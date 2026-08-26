@@ -1,0 +1,31 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator dbml {
+  provider = "prisma-dbml-generator"
+}
+
+// Placeholder auth model — the field-level schema per ERP module
+// (hr, payroll, projects, plant, inventory, partners, settings, shared)
+// is the next follow-up task; see docs/HLD.md §5.1 in the ERP-Demo repo.
+model User {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  email     String   @unique
+  password  String
+  firstname String?
+  lastname  String?
+  role      Role     @default(USER)
+}
+
+enum Role {
+  ADMIN
+  USER
+}
