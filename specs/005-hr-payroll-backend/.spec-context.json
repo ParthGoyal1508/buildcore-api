@@ -1,0 +1,10 @@
+{
+  "workflow": "speckit",
+  "specName": "005-hr-payroll-backend",
+  "branch": "005-hr-payroll-backend",
+  "selectedAt": "2026-08-27T18:19:57.936Z",
+  "currentStep": "specify",
+  "status": "draft",
+  "history": [],
+  "telemetryInstanceId": "93bde7ef-f647-4ac6-aa62-ebc9478d5a96"
+}
