@@ -1,8 +1,16 @@
 <!--
 Sync Impact Report
-- Version change: (template) → 1.0.0
-- Modified principles: n/a (initial ratification)
+- Version change: 1.0.0 → 1.1.0
+- Modified principles: n/a
 - Added sections:
+  - Technology Stack & Standards: pre-approved (1) a specific in-process, npm-based biometric
+    face-matching mechanism (`@vladmandic/face-api`-style library) for any module needing face
+    verification, per the user's explicit direction during the My Workspace feature's
+    clarification session; (2) `pdfkit` for any module needing downloadable PDF generation, per the
+    user's explicit choice when asked — the My Workspace feature (biometric attendance punching,
+    salary-slip PDF download) is the first consumer of both.
+- Removed sections: none
+- Original ratification's Added sections (for reference, unchanged):
   - Core Principles: I. Schema-Per-Module Boundaries (NON-NEGOTIABLE), II. Validated DTO
     Contracts (NON-NEGOTIABLE), III. Centralized Configuration & No Hardcoded Values
     (NON-NEGOTIABLE), IV. Multi-Tenant Isolation & PII Protection (NON-NEGOTIABLE),
@@ -10,8 +18,7 @@ Sync Impact Report
   - Technology Stack & Standards
   - Development Workflow & Quality Gates
   - Governance
-- Removed sections: none (first concrete draft from template scaffold)
-- Deferred / TODO items:
+- Deferred / TODO items (carried over, unchanged):
   - TODO(SCHEMA_MIGRATION): `prisma/schema.prisma` currently has a single placeholder `User`
     model, not the schema-per-module split (hr/payroll/projects/plant/inventory/partners/
     settings/shared) described in Principle I. That split is recorded as the target architecture
@@ -122,6 +129,17 @@ production incident is far more expensive than wiring them from the start.
   validation) are pre-approved additions when the module that needs them lands. Introducing a
   *different* new architectural dependency (a second ORM, a second auth strategy, a second queue
   library) requires a constitution amendment first.
+- **Biometric face matching**: An in-process, npm-based face-recognition library (e.g.
+  `@vladmandic/face-api`, a maintained TensorFlow.js-based face-api fork — pure JS/WASM inference,
+  no native-binding build step) computing and comparing face embeddings locally in the backend is
+  pre-approved for any module that needs face verification (e.g. biometric attendance punching).
+  This is an explicit, narrow exception to needing a fresh amendment per module — a second,
+  materially different face-matching mechanism (a native-binding library, a hosted third-party
+  face-recognition API) still requires its own amendment before introduction.
+- **PDF generation**: `pdfkit` (pure-Node, no headless-browser dependency) is pre-approved for any
+  module that needs to generate a downloadable PDF document (e.g. a salary slip). A second,
+  materially different PDF-generation mechanism (a headless-browser HTML-to-PDF renderer, a hosted
+  third-party document-generation API) still requires its own amendment before introduction.
 
 ## Development Workflow & Quality Gates
 
@@ -154,4 +172,4 @@ Workflow & Quality Gates); a reviewer who approves a change that knowingly viola
 NON-NEGOTIABLE principle MUST record the justification in the PR description, and that
 justification MUST itself prompt a constitution amendment if the exception is expected to recur.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-26
+**Version**: 1.1.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-27
