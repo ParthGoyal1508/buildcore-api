@@ -1,14 +1,15 @@
 <!--
 Sync Impact Report
-- Version change: 1.0.0 → 1.1.0
+- Version change: 1.1.0 → 1.2.0
 - Modified principles: n/a
 - Added sections:
-  - Technology Stack & Standards: pre-approved (1) a specific in-process, npm-based biometric
-    face-matching mechanism (`@vladmandic/face-api`-style library) for any module needing face
-    verification, per the user's explicit direction during the My Workspace feature's
-    clarification session; (2) `pdfkit` for any module needing downloadable PDF generation, per the
-    user's explicit choice when asked — the My Workspace feature (biometric attendance punching,
-    salary-slip PDF download) is the first consumer of both.
+  - Technology Stack & Standards: pre-approved `exceljs` for any module needing downloadable Excel
+    (.xlsx) generation, per the user's explicit choice when asked — the Dashboard & General
+    feature's Reports module is the first consumer.
+- Previous amendment (v1.1.0, for reference, unchanged): pre-approved (1) a specific in-process,
+  npm-based biometric face-matching mechanism (`@vladmandic/face-api`-style library) for any module
+  needing face verification; (2) `pdfkit` for any module needing downloadable PDF generation — both
+  introduced by the My Workspace feature.
 - Removed sections: none
 - Original ratification's Added sections (for reference, unchanged):
   - Core Principles: I. Schema-Per-Module Boundaries (NON-NEGOTIABLE), II. Validated DTO
@@ -140,6 +141,9 @@ production incident is far more expensive than wiring them from the start.
   module that needs to generate a downloadable PDF document (e.g. a salary slip). A second,
   materially different PDF-generation mechanism (a headless-browser HTML-to-PDF renderer, a hosted
   third-party document-generation API) still requires its own amendment before introduction.
+- **Excel generation**: `exceljs` is pre-approved for any module that needs to generate a
+  downloadable `.xlsx` document (e.g. a report export). A second, materially different
+  spreadsheet-generation mechanism still requires its own amendment before introduction.
 
 ## Development Workflow & Quality Gates
 
@@ -172,4 +176,4 @@ Workflow & Quality Gates); a reviewer who approves a change that knowingly viola
 NON-NEGOTIABLE principle MUST record the justification in the PR description, and that
 justification MUST itself prompt a constitution amendment if the exception is expected to recur.
 
-**Version**: 1.1.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-27
+**Version**: 1.2.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-27
