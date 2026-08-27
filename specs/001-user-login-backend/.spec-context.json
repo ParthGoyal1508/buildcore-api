@@ -1,0 +1,10 @@
+{
+  "workflow": "speckit",
+  "specName": "001-user-login-backend",
+  "branch": "001-user-login-backend",
+  "selectedAt": "2026-08-27T02:09:08.212Z",
+  "currentStep": "specify",
+  "status": "draft",
+  "history": [],
+  "telemetryInstanceId": "5896332e-0f12-4242-aae4-e5d8f9286e96"
+}
