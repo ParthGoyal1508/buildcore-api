@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
-import { User } from '@prisma/client';
+import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { UsersService } from './users.service';
@@ -17,31 +17,27 @@ export class UsersController {
 
   @Get('me')
   @ApiOkResponse({ type: UserResponseDto })
-  me(@UserEntity() user: User): UserResponseDto {
+  me(@UserEntity() user: AuthenticatedUser): UserResponseDto {
     return UserResponseDto.fromEntity(user);
   }
 
   @Patch('me')
   @ApiOkResponse({ type: UserResponseDto })
   async updateMe(
-    @UserEntity() user: User,
+    @UserEntity() user: AuthenticatedUser,
     @Body() data: UpdateUserDto,
   ): Promise<UserResponseDto> {
-    const updated = await this.usersService.updateUser(user.id, data);
+    const updated = await this.usersService.updateUser(user, data);
     return UserResponseDto.fromEntity(updated);
   }
 
   @Patch('me/password')
   @ApiOkResponse({ type: UserResponseDto })
   async changePassword(
-    @UserEntity() user: User,
+    @UserEntity() user: AuthenticatedUser,
     @Body() data: ChangePasswordDto,
   ): Promise<UserResponseDto> {
-    const updated = await this.usersService.changePassword(
-      user.id,
-      user.password,
-      data,
-    );
+    const updated = await this.usersService.changePassword(user, data);
     return UserResponseDto.fromEntity(updated);
   }
 }

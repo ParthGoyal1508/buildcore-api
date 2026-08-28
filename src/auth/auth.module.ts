@@ -7,6 +7,10 @@ import { JwtAuthGuard } from './jwt-auth.guard';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
+import { RefreshTokenService } from './refresh-token.service';
+import { AuditLogService } from './audit-log.service';
+import { MailService } from './mail.service';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { SecurityConfig } from '../common/configs/config.interface';
 
 @Module({
@@ -16,7 +20,7 @@ import { SecurityConfig } from '../common/configs/config.interface';
       useFactory: async (configService: ConfigService) => {
         const securityConfig = configService.get<SecurityConfig>('security');
         return {
-          secret: configService.get<string>('JWT_ACCESS_SECRET'),
+          secret: securityConfig.jwtAccessSecret,
           signOptions: {
             expiresIn: securityConfig.expiresIn,
           },
@@ -26,7 +30,16 @@ import { SecurityConfig } from '../common/configs/config.interface';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, JwtAuthGuard, PasswordService],
-  exports: [JwtAuthGuard],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    JwtAuthGuard,
+    PermissionsGuard,
+    PasswordService,
+    RefreshTokenService,
+    AuditLogService,
+    MailService,
+  ],
+  exports: [JwtAuthGuard, PermissionsGuard],
 })
 export class AuthModule {}

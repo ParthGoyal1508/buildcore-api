@@ -21,7 +21,30 @@ const config: Config = {
   },
   security: {
     expiresIn: '15m',
-    refreshIn: '7d',
+    jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
+    refreshTokenHashSecret: process.env.JWT_REFRESH_SECRET,
+    lockout: {
+      maxAttempts: 5,
+      durationMinutes: 15,
+    },
+    refreshCookie: {
+      // Defaults to 'none' wherever CORS_ORIGINS is set, since that's precisely the
+      // split-origin deployment where 'strict' would silently drop the cookie; local
+      // dev (frontend and API both on localhost, same-site regardless of port) keeps
+      // the stronger 'strict'. REFRESH_COOKIE_SAMESITE overrides either way.
+      sameSite:
+        (process.env.REFRESH_COOKIE_SAMESITE as 'strict' | 'lax' | 'none') ||
+        (process.env.CORS_ORIGINS ? 'none' : 'strict'),
+      secure: true,
+    },
+    refreshToken: {
+      rememberMeDays: 30,
+      defaultDays: 1,
+    },
+    throttle: {
+      ttlSeconds: 60,
+      limit: 10,
+    },
   },
 };
 

@@ -6,8 +6,8 @@ schema placement rationale.
 ## User Account (`shared` schema — MODIFIES feature 001's model)
 
 ```
-{ ...unchanged from 001: id, email, password, roleId, companyId, consecutiveFailures, lockedUntil,
-  mustChangePassword,
+{ ...unchanged from 001: id, email, username, password, roleId, companyId, consecutiveFailures,
+  lockedUntil, mustChangePassword,
   status: 'pending' | 'active' | 'deactivated',   // MODIFIED — gains 'pending' (was active|deactivated)
   displayName: string?,                            // NEW — used only when no Employee is linked
   createdAt, updatedAt }
@@ -17,6 +17,13 @@ schema placement rationale.
 set-password succeeds) — 001's column was implicitly non-null in practice since only fully-created
 accounts existed before this feature; this is an additive nullability relaxation, not a breaking
 change to any existing row (all pre-existing rows already have a password).
+
+`username` is 001's field (its 2026-08-28 clarification), owned here: this feature's `create()`
+must accept and assign it — an admin sets it explicitly when inviting the account (not
+self-chosen, not derived from email). **Not yet decided**: the exact format/uniqueness validation
+rule (allowed characters, min/max length) — 001 deliberately left that open for this feature to
+settle when it's actually built; resolve it via `speckit-clarify` on this feature rather than
+guessing, since it wasn't part of the 001 implementation pass that added this note.
 
 ## Invite Token (`shared` schema — new)
 
@@ -60,6 +67,7 @@ small amendment, the same cross-feature-amendment pattern used for `008-projects
 interface AccountListRow {
   id: string;
   email: string;
+  username: string;
   status: 'pending' | 'active' | 'deactivated';
   roleName: string;
   companyName: string | null;    // null only for Super Admin
