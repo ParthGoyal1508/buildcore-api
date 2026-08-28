@@ -153,7 +153,8 @@ Subject to `ProjectLockGuard`.
 
 - `GET /projects/:id/budget` — `{ budgets: [{ category, amount }] }` (up to 5 rows).
 - `PUT /projects/:id/budget` — `{ budgets: [{ category, amount }] }` — upserts all provided
-  categories atomically. Missing categories unchanged.
+  categories atomically. Categories: `labour` | `materials` | `machinery` | `fuel` |
+  `subcontractors` | `overheads`. Missing categories unchanged.
 
 ---
 

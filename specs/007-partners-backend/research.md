@@ -34,10 +34,14 @@ orders). A separate entity would require maintaining duplicate contact/GST data.
 **Decision**: `ContractorProfile.complianceStatus` is a persisted column, not a lazy computation.
 Whenever a `MonthlyCompliance` record is created, updated (PF/ESIC fields), or verified, a
 `ComplianceStatusService.recompute(contractorProfileId)` call runs inside the same Prisma
-transaction. It queries the last 3 completed calendar months (looking back from today), checks
-each for a compliance record, and applies: all-verified → `compliant`; any missing → `non_compliant`;
-mixed (some submitted/partial, none missing) → `partially_compliant`. Missing months (no record at
-all) always count as missing — clarification Q2.
+transaction. It queries the **most recently concluded calendar month's** compliance record for
+that contractor and applies the master PRD §7.7.2 rule:
+- Both PF and ESIC submitted or verified → `compliant`
+- Exactly one of PF or ESIC submitted → `partially_compliant`
+- Neither submitted or no record for the last month → `non_compliant`
+
+The previous 3-month rolling window design has been replaced by this simpler per-month rule
+(updated to match master PRD §7.7.2).
 
 **Rationale**: The Contractor list endpoint reads `complianceStatus` directly from the stored
 column rather than aggregating `MonthlyCompliance` on every list request. With potentially
@@ -127,12 +131,13 @@ full contacts array is always replaced. Same pattern for `VendorDealsIn` (catego
 endpoints); consistent with the PRD's Contacts tab showing a full list that the user manages
 as a whole. The atomicity prevents partial states.
 
-## 11. ComplianceStatus look-back: last 3 completed calendar months
+## 11. ComplianceStatus look-back: most recently concluded calendar month
 
-**Decision**: "Last 3 months" means the 3 most recently completed calendar months before today.
-Example: if today is 2026-08-15, the look-back months are July 2026, June 2026, May 2026.
-The current partial month (August 2026) is never included in the look-back window.
+**Decision**: The derivation is based on the **single most recently concluded calendar month**
+before today, not a 3-month window (updated to match master PRD §7.7.2). Example: if today is
+2026-08-15, the look-back month is July 2026. If a `MonthlyCompliance` record exists for July
+with both PF and ESIC fields: `compliant`; only one: `partially_compliant`; none or no record:
+`non_compliant`. The current partial month is never included.
 
-**Rationale**: Including the current in-progress month would unfairly mark contractors as
-non-compliant for a month not yet concluded. The 3-month look-back gives a reasonable recent
-compliance signal without going so far back that a reformed contractor stays flagged for old gaps.
+**Rationale**: Simpler rule, directly matches the master PRD. The RAG Matrix provides the
+full historical view for trend analysis without needing the contractor status to encode history.

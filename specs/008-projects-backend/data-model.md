@@ -128,7 +128,7 @@ State machine (research.md §7): `draft → submitted → approved`; `submitted 
 
 ```
 { id, companyId, projectId FK→Project,
-  category: 'labour' | 'materials' | 'machinery_fuel' | 'subcontractors' | 'overheads',
+  category: 'labour' | 'materials' | 'machinery' | 'fuel' | 'subcontractors' | 'overheads',
   amount (decimal), updatedAt }
 ```
 
@@ -155,7 +155,8 @@ per project (one per category).
 | `WorkOrder.partnerId` | Plain UUID | `PartnersService.getPartnerById()` when needed |
 | P&L labour cost | Not stored | `HrPayrollService.getLabourCostByProject()` at request time |
 | P&L material cost | Not stored | `InventoryService.getMaterialCostByProject()` at request time |
-| P&L machinery & fuel | Not stored | `PlantService.getMachineryCostByProject()` at request time |
+| P&L machinery cost | Not stored | `PlantService.getMachineryCostByProject()` at request time |
+| P&L fuel cost | Not stored | `PlantService.getFuelCostByProject()` at request time |
 | P&L subcontractor cost | Not stored | `PartnersService.getSubcontractorCostByProject()` at request time |
 
 ## P&L Response Shape (not stored — computed on demand)
@@ -165,14 +166,14 @@ interface ProjectPnlResponse {
   contractValue: number;
   revenueBooked: number;      // sum of approved RABills + received Revenue entries
   costBreakdown: Array<{
-    category: PnlCategory;
-    budget: number;           // from ProjectBudget, 0 if not set
-    actual: number;           // from cross-module service (0 if unavailable)
-    variance: number;         // budget − actual
-    variancePct: number;      // variance / budget × 100 (null if budget = 0)
+    category: PnlCategory;     // 'labour'|'materials'|'machinery'|'fuel'|'subcontractors'|'overheads'
+    budget: number;            // from ProjectBudget, 0 if not set
+    actual: number;            // from cross-module service (0 if unavailable)
+    variance: number;          // budget − actual
+    variancePct: number;       // variance / budget × 100 (null if budget = 0)
     costOverrunAlert: boolean; // actual > budget × 1.10
   }>;
-  grossProfit: number;        // revenueBooked − sum(actual costs)
+  grossProfit: number;        // revenueBooked − sum(all 6 actual costs)
   marginPct: number;          // grossProfit / revenueBooked × 100 (null if revenueBooked = 0)
   period: 'monthly' | 'quarterly' | 'yearly' | 'cumulative';
   unavailableModules: string[];

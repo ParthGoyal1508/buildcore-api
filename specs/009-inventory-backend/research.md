@@ -69,16 +69,21 @@ totals. The reversal is blocked (`422`) if it would produce negative totals. WAR
 after purchase deletion (research.md §3). This is consistent with the constitution's pattern
 for financial immutability.
 
-## 7. Payment allocation atomicity
+## 7. Payment allocation: FIFO atomicity
 
-**Decision**: `PaymentService.create()` runs in a single Prisma transaction: (1) creates the
-`Payment` row, (2) creates `PaymentAllocation` rows, (3) increments `PurchaseBill.paidAmount`
-and re-derives `paymentStatus` per bill, (4) sets `Payment.allocatedAmount = sum(allocations)`.
-Deletion runs the same steps in reverse (clarification Q3).
+**Decision**: `PaymentService.create()` runs in a single Prisma transaction implementing FIFO
+allocation (master PRD §7.6.5): (1) creates the `Payment` row, (2) fetches the vendor's
+unpaid/part-paid `PurchaseBill` rows ordered by `date ASC` (oldest first), (3) allocates the
+payment amount greedily across bills until exhausted, (4) creates `PaymentAllocation` rows
+for the audit trail, (5) updates each bill's `paidAmount` and re-derives `paymentStatus`,
+(6) sets `Payment.allocatedAmount` and `Payment.unallocatedBalance`. The `SELECT ... FOR UPDATE`
+lock is applied to each `PurchaseBill` row being updated to prevent concurrent double-payment
+(M-006 remediation from the analyze report).
 
-**Pre-validation before transaction**: Sum-of-allocations ≤ payment amount AND each
-`allocatedAmount ≤ bill.remainingAmount` are checked before opening the transaction to fail
-fast with a `400` rather than inside the DB lock.
+Deletion reverses all FIFO allocations atomically in the same transaction.
+
+**Rationale**: FIFO is the master PRD-mandated behaviour. It removes the UX complexity of manual
+allocation entirely — the admin simply records the payment amount and the system handles the rest.
 
 ## 8. `getMaterialCostByProject` implementation
 

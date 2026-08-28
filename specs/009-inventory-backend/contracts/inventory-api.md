@@ -63,27 +63,29 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 
 ## Transfers — `/inventory/transfers` (permission: `INVENTORY_PURCHASES`)
 
-- `GET /inventory/transfers?fromSiteId=&toSiteId=&itemId=&dateFrom=&dateTo=&page=`
+- `GET /inventory/transfers?fromSiteId=&toSiteId=&itemId=&dateFrom=&dateTo=&status=&page=`
 - `POST /inventory/transfers` — `{ fromSiteId, toSiteId, itemId, date, quantity, remarks? }`.
   `400` if `fromSiteId === toSiteId`. Uses `SELECT FOR UPDATE` on source `StockBalance`; `422`
   if `quantity > source inStock`. Appends `transfer_out` and `transfer_in` ledger entries,
-  updates both `StockBalance` rows, atomically. Audit-logged. → 201.
-- `DELETE /inventory/transfers/:id` — soft-delete with both reversal entries; both
-  `StockBalance` rows revert atomically.
+  updates both `StockBalance` rows atomically. Created with `status: 'pending'`. → 201.
+- `PATCH /inventory/transfers/:id` — `{ status: 'in_transit' | 'received' }` only.
+  State machine: `pending → in_transit → received`. `409` on out-of-order transition.
+- `DELETE /inventory/transfers/:id` — allowed only for `pending` or `in_transit` status;
+  `409` if `received`. Soft-delete with both reversal entries; both `StockBalance` rows revert.
 
 ---
 
 ## Payments — `/inventory/payments` (permission: `INVENTORY_PAYMENTS`)
 
 - `GET /inventory/payments?vendorId=&dateFrom=&dateTo=&paymentMode=&page=` — paginated;
-  includes `allocatedBillCount` (count of `PaymentAllocation` rows).
-- `POST /inventory/payments` — `{ vendorId, amount, date, paymentMode, referenceNumber,
-  allocations: [{ billId, allocatedAmount }] }`. Pre-validates: sum ≤ amount, each
-  allocatedAmount ≤ bill.remainingAmount. Then atomically: creates `Payment`, creates
-  `PaymentAllocation` rows, updates `PurchaseBill.paidAmount` + `paymentStatus`, sets
-  `Payment.allocatedAmount`. Audit-logged. → 201.
-- `DELETE /inventory/payments/:id` — reverses all allocations atomically; decrements
-  `PurchaseBill.paidAmount`; re-derives bill `paymentStatus`; resets `Payment.allocatedAmount`.
+  includes `allocatedBillCount` (count of `PaymentAllocation` rows) and `unallocatedBalance`.
+- `POST /inventory/payments` — `{ vendorId, amount, date, paymentMode, referenceNumber }`.
+  Atomically: FIFO-allocates the amount against the vendor's unpaid/part-paid bills (oldest
+  first), creates `PaymentAllocation` rows, updates `PurchaseBill.paidAmount` + `paymentStatus`,
+  sets `Payment.allocatedAmount` and `unallocatedBalance`. `SELECT FOR UPDATE` on each bill
+  row prevents concurrent over-payment. Audit-logged. → 201.
+- `DELETE /inventory/payments/:id` — reverses all FIFO allocations atomically; decrements
+  `PurchaseBill.paidAmount`; re-derives bill `paymentStatus`.
 
 ## Utility endpoints (permission: `INVENTORY_PURCHASES`)
 

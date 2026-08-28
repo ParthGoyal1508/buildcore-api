@@ -255,16 +255,19 @@ actuals from stubs, `unavailableModules` populated, overrun flag when actual > b
 ### Implementation for User Story 9
 
 - [ ] T043 [P] [US7] Create `src/projects/pnl/dto/pnl-query.dto.ts` and
-      `src/projects/pnl/dto/pnl-response.dto.ts` matching data-model.md P&L Response Shape
-- [ ] T044 [P] [US7] Create `src/projects/pnl/dto/budget.dto.ts` and
+      `src/projects/pnl/dto/pnl-response.dto.ts` matching data-model.md P&L Response Shape      (6 cost categories: labour, materials, machinery, fuel, subcontractors, overheads)
+- [ ] T044a [P] [US7] Add `getFuelCostByProject(projectId, range): Promise<number>` stub to
+      `src/projects/interfaces/pnl-sources.interface.ts` alongside `getMachineryCostByProject`
+      — two separate Plant stubs for two separate P&L lines (master PRD §7.5.4)- [ ] T044 [P] [US7] Create `src/projects/pnl/dto/budget.dto.ts` and
       `src/projects/budget/budget.service.ts`: upsert per category in single Prisma transaction,
       `getByProject` returning all 5 rows (0 for unset)
 - [ ] T045 [US7] Implement `PnlService` in `src/projects/pnl/pnl.service.ts`:
       - Resolve date range from `period` + optional `month`/`quarter`/`year` params
-      - `Promise.allSettled` over 4 cross-module stub calls
+      - `Promise.allSettled` over **5** cross-module stub calls (labour, materials, machinery,
+        fuel, subcontractors — machinery and fuel are separate calls to `PlantService`)
       - Sum `revenueBooked` from approved RABills + received Revenue in date range
-      - Merge budget rows, compute variance/variancePct, set `costOverrunAlert` when
-        `actual > budget × COST_OVERRUN_THRESHOLD` — spec FR-009, constants T005
+      - Merge budget rows for all 6 categories, compute variance/variancePct, set
+        `costOverrunAlert` when `actual > budget × COST_OVERRUN_THRESHOLD` — spec FR-009
       - Populate `unavailableModules` from rejected promises
 - [ ] T046 [P] [US7] Unit test `PnlService.compute()`: all stubs return 0 → correct zero rows;
       one stub rejects → `unavailableModules` populated; actual > budget × 1.10 → overrun flag

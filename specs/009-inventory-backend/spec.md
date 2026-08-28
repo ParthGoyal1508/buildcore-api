@@ -199,12 +199,18 @@ Site B inStock = 30; attempt to transfer 80 more from Site A (→ 422 insufficie
    with `fromSiteId`, `toSiteId`, `itemId`, `date`, `quantity`, and optional `remarks`, **Then**
    source `transferOut` increments and destination `transferIn` increments atomically in a single
    Prisma transaction; two `StockLedgerEntry` rows are appended (`transfer_out` and
-   `transfer_in`).
+   `transfer_in`). Transfer is created with `status: 'pending'`.
 2. **Given** `quantity > source inStock`, **When** attempted, **Then** `422` with
    `{ availableStock: N }`.
 3. **Given** `fromSiteId === toSiteId`, **When** attempted, **Then** `400 Bad Request`.
-4. **Given** a transfer record, **When** `DELETE /inventory/transfers/:id`, **Then** soft-delete
-   with two reversal ledger entries; both `StockBalance` rows revert atomically.
+4. **Given** a transfer in `pending` or `in_transit` status, **When**
+   `PATCH /inventory/transfers/:id` is called with `{ status: 'in_transit' }` or
+   `{ status: 'received' }`, **Then** status updates; transitions are one-way
+   (pending → in_transit → received); out-of-order transitions return `409`.
+5. **Given** a transfer record with `status: 'received'`, **When** `DELETE` is attempted,
+   **Then** `409 Conflict` — received transfers cannot be reversed.
+6. **Given** a transfer in `pending` or `in_transit` status, **When** `DELETE` is called,
+   **Then** soft-delete with two reversal ledger entries; both `StockBalance` rows revert.
 
 ---
 
@@ -233,32 +239,34 @@ arithmetic — independent of transfers or payments.
 
 ---
 
-### User Story 7 - Record Payments and Allocate Bills (Priority: P2)
+### User Story 7 - Record Payments (FIFO Bill Allocation) (Priority: P2)
 
-An admin records a vendor payment and allocates it across one or more unpaid/part-paid purchase
-bills. Bill statuses auto-update (unpaid → part_paid → paid) based on total allocated amounts.
+An admin records a vendor payment; the system automatically allocates it against the vendor's
+unpaid/part-paid bills in FIFO order (oldest bill first) until the payment amount is exhausted.
+Bill statuses auto-update (unpaid → part_paid → paid).
 
 **Why this priority**: Completes the purchase-to-payment audit trail. Depends on purchases
 creating bills (US3).
 
-**Independent Test**: Create 2 purchase bills for a vendor (₹5,000 + ₹3,000). Record a payment
-of ₹7,000 allocated ₹5,000 to bill 1 (→ paid) and ₹2,000 to bill 2 (→ part_paid). Record
-another ₹1,000 payment allocated to bill 2 (→ paid).
+**Independent Test**: Create 2 purchase bills for a vendor (oldest ₹5,000 + newer ₹3,000).
+Record a payment of ₹7,000 — system allocates ₹5,000 to the oldest bill (→ paid) and ₹2,000
+to the newer bill (→ part_paid). Record another ₹1,000 — allocated to the remaining ₹1,000
+on the second bill (→ paid).
 
 **Acceptance Scenarios**:
 
-1. **Given** a vendor, **When** `POST /inventory/payments` is called with `vendorId`, `amount`,
-   `date`, `paymentMode`, `referenceNumber`, and `allocations: [{ billId, allocatedAmount }]`,
-   **Then** the payment and all allocations commit atomically; each bill's `paidAmount` updates
-   and `paymentStatus` auto-derives.
-2. **Given** `sum(allocations.allocatedAmount) > payment.amount`, **When** submitted, **Then**
-   `400 Bad Request` — over-allocation is rejected.
-3. **Given** `allocatedAmount > bill.remainingAmount` for any allocation, **Then** `400` — cannot
-   allocate more than what remains on a bill.
-4. **Given** the payment list, **When** `GET /inventory/payments?vendorId=&dateFrom=&dateTo=
+1. **Given** a vendor with outstanding bills, **When** `POST /inventory/payments` is called
+   with `vendorId`, `amount`, `date`, `paymentMode`, and `referenceNumber`, **Then** the
+   system allocates the payment amount against unpaid/part-paid bills in FIFO order (oldest
+   bill date first); each bill's `paidAmount` updates and `paymentStatus` auto-derives.
+2. **Given** `payment.amount` exceeds the total outstanding balance, **When** submitted,
+   **Then** all bills are marked `paid` and the excess `unallocatedBalance = amount −
+   totalAllocated` is recorded on the `Payment` row for future reference.
+3. **Given** the payment list, **When** `GET /inventory/payments?vendorId=&dateFrom=&dateTo=
    &paymentMode=&page=`, **Then** paginated, filtered results with `allocatedBillCount`.
-5. **Given** a payment, **When** `DELETE /inventory/payments/:id`, **Then** all allocations are
-   reversed atomically; affected bills' `paidAmount` decrements and `paymentStatus` re-derives.
+4. **Given** a payment, **When** `DELETE /inventory/payments/:id`, **Then** all FIFO
+   allocations are reversed atomically; affected bills' `paidAmount` decrements and
+   `paymentStatus` re-derives.
 
 ---
 
@@ -317,10 +325,11 @@ verify return = ₹1,50,000.
 - **FR-004**: Purchases, issues, and transfers MUST NOT be hard-deleted; soft-delete (appending
   a reversal `StockLedgerEntry` and adjusting `StockBalance`) is the only permitted deletion
   path.
-- **FR-005**: Payment-to-bill allocation MUST be atomic — payment record and all bill
-  `paidAmount`/`paymentStatus` updates commit together or not at all.
-- **FR-006**: Over-allocation (sum of allocations > payment amount OR allocated > bill remaining)
-  MUST return `400`.
+- **FR-005**: Payment-to-bill allocation MUST be atomic and follow FIFO order (oldest
+  unpaid/part-paid bill date first) — the payment record and all bill `paidAmount`/`paymentStatus`
+  updates commit together or not at all (master PRD §7.6.5).
+- **FR-006**: The `PaymentAllocation` table records which bill received how much from each
+  payment — this enables audit reversal on payment deletion.
 - **FR-007**: Purchase deletion MUST be blocked (`409`) if any allocation against that bill has
   `allocatedAmount > 0`.
 - **FR-008**: WAR MUST be updated on every new purchase using the formula

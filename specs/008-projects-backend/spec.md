@@ -61,9 +61,11 @@ radius). Clients are a new master record type owned exclusively by this module."
   `GET /projects/:id/documents` (list), `DELETE /projects/:id/documents/:docId` (remove row).
   Gated by `PROJECTS` permission. Uses the same object-storage reference pattern as 005.
 - Q: Should the P&L report "Machinery & Fuel" as a single combined cost line or two separate
-  lines? → A: Single combined line — "Machinery & Fuel" is one P&L category, one `ProjectBudget`
-  row (`category: machinery_fuel`), and one cost line in the P&L statement. The plant module's
-  exported service returns a combined machinery-and-fuel cost total for the project.
+  lines? → A: **Two separate lines** — Machinery Cost and Fuel Cost are distinct P&L categories
+  matching the master PRD §7.5.4. Machinery Cost comes from `PlantService.getMachineryCostByProject()`
+  (logbook hours × hire rate + owned depreciation); Fuel Cost comes from `PlantService.getFuelCostByProject()`
+  (fuel entries for the project). Both are separate `ProjectBudget` rows with categories
+  `machinery` and `fuel`.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -278,8 +280,9 @@ in the P&L's Revenue Booked total — independent of DWR or BOQ.
 ### User Story 7 - Project P&L (Priority: P3)
 
 The P&L endpoint computes a live, cross-module project P&L — pulling Labour cost from payroll,
-Material cost from inventory purchases, Machinery & Fuel from the plant module, Subcontractor
-costs from partners billing, and Revenue Booked from approved RA bills and direct revenue entries.
+Material cost from inventory purchases, Machinery cost and Fuel cost separately from the plant
+module, Subcontractor costs from partners billing, and Revenue Booked from approved RA bills and
+direct revenue entries.
 
 **Why this priority**: The PRD's flagship "no cost overrun surprises" outcome; depends on all
 other stories plus cross-module data in hr/payroll, inventory, plant, and partners. Deliberately
@@ -295,9 +298,11 @@ underlying source records — independent of the frontend existing.
 1. **Given** a project with cross-module transactional data, **When** `GET /projects/:id/pnl` is
    called, **Then** Labour cost equals the sum of `PayrollLineItem`s for employees assigned to
    this project (from `hr` via exported service), Material cost equals inventory purchase entries
-   for this project's store (from `inventory` via exported service), Machinery & Fuel equals
-   asset-deployment cost entries for this project's sites (from `plant` via exported service), and
-   Subcontractors equals contractor billing for this project (from `partners` via exported
+   for this project's stores (from `inventory` via exported service), Machinery cost equals
+   logbook-hours × hire rate + owned depreciation for this project's sites (from `plant` via
+   `PlantService.getMachineryCostByProject()`), Fuel cost equals fuel entries for this project
+   (from `plant` via `PlantService.getFuelCostByProject()`), and Subcontractors equals contractor
+   billing for this project (from `partners` via exported
    service).
 2. **Given** a period filter, **When** `?period=monthly|quarterly|yearly|cumulative` is passed,
    **Then** only the relevant date-range records are included in each line's computation.
@@ -438,7 +443,7 @@ one and confirming it no longer appears.
 - **WorkOrder** (`projects` schema): `projectId`, `partnerId`, WorkDetail, Terms, LabourAmount,
   MaterialAmount, Status, `companyId`.
 - **ProjectBudget** (`projects` schema): `projectId`, `category` (enum: labour | materials |
-  machinery_fuel | subcontractors | overheads), `amount` (decimal), `companyId`. One row per
+  machinery | fuel | subcontractors | overheads), `amount` (decimal), `companyId`. One row per
   category per project; upserted via `PUT /projects/:id/budget`.
 - **ProjectDocument** (`projects` schema): `projectId`, `documentType` (string — from a
   configurable list: Address Details, Tax Details, Other Details, GST, Document), `fileRef`
@@ -470,9 +475,9 @@ one and confirming it no longer appears.
 - Settings' code-series service (002) supports a `PROJECTS` series type with the same interface
   used for Employee Code generation; if it does not, a projects-specific code generator is built
   within the `projects` module.
-- The `plant` module (machinery) exposes a `getAssetCostByProjectSite(projectId, period)` service
-  method for P&L — if it does not yet exist, the P&L Machinery & Fuel line returns zero with an
-  `unavailableModules` flag rather than failing.
+- The `plant` module (machinery) exposes `getMachineryCostByProject(projectId, period)` and
+  `getFuelCostByProject(projectId, period)` as **two separate** service methods for P&L —
+  if they do not yet exist, each P&L line returns zero with an `unavailableModules` flag.
 - The `partners` module exposes a `getSubcontractorCostByProject(projectId, period)` service
   method for P&L — same fallback applies.
 - The `inventory` module exposes a `getMaterialCostByProject(projectId, period)` service method

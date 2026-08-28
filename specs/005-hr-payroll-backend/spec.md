@@ -374,6 +374,67 @@ queue (confirming employee, site, reason, requested-on are all present), and app
 
 ---
 
+### User Story 11 - Employee Offboarding and Full & Final Settlement (Priority: P3)
+
+An HR admin initiates an employee's exit (last working day, reason), computes the Full & Final
+(F&F) settlement (pending salary, leave encashment, loan recovery), processes it as a special
+payroll run, and deactivates the employee's user account on exit.
+
+**Why this priority**: A complete HR lifecycle capability; depends on payroll (US5) and loans
+(US7) existing. PRD §7.3.7.
+
+**Independent Test**: Can be fully tested by initiating exit for a test employee, computing F&F
+(confirming leave encashment and loan recovery appear), processing it as an F&F payroll run, and
+confirming the employee's status becomes Inactive and their login is revoked.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active employee, **When** `POST /hr/employees/:id/exit` is called with
+   `lastWorkingDay`, `reason` (Resignation/Termination/Contract End), and optional `remarks`,
+   **Then** an `ExitRecord` is created; the employee's departure is scheduled for `lastWorkingDay`.
+2. **Given** an exit record, **When** `GET /hr/employees/:id/fnf` is called, **Then** it returns
+   the F&F computation: pending salary (pro-rated for partial month), earned leave encashment
+   (EL balance × daily rate), active loan recovery amount, and net F&F payable.
+3. **Given** the F&F computation, **When** `POST /hr/employees/:id/fnf/process` is called,
+   **Then** a `PayrollRun` flagged as F&F is created for the employee, incorporating the computed
+   components; processed through the standard payroll lock flow.
+4. **Given** `lastWorkingDay` has passed and the F&F payroll is processed, **When** the employee
+   record is updated, **Then** `status → Inactive`; the linked `User.active` is set to false
+   (login disabled, all refresh tokens revoked in Redis).
+5. **Given** an inactive employee, **When** attendance/leave/payroll actions are attempted,
+   **Then** they are rejected with a "employee is inactive" error; historical records remain intact.
+
+---
+
+### User Story 12 - Reimbursement Claims (Admin) (Priority: P3)
+
+An HR/Site Admin reviews employee-submitted reimbursement claims, approves or rejects them,
+and marks approved claims as paid (via payroll or direct payment).
+
+**Why this priority**: Depends on Settings' Reimbursement Categories master (added by this feature
+to 002's scope) and employees existing. PRD §7.3.8.
+
+**Independent Test**: Can be fully tested by seeding a submitted claim, approving it, marking it
+paid directly, and confirming a second claim can be rejected with mandatory remarks.
+
+**Acceptance Scenarios**:
+
+1. **Given** submitted reimbursement claims, **When** `GET /hr/reimbursements?status=submitted&
+   employeeId=&companyId=&page=` is called, **Then** it returns paginated claims with employee,
+   category, amount, expense date, description, receipt reference, and status.
+2. **Given** a Submitted claim, **When** `PATCH /hr/reimbursements/:id/approve` is called with
+   optional `remarks`, **Then** status → `approved`; the claim is queued for payment.
+3. **Given** a Submitted claim, **When** `PATCH /hr/reimbursements/:id/reject` is called with
+   mandatory `remarks`, **Then** status → `rejected`; employee is notified.
+4. **Given** an Approved claim, **When** `PATCH /hr/reimbursements/:id/pay` is called with
+   `{ paymentMode: 'direct', paymentDate, paymentReference }`, **Then** status → `paid`,
+   payment details recorded. Alternatively, `paymentMode: 'payroll'` includes the claim amount
+   as an earnings line in the employee's next payroll run.
+5. **Given** the Reimbursement Register, **When** `GET /hr/reimbursements/register` is called,
+   **Then** it returns all claims with status filters; summary totals by status.
+
+---
+
 ### Edge Cases
 
 - What happens when an employee's Employment Type changes from Daily Wage to Full Time mid-cycle?
@@ -580,11 +641,22 @@ queue (confirming employee, site, reason, requested-on are all present), and app
   minutes; attendance marking completes in under 15 seconds per worker, per the PRD's own targets.
 - **SC-009**: Across all testing, zero cross-site Daily Worker enrolment/attendance actions succeed
   for a supervisor not assigned to that site.
+- **SC-010**: F&F settlement computation matches hand-calculation of pending salary + EL
+  encashment + loan recovery for a test employee across all testing.
+- **SC-011**: Reimbursement claims in `rejected` or `draft` status never appear in payroll runs
+  or the payment queue across all testing.
 
 ## Assumptions
 
 - Per the confirmed scope decisions: TDS is a manual per-run entry (no slab calculation built);
   document virus scanning is deferred as a tracked gap, not implemented.
+- **Reimbursement Categories** is a new Settings master added by this feature to `settings.Company`
+  scope: `{ id, companyId, name, receiptRequired (bool), maxAmount (decimal?) }`. This feature
+  adds the Prisma model and the Settings endpoints to manage it; the `hr` module reads via
+  `SettingsService.getReimbursementCategories(companyId)`.
+- F&F settlement: leave encashment rate = employee's `basic / 26` per day (standard); loan
+  recovery = remaining loan outstanding balance; pro-rated salary = (days worked / month days) ×
+  monthly gross. These are computed by the F&F service, not configurable rates.
 - This feature extends, never redefines, the entities My Workspace (003) and Settings (002) already
   specced — `Employee`, `Site`, `PunchRecord`, `LeaveApplication`/`LeaveBalance`, `PayrollRun`,
   `ReEnrolmentRequest` (003) and `Company`, `Department`, `Designation`, `DocumentType`, `Shift`,

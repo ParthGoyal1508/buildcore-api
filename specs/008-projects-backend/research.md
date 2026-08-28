@@ -37,13 +37,13 @@ also force `ProjectsModule` to import from `HrModule` to list its own sites — 
 
 ## 3. P&L on-demand calculation via `Promise.allSettled`
 
-**Decision**: `ProjectPnlService.compute(projectId, period)` issues four cross-module calls in
+**Decision**: `ProjectPnlService.compute(projectId, period)` issues **five** cross-module calls in
 parallel using `Promise.allSettled`: `HrPayrollService.getLabourCostByProject(projectId, dateRange)`,
 `InventoryService.getMaterialCostByProject(projectId, dateRange)`,
 `PlantService.getMachineryCostByProject(projectId, dateRange)`,
-`PartnersService.getSubcontractorCostByProject(projectId, dateRange)`. Settled rejections populate
-`unavailableModules: string[]` in the response with a zero value for that line; fulfilled values
-compose the P&L statement. No stored snapshot — every `GET /projects/:id/pnl` request recomputes.
+`PlantService.getFuelCostByProject(projectId, dateRange)`,
+`PartnersService.getSubcontractorCostByProject(projectId, dateRange)`. Machinery and Fuel are
+two separate calls and two separate P&L lines (master PRD §7.5.4). No stored snapshot — every `GET /projects/:id/pnl` request recomputes.
 
 **Rationale**: On-demand was the clarification-session answer (Q1 of spec clarifications). The
 four calls are independent and can run in parallel; `allSettled` rather than `Promise.all` is the

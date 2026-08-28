@@ -39,14 +39,16 @@
 ## Scenario 3 — Monthly Compliance + complianceStatus recompute (US4)
 
 1. `POST /partners/compliance` with PF data only (no ESIC). **Expected**: 201, `status: "partial"`.
-2. `GET /partners/contractors/:id`. **Expected**: `complianceStatus: "non_compliant"` (1 of 3
-   look-back months is partial, other 2 are missing).
+2. `GET /partners/contractors/:id`. **Expected**: `complianceStatus: "partially_compliant"`
+   (last month has only PF submitted — master PRD §7.7.2 rule).
 3. `PATCH /partners/compliance/:id` adding ESIC data. **Expected**: 200, `status: "submitted"`.
-4. `PATCH /partners/compliance/:id/verify`. **Expected**: 200, `status: "verified"`,
+4. `GET /partners/contractors/:id`. **Expected**: `complianceStatus: "compliant"` (both PF+ESIC
+   submitted for the last concluded month).
+5. `PATCH /partners/compliance/:id/verify`. **Expected**: 200, `status: "verified"`,
    `verifiedByUserId` set.
-5. `PATCH /partners/compliance/:id` after verify. **Expected**: 409 (verified records immutable).
-6. Seed 2 more months as verified for the same contractor.
-   `GET /partners/contractors/:id`. **Expected**: `complianceStatus: "compliant"`.
+6. `PATCH /partners/compliance/:id` after verify. **Expected**: 409 (verified records immutable).
+7. Seed a contractor with no compliance record for last month.
+   `GET /partners/contractors/:id`. **Expected**: `complianceStatus: "non_compliant"`.
 
 ---
 

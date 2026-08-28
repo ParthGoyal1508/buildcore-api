@@ -90,8 +90,12 @@ Immutable after insert. Referenced by `StockService.recomputeWAR()` (research.md
 ```
 { id, companyId, fromSiteId (UUID), toSiteId (UUID), itemId FK→Item,
   date (date), quantity (decimal), remarks?,
+  status: 'pending' | 'in_transit' | 'received' (default 'pending'),
   deleted (boolean, default false), createdAt }
 ```
+
+Note: stock updates (source `transferOut` + destination `transferIn`) happen atomically at
+creation regardless of status. Status tracks physical movement confirmation only.
 
 ## Payment (`inventory` schema — new)
 

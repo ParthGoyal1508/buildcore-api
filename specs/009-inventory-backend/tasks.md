@@ -223,32 +223,31 @@ same-site → 400; delete → both balances revert.
 
 ## Phase 8: User Story 7 — Payments & Bill Allocation (Priority: P2)
 
-**Goal**: Atomic payment creation with allocation validation, bill status updates, delete reversal.
+**Goal**: FIFO payment allocation — system auto-allocates oldest bills first, no manual selection.
 
-**Independent Test**: Allocate ₹5k + ₹2k from ₹7k payment; verify bill statuses; over-allocate
-→ 400; delete payment → bills revert.
+**Independent Test**: Seed oldest bill ₹5,000 + newer bill ₹3,000 for a vendor. Record ₹7,000
+payment — oldest bill → paid, newer bill → part_paid. Record ₹1,000 — newer bill → paid.
+Delete first payment — both bills revert.
 
 ### Implementation for User Story 7
 
-- [ ] T033 [P] [US7] Create payment DTOs in `src/inventory/payments/dto/`:
-      `create-payment.dto.ts` (with nested `allocations: AllocationsInput[]`),
-      `allocation-input.dto.ts`
+- [ ] T033 [P] [US7] Create `src/inventory/payments/dto/create-payment.dto.ts` with
+      `vendorId`, `amount`, `date`, `paymentMode`, `referenceNumber` fields only —
+      no allocations array (FIFO is automatic)
 - [ ] T034 [P] [US7] Implement `PaymentsService` in
       `src/inventory/payments/payments.service.ts`:
-      - Pre-validation: sum(allocations) ≤ amount → 400; each allocatedAmount ≤ bill remaining
-        → 400 (spec FR-006)
-      - Prisma transaction: `SELECT ... FOR UPDATE` on each referenced `PurchaseBill` row
-        before updating (M-006 remediation: prevents concurrent double-payment on the same
-        bill); create `Payment`, create `PaymentAllocation` rows, update each
-        `PurchaseBill.paidAmount` and re-derive `paymentStatus`, set `Payment.allocatedAmount`;
-        audit-log (research.md §7)
-      - `delete`: reverse all allocations atomically with bill-row lock; re-derive statuses
-      - `findAll` (with `allocatedBillCount`), `getOutstandingBills(vendorId)` utility
+      - `create`: Prisma transaction — fetch vendor's unpaid/part-paid bills ordered by
+        `date ASC` (FIFO), `SELECT ... FOR UPDATE` on each, greedily allocate payment amount
+        across bills, create `PaymentAllocation` rows, update `PurchaseBill.paidAmount` +
+        `paymentStatus`, set `Payment.allocatedAmount` + `unallocatedBalance`; audit-log
+      - `delete`: reverse all FIFO allocations atomically with bill-row lock; re-derive statuses
+      - `findAll` (with `allocatedBillCount`, `unallocatedBalance`)
+      - Remove `getOutstandingBills()` utility — no longer needed for manual allocation
 - [ ] T035 [P] [US7] Unit test `PaymentsService`:
-      - over-allocation sum → 400
-      - per-bill overflow → 400
-      - correct bill status transitions (unpaid→part_paid→paid)
-      - delete reversal → bills revert to prior status
+      - FIFO order: oldest bill gets paid first
+      - excess payment: all bills paid, `unallocatedBalance = amount − total outstanding`
+      - partial payment: oldest bill paid first, second bill part-paid
+      - delete reversal → bills revert
       - `src/inventory/payments/payments.service.spec.ts`
 - [ ] T036 [US7] Implement `PaymentsController` in
       `src/inventory/payments/payments.controller.ts`: all endpoints,

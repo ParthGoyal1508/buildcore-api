@@ -34,9 +34,10 @@ object-storage pattern as features 005 and 008."
 - Q: How is Contractor compliance status derived — computed on-demand from `MonthlyCompliance`
   rows, or stored and updated on each record change? → A: Stored on the `ContractorProfile`
   table and recomputed/written whenever a `MonthlyCompliance` record is created, updated, or
-  verified. The recomputation looks at the last 3 months: all verified → Compliant; any missing
-  → Non-compliant; at least one partial → Partially compliant. This avoids repeated aggregation
-  on every Contractor list read.
+  verified. The recomputation uses the **most recently concluded calendar month's** record:
+  both PF and ESIC submitted/verified → Compliant; only one submitted → Partially Compliant;
+  neither or no record → Non-compliant. This matches the master PRD §7.7.2 rule directly —
+  no 3-month rolling window.
 - Q: Does `getSubcontractorCostByProject(projectId, dateRange)` sum `WorkOrder` amounts from the
   `projects` schema, or does it sum `MonthlyCompliance` payment amounts, or contractor billing
   records? → A: It sums Work Order amounts from the `projects` schema via
@@ -53,9 +54,9 @@ object-storage pattern as features 005 and 008."
   and uses a stub returning 0; feature 008 (Projects) ships the real method in a separate
   task (TODO added to 008's plan.md). Partners can ship independently without blocking on 008.
 - Q: When a contractor has fewer than 3 months of history, how is `complianceStatus` computed?
-  → A: Missing months always count as "missing" — a new contractor with no compliance records
-  has all 3 look-back months as missing, so `complianceStatus = 'non_compliant'` from day one.
-  No grace period, no `not_started` status. Consistent with the PRD's 100%-tracked-monthly goal.
+  → A: Based solely on the most recently concluded calendar month's record (master PRD rule,
+  updated from the original 3-month window). A new contractor with no compliance record for
+  the last concluded month is `non_compliant` by default.
 - Q: If a Vendor with a linked ContractorProfile is set to `active: false`, does that contractor
   appear in the RAG Matrix and new compliance recording? → A: No — inactive vendors are excluded
   from the RAG Matrix rows and from the Contractor dropdown in new compliance entries. Their
@@ -201,8 +202,10 @@ vendor data.
 4. **Given** a Submitted compliance record, **When** `PATCH /partners/compliance/:id/verify` is
    called, **Then** `status` moves to `'verified'`, and `verifiedByUserId` + `verifiedAt` are
    set.
-5. **Given** a compliance record, **When** status changes, **Then** `ContractorProfile.
-   complianceStatus` for that contractor is recomputed based on the last 3 months' records.
+5. **Given** a compliance record is created, updated, or verified, **Then**
+   `ContractorProfile.complianceStatus` is recomputed based on the most recently concluded
+   calendar month: both PF and ESIC submitted/verified → `compliant`; only one →
+   `partially_compliant`; neither or no record → `non_compliant` (master PRD §7.7.2 rule).
 6. **Given** the compliance list, **When** `GET /partners/compliance?contractorId=&month=&
    status=&page=` is called, **Then** results are paginated and filterable.
 7. **Given** month-end (end of current or previous month) passes with no compliance record for
@@ -325,7 +328,10 @@ and labourAmount=₹20k, materialAmount=₹10k within the date range); call
 - **FR-004**: Vendor "Deals In" categories MUST be stored via a `VendorDealsIn` join table
   linking `Vendor` ↔ `VendorCategory`; the join is fully replaced on vendor update.
 - **FR-005**: `ContractorProfile.complianceStatus` MUST be recomputed and persisted whenever a
-  `MonthlyCompliance` record is created, updated, or verified — never lazy-read at list time.
+  `MonthlyCompliance` record is created, updated, or verified. Rule (master PRD §7.7.2):
+  look at the **most recently concluded calendar month's** record — both PF and ESIC
+  submitted/verified → `compliant`; exactly one → `partially_compliant`; neither or no record
+  → `non_compliant`. Never lazy-read at list time.
 - **FR-006**: Monthly compliance `status` MUST be auto-derived from PF/ESIC data presence:
   both present → `submitted`; one present → `partial`; neither → `missing`. `verified` is a
   manually triggered state transition (separate PATCH endpoint), not auto-derived.

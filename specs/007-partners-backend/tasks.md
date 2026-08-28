@@ -168,15 +168,16 @@ audit-logged, immutable); check contractor `complianceStatus` updates.
       `create-compliance.dto.ts` (with `month` YYYY-MM format validation), `update-compliance.dto.ts`
 - [ ] T025 [P] [US4] Implement `ComplianceStatusService` in
       `src/partners/compliance/compliance-status.service.ts`:
-      `recompute(contractorProfileId)` — queries last 3 completed calendar months (research.md §11),
-      derives `complianceStatus` (all-verified → compliant; any missing → non_compliant; mixed
-      partial/submitted → partially_compliant), persists to `ContractorProfile` in the caller's
-      transaction
+      `recompute(contractorProfileId)` — queries the most recently concluded calendar month's
+      `MonthlyCompliance` record for this contractor; derives `complianceStatus` using the
+      master PRD §7.7.2 rule: both PF+ESIC submitted/verified → `compliant`; exactly one →
+      `partially_compliant`; neither or no record → `non_compliant`; persists to
+      `ContractorProfile` in the caller's transaction — research.md §3, §11
 - [ ] T026 [P] [US4] Unit test `ComplianceStatusService.recompute()`:
-      - all 3 months verified → `compliant`
-      - 2 verified + 1 missing → `non_compliant`
-      - 2 submitted + 1 verified (none missing) → `partially_compliant`
-      - new contractor, no records → `non_compliant`
+      - last month has both PF+ESIC (submitted/verified) → `compliant`
+      - last month has PF only → `partially_compliant`
+      - last month has no record → `non_compliant`
+      - last month has ESIC only → `partially_compliant`
       - `src/partners/compliance/compliance-status.service.spec.ts`
 - [ ] T027 [US4] Implement `ComplianceService` in
       `src/partners/compliance/compliance.service.ts`: `create` (status auto-derive, call
