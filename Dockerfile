@@ -1,5 +1,9 @@
 FROM node:20-slim AS builder
 
+# node:*-slim ships without OpenSSL, which the Prisma query engine needs both to
+# detect the right binary target at `generate` time and to dlopen at runtime.
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
 # Create app directory
 WORKDIR /app
 
@@ -15,6 +19,8 @@ COPY . .
 RUN npm run build
 
 FROM node:20-slim
+
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
