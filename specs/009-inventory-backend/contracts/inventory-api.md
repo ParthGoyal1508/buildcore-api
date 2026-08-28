@@ -1,0 +1,117 @@
+# Contract: `/inventory/*` endpoints
+
+All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three new values
+added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
+`INVENTORY_PAYMENTS`.
+
+---
+
+## Item Categories — `/inventory/categories` (permission: `INVENTORY_STOCK`)
+
+- `GET /inventory/categories` — list with `itemCount` per category.
+- `POST /inventory/categories` — `{ name }` → 201; name stored uppercase. `409` on duplicate.
+- `PATCH /inventory/categories/:id` — update name.
+- `DELETE /inventory/categories/:id` — `409` if linked items exist.
+
+---
+
+## Items — `/inventory/items` (permission: `INVENTORY_STOCK`)
+
+- `GET /inventory/items?search=&categoryId=&page=` — paginated list.
+- `POST /inventory/items` — `{ name, categoryId, unit, description? }` → 201; code auto-generated.
+  `409` on duplicate name per company.
+- `PATCH /inventory/items/:id` — partial update (not code; not categoryId if stock exists).
+- `DELETE /inventory/items/:id` — `409` if any Purchase/Issue/Transfer references this item.
+
+---
+
+## Stock — `/inventory/stock` (permission: `INVENTORY_STOCK`)
+
+- `GET /inventory/stock?siteId=&categoryId=&search=&page=` — paginated stock rows. Each row
+  is a `StockRow` (data-model.md); `stockValue` computed server-side. Only item-sites with a
+  `StockBalance` row (at least one purchase) are returned.
+
+---
+
+## Purchases — `/inventory/purchases` (permission: `INVENTORY_PURCHASES`)
+
+- `GET /inventory/purchases?siteId=&vendorId=&paymentStatus=&dateFrom=&dateTo=&page=` —
+  paginated list. Includes vendor name (via `PartnersService`), bill file URL.
+- `POST /inventory/purchases` — `multipart/form-data`: `{ siteId, itemId, vendorId, date,
+  quantity, rate, billFile? }`. Creates `Purchase`, appends `StockLedgerEntry` (type: purchase),
+  upserts `StockBalance` (increments `received`, recalculates WAR), creates `PurchaseBill`
+  (status: unpaid). → 201. Audit-logged.
+- `PATCH /inventory/purchases/:id` — update `date`, `remarks` only (quantity/rate changes
+  require delete + re-create — immutable financial fields). `409` if deleted.
+- `DELETE /inventory/purchases/:id` — soft-delete: sets `deleted: true`, appends
+  `purchase_reversal` ledger entry, decrements `StockBalance.received`, replays WAR
+  (research.md §3). `409` if bill has `allocatedAmount > 0`.
+
+---
+
+## Issues — `/inventory/issues` (permission: `INVENTORY_PURCHASES`)
+
+- `GET /inventory/issues?siteId=&itemId=&dateFrom=&dateTo=&page=` — paginated list.
+- `POST /inventory/issues` — `{ siteId, itemId, date, quantity, issuedTo, remarks? }`.
+  Uses `SELECT FOR UPDATE` on `StockBalance`; `422` with `{ availableStock: N }` if
+  `quantity > inStock`. On success: appends `issue` ledger entry, increments
+  `StockBalance.issued`. Audit-logged. → 201.
+- `DELETE /inventory/issues/:id` — soft-delete with `issue_reversal` ledger entry; decrements
+  `issued`. `422` if reversal would make `issued` negative.
+
+---
+
+## Transfers — `/inventory/transfers` (permission: `INVENTORY_PURCHASES`)
+
+- `GET /inventory/transfers?fromSiteId=&toSiteId=&itemId=&dateFrom=&dateTo=&page=`
+- `POST /inventory/transfers` — `{ fromSiteId, toSiteId, itemId, date, quantity, remarks? }`.
+  `400` if `fromSiteId === toSiteId`. Uses `SELECT FOR UPDATE` on source `StockBalance`; `422`
+  if `quantity > source inStock`. Appends `transfer_out` and `transfer_in` ledger entries,
+  updates both `StockBalance` rows, atomically. Audit-logged. → 201.
+- `DELETE /inventory/transfers/:id` — soft-delete with both reversal entries; both
+  `StockBalance` rows revert atomically.
+
+---
+
+## Payments — `/inventory/payments` (permission: `INVENTORY_PAYMENTS`)
+
+- `GET /inventory/payments?vendorId=&dateFrom=&dateTo=&paymentMode=&page=` — paginated;
+  includes `allocatedBillCount` (count of `PaymentAllocation` rows).
+- `POST /inventory/payments` — `{ vendorId, amount, date, paymentMode, referenceNumber,
+  allocations: [{ billId, allocatedAmount }] }`. Pre-validates: sum ≤ amount, each
+  allocatedAmount ≤ bill.remainingAmount. Then atomically: creates `Payment`, creates
+  `PaymentAllocation` rows, updates `PurchaseBill.paidAmount` + `paymentStatus`, sets
+  `Payment.allocatedAmount`. Audit-logged. → 201.
+- `DELETE /inventory/payments/:id` — reverses all allocations atomically; decrements
+  `PurchaseBill.paidAmount`; re-derives bill `paymentStatus`; resets `Payment.allocatedAmount`.
+
+## Utility endpoints (permission: `INVENTORY_PURCHASES`)
+
+- `GET /inventory/stock/:itemId/:siteId` — single item-site stock (used by Issue/Transfer
+  forms to show available stock hint). Returns `{ inStock, avgRate }` or `{ inStock: 0 }` if
+  no `StockBalance` row exists.
+- `GET /inventory/bills?vendorId=&paymentStatus=unpaid,part_paid` — list of outstanding
+  `PurchaseBill` rows for a vendor (used by Payment modal's allocation list).
+
+---
+
+## Exported service method (for ProjectsModule P&L)
+
+```typescript
+// Exported from InventoryModule for injection by ProjectsModule
+class InventoryService {
+  async getMaterialCostByProject(
+    projectId: string,
+    dateRange: { from: Date; to: Date }
+  ): Promise<number>
+  // Calls ProjectsService.getSitesByProject(projectId) stub (TODO(008))
+  // Returns 0 gracefully if stub returns [] or throws
+}
+```
+
+---
+
+## Audit logging
+
+Extends `shared.AuditLogEntry.entityType` with: `ITEM_CATEGORY`, `ITEM`, `PURCHASE`, `ISSUE`,
+`STOCK_TRANSFER`, `PAYMENT`. Every create/update/delete writes an audit entry.

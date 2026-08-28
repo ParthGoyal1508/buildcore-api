@@ -1,0 +1,10 @@
+{
+  "workflow": "speckit",
+  "specName": "009-inventory-backend",
+  "branch": "009-inventory-backend",
+  "selectedAt": "2026-08-28T06:37:01.929Z",
+  "currentStep": "specify",
+  "status": "draft",
+  "history": [],
+  "telemetryInstanceId": "babfbb41-5c72-4404-ad85-1ef013807fd6"
+}
