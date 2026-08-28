@@ -1,31 +1,212 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  schemas  = ["shared", "settings"]
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema"]
 }
 
 generator dbml {
   provider = "prisma-dbml-generator"
 }
 
-// Placeholder auth model — the field-level schema per ERP module
-// (hr, payroll, projects, plant, inventory, partners, settings, shared)
-// is the next follow-up task; see docs/HLD.md §5.1 in the ERP-Demo repo.
+// `shared` is the cross-module schema for concerns that don't belong to any single
+// named business module (hr, payroll, projects, plant, inventory, partners, settings)
+// — see the constitution's schema-per-module principle and specs/001-user-login-backend/
+// research.md §10. Account/session/audit data lives here.
+//
+// `settings` normally belongs to 002-settings-backend, which hasn't been built yet.
+// Role/Permission/UserRole are pulled forward into this feature (2026-08-28 design
+// decision, prompted by a direct question about why Super Admin was schema-special-
+// cased instead of being an ordinary, dynamically-editable role) because login/access
+// control cannot work without a real permission model — 002 owns *managing* roles
+// (CRUD, the other eight default roles from the PRD) but does not own the schema
+// itself once this feature exists first.
+
 model User {
   id        String   @id @default(cuid())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  email     String   @unique
+
+  email     String @unique
+  username  String @unique
   password  String
   firstname String?
   lastname  String?
-  role      Role     @default(USER)
+
+  /// A user can hold more than one role at once (2026-08-28 clarification) — their
+  /// effective permissions are the union across every assigned role's permissions.
+  userRoles UserRole[]
+
+  /// The account's home company. Still present even for a user who also holds a
+  /// role with CROSS_COMPANY_ACCESS (research.md §5 update) — cross-company access
+  /// is now a permission, not a null-companyId special case, so a "super admin"
+  /// account can still meaningfully belong to one home company.
+  companyId String?
+
+  status               UserStatus @default(active)
+  mustChangePassword   Boolean    @default(false)
+  /// Resets to 0 on next successful login (FR-013).
+  consecutiveFailures  Int        @default(0)
+  /// Set when consecutiveFailures reaches the configured threshold (FR-012).
+  lockedUntil          DateTime?
+
+  refreshTokens   RefreshToken[]
+  auditLogEntries AuditLogEntry[]
+
+  @@schema("shared")
 }
 
-enum Role {
-  ADMIN
-  USER
+enum UserStatus {
+  active
+  deactivated
+
+  @@schema("shared")
+}
+
+/// A named, editable set of permissions (`settings` schema — see header comment on
+/// why this feature creates it ahead of 002). Seeded here with only the one
+/// permanent, protected role this feature itself depends on (Super Admin); the
+/// other eight default roles from the PRD are 002-settings-backend's own seeding
+/// work, once it exists.
+///
+/// Deliberately NOT row-level-secured: role *definitions* are global reference data
+/// shared across every company (one system-wide "Super Admin" role, not one per
+/// company), so Principle IV's per-tenant isolation requirement doesn't apply here
+/// — every authenticated user can read what a role grants. UserRole (who
+/// actually *holds* a role) is the tenant-scoped side, and is RLS-protected.
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  permissions Permission[]
+  /// True only for the seeded Super Admin role — blocks rename/permission-change/
+  /// delete (002-settings-backend FR-008; enforced there once it owns role editing —
+  /// this feature only ever reads roles, it doesn't expose role management).
+  isProtected Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  userRoles UserRole[]
+
+  @@schema("settings")
+}
+
+/// Join table — a user can hold multiple roles, a role can be held by multiple users.
+/// Unlike Role itself (global reference data, not tenant-scoped — see Role's own
+/// comment), *who has which role* is tenant data: carries companyId, denormalized
+/// from the user at assignment time, so it follows the same RLS pattern as every
+/// other tenant-scoped table this feature relies on (FR-020).
+model UserRole {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  roleId    String
+  role      Role     @relation(fields: [roleId], references: [id])
+  companyId String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@schema("settings")
+}
+
+enum Permission {
+  DASHBOARD
+  EMPLOYEES
+  ATTENDANCE
+  PROJECTS
+  DWR
+  PROJECT_FINANCIALS
+  MACHINERY
+  INVENTORY
+  PARTNERS
+  REPORTS
+  PAYROLL
+  CHALLANS
+  LOANS
+  LOGBOOK
+  FUEL
+  DAILY_WORKER_REGISTRY
+  MY_WORKSPACE
+  SETTINGS
+  USER_MANAGEMENT
+  COMPANY_SETTINGS
+  DATA_EXPORT
+  DATA_DELETE
+  /// New, added by this feature (not in 002-settings-backend's original list): the
+  /// capability that lets a role's holder see/act across every company rather than
+  /// just their own — replaces the old hardcoded "role === SUPER_ADMIN" schema
+  /// exception (research.md §5 update, FR-020a).
+  CROSS_COMPANY_ACCESS
+
+  @@schema("settings")
+}
+
+/// One signed-in period on one device/client, as a chain of rotating refresh tokens
+/// sharing a `familyId` — see data-model.md "Refresh Token".
+model RefreshToken {
+  id        String  @id @default(cuid())
+  /// HMAC-hashed opaque token value (SecurityConfig.refreshTokenHashSecret as pepper) —
+  /// the raw value is never stored, mirroring password hashing practice.
+  tokenHash String  @unique
+  familyId  String
+  accountId String
+  account   User    @relation(fields: [accountId], references: [id])
+  /// Copied from the owning account at issuance — every tenant-scoped table this
+  /// feature relies on carries a company identifier (FR-020); null when the owning
+  /// account has no home company.
+  companyId String?
+
+  /// Copied from the family's original login onto every rotated token — determines
+  /// each rotation's cookie Max-Age and server-side expiry (FR-006).
+  rememberMe Boolean
+  /// Set true the moment this token is rotated (exchanged for a new one).
+  used       Boolean   @default(false)
+  /// When `used` was set — lets rotation tell a genuine replay apart from a benign
+  /// concurrent-refresh race within a short grace window (research.md §2).
+  usedAt     DateTime?
+  /// Set on logout, reuse detection, account deactivation, or admin-reset-password.
+  revokedAt  DateTime?
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+
+  @@index([familyId])
+  @@index([accountId])
+  @@schema("shared")
+}
+
+/// Immutable security-event record — write-only in this feature (spec.md 2026-08-26
+/// clarification: reading/querying is a separate, later Activity Log feature).
+model AuditLogEntry {
+  id        String         @id @default(cuid())
+  eventType AuditEventType
+
+  accountId String?
+  account   User?   @relation(fields: [accountId], references: [id])
+  /// Populated only when accountId is null (an unregistered-identifier login_failure),
+  /// so that failure is still traceable without inventing an account reference.
+  attemptedEmail String?
+  /// Copied from the account at event time; null for an unregistered-identifier
+  /// failure and for any event with no company-scoped account.
+  companyId String?
+
+  ipAddress String
+  createdAt DateTime @default(now())
+
+  @@index([accountId])
+  @@schema("shared")
+}
+
+enum AuditEventType {
+  login_success
+  login_failure
+  account_locked
+  logout
+  refresh_reuse_detected
+  admin_password_reset
+
+  @@schema("shared")
 }

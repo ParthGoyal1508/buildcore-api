@@ -10,10 +10,11 @@ contract's *observable* behavior (what a client sees) remains compatible.
 
 **Request** (`LoginDto`, extended):
 ```ts
-{ email: string; password: string; rememberMe: boolean }
+{ identifier: string; password: string; rememberMe: boolean }
 ```
-Validated via `class-validator`; unexpected fields rejected (global `ValidationPipe` with
-`whitelist`/`forbidNonWhitelisted`, per Constitution Principle II).
+`identifier` is either the account's email or its username — the service looks up by whichever
+matches (FR-001). Validated via `class-validator`; unexpected fields rejected (global
+`ValidationPipe` with `whitelist`/`forbidNonWhitelisted`, per Constitution Principle II).
 
 **Response — 200 OK**:
 ```ts
@@ -25,8 +26,8 @@ Validated via `class-validator`; unexpected fields rejected (global `ValidationP
   account, whose token carries no `companyId` claim (or an explicit `allCompanies: true` marker)
   instead (FR-005, FR-020a).
 
-**Response — 401 Unauthorized** (unregistered email, wrong password, or deactivated account —
-indistinguishable, FR-002):
+**Response — 401 Unauthorized** (unregistered email/username, wrong password, or deactivated
+account — indistinguishable, FR-002):
 ```ts
 { message: "Invalid email or password" }
 ```
@@ -72,6 +73,28 @@ On every request bearing an access token, the guard chain MUST re-check the acco
 `status` (and, if changed, `role`) against the database — not merely trust the token's claims —
 and reject with 401 if the account no longer qualifies. This applies uniformly, including to a
 Super Admin's cross-company-scoped token.
+
+## `POST /auth/admin/reset-password` (FR-022, FR-022a)
+
+**Request**:
+```ts
+{ targetAccountId: string; temporaryPassword: string }
+```
+Restricted to an admin role via the FR-010 role guard, scoped to the target account's own company
+(Super Admin exempt from that scoping, per FR-020a). Validated via `class-validator` the same as
+every other endpoint here (Principle II).
+
+**Response — 200 OK**: `{ success: true }`. Side effects (FR-022, data-model.md "Admin Password
+Reset"): target account's `password` is overwritten with the argon2 hash of `temporaryPassword`,
+`mustChangePassword` is set `true`, every active refresh-token session for that account is revoked,
+and an `admin_password_reset` audit entry is recorded.
+
+**Response — 403 Forbidden**: caller lacks an admin role, or (non-Super-Admin caller) the target
+account belongs to a different company.
+
+**Response — 404 Not Found**: `targetAccountId` does not resolve to an existing account.
+
+**Response — 400 Bad Request**: standard DTO validation failure.
 
 ## Role-restricted endpoints (FR-010, any future endpoint — not just auth's own)
 

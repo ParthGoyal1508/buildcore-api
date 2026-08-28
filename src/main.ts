@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { PrismaClientExceptionFilter } from 'nestjs-prisma';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import type {
   CorsConfig,
@@ -13,8 +14,19 @@ import type {
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Validation
-  app.useGlobalPipes(new ValidationPipe());
+  // Refresh tokens are delivered/read exclusively as HttpOnly cookies (FR-006) —
+  // req.cookies is otherwise undefined under Express.
+  app.use(cookieParser());
+
+  // Validation — whitelist/forbidNonWhitelisted reject any unexpected field
+  // (Principle II, FR-001/FR-018), transform coerces payloads to their DTO classes.
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
 
   // enable shutdown hook
   app.enableShutdownHooks();
@@ -42,7 +54,11 @@ async function bootstrap() {
 
   // Cors
   if (corsConfig.enabled) {
-    app.enableCors({ origin: corsConfig.origin });
+    // credentials: true is required for the browser to accept/send the
+    // HttpOnly refresh-token cookie cross-origin (frontend and backend are
+    // separate origins in both local dev and production) — without it the
+    // Set-Cookie response header is silently ignored by the browser.
+    app.enableCors({ origin: corsConfig.origin, credentials: true });
   }
 
   await app.listen(process.env.PORT || nestConfig.port || 3000);

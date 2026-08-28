@@ -38,6 +38,23 @@ general-purpose role/permission guard system."
   sufficient? → A: Write-only in this feature — reading/querying the audit log is a separate,
   later Activity Log feature.
 
+### Session 2026-08-28
+
+- Q: Should login accept only an email, or also a username? → A: Both — an account has a unique
+  `username` in addition to its email, and the login identifier field accepts either. The username
+  is set by an admin when the account is created/invited (`010-account-creation-backend`'s scope,
+  not self-chosen by the user), so this feature only needs to read it, not assign it.
+- Q: Should `mustChangePassword` ever be settable outside of account creation — e.g., an admin
+  forcing a reset? → A: Yes — a new minimal admin-only endpoint sets a target account's password to
+  an admin-supplied temporary value and marks `mustChangePassword` true. This is backend-only scope;
+  no corresponding UI is built in `001-user-login` (buildcore-web) — that screen stays scoped to the
+  login form itself, per its own spec.
+- Q: Should cross-company access ever extend beyond Super Admin (e.g., a role that needs a
+  consolidated, multi-company view)? → A: No change here — confirmed the existing one-company-per-
+  account model with the single Super Admin exception (FR-020a) stands exactly as specified. A
+  future consolidated/multi-company *view* for other roles, if wanted, is a reporting-level concern
+  for a different feature (e.g., Dashboard's Group Dashboard), not a login-scope change.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Authenticate with valid credentials (Priority: P1)
@@ -229,14 +246,14 @@ reaching that route's own logic, while a correctly-roled account passes through.
 
 ### Functional Requirements
 
-- **FR-001**: The system MUST expose a login endpoint accepting an email, a password, and a
-  "remember me" flag, validating the request shape and rejecting any unexpected field before any
-  credential check occurs.
-- **FR-002**: The system MUST reject a login attempt whenever the email is unregistered, the
-  password is wrong, or the account is deactivated, returning the identical generic rejection in
-  every one of these cases.
-- **FR-003**: The system MUST treat the registered email as case-insensitive and trim surrounding
-  whitespace before every lookup or comparison.
+- **FR-001**: The system MUST expose a login endpoint accepting an identifier (either the
+  account's email or its username), a password, and a "remember me" flag, validating the request
+  shape and rejecting any unexpected field before any credential check occurs.
+- **FR-002**: The system MUST reject a login attempt whenever the identifier (email or username) is
+  unregistered, the password is wrong, or the account is deactivated, returning the identical
+  generic rejection in every one of these cases.
+- **FR-003**: The system MUST treat the registered email and username as case-insensitive and trim
+  surrounding whitespace before every lookup or comparison, on both fields.
 - **FR-004**: The system MUST hash and verify passwords using argon2, and MUST NOT store, log, or
   otherwise expose a password in plaintext at any point.
 - **FR-005**: On a successful login, the system MUST issue a short-lived access token (target: 15
@@ -294,17 +311,31 @@ reaching that route's own logic, while a correctly-roled account passes through.
   extendable to any other role.
 - **FR-021**: These endpoints MUST be reachable only over an encrypted connection; no credential or
   session token is ever accepted or issued over an unencrypted connection.
+- **FR-022**: The system MUST provide an admin-only endpoint that sets a target account's password
+  to an admin-supplied temporary value and marks that account's `mustChangePassword` flag true,
+  without requiring or checking the target account's own prior credentials. This action MUST be
+  recorded to the audit log (accompanying `eventType` extended per FR-017/data-model.md) and MUST
+  revoke every one of that account's existing refresh-token sessions (same effect as FR-009's
+  re-validation would eventually produce, applied eagerly so the old sessions can't outlive the
+  password they were issued under).
+- **FR-022a**: The admin-reset endpoint (FR-022) MUST be restricted to callers holding an
+  administrative role for the target account's own company (or Super Admin, cross-company), via the
+  same declarative role guard as FR-010 — an admin from a different company MUST NOT be able to
+  reset a password outside their own company.
 
 ### Key Entities
 
 - **User Account**: A registered person who can authenticate — holds the argon2 password hash, a
   role, a status (active/deactivated, plus a `pending` pre-activation state added by
-  `010-account-creation-backend`), and a mandatory-password-change flag. Every account except a
-  Super Admin carries exactly one company identifier; a Super Admin account instead carries the
-  explicit cross-company marker described in FR-020a. Owned by `010-account-creation-backend`
-  (built via the Invite Flow — was an unresolved forward reference to a "separate Account Creation
-  feature" until that feature was specced); this feature reads and enforces this state but does
-  not create or edit accounts.
+  `010-account-creation-backend`), a unique `username` (in addition to email; both are valid login
+  identifiers per FR-001), and a mandatory-password-change flag. Every account except a Super Admin
+  carries exactly one company identifier; a Super Admin account instead carries the explicit
+  cross-company marker described in FR-020a. Ownership is split: `010-account-creation-backend`
+  owns *creating* an account (including assigning its username and email — built via the Invite
+  Flow); this feature reads and enforces that state for login/session purposes, and additionally
+  owns the one exception where it *writes* to an existing account — the admin-reset-password action
+  (FR-022), which only ever overwrites `password`/`mustChangePassword` on an already-created
+  account, never creates one.
 - **Session (Refresh Token Family)**: One signed-in period on one device/client, represented as a
   chain of rotating refresh tokens sharing a common lineage — a reuse of any non-current token in
   the chain revokes the whole chain. Carries its own expiry (30 days for "remember me", a short
@@ -362,10 +393,18 @@ reaching that route's own logic, while a correctly-roled account passes through.
   this feature per the clarification, even though this feature's own endpoints (login/refresh/
   logout) don't themselves require a specific role — it exists so future protected endpoints can
   adopt it without rework.
-- Forgot Password (OTP) and Password Change (logged-in user) remain out of scope for this feature.
-  Account Creation (admin provisioning) also remained out of scope here, matching the
-  already-agreed boundary on the buildcore-web side of this feature — it is now built separately
-  as `010-account-creation-backend`.
+- Forgot Password (OTP) and Password Change (logged-in user, changing their own password while
+  signed in) remain out of scope for this feature. Account Creation (admin provisioning, including
+  assigning a new account's username/email) also remained out of scope here, matching the
+  already-agreed boundary on the buildcore-web side of this feature — it is now built separately as
+  `010-account-creation-backend`. The one deliberate exception is admin-reset-password (FR-022):
+  unlike Password Change, it is *other*-initiated (an admin acting on someone else's account) and
+  directly gates login (an account can't sign in against a temp password it doesn't yet reflect),
+  so it stays in this feature rather than waiting on a future Settings/User Management feature.
+- Username, added per the 2026-08-28 clarification, has no stated format/uniqueness rule beyond
+  "unique, admin-assigned" — this feature only needs to accept it as a login identifier
+  alongside email; the exact validation rule (allowed characters, min/max length) is
+  `010-account-creation-backend`'s decision to make when it builds the field it owns.
 - The buildcore-web frontend's already-built expectations (response shapes, status codes, cookie
   behavior) are the starting contract this backend targets; where this repo's constitution requires
   stricter behavior than that frontend spec assumed (e.g., rotation with reuse detection instead of

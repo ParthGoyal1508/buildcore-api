@@ -1,18 +1,43 @@
 import { PrismaService } from 'nestjs-prisma';
-import { Prisma, User } from '@prisma/client';
+import { AuditEventType, Permission, User } from '@prisma/client';
 import {
+  ForbiddenException,
+  HttpException,
   Injectable,
   NotFoundException,
-  BadRequestException,
-  ConflictException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { PasswordService } from './password.service';
-import { SignupDto } from './dto/signup.dto';
+import { RefreshTokenService } from './refresh-token.service';
+import { AuditLogService } from './audit-log.service';
+import { MailService } from './mail.service';
 import { TokenDto } from './dto/token.dto';
+import { JwtDto } from './dto/jwt.dto';
+import { ConfigService } from '@nestjs/config';
 import { SecurityConfig } from '../common/configs/config.interface';
+import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import { AuthenticatedUser, toAuthenticatedUser } from './authenticated-user';
+
+const GENERIC_INVALID_CREDENTIALS = 'Invalid email or password';
+
+export interface LoginSuccess extends TokenDto {
+  rawRefreshToken: string;
+  rememberMe: boolean;
+}
+
+export interface RefreshSuccess {
+  accessToken: string;
+  rawRefreshToken: string;
+  rememberMe: boolean;
+}
+
+function displayName(
+  user: Pick<User, 'firstname' | 'lastname' | 'username'>,
+): string {
+  const full = [user.firstname, user.lastname].filter(Boolean).join(' ').trim();
+  return full || user.username;
+}
 
 @Injectable()
 export class AuthService {
@@ -21,41 +46,76 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly passwordService: PasswordService,
     private readonly configService: ConfigService,
+    private readonly refreshTokenService: RefreshTokenService,
+    private readonly auditLogService: AuditLogService,
+    private readonly mailService: MailService,
   ) {}
 
-  async createUser(payload: SignupDto): Promise<TokenDto> {
-    const hashedPassword = await this.passwordService.hashPassword(
-      payload.password,
-    );
-
-    try {
-      const user = await this.prisma.user.create({
-        data: {
-          ...payload,
-          password: hashedPassword,
-          role: 'USER',
-        },
-      });
-
-      return this.generateTokens({
-        userId: user.id,
-      });
-    } catch (e) {
-      if (
-        e instanceof Prisma.PrismaClientKnownRequestError &&
-        e.code === 'P2002'
-      ) {
-        throw new ConflictException(`Email ${payload.email} already used.`);
-      }
-      throw new Error(e);
-    }
+  private accessTokenFor(user: AuthenticatedUser): string {
+    const payload: Omit<JwtDto, 'iat' | 'exp'> = {
+      userId: user.id,
+      permissions: user.permissions,
+      companyId: user.companyId,
+      mustChangePassword: user.mustChangePassword,
+      name: displayName(user),
+    };
+    return this.jwtService.sign(payload);
   }
 
-  async login(email: string, password: string): Promise<TokenDto> {
-    const user = await this.prisma.user.findUnique({ where: { email } });
+  /**
+   * Looked up by identifier before any credential check — there's no company
+   * context to scope by yet, so this runs as system/bypass (rls-context.ts).
+   */
+  private async findByIdentifier(
+    identifier: string,
+  ): Promise<AuthenticatedUser | null> {
+    const normalized = identifier.trim().toLowerCase();
+    const user = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findFirst({
+          where: {
+            OR: [
+              { email: { equals: normalized, mode: 'insensitive' } },
+              { username: { equals: normalized, mode: 'insensitive' } },
+            ],
+          },
+          include: { userRoles: { include: { role: true } } },
+        }),
+    );
+    return user ? toAuthenticatedUser(user) : null;
+  }
+
+  async login(
+    identifier: string,
+    password: string,
+    rememberMe: boolean,
+    ipAddress: string,
+  ): Promise<LoginSuccess> {
+    const { maxAttempts, durationMinutes } =
+      this.configService.get<SecurityConfig>('security').lockout;
+
+    const user = await this.findByIdentifier(identifier);
 
     if (!user) {
-      throw new NotFoundException(`No user found for email: ${email}`);
+      await this.auditLogService.record({
+        eventType: AuditEventType.login_failure,
+        attemptedEmail: identifier,
+        ipAddress,
+      });
+      throw new UnauthorizedException(GENERIC_INVALID_CREDENTIALS);
+    }
+
+    // Locked accounts are rejected before any credential check, regardless of
+    // password correctness (FR-014).
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      throw new HttpException(
+        {
+          message: `Account temporarily locked. Try again after ${user.lockedUntil.toISOString()}.`,
+        },
+        423,
+      );
     }
 
     const passwordValid = await this.passwordService.validatePassword(
@@ -63,49 +123,188 @@ export class AuthService {
       user.password,
     );
 
-    if (!passwordValid) {
-      throw new BadRequestException('Invalid password');
+    if (!passwordValid || user.status !== 'active') {
+      // Only a wrong password against an otherwise-active account counts toward
+      // the brute-force counter — a deactivated account is already rejected
+      // structurally and doesn't need lockout on top of that (spec FR-012's
+      // brute-force-protection intent doesn't extend to an account that can't
+      // succeed regardless).
+      if (!passwordValid && user.status === 'active') {
+        await this.registerFailedAttempt(user, maxAttempts, durationMinutes);
+      }
+      await this.auditLogService.record({
+        eventType: AuditEventType.login_failure,
+        accountId: user.id,
+        companyId: user.companyId,
+        ipAddress,
+      });
+      throw new UnauthorizedException(GENERIC_INVALID_CREDENTIALS);
     }
 
-    return this.generateTokens({
-      userId: user.id,
+    await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
+      tx.user.update({
+        where: { id: user.id },
+        data: { consecutiveFailures: 0 },
+      }),
+    );
+
+    const { rawToken } = await this.refreshTokenService.issueFamily({
+      accountId: user.id,
+      companyId: user.companyId,
+      rememberMe,
     });
-  }
 
-  validateUser(userId: string): Promise<User> {
-    return this.prisma.user.findUnique({ where: { id: userId } });
-  }
+    await this.auditLogService.record({
+      eventType: AuditEventType.login_success,
+      accountId: user.id,
+      companyId: user.companyId,
+      ipAddress,
+    });
 
-  generateTokens(payload: { userId: string }): TokenDto {
     return {
-      accessToken: this.generateAccessToken(payload),
-      refreshToken: this.generateRefreshToken(payload),
+      accessToken: this.accessTokenFor(user),
+      rawRefreshToken: rawToken,
+      rememberMe,
+      name: displayName(user),
+      mustChangePassword: user.mustChangePassword,
     };
   }
 
-  private generateAccessToken(payload: { userId: string }): string {
-    return this.jwtService.sign(payload);
+  private async registerFailedAttempt(
+    user: AuthenticatedUser,
+    maxAttempts: number,
+    durationMinutes: number,
+  ): Promise<void> {
+    const consecutiveFailures = user.consecutiveFailures + 1;
+    const justLocked = consecutiveFailures >= maxAttempts;
+    const lockedUntil = justLocked
+      ? new Date(Date.now() + durationMinutes * 60 * 1000)
+      : null;
+
+    await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
+      tx.user.update({
+        where: { id: user.id },
+        data: { consecutiveFailures, lockedUntil },
+      }),
+    );
+
+    if (justLocked) {
+      await this.mailService.sendAccountLockedEmail(user.email, lockedUntil);
+      await this.auditLogService.record({
+        eventType: AuditEventType.account_locked,
+        accountId: user.id,
+        companyId: user.companyId,
+        ipAddress: '',
+      });
+    }
   }
 
-  private generateRefreshToken(payload: { userId: string }): string {
-    const securityConfig = this.configService.get<SecurityConfig>('security');
-    return this.jwtService.sign(payload, {
-      secret: this.configService.get('JWT_REFRESH_SECRET'),
-      expiresIn: securityConfig.refreshIn,
-    });
-  }
+  async refresh(rawToken: string, ipAddress: string): Promise<RefreshSuccess> {
+    const result = await this.refreshTokenService.rotate(rawToken);
 
-  refreshToken(token: string) {
-    try {
-      const { userId } = this.jwtService.verify(token, {
-        secret: this.configService.get('JWT_REFRESH_SECRET'),
-      });
-
-      return this.generateTokens({
-        userId,
-      });
-    } catch (e) {
+    if (result.outcome === 'invalid') {
       throw new UnauthorizedException();
     }
+
+    if (result.outcome === 'reuse') {
+      await this.auditLogService.record({
+        eventType: AuditEventType.refresh_reuse_detected,
+        accountId: result.accountId,
+        ipAddress,
+      });
+      throw new ForbiddenException();
+    }
+
+    const user = await this.loadUserWithPermissions(result.accountId);
+    if (!user || user.status !== 'active') {
+      throw new UnauthorizedException();
+    }
+
+    return {
+      accessToken: this.accessTokenFor(user),
+      rawRefreshToken: result.rawToken,
+      rememberMe: result.rememberMe,
+    };
+  }
+
+  async logout(rawToken: string): Promise<void> {
+    await this.refreshTokenService.revokeFamilyByToken(rawToken);
+  }
+
+  /**
+   * Looked up by id from the server's own signed JWT claim — nothing for a caller
+   * to forge here, so this runs as system/bypass (rls-context.ts). Used by
+   * jwt.strategy.ts's per-request re-validation (FR-009) and by refresh().
+   */
+  async loadUserWithPermissions(
+    userId: string,
+  ): Promise<AuthenticatedUser | null> {
+    const user = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findUnique({
+          where: { id: userId },
+          include: { userRoles: { include: { role: true } } },
+        }),
+    );
+    return user ? toAuthenticatedUser(user) : null;
+  }
+
+  /**
+   * Admin-only: sets a target account's password to a temporary value and forces a
+   * change on next login (FR-022). Restricted to the caller's own company unless
+   * the caller holds CROSS_COMPANY_ACCESS (FR-022a) — enforced both here
+   * (service-layer check) and by RLS (the update runs under the caller's own
+   * context, so a cross-company target simply isn't visible to update,
+   * defense-in-depth against a bug in this check).
+   */
+  async adminResetPassword(
+    caller: AuthenticatedUser,
+    targetAccountId: string,
+    temporaryPassword: string,
+    ipAddress: string,
+  ): Promise<void> {
+    const target = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => tx.user.findUnique({ where: { id: targetAccountId } }),
+    );
+
+    if (!target) {
+      throw new NotFoundException();
+    }
+    if (
+      !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
+      target.companyId !== caller.companyId
+    ) {
+      throw new ForbiddenException();
+    }
+
+    const hashed = await this.passwordService.hashPassword(temporaryPassword);
+
+    await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.user.update({
+        where: { id: target.id },
+        data: {
+          password: hashed,
+          mustChangePassword: true,
+          // An admin resetting a locked-out account's password is the
+          // account's way back in — leaving the lockout in place would make
+          // the reset useless for its most common real case.
+          consecutiveFailures: 0,
+          lockedUntil: null,
+        },
+      }),
+    );
+
+    await this.refreshTokenService.revokeAllForAccount(target.id);
+
+    await this.auditLogService.record({
+      eventType: AuditEventType.admin_password_reset,
+      accountId: target.id,
+      companyId: target.companyId,
+      ipAddress,
+    });
   }
 }

@@ -10,7 +10,8 @@ constraint on itself). Field names are conceptual; exact Prisma types are a task
 |---|---|---|
 | `id` | string | Existing |
 | `email` | string | Existing, unique — already case-sensitive at the DB level; lookups MUST normalize (lowercase + trim) at the service layer (FR-003) |
-| `password` | string | Existing — already argon2-hashed via `PasswordService` |
+| `username` | string | **NEW** — unique, admin-assigned at account creation (`010-account-creation-backend`'s scope); a second valid login identifier alongside email (FR-001). Same normalize-then-compare treatment as email (FR-003). Format/uniqueness validation rule is owned by 010; this feature just stores and reads it. |
+| `password` | string | Existing — already argon2-hashed via `PasswordService`; overwritten in place by the admin-reset-password action (FR-022) without reading its previous value |
 | `role` | enum | Existing (`Role` enum: currently `ADMIN`/`USER`) — replaced by `roleId` FK per 002, extended per the PRD's full role list; this feature only reads/compares it. Account *creation* itself is built in `010-account-creation-backend` (was an unresolved forward reference here until that feature was specced). |
 | `companyId` | string \| null | **NEW** — required for every role except Super Admin; `null` only for Super Admin (research.md §5) |
 | `status` | enum: `active` \| `deactivated` | **NEW** |
@@ -26,6 +27,7 @@ constraint on itself). Field names are conceptual; exact Prisma types are a task
 | `tokenHash` | string | Hash of the opaque token value actually sent to the client — the raw value is never stored (mirrors password hashing practice) |
 | `familyId` | string | Shared by every token descended from one original login; reuse of any non-current member revokes the whole family (FR-008) |
 | `accountId` | string | FK to User Account |
+| `companyId` | string \| null | Copied from the owning account at issuance — every tenant-scoped table this feature relies on carries a company identifier (FR-020); null only for a Super Admin's session |
 | `rememberMe` | boolean | Set once, from the original login's "remember me" choice, and copied onto every token rotated within the same family — determines each rotation's cookie `Max-Age` (FR-006) |
 | `used` | boolean | Set true the moment this token is rotated (exchanged for a new one) |
 | `revokedAt` | timestamp \| null | Set on logout (FR-011), reuse detection (FR-008), or account deactivation |
@@ -49,7 +51,7 @@ State transitions:
 | Field | Type | Notes |
 |---|---|---|
 | `id` | string | |
-| `eventType` | enum: `login_success` \| `login_failure` \| `account_locked` \| `logout` \| `refresh_reuse_detected` | |
+| `eventType` | enum: `login_success` \| `login_failure` \| `account_locked` \| `logout` \| `refresh_reuse_detected` \| `admin_password_reset` | |
 | `accountId` | string \| null | Null only for `login_failure` against an unregistered email |
 | `attemptedEmail` | string \| null | Populated only when `accountId` is null, so an unregistered-email failure is still traceable without ever inventing an account reference |
 | `companyId` | string \| null | Copied from the account at the time of the event; null for both an unregistered-email failure and any Super-Admin-related event |
@@ -59,12 +61,41 @@ State transitions:
 Never includes: a password (attempted or stored), a raw refresh/access token value, or any field
 not listed above (FR-017's "no password material" requirement).
 
-## Role/Permission Requirement (code-level metadata, not a table)
+## Admin Password Reset (an action, not a new entity — FR-022)
 
-Represented as decorator metadata (e.g., `@Roles('SUPER_ADMIN', 'HO_USER')`) attached to a
-controller method, read at request time by the guard described in research.md §6. Listed here for
-completeness since spec.md's Key Entities calls it out, but it has no database row of its own —
-its "state" is simply whatever roles a given endpoint's source code declares.
+Writes directly to the existing User Account row: sets `password` to the argon2 hash of the
+admin-supplied temporary value, sets `mustChangePassword = true`, clears any active lockout
+(`consecutiveFailures = 0`, `lockedUntil = null` — caught during implementation testing: without
+this, resetting a locked-out account's password left it still locked, defeating the reset's main
+real use case), and (per FR-022's session-revocation requirement) sets `revokedAt = now` on every
+currently-active Refresh Token row for that `accountId`. Also inserts one Audit Log Entry with a
+new `eventType: admin_password_reset`,
+`accountId` = target account, and the acting admin's identity captured the same way other entries
+capture "the acting account" (extend the `eventType` enum below accordingly).
+
+## Role / Permission / User Role (superseded the original "code-level metadata" design — 2026-08-28)
+
+Originally specced as decorator-only metadata (`@Roles('SUPER_ADMIN', 'HO_USER')`) with no
+database row of its own. Revised during implementation in response to the client's explicit
+question ("shouldn't we have users, roles, and permissions — a user can hold multiple roles?
+why is Super Admin special-cased?"): a user can hold **multiple roles simultaneously**, and Super
+Admin is just a role like any other (seeded with every `Permission`, not hardcoded into the
+authorization logic), not a distinct account type.
+
+| Entity | Fields | Notes |
+|---|---|---|
+| `Role` | `id`, `name` (unique), `permissions: Permission[]`, `isProtected`, timestamps | Lives in the new `settings` Prisma schema, not RLS-protected (roles are a company-independent, admin-managed concept). `isProtected` marks roles (e.g. seeded "Super Admin") that can't be deleted/renamed via future role-management UI. |
+| `Permission` | enum (22 values, incl. `CROSS_COMPANY_ACCESS`) | Replaces the old free-text role-name checks; endpoints declare `@RequirePermissions(...)` instead of `@Roles(...)`. |
+| `UserRole` | `id`, `userId`, `roleId`, `companyId`, `createdAt`, unique on `(userId, roleId)` | Join table — a `User` holds zero or more roles via this table. A caller's *effective* permissions/role-names are the union across every held role (`authenticated-user.ts`'s `toAuthenticatedUser()`). |
+
+Enforcement: `src/common/decorators/permissions.decorator.ts` (`@RequirePermissions(...)`) +
+`src/common/guards/permissions.guard.ts` (`PermissionsGuard`) — reads the metadata, compares
+against the request's effective permission union, applied alongside `JwtAuthGuard`. Cross-company
+access (FR-020a) is now `Permission.CROSS_COMPANY_ACCESS` rather than a hardcoded Super-Admin
+role-name check, so any role could in principle be granted it — the constitution's "non-extendable
+without a constitution amendment" intent from the original FR-020a still holds in spirit (only the
+seeded Super Admin role is granted it today) but is no longer structurally enforced by the code
+itself; worth a follow-up if that structural guarantee turns out to matter.
 
 ## Cross-reference to buildcore-web's data-model.md
 
