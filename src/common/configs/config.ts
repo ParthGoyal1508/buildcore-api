@@ -6,6 +6,11 @@ const config: Config = {
   },
   cors: {
     enabled: true,
+    // CORS_ORIGINS: comma-separated allowed origins for prod (e.g. the deployed
+    // frontend's URL). Unset → allow all, matching prior local-dev behavior.
+    origin: process.env.CORS_ORIGINS
+      ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+      : true,
   },
   swagger: {
     enabled: true,
