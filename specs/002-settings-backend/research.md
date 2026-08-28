@@ -48,8 +48,18 @@ Auth module (`shared`) needs a role's name and permission set at login time to e
 gets this by calling `SettingsModule`'s exported `RolesService.getRoleById(roleId)` (an in-process
 NestJS provider call), never by a Prisma `include`/join that reaches into `settings.Role` from
 `shared`'s own query. Symmetrically, `SettingsModule`'s user-administration endpoints (User Story 3)
-need basic account fields (name, email, status, lastLoginAt) — obtained via `AuthModule`'s exported
-`UsersService` methods, not a direct Prisma query against `shared.User` from `settings`.
+need basic account fields (name, email, status, lastLoginAt) — obtained via an exported
+`UsersService`, not a direct Prisma query against `shared.User` from `settings`.
+
+**Correction (010's build-out)**: This section originally said that `UsersService` was exported by
+`AuthModule` (feature 001) — but 001 never built it (verified: no such service appears anywhere in
+001's own spec/tasks). The correct owner turned out to be `010-account-creation-backend`, the
+feature that actually implements user-account creation and the invite lifecycle, and which needs
+the same `shared.User` CRUD-adjacent operations internally anyway. `UsersService` (`create`,
+`findAllForCompany`, `updateRoleOrStatus`, `deleteAccount`, `countByRoleId`,
+`clearRoleAssignment`, plus 010's own invite-specific methods) is exported from
+`AccountCreationModule`; `SettingsModule` imports it for User Story 3's endpoints exactly as
+originally planned, just from a different module than first assumed.
 
 **Rationale**: This is exactly Principle I's "anything one module needs from another MUST go
 through that module's exported service method" — the FK is a data-integrity constraint at the
@@ -90,8 +100,9 @@ the DTO layer:
   update/delete request targeting a protected role is rejected before touching the database,
   regardless of caller (FR-008).
 - **Account-level**: before deactivating, deleting, or reassigning a user away from the Super Admin
-  role, `UsersService` counts currently-active accounts holding that role; if the target account is
-  the last one, the operation is rejected (FR-016).
+  role, `UsersService` (010's exported service — see §3's correction) counts currently-active
+  accounts holding that role; if the target account is the last one, the operation is rejected
+  (FR-016).
 
 **Rationale**: These are two distinct failure modes named in the spec (Edge Cases, FR-008, FR-016) —
 protecting the role definition doesn't by itself stop the last Super Admin *account* from being

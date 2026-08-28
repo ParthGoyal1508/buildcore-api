@@ -27,17 +27,22 @@ UNIQUE constraint: `(companyId, gstin)` where gstin is non-null.
 
 UNIQUE constraint: `(companyId, code)`.
 
-## Site (`projects` schema — REPLACES 003's minimal `hr.Site`)
+## Site (`projects` schema — EXTENDS 003's existing `Site` in place, not a replacement)
 
 ```
-{ id, companyId, projectId FK→Project (nullable for backward compat with existing rows),
-  name, address?, latitude (decimal?), longitude (decimal?),
-  geofenceRadius (integer?, meters), status: 'active' | 'inactive', createdAt, updatedAt }
+{ id, companyId,                                              // unchanged from 003
+  name, latitude (decimal?), longitude (decimal?),            // unchanged from 003
+  geofenceRadiusMeters (integer?), weeklyOffDay (integer?), holidays (date[]),  // unchanged from 003
+  projectId FK→Project (nullable for backward compat with existing rows),      // NEW — this feature
+  address?, status: 'active' | 'inactive',                                     // NEW — this feature
+  createdAt, updatedAt }
 ```
 
-Unchanged from 003: `id`, `name`, `companyId`. New columns are nullable, added via additive
-migration. HR's `PunchRecord` retains its `siteId` FK — no foreign key change needed since the
-table still exists with the same primary key.
+003 already built `Site` directly in the `projects` schema with geofence/weekly-off/holiday
+fields (research.md §2) — this feature does not move it or touch those columns. The new columns
+(`projectId`, `address`, `status`) are nullable, added via an additive migration. HR's
+`PunchRecord` retains its `siteId` FK — no foreign key change needed since the table still exists
+with the same primary key.
 
 ## BOQTaskGroup (`projects` schema — new)
 
@@ -51,7 +56,7 @@ table still exists with the same primary key.
 ```
 { id, companyId, groupId FK→BOQTaskGroup, boqNo (string), taskName, unit (string),
   scopeQty (decimal), startDate, finishDate, duration (integer, days), perDayQty (decimal),
-  doneQty (decimal, default 0 — running total updated on DWR submission/reversal),
+  doneQty (decimal, default 0 — running total updated on DWR approval/reversal, not submission),
   isEstimate (boolean, default false), createdAt, updatedAt }
 ```
 
@@ -151,9 +156,9 @@ per project (one per category).
 |---|---|---|
 | `Project.projectManagerEmployeeId` | Plain UUID in `projects` schema | `HrService.getEmployeeById()` on reads that need name/designation |
 | `DailyWorkReport.supervisorEmployeeId` | Plain UUID | Same |
-| `Site` (replacing `hr.Site`) | Table moved to `projects` | `ProjectsService.getSiteById()` called by `hr` module |
+| `Site` geofence/holiday data (already in `projects` schema, owned by 003) | N/A | HR reads via 003's existing `SitesService.getGeofence()`/`.getHolidayCalendar()`/`.getWeeklyOffDay()` — unchanged. This feature's own consumers use a new `SitesService.getSiteById()` (full row) |
 | `WorkOrder.partnerId` | Plain UUID | `PartnersService.getPartnerById()` when needed |
-| P&L labour cost | Not stored | `HrPayrollService.getLabourCostByProject()` at request time |
+| P&L labour cost | Not stored | `HrPayrollService.getLabourCostByProject()` at request time — new method added to 005 as part of this feature (research.md §X); `PayrollLineItem.projectId` also added to 005 |
 | P&L material cost | Not stored | `InventoryService.getMaterialCostByProject()` at request time |
 | P&L machinery cost | Not stored | `PlantService.getMachineryCostByProject()` at request time |
 | P&L fuel cost | Not stored | `PlantService.getFuelCostByProject()` at request time |

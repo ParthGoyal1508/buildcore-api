@@ -80,8 +80,45 @@ research.md §8)
   site/reason/requested-on; approve/reject continue to use 003's existing endpoints unchanged
   (FR-029).
 
+## Offboarding & F&F — `/hr/employees/:id/*` (permission: `EMPLOYEES`)
+
+- `POST /hr/employees/:id/exit` — `{ lastWorkingDay, reason, remarks? }` → creates an
+  `ExitRecord` (FR-031).
+- `GET /hr/employees/:id/fnf` — F&F computation: pending salary, EL encashment, loan recovery, net
+  payable (FR-032).
+- `POST /hr/employees/:id/fnf/process` — creates an F&F-flagged `PayrollRun`, follows the standard
+  Draft → Processed → Paid lock lifecycle (FR-033); on processing past `lastWorkingDay`, sets
+  `Employee.status = Inactive` and revokes the linked `User`'s access (FR-034).
+
+## Reimbursements (admin) — `/hr/reimbursements` (permission: `EMPLOYEES`)
+
+- `GET /hr/reimbursements?status=&employeeId=&companyId=&page=` — paginated list (FR-036).
+- `PATCH /hr/reimbursements/:id/approve` — `{ remarks? }` (FR-037).
+- `PATCH /hr/reimbursements/:id/reject` — `{ remarks }` (mandatory) (FR-037).
+- `PATCH /hr/reimbursements/:id/pay` — `{ paymentMode: 'direct', paymentDate, paymentReference }`
+  or `{ paymentMode: 'payroll' }` (queues for next run) (FR-038).
+- `GET /hr/reimbursements/register?status=&company=&dateRange=` — register view with summary
+  totals by status (FR-039).
+
+## Reimbursement Categories — `/settings/reimbursement-categories` (permission: `EMPLOYEES`)
+
+Same CRUD shape as 002's Department/Designation/Document Type/Shift masters (FR-045):
+
+- `GET /settings/reimbursement-categories`
+- `POST /settings/reimbursement-categories` — `{ name, receiptRequired, maxAmount? }`
+- `PATCH /settings/reimbursement-categories/:id`
+
+## Bulk Attendance Import — `/hr/attendance/import/*` (permission: `ATTENDANCE`)
+
+- `GET /hr/attendance/import/template` — CSV template (Employee Code, Date, Punch In, Punch Out)
+  (FR-041).
+- `POST /hr/attendance/import/validate` — CSV upload → row-level error report, no writes (FR-042).
+- `POST /hr/attendance/import/commit` — commits only previously-validated rows via US3's existing
+  Mark/Edit write path (FR-043, FR-044).
+
 ## Audit logging (cross-cutting)
 
 Every create/update/delete across this contract writes one `AuditLogEntry` (shared
 `AuditLogService`, entityType values: `EMPLOYEE`, `EMPLOYEE_DOCUMENT`, `EMPLOYEE_TRANSFER`,
-`ATTENDANCE`, `HOLIDAY`, `PAYROLL_RUN`, `LOAN`, `DAILY_WORKER`, `DAILY_WORKER_ATTENDANCE`) — FR-030.
+`ATTENDANCE`, `HOLIDAY`, `PAYROLL_RUN`, `LOAN`, `DAILY_WORKER`, `DAILY_WORKER_ATTENDANCE`,
+`EXIT_RECORD`, `REIMBURSEMENT_CLAIM`) — FR-030.

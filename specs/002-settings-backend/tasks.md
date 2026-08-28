@@ -43,11 +43,11 @@ implementation and testing of each story.
 
 - [ ] T004 Add a `settings` Postgres schema block to `prisma/schema.prisma` (Prisma multi-schema,
       matching feature 001's `shared` schema pattern) — research.md §1
-- [ ] T005 Add the `Permission` enum to the `settings` schema in `prisma/schema.prisma` with all 20
-      values (`DASHBOARD`, `EMPLOYEES`, `ATTENDANCE`, `PROJECTS`, `MACHINERY`, `INVENTORY`,
-      `PARTNERS`, `REPORTS`, `PAYROLL`, `CHALLANS`, `LOANS`, `LOGBOOK`, `FUEL`,
-      `DAILY_WORKER_REGISTRY`, `MY_WORKSPACE`, `SETTINGS`, `USER_MANAGEMENT`, `COMPANY_SETTINGS`,
-      `DATA_EXPORT`, `DATA_DELETE`) — data-model.md "Permission enum"
+- [ ] T005 Add the `Permission` enum to the `settings` schema in `prisma/schema.prisma` with all 22
+      values (`DASHBOARD`, `EMPLOYEES`, `ATTENDANCE`, `PROJECTS`, `DWR`, `PROJECT_FINANCIALS`,
+      `MACHINERY`, `INVENTORY`, `PARTNERS`, `REPORTS`, `PAYROLL`, `CHALLANS`, `LOANS`, `LOGBOOK`,
+      `FUEL`, `DAILY_WORKER_REGISTRY`, `MY_WORKSPACE`, `SETTINGS`, `USER_MANAGEMENT`,
+      `COMPANY_SETTINGS`, `DATA_EXPORT`, `DATA_DELETE`) — data-model.md "Permission enum"
 - [ ] T006 Add the `Role` model to the `settings` schema in `prisma/schema.prisma` (`id`, `name`
       unique, `permissions Permission[]`, `isProtected`, timestamps) — data-model.md "Role"
 - [ ] T007 Change `shared.User.role` (enum) to `roleId String` with a relation to `settings.Role.id`
@@ -175,19 +175,22 @@ assign it to a test user, confirm accessible modules match exactly.
       Permission[]` validated against the enum)
 - [ ] T036 [P] [US2] Create `src/settings/roles/dto/update-role.dto.ts` (partial fields)
 - [ ] T037 [US2] Implement `src/settings/roles/roles.service.ts`: list (with
-      `assignedUserCount` via `AuthModule`'s exported `UsersService.countByRoleId()`), create,
-      update (reject if `isProtected`), delete (reject if `isProtected`; otherwise clear `roleId`
-      on all referencing users via `UsersService.clearRoleAssignment()`) — research.md §3, §5, FR-008,
-      FR-009, FR-010
+      `assignedUserCount` via `010-account-creation-backend`'s exported
+      `UsersService.countByRoleId()` — corrected from an original "AuthModule" assumption,
+      research.md §3), create, update (reject if `isProtected`), delete (reject if `isProtected`;
+      otherwise clear `roleId` on all referencing users via `UsersService.clearRoleAssignment()`) —
+      research.md §3, §5, FR-008, FR-009, FR-010
 - [ ] T038 [US2] Implement `src/settings/roles/roles.controller.ts`:
       `GET/POST/PATCH/DELETE /settings/roles`, guarded with
       `@RequirePermission(Permission.USER_MANAGEMENT)` (depends on T037)
 - [ ] T039 [US2] Wire audit logging (entityType `ROLE`) into create/update/delete paths of
       `roles.service.ts` — FR-025
 - [ ] T040 [US2] Register `RolesController`/`RolesService` in `src/settings/settings.module.ts`
-- [ ] T041 [US2] Add `UsersService.countByRoleId()` and `UsersService.clearRoleAssignment()` to
-      `src/users/users.service.ts` (or `src/auth/`, wherever feature 001 places it), exported for
-      `SettingsModule` to call — research.md §3
+- [ ] T041 [US2] Cross-feature task: add `UsersService.countByRoleId()` and
+      `.clearRoleAssignment()` to `010-account-creation-backend`'s `src/account-creation/users/
+      users.service.ts`, exported from `AccountCreationModule` for `SettingsModule` to import and
+      call — research.md §3 (this task actually lives in 010's own tasks.md; listed here as a
+      dependency marker since 002 was specced first and originally assumed a different owner)
 
 **Checkpoint**: User Stories 1 AND 2 both independently functional.
 
@@ -216,21 +219,31 @@ another; confirm the last Super Admin account can't be deactivated/deleted/reass
 - [ ] T045 [P] [US3] Create `src/settings/users-admin/dto/update-user.dto.ts` (partial `{ roleId?,
       status? }`)
 - [ ] T046 [US3] Implement `src/settings/users-admin/users-admin.service.ts`: list (via
-      `UsersService.findAllForCompany()`), update (last-Super-Admin-standing check per research.md
-      §5, calls `UsersService.updateRoleOrStatus()`), delete (same guard, calls
-      `UsersService.deleteAccount()`) — FR-013, FR-014, FR-015, FR-016
+      `UsersService.findAllForCompany()` — now includes `pending` accounts, with `inviteExpiresAt`/
+      `employeeId`/`displayName` alongside the original name/email/role/status/lastLoginAt fields,
+      per `010-account-creation-backend`'s extension of `UserSummary`), update
+      (last-Super-Admin-standing check per research.md §5, calls
+      `UsersService.updateRoleOrStatus()` — which itself rejects a direct `pending → active`
+      transition with `400`, since that only happens via 010's set-password flow), delete (same
+      guard, calls `UsersService.deleteAccount()` — also removes any associated `InviteToken` row
+      if the deleted account was `pending`) — FR-013, FR-014, FR-015, FR-016
 - [ ] T047 [US3] Implement `src/settings/users-admin/users-admin.controller.ts`:
       `GET/PATCH/DELETE /settings/users`, guarded with
       `@RequirePermission(Permission.USER_MANAGEMENT)` plus a role check restricting to Super Admin
-      or HO User — FR-014 (depends on T046)
-- [ ] T048 [US3] Wire audit logging (entityType from feature 001's login-adjacent set is not
-      applicable here — reuse `COMPANY`/`ROLE`-style pattern with a new `USER` entityType value if
-      not already covered by T008) into update/delete paths of `users-admin.service.ts` — FR-025
+      or HO User — FR-014 (depends on T046). Account *creation* is intentionally absent from this
+      controller — `POST /account-creation/users` (010) is the only creation path.
+- [ ] T048 [US3] Wire audit logging (entityType `USER_ACCOUNT` — matches
+      `010-account-creation-backend`'s entityType so both features' writes to the same account
+      appear under one type in the Activity Log) into update/delete paths of
+      `users-admin.service.ts` — FR-025
 - [ ] T049 [US3] Register `UsersAdminController`/`UsersAdminService` in
-      `src/settings/settings.module.ts`
-- [ ] T050 [US3] Add `UsersService.findAllForCompany()`, `updateRoleOrStatus()`, `deleteAccount()`,
-      and `countActiveSuperAdmins()` to `src/users/users.service.ts` (or `src/auth/`), exported for
-      `SettingsModule` — research.md §3, §5
+      `src/settings/settings.module.ts`; import `AccountCreationModule` to access its exported
+      `UsersService`
+- [ ] T050 [US3] Cross-feature task: add `UsersService.findAllForCompany()`,
+      `.updateRoleOrStatus()`, `.deleteAccount()`, and `.countActiveSuperAdmins()` to
+      `010-account-creation-backend`'s `users.service.ts`, exported from `AccountCreationModule`
+      for `SettingsModule` — research.md §3, §5 (this task actually lives in 010's own tasks.md;
+      listed here as a dependency marker)
 
 **Checkpoint**: User Stories 1–3 independently functional.
 

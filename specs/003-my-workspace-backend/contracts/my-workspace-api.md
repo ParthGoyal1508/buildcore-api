@@ -123,6 +123,23 @@ the covered dates show `on_leave` in that employee's `GET /my/punch/history`.
 **Response — 200**: `application/pdf`, generated via `pdfkit` (research.md §7), identical figures
 to the JSON response.
 
+## Reimbursements — `/my/reimbursements`
+
+### `POST /my/reimbursements`
+**Request**: `{ categoryId, amount, expenseDate, description, receiptRef? }` — `receiptRef`
+required when `amount` exceeds the category's configured mandatory-receipt threshold (FR-030).
+
+**Response — 201**: the created claim, status `submitted`.
+
+### `PATCH /my/reimbursements/:id`
+**Request**: same shape as create. **Response — 200** while `status: 'draft'`; **403** otherwise.
+
+### `POST /my/reimbursements/:id/withdraw`
+**Response — 200** while `status: 'submitted'` (still Pending review); **403** otherwise.
+
+### `GET /my/reimbursements`
+**Response — 200**: the caller's own claims, with status and, once processed, `paymentMode`.
+
 ## Audit logging (cross-cutting, not a separate endpoint)
 
 Every enrolment, punch (including exceptions and their resolution), leave application/cancellation/

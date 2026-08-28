@@ -71,17 +71,22 @@ reassigned.
 per FR-014)
 
 Creation is intentionally absent from this contract — new accounts are created exclusively through
-the separate Account Creation feature (spec Assumptions).
+`010-account-creation-backend` (`POST /account-creation/users`), whose invite lifecycle endpoints
+also live at `/account-creation/*`, not here.
 
 ### `GET /settings/users`
-**Response — 200**: `UserSummary[]` — `{ id, name, email, role: { id, name }, status, lastLoginAt:
-string | null }`, scoped to the caller's company (or all companies for a cross-company Super
-Admin).
+**Response — 200**: `UserSummary[]` — `{ id, name, email, role: { id, name }, status:
+'pending' | 'active' | 'deactivated', inviteExpiresAt: string | null, employeeId: string | null,
+lastLoginAt: string | null }`, scoped to the caller's company (or all companies for a cross-company
+Super Admin). `inviteExpiresAt` is populated only while `status === 'pending'`.
 
 ### `PATCH /settings/users/:id`
 **Request** (`UpdateUserDto`): partial `{ roleId?, status? }`.
 
 **Response — 200**: the updated `UserSummary`.
+
+**Response — 400 Bad Request**: `status: 'active'` requested directly against a currently-`pending`
+account — that transition only happens via `010-account-creation-backend`'s set-password flow.
 
 **Response — 409 Conflict**: the request would leave zero active Super Admin accounts (FR-016) —
 either deactivating the last one or reassigning its role away.
@@ -90,7 +95,8 @@ either deactivating the last one or reassigning its role away.
 User.
 
 ### `DELETE /settings/users/:id`
-**Response — 200**: the account is deleted; it can no longer authenticate (FR-015).
+**Response — 200**: the account is deleted; it can no longer authenticate (FR-015). If the account
+was `pending`, its associated `InviteToken` row is deleted alongside it.
 
 **Response — 409 Conflict**: deleting the last active Super Admin account (FR-016).
 

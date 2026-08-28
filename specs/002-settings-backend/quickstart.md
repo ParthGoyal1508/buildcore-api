@@ -51,6 +51,15 @@
 4. `PATCH /settings/users/:lastSuperAdminId` attempting to deactivate or reassign the only
    remaining active Super Admin account. **Expected**: 409.
 5. `DELETE /settings/users/:id` as the non-admin third account. **Expected**: 403.
+6. Create a `pending` account via `010-account-creation-backend`'s `POST /account-creation/users`,
+   then `PATCH /settings/users/:id` on it with `{ status: "active" }`. **Expected**: 400 — a
+   pending account can only activate via 010's set-password flow, enforced inside the shared
+   `UsersService.updateRoleOrStatus()` this feature imports from `AccountCreationModule`.
+7. `PATCH /settings/users/:id` on an `active` account (created via 010, then activated) with
+   `{ status: "deactivated" }`. **Expected**: 200; all of that account's refresh tokens are
+   revoked immediately (verify a subsequent refresh with its pre-deactivation token fails); a
+   follow-up `PATCH ... { status: "active" }` reactivates it directly, and login succeeds again
+   with its existing password (no new invite needed).
 
 ## Scenario 4 — Employee Setup reference masters (User Stories 4–6)
 

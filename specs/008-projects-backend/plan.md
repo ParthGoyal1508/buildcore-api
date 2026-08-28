@@ -6,13 +6,20 @@
 
 ## Summary
 
-Build the `projects` schema — the first feature to populate it — delivering: Client and Site
-masters (Site replacing 003's placeholder and taking ownership of geofence data from HR), a full
-Project portfolio with lock enforcement, BOQ task management with Excel import, Daily Work Reports
-with server-side measurement-formula computation, Revenue and RA Bill tracking with a three-state
-workflow, project budget entry, cross-module P&L (on-demand via `Promise.allSettled` over four
-exported service stubs), and per-project document uploads. Three new `Permission` enum values
-extend Settings' 002 enum. See [research.md](research.md) for all eleven architecture decisions.
+Build the `projects` schema — populated for the first time by 003's minimal `Site` table, now
+substantially extended by this feature — delivering: Client and Site masters (Site already lives
+in `projects` schema and already carries geofence/holiday data from 003; this feature adds
+`projectId`/`address`/`status` and a general-purpose `getSiteById()` export alongside 003's
+existing narrow geofence exports, which HR keeps using unchanged), a full Project portfolio with
+lock enforcement, BOQ task management with a two-step validate-then-confirm Excel import, Daily
+Work Reports with server-side measurement-formula computation and Approved-only BOQ progress
+counting, Revenue and RA Bill tracking with a three-state workflow, project budget entry,
+cross-module P&L (on-demand via `Promise.allSettled` — Machinery/Fuel real via 006, Labour real
+via a 005 amendment this feature required, Material/Subcontractor still stubbed pending
+Inventory/Partners), and per-project document uploads. `PROJECTS` is reused from Settings' 002
+enum; `DWR` and `PROJECT_FINANCIALS` are genuinely new and have been reconciled into 002's own
+spec as the canonical enum source. See [research.md](research.md) for all fourteen architecture
+decisions (eleven original + corrections/additions from the master-PRD alignment audit).
 
 ## Technical Context
 
@@ -23,12 +30,15 @@ extend Settings' 002 enum. See [research.md](research.md) for all eleven archite
 for BOQ import), 005's object-storage reference pattern for document uploads. No new architectural
 dependency.
 
-**Storage**: PostgreSQL via Prisma — new `projects` schema with 12 tables: `Client`, `Project`,
-`Site` (extended from 003's placeholder), `BOQTaskGroup`, `BOQTaskItem`, `DailyWorkReport`,
-`DWRTask`, `Revenue`, `RABill`, `WorkOrder`, `ProjectBudget`, `ProjectDocument`.
+**Storage**: PostgreSQL via Prisma — `projects` schema (already exists from 003, which put `Site`
+there) gets 11 new tables from this feature plus an additive extension to `Site`: `Client`,
+`Project`, `Site` (extended — `projectId`/`address`/`status` added; geofence fields already
+existed from 003), `BOQTaskGroup`, `BOQTaskItem`, `DailyWorkReport`, `DWRTask`, `Revenue`,
+`RABill`, `WorkOrder`, `ProjectBudget`, `ProjectDocument`.
 
-**Testing**: Jest unit tests for: `ProjectLockGuard`, `DWRTaskService.computeActualQty()`,
-`ProjectPnlService.compute()` (all cross-module stubs return 0), BOQ Excel validation logic, RA
+**Testing**: Jest unit tests for: `ProjectLockGuard`, `DWRTaskService.computeActualQty()` and the
+approve-only `doneQty` update path, `ProjectPnlService.compute()` (Inventory/Partners stubs return
+0; Machinery/Fuel/Labour call real 006/005 methods), BOQ Excel two-step validate/confirm logic, RA
 Bill state machine transition guard. E2e coverage in `test/projects.e2e-spec.ts` — required for
 all endpoints touching financial data (P&L, RA Bills, Budget) and the lock-enforcement path.
 
@@ -42,14 +52,18 @@ months of data (cross-module stubs return immediately; real implementations must
 BOQ import of 100 rows under 5 seconds (spec SC-004).
 
 **Constraints**: `projects` module never queries `hr`/`payroll`/`inventory`/`plant`/`partners`
-schemas directly — only via exported service calls (Principle I, research.md §3, §10); `Site`
-migration is additive (nullable columns) to avoid breaking 003's FK references (research.md §2);
-`ProjectLockGuard` is the single enforcement point for the `isLocked` rule across all write
+schemas directly — only via exported service calls (Principle I, research.md §3, §10); `Site`'s
+extension is additive (nullable new columns only — geofence columns are untouched, not re-added)
+to avoid breaking 003's FK references or HR's existing exported-method call sites (research.md
+§2); `ProjectLockGuard` is the single enforcement point for the `isLocked` rule across all write
 endpoints (research.md §6); all tables `companyId`-scoped with RLS policies (Principle IV);
-Permission enum extended in `settings` module's enum, not redefined (research.md §8).
+Permission enum extended in `settings` module's own canonical enum, not redefined locally
+(research.md §8, §14); BOQ import never commits from the `validate` call (research.md §12); BOQ
+`doneQty` only moves on DWR approval, never submission (research.md §13).
 
-**Scale/Scope**: 12 new tables, ~35 endpoints across 10 controller areas, 3 new Permission enum
-values, 4 cross-module service stubs.
+**Scale/Scope**: 11 new tables + 1 extended (`Site`), ~36 endpoints across 10 controller areas, 2
+new Permission enum values (`DWR`, `PROJECT_FINANCIALS`; `PROJECTS` reused), 2 cross-module
+service stubs (Inventory, Partners — Machinery/Fuel and Labour are real via 006/005).
 
 ## Constitution Check
 
@@ -57,12 +71,12 @@ values, 4 cross-module service stubs.
 
 | Principle | Check | Status |
 |---|---|---|
-| I. Schema-Per-Module Boundaries (NON-NEGOTIABLE) | All 12 new tables land in `projects` schema. Cross-module reads (P&L, employee names, machinery, materials, subcontractors) go via exported service calls — never direct cross-schema queries. `Site` is moved to `projects`; HR reads it via `ProjectsService.getSiteById()`. research.md §2, §3, §10. | PASS |
+| I. Schema-Per-Module Boundaries (NON-NEGOTIABLE) | All 11 new tables land in `projects` schema, which already existed (003 put `Site` there). Cross-module reads (P&L, employee names, machinery, materials, subcontractors) go via exported service calls — never direct cross-schema queries. HR keeps reading `Site` geofence/holiday data via 003's existing `SitesService.getGeofence()`/`.getHolidayCalendar()`/`.getWeeklyOffDay()`, unchanged; this feature's own consumers use a new, separate `getSiteById()`. research.md §2, §3, §10. | PASS |
 | II. Validated DTO Contracts (NON-NEGOTIABLE) | Every endpoint in contracts/projects-api.md uses a typed DTO. `ProjectLockGuard` validates `isLocked` before any write reaches a service method. | PASS |
 | III. Centralized Configuration & No Hardcoded Values (NON-NEGOTIABLE) | No hardcoded project codes, status values, or category names — all are enums or config-driven. The 10% overrun threshold (FR-009) is a named constant in a shared constants file, not an inline literal. | PASS |
 | IV. Multi-Tenant Isolation & PII Protection (NON-NEGOTIABLE) | All 12 tables carry `companyId`; RLS policies enforced on every table. No regulated PII in this module (no Aadhaar/PAN/bank data). Project documents use encrypted object-storage references (same pattern as 005's `EmployeeDocument`). | PASS |
-| V. Authentication, Authorization & Secrets Hygiene | Every endpoint behind `JwtAuthGuard` + `@RequirePermission()` using one of three new enum values: `PROJECTS`, `DWR`, `PROJECT_FINANCIALS` (research.md §8). | PASS |
-| VI. Observability & Safe Migrations | Site migration is additive (nullable columns) — no data loss risk. `projects` schema tables added in a separate migration from the Site extension. All migrations via `migrate:dev:create`/`migrate:dev`. | PASS |
+| V. Authentication, Authorization & Secrets Hygiene | Every endpoint behind `JwtAuthGuard` + `@RequirePermission()` using `PROJECTS` (reused from 002), `DWR`, or `PROJECT_FINANCIALS` (both new, reconciled into 002's own enum — research.md §8, §14). | PASS |
+| VI. Observability & Safe Migrations | `Site`'s extension is additive (new nullable columns only; existing geofence columns untouched) — no data loss risk. `projects` schema's 11 new tables added in a separate migration from the `Site` extension. All migrations via `migrate:dev:create`/`migrate:dev`. | PASS |
 
 **Post-design re-check**: data-model.md and contracts/projects-api.md keep every table
 tenant-scoped, every financial endpoint permission-gated with `PROJECT_FINANCIALS`, cross-module
@@ -136,14 +150,19 @@ test/
 
 ### Phase 1: Schema & Shared Infrastructure
 
-- [ ] Extend `settings.Permission` enum with `PROJECTS`, `DWR`, `PROJECT_FINANCIALS`
-- [ ] Add geofence columns (address, latitude, longitude, geofenceRadius) to existing `Site`
-  model — additive migration only; existing `hr` FK references unaffected
-- [ ] Add all 12 `projects` schema models to `prisma/schema.prisma`
-- [ ] Generate and apply migrations (Site extension first; then `projects` schema in one migration)
+- [ ] Extend `settings.Permission` enum with `DWR`, `PROJECT_FINANCIALS` (`PROJECTS` already
+  exists — reused, not re-added) — also reflected in 002's own data-model.md/tasks.md
+- [ ] Add `projectId`, `address`, `status` columns to the existing `Site` model — additive
+  migration only; 003's geofence columns (`latitude`/`longitude`/`geofenceRadiusMeters`) and
+  `weeklyOffDay`/`holidays` are untouched, and existing FK references (HR's `PunchRecord`) are
+  unaffected
+- [ ] Add the 11 new `projects` schema models to `prisma/schema.prisma`
+- [ ] Generate and apply migrations (Site extension first; then the 11 new tables in one migration)
 - [ ] Add RLS policies for all `projects` schema tables
 - [ ] Create `project-lock.guard.ts`
-- [ ] Create `pnl-sources.interface.ts` with stub implementations (all return 0)
+- [ ] Create `pnl-sources.interface.ts`: stub implementations for Inventory/Partners only (return
+  0); wire the real `PlantService.getMachineryCostByProject()`/`.getFuelCostByProject()` (006) and
+  `HrPayrollService.getLabourCostByProject()` (005, amended by this feature) — not stubs
 - [ ] Scaffold `ProjectsModule` with the 7 sub-module structure above
 
 **Checkpoint**: Schema, guard, and module scaffold complete. All other phases can proceed in
@@ -152,11 +171,16 @@ parallel per user story.
 ### Phase 2: User Stories 1 & 2 — Clients and Sites (P1)
 
 - [ ] `ClientsController` + `ClientsService` + DTOs
-- [ ] `SitesController` + `SitesService` + DTOs (includes `getSiteById()` exported method for HR)
+- [ ] `SitesController` + `SitesService` + DTOs, extending 003's existing `sites.service.ts` in
+  place (adds `projectId`/`address`/`status` CRUD and a new `getSiteById()` export for this
+  feature's own consumers — 003's `getGeofence()`/`getHolidayCalendar()`/`getWeeklyOffDay()`
+  exports are untouched)
 - [ ] Unit tests for duplicate-GSTIN rejection, site status validation
 - [ ] E2e tests for `POST /projects/clients`, `POST /projects/sites`
 
-**Checkpoint**: Client and Site CRUD functional; HR geofence validation now uses real radius.
+**Checkpoint**: Client and Site CRUD functional (Sites now carry `projectId`/`address`/`status`
+alongside 003's existing geofence/holiday data); HR's attendance geofence validation is unaffected
+by this feature (it was already using real radius data from 003).
 
 ### Phase 3: User Story 3 — Project Portfolio (P1)
 
@@ -171,23 +195,27 @@ parallel per user story.
 ### Phase 4: User Story 4 — BOQ (P2)
 
 - [ ] `BOQController` + `BOQService` + DTOs
-- [ ] `BOQImportService` (exceljs parsing, 9-column validation, CSV error report)
+- [ ] `BOQImportService` (exceljs parsing, 9-column validation, CSV error report) with two
+  endpoints: `POST .../boq/import/validate` (parse + report, no writes) and
+  `POST .../boq/import/confirm { batchId }` (commits the validated batch) — research.md §12
 - [ ] `GET /projects/:id/boq/alerts` (Today Task, Delayed, To Be Delayed)
-- [ ] Unit tests for BOQ import validation, `doneQty` computation
-- [ ] E2e test for import with mixed valid/invalid rows
+- [ ] Unit tests for BOQ import validate/confirm split, `doneQty` computation
+- [ ] E2e test for validate → mixed valid/invalid report → confirm → only valid rows created
 
 **Checkpoint**: BOQ management and import functional.
 
 ### Phase 5: User Story 5 — DWR (P2)
 
 - [ ] `DWRController` + `DWRService` + DTOs
-- [ ] `DWRTaskService.computeActualQty()` with formula and `exceedsScope` flag
-- [ ] BOQ `doneQty` increment on DWR submission
+- [ ] `DWRTaskService.computeActualQty()` with formula and `exceedsScope` flag, computed and
+  stored at creation regardless of status
+- [ ] BOQ `doneQty` increment on DWR **approval** — not submission (research.md §13)
 - [ ] File attachment endpoint
-- [ ] Unit tests for formula computation (zero-value case, scope exceeded)
-- [ ] E2e tests for DWR creation, submission, approval
+- [ ] Unit tests for formula computation (zero-value case, scope exceeded) and for `doneQty`
+  remaining unchanged through submission and only moving on approval
+- [ ] E2e tests for DWR creation, submission (doneQty unchanged), approval (doneQty updates)
 
-**Checkpoint**: DWR lifecycle fully functional; BOQ progress tracking live.
+**Checkpoint**: DWR lifecycle fully functional; BOQ progress tracking live and Approved-only.
 
 ### Phase 6: User Stories 6 & 7 — Revenue, RA Bills, Budget, P&L (P3)
 
@@ -209,13 +237,15 @@ parallel per user story.
 
 **Checkpoint**: All user stories complete.
 
-## TODO: Cross-module Service Stubs (to be replaced by features 006/007)
+## TODO: Cross-module Service Stubs (remaining — corrected, research.md §10)
 
-The following stub implementations in `ProjectsModule` return 0 and mark the module unavailable
-in the P&L response until the real features ship:
+Only two of the original four P&L sources are still stubbed. Machinery/Fuel (006) and Labour (005)
+are real, not stub, as of this feature's master-PRD alignment audit:
 
-- `PlantServiceStub.getMachineryCostByProject()` → to be replaced by feature 006 (Plant/Machinery)
-- `InventoryServiceStub.getMaterialCostByProject()` → to be replaced by feature 007 (Inventory)
+- `InventoryServiceStub.getMaterialCostByProject()` → to be replaced by feature 009 (Inventory)
 - `PartnersServiceStub.getSubcontractorCostByProject()` → to be replaced by feature 007 (Partners)
-- `HrPayrollService.getLabourCostByProject()` → HR & Payroll (005) must add `projectId` parameter
-  to its payroll line item queries; this feature adds the interface requirement to 005's contract.
+- ~~`PlantServiceStub.getMachineryCostByProject()`/`.getFuelCostByProject()`~~ → real, implemented
+  by feature 006 (Plant/Machinery) — wire directly, no stub needed
+- ~~`HrPayrollService.getLabourCostByProject()`~~ → real, added directly to 005's own spec/
+  data-model/tasks as part of this feature's build-out (`PayrollLineItem.projectId`, FR-046,
+  005's research.md §16) — wire directly, no stub needed

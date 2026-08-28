@@ -54,7 +54,8 @@ centralized config, never inline (Principle III); every endpoint behind `JwtAuth
 scoped and RLS-protected (Principle IV); all schema changes via generated migrations (Principle
 VI).
 
-**Scale/Scope**: One new module, ~15 endpoints, ~12 widget providers (6 real + 6 placeholder), ~4
+**Scale/Scope**: One new module, ~16 endpoints (incl. Activity Log CSV export — FR-024,
+research.md §9), ~12 widget providers (6 real + 6 placeholder), ~4
 notification providers (3 real + Export-Ready), ~9 report-type registrations (2 real + 7
 placeholder), one new table, one new infrastructure dependency (Redis).
 

@@ -298,10 +298,13 @@ reaching that route's own logic, while a correctly-roled account passes through.
 ### Key Entities
 
 - **User Account**: A registered person who can authenticate — holds the argon2 password hash, a
-  role, an active/deactivated status, and a mandatory-password-change flag. Every account except a
+  role, a status (active/deactivated, plus a `pending` pre-activation state added by
+  `010-account-creation-backend`), and a mandatory-password-change flag. Every account except a
   Super Admin carries exactly one company identifier; a Super Admin account instead carries the
-  explicit cross-company marker described in FR-020a. Owned by the separate Account Creation
-  feature; this feature reads and enforces this state but does not create or edit accounts.
+  explicit cross-company marker described in FR-020a. Owned by `010-account-creation-backend`
+  (built via the Invite Flow — was an unresolved forward reference to a "separate Account Creation
+  feature" until that feature was specced); this feature reads and enforces this state but does
+  not create or edit accounts.
 - **Session (Refresh Token Family)**: One signed-in period on one device/client, represented as a
   chain of rotating refresh tokens sharing a common lineage — a reuse of any non-current token in
   the chain revokes the whole chain. Carries its own expiry (30 days for "remember me", a short
@@ -359,9 +362,10 @@ reaching that route's own logic, while a correctly-roled account passes through.
   this feature per the clarification, even though this feature's own endpoints (login/refresh/
   logout) don't themselves require a specific role — it exists so future protected endpoints can
   adopt it without rework.
-- Forgot Password (OTP), Account Creation (admin provisioning), and Password Change (logged-in
-  user) remain out of scope, matching the already-agreed boundary on the buildcore-web side of this
-  feature.
+- Forgot Password (OTP) and Password Change (logged-in user) remain out of scope for this feature.
+  Account Creation (admin provisioning) also remained out of scope here, matching the
+  already-agreed boundary on the buildcore-web side of this feature — it is now built separately
+  as `010-account-creation-backend`.
 - The buildcore-web frontend's already-built expectations (response shapes, status codes, cookie
   behavior) are the starting contract this backend targets; where this repo's constitution requires
   stricter behavior than that frontend spec assumed (e.g., rotation with reuse detection instead of

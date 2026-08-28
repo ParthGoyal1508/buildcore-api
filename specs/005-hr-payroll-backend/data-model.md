@@ -52,11 +52,15 @@ Unchanged from 003: `companyId`, `period`, `status` (`draft`\|`processed`\|`paid
 
 ## Payroll Line Item (`payroll` schema — new)
 
-`{ id, payrollRunId, employeeId, monthDays, payableDays, lopDays, otHours, otWages, basic, hra,
+`{ id, payrollRunId, employeeId, projectId? (nullable — FK reference to projects.Project,
+resolved via ProjectsService, not a Prisma relation across schemas; null for HO/overhead staff —
+FR-046), monthDays, payableDays, lopDays, otHours, otWages, basic, hra,
 conveyanceAllowance, siteAllowance, specialAllowance, employeePf, employeeEsic,
 professionalTax, tds (manual entry, default 0 — clarification), loanEmiDeduction, netPay,
 employerPf, employerEps, employerEdli, adminCharges, employerEsic, gratuity, bonus }` — the
-source of truth `/hr/challans/*` (research.md §5) and 003's `/my/salary` both read from.
+source of truth `/hr/challans/*` (research.md §5), 003's `/my/salary`, and
+`008-projects-backend`'s P&L Labour cost line (via the exported `getLabourCostByProject()`,
+FR-046) all read from.
 
 ## Loan (`payroll` schema — new)
 
@@ -85,6 +89,31 @@ consentAttestedByUserId, consentAttestedAt, enrolledByUserId, enrolledAt, status
 New field: `otMultiplier` (decimal, default 2.00) — FR-014a, alongside 002's existing
 `pfEmployerRate`/`esicEmployerRate`/`gratuityRate`/`bonusRate`.
 
+## Exit Record (`hr` schema — new)
+
+`{ id, employeeId, companyId, lastWorkingDay, reason: 'resignation' | 'termination' |
+'contract_end', remarks?, fnfPayrollRunId?: FK PayrollRun, createdAt }`.
+
+## Payroll Run (extended)
+
+Gains `isFnf: boolean` (default `false`) alongside the existing Draft/Processed/Paid lifecycle
+(US5) — an F&F run is a normal `PayrollRun` for exactly one employee, flagged for reporting/
+audit purposes (research.md §12).
+
+## Reimbursement Claim (extended — admin fields only, table owned by feature 003)
+
+This feature adds no new table for reimbursements; it writes `status` transitions beyond
+`submitted` (`approved`/`rejected`/`paid`), `approvedBy`/`rejectedBy`/`remarks`, `paymentMode`,
+`paymentReference`, and `paidAt` onto feature 003's `hr.ReimbursementClaim` (research.md §13). See
+003's data-model.md for the full field list.
+
+## Reimbursement Category (`settings` schema — new, research.md §15)
+
+`{ id, companyId, name, receiptRequired: boolean, maxAmount?: decimal, active: boolean }`. CRUD at
+`/settings/reimbursement-categories`, same shape as Department/Designation/Document Type/Shift
+(002). Read by 003 via `SettingsService.getReimbursementCategories()` for claim creation, and by
+this feature's own admin claim-review screen for display.
+
 ## Cross-reference to features 001–004
 
 | Concept | Relationship |
@@ -99,3 +128,5 @@ New field: `otMultiplier` (decimal, default 2.00) — FR-014a, alongside 002's e
 | `Department`/`Designation`/`DocumentType`/`Shift`/employee-code-series (002) | Read via `settings`' exported services; `EmployeeDocument` FKs `DocumentType` |
 | `Permission` enum (002) | Reused verbatim (`EMPLOYEES`/`ATTENDANCE`/`PAYROLL`/`CHALLANS`/`LOANS`/`DAILY_WORKER_REGISTRY`) — no new values |
 | Dashboard widget/notification providers (004) | This feature's Document Expiry data, PF/ESIC-pending challan counts, and site headcount aggregates are what let 004's currently-placeholder providers for those become real (a 004 task, not this feature's own scope) |
+| `hr.ReimbursementClaim` (003) | Extended with admin-only fields by this feature (see above) — no redefinition, matching this table's own 003 → 005 extension pattern used throughout |
+| `settings.ReimbursementCategory` (new, added to 002's schema by this feature) | Read by 003 via `SettingsService.getReimbursementCategories()`; written/administered by this feature's Settings-facing scope |

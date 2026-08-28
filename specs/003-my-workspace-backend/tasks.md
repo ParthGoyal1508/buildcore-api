@@ -332,26 +332,62 @@ unlock consumed; separately, a completion attempt with no/expired/consumed unloc
 - [ ] T074 [US7] Wire audit logging (entityType `RE_ENROLMENT_REQUEST`) into request/decide/
       complete paths of `face-enrolment.service.ts` — FR-027
 
-**Checkpoint**: All seven user stories independently functional.
+**Checkpoint**: All seven original user stories independently functional.
 
 ---
 
-## Phase 10: Polish & Cross-Cutting Concerns
+## Phase 10: User Story 8 - Submit reimbursement claims (Priority: P3)
 
-- [ ] T075 [P] Run `npm run lint` and `npm run build` across all new/modified files
-- [ ] T076 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`,
-      `src/projects/`, `src/payroll/salary/`
-- [ ] T077 Run the full `quickstart.md` validation scenarios end-to-end and record results
-- [ ] T077a [P] E2e test: perform one action producing each new `AuditLogEntry.entityType`
-      (`PUNCH`, `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST`), then query
-      `AuditLogEntry` directly and assert each row's `entityType`, `action`, `entityId`, acting
-      account, `companyId`, and timestamp are correct — spec SC-009 — in
+**Goal**: An employee can create a reimbursement claim, edit/withdraw it while eligible, and view
+their own claim history.
+
+**Independent Test**: Submit a claim above a category's mandatory-receipt threshold without a
+receipt (rejected), then with one (created, Submitted); confirm it appears in own-history.
+
+### Tests for User Story 8 ⚠️
+
+- [ ] T078 [P] [US8] E2e test: create claim below/above receipt threshold (with/without receipt)
+      in `test/my-workspace.e2e-spec.ts`
+- [ ] T079 [P] [US8] E2e test: edit/delete a Draft claim; withdraw a Submitted claim only while
+      Pending in `test/my-workspace.e2e-spec.ts`
+- [ ] T080 [P] [US8] E2e test: one employee cannot read or act on another's claim in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T078 [P] Review every `companyId`-scoped table for RLS coverage and confirm the Super Admin
+
+### Implementation for User Story 8
+
+- [ ] T081 [P] [US8] Create `src/hr/reimbursements/dto/create-claim.dto.ts` and
+      `dto/update-claim.dto.ts`
+- [ ] T082 [US8] Implement `src/hr/reimbursements/reimbursement.service.ts` — `createClaim()`
+      (reads category config via `SettingsService.getReimbursementCategories()`, enforces the
+      receipt-threshold rule), `updateClaim()`, `withdrawClaim()`, `listOwnClaims()` — FR-029–
+      FR-032 (depends on T081)
+- [ ] T083 [US8] Implement `src/hr/reimbursements/reimbursement.controller.ts` — `POST /my/
+      reimbursements`, `PATCH /my/reimbursements/:id`, `POST /my/reimbursements/:id/withdraw`,
+      `GET /my/reimbursements` — all scoped to the caller's own employee record (FR-033),
+      permission-guarded (depends on T082)
+- [ ] T084 [US8] Wire audit logging (entityType `REIMBURSEMENT_CLAIM`) into
+      `reimbursement.service.ts` — FR-027
+
+**Checkpoint**: All eight user stories independently functional.
+
+---
+
+## Phase 11: Polish & Cross-Cutting Concerns
+
+- [ ] T085 [P] Run `npm run lint` and `npm run build` across all new/modified files
+- [ ] T086 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`,
+      `src/projects/`, `src/payroll/salary/`
+- [ ] T087 Run the full `quickstart.md` validation scenarios end-to-end and record results
+- [ ] T087a [P] E2e test: perform one action producing each new `AuditLogEntry.entityType`
+      (`PUNCH`, `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST`,
+      `REIMBURSEMENT_CLAIM`), then query `AuditLogEntry` directly and assert each row's
+      `entityType`, `action`, `entityId`, acting account, `companyId`, and timestamp are correct —
+      spec SC-009 — in `test/my-workspace.e2e-spec.ts`
+- [ ] T088 [P] Review every `companyId`-scoped table for RLS coverage and confirm the Super Admin
       bypass flag still behaves correctly — Constitution Principle IV
-- [ ] T079 [P] Confirm biometric photo/descriptor storage is encrypted at rest and every access is
+- [ ] T089 [P] Confirm biometric photo/descriptor storage is encrypted at rest and every access is
       audit-logged — FR-026, research.md §8
-- [ ] T080 Update `.env.example` with any new `WorkspaceConfig` environment variables
+- [ ] T090 Update `.env.example` with any new `WorkspaceConfig` environment variables
 
 ---
 
@@ -361,7 +397,7 @@ unlock consumed; separately, a completion attempt with no/expired/consumed unloc
 
 - **Setup (Phase 1)**: No dependencies — can start immediately
 - **Foundational (Phase 2)**: Depends on Setup — BLOCKS all user stories
-- **User Stories (Phase 3–9)**: All depend on Foundational
+- **User Stories (Phase 3–10)**: All depend on Foundational
   - US1 (Enrolment) has no dependency on other stories and is the true prerequisite for US2's face
     verification to be meaningful (though US2's code can be built in parallel against a stubbed
     enrolled employee)
@@ -373,7 +409,9 @@ unlock consumed; separately, a completion attempt with no/expired/consumed unloc
   - US6 (Offline sync) extends US2's `punch.service.ts` directly — must follow US2
   - US7 (Re-enrolment) extends US1's `face-enrolment.service.ts`/`controller.ts` directly — must
     follow US1
-- **Polish (Phase 10)**: Depends on all desired user stories being complete
+  - US8 (Reimbursement Claims) is independent of every other story beyond a Company/Employee
+    existing and Settings' Reimbursement Categories master (feature 005) being available
+- **Polish (Phase 11)**: Depends on all desired user stories being complete
 
 ### Parallel Opportunities
 

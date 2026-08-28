@@ -271,6 +271,37 @@ expired one) is rejected.
 
 ---
 
+### User Story 8 - Submit reimbursement claims (Priority: P3)
+
+An employee raises an expense reimbursement claim (category, amount, expense date, description,
+receipt) and tracks its status through review.
+
+**Why this priority**: Depends on Settings' Reimbursement Categories master (a new master this
+feature's own scope reads, added to `settings` by feature 005); an optional convenience capability,
+not blocking the P1/P2 self-service core (punch/leave/salary). PRD §7.9.5.
+
+**Independent Test**: Can be fully tested by submitting a claim with a receipt above the
+category's configured mandatory-receipt threshold, confirming rejection without one and acceptance
+with one, then confirming it appears correctly in the employee's own claim history.
+
+**Acceptance Scenarios**:
+
+1. **Given** the Reimbursement Categories master (Settings), **When** an employee starts a new
+   claim, **Then** the category options list the company's configured categories, each showing
+   whether a receipt is required and any per-claim max amount.
+2. **Given** a category requiring a receipt above a configured threshold, **When** the employee
+   submits a claim above that threshold without a receipt, **Then** it is rejected; with a receipt
+   attached, **Then** it is created with status Submitted and the Site Admin is notified.
+3. **Given** a Draft claim (not yet submitted), **When** the employee edits or deletes it, **Then**
+   the change succeeds; once Submitted, **When** the employee attempts to withdraw it, **Then** it
+   succeeds only while status is still Pending review.
+4. **Given** the employee's own claim history, **When** viewed, **Then** it lists every claim with
+   status (Draft/Submitted/Approved/Rejected/Paid) and, once processed, whether paid via payroll or
+   directly — this is the same underlying record feature 005's admin review acts on, never a
+   duplicate.
+
+---
+
 ### Edge Cases
 
 - What happens when an employee's assigned site changes between enrolment and a punch? The
@@ -396,6 +427,21 @@ expired one) is rejected.
   scoped to the authenticated caller's own employee record and company — with no way for one
   employee to read or act on another's punch, leave, salary, or biometric data.
 
+**Reimbursement Claims (Self-Service)**
+
+- **FR-029**: The system MUST allow an employee to create a reimbursement claim (category from
+  Settings' Reimbursement Categories master, amount, expense date, description, optional receipt
+  upload) scoped to their own employee record.
+- **FR-030**: The system MUST require a receipt upload when the claim amount exceeds the
+  category's configured mandatory-receipt threshold, and MUST reject submission without one above
+  that threshold.
+- **FR-031**: The system MUST allow an employee to edit or delete their own claim while it is in
+  Draft status, and to withdraw a Submitted claim only while it remains in Pending review.
+- **FR-032**: The system MUST provide an employee's own list of reimbursement claims with status
+  and, once processed, payment method (payroll/direct).
+- **FR-033**: Every endpoint in this feature's Reimbursement scope MUST be scoped to the
+  authenticated caller's own claims, consistent with FR-028.
+
 ### Key Entities
 
 - **Employee** (minimal, this feature's own scope per the confirmed scope decision): The
@@ -427,6 +473,10 @@ expired one) is rejected.
   (attendance summary, earnings, deductions, employer contributions, net pay) — this feature
   displays/exports it but does not calculate payroll figures itself; those are assumed to already
   exist once a period is Processed.
+- **Reimbursement Claim**: Employee, category (Settings Reimbursement Categories master), amount,
+  expense date, description, receipt reference, status (Draft/Submitted/Approved/Rejected/Paid) —
+  this feature owns creation/own-history; feature 005 adds the admin review layer over the same
+  record.
 
 ## Success Criteria *(mandatory)*
 

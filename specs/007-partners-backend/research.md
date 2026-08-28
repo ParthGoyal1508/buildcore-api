@@ -2,15 +2,22 @@
 
 ## 1. Schema placement
 
-**Decision**: A single new `partners` schema owns all entities: `VendorCategory`, `Vendor`,
-`VendorContact`, `VendorDealsIn`, `VendorHireDetail`, `ContractorProfile`, `ContractorDocument`,
-`MonthlyCompliance`, `BOCWPayment`. One additive field (`bocwCessRate`) is added to
+**Decision** (corrected during a master-PRD alignment audit): Operational entities land in
+`partners`: `Vendor`, `VendorContact`, `VendorDealsIn`, `VendorHireDetail`, `ContractorProfile`,
+`ContractorDocument`, `MonthlyCompliance`, `BOCWPayment`. **`VendorCategory` lands in `settings`
+instead** — this feature's original placement (all entities in `partners`) missed that
+reference-data masters are consistently Settings-owned across this project (Employee Setup
+Masters, Reimbursement Categories, Machinery's corrected Equipment Categories/Doc Types/Hire
+Rates). CRUD logic for `VendorCategory` lives in `SettingsService`-exported methods; this
+module's own `/partners/vendor-categories` controller calls those methods rather than querying
+`settings` directly (Principle I). One additive field (`bocwCessRate`) is added to
 `settings.Company` via this feature's migration — owned here, read via `SettingsService`, exactly
 as 005 did with `otMultiplier`.
 
-**Rationale**: `partners` is a named schema in the constitution's canonical module list. All
-entities are squarely vendor/contractor concerns. Putting them together gives `PartnersModule` a
-clean future-extraction boundary.
+**Rationale**: `partners` is a named schema in the constitution's canonical module list and
+remains correct for the eight operational entities. `VendorCategory` is structurally identical to
+every other reference-data master this project already places in `settings` — no reason for
+Partners' one master to be the exception.
 
 ## 2. Contractor as 1:1 Vendor extension (`ContractorProfile`)
 
@@ -113,12 +120,27 @@ added here as its first consumer.
 the constitution's mandated pattern for cross-module side effects (Principle I). Running on days
 1–5 satisfies the PRD's "within 5 days of month-end" target.
 
-## 9. Permission enum — three new values
+## 9. Permission enum — reuse the existing `PARTNERS` value
 
-**Decision**: `VENDORS`, `CONTRACTORS`, `BOCW` are added to Settings' existing `Permission` enum.
-`VENDORS` gates all vendor and category endpoints. `CONTRACTORS` gates contractor vault,
-compliance, and RAG Matrix. `BOCW` gates BOCW cess endpoints. This brings the total enum size
-to 14 values (001–007 contributions).
+**Decision** (corrected during a master-PRD alignment audit): Settings' `Permission` enum already
+contains `PARTNERS` — built "covering every PRD module by name" from feature 002's own original
+design, the same reason `MACHINERY`/`LOGBOOK`/`FUEL`/`PROJECTS`/`INVENTORY` already exist too.
+`PARTNERS` gates every endpoint in this feature (vendors, contractors, compliance, RAG Matrix,
+BOCW cess). Vendor Categories (now `settings`-owned, §1) are gated with the existing `SETTINGS`
+value instead, matching every other reference-data master. No new `Permission` values are added by
+this feature at all.
+
+**Rationale**: The original decision below invented three new values (`VENDORS`/`CONTRACTORS`/
+`BOCW`) where `PARTNERS` already existed reserved by name for exactly this module — the same
+oversight found and fixed in the Machinery spec. A single coarse `PARTNERS` permission is
+appropriate here (unlike Machinery, which genuinely needed finer-grained splits for asset
+management vs. financial verification) since Partners' functional areas don't have meaningfully
+different trust levels — vendor management, contractor compliance, and BOCW cess are all the same
+back-office administrative function.
+
+~~**Original (superseded) decision**: `VENDORS`, `CONTRACTORS`, `BOCW` added to Settings' existing
+`Permission` enum, gating vendor/category, contractor/compliance/RAG, and BOCW endpoints
+respectively.~~
 
 ## 10. VendorContacts — atomic replace on update
 
@@ -141,3 +163,33 @@ with both PF and ESIC fields: `compliant`; only one: `partially_compliant`; none
 
 **Rationale**: Simpler rule, directly matches the master PRD. The RAG Matrix provides the
 full historical view for trend analysis without needing the contractor status to encode history.
+
+## 12. Exported `getVendorById`/`getVendorTds` — a gap found on re-audit
+
+**Decision**: `PartnersService` exports both `getVendorById(vendorId): Promise<{ id, name, type,
+active }>` and `getVendorTds(vendorId): Promise<{ tdsSection, tdsRate }>` as in-process methods,
+injected into `PlantModule` (006) and `InventoryModule` (009) via standard NestJS module exports —
+not called via HTTP. The existing `GET /partners/vendors/:id/tds` endpoint remains for direct
+frontend consumption but is a thin wrapper around the same `getVendorTds()` method.
+
+**Rationale**: This feature originally only built the HTTP endpoint (FR-002's original text),
+leaving `PlantService`'s and `InventoryService`'s cross-module reads (which explicitly name these
+exact methods in their own specs) with nothing to inject — a real integration break, caught during
+a master-PRD alignment audit. Every other cross-module read in this codebase goes through an
+exported service method (Principle I); this was simply missed for Partners' two consumers.
+
+**Alternatives considered**: Machinery/Inventory call the HTTP endpoint internally instead —
+rejected: an in-process HTTP self-call for data one module needs from another is exactly the
+anti-pattern Principle I exists to prevent (network overhead, no shared transaction context, and
+a needless serialization round-trip for an in-process call).
+
+## 13. GSTIN/PAN format validation
+
+**Decision**: `Vendor.gstin` and `Vendor.pan`, when provided, are validated via `class-validator`
+`@Matches()` decorators against the standard GSTIN (15-char: `\d{2}[A-Z]{5}\d{4}[A-Z]{1}\d[Z]
+[A-Z\d]`) and PAN (10-char: `[A-Z]{5}\d{4}[A-Z]`) patterns, rejected with a field-level `400` if
+malformed. Both fields remain optional (not every vendor type needs GST/PAN registration) but MUST
+be well-formed when present.
+
+**Rationale**: Master PRD §7.7.1 explicitly calls out "Format validated" for both fields; this
+feature's original DTO left them as unvalidated free-text strings — found missing on re-audit.

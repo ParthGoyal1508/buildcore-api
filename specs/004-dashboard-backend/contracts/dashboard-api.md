@@ -61,6 +61,11 @@ inert type has nothing to be active).
 **Response — 200**: `{ entries: [{ id, actor, action, module, target, timestamp }], hasMore:
 boolean }` — newest first, module-bucket-mapped (data-model.md), company-scoped.
 
+## `GET /activity-log/export?module=&timeRange=`
+
+**Response — 200**: `text/csv` stream, columns Timestamp/User/Action/Module/Entity/Before/After,
+same filters and company scoping as the feed endpoint above (master PRD §7.2.5, spec FR-024).
+
 ## `GET /reports/types`
 
 **Response — 200**: `{ id, name, isAvailable, filters: FilterSpec[] }[]` — all 9 (8 PRD-named +

@@ -104,8 +104,9 @@ test user, and confirming that user's accessible modules match exactly what the 
 
 A Super Admin or HO User views the list of user accounts, searches/filters it, edits a user's
 assigned role or active/inactive status, and removes an account that should no longer have access.
-(Creating a new account is handled by the separate Account Creation feature; this feature
-administers accounts that already exist.)
+(Creating a new account is handled by `010-account-creation-backend`; this feature administers
+accounts that already exist, including `pending` ones awaiting activation — see that feature's
+spec for the invite lifecycle itself.)
 
 **Why this priority**: Depends on Story 2 (roles must exist to assign) and on accounts already
 being created elsewhere; important for day-to-day access management but the system is already
@@ -133,6 +134,12 @@ deactivating another and confirming it can no longer authenticate, and deleting 
    requested, **Then** the operation is scoped to that account's own company and never exposes or
    modifies an account in a different company (except where the acting user is a cross-company
    Super Admin).
+6. **Given** a `pending` account (created but not yet activated, per
+   `010-account-creation-backend`'s invite flow), **When** the user list is viewed, **Then** it
+   appears alongside active/deactivated accounts with a `pending` status and its invite's
+   expiry shown; **When** an admin attempts `PATCH .../:id` with `{ status: 'active' }` directly
+   against it, **Then** `400` is returned — a pending account can only activate via the invitee
+   completing set-password (010's flow), never an admin's direct status write.
 
 ---
 
@@ -302,11 +309,13 @@ collision, even in concurrent requests.
 - **FR-012**: The system MUST re-evaluate a user's current role and its current permissions on that
   user's next authenticated request after either is changed, without waiting for their session to
   expire naturally.
-- **FR-013**: The system MUST provide a list of existing user accounts (name, email, role, status,
-  last-login timestamp) scoped to the requesting admin's company, except for a cross-company Super
-  Admin.
+- **FR-013**: The system MUST provide a list of existing user accounts (name, email, role, status
+  — including `pending`, `inviteExpiresAt` when applicable — last-login timestamp) scoped to the
+  requesting admin's company, except for a cross-company Super Admin.
 - **FR-014**: The system MUST allow a Super Admin or HO User to edit an existing user account's
   assigned role or active/inactive status, and MUST reject the same operation from any other role.
+  A direct write of `status: 'active'` against a currently-`pending` account MUST be rejected with
+  `400` — that transition only happens via `010-account-creation-backend`'s set-password flow.
 - **FR-015**: The system MUST allow a Super Admin or HO User to delete an existing user account,
   after which it can no longer authenticate and no longer counts toward any role's assigned-user
   count.

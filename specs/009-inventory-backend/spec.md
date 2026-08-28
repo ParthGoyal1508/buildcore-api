@@ -79,8 +79,10 @@ also implements `InventoryService.getMaterialCostByProject()` — the exported m
 An admin creates, edits, and deletes material categories (CEMENT, STEEL, AGGREGATE, etc.);
 categories populate the Category dropdown in Item Masters and stock filters.
 
-**Why this priority**: No dependency; required before any item can be created. Ships with 8
-seeded default categories.
+**Why this priority**: No dependency; required before any item can be created. Ships with all 10
+of the master PRD's named default categories (Cement, Aggregate, Steel, Bricks, Sand, Paint,
+Electrical, Plumbing, Fuel, Consumables) — corrected from this feature's original 8-category seed
+list, which omitted Fuel and Consumables.
 
 **Independent Test**: Create a category, edit it, delete it (no linked items → 200; linked → 409)
 — independent of any inventory transaction.
@@ -138,8 +140,9 @@ rate ₹60), verify WAR recalculates to ₹53.33 and inStock = 150 — independe
 1. **Given** a valid item and project site, **When** `POST /inventory/purchases` is called with
    `siteId`, `itemId`, `vendorId`, `date`, `quantity`, `rate`, and optional `billFile`, **Then**
    a `Purchase` record is created, a `StockLedgerEntry` (type: `purchase`) is appended, the
-   `StockBalance.received` increments, WAR recalculates, and a `PurchaseBill` (status: `unpaid`)
-   is created.
+   `StockBalance.received` increments, WAR recalculates, a `PurchaseBill` (status: `unpaid`) is
+   created, and a `GoodsReceiptNote` (GRN) is auto-generated and linked to the purchase's project
+   site for visibility on that project's Bills & Expenses tab (FR-020).
 2. **Given** multiple purchases for the same item+site, **When** stock is queried, **Then**
    `inStock = received − issued − transferOut + transferIn` and WAR reflects the weighted
    average across all purchases.
@@ -167,9 +170,9 @@ more (→ 422 Unprocessable Entity, "insufficient stock"); issue the remaining 4
 **Acceptance Scenarios**:
 
 1. **Given** an item with `inStock > 0`, **When** `POST /inventory/issues` is called with
-   `siteId`, `itemId`, `date`, `quantity`, `issuedTo`, and optional `remarks`, **Then** the
-   issue is recorded, `StockLedgerEntry` (type: `issue`) is appended, `StockBalance.issued`
-   increments.
+   `siteId`, `itemId`, `date`, `quantity`, `issuedTo`, an `activityId` or `boqItemId` (FR-019),
+   and optional `remarks`, **Then** the issue is recorded, `StockLedgerEntry` (type: `issue`) is
+   appended, `StockBalance.issued` increments.
 2. **Given** `quantity > inStock`, **When** `POST /inventory/issues` is attempted, **Then**
    `422 Unprocessable Entity` with `{ availableStock: N }` in the response — enforced
    server-side with database-level locking to prevent race conditions.
@@ -345,19 +348,46 @@ verify return = ₹1,50,000.
   `partners` schema query (Constitution Principle I).
 - **FR-012**: Site/project resolution MUST go via `ProjectsService.getSitesByProject()` —
   no direct `projects` schema query.
-- **FR-013**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission()` using
-  enum values: `INVENTORY_STOCK` (stock view), `INVENTORY_PURCHASES` (purchases + items +
-  categories), `INVENTORY_PAYMENTS` (payments); these are added to Settings' existing enum.
+- **FR-013**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission(Permission.
+  INVENTORY)`, reusing Settings' already-existing `INVENTORY` enum value verbatim — corrected
+  during a master-PRD alignment audit; this feature originally invented three new values
+  (`INVENTORY_STOCK`/`INVENTORY_PURCHASES`/`INVENTORY_PAYMENTS`) where `INVENTORY` already
+  existed reserved by name for exactly this module (matching the same failure pattern found and
+  fixed in the Machinery and Partners specs). Item/Category Masters (US1/US2, `settings`-schema
+  per FR-016) are guarded with the existing `SETTINGS` permission instead.
 - **FR-014**: `StockValue = inStock × avgRate` MUST be computed server-side on stock reads, never
   stored as a column (it would become stale between WAR updates).
 - **FR-015**: Item names MUST be unique per company; `POST /inventory/items` returns `409` on
   duplicate name.
+- **FR-016**: Item Categories and Items MUST live in the `settings` schema, not `inventory` —
+  corrected during a master-PRD alignment audit (master PRD §7.8.6 places "Inventory Masters" as
+  a Settings subsection, matching Employee Setup Masters, Reimbursement Categories, and
+  Machinery's corrected Equipment Categories/Doc Types/Hire Rates). CRUD lives in
+  `SettingsService`-exported methods; this module's own `/inventory/items`,
+  `/inventory/categories` controllers call those exported methods rather than querying `settings`
+  directly (Principle I).
+- **FR-017**: Item Master MUST include Reorder Level (per item, per master PRD §7.6.6) and HSN
+  Code — both entirely absent from this feature's original scope, found missing during a
+  master-PRD alignment audit. `GET /inventory/stock` MUST flag a row `belowReorderLevel: true`
+  when `inStock < item.reorderLevel` (master PRD §7.6.1's explicit alert requirement).
+- **FR-018**: The `Unit` enum MUST include all 8 units the master PRD names: BAG, CUM, KG, NOS,
+  MT, LTR, RMT, SQM — this feature's original enum was missing RMT and SQM.
+- **FR-019**: An Issue record MUST capture the work Activity or BOQ Item it was issued against
+  (`activityId?` or `boqItemId?`, resolved via `ProjectsService`) — master PRD §7.6.3 names this
+  as a required field ("Activity/BOQ Item"), missing from this feature's original scope; without
+  it, material consumption cannot be traced back to project costing.
+- **FR-020**: A Goods Receipt Note (GRN) record MUST be auto-generated on every purchase save and
+  MUST be visible from the purchase's project site via `ProjectsService`, satisfying master PRD
+  §7.6.2's "Auto-generated on purchase save" and "Links to project's Bills & Expenses tab"
+  requirements — both entirely absent from this feature's original scope.
 
 ### Key Entities
 
-- **ItemCategory** (`inventory` schema): `id`, `companyId`, `name` (uppercase), `createdAt`.
-- **Item** (`inventory` schema): `id`, `companyId`, `code` (auto-gen), `name` (unique per
-  company), `categoryId` FK, `unit` (BAG|CUM|KG|NOS|MT|LTR), `description?`, `createdAt`.
+- **ItemCategory** (`settings` schema, corrected per FR-016): `id`, `companyId`, `name`
+  (uppercase), `createdAt`.
+- **Item** (`settings` schema, corrected per FR-016): `id`, `companyId`, `code` (auto-gen),
+  `name` (unique per company), `categoryId` FK, `unit` (BAG|CUM|KG|NOS|MT|LTR|RMT|SQM, FR-018),
+  `reorderLevel?` (decimal, FR-017), `hsnCode?` (string, FR-017), `description?`, `createdAt`.
 - **StockBalance** (`inventory` schema): `id`, `companyId`, `itemId` FK, `siteId` (UUID, cross-
   schema ref to `projects.Site`), `received` (decimal, default 0), `issued` (decimal, default 0),
   `transferIn` (decimal, default 0), `transferOut` (decimal, default 0), `avgRate` (decimal,
@@ -370,11 +400,15 @@ verify return = ₹1,50,000.
 - **Purchase** (`inventory` schema): `id`, `companyId`, `siteId`, `itemId` FK, `vendorId` (UUID,
   cross-schema ref), `date`, `quantity`, `rate`, `amount` (qty × rate, stored), `billFileRef?`
   (encrypted object-storage), `deleted` (boolean, default false), `createdAt`.
+- **GoodsReceiptNote** (`inventory` schema, new per FR-020): `id`, `companyId`, `purchaseId`
+  FK→Purchase (1:1), `grnNumber` (auto-generated), `siteId`, `createdAt`. Visible from the
+  purchase's project site via `ProjectsService` for that project's Bills & Expenses tab.
 - **PurchaseBill** (`inventory` schema): `id`, `companyId`, `purchaseId` FK (1:1), `vendorId`,
   `totalAmount`, `paidAmount` (default 0), `paymentStatus` (unpaid|part_paid|paid),
   `createdAt`, `updatedAt`.
 - **Issue** (`inventory` schema): `id`, `companyId`, `siteId`, `itemId` FK, `date`, `quantity`,
-  `issuedTo`, `remarks?`, `deleted` (boolean, default false), `createdAt`.
+  `issuedTo`, `activityId?` / `boqItemId?` (cross-schema ref to `projects`, FR-019), `remarks?`,
+  `deleted` (boolean, default false), `createdAt`.
 - **StockTransfer** (`inventory` schema): `id`, `companyId`, `fromSiteId`, `toSiteId`,
   `itemId` FK, `date`, `quantity`, `remarks?`, `deleted` (boolean, default false), `createdAt`.
 - **Payment** (`inventory` schema): `id`, `companyId`, `vendorId`, `amount`, `date`,
@@ -398,6 +432,8 @@ verify return = ₹1,50,000.
   always equals `StockBalance.received − StockBalance.issued − ...` for that row.
 - **SC-005**: `getMaterialCostByProject()` returns the correct sum within 1 second for a project
   with up to 500 purchases.
+- **SC-006**: Every stock row where `inStock < item.reorderLevel` is flagged `belowReorderLevel:
+  true` in `GET /inventory/stock` — zero missed reorder alerts in testing.
 
 ## Assumptions
 
@@ -405,10 +441,16 @@ verify return = ₹1,50,000.
   item code generator is built within the `inventory` module.
 - `ProjectsService` exposes `getSitesByProject(projectId): string[]` returning siteIds — needed
   for `getMaterialCostByProject`. This is added as a stub export from `ProjectsModule` (same
-  pattern as other cross-module stubs).
+  pattern as other cross-module stubs). Issue's `activityId`/`boqItemId` (FR-019) resolves via
+  the same `ProjectsService`, validated but not duplicated into `inventory` schema.
 - The `inventory` module reads `PartnersService.getVendorById(vendorId)` for vendor name display
-  in purchase/payment lists — full vendor data is not cached in `inventory` tables.
+  in purchase/payment lists — full vendor data is not cached in `inventory` tables. This uses the
+  exported in-process method (`007-partners-backend` research.md §12), never the HTTP endpoint.
 - Purchase bill files use the same encrypted object-storage reference pattern as 005/007/008.
 - The `@nestjs/bullmq` queue (pre-approved in the constitution) is NOT used for ledger writes —
   all ledger updates are synchronous within the request transaction, acceptable for the expected
   transaction volume.
+- Reorder Level granularity (FR-017) is per-item, company-wide — not per-item-per-site. Master
+  PRD §7.6.6 implies per-item; §7.8.6 separately says "per item per site," an internal
+  inconsistency in the source document. Per-item was chosen as the simpler default; a future
+  amendment can add per-site overrides if the business need materializes.

@@ -53,11 +53,12 @@ descriptors encrypted at rest with every access audit-logged (Principle IV, FR-0
 config, never inline magic numbers (Principle III); every Prisma schema change ships as a generated
 migration (Principle VI).
 
-**Scale/Scope**: Three new schemas' worth of entities (~9), ~20 employee-facing endpoints plus 4
-admin-side endpoints (contracts/my-workspace-api.md), two newly pre-approved dependencies. No
-existing feature 001/002 code is modified beyond the two additive schema changes in
-data-model.md's cross-reference table (`User.roleId` unaffected; only `AuditLogEntry.entityType`
-gains new values).
+**Scale/Scope**: Three new schemas' worth of entities (~10, including the new Reimbursement Claim
+added for US8), ~24 employee-facing endpoints plus 4 admin-side endpoints
+(contracts/my-workspace-api.md), two newly pre-approved dependencies. No existing feature 001/002
+code is modified beyond the additive schema changes in data-model.md's cross-reference table
+(`User.roleId` unaffected; `AuditLogEntry.entityType` gains new values; `settings` gains a
+`ReimbursementCategory` table, added by feature 005, read here read-only).
 
 ## Constitution Check
 
@@ -135,6 +136,10 @@ buildcore-api/
 │   │       ├── leave.controller.ts                 # NEW — /my/leave*
 │   │       ├── leave-admin.controller.ts           # NEW — /workspace-admin/leave-applications*
 │   │       ├── leave.service.ts                    # NEW — day-count calc, balance check
+│   │       └── dto/
+│   │   └── reimbursements/
+│   │       ├── reimbursement.controller.ts          # NEW — /my/reimbursements* (US8)
+│   │       ├── reimbursement.service.ts              # NEW — research.md §10
 │   │       └── dto/
 │   ├── projects/
 │   │   ├── projects.module.ts                      # NEW

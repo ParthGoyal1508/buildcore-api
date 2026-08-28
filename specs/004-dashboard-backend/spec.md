@@ -84,9 +84,10 @@ that data implies.
 **Acceptance Scenarios**:
 
 1. **Given** a company's employee/attendance/leave data for today, **When** the Dashboard widgets
-   are requested, **Then** Total Employees, Present Today, Absent, On Leave, and Pending Approvals
-   (pending leave applications specifically — matching the PRD's own link to `/hr/leave`, not
-   attendance exceptions, which are a separate concern) each reflect the current count.
+   are requested, **Then** Total Employees, Present Today, Absent, and On Leave each reflect the
+   current count, and Pending Approvals reflects the sum of pending leave applications, open
+   maintenance jobs, and submitted reimbursement claims (FR-005) — never attendance exceptions,
+   which are a separate concern.
 2. **Given** the Active Projects and Total Machinery KPI widgets and the Monthly Expenses widget,
    **When** requested, **Then** each returns the unavailable state (Projects/Machinery/expense
    figures are not yet computable modules), per User Story 1's contract.
@@ -128,6 +129,12 @@ feed, newest first, correctly filterable by module and time range.
    company's entries are returned (or all companies', for a cross-company Super Admin).
 5. **Given** any entry, **When** inspected, **Then** it is exactly what was originally written —
    this feature is read-only against the log and never modifies or deletes an entry.
+6. **Given** the feed with any combination of module/time-range filters applied, **When**
+   `GET /dashboard/activity-log/export` is called, **Then** a CSV is returned with the same
+   columns as the feed (Timestamp, User, Action, Module, Entity, Before, After) and the same
+   filters and company scoping applied — matching master PRD §7.2.5's "Export: CSV" requirement.
+   Found missing during the master-PRD alignment audit: the original scope built the feed
+   read-side but never the export.
 
 ---
 
@@ -296,9 +303,15 @@ unavailable state when run.
   each request (or from a cache no older than a short, documented interval — target 30 seconds),
   never a hardcoded or indefinitely-stale value.
 - **FR-005**: The system MUST compute company-wide KPIs (Total Employees, Present Today, Absent, On
-  Leave, and Pending Approvals — the count of Pending leave applications specifically, matching the
-  PRD's own `/hr/leave` link) from already-specced Employee/Attendance/Leave data, scoped to the
-  caller's company.
+  Leave, and Pending Approvals) from already-specced Employee/Attendance/Leave data, scoped to the
+  caller's company. **Pending Approvals** is the sum of Pending leave applications (`/hr/leave`,
+  always available since feature 003/005) plus, once each source module exists, Open maintenance
+  jobs (`/machinery/maintenance`, feature 006) and Submitted reimbursement claims
+  (`/hr/reimbursements`, feature 005 US12) — matching the master PRD's §7.2.1 formula exactly.
+  Each additional source is read via that module's own exported service (never a direct
+  cross-schema query, Principle I); a source module that doesn't exist yet is simply omitted from
+  the sum, not treated as zero-and-final — this widget's computation is expected to pick up each
+  new source automatically once specced, without a version bump (per FR-002's registry contract).
 - **FR-006**: The system MUST provide a Today's Attendance table widget (first 8 records) and a
   Recent Leaves table widget, each scoped to the caller's company.
 - **FR-007**: The system MUST provide a read/query endpoint over the existing shared audit log,
@@ -355,6 +368,11 @@ unavailable state when run.
   are introduced (per clarification).
 - **FR-023**: Every endpoint in this feature MUST accept and return validated, typed request/
   response structures, consistent with this repo's existing DTO contract pattern.
+- **FR-024**: The system MUST provide `GET /dashboard/activity-log/export`, streaming a CSV of the
+  Activity Log feed (Timestamp, User, Action, Module, Entity, Before, After columns) honoring the
+  same module/time-range filters and company scoping as the feed endpoint (FR from US3) — master
+  PRD §7.2.5. Added during the master-PRD alignment audit; the original scope built only the
+  feed's read side, not its export.
 
 ### Key Entities
 

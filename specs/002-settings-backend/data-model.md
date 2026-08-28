@@ -50,9 +50,14 @@ Seeded on first setup with the nine default roles from the PRD's table, `isProte
 for Super Admin.
 
 **`Permission` enum** (`settings` schema): `DASHBOARD`, `EMPLOYEES`, `ATTENDANCE`, `PROJECTS`,
-`MACHINERY`, `INVENTORY`, `PARTNERS`, `REPORTS`, `PAYROLL`, `CHALLANS`, `LOANS`, `LOGBOOK`, `FUEL`,
-`DAILY_WORKER_REGISTRY`, `MY_WORKSPACE`, `SETTINGS`, `USER_MANAGEMENT`, `COMPANY_SETTINGS`,
-`DATA_EXPORT`, `DATA_DELETE`.
+`DWR`, `PROJECT_FINANCIALS`, `MACHINERY`, `INVENTORY`, `PARTNERS`, `REPORTS`, `PAYROLL`,
+`CHALLANS`, `LOANS`, `LOGBOOK`, `FUEL`, `DAILY_WORKER_REGISTRY`, `MY_WORKSPACE`, `SETTINGS`,
+`USER_MANAGEMENT`, `COMPANY_SETTINGS`, `DATA_EXPORT`, `DATA_DELETE`.
+
+`DWR` and `PROJECT_FINANCIALS` split daily-work-report entry and project financial data
+(revenue/RA bills/P&L) out from the coarser `PROJECTS` permission — added during feature
+008's build-out (a genuine new trust-level split, not a duplicate of an existing value; see
+008's research.md).
 
 ## User Account (`shared` schema — modifies feature 001's model)
 
@@ -60,10 +65,12 @@ for Super Admin.
 |---|---|---|
 | `roleId` | string | **CHANGED** — replaces the placeholder `role Role` enum; FK to `settings.Role.id` (research.md §2/§3). Every account has exactly one role. |
 | `lastLoginAt` | timestamp \| null | **NEW** (owned by feature 001) — set on every successful authentication (spec FR-017). Feature 001's `AuthService.login()` writes it; this feature only reads it via the exported `UsersService` (research.md §3) for the Users list (FR-013). If feature 001 lands first without this field, add it there instead of here — either way it belongs to `shared.User`, not to `settings`. |
-| *(all other fields)* | — | Unchanged from feature 001's data-model.md (`companyId`, `status`, `mustChangePassword`, lockout fields, etc.) |
+| `status` | enum | **EXTENDED by feature 010** — gains `pending` (was `active`\|`deactivated`). This feature's `UserSummary` and `PATCH` guard both account for it (spec FR-013, FR-014). |
+| *(all other fields)* | — | Unchanged from feature 001's data-model.md (`companyId`, `mustChangePassword`, lockout fields, etc.) |
 
 This feature does not add new columns to `User` beyond the enum→FK change; it reads/lists/edits/
-deletes existing rows via `AuthModule`'s exported `UsersService` (research.md §3), never a direct
+deletes existing rows via an exported `UsersService` — owned by `010-account-creation-backend`
+(corrected from an original "AuthModule"/001 assumption; see research.md §3), never a direct
 `shared.User` query from `settings`.
 
 ## Department (`settings` schema — new)

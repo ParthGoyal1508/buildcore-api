@@ -130,6 +130,26 @@ them) forms one worked-hours computation; hours beyond `shiftId`'s duration beco
 This feature formats and serves this projection (JSON + PDF, research.md §7); it does not compute
 the underlying payroll figures.
 
+## Reimbursement Claim (`hr` schema — new)
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | |
+| `employeeId` | string | Owner; every access scoped to this (FR-033) |
+| `companyId` | string | RLS-protected |
+| `categoryId` | string | FK `settings.ReimbursementCategory` (feature 005) |
+| `amount` | decimal | |
+| `expenseDate` | date | |
+| `description` | string | |
+| `receiptRef` | string \| null | Encrypted object-storage reference; required above the category's threshold (FR-030) |
+| `status` | enum | `draft` \| `submitted` \| `approved` \| `rejected` \| `paid` |
+| `paymentMode` | enum \| null | `payroll` \| `direct`, set once approved+paid (feature 005) |
+| `paymentReference` | string \| null | Set on direct payment (feature 005) |
+
+Created/edited/withdrawn by this feature (FR-029–FR-032); `approved`/`rejected`/`paid` transitions
+and `paymentMode`/`paymentReference` are written by feature 005's admin layer over the same table
+(research.md §10) — this feature only reads those fields, never writes them.
+
 ## Cross-reference to feature 001/002
 
 | Concept | Relationship |
@@ -137,4 +157,5 @@ the underlying payroll figures.
 | `Employee.userId` | FK to `shared.User.id` (feature 001) |
 | `Employee.companyId`, `Site.companyId` | FK to `settings.Company.id` (feature 002) |
 | `Employee.shiftId` | FK to `settings.Shift.id` (feature 002) — OT computation reads shift duration via `SettingsModule`'s exported service, never a direct cross-schema join |
-| `AuditLogEntry` (`shared` schema) | Reused, not redefined — every event this feature logs (FR-027) goes through the same `AuditLogService.record()` feature 001/002 establish, with `entityType` values `PUNCH`, `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST` added to that enum |
+| `ReimbursementClaim.categoryId` | FK to `settings.ReimbursementCategory.id` (feature 005 adds this table to `settings`) — read via `SettingsService.getReimbursementCategories()`, never a direct cross-schema join (research.md §10) |
+| `AuditLogEntry` (`shared` schema) | Reused, not redefined — every event this feature logs (FR-027) goes through the same `AuditLogService.record()` feature 001/002 establish, with `entityType` values `PUNCH`, `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST`, `REIMBURSEMENT_CLAIM` added to that enum |

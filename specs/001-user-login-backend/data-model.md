@@ -11,7 +11,7 @@ constraint on itself). Field names are conceptual; exact Prisma types are a task
 | `id` | string | Existing |
 | `email` | string | Existing, unique — already case-sensitive at the DB level; lookups MUST normalize (lowercase + trim) at the service layer (FR-003) |
 | `password` | string | Existing — already argon2-hashed via `PasswordService` |
-| `role` | enum | Existing (`Role` enum: currently `ADMIN`/`USER`) — extended per the PRD's full role list as a separate concern (Account Creation feature); this feature only reads/compares it |
+| `role` | enum | Existing (`Role` enum: currently `ADMIN`/`USER`) — replaced by `roleId` FK per 002, extended per the PRD's full role list; this feature only reads/compares it. Account *creation* itself is built in `010-account-creation-backend` (was an unresolved forward reference here until that feature was specced). |
 | `companyId` | string \| null | **NEW** — required for every role except Super Admin; `null` only for Super Admin (research.md §5) |
 | `status` | enum: `active` \| `deactivated` | **NEW** |
 | `mustChangePassword` | boolean | **NEW** |

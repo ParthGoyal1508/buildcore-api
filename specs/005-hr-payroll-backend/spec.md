@@ -435,6 +435,38 @@ paid directly, and confirming a second claim can be rejected with mandatory rema
 
 ---
 
+### User Story 13 - Bulk Attendance Import (Priority: P3)
+
+An HR admin imports a batch of attendance records via a CSV template (Employee Code, Date, Punch
+In, Punch Out), reviewing a row-level validation report before any commit — for situations like
+catching up a batch of biometric-device exports or backfilling a newly onboarded site's history.
+
+**Why this priority**: A backfill/convenience tool, independent of day-to-day admin attendance
+entry (US3); PRD §7.3.2.
+
+**Independent Test**: Can be fully tested by uploading a CSV mixing valid and invalid rows (unknown
+employee code, malformed date), confirming the validation report lists row-level errors with
+nothing committed, then re-importing only the valid rows and confirming they appear as standard
+Attendance Records.
+
+**Acceptance Scenarios**:
+
+1. **Given** the Attendance Import action, **When** `GET /hr/attendance/import/template` is
+   called, **Then** it returns a CSV template with columns Employee Code, Date, Punch In, Punch
+   Out.
+2. **Given** an uploaded CSV, **When** `POST /hr/attendance/import/validate` is called, **Then**
+   it returns a row-level report (unknown employee code, malformed date/time, duplicate
+   employee+date within the file) without creating any records.
+3. **Given** a validation report with the blocking rows removed, **When** `POST
+   /hr/attendance/import/commit` is called, **Then** only the previously-validated rows are
+   created as standard Attendance Records — each auto-computing Total Hours/status identically to
+   a manually-created entry (US3) — and each is tagged import-sourced in the audit log.
+4. **Given** a CSV row whose date falls within a Processed/Paid payroll period, **When**
+   validated, **Then** that row is rejected in the report with the same period-locked rule already
+   applied to manual edits (FR-009).
+
+---
+
 ### Edge Cases
 
 - What happens when an employee's Employment Type changes from Daily Wage to Full Time mid-cycle?
@@ -592,6 +624,79 @@ paid directly, and confirming a second claim can be rejected with mandatory rema
   company exception), and log every create/update/delete action to the audit log with the acting
   admin's identity.
 
+**Offboarding & Full and Final Settlement**
+
+- **FR-031**: The system MUST allow an admin to initiate an active employee's exit, capturing
+  `lastWorkingDay`, `reason` (Resignation/Termination/Contract End), and an optional `remarks`
+  field, creating an `ExitRecord`.
+- **FR-032**: The system MUST compute a Full & Final (F&F) settlement for an employee with an
+  exit record: pending salary pro-rated to `lastWorkingDay`, earned-leave encashment (EL balance
+  × daily rate), active loan recovery, and net F&F payable.
+- **FR-033**: The system MUST process an F&F settlement as a `PayrollRun` flagged F&F for that
+  employee, incorporating the computed components, and MUST route it through the same
+  Draft → Processed → Paid lifecycle and immutability rules as a standard payroll run (FR-015).
+- **FR-034**: The system MUST, once `lastWorkingDay` has passed and the F&F run is processed, set
+  the employee's status to Inactive and deactivate their linked `User` account (login disabled,
+  all refresh tokens revoked), while retaining all historical employee/attendance/payroll records
+  unmodified.
+- **FR-035**: The system MUST reject attendance, leave, and payroll actions attempted against an
+  Inactive employee with a clear "employee is inactive" error.
+
+**Reimbursement Claims (Admin)**
+
+- **FR-036**: The system MUST provide a paginated, filterable (status/employee/company) list of
+  reimbursement claims for admin review, sourced from claims submitted via this feature or via
+  003's employee-facing submission.
+- **FR-037**: The system MUST allow an admin to Approve a Submitted claim (with optional remarks,
+  queuing it for payment) or Reject one (with mandatory remarks, notifying the employee).
+- **FR-038**: The system MUST allow an admin to mark an Approved claim Paid, either directly
+  (capturing payment mode, date, and reference) or by including its amount as an earnings line in
+  the employee's next payroll run — mirroring how Loan EMI is already included (FR-022).
+- **FR-039**: The system MUST expose a Reimbursement Register view with status filters and summary
+  totals by status (Pending / Approved-unpaid / Paid), matching the Activity Log's existing
+  Super-Admin-sees-all/Site-Admin-sees-own-company access pattern.
+- **FR-040**: The system MUST prevent a claim in `rejected` or `draft` status from ever appearing
+  in a payroll run or the Accountant's payment queue.
+
+**Bulk Attendance Import**
+
+- **FR-041**: The system MUST provide a downloadable CSV template for attendance import (Employee
+  Code, Date, Punch In, Punch Out).
+- **FR-042**: The system MUST validate an uploaded attendance-import CSV before any commit,
+  producing a row-level error report (unknown employee code, malformed date/time, duplicate
+  employee+date within the file) — no records are created by validation alone.
+- **FR-043**: The system MUST commit only previously-validated rows on admin confirmation, creating
+  standard Attendance Records that compute Total Hours/status identically to a manually-created
+  entry (FR-009), each tagged import-sourced in the audit log.
+- **FR-044**: The system MUST reject an import row whose date falls within an already
+  payroll-locked period, per the same rule already applied to manual attendance edits (FR-009).
+
+**Reimbursement Categories (Settings master)**
+
+- **FR-045**: The system MUST provide per-company CRUD for Reimbursement Categories (name,
+  whether a receipt is required, an optional per-claim max amount), exposed at
+  `/settings/reimbursement-categories` — the same CRUD shape as Settings' existing Department/
+  Designation/Document Type/Shift masters (002 FR-018–FR-022) — since claim creation (003 FR-029)
+  and category-threshold enforcement (003 FR-030) both depend on this data existing, not just
+  being seeded once. Found missing during a second alignment-audit pass — this feature's original
+  scope (FR-036–FR-040) only ever consumed this master via a read method, never built the
+  create/edit path for it.
+- **FR-046**: `PayrollLineItem` MUST carry an optional `projectId` (nullable — set when the
+  employee's assignment for that payroll period is attributable to a specific project; null for
+  HO/overhead staff). The system MUST expose an exported `HrPayrollService.getLabourCostByProject
+  (projectId, dateRange)` method that sums `netPay` (or the applicable cost figure) across
+  `PayrollLineItem`s with a matching `projectId` and `payrollRun.period` within the range, for
+  `008-projects-backend`'s Project P&L Labour cost line to call — never a direct `projects` →
+  `payroll` cross-schema query (Constitution Principle I). Added during 008's master-PRD alignment
+  audit, which found this feature's original scope had no project-attribution field and no such
+  method, though 008's P&L design assumed both existed.
+- **FR-047**: The system MUST expose exported `HrService.getUnlinkedEmployees(companyId, search?)`
+  (lists `Employee` rows with no `userId` set) and `HrService.linkEmployeeToUser(employeeId,
+  userId)` (sets `Employee.userId`, throws if already set) for
+  `010-account-creation-backend`'s employee-picker and User-Employee linking to call — never a
+  direct `account-creation` → `hr` cross-schema query (Constitution Principle I). Added when that
+  feature was specced, research.md §17.
+
 ### Key Entities
 
 - **Employee (extended)**: My Workspace's minimal record (003) plus the full Identity/Employment/
@@ -619,6 +724,13 @@ paid directly, and confirming a second claim can be rejected with mandatory rema
   site, trade, wage rate, face template/photos, consent attestation, status.
 - **Daily Worker Attendance**: One day's presence record for a Daily Worker — photo (optional),
   GPS, timestamp, marking supervisor, status.
+- **Exit Record**: One employee's departure — last working day, reason, remarks, linked F&F
+  Payroll Run once processed.
+- **Reimbursement Claim**: Employee, category (Settings Reimbursement Categories master), amount,
+  expense date, description, receipt reference, status (Draft/Submitted/Approved/Rejected/Paid),
+  approval/rejection remarks, payment mode/date/reference.
+- **Reimbursement Category** (Settings master, new): Name, whether a receipt is required, an
+  optional per-claim max amount, active flag.
 
 ## Success Criteria *(mandatory)*
 

@@ -24,22 +24,30 @@ contractor document upload — per constitution requirements for financial and a
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 [P] Extend `src/settings/permission.enum.ts` with `VENDORS`, `CONTRACTORS`, `BOCW`
-      — spec FR-015, research.md §9
+- [ ] T001 [P] No `Permission` enum changes needed — reuse Settings' already-existing `PARTNERS`
+      and `SETTINGS` values verbatim (corrected during a master-PRD alignment audit — spec
+      FR-015, research.md §9; this task originally added `VENDORS`/`CONTRACTORS`/`BOCW`)
 - [ ] T002 [P] Add `bocwCessRate Decimal @default(0.01)` to `settings.Company` in
       `prisma/schema.prisma` — research.md §7 (same pattern as 005's `otMultiplier`)
-- [ ] T003 Add all 9 `partners` schema models to `prisma/schema.prisma`: `VendorCategory`,
-      `Vendor`, `VendorContact`, `VendorDealsIn`, `VendorHireDetail`, `ContractorProfile`,
-      `ContractorDocument`, `MonthlyCompliance`, `BOCWPayment` — data-model.md
+- [ ] T003 Add the 8 operational `partners` schema models to `prisma/schema.prisma`: `Vendor`,
+      `VendorContact`, `VendorDealsIn`, `VendorHireDetail`, `ContractorProfile`,
+      `ContractorDocument`, `MonthlyCompliance`, `BOCWPayment`, plus the `settings.VendorCategory`
+      model (corrected placement — research.md §1) — data-model.md
 - [ ] T004 Generate and apply migrations: `bocwCessRate` additive column (separate migration),
-      then all 9 `partners` schema models (one migration) — Constitution Principle VI
-- [ ] T005 [P] Add RLS policies for all 9 `partners` tables — Constitution Principle IV
+      then the 8 `partners` schema models + `settings.VendorCategory` (one migration) —
+      Constitution Principle VI
+- [ ] T005 [P] Add RLS policies for all 9 tables (8 `partners` + 1 `settings`) — Constitution
+      Principle IV
 - [ ] T006 [P] Extend `shared.AuditLogEntry.entityType` with: `VENDOR`, `VENDOR_CATEGORY`,
       `CONTRACTOR_PROFILE`, `CONTRACTOR_DOCUMENT`, `MONTHLY_COMPLIANCE`, `BOCW_PAYMENT`
 - [ ] T007 Scaffold `PartnersModule` in `src/partners/partners.module.ts` with 7 sub-module
-      structure; immediately export `PartnersService` with stub
-      `getSubcontractorCostByProject()` returning 0 — so `ProjectsModule` can inject it
-      without error from day one
+      structure; immediately export `PartnersService` with stubs
+      `getSubcontractorCostByProject()`, `getVendorById()`, `getVendorTds()` returning
+      0/null — so `ProjectsModule`/`PlantModule`/`InventoryModule` can inject them without error
+      from day one (research.md §12, found missing on re-audit)
+- [ ] T007a [P] Scaffold `src/settings/vendor-categories/vendor-categories.service.ts`
+      (`settings` schema, exported for `PartnersModule`'s thin controller proxy to call —
+      Principle I, research.md §1)
 - [ ] T008 [P] Install `@nestjs/schedule` and `@nestjs/event-emitter` packages:
       `npm install @nestjs/schedule @nestjs/event-emitter` — M-003 remediation
 - [ ] T009 [P] Wire `@nestjs/schedule` in `src/app.module.ts` (first use in codebase):
@@ -73,16 +81,17 @@ and both new packages ready. All subsequent phases can proceed in parallel per s
 
 ### Implementation for User Story 1
 
-- [ ] T011 [P] [US1] Create `src/partners/vendor-categories/dto/create-vendor-category.dto.ts`
+- [ ] T011 [P] [US1] Create `src/settings/vendor-categories/dto/create-vendor-category.dto.ts`
       and `update-vendor-category.dto.ts` with class-validator decorators
-- [ ] T012 [P] [US1] Implement `VendorCategoriesService` in
-      `src/partners/vendor-categories/vendor-categories.service.ts`: `create` (unique name per
-      company → 409 if duplicate), `findAll` (with `vendorCount` via aggregation), `update`,
-      `delete` (→ 409 if `VendorDealsIn` rows reference this category) — all write paths
-      audit-logged
-- [ ] T013 [US1] Implement `VendorCategoriesController` in
-      `src/partners/vendor-categories/vendor-categories.controller.ts`: all 4 endpoints,
-      `@RequirePermission(Permission.VENDORS)`
+- [ ] T012 [P] [US1] Implement `VendorCategoriesService` (`settings` schema, corrected —
+      research.md §1) in `src/settings/vendor-categories/vendor-categories.service.ts`: `create`
+      (unique name per company → 409 if duplicate), `findAll` (with `vendorCount` via
+      aggregation), `update`, `delete` (→ 409 if `VendorDealsIn` rows reference this category) —
+      all write paths audit-logged
+- [ ] T013 [US1] Implement a thin `VendorCategoriesController` in
+      `src/partners/vendor-categories/vendor-categories.controller.ts` calling the `settings`
+      service above (Principle I): all 4 endpoints, `@RequirePermission(Permission.SETTINGS)`
+      (corrected — research.md §9)
 - [ ] T014 [P] [US1] Add 6 default seeded `VendorCategory` rows to `prisma/seed.ts`:
       Material, Fuel, Hire, Service, Transport, Subcontractor — `isDefault: true`
 
@@ -102,18 +111,24 @@ array (→ old replaced), call TDS endpoint (→ section+rate only), filter by t
 
 - [ ] T015 [P] [US2] Create vendor DTOs in `src/partners/vendors/dto/`: `create-vendor.dto.ts`
       (with nested `VendorContactInput[]`, `categoryIds: string[]`, optional
-      `VendorHireDetailInput`), `update-vendor.dto.ts`
+      `VendorHireDetailInput`, `@Matches()` GSTIN/PAN format validators — research.md §13),
+      `update-vendor.dto.ts`
 - [ ] T016 [P] [US2] Implement `VendorsService` in `src/partners/vendors/vendors.service.ts`:
       `create` (CodeSeriesService 'VENDORS', atomic contacts + DealsIn insert),
       `findAll` (paginated, search/type/active filters, `primaryContact` derived),
       `findOne` (full detail with contacts, categories, hireDetail, contractorProfile?),
       `update` (atomic contacts/tags replace in Prisma transaction — research.md §10),
-      `getTds` (returns `{ tdsSection, tdsRate }` only — FR-002), audit-log all writes
+      `getTds` (returns `{ tdsSection, tdsRate }` only — FR-002), `getVendorById()` and
+      `getVendorTds()` as real `PartnersService`-exported methods (replacing the Phase-1 stubs,
+      research.md §12), audit-log all writes
 - [ ] T017 [US2] Implement `VendorsController` in
       `src/partners/vendors/vendors.controller.ts`: all endpoints including
-      `GET /partners/vendors/:id/tds`, `@RequirePermission(Permission.VENDORS)`
+      `GET /partners/vendors/:id/tds`, `@RequirePermission(Permission.PARTNERS)` (corrected —
+      research.md §9)
 - [ ] T018 [P] [US2] Unit test: atomic contacts replacement (2 contacts → update with 1 →
-      verify old deleted), category tags replace — `src/partners/vendors/vendors.service.spec.ts`
+      verify old deleted), category tags replace, malformed GSTIN/PAN → 400, `getVendorById()`/
+      `getVendorTds()` return correct shapes and `null` for a non-existent vendor —
+      `src/partners/vendors/vendors.service.spec.ts`
 - [ ] T019 [US2] E2e test: `POST /partners/vendors` with contacts + categories, `PATCH` with
       new contacts array, `GET /:id/tds` — `test/partners.e2e-spec.ts` (create the file)
 
@@ -146,7 +161,7 @@ upload document with expiry 20 days out (→ `expiryWarning: true`); try materia
       `CONTRACTOR_PROFILE` / `CONTRACTOR_DOCUMENT` entity types — H-001 remediation
 - [ ] T022 [US3] Implement `ContractorsController` in
       `src/partners/contractors/contractors.controller.ts`: all 6 endpoints,
-      `@RequirePermission(Permission.CONTRACTORS)`
+      `@RequirePermission(Permission.PARTNERS)`
 - [ ] T023 [US3] E2e test: create contractor for wrong vendor type → 400; upload document with
       expiry → `expiryWarning: true` in response — `test/partners.e2e-spec.ts`
 
@@ -186,7 +201,7 @@ audit-logged, immutable); check contractor `complianceStatus` updates.
       re-`recompute()`; audit-log)
 - [ ] T028 [US4] Implement `ComplianceController` in
       `src/partners/compliance/compliance.controller.ts`: 4 endpoints,
-      `@RequirePermission(Permission.CONTRACTORS)`
+      `@RequirePermission(Permission.PARTNERS)`
 - [ ] T029 [US4] E2e test: create → partial; add ESIC → submitted; verify → 200 + audit entry;
       patch after verify → 409 — `test/partners.e2e-spec.ts`
 
@@ -216,7 +231,7 @@ verify correct statuses, future months = gray, inactive contractor excluded.
       - missing record for past month → `missing` cell
       - `src/partners/rag/rag.service.spec.ts`
 - [ ] T032 [US5] Implement `RagController` in `src/partners/rag/rag.controller.ts`:
-      `GET /partners/rag?fy=`, `@RequirePermission(Permission.CONTRACTORS)`
+      `GET /partners/rag?fy=`, `@RequirePermission(Permission.PARTNERS)`
 
 **Checkpoint**: RAG Matrix endpoint functional and unit tested.
 
@@ -244,7 +259,7 @@ payment; verify balance recomputes.
       throws — `src/partners/bocw/bocw.service.spec.ts`
 - [ ] T036 [US6] Implement `BOCWController` in `src/partners/bocw/bocw.controller.ts`:
       `GET /partners/bocw`, `POST /partners/bocw/:projectId/payments`,
-      `GET /partners/bocw/:projectId/payments`, `@RequirePermission(Permission.BOCW)`;
+      `GET /partners/bocw/:projectId/payments`, `@RequirePermission(Permission.PARTNERS)`;
       `recordPayment` in `BOCWService` audit-logs with `BOCW_PAYMENT` entity type — H-001 remediation
 - [ ] T037 [US6] E2e test: record BOCW payment → balance updates; partial → paid transition
       — `test/partners.e2e-spec.ts`

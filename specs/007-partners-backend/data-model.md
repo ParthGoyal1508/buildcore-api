@@ -3,21 +3,26 @@
 Field names are conceptual; exact Prisma types are a task-level decision. All tables live in the
 `partners` schema unless noted. See research.md for schema/entity decisions.
 
-## VendorCategory (`partners` schema — new)
+## VendorCategory (`settings` schema — new, moved from `partners` per research.md §1)
 
 ```
 { id, companyId, name (unique per company), description?, isDefault (boolean, default false),
   createdAt }
 ```
 
-UNIQUE: `(companyId, name)`.
+UNIQUE: `(companyId, name)`. CRUD lives in `SettingsService` (`createVendorCategory()` etc.);
+Partners' own controller calls those exported methods rather than querying this table directly
+(Principle I, research.md §1).
 
 ## Vendor (`partners` schema — new)
 
 ```
 { id, companyId, code (auto-generated via CodeSeriesService 'VENDORS' series),
   name, type: 'material' | 'fuel' | 'hire' | 'service' | 'subcontractor' | 'labour_contractor',
-  gstin?, pan?, tdsSection?, tdsRate (decimal?),
+  gstin? (validated 15-char GSTIN format, research.md §13),
+  pan? (validated 10-char PAN format, research.md §13),
+  tdsSection? (string, validated against the Income Tax Act TDS-section pattern — open-ended
+  list per master PRD, not a closed enum), tdsRate (decimal?),
   active (boolean, default true),
   address?, city?, state?, pinCode?,
   vendorCurrency (string, default 'INR'), exchangeRate (decimal, default 1.0),
@@ -38,8 +43,11 @@ on individual contact rows.
 ## VendorDealsIn (`partners` schema — join table)
 
 ```
-{ vendorId FK→Vendor, categoryId FK→VendorCategory }
+{ vendorId FK→Vendor, categoryId FK→settings.VendorCategory }
 ```
+
+`categoryId` is a cross-schema reference, validated via `SettingsService.getVendorCategory()` on
+write — never a direct cross-schema FK constraint (Principle I).
 
 PRIMARY KEY: `(vendorId, categoryId)`. Replaced atomically with VendorContacts on vendor update.
 
@@ -134,7 +142,8 @@ Same additive migration pattern as 005's `otMultiplier`. Owned by this feature's
 | `BOCWPayment.projectId` | Plain UUID | `ProjectsService.getProjectsWithContractValues()` on read |
 | BOCW cess rate | In `settings.Company.bocwCessRate` | `SettingsService.getBocwCessRate(companyId)` |
 | `getSubcontractorCostByProject()` | Not stored | `ProjectsService.getWorkOrderTotalByProject()` stub (TODO 008) |
-| `VendorContact`, `VendorDealsIn` | In `partners` schema | Referenced by Inventory/Machinery via `GET /partners/vendors/:id/tds` |
+| `VendorDealsIn.categoryId` | Plain UUID, cross-schema | `SettingsService.getVendorCategory()` (research.md §1) |
+| Vendor name/TDS for Inventory (009) and Machinery (006) | Not duplicated | `PartnersService.getVendorById()` / `.getVendorTds()` — exported in-process methods (research.md §12), not the HTTP endpoint |
 
 ## RAG Matrix Response Shape (computed on demand)
 

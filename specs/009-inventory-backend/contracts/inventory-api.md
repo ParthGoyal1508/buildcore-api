@@ -1,12 +1,17 @@
 # Contract: `/inventory/*` endpoints
 
-All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three new values
-added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
-`INVENTORY_PAYMENTS`.
+All endpoints require `JwtAuthGuard` + `@RequirePermission(Permission.INVENTORY)` — reusing
+Settings' already-existing `INVENTORY` value verbatim (corrected during a master-PRD alignment
+audit; no new enum values are added by this feature). Item Categories and Items are gated with
+the existing `SETTINGS` value instead (now `settings`-schema masters, research.md §1).
 
 ---
 
-## Item Categories — `/inventory/categories` (permission: `INVENTORY_STOCK`)
+## Item Categories — `settings` schema (permission: `SETTINGS`, via `SettingsService`)
+
+Routes stay under `/inventory/categories` (matching the module's own grouping); each controller
+action is a thin call into `SettingsService`'s exported methods — no direct query against the
+`settings` schema tables (Principle I, research.md §1).
 
 - `GET /inventory/categories` — list with `itemCount` per category.
 - `POST /inventory/categories` — `{ name }` → 201; name stored uppercase. `409` on duplicate.
@@ -15,32 +20,33 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 
 ---
 
-## Items — `/inventory/items` (permission: `INVENTORY_STOCK`)
+## Items — `settings` schema (permission: `SETTINGS`, via `SettingsService`)
 
 - `GET /inventory/items?search=&categoryId=&page=` — paginated list.
-- `POST /inventory/items` — `{ name, categoryId, unit, description? }` → 201; code auto-generated.
-  `409` on duplicate name per company.
+- `POST /inventory/items` — `{ name, categoryId, unit, reorderLevel?, hsnCode?, description? }`
+  → 201; code auto-generated. `409` on duplicate name per company.
 - `PATCH /inventory/items/:id` — partial update (not code; not categoryId if stock exists).
 - `DELETE /inventory/items/:id` — `409` if any Purchase/Issue/Transfer references this item.
 
 ---
 
-## Stock — `/inventory/stock` (permission: `INVENTORY_STOCK`)
+## Stock — `/inventory/stock` (permission: `INVENTORY`)
 
 - `GET /inventory/stock?siteId=&categoryId=&search=&page=` — paginated stock rows. Each row
-  is a `StockRow` (data-model.md); `stockValue` computed server-side. Only item-sites with a
-  `StockBalance` row (at least one purchase) are returned.
+  is a `StockRow` (data-model.md); `stockValue` and `belowReorderLevel` computed server-side
+  (research.md §12). Only item-sites with a `StockBalance` row (at least one purchase) are
+  returned.
 
 ---
 
-## Purchases — `/inventory/purchases` (permission: `INVENTORY_PURCHASES`)
+## Purchases — `/inventory/purchases` (permission: `INVENTORY`)
 
 - `GET /inventory/purchases?siteId=&vendorId=&paymentStatus=&dateFrom=&dateTo=&page=` —
-  paginated list. Includes vendor name (via `PartnersService`), bill file URL.
+  paginated list. Includes vendor name (via `PartnersService`), bill file URL, GRN number.
 - `POST /inventory/purchases` — `multipart/form-data`: `{ siteId, itemId, vendorId, date,
   quantity, rate, billFile? }`. Creates `Purchase`, appends `StockLedgerEntry` (type: purchase),
   upserts `StockBalance` (increments `received`, recalculates WAR), creates `PurchaseBill`
-  (status: unpaid). → 201. Audit-logged.
+  (status: unpaid), auto-creates a `GoodsReceiptNote` (research.md §14). → 201. Audit-logged.
 - `PATCH /inventory/purchases/:id` — update `date`, `remarks` only (quantity/rate changes
   require delete + re-create — immutable financial fields). `409` if deleted.
 - `DELETE /inventory/purchases/:id` — soft-delete: sets `deleted: true`, appends
@@ -49,10 +55,11 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 
 ---
 
-## Issues — `/inventory/issues` (permission: `INVENTORY_PURCHASES`)
+## Issues — `/inventory/issues` (permission: `INVENTORY`)
 
 - `GET /inventory/issues?siteId=&itemId=&dateFrom=&dateTo=&page=` — paginated list.
-- `POST /inventory/issues` — `{ siteId, itemId, date, quantity, issuedTo, remarks? }`.
+- `POST /inventory/issues` — `{ siteId, itemId, date, quantity, issuedTo, activityId?,
+  boqItemId?, remarks? }` — one of `activityId`/`boqItemId` required (research.md §13).
   Uses `SELECT FOR UPDATE` on `StockBalance`; `422` with `{ availableStock: N }` if
   `quantity > inStock`. On success: appends `issue` ledger entry, increments
   `StockBalance.issued`. Audit-logged. → 201.
@@ -61,7 +68,7 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 
 ---
 
-## Transfers — `/inventory/transfers` (permission: `INVENTORY_PURCHASES`)
+## Transfers — `/inventory/transfers` (permission: `INVENTORY`)
 
 - `GET /inventory/transfers?fromSiteId=&toSiteId=&itemId=&dateFrom=&dateTo=&status=&page=`
 - `POST /inventory/transfers` — `{ fromSiteId, toSiteId, itemId, date, quantity, remarks? }`.
@@ -75,7 +82,7 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 
 ---
 
-## Payments — `/inventory/payments` (permission: `INVENTORY_PAYMENTS`)
+## Payments — `/inventory/payments` (permission: `INVENTORY`)
 
 - `GET /inventory/payments?vendorId=&dateFrom=&dateTo=&paymentMode=&page=` — paginated;
   includes `allocatedBillCount` (count of `PaymentAllocation` rows) and `unallocatedBalance`.
@@ -87,7 +94,7 @@ added to Settings' `Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
 - `DELETE /inventory/payments/:id` — reverses all FIFO allocations atomically; decrements
   `PurchaseBill.paidAmount`; re-derives bill `paymentStatus`.
 
-## Utility endpoints (permission: `INVENTORY_PURCHASES`)
+## Utility endpoints (permission: `INVENTORY`)
 
 - `GET /inventory/stock/:itemId/:siteId` — single item-site stock (used by Issue/Transfer
   forms to show available stock hint). Returns `{ inStock, avgRate }` or `{ inStock: 0 }` if
@@ -115,5 +122,6 @@ class InventoryService {
 
 ## Audit logging
 
-Extends `shared.AuditLogEntry.entityType` with: `ITEM_CATEGORY`, `ITEM`, `PURCHASE`, `ISSUE`,
-`STOCK_TRANSFER`, `PAYMENT`. Every create/update/delete writes an audit entry.
+Extends `shared.AuditLogEntry.entityType` with: `ITEM_CATEGORY`, `ITEM`, `PURCHASE`,
+`GOODS_RECEIPT_NOTE`, `ISSUE`, `STOCK_TRANSFER`, `PAYMENT`. Every create/update/delete writes an
+audit entry.

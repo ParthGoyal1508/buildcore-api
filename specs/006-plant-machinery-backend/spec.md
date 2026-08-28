@@ -15,6 +15,20 @@ hours. This feature also implements two cross-module P&L service methods that fe
 (Projects) waits on: `getMachineryCostByProject(projectId, dateRange)` and
 `getFuelCostByProject(projectId, dateRange)`."
 
+**Reconciled 2026-08-28** against a second, independently-specced version of this feature and a
+fresh master-PRD alignment audit: three fixes merged in from that parallel work (see
+research.md §10) — (1) Equipment Categories, Equipment Doc Types, and Hire Rates are Settings-owned
+masters (`settings` schema) per master PRD §7.8.5, not `plant`-owned, matching how every other
+module's reference-data masters (Employee Setup, Reimbursement Categories) are Settings-owned in
+this project; Equipment Doc Types and Hire Rates did not exist as masters at all in this feature's
+original scope (document type was a fixed enum, hire bill rate was a manual per-bill entry with no
+history) and are added now; (2) permission checks reuse Settings' already-existing `MACHINERY`/
+`LOGBOOK`/`FUEL`/`SETTINGS` enum values instead of the three newly-invented `PLANT_ASSETS`/
+`PLANT_OPERATIONS`/`PLANT_BILLING` values this feature originally specified, adding only
+`MAINTENANCE` and `HIRE_BILLS` as genuinely new. Everything else in this spec (utilisation formula,
+P&L service methods, event-driven fuel variance, auto-managed equipment status) is unchanged from
+the original.
+
 ## Clarifications
 
 ### Session 2026-08-28
@@ -41,24 +55,39 @@ hours. This feature also implements two cross-module P&L service methods that fe
 
 ## User Scenarios & Testing *(mandatory)*
 
-### User Story 1 - Manage Equipment Categories (Priority: P1)
+### User Story 1 - Manage Reference Data Masters (Priority: P1)
 
-An admin creates equipment categories (Excavator, Tipper, Concrete Mixer, etc.) with meter type
-and fuel benchmark; categories populate equipment forms and drive utilisation/variance calculations.
+An admin creates equipment categories (Excavator, Tipper, Concrete Mixer, etc.) with meter type,
+fuel benchmark, and fuel-variance-alert threshold; equipment document types (name, alert days);
+and effective-dated hire rates per category. All three are Settings-owned masters (`settings`
+schema, per master PRD §7.8.5) — categories populate equipment forms and drive utilisation/variance
+calculations, doc types drive document upload/expiry, and hire rates default a new hire bill's
+rate for its billing period.
 
-**Why this priority**: Required before any equipment can be created. No dependencies.
+**Why this priority**: Required before any equipment, document, or hire bill can be created. No
+dependencies.
 
-**Independent Test**: Create a category with meter type "Hours" and fuel benchmark 8 litres/hr;
-create an equipment under it; confirm the benchmark is used for fuel variance calculation.
+**Independent Test**: Create a category with meter type "Hours", fuel benchmark 8 litres/hr, and a
+15% variance threshold; create an equipment under it; confirm the benchmark and threshold are used
+for fuel variance calculation. Separately, create a doc type and confirm it's selectable on
+document upload; create a hire rate and confirm a new hire bill for that category defaults to it.
 
 **Acceptance Scenarios**:
 
-1. **Given** an admin session, **When** `POST /plant/categories` is called with Name, Meter Type
-   (hours|km), and optional Fuel Benchmark, **Then** the category is created.
-2. **Given** a category with linked equipment, **When** `DELETE /plant/categories/:id` is
-   attempted, **Then** `409 Conflict`.
-3. **Given** the category list, **When** `GET /plant/categories`, **Then** all categories are
-   returned with `equipmentCount`.
+1. **Given** an admin session, **When** `POST /settings/equipment-categories` is called with Name,
+   Meter Type (hours|km), optional Fuel Benchmark, and Fuel Variance Threshold % (default 15),
+   **Then** the category is created.
+2. **Given** a category with linked equipment, **When** `DELETE /settings/equipment-categories/:id`
+   is attempted, **Then** `409 Conflict`.
+3. **Given** the category list, **When** `GET /settings/equipment-categories`, **Then** all
+   categories are returned with `equipmentCount`.
+4. **Given** an admin session, **When** `POST /settings/equipment-doc-types` is called with Name
+   and Alert Days, **Then** the doc type is created and becomes selectable on equipment document
+   upload.
+5. **Given** an admin session, **When** `POST /settings/hire-rates` is called with `categoryId`,
+   `ratePerUnit`, and `effectiveFrom`, **Then** the rate is created; any prior open-ended
+   ("current") rate for that category has its `effectiveTo` set to the day before the new rate's
+   `effectiveFrom`, preserving a non-overlapping effective-dated history.
 
 ---
 
@@ -79,11 +108,12 @@ data.
 1. **Given** a category, **When** `POST /plant/equipment` is called with Code, Name, Category,
    Ownership (owned|hired), Power Source, Vendor (if hired), Meter Type, Deployed Site, and
    Depreciation Rate (if owned), **Then** equipment is created with `status: 'active'`.
-2. **Given** equipment, **When** `POST /plant/equipment/:id/documents` is called with document
-   type and file, **Then** the document is stored with encrypted file reference and optional expiry.
-3. **Given** a document within 30 days of expiry or past expiry, **When** equipment is listed,
-   **Then** the equipment row includes an `expiryAlert` flag (Expiring Soon/Expired) and
-   `alertDocumentTypes` listing which documents are affected.
+2. **Given** equipment, **When** `POST /plant/equipment/:id/documents` is called with a
+   `docTypeId` (from the Equipment Doc Types master, User Story 1) and file, **Then** the document
+   is stored with encrypted file reference and optional expiry.
+3. **Given** a document within its doc type's configured Alert Days of expiry or past expiry,
+   **When** equipment is listed, **Then** the equipment row includes an `expiryAlert` flag
+   (Expiring Soon/Expired) and `alertDocumentTypes` listing which documents are affected.
 4. **Given** equipment, **When** `PATCH /plant/equipment/:id` updates `deployedSiteId`,
    **Then** the equipment is reassigned; the old site no longer shows it in its site filter.
 5. **Given** hired equipment, **When** `GET /plant/equipment/:id`, **Then** the vendor ID is
@@ -203,17 +233,20 @@ vendor's rate; the bill moves through Pending Verification → Verified → Paid
 **Why this priority**: Closes the hired-equipment payment loop; depends on logbook (US3) and
 vendors (Partners 007).
 
-**Independent Test**: Record a hire bill for 40 billed hours at ₹500/hr (= ₹20,000); verify
-logbook shows 38 hours actually worked (2-hour variance); apply 2% TDS (= ₹400 deduction); net
-payable = ₹19,600; verify status transitions to Verified.
+**Independent Test**: Record a hire bill for 40 billed hours (rate auto-populated from the
+equipment category's effective Hire Rate, User Story 1); verify logbook shows 38 hours actually
+worked (2-hour variance); apply 2% TDS (= ₹400 deduction); net payable = gross − TDS; verify
+status transitions to Verified.
 
 **Acceptance Scenarios**:
 
 1. **Given** hired equipment with logbook entries, **When** `POST /plant/hire-bills` is called
-   with `equipmentId`, `vendorId`, `billedHours`, `rate`, `billingPeriod`, **Then** `grossAmount
-   = billedHours × rate`; `logbookHours` fetched from logbook for the period; `variance =
-   billedHours − logbookHours`; TDS deducted from vendor's TDS rate (via
-   `PartnersService.getVendorTds(vendorId)`); `netPayable = grossAmount − tdsAmount`.
+   with `equipmentId`, `vendorId`, `billedHours`, `billingPeriod`, and an optional `rate`
+   override, **Then** `rate` defaults from the Hire Rate effective for the equipment's category on
+   `billingPeriodFrom` (User Story 1) if not supplied; `grossAmount = billedHours × rate`;
+   `logbookHours` fetched from logbook for the period; `variance = billedHours − logbookHours`;
+   TDS deducted from vendor's TDS rate (via `PartnersService.getVendorTds(vendorId)`);
+   `netPayable = grossAmount − tdsAmount`.
 2. **Given** a hire bill, **When** `PATCH /plant/hire-bills/:id/verify` is called, **Then**
    `status → 'verified'`; audit-logged with admin identity.
 3. **Given** a verified hire bill, **When** `PATCH /plant/hire-bills/:id/pay` is called with
@@ -270,8 +303,10 @@ equipment with depreciation ₹10,000 for a project in a date range; call
   `under_maintenance` via `PATCH /plant/equipment`.
 - **FR-003**: One logbook entry per equipment per date MUST be enforced at the database level
   (UNIQUE constraint on `(equipmentId, date)`).
-- **FR-004**: Fuel variance MUST be computed server-side per entry (`variancePercent > 15` →
-  emit `fuel_variance` event via `@nestjs/event-emitter`) — never stored as a stale column.
+- **FR-004**: Fuel variance MUST be computed server-side per entry against the equipment
+  category's configurable Fuel Variance Threshold % (default 15, User Story 1) — never a hardcoded
+  literal — emitting a `fuel_variance` event via `@nestjs/event-emitter` when exceeded; never
+  stored as a stale column.
 - **FR-005**: `HireBill.tdsAmount` and `HireBill.netPayable` MUST be computed server-side from
   vendor's TDS rate (via `PartnersService.getVendorTds()`) — never client-supplied.
 - **FR-006**: Service schedule `status` (ok|due_soon|overdue) MUST be computed on every read
@@ -283,26 +318,46 @@ equipment with depreciation ₹10,000 for a project in a date range; call
 - **FR-009**: Equipment and vendor cross-module reads MUST go via `ProjectsService.getSitesByProject()`
   and `PartnersService.getVendorById()`/`getVendorTds()` — no direct cross-schema queries.
 - **FR-010**: All equipment document uploads MUST use encrypted object-storage references (same
-  pattern as 005/007/008/009); documents with expiry within 30 days flag `expiryAlert`.
-- **FR-011**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission()` using
-  enum values: `PLANT_ASSETS` (equipment + categories + documents + services),
-  `PLANT_OPERATIONS` (logbook + fuel + maintenance), `PLANT_BILLING` (hire bills).
+  pattern as 005/007/008/009); documents with expiry within their doc type's configured Alert Days
+  flag `expiryAlert` (User Story 1) — never a hardcoded 30-day literal.
+- **FR-011**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission()`, reusing
+  Settings' already-existing `MACHINERY` (equipment + documents), `LOGBOOK`, `FUEL`, and `SETTINGS`
+  (the three reference-data masters) enum values verbatim, adding only `MAINTENANCE` (maintenance
+  jobs + service schedules) and `HIRE_BILLS` as genuinely new values — corrected during
+  reconciliation with a parallel spec (spec.md preamble); 002's enum already reserved `MACHINERY`/
+  `LOGBOOK`/`FUEL` by name for exactly this module.
 - **FR-012**: All write operations MUST be written to the audit log with entity types:
   `EQUIPMENT`, `EQUIPMENT_DOCUMENT`, `LOGBOOK_ENTRY`, `FUEL_ENTRY`, `MAINTENANCE_JOB`,
-  `SERVICE_SCHEDULE`, `HIRE_BILL`.
+  `SERVICE_SCHEDULE`, `HIRE_BILL`, `EQUIPMENT_CATEGORY`, `EQUIPMENT_DOC_TYPE`, `HIRE_RATE`.
+- **FR-013**: The system MUST provide per-company CRUD for Equipment Categories, Equipment Doc
+  Types, and Hire Rates at `/settings/equipment-categories`, `/settings/equipment-doc-types`, and
+  `/settings/hire-rates` — the same CRUD shape as Settings' existing Department/Designation/
+  Document Type/Shift masters (002) — guarded with the `SETTINGS` permission, living in the
+  `settings` schema and consumed by this module via `SettingsService`'s exported methods, never a
+  direct cross-schema query (Principle I).
+- **FR-014**: The system MUST maintain Hire Rates as a non-overlapping, effective-dated history per
+  category: creating a new open-ended ("current") rate closes the prior current rate's
+  `effectiveTo` to the day before the new rate's `effectiveFrom`, so a historical hire bill always
+  resolves the rate that was in force during its own billing period.
 
 ### Key Entities
 
-- **EquipmentCategory** (`plant` schema): `id`, `companyId`, `name`, `meterType` (hours|km),
-  `fuelBenchmark` (decimal?, litres/hr or litres/km), `targetHoursPerMonth` (integer, default 176).
-- **Equipment** (`plant` schema): `id`, `companyId`, `code`, `name`, `categoryId` FK,
-  `ownership` (owned|hired), `vendorId?` (UUID, cross-schema ref), `powerSource` (diesel|electric|
-  manual|petrol), `purchaseDate?`, `purchaseCost?`, `depreciationRate?` (% per annum),
-  `meterType` (from category), `currentReading` (decimal, default 0), `deployedSiteId?` (UUID),
-  `status` (active|under_maintenance|inactive), `utilizationPercent` (decimal, default 0).
-- **EquipmentDocument** (`plant` schema): `id`, `equipmentId` FK, `documentType` (rc|insurance|
-  puc|fitness|permit|road_tax|calibration), `fileRef` (encrypted), `expiresAt?`, `uploadedByUserId`,
-  `uploadedAt`. Alert window: 30 days before expiry.
+- **EquipmentCategory** (`settings` schema): `id`, `companyId`, `name`, `meterType` (hours|km),
+  `fuelBenchmark` (decimal?, litres/hr or litres/km), `fuelVarianceThresholdPercent` (decimal,
+  default 15), `targetHoursPerMonth` (integer, default 176), `active`.
+- **EquipmentDocType** (`settings` schema, new): `id`, `companyId`, `name`, `alertDays` (integer),
+  `active`.
+- **HireRate** (`settings` schema, new): `id`, `companyId`, `categoryId` FK, `ratePerUnit`
+  (decimal), `effectiveFrom` (date), `effectiveTo?` (date, `null` = current).
+- **Equipment** (`plant` schema): `id`, `companyId`, `code`, `name`, `categoryId` FK →
+  `settings.EquipmentCategory`, `ownership` (owned|hired), `vendorId?` (UUID, cross-schema ref),
+  `powerSource` (diesel|electric|manual|petrol), `purchaseDate?`, `purchaseCost?`,
+  `depreciationRate?` (% per annum), `meterType` (from category), `currentReading` (decimal,
+  default 0), `deployedSiteId?` (UUID), `status` (active|under_maintenance|inactive),
+  `utilizationPercent` (decimal, default 0).
+- **EquipmentDocument** (`plant` schema): `id`, `equipmentId` FK, `docTypeId` FK →
+  `settings.EquipmentDocType`, `fileRef` (encrypted), `expiresAt?`, `uploadedByUserId`,
+  `uploadedAt`. Alert window: the referenced doc type's configured Alert Days.
 - **LogbookEntry** (`plant` schema): `id`, `companyId`, `equipmentId` FK, `date` (unique per
   equipment), `openingReading`, `closingReading`, `totalHours` (computed: closing − opening),
   `fuelConsumed?`, `operatorId?` (UUID), `projectId?` (UUID), `remarks?`. UNIQUE: `(equipmentId, date)`.
@@ -317,7 +372,8 @@ equipment with depreciation ₹10,000 for a project in a date range; call
   `labourCost?`, `totalCost?`, `linkedServiceScheduleId?` FK→ServiceSchedule, `status`
   (open|closed).
 - **HireBill** (`plant` schema): `id`, `companyId`, `equipmentId` FK, `vendorId` (UUID),
-  `billedHours`, `rate`, `grossAmount`, `logbookHours` (fetched at creation), `variance`
+  `billedHours`, `rate` (defaults from the effective `HireRate` for the equipment's category,
+  overridable), `grossAmount`, `logbookHours` (fetched at creation), `variance`
   (billedHours − logbookHours), `tdsRate?`, `tdsAmount`, `netPayable`,
   `billingPeriodFrom`, `billingPeriodTo`, `status` (pending_verification|verified|paid),
   `verifiedByUserId?`, `verifiedAt?`, `paymentDate?`, `paymentReference?`.
@@ -328,13 +384,15 @@ equipment with depreciation ₹10,000 for a project in a date range; call
 
 - **SC-001**: Equipment document expiry is detected and flagged within the same API response
   as the equipment list — no separate expiry-check call needed.
-- **SC-002**: Fuel variance alerts are generated on every fuel entry where `variancePercent > 15%`
-  — zero missed alerts in testing.
+- **SC-002**: Fuel variance alerts are generated on every fuel entry whose variance exceeds the
+  machine's category-configured threshold — zero missed alerts in testing.
 - **SC-003**: Hire bill `netPayable` always equals `grossAmount − tdsAmount` in all test cases.
 - **SC-004**: `getMachineryCostByProject()` and `getFuelCostByProject()` return correct sums
   within 1 second for a project with up to 50 equipment items.
 - **SC-005**: Service schedule status (ok/due_soon/overdue) always reflects current
   `equipment.currentReading` at the time of the request — no stale cached status.
+- **SC-006**: Historical hire bills, when re-queried, always resolve to the Hire Rate that was in
+  force during their original billing period, even after newer rates are added for that category.
 
 ## Assumptions
 
@@ -347,5 +405,11 @@ equipment with depreciation ₹10,000 for a project in a date range; call
   explicitly set.
 - Fuel benchmark variance is compared per logbook entry's fuel-per-hour (fuelConsumed /
   totalHours); if `totalHours = 0`, variance is not computed (no division by zero).
-- Three new `Permission` enum values (`PLANT_ASSETS`, `PLANT_OPERATIONS`, `PLANT_BILLING`) are
-  added to Settings' existing enum, same pattern as 007/008/009.
+- Two new `Permission` enum values (`MAINTENANCE`, `HIRE_BILLS`) are added to Settings' existing
+  enum; `MACHINERY`, `LOGBOOK`, `FUEL`, and `SETTINGS` are reused verbatim — corrected during
+  reconciliation with a parallel spec, since 002's enum already reserved the first three by name.
+- Equipment Categories, Equipment Doc Types, and Hire Rates are seeded with sensible defaults
+  (10 named categories, common document types) via migration, matching how Settings' other
+  Employee Setup masters are seeded — so User Stories 2–8 are independently testable without
+  requiring User Story 1's admin screens to be used first. Hire Rates are not pre-seeded (they are
+  inherently company/market-specific).

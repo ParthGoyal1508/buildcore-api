@@ -122,6 +122,11 @@ Absent/On Leave/Pending Approvals match the data, and the two table widgets retu
       Present Today, Absent, On Leave, Pending Approvals `WidgetProvider`s, each calling `hr`'s
       exported `EmployeesService`/`AttendanceHistoryService`/`LeaveService` methods — spec FR-005
       (depends on T008)
+- [ ] T022a [US2] Extend the Pending Approvals provider (T022) to additionally sum Open
+      maintenance jobs (via `plant`'s exported `MaintenanceJobsService` from feature 006) and
+      Submitted reimbursement claims (via `payroll`'s exported `ReimbursementsAdminService` from
+      feature 005 US12), matching the master PRD's §7.2.1 formula — added during the master-PRD
+      alignment pass, once both source modules existed (FR-005, depends on T022, features 005/006)
 - [ ] T023 [P] [US2] Create `src/dashboard/widgets/attendance-table.provider.ts` and
       `recent-leaves-table.provider.ts` — spec FR-006 (depends on T008)
 - [ ] T024 [P] [US2] Create `src/dashboard/widgets/muster-stat.provider.ts`: Employees on Muster
@@ -160,6 +165,11 @@ appear newest-first and are correctly filterable.
 - [ ] T030 [US3] Implement `src/dashboard/activity-log/activity-log.controller.ts`:
       `GET /activity-log?module=&timeRange=&page=`, guarded with
       `@RequirePermission(Permission.DASHBOARD)` — spec FR-007, FR-008 (depends on T029)
+- [ ] T030a [US3] Add `GET /activity-log/export?module=&timeRange=` to
+      `activity-log.controller.ts`: streams a CSV (Timestamp/User/Action/Module/Entity/Before/
+      After) built from the same `ActivityLogService` query as T029 (no pagination — full
+      filtered result set), guarded with `@RequirePermission(Permission.DASHBOARD)` — spec
+      FR-024, research.md §9 (depends on T029)
 - [ ] T031 [US3] Register `ActivityLogController`/`ActivityLogService` in
       `src/dashboard/dashboard.module.ts`
 

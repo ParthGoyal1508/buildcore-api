@@ -56,10 +56,14 @@ payroll run's figures are immutable at the database-write-path level, not just c
 (Principle IV's "payroll integrity" NFR, FR-015); every schema change via generated migrations
 (Principle VI).
 
-**Scale/Scope**: ~45 new/extended fields on `Employee`, ~10 new tables across `hr`/`payroll`, one
-field on `settings.Company`, ~35 endpoints across seven functional areas. No existing 001–004
-endpoint contracts change — only their underlying data becomes real where it was previously a
-placeholder (challans, salary slip figures, Document Expiry notifications).
+**Scale/Scope**: ~45 new/extended fields on `Employee`, ~12 new tables across `hr`/`payroll`
+(including `ExitRecord` and a `settings.ReimbursementCategory` addition), one field on
+`settings.Company`, ~44 endpoints across ten functional areas (the original seven plus
+Offboarding/F&F, Reimbursements Admin, and Bulk Attendance Import — US11–US13). No existing
+001–004 endpoint contracts change — only their underlying data becomes real where it was
+previously a placeholder (challans, salary slip figures, Document Expiry notifications), and
+feature 003's `ReimbursementClaim` table (added by that feature as part of this same alignment
+pass) gains admin-only fields here, never a redefinition.
 
 ## Constitution Check
 
@@ -108,7 +112,11 @@ buildcore-api/
 │   └── migrations/                                  # NEW migrations (grouped logically —
 │                                                    #   research.md §2/Constitution Check VI)
 ├── src/
-│   ├── settings/companies/                          # MODIFIED — otMultiplier field/DTO
+│   ├── settings/
+│   │   ├── companies/                                # MODIFIED — otMultiplier field/DTO
+│   │   └── reimbursement-categories/                 # NEW — research.md §15, `settings` schema
+│   │       ├── reimbursement-categories.controller.ts
+│   │       └── reimbursement-categories.service.ts
 │   ├── hr/
 │   │   ├── employees/
 │   │   │   ├── employees.controller.ts              # MODIFIED (003 scaffold) — full CRUD, list,
@@ -131,8 +139,14 @@ buildcore-api/
 │   │   │   ├── daily-workers.service.ts              # NEW — reuses 003's BiometricsService
 │   │   │   ├── daily-worker-attendance.controller.ts # NEW
 │   │   │   └── daily-worker-conversion.service.ts    # NEW — research.md §9
-│   │   └── re-enrolment-requests/
-│   │       └── re-enrolment-requests-admin.controller.ts # NEW — thin list over 003
+│   │   ├── re-enrolment-requests/
+│   │   │   └── re-enrolment-requests-admin.controller.ts # NEW — thin list over 003
+│   │   ├── offboarding/
+│   │   │   ├── exit.service.ts                        # NEW — research.md §12
+│   │   │   └── dto/
+│   │   └── attendance/
+│   │       └── attendance-import.{controller,service}.ts # NEW — research.md §14, reuses
+│   │                                                    #   attendance-admin.service.ts (US3)
 │   └── payroll/
 │       ├── engine/
 │       │   └── payroll-engine.service.ts             # NEW — research.md §4
@@ -141,9 +155,16 @@ buildcore-api/
 │       │   └── salary-slip.service.ts                 # NEW — reuses pdfkit (003)
 │       ├── challans/
 │       │   └── challans.controller.ts                 # NEW — derived read, research.md §5
-│       └── loans/
-│           ├── loans.controller.ts                    # NEW
-│           └── loans.service.ts                       # NEW — schedule generation
+│       ├── loans/
+│       │   ├── loans.controller.ts                    # NEW
+│       │   └── loans.service.ts                       # NEW — schedule generation
+│       ├── offboarding/
+│       │   └── fnf.service.ts                          # NEW — research.md §12, reuses
+│       │                                               #   payroll-engine.service.ts
+│       └── reimbursements-admin/
+│           ├── reimbursements-admin.controller.ts       # NEW — research.md §13
+│           └── reimbursements-admin.service.ts           # NEW — extends 003's
+│                                                        #   hr.ReimbursementClaim, no new table
 └── test/
     └── hr-payroll.e2e-spec.ts                          # NEW
 ```

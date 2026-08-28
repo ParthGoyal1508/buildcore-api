@@ -25,22 +25,35 @@ concurrency-sensitive paths.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 [P] Extend `src/settings/permission.enum.ts` with `INVENTORY_STOCK`,
-      `INVENTORY_PURCHASES`, `INVENTORY_PAYMENTS` — spec FR-013, research.md §9
-- [ ] T002 Add all 10 `inventory` schema models to `prisma/schema.prisma`: `ItemCategory`,
-      `Item`, `StockBalance` (include `companyId` field for RLS consistency — M-007 remediation),
-      `StockLedgerEntry`, `Purchase`, `PurchaseBill`, `Issue`,
-      `StockTransfer`, `Payment`, `PaymentAllocation` — data-model.md
-- [ ] T003 Generate and apply the `inventory` schema migration — Constitution Principle VI
-- [ ] T004 [P] Add RLS policies for all 10 `inventory` tables — Constitution Principle IV
+- [ ] T001 [P] No `Permission` enum changes needed — reuse Settings' already-existing
+      `INVENTORY` and `SETTINGS` values verbatim (corrected during a master-PRD alignment audit
+      — spec FR-013, research.md §9; this task originally added `INVENTORY_STOCK`/
+      `INVENTORY_PURCHASES`/`INVENTORY_PAYMENTS`)
+- [ ] T002 Add the 9 operational `inventory` schema models to `prisma/schema.prisma`:
+      `StockBalance` (include `companyId` field for RLS consistency — M-007 remediation),
+      `StockLedgerEntry`, `Purchase`, `GoodsReceiptNote` (research.md §14), `PurchaseBill`,
+      `Issue` (with `activityId?`/`boqItemId?`, research.md §13), `StockTransfer`, `Payment`,
+      `PaymentAllocation`; plus `settings.ItemCategory` and `settings.Item` (with
+      `reorderLevel?`/`hsnCode?`/full 8-unit enum, corrected placement — research.md §1, §12) —
+      data-model.md
+- [ ] T003 Generate and apply the `inventory` and `settings` schema migrations — Constitution
+      Principle VI
+- [ ] T004 [P] Add RLS policies for all 11 tables (9 `inventory` + 2 `settings`) — Constitution
+      Principle IV
 - [ ] T005 [P] Extend `shared.AuditLogEntry.entityType` with: `ITEM_CATEGORY`, `ITEM`,
-      `PURCHASE`, `ISSUE`, `STOCK_TRANSFER`, `PAYMENT`
+      `PURCHASE`, `GOODS_RECEIPT_NOTE`, `ISSUE`, `STOCK_TRANSFER`, `PAYMENT`
 - [ ] T006 Scaffold `InventoryModule` in `src/inventory/inventory.module.ts`; export
       `InventoryService` with stub `getMaterialCostByProject()` returning 0 immediately so
       `ProjectsModule` can inject it from day one
+- [ ] T006a [P] Scaffold `src/settings/item-masters/` with `ItemCategoriesService`,
+      `ItemsService` (`settings` schema, exported for `InventoryModule`'s thin controller
+      proxies to call — Principle I, research.md §1)
 - [ ] T007 [P] Add `getSitesByProject(projectId): Promise<string[]>` stub to
       `src/projects/portfolio/projects.service.ts` and export from `ProjectsModule` —
       TODO(008) comment; same pattern as 007's T011c / BOCW stub
+- [ ] T007a [P] Add `getActivityById()`/`getBoqItemById()` stubs to `ProjectsModule`'s exported
+      interface for Issue's `activityId`/`boqItemId` validation (research.md §13) — TODO(008)
+      comment if 008 hasn't shipped the real implementations yet
 - [ ] T008 [P] Add `ITEMS` code-series seed entry to `prisma/seed.ts` — research.md §10
 
 **Checkpoint**: Schema, permissions, stubs, and module scaffold ready. All user story phases
@@ -50,22 +63,25 @@ can proceed in parallel.
 
 ## Phase 2: User Story 1 — Item Categories (Priority: P1) 🎯 MVP
 
-**Goal**: Category CRUD with uppercase name storage, delete guard, 8 seeded defaults.
+**Goal**: Category CRUD with uppercase name storage, delete guard, all 10 seeded defaults.
 
 **Independent Test**: Create category, edit it, delete unlinked (200), delete linked (409).
 
 ### Implementation for User Story 1
 
-- [ ] T009 [P] [US1] Create `src/inventory/categories/dto/create-category.dto.ts` and
+- [ ] T009 [P] [US1] Create `src/settings/item-masters/dto/create-category.dto.ts` and
       `update-category.dto.ts`; name is uppercased in service before write
-- [ ] T010 [P] [US1] Implement `CategoriesService` in
-      `src/inventory/categories/categories.service.ts`: `create` (unique name → 409), `findAll`
-      (with `itemCount`), `update`, `delete` (linked items → 409); all writes audit-logged
-- [ ] T011 [US1] Implement `CategoriesController` in
-      `src/inventory/categories/categories.controller.ts`: all 4 endpoints,
-      `@RequirePermission(Permission.INVENTORY_STOCK)`
-- [ ] T012 [P] [US1] Add 8 default `ItemCategory` seed rows to `prisma/seed.ts`: CEMENT,
-      AGGREGATE, STEEL, BRICKS, SAND, PAINT, ELECTRICAL, PLUMBING
+- [ ] T010 [P] [US1] Implement `ItemCategoriesService` (`settings` schema, corrected —
+      research.md §1) in `src/settings/item-masters/item-categories.service.ts`: `create`
+      (unique name → 409), `findAll` (with `itemCount`), `update`, `delete` (linked items →
+      409); all writes audit-logged
+- [ ] T011 [US1] Implement a thin `CategoriesController` in
+      `src/inventory/categories/categories.controller.ts` calling the `settings` service above
+      (Principle I): all 4 endpoints, `@RequirePermission(Permission.SETTINGS)` (corrected —
+      research.md §9)
+- [ ] T012 [P] [US1] Add all 10 default `ItemCategory` seed rows to `prisma/seed.ts`: CEMENT,
+      AGGREGATE, STEEL, BRICKS, SAND, PAINT, ELECTRICAL, PLUMBING, FUEL, CONSUMABLES (corrected
+      from 8 — research.md §15)
 
 **Checkpoint**: Category CRUD functional and seeded.
 
@@ -80,13 +96,16 @@ can proceed in parallel.
 
 ### Implementation for User Story 2
 
-- [ ] T013 [P] [US2] Create `src/inventory/items/dto/create-item.dto.ts` and
-      `update-item.dto.ts` with unit enum validation
-- [ ] T014 [P] [US2] Implement `ItemsService` in `src/inventory/items/items.service.ts`:
-      `create` (CodeSeriesService 'ITEMS', unique name → 409), `findAll` (paginated, filterable
-      by category), `update`, `delete` (Purchase/Issue/Transfer linked → 409); audit-logged
-- [ ] T015 [US2] Implement `ItemsController` in `src/inventory/items/items.controller.ts`:
-      all 4 endpoints, `@RequirePermission(Permission.INVENTORY_STOCK)`
+- [ ] T013 [P] [US2] Create `src/settings/item-masters/dto/create-item.dto.ts` and
+      `update-item.dto.ts` with the full 8-value unit enum (BAG/CUM/KG/NOS/MT/LTR/RMT/SQM,
+      research.md §12) and optional `reorderLevel`/`hsnCode` fields
+- [ ] T014 [P] [US2] Implement `ItemsService` (`settings` schema, corrected — research.md §1)
+      in `src/settings/item-masters/items.service.ts`: `create` (CodeSeriesService 'ITEMS',
+      unique name → 409), `findAll` (paginated, filterable by category), `update`, `delete`
+      (Purchase/Issue/Transfer linked → 409); audit-logged
+- [ ] T015 [US2] Implement a thin `ItemsController` in
+      `src/inventory/items/items.controller.ts` calling the `settings` service above: all 4
+      endpoints, `@RequirePermission(Permission.SETTINGS)` (corrected — research.md §9)
 
 **Checkpoint**: Item master CRUD functional; item codes auto-generated.
 
@@ -110,8 +129,8 @@ verify WAR recalculates; delete first → WAR replays from remaining; delete wit
         increment `received`, compute WAR incrementally (research.md §3)
       - `recomputeWAR(tx, itemId, siteId)`: replay all non-deleted purchase ledger entries
         chronologically, write final WAR to `StockBalance` (called on purchase soft-delete)
-      - `toRow(balance, itemName, siteName, category, unit): StockRow`: compute `inStock` +
-        `stockValue` (research.md §11)
+      - `toRow(balance, itemName, siteName, category, unit, reorderLevel): StockRow`: compute
+        `inStock`, `stockValue`, and `belowReorderLevel` (research.md §11, §12)
 - [ ] T018 [P] [US3] Unit test `StockService`:
       - WAR incremental formula: 2 purchases → correct WAR
       - WAR replay after first purchase deleted → WAR = second purchase rate
@@ -120,16 +139,18 @@ verify WAR recalculates; delete first → WAR replays from remaining; delete wit
 - [ ] T019 [US3] Implement `PurchasesService` in
       `src/inventory/purchases/purchases.service.ts`:
       - `create`: Prisma transaction — append `StockLedgerEntry` (purchase), call
-        `StockService.upsertBalanceForPurchase()`, create `PurchaseBill` (unpaid),
-        store `billFileRef` via encrypted object-storage reference (same pattern as
-        005/008 `EmployeeDocument` / `ProjectDocument`) — H-002 remediation, audit-log
+        `StockService.upsertBalanceForPurchase()`, create `PurchaseBill` (unpaid), auto-create a
+        `GoodsReceiptNote` linked 1:1 to the purchase (research.md §14), store `billFileRef` via
+        encrypted object-storage reference (same pattern as 005/008 `EmployeeDocument` /
+        `ProjectDocument`) — H-002 remediation, audit-log
       - `delete`: check `PaymentAllocation` → 409 if allocated; soft-delete; append
         `purchase_reversal` ledger entry; decrement `StockBalance.received`; call
         `StockService.recomputeWAR()`; audit-log
-      - `findAll`: paginated with vendor name via `PartnersService.getVendorById()`
+      - `findAll`: paginated with vendor name via `PartnersService.getVendorById()` (exported
+        in-process method, `007-partners-backend` research.md §12 — never the HTTP endpoint)
 - [ ] T020 [US3] Implement `PurchasesController` in
       `src/inventory/purchases/purchases.controller.ts`: all endpoints,
-      `@RequirePermission(Permission.INVENTORY_PURCHASES)`
+      `@RequirePermission(Permission.INVENTORY)` (corrected — research.md §9)
 - [ ] T021 [US3] E2e test: create purchase → stock balance correct; delete → balance reverts;
       delete with allocation → 409 — `test/inventory.e2e-spec.ts` (create file)
 
@@ -148,7 +169,8 @@ one 422; delete → balance reverts.
 ### Implementation for User Story 4
 
 - [ ] T022 [P] [US4] Create `src/inventory/issues/dto/create-issue.dto.ts` with
-      siteId, itemId, date, quantity, issuedTo, remarks validation
+      siteId, itemId, date, quantity, issuedTo, `activityId`/`boqItemId` (one required,
+      research.md §13), remarks validation
 - [ ] T023 [P] [US4] Add `validateAndLockStock(tx, itemId, siteId, qty): Promise<number>`
       to `StockService`: Prisma `$queryRaw` with `SELECT ... FOR UPDATE` on `StockBalance`,
       compute `inStock`, throw `422 { availableStock: inStock }` if `qty > inStock` —
@@ -157,11 +179,13 @@ one 422; delete → balance reverts.
       returns balance; insufficient → throws with `availableStock` — use mocked transaction
       `src/inventory/stock/stock.service.spec.ts`
 - [ ] T025 [US4] Implement `IssuesService` in `src/inventory/issues/issues.service.ts`:
-      `create` (Prisma transaction: `validateAndLockStock()`, append `issue` ledger entry,
-      increment `StockBalance.issued`; audit-log), `delete` (soft-delete, `issue_reversal`
-      entry, decrement `issued`, guard negative-issued check → 422), `findAll`
+      `create` (Prisma transaction: validate `activityId`/`boqItemId` via `ProjectsService`
+      — research.md §13, `validateAndLockStock()`, append `issue` ledger entry, increment
+      `StockBalance.issued`; audit-log), `delete` (soft-delete, `issue_reversal` entry, decrement
+      `issued`, guard negative-issued check → 422), `findAll`
 - [ ] T026 [US4] Implement `IssuesController` in
-      `src/inventory/issues/issues.controller.ts`: `@RequirePermission(Permission.INVENTORY_PURCHASES)`
+      `src/inventory/issues/issues.controller.ts`: `@RequirePermission(Permission.INVENTORY)`
+      (corrected — research.md §9)
 - [ ] T027 [US4] E2e test: over-issue → 422 `availableStock`; two rapid concurrent issues
       for last stock unit → exactly one succeeds — `test/inventory.e2e-spec.ts`
 
@@ -181,12 +205,14 @@ arithmetic matches the seeded data; verify hint endpoint returns correct inStock
 
 - [ ] T028 [P] [US6] Implement `StockController` in
       `src/inventory/stock/stock.controller.ts`:
-      - `GET /inventory/stock` — reads `StockBalance` rows, calls `StockService.toRow()` per row;
+      - `GET /inventory/stock` — reads `StockBalance` rows, calls `StockService.toRow()` per row
+        (including `belowReorderLevel` from the item's `reorderLevel`, research.md §12);
         resolves site name via `ProjectsService.getSiteById()`, vendor name not needed here
       - `GET /inventory/stock/:itemId/:siteId` — single item-site hint
-      - `@RequirePermission(Permission.INVENTORY_STOCK)`
+      - `@RequirePermission(Permission.INVENTORY)` (corrected — research.md §9)
 - [ ] T029 [P] [US6] Unit test `StockService.toRow()`: all four balance fields, zero-inStock
-      row still returned, `stockValue` rounds correctly
+      row still returned, `stockValue` rounds correctly, `belowReorderLevel` flips correctly
+      around the item's `reorderLevel` threshold
 
 **Checkpoint**: Stock view and hint endpoint functional; used by Issue/Transfer forms.
 
@@ -215,7 +241,8 @@ same-site → 400; delete → both balances revert.
       atomically; audit-log),
       `delete` (both reversal entries, atomic balance revert), `findAll`
 - [ ] T032 [US5] Implement `TransfersController` in
-      `src/inventory/transfers/transfers.controller.ts`: `@RequirePermission(Permission.INVENTORY_PURCHASES)`
+      `src/inventory/transfers/transfers.controller.ts`: `@RequirePermission(Permission.
+      INVENTORY)` (corrected — research.md §9)
 
 **Checkpoint**: Transfer CRUD functional.
 
@@ -251,9 +278,11 @@ Delete first payment — both bills revert.
       - `src/inventory/payments/payments.service.spec.ts`
 - [ ] T036 [US7] Implement `PaymentsController` in
       `src/inventory/payments/payments.controller.ts`: all endpoints,
-      `@RequirePermission(Permission.INVENTORY_PAYMENTS)`
-- [ ] T037 [US7] E2e test: full payment lifecycle; delete reversal; over-allocation → 400
-      — `test/inventory.e2e-spec.ts`
+      `@RequirePermission(Permission.INVENTORY)` (corrected — research.md §9)
+- [ ] T037 [US7] E2e test: full payment lifecycle (FIFO allocation, no client-supplied
+      allocation array); delete reversal; payment amount exceeding total outstanding → all bills
+      paid + `unallocatedBalance` recorded (not a `400` — over-payment is allowed, corrected to
+      match the automatic-FIFO design) — `test/inventory.e2e-spec.ts`
 
 **Checkpoint**: Payment allocation fully functional.
 
@@ -278,7 +307,7 @@ Delete first payment — both bills revert.
 
 ## Phase 10: Polish & Cross-Cutting
 
-- [ ] T040 [P] Add Swagger `@ApiTags('Inventory')` + `@ApiOperation` to all 6 controllers
+- [ ] T040 [P] Add Swagger `@ApiTags('Inventory')` + `@ApiOperation` to all 7 controllers
 - [ ] T041 [P] `npm run lint` and fix issues
 - [ ] T042 [P] `npm run build` typecheck and fix issues
 - [ ] T043 [P] Add `TODO(008)` comments in `InventoryService.getMaterialCostByProject()` and

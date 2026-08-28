@@ -1,18 +1,43 @@
 # Data Model: Plant & Machinery Backend
 
-All tables in the `plant` schema. See research.md for design decisions.
+Operational tables in `plant`; reference-data masters in `settings` (research.md §1, §10 —
+corrected during reconciliation with a parallel spec). See research.md for design decisions.
 
-## EquipmentCategory (`plant` schema — new)
+## EquipmentCategory (`settings` schema — new)
 
 ```
 { id, companyId, name (unique per company), meterType: 'hours' | 'km',
-  fuelBenchmark (decimal?), targetHoursPerMonth (integer, default 176), createdAt }
+  fuelBenchmark (decimal?), fuelVarianceThresholdPercent (decimal, default 15),
+  targetHoursPerMonth (integer, default 176), active (boolean, default true), createdAt }
 ```
+
+CRUD lives in `SettingsService` (`createEquipmentCategory()` etc.); this module's own controller
+calls those exported methods rather than querying this table directly (Principle I).
+
+## EquipmentDocType (`settings` schema — new)
+
+```
+{ id, companyId, name, alertDays (integer), active (boolean, default true), createdAt }
+```
+
+Same `SettingsService`-exported-methods pattern as EquipmentCategory.
+
+## HireRate (`settings` schema — new)
+
+```
+{ id, companyId, categoryId FK→EquipmentCategory, ratePerUnit (decimal),
+  effectiveFrom (date), effectiveTo (date?, null = current), createdAt }
+```
+
+Non-overlapping per category — creating a new "current" rate sets the prior current rate's
+`effectiveTo` to the day before the new rate's `effectiveFrom` (spec FR-014). Same
+`SettingsService`-exported-methods pattern; this module's Hire Bills rate-resolution logic calls
+`SettingsService.getEffectiveHireRate()` rather than querying this table directly.
 
 ## Equipment (`plant` schema — new)
 
 ```
-{ id, companyId, code (auto-gen or manual), name, categoryId FK→EquipmentCategory,
+{ id, companyId, code (auto-gen or manual), name, categoryId FK→settings.EquipmentCategory,
   ownership: 'owned' | 'hired', vendorId? (UUID, cross-schema),
   powerSource: 'diesel' | 'electric' | 'manual' | 'petrol',
   purchaseDate?, purchaseCost (decimal?), depreciationRate (decimal?, % per annum),
@@ -28,12 +53,13 @@ UNIQUE: `(companyId, code)` where code is non-null.
 ## EquipmentDocument (`plant` schema — new)
 
 ```
-{ id, equipmentId FK→Equipment,
-  documentType: 'rc' | 'insurance' | 'puc' | 'fitness' | 'permit' | 'road_tax' | 'calibration',
+{ id, equipmentId FK→Equipment, docTypeId FK→settings.EquipmentDocType,
   fileRef (encrypted object-storage reference), expiresAt?, uploadedByUserId, uploadedAt }
 ```
 
-Derived (service-layer): `expiryAlert = expiresAt != null && expiresAt <= today + 30 days`.
+Derived (service-layer): `expiryAlert = expiresAt != null && expiresAt <= today +
+docType.alertDays` — reads the referenced doc type's `alertDays` via
+`SettingsService.getEquipmentDocType()`, never a hardcoded literal.
 
 ## LogbookEntry (`plant` schema — new)
 
@@ -85,7 +111,9 @@ Constraint: at most one `status: 'open'` job per equipment (enforced in service 
 
 ```
 { id, companyId, equipmentId FK→Equipment (hired only),
-  vendorId (UUID), billedHours (decimal), rate (decimal),
+  vendorId (UUID), billedHours (decimal),
+  rate (decimal — defaults from settings.HireRate effective for the equipment's category on
+  billingPeriodFrom via SettingsService.getEffectiveHireRate(), overridable),
   grossAmount (decimal — billedHours × rate, stored),
   billingPeriodFrom (date), billingPeriodTo (date),
   logbookHours (decimal — fetched at creation, stored snapshot),
@@ -105,5 +133,6 @@ Constraint: at most one `status: 'open'` job per equipment (enforced in service 
 | `Equipment.vendorId` | Plain UUID | `PartnersService.getVendorById()` for name; `getVendorTds()` for hire bill TDS |
 | `Equipment.deployedSiteId` | Plain UUID | `ProjectsService.getSiteById()` for site name |
 | `LogbookEntry.operatorId` | Plain UUID | `HrService.getEmployeeById()` for name display |
+| `Equipment.categoryId`, `EquipmentDocument.docTypeId`, `HireBill.rate` | FK/lookup into `settings` | `SettingsService.getEquipmentCategory()` / `.getEquipmentDocType()` / `.getEffectiveHireRate()` — never a direct cross-schema query (research.md §1, §10) |
 | P&L machinery cost | Not stored | `PlantService.getMachineryCostByProject()` on demand |
 | P&L fuel cost | Not stored | `PlantService.getFuelCostByProject()` on demand |

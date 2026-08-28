@@ -140,3 +140,24 @@ schema boundaries are for.
 **Alternatives considered**: Duplicate a denormalized `shiftDuration` field onto `Employee` —
 rejected: introduces a second source of truth for data `settings.Shift` already owns, with no
 performance justification in this feature's requirements.
+
+## 10. Reimbursement Claims: schema placement and the self-service/admin split
+
+**Decision**: `ReimbursementClaim` lives in the `hr` schema (this feature's own scope), created and
+owned by the employee via `POST /my/reimbursements`. Feature 005 (HR & Payroll) adds an admin
+review layer (list/approve/reject/mark-paid/register) over this same table, exactly the pattern
+already established for Leave (US4 here, admin decide layer added by feature 005's own Leave
+story) — never a second, duplicated claims table. `ReimbursementCategory` (the master claims
+validate against) lives in `settings`, added by feature 005 to that schema, read here via
+`SettingsService.getReimbursementCategories(companyId)`.
+
+**Rationale**: Master PRD §7.9.5 frames claim creation as employee-initiated (via My Workspace) or
+entered by HR "on an employee's behalf" — the same dual-entry-point shape Leave already has, so it
+gets the same architectural answer: one table, one owning schema, a thin admin layer added later
+by whichever feature needs it.
+
+**Alternatives considered**: Have feature 005 own the table (in `payroll`, matching Loan's
+placement) with this feature calling into it via an exported service for creation — rejected:
+`ReimbursementClaim` is Draft/Submitted by the employee well before any payroll concern touches it
+(unlike Loan, which an employee never self-originates), so `hr` (the employee-facing schema) is the
+more natural owner, matching Leave's precedent exactly rather than Loan's.

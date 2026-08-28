@@ -40,6 +40,9 @@
 4. `GET /activity-log?module=machinery`. **Expected**: empty result, not an error.
 5. `GET /activity-log?timeRange=today`. **Expected**: only today's entries.
 6. As a single-company user, confirm no other company's entries ever appear.
+7. `GET /activity-log/export?module=settings`. **Expected**: `text/csv` response with a header
+   row (Timestamp, User, Action, Module, Entity, Before, After) and one data row — the same
+   company edit from step 3.
 
 ## Scenario 4 — Notifications (User Story 4)
 

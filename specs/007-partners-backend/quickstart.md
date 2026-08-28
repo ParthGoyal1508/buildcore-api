@@ -3,8 +3,10 @@
 ## Prerequisites
 
 - Seeded company (002), admin session. `@nestjs/schedule` wired (first consumer in this codebase).
-- Migrations applied: `partners` schema (9 new tables), `settings.Company.bocwCessRate` additive
-  column, `Permission` enum extended with `VENDORS`/`CONTRACTORS`/`BOCW`.
+- Migrations applied: `partners` schema (8 operational tables), `settings.VendorCategory` (moved,
+  research.md §1), `settings.Company.bocwCessRate` additive column. No `Permission` enum changes
+  — this feature reuses Settings' existing `PARTNERS` and `SETTINGS` values (corrected,
+  research.md §9).
 
 ---
 

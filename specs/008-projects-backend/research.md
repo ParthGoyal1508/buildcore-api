@@ -17,23 +17,35 @@ are only referenced by projects in the current system; there is no evidence of c
 client reuse in other PRDs. Adding it to `shared` now for speculative reuse would bloat that
 schema; if reuse materialises later, a constitution amendment handles it.
 
-## 2. Site ownership: `projects` schema replaces 003's placeholder
+## 2. Site ownership: `projects` schema already owns `Site` (corrected — was a false narrative)
 
-**Decision**: `projects` schema owns `Site`. The `hr.Site` stub from feature 003 (id, name,
-companyId only) is migrated: this feature's migration adds the geofence columns (address,
-latitude, longitude, geofenceRadius) to the existing `Site` table — the table itself moves to
-`projects` schema conceptually, and HR's `PunchRecord`/attendance logic now calls
-`ProjectsService.getSiteById(siteId)` (an exported in-process method) instead of querying its own
-schema's `Site` directly. No data migration is required because the additive columns are nullable.
+**Decision**: `projects` schema already owns `Site` — feature 003 built it there directly (not in
+`hr`), complete with geofence fields (`latitude`, `longitude`, `geofenceRadiusMeters`) and
+`weeklyOffDay`/`holidays`, specifically anticipating this feature's needs (003's own research.md
+documents this placement choice). This feature does **not** move Site or re-add geofence columns.
+It extends the existing table additively with `projectId`, `address`, `status`. HR's attendance
+module keeps calling 003's existing exported methods — `SitesService.getGeofence(siteId)`,
+`.getHolidayCalendar(siteId)`, `.getWeeklyOffDay(siteId)` — completely unchanged; this feature adds
+a separate, new `getSiteById(siteId)` export (returns the full Site row, not just geofence fields)
+for its own consumers (DWR, BOQ, project-detail views) that need more than HR's narrow slice.
 
-**Rationale**: The clarification session established this direction (Q2). Sites are a project
-concept; HR needs only the geofence radius for validation, which is cleanly served via an exported
-method. Putting Site in `projects` avoids an `hr` → `projects` cross-schema query that would
-violate Principle I in the opposite direction.
+**Correction context**: The original draft of this research entry and the spec's clarification
+answer both wrongly asserted that 003 had built only a bare `hr.Site` placeholder (id/name/
+companyId) that this feature would "move to `projects`" and add geofence columns to — both false:
+the schema was already `projects`, and geofence was already there. That false premise also implied
+HR would need to switch its call sites to a new `getSiteById()`, an unnecessary and disruptive
+change to code 003 already built and 005 (attendance computation, research.md §6 there) already
+depends on. Found and corrected during 008's master-PRD alignment audit, by re-reading 003's
+data-model.md/tasks.md directly rather than trusting this feature's own prior description of it.
 
-**Alternatives considered**: Keeping `Site` in `hr` schema and having `projects` reference it —
-rejected: this inverts the ownership (HR is not the business owner of site geography); it would
-also force `ProjectsModule` to import from `HrModule` to list its own sites — backward coupling.
+**Rationale**: Sites are a project concept; HR needs only the geofence/holiday/weekly-off slice for
+validation, which 003 already serves via narrow exported methods — no reason to widen or rename
+that contract just because a broader consumer (this feature) also needs Site data, for a different
+purpose, via its own new method.
+
+**Alternatives considered**: Having HR switch to the new `getSiteById()` for consistency — rejected:
+churn with no benefit; 003's narrow methods are already the right shape for what HR actually needs,
+and changing a working exported contract without a functional reason increases risk for free.
 
 ## 3. P&L on-demand calculation via `Promise.allSettled`
 
@@ -57,25 +69,28 @@ ships without blocking on those features.
 invalidation logic whenever any source module's data changes, a significant complexity for a
 module-boundary system.
 
-## 4. BOQ Excel import: `exceljs` parsing, synchronous for ≤1000 rows
+## 4. BOQ Excel import: `exceljs` parsing, two-step validate-then-confirm (corrected — see §12)
 
-**Decision**: `POST /projects/:id/boq/import` accepts a `multipart/form-data` file upload,
-parses it with `exceljs` (pre-approved by constitution v1.2.0), validates each row against the
-nine required columns (BOQ No., Task Group, Task Name, Unit, Scope Qty, Start Date, Finish Date,
-Duration, Per Day Qty), commits valid rows in a single Prisma transaction (creating groups
-on first reference), and returns `{ imported: N, errors: ErrorRow[] }`. If any errors exist, the
-response also includes a `errorReportUrl` pointing to a downloadable CSV error report stored in
-object storage. Import is synchronous; files exceeding 1,000 rows are rejected with a `413`
-before processing.
+**Decision**: `POST /projects/:id/boq/import/validate` accepts a `multipart/form-data` file
+upload, parses it with `exceljs` (pre-approved by constitution v1.2.0), validates each row against
+the nine required columns (BOQ No., Task Group, Task Name, Unit, Scope Qty, Start Date, Finish
+Date, Duration, Per Day Qty), and returns `{ batchId, validRows: Row[], errors: ErrorRow[] }`
+without writing anything — the parsed valid rows are held server-side (keyed by `batchId`, TTL'd)
+rather than committed. `POST /projects/:id/boq/import/confirm { batchId }` then commits the held
+valid rows in a single Prisma transaction (creating groups on first reference). If any errors
+exist, the validate response also includes an `errorReportUrl` pointing to a downloadable CSV.
+Both steps are synchronous; files exceeding 1,000 rows are rejected with a `413` before processing.
 
-**Rationale**: `exceljs` is the pre-approved library; synchronous import is spec-mandated for
-≤1,000-row files. A single transaction ensures atomic validity — no partial BOQ states. The CSV
-error report matches the spec's "downloadable error report" requirement without requiring a
-streaming/queue infrastructure this feature doesn't otherwise need.
+**Rationale**: `exceljs` is the pre-approved library; synchronous processing is spec-mandated for
+≤1,000-row files. A single transaction on confirm ensures atomic validity — no partial BOQ states.
+The CSV error report matches the spec's "downloadable error report" requirement without requiring
+a streaming/queue infrastructure this feature doesn't otherwise need. The two-step split (see §12
+for why this replaced an earlier single-step design) lets the admin review the error report and
+decide whether to proceed before anything is written, matching master PRD §7.5.3.
 
 **Alternatives considered**: Async import with a job queue — rejected: out of scope for this
 version per the spec assumption; the 1,000-row limit keeps synchronous processing well under any
-reasonable timeout.
+reasonable timeout. A single blind-commit endpoint (the original design) — rejected, see §12.
 
 ## 5. DWR Actual Qty: server-side computation
 
@@ -90,6 +105,9 @@ from diverging from formula-computed values. The formula is simple arithmetic wi
 
 **Alternatives considered**: Accepting client-computed `actualQty` directly — rejected: FR-005
 explicitly disallows this; a compromised client could submit inflated BOQ progress.
+
+`actualQty` is computed and stored at DWR creation time regardless of status; it is only *applied*
+to the BOQ item's `doneQty` when the DWR is approved, not when computed or submitted — see §13.
 
 ## 6. Project lock enforcement: `ProjectLockGuard`
 
@@ -160,25 +178,34 @@ harder to do atomically.
 for P&L to work, even though those modules (Plant, Inventory, Partners) are not yet fully specced:
 
 ```typescript
-// Required by features 006/007/008
-interface PlantService      { getMachineryCostByProject(projectId: string, range: DateRange): Promise<number> }
+// Machinery/Fuel already implemented by 006 (getMachineryCostByProject/getFuelCostByProject
+// were built there per the 006 reconciliation — no stub needed for these two):
+interface PlantService      { getMachineryCostByProject(projectId: string, range: DateRange): Promise<number>;
+                               getFuelCostByProject(projectId: string, range: DateRange): Promise<number> }
+// Not yet implemented anywhere — this feature defines the contract, injects a zero-returning stub,
+// and surfaces `unavailableModules` until 007/009 add the real methods:
 interface InventoryService  { getMaterialCostByProject(projectId: string, range: DateRange): Promise<number> }
 interface PartnersService   { getSubcontractorCostByProject(projectId: string, range: DateRange): Promise<number> }
-// Already in 005 — HR must add the projectId parameter:
+// Added to 005 directly as part of this feature's build-out (research.md §16 there, FR-046) —
+// not a stub; PayrollLineItem.projectId + the method both ship together with this feature:
 interface HrPayrollService  { getLabourCostByProject(projectId: string, range: DateRange): Promise<number> }
 ```
 
-Until those features ship their implementations, `ProjectsModule` injects stub implementations
-that return `0` and mark the module as unavailable. This is captured as a TODO in plan.md and
-surfaced in `unavailableModules` in the P&L response.
+Until Inventory/Partners ship their implementations, `ProjectsModule` injects stub implementations
+for those two that return `0` and mark the module as unavailable. This is captured as a TODO in
+plan.md and surfaced in `unavailableModules` in the P&L response. Machinery/Fuel (006) and Labour
+(005, amended by this feature) are real, not stubbed.
 
 **Rationale**: Defining the interface contract now prevents future modules from shipping
 incompatible signatures; the stub pattern keeps the P&L endpoint fully functional and testable
-today without blocking on 006/007.
+today without blocking on Inventory/Partners. Labour was originally assumed to already exist in
+005 (a false assumption, corrected above) — since it's the largest cost line in a construction
+P&L, amending 005 now was chosen over adding it to the stub list.
 
-**Alternatives considered**: Wait for 006/007/008 to ship before implementing P&L — rejected: the
-P&L endpoint is valuable even with partial data; the stub pattern is a standard interface-first
-design technique.
+**Alternatives considered**: Stubbing Labour like Inventory/Partners instead of amending 005 —
+rejected: Labour is typically the dominant cost category in construction P&L (master PRD §7.5.4
+lists it first), so shipping the P&L with a permanently-zero Labour line would defeat the feature's
+core "no cost overrun surprises" value proposition from day one.
 
 ## 11. Project Code auto-generation
 
@@ -192,3 +219,60 @@ III); adding a PROJECTS series type is a trivial Settings seed extension, not a 
 
 **Alternatives considered**: A projects-specific sequential code generator — rejected: duplicates
 the settings code-series mechanism for no benefit; also harder to customise prefix/format later.
+
+## 12. BOQ import: validate-then-confirm, not a blind single-step commit
+
+**Decision**: Split BOQ Excel import into `POST .../boq/import/validate` (parse + validate, return
+report, write nothing) and `POST .../boq/import/confirm` (commit a previously-validated batch) —
+see §4's updated decision for the mechanics.
+
+**Rationale**: The original design (a single `POST .../boq/import` that validated and committed
+valid rows in the same call) directly contradicted master PRD §7.5.3 ("Errors displayed per row
+before import confirmed") and §11's cross-cutting import pattern (shared with Attendance Import,
+003/005), both of which describe a review step between validation and commit. Found during the
+master-PRD alignment audit sweep — this feature's BOQ import was the one import flow in the
+codebase that hadn't followed the already-established two-step convention.
+
+**Alternatives considered**: None — this brings BOQ import in line with an already-established,
+already-audited pattern rather than inventing a new one.
+
+## 13. BOQ `doneQty` counts only Approved DWRs, not Submitted
+
+**Decision**: `doneQty`/`pendingQty`/`avgQtyPerDay`/`daysToComplete` update when a DWR is
+**approved** (`PATCH /projects/dwr/:id/approve`), not when it's submitted. A submitted-but-
+unapproved DWR's `actualQty` is computed and stored on the `DWRTask` row but does not yet count
+toward the BOQ item's progress.
+
+**Rationale**: Master PRD §7.5.3 is explicit: "Only Approved DWRs count toward project progress %
+calculation." The original draft's FR-006/US5 AC2 incremented `doneQty` on submission, which would
+let an unreviewed, potentially-erroneous site-supervisor entry move official BOQ progress before a
+Project Manager ever looks at it — undermining the entire point of the Draft → Submitted →
+Approved review workflow (§7 in this file). Found during the master-PRD alignment audit sweep.
+
+**Alternatives considered**: Counting Submitted DWRs provisionally with a separate "approved
+doneQty" vs. "provisional doneQty" pair of fields — rejected: the master PRD's single-sentence
+rule doesn't call for two parallel progress figures, and it would complicate every downstream
+consumer (BOQ alerts, P&L activity level) that just wants one authoritative progress number.
+
+## 14. `DWR`/`PROJECT_FINANCIALS` permission values reconciled into 002
+
+**Decision**: `PROJECTS` is reused verbatim from 002's pre-built enum (it already anticipated this
+module). `DWR` and `PROJECT_FINANCIALS` are genuinely new — 002 only ever pre-built one coarse
+`PROJECTS` value, not the finer daily-work-report/financial split this feature's data sensitivity
+requires. Both new values have been added directly to 002's own data-model.md and tasks.md
+(the canonical enum definition), not just asserted here.
+
+**Rationale**: The established convention from the Partners/Inventory reconciliation earlier in
+this audit was "reuse existing values, never invent duplicates" — but that convention addressed
+features that invented *renamed duplicates* of concepts 002 already covered. `DWR`/
+`PROJECT_FINANCIALS` are not duplicates of anything already in the enum; they're a legitimate new
+trust-level split (a site supervisor filing DWRs should not automatically see RA Bill/P&L
+financial data). The fix here is narrower: make sure the *canonical* enum list (002's own spec)
+reflects the addition, rather than leaving 002's spec silently out of date relative to what every
+other feature that reads its enum now assumes exists.
+
+**Alternatives considered**: Folding DWR and PROJECT_FINANCIALS entry under the existing coarse
+`PROJECTS` value — rejected: the clarification session (Q of spec) already established the
+business need for the finer split (a site supervisor filing DWRs should not automatically see RA
+Bill/P&L financial data); collapsing them back to one value would re-introduce the access-control
+gap the clarification was meant to close.

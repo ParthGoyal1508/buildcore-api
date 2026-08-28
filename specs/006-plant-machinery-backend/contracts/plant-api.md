@@ -1,20 +1,40 @@
 # Contract: `/plant/*` endpoints
 
-All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three new values:
-`PLANT_ASSETS`, `PLANT_OPERATIONS`, `PLANT_BILLING`.
+All endpoints require `JwtAuthGuard` + `@RequirePermission()` — reusing Settings' existing
+`MACHINERY`/`LOGBOOK`/`FUEL`/`SETTINGS` values verbatim, plus two genuinely new ones this feature
+adds (`MAINTENANCE`, `HIRE_BILLS`) — per research.md §7 (corrected during reconciliation).
 
 ---
 
-## Equipment Categories — `/plant/categories` (permission: `PLANT_ASSETS`)
+## Equipment Categories, Doc Types, Hire Rates — `settings` schema (research.md §1, §10)
+
+Routes stay under `/plant/*` (matching the master PRD's own module grouping); each controller
+action is a thin call into `SettingsService`'s exported methods — no direct query against the
+`settings` schema tables (Principle I).
+
+## Equipment Categories — `/plant/categories` (permission: `SETTINGS`, via `SettingsService`)
 
 - `GET /plant/categories` — list with `equipmentCount`.
-- `POST /plant/categories` — `{ name, meterType, fuelBenchmark?, targetHoursPerMonth? }` → 201.
+- `POST /plant/categories` — `{ name, meterType, fuelBenchmark?, fuelVarianceThresholdPercent?,
+  targetHoursPerMonth? }` → 201.
 - `PATCH /plant/categories/:id` — partial update.
 - `DELETE /plant/categories/:id` — `409` if linked equipment.
 
+## Equipment Doc Types — `/plant/doc-types` (permission: `SETTINGS`, via `SettingsService`)
+
+- `GET /plant/doc-types` — list.
+- `POST /plant/doc-types` — `{ name, alertDays }` → 201.
+- `PATCH /plant/doc-types/:id` — partial update.
+
+## Hire Rates — `/plant/rates` (permission: `SETTINGS`, via `SettingsService`)
+
+- `GET /plant/rates?categoryId=` — effective-dated history.
+- `POST /plant/rates` — `{ categoryId, ratePerUnit, effectiveFrom, effectiveTo? }`; closes the
+  prior "current" rate's `effectiveTo` automatically (spec FR-014).
+
 ---
 
-## Equipment — `/plant/equipment` (permission: `PLANT_ASSETS`)
+## Equipment — `/plant/equipment` (permission: `MACHINERY`)
 
 - `GET /plant/equipment?categoryId=&siteId=&status=&ownership=&page=` — paginated list.
   Response includes `expiryAlert` (boolean) and `alertDocumentTypes` array per equipment.
@@ -23,13 +43,13 @@ All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three
 - `GET /plant/equipment/:id` — full detail including documents and service schedules.
 - `PATCH /plant/equipment/:id` — partial update. `status` cannot be set to `under_maintenance`
   manually (FR-002). Audit-logged.
-- `POST /plant/equipment/:id/documents` — `multipart/form-data`: `documentType`, `file`,
+- `POST /plant/equipment/:id/documents` — `multipart/form-data`: `docTypeId`, `file`,
   `expiresAt?` → 201.
 - `DELETE /plant/equipment/:id/documents/:docId` — removes document.
 
 ---
 
-## Logbook — `/plant/logbook` (permission: `PLANT_OPERATIONS`)
+## Logbook — `/plant/logbook` (permission: `LOGBOOK`)
 
 - `GET /plant/logbook?equipmentId=&projectId=&dateFrom=&dateTo=&page=`
 - `POST /plant/logbook` — `{ equipmentId, date, openingReading, closingReading, fuelConsumed?,
@@ -41,16 +61,17 @@ All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three
 
 ---
 
-## Fuel — `/plant/fuel` (permission: `PLANT_OPERATIONS`)
+## Fuel — `/plant/fuel` (permission: `FUEL`)
 
 - `GET /plant/fuel?equipmentId=&dateFrom=&dateTo=&page=`
 - `POST /plant/fuel` — `{ equipmentId, date, quantity, rate, vendorId? }`. Computes `amount`,
-  `variancePercent`, `varianceAlert`; emits `fuel_variance` event if alert. Audit-logged. → 201.
+  `variancePercent` (against the equipment category's configured threshold), `varianceAlert`;
+  emits `fuel_variance` event if alert. Audit-logged. → 201.
 - `GET /plant/fuel/summary?month=YYYY-MM&companyId=` — per-equipment totals.
 
 ---
 
-## Service Schedules — `/plant/services` (permission: `PLANT_ASSETS`)
+## Service Schedules — `/plant/services` (permission: `MAINTENANCE`)
 
 - `GET /plant/services?equipmentId=&status=&page=` — computed `status` per schedule.
 - `POST /plant/services` — `{ equipmentId, serviceType, intervalHours?, intervalKm?,
@@ -59,7 +80,7 @@ All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three
 
 ---
 
-## Maintenance — `/plant/maintenance` (permission: `PLANT_OPERATIONS`)
+## Maintenance — `/plant/maintenance` (permission: `MAINTENANCE`)
 
 - `GET /plant/maintenance?equipmentId=&status=&page=`
 - `POST /plant/maintenance` — `{ equipmentId, type, description, linkedServiceScheduleId? }`.
@@ -70,12 +91,14 @@ All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three
 
 ---
 
-## Hire Bills — `/plant/hire-bills` (permission: `PLANT_BILLING`)
+## Hire Bills — `/plant/hire-bills` (permission: `HIRE_BILLS`)
 
 - `GET /plant/hire-bills?equipmentId=&vendorId=&status=&page=`
-- `POST /plant/hire-bills` — `{ equipmentId, vendorId, billedHours, rate, billingPeriodFrom,
-  billingPeriodTo }`. Fetches `logbookHours` from logbook entries in period; fetches `tdsRate`
-  via `PartnersService.getVendorTds(vendorId)`; computes all financial fields. → 201.
+- `POST /plant/hire-bills` — `{ equipmentId, vendorId, billedHours, rate?, billingPeriodFrom,
+  billingPeriodTo }`. `rate` defaults from the effective `HireRate` for the equipment's category
+  on `billingPeriodFrom` if omitted (spec FR-014). Fetches `logbookHours` from logbook entries in
+  period; fetches `tdsRate` via `PartnersService.getVendorTds(vendorId)`; computes all financial
+  fields. → 201.
 - `PATCH /plant/hire-bills/:id/verify` — `pending_verification → verified`. Audit-logged.
 - `PATCH /plant/hire-bills/:id/pay` — `{ paymentDate, paymentReference }`. `verified → paid`.
 
@@ -96,7 +119,8 @@ class PlantService {
 
 ---
 
-## Audit logging
+## Audit logging (updated set)
 
 Extends `shared.AuditLogEntry.entityType` with: `EQUIPMENT`, `EQUIPMENT_DOCUMENT`,
-`LOGBOOK_ENTRY`, `FUEL_ENTRY`, `MAINTENANCE_JOB`, `SERVICE_SCHEDULE`, `HIRE_BILL`.
+`LOGBOOK_ENTRY`, `FUEL_ENTRY`, `MAINTENANCE_JOB`, `SERVICE_SCHEDULE`, `HIRE_BILL`,
+`EQUIPMENT_CATEGORY`, `EQUIPMENT_DOC_TYPE`, `HIRE_RATE`.

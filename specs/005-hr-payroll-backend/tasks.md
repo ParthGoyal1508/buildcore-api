@@ -55,8 +55,9 @@ implementation and testing of each story.
       §Daily Worker
 - [ ] T009 Generate and apply the migration for T004–T008 via `migrate:dev:create`/`migrate:dev`
       (grouped per Constitution Check VI)
-- [ ] T010 [P] Add `PayrollLineItem` model to `payroll` schema, extend `PayrollRun` with
-      `generatedAt`/`generatedByUserId`/`processedAt`/`paidAt` — data-model.md
+- [ ] T010 [P] Add `PayrollLineItem` model to `payroll` schema (including nullable `projectId` —
+      FR-046), extend `PayrollRun` with `generatedAt`/`generatedByUserId`/`processedAt`/`paidAt` —
+      data-model.md
 - [ ] T011 [P] Add `Loan`, `LoanScheduleEntry` models to `payroll` schema — data-model.md
 - [ ] T012 Generate and apply the migration for T010–T011
 - [ ] T013 Add RLS policies for every new `companyId`-scoped table from T004–T011
@@ -106,6 +107,10 @@ and PII is masked by default.
       (depends on T022, T023)
 - [ ] T025 [US1] Apply `PiiMaskingInterceptor` (T014) to `employees.controller.ts`
 - [ ] T026 [US1] Wire audit logging (entityType `EMPLOYEE`) into create/update paths — FR-030
+- [ ] T026a [US1] Implement exported `HrService.getUnlinkedEmployees(companyId, search?)` and
+      `.linkEmployeeToUser(employeeId, userId)` (throws if `Employee.userId` already set) in
+      `employees.service.ts`, exported from `HrModule` for `010-account-creation-backend` to
+      inject — FR-047, research.md §17
 
 **Checkpoint**: User Story 1 fully functional and independently testable.
 
@@ -239,8 +244,9 @@ progress through Processed/Paid; confirm 003's `/my/salary` now returns real dat
 
 - [ ] T051 [US5] Implement `src/payroll/engine/payroll-engine.service.ts`: single-transaction
       `generate(companyId, period)` reading attendance (via 003's computation), salary structure
-      (US1), active Loans (US7), Settings' rates + `otMultiplier` — research.md §4 (depends on
-      T010, T022, T040)
+      (US1), active Loans (US7), Settings' rates + `otMultiplier`, and each employee's current
+      site/project assignment to set `PayrollLineItem.projectId` (FR-046, research.md §16) —
+      research.md §4 (depends on T010, T022, T040)
 - [ ] T052 [US5] Implement `src/payroll/runs/payroll-runs.controller.ts`:
       `POST /hr/payroll/generate`, `GET /hr/payroll/runs`,
       `POST /hr/payroll/runs/:id/process`, `.../pay`, guarded with
@@ -257,6 +263,10 @@ progress through Processed/Paid; confirm 003's `/my/salary` now returns real dat
       `payroll-runs.controller.ts`: `GET /hr/payroll/runs/:id/bank-sheet` — spec FR-017
 - [ ] T057 [US5] Wire audit logging (entityType `PAYROLL_RUN`) into generate/process/pay paths —
       FR-030
+- [ ] T057a [US5] Implement `HrPayrollService.getLabourCostByProject(projectId, dateRange)` in
+      `src/payroll/runs/payroll-runs.service.ts` (or a dedicated exported service), summing
+      `netPay` across `PayrollLineItem`s matching `projectId` and a `payrollRun.period` within
+      range — exported for `008-projects-backend`'s P&L to call — FR-046, research.md §16
 
 **Checkpoint**: User Stories 1–5 independently functional — this is the feature's core MVP.
 
@@ -421,22 +431,139 @@ unchanged endpoint.
       `@RequirePermission(Permission.EMPLOYEES)` — thin list over 003's existing service, no new
       decision logic (spec FR-029)
 
-**Checkpoint**: All ten user stories independently functional.
+**Checkpoint**: All ten original user stories independently functional.
 
 ---
 
-## Phase 13: Polish & Cross-Cutting Concerns
+## Phase 14: User Story 11 - Employee Offboarding and Full & Final Settlement (Priority: P3)
 
-- [ ] T090 [P] Run `npm run lint` and `npm run build` across all new/modified files
-- [ ] T091 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`, `src/payroll/`
-- [ ] T092 Run the full `quickstart.md` validation scenarios end-to-end and record results
-- [ ] T093 [P] Review every new `companyId`-scoped table for RLS coverage and confirm the Super
+**Goal**: Initiate an employee exit, compute and process F&F settlement, deactivate their account.
+
+**Independent Test**: Initiate exit, compute F&F (leave encashment + loan recovery appear),
+process as an F&F payroll run, confirm status → Inactive and login revoked.
+
+### Tests for User Story 11 ⚠️
+
+- [ ] T097 [P] [US11] E2e test: exit → F&F computation (pending salary, EL encashment, loan
+      recovery, net payable) → process → employee Inactive, login revoked in
+      `test/hr-payroll.e2e-spec.ts`
+- [ ] T098 [P] [US11] E2e test: attendance/leave/payroll actions rejected for an Inactive employee;
+      historical records remain readable in `test/hr-payroll.e2e-spec.ts`
+- [ ] T099 [P] [US11] Unit test for the F&F computation function (pro-rated pending salary, EL
+      encashment at `basic / 26`/day, active loan recovery) in
+      `src/payroll/offboarding/fnf.service.spec.ts`
+
+### Implementation for User Story 11
+
+- [ ] T100 [P] [US11] Create `src/hr/offboarding/dto/exit.dto.ts`
+- [ ] T101 [US11] Implement `src/hr/offboarding/exit.service.ts` — `initiateExit()` creates an
+      `ExitRecord` (FR-031); implement `src/payroll/offboarding/fnf.service.ts` —
+      `computeFnf()` (FR-032), `processFnf()` (creates an F&F-flagged `PayrollRun`, reuses the
+      standard payroll lock lifecycle, FR-033) (depends on T100, existing PayrollEngine from US5)
+- [ ] T102 [US11] Implement `src/hr/employees/employees.controller.ts` additions: `POST
+      /hr/employees/:id/exit`, `GET /hr/employees/:id/fnf`, `POST
+      /hr/employees/:id/fnf/process` — guarded with `@RequirePermission(Permission.EMPLOYEES)`
+      (depends on T101)
+- [ ] T103 [US11] Wire the on-processed employee-deactivation hook (`status → Inactive`,
+      `User.active = false`, Redis refresh-token revocation, FR-034) and the Inactive-employee
+      action-rejection guard (FR-035) into `employees.service.ts`
+
+**Checkpoint**: All eleven user stories independently functional.
+
+---
+
+## Phase 15: User Story 12 - Reimbursement Claims (Admin) (Priority: P3)
+
+**Goal**: Admin review layer (approve/reject/pay/register) over feature 003's employee-created
+Reimbursement Claims.
+
+**Independent Test**: Seed a Submitted claim (003), approve it, mark it paid directly, confirm a
+second claim can be rejected with mandatory remarks.
+
+### Tests for User Story 12 ⚠️
+
+- [ ] T104 [P] [US12] E2e test: list submitted claims → approve (optional remarks) → mark paid
+      (direct: mode/date/reference recorded) in `test/hr-payroll.e2e-spec.ts`
+- [ ] T105 [P] [US12] E2e test: reject requires remarks; employee notified; rejected claim never
+      appears in a payroll run or the register's payable totals in
+      `test/hr-payroll.e2e-spec.ts`
+- [ ] T106 [P] [US12] E2e test: `paymentMode: 'payroll'` includes the claim as an earnings line in
+      the employee's next payroll run, mirroring Loan EMI (FR-022) in
+      `test/hr-payroll.e2e-spec.ts`
+
+### Implementation for User Story 12
+
+- [ ] T107 [P] [US12] Create `src/payroll/reimbursements-admin/dto/decide-claim.dto.ts` and
+      `dto/pay-claim.dto.ts`
+- [ ] T108 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.service.ts` —
+      `listClaims()`, `approveClaim()`, `rejectClaim()` (FR-037), `payClaim()` (direct or
+      payroll-earnings-line, FR-038), `getRegister()` (FR-039) — operating on feature 003's
+      `ReimbursementClaim` table (`hr` schema), never a duplicate table (research.md §10 there)
+- [ ] T109 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.controller.ts`
+      — `GET /hr/reimbursements`, `PATCH /hr/reimbursements/:id/approve`, `.../reject`,
+      `.../pay`, `GET /hr/reimbursements/register` — guarded with
+      `@RequirePermission(Permission.EMPLOYEES)` (depends on T108)
+- [ ] T110 [US12] Wire the payroll-earnings-line inclusion path into the payroll engine (US5) so an
+      Approved, `paymentMode: 'payroll'` claim's amount appears in the employee's next run
+      (depends on T108, existing PayrollEngine)
+- [ ] T110a [US12] Implement `ReimbursementCategoriesService` + `ReimbursementCategoriesController`
+      in `src/settings/reimbursement-categories/` — same CRUD shape as 002's Department/
+      Designation/Document Type/Shift masters, guarded with `@RequirePermission(Permission.
+      EMPLOYEES)` (FR-045, research.md §15 — found missing on a second alignment-audit pass;
+      depends on T003)
+
+**Checkpoint**: All twelve user stories independently functional.
+
+---
+
+## Phase 16: User Story 13 - Bulk Attendance Import (Priority: P3)
+
+**Goal**: CSV template download, row-level validation report, then commit-only-validated-rows
+attendance import.
+
+**Independent Test**: Upload a CSV mixing valid/invalid rows, confirm the validation report and
+zero records created, then commit only the valid rows.
+
+### Tests for User Story 13 ⚠️
+
+- [ ] T111 [P] [US13] E2e test: validate returns row-level errors (unknown employee code,
+      malformed date, duplicate row) with nothing committed in `test/hr-payroll.e2e-spec.ts`
+- [ ] T112 [P] [US13] E2e test: commit creates only previously-validated rows as standard
+      Attendance Records, each tagged import-sourced in the audit log, in
+      `test/hr-payroll.e2e-spec.ts`
+- [ ] T113 [P] [US13] E2e test: a row dated within an already payroll-locked period is rejected in
+      the validation report (FR-009/FR-044) in `test/hr-payroll.e2e-spec.ts`
+
+### Implementation for User Story 13
+
+- [ ] T114 [P] [US13] Create `src/hr/attendance/dto/import-row.dto.ts`
+- [ ] T115 [US13] Implement `src/hr/attendance/attendance-import.service.ts` — `getTemplate()`
+      (FR-041), `validate()` (row-level parsing/lookup errors, no writes, FR-042), `commit()`
+      (creates Attendance Records via the existing Mark/Edit path — US3's `attendance-admin.
+      service.ts` — reusing its Total-Hours/status computation and payroll-lock rejection,
+      FR-043/FR-044) (depends on US3's `attendance-admin.service.ts`)
+- [ ] T116 [US13] Implement `src/hr/attendance/attendance-import.controller.ts` — `GET
+      /hr/attendance/import/template`, `POST /hr/attendance/import/validate`, `POST
+      /hr/attendance/import/commit` — guarded with `@RequirePermission(Permission.ATTENDANCE)`
+      (depends on T115)
+- [ ] T117 [US13] Wire the import-sourced audit-log tag into committed rows (FR-043)
+
+**Checkpoint**: All thirteen user stories independently functional.
+
+---
+
+## Phase 17: Polish & Cross-Cutting Concerns
+
+- [ ] T118 [P] Run `npm run lint` and `npm run build` across all new/modified files
+- [ ] T119 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`, `src/payroll/`
+- [ ] T120 Run the full `quickstart.md` validation scenarios end-to-end and record results
+- [ ] T121 [P] Review every new `companyId`-scoped table for RLS coverage and confirm the Super
       Admin bypass flag behaves correctly — Constitution Principle IV
-- [ ] T094 [P] Confirm every PII field (Aadhaar/PAN/bank-account/UAN) is encrypted at rest, masked
+- [ ] T122 [P] Confirm every PII field (Aadhaar/PAN/bank-account/UAN) is encrypted at rest, masked
       by default, and every reveal is audit-logged — spec FR-003, SC-006
-- [ ] T095 Confirm the `TODO(VIRUS_SCAN)` gap (T031) is also recorded in this repo's constitution's
+- [ ] T123 Confirm the `TODO(VIRUS_SCAN)` gap (T031) is also recorded in this repo's constitution's
       Deferred/TODO list — research.md §10
-- [ ] T096 Update `.env.example` with any new config variables
+- [ ] T124 Update `.env.example` with any new config variables
 
 ---
 
@@ -447,7 +574,7 @@ unchanged endpoint.
 - **Setup (Phase 1)**: No dependencies — can start immediately
 - **Foundational (Phase 2)**: Depends on Setup — BLOCKS all user stories (this is the largest
   Foundational phase of any feature so far, given the sheer number of new/extended tables)
-- **User Stories (Phase 3–12)**: All depend on Foundational
+- **User Stories (Phase 3–16)**: All depend on Foundational
   - US1 (Employees) is the true root dependency — US2 (Documents), US3 (Attendance admin), US8
     (Transfer) all extend or reference the Employee record US1 builds
   - US2 depends on US1's Employee existing; its mandatory-doc gate is consumed by US3's Mark
@@ -461,7 +588,13 @@ unchanged endpoint.
   - US9 (Daily Workers) is fully independent of US1–US8 (a structurally separate system,
     research.md §8) beyond Foundational and 003's `BiometricsService`
   - US10 (Re-enrolment queue) is independent of everything except 003's existing data
-- **Polish (Phase 13)**: Depends on all desired user stories being complete
+  - US11 (Offboarding/F&F) depends on US1 (Employee), US5 (payroll engine reuse), and US7 (loan
+    recovery figures)
+  - US12 (Reimbursements Admin) depends on feature 003's `ReimbursementClaim` table existing (that
+    feature's own US8) and, for the payroll-earnings-line path, US5's payroll engine
+  - US13 (Attendance Import) depends on US3's `attendance-admin.service.ts` (reused for the actual
+    record-creation/lock-check logic) — independent of US1, US2, US4–US12 otherwise
+- **Polish (Phase 17)**: Depends on all desired user stories being complete
 
 ### Parallel Opportunities
 

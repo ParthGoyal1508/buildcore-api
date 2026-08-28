@@ -136,7 +136,9 @@ buildcore-api/
 │       │       ├── create-role.dto.ts          # NEW
 │       │       └── update-role.dto.ts          # NEW
 │       ├── users-admin/
-│       │   ├── users-admin.controller.ts       # NEW — calls AuthModule's exported UsersService
+│       │   ├── users-admin.controller.ts       # NEW — calls 010's exported UsersService (corrected
+│       │   │                                   #   from an original "AuthModule" assumption — 001
+│       │   │                                   #   never built this; see research.md §3)
 │       │   ├── users-admin.service.ts          # NEW — incl. last-Super-Admin-standing guard
 │       │   └── dto/update-user.dto.ts          # NEW
 │       ├── reference-data/

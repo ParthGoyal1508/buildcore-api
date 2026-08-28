@@ -6,12 +6,20 @@
 
 ## Summary
 
-Build the `inventory` schema — 10 entities, ledger-based stock tracking using dual-write
-(`StockBalance` for O(1) reads + `StockLedgerEntry` for audit), `SELECT FOR UPDATE` concurrency
-on issue/transfer, WAR incremental update on purchase and full-replay on deletion, atomic payment-
-bill allocation, and the exported `getMaterialCostByProject()` method that resolves 008's P&L
-Materials stub. Three new `Permission` enum values. One cross-module stub added to `ProjectsModule`.
-See [research.md](research.md) for all 11 decisions.
+Build the `inventory` schema — ledger-based stock tracking using dual-write (`StockBalance` for
+O(1) reads + `StockLedgerEntry` for audit), `SELECT FOR UPDATE` concurrency on issue/transfer,
+WAR incremental update on purchase and full-replay on deletion, atomic FIFO payment-bill
+allocation, and the exported `getMaterialCostByProject()` method that resolves 008's P&L
+Materials stub. One cross-module stub added to `ProjectsModule`.
+
+**Corrected during a master-PRD alignment audit**: Item Categories and Items are `settings`-schema
+masters (not `inventory`-owned), matching master PRD §7.8.6 and this project's established
+convention; permission checks reuse Settings' already-existing `INVENTORY` value instead of three
+invented ones; Item gains Reorder Level and HSN Code fields plus two missing units (RMT, SQM);
+Issue gains an Activity/BOQ Item link; a Goods Receipt Note is now auto-created per purchase;
+`quickstart.md`'s payment scenario (which described manual, client-supplied allocation) is
+corrected to match the fully-automatic FIFO design every other artifact already specified. See
+[research.md](research.md) for all 15 decisions (11 original + 4 corrections).
 
 ## Technical Context
 
@@ -21,7 +29,9 @@ See [research.md](research.md) for all 11 decisions.
 001/002's guards, 005/007/008's object-storage pattern for bill file uploads. First use of Prisma
 `$queryRaw` for `SELECT FOR UPDATE` (pre-approved — Prisma raw SQL, not a new package).
 
-**Storage**: PostgreSQL via Prisma — new `inventory` schema with 10 tables.
+**Storage**: PostgreSQL via Prisma — new `inventory` schema with 9 operational tables (adds
+`GoodsReceiptNote`, research.md §14); 2 new `settings`-schema tables (`ItemCategory`, `Item`,
+corrected placement — research.md §1).
 
 **Testing**: Jest unit tests for `StockService.recomputeWAR()`, `StockService.toRow()`,
 `PaymentService` allocation validation. E2e in `test/inventory.e2e-spec.ts` for purchase
@@ -32,51 +42,57 @@ create/delete, issue concurrency check, payment allocation + reversal.
 **Performance Goals**: `GET /inventory/stock` under 500ms for 500 item-site rows (O(1) reads
 from `StockBalance`). `getMaterialCostByProject()` under 1 second for 500 purchases (SC-005).
 
-**Constraints**: `inventory` schema never queries `projects`/`partners` schemas directly —
-only via exported service calls (Principle I); `StockLedgerEntry` is append-only — no updates
-or hard deletes permitted; `SELECT FOR UPDATE` via `$queryRaw` for issue/transfer validation
-(research.md §4); all 10 tables `companyId`-scoped with RLS (Principle IV); `stockValue` never
-stored (research.md §11); payment allocation atomic (research.md §7).
+**Constraints**: `inventory` schema never queries `projects`/`partners`/`settings` schemas
+directly — only via exported service calls (Principle I), including its own Item/Category
+masters (§1); `StockLedgerEntry` is append-only — no updates or hard deletes permitted; `SELECT
+FOR UPDATE` via `$queryRaw` for issue/transfer validation (research.md §4); all 11 tables
+`companyId`-scoped with RLS (Principle IV); `stockValue`/`belowReorderLevel` never stored
+(research.md §11, §12); payment allocation atomic and fully automatic FIFO — no client-supplied
+allocation (research.md §7).
 
-**Scale/Scope**: 10 new tables, ~20 endpoints, 3 new Permission enum values, 1 exported P&L
-service method, 1 cross-module stub added to ProjectsModule.
+**Scale/Scope**: 11 new tables (9 `inventory` + 2 `settings`), ~20 endpoints, 0 new Permission
+enum values (reuses `INVENTORY`/`SETTINGS`, corrected), 1 exported P&L service method, 1
+cross-module stub added to ProjectsModule.
 
 ## Constitution Check
 
 | Principle | Check | Status |
 |---|---|---|
-| I. Schema-Per-Module Boundaries | All 10 tables in `inventory`. Vendor names via `PartnersService.getVendorById()`. Site resolution via `ProjectsService.getSitesByProject()` stub. No direct cross-schema queries. | PASS |
-| II. Validated DTO Contracts | Every endpoint uses typed DTOs. Pre-validation of allocation sums before transaction opens. | PASS |
-| III. Centralized Configuration | No hardcoded values. Item code series via `CodeSeriesService`. Permission enum values in Settings' enum file. | PASS |
-| IV. Multi-Tenant Isolation | All 10 tables carry `companyId`; RLS on all. `StockBalance` UNIQUE on `(itemId, siteId)` — scoped within company. | PASS |
-| V. Authentication & Authorization | Every endpoint behind `JwtAuthGuard` + `@RequirePermission(INVENTORY_STOCK | INVENTORY_PURCHASES | INVENTORY_PAYMENTS)`. | PASS |
-| VI. Observability & Safe Migrations | `inventory` schema added in a single migration. All schema changes via `prisma migrate`. `SELECT FOR UPDATE` via `$queryRaw` — no ORM bypass of Prisma's safety model. | PASS |
+| I. Schema-Per-Module Boundaries | 9 operational tables in `inventory`; `ItemCategory`/`Item` in `settings` (corrected, research.md §1) with CRUD via `SettingsService`-exported methods. Vendor names via `PartnersService.getVendorById()` — exported in-process method (research.md §12 there), not the HTTP endpoint. Site resolution via `ProjectsService.getSitesByProject()` stub; Issue's Activity/BOQ Item via `ProjectsService` (research.md §13). No direct cross-schema queries. | PASS |
+| II. Validated DTO Contracts | Every endpoint uses typed DTOs. | PASS |
+| III. Centralized Configuration | No hardcoded values. Item code series via `CodeSeriesService`. Reorder Level is per-item config, not a hardcoded threshold (research.md §12). | PASS |
+| IV. Multi-Tenant Isolation | All 11 tables carry `companyId`; RLS on all. `StockBalance` UNIQUE on `(itemId, siteId)` — scoped within company. | PASS |
+| V. Authentication & Authorization | Every endpoint behind `JwtAuthGuard` + `@RequirePermission(INVENTORY)`, reusing 002's existing value; Item/Category masters behind `SETTINGS` (corrected, research.md §9). | PASS |
+| VI. Observability & Safe Migrations | `inventory` and `settings` schema changes shipped as separate, logically-grouped migrations. All schema changes via `prisma migrate`. `SELECT FOR UPDATE` via `$queryRaw` — no ORM bypass of Prisma's safety model. | PASS |
 
 ## Project Structure
 
 ```text
 src/
+├── settings/
+│   ├── item-masters/                 # NEW — settings schema (research.md §1)
+│   │   ├── item-categories.service.ts
+│   │   ├── items.service.ts
+│   │   └── dto/
+│   └── permission.enum.ts            # unchanged — INVENTORY/SETTINGS already exist
 ├── inventory/
 │   ├── inventory.module.ts
 │   ├── categories/
-│   │   ├── categories.controller.ts
-│   │   ├── categories.service.ts
-│   │   └── dto/
+│   │   └── categories.controller.ts  # thin proxy to settings/item-masters service
 │   ├── items/
-│   │   ├── items.controller.ts
-│   │   ├── items.service.ts
-│   │   └── dto/
+│   │   └── items.controller.ts       # thin proxy to settings/item-masters service
 │   ├── stock/
 │   │   ├── stock.controller.ts
-│   │   ├── stock.service.ts       # dual-write, WAR, SELECT FOR UPDATE, recomputeWAR()
+│   │   ├── stock.service.ts       # dual-write, WAR, SELECT FOR UPDATE, recomputeWAR(),
+│   │   │                          #   belowReorderLevel (research.md §12)
 │   │   └── dto/
 │   ├── purchases/
 │   │   ├── purchases.controller.ts
-│   │   ├── purchases.service.ts
+│   │   ├── purchases.service.ts   # + GoodsReceiptNote creation (research.md §14)
 │   │   └── dto/
 │   ├── issues/
 │   │   ├── issues.controller.ts
-│   │   ├── issues.service.ts
+│   │   ├── issues.service.ts      # + activityId/boqItemId validation (research.md §13)
 │   │   └── dto/
 │   ├── transfers/
 │   │   ├── transfers.controller.ts
@@ -84,15 +100,13 @@ src/
 │   │   └── dto/
 │   └── payments/
 │       ├── payments.controller.ts
-│       ├── payments.service.ts
+│       ├── payments.service.ts    # fully automatic FIFO, no client-supplied allocation
 │       └── dto/
-├── settings/
-│   └── permission.enum.ts          # MODIFIED: +INVENTORY_STOCK, +INVENTORY_PURCHASES,
-│                                   #           +INVENTORY_PAYMENTS
 src/projects/
 │   └── portfolio/projects.service.ts  # MODIFIED: +getSitesByProject() stub export
 
-prisma/schema.prisma                # MODIFIED: inventory schema, 10 new models
+prisma/schema.prisma                # MODIFIED: inventory schema (9 models), settings schema
+                                     #   (+ItemCategory, +Item)
 
 test/
 └── inventory.e2e-spec.ts          # new
@@ -102,32 +116,46 @@ test/
 
 ### Phase 1: Setup & Schema
 
-- [ ] Extend `settings.Permission` enum: `INVENTORY_STOCK`, `INVENTORY_PURCHASES`,
-      `INVENTORY_PAYMENTS`
-- [ ] Add all 10 `inventory` schema models to `prisma/schema.prisma` (data-model.md)
-- [ ] Generate and apply migration for the `inventory` schema
-- [ ] Add RLS policies for all 10 `inventory` tables
-- [ ] Extend `shared.AuditLogEntry.entityType` with 6 new inventory values
+- [ ] No `Permission` enum changes needed — reuse Settings' already-existing `INVENTORY` and
+      `SETTINGS` values verbatim (corrected, research.md §9)
+- [ ] Add the 9 operational `inventory` schema models (including `GoodsReceiptNote`, research.md
+      §14) and the `settings.ItemCategory`/`settings.Item` models (corrected placement —
+      research.md §1) to `prisma/schema.prisma` (data-model.md)
+- [ ] Generate and apply migrations for `inventory` and `settings` schema changes
+- [ ] Add RLS policies for all 11 tables
+- [ ] Extend `shared.AuditLogEntry.entityType` with 7 new inventory values (including
+      `GOODS_RECEIPT_NOTE`)
 - [ ] Scaffold `InventoryModule`; export `InventoryService` with stub
       `getMaterialCostByProject()` returning 0 immediately
+- [ ] Scaffold `src/settings/item-masters/` with `ItemCategoriesService`, `ItemsService`
+      (`settings` schema, exported for `InventoryModule`'s thin controller proxies to call —
+      Principle I, research.md §1)
 - [ ] Add `getSitesByProject(projectId): Promise<string[]>` stub to
       `src/projects/portfolio/projects.service.ts` and export from `ProjectsModule` —
       TODO(008) comment (same pattern as 007's T011c)
-- [ ] Add `ITEMS` code-series seed entry to `prisma/seed.ts`
+- [ ] Add `ITEMS` code-series seed entry to `prisma/seed.ts`; seed all 10 master-PRD-named
+      `ItemCategory` defaults (research.md §15, corrected from 8)
 
 **Checkpoint**: Schema, permissions, stubs ready. All phases proceed in parallel.
 
 ### Phase 2: US1 & US2 — Item Categories and Items (P1)
 
-- [ ] Category DTOs + `CategoriesService` (uppercase name, delete guard) + `CategoriesController`
-- [ ] Item DTOs + `ItemsService` (code-series, unique name, delete guard) + `ItemsController`
-- [ ] Unit test: duplicate category → 409; delete linked category → 409
+- [ ] Category DTOs + `ItemCategoriesService` (`settings` schema — uppercase name, delete guard)
+      in `src/settings/item-masters/`; thin `CategoriesController` proxy in
+      `src/inventory/categories/`, guarded with `SETTINGS`
+- [ ] Item DTOs (including `reorderLevel?`, `hsnCode?`, full 8-value `unit` enum — research.md
+      §12) + `ItemsService` (`settings` schema — code-series, unique name, delete guard) in
+      `src/settings/item-masters/`; thin `ItemsController` proxy in `src/inventory/items/`,
+      guarded with `SETTINGS`
+- [ ] Unit test: duplicate category → 409; delete linked category → 409; item with all 8 units
+      accepted
 
 ### Phase 3: US3 — Purchases (P1)
 
 - [ ] Purchase + PurchaseBill DTOs + `PurchasesService`: `create` (dual-write, WAR update,
-      PurchaseBill creation), `delete` (soft-delete, reversal ledger, WAR replay via
-      `StockService.recomputeWAR()`, allocation guard → 409)
+      PurchaseBill creation, auto-created `GoodsReceiptNote` — research.md §14), `delete`
+      (soft-delete, reversal ledger, WAR replay via `StockService.recomputeWAR()`, allocation
+      guard → 409)
 - [ ] `PurchasesController` + `PATCH` (date/remarks only)
 - [ ] Unit test: WAR incremental formula; WAR replay after deletion
 - [ ] E2e test: create purchase → stock balance; delete → balance reverts; delete with
@@ -135,8 +163,10 @@ test/
 
 ### Phase 4: US4 — Issues (P1)
 
-- [ ] Issue DTOs + `IssuesService`: `create` (`SELECT FOR UPDATE` on `StockBalance`, `422` if
-      insufficient, dual-write), `delete` (reversal, guard negative-issued check)
+- [ ] Issue DTOs (with `activityId?`/`boqItemId?`, one required — research.md §13) +
+      `IssuesService`: `create` (`SELECT FOR UPDATE` on `StockBalance`, `422` if insufficient,
+      validates activity/BOQ item via `ProjectsService`, dual-write), `delete` (reversal, guard
+      negative-issued check)
 - [ ] `IssuesController`
 - [ ] E2e test: over-issue → 422 with availableStock; concurrent issues (simulate with 2 rapid
       requests) → exactly one succeeds
@@ -150,18 +180,21 @@ test/
 ### Phase 6: US6 — Stock View (P1)
 
 - [ ] `StockService.getStock(companyId, filters)` reading from `StockBalance` with
-      `toRow()` computing `inStock` + `stockValue`
+      `toRow()` computing `inStock`, `stockValue`, and `belowReorderLevel` (research.md §12)
 - [ ] `GET /inventory/stock/:itemId/:siteId` utility endpoint (for Issue/Transfer form hints)
 - [ ] `StockController`
-- [ ] Unit test: `toRow()` arithmetic; zero-balance row still returned
+- [ ] Unit test: `toRow()` arithmetic; zero-balance row still returned; `belowReorderLevel`
+      flips correctly around the item's `reorderLevel` threshold
 
 ### Phase 7: US7 — Payments (P2)
 
-- [ ] Payment + PaymentAllocation DTOs + `PaymentsService`: pre-validation (sum ≤ amount,
-      per-bill overflow), atomic transaction (payment + allocations + bill updates), delete
-      reversal, `GET /inventory/bills` utility
+- [ ] Payment DTO (amount/date/mode/reference only — no client-supplied allocation, corrected)
+      + `PaymentsService`: fully automatic FIFO allocation against the vendor's oldest
+      unpaid/part-paid bills first (research.md §7), atomic transaction (payment + allocations +
+      bill updates), delete reversal, `GET /inventory/bills` utility
 - [ ] `PaymentsController`
-- [ ] Unit test: over-allocation → 400; partial allocation → correct bill statuses
+- [ ] Unit test: FIFO allocates oldest bill first; partial allocation → correct bill statuses;
+      amount exceeding total outstanding → all bills paid + `unallocatedBalance` recorded
 - [ ] E2e test: full payment lifecycle; delete reversal
 
 ### Phase 8: US8 — getMaterialCostByProject (P3)

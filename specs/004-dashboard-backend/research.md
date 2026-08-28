@@ -140,3 +140,34 @@ important here, not less.
 schemas directly for performance — rejected as premature: no measured performance problem exists
 yet to justify bypassing the service-call boundary; SC-001's 3-second budget is achievable through
 each module's own indexed queries called in parallel (`Promise.all`), not a shared join.
+
+## 8. Pending Approvals: extended once its source modules existed
+
+**Decision** (added during the master-PRD alignment pass): Pending Approvals originally summed
+only Pending leave applications, since Machinery and Reimbursements didn't exist yet when this
+feature was built. Now that both exist (features 006 and 005 US12), the widget sums all three —
+Pending leave + Open maintenance jobs + Submitted reimbursement claims — matching master PRD
+§7.2.1 exactly, via each source module's own exported service (`Promise.all`'d alongside the
+other KPI reads, per §7 above).
+
+**Rationale**: This is exactly the kind of extension the widget-provider registry (FR-002) was
+built to absorb without a version bump — the original scope decision was correct at the time (the
+source modules genuinely didn't exist), not a defect; this is planned growth, not a fix.
+
+## 9. Activity Log CSV export — a genuine gap, not a deferred extension
+
+**Decision** (added during the master-PRD alignment audit): `GET /activity-log/export` streams a
+CSV of the same query §4 already builds (same `module`/`timeRange` filters, same company scoping,
+same `entityType`→bucket mapping) with columns Timestamp/User/Action/Module/Entity/Before/After,
+using the `csv-writer`/streaming pattern already used for large exports elsewhere in this repo
+(FR-024, master PRD §7.2.5).
+
+**Rationale**: Unlike §8's Pending Approvals (correctly deferred because its source modules didn't
+exist yet), the Activity Log's own data source (`shared.AuditLogEntry`) has existed since feature
+001 — there was no dependency blocking the export from being built alongside the feed in this
+feature's original scope. Master PRD §7.2.5 lists "Export: CSV" as a first-class requirement of
+the Activity Log, not an optional add-on. This was simply missed, found during a full sweep of the
+Activity Log's PRD section against this feature's shipped scope.
+
+**Alternatives considered**: None — straightforward gap-fill reusing an existing query and an
+existing export pattern, not a design decision.

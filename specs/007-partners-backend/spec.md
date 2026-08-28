@@ -171,10 +171,11 @@ records) — independent of compliance recording.
 4. **Given** the contractor list, **When** `GET /partners/contractors?complianceStatus=&page=`
    is called, **Then** it returns contractors with their derived `complianceStatus` and key
    registration fields.
-5. **Given** a contractor profile, **When** monthly compliance records are added/updated for the
-   last 3 months (via US4), **Then** `ContractorProfile.complianceStatus` is recomputed and
-   stored: all-verified → `compliant`; any missing → `non_compliant`; mixed partial →
-   `partially_compliant`.
+5. **Given** a contractor profile, **When** a monthly compliance record is added/updated (via
+   US4), **Then** `ContractorProfile.complianceStatus` is recomputed and stored from the **most
+   recently concluded calendar month's** record only (master PRD §7.7.2 — no rolling window):
+   both PF and ESIC submitted/verified → `compliant`; exactly one → `partially_compliant`;
+   neither or no record → `non_compliant`.
 
 ---
 
@@ -302,8 +303,9 @@ and labourAmount=₹20k, materialAmount=₹10k within the date range); call
 - What happens when a vendor has both `type: subcontractor` and no `ContractorProfile`? →
   Allowed — the profile is created separately via `POST /partners/contractors`; a vendor of
   subcontractor type without a profile does not appear in the Contractor Vault list.
-- What if a contractor has no Monthly Compliance records for any of the last 3 months? → All
-  three are effectively "missing"; `complianceStatus = 'non_compliant'`.
+- What if a contractor has no Monthly Compliance record for the most recently concluded calendar
+  month? → `complianceStatus = 'non_compliant'` (no rolling window — this is the only month that
+  matters, per master PRD §7.7.2).
 - What if a compliance record is verified for a future month (admin error)? → Backend allows it
   (no validation on future months for Verify action); the RAG Matrix shows it as `gray` (future)
   regardless of verified status — gray takes precedence for future months.
@@ -319,9 +321,25 @@ and labourAmount=₹20k, materialAmount=₹10k within the date range); call
 
 - **FR-001**: All `partners` schema tables MUST carry `companyId` with RLS enforcing tenant
   isolation — Constitution Principle IV.
-- **FR-002**: Vendor TDS section and rate MUST be returned by `GET /partners/vendors/:id/tds`
-  for consumption by Inventory and Machinery modules without those modules querying `partners`
-  schema directly (Principle I).
+- **FR-002**: `PartnersService.getVendorById(vendorId)` (name, type, active status) and
+  `PartnersService.getVendorTds(vendorId)` (`{ tdsSection, tdsRate }`) MUST both be exported from
+  `PartnersModule` as in-process service methods — not only as the `GET /partners/vendors/:id/tds`
+  HTTP endpoint — since Inventory (009) and Machinery (006) both consume vendor name/TDS data via
+  direct injection, not an HTTP self-call, per Principle I. Found missing during a master-PRD
+  alignment audit: this feature originally only built the HTTP endpoint, leaving both dependent
+  modules' expected injections unresolvable.
+- **FR-002a**: Vendor Categories MUST live in the `settings` schema, not `partners` — corrected
+  during a master-PRD alignment audit (master PRD places reference-data masters in Settings,
+  matching Employee Setup Masters, Reimbursement Categories, and Machinery's corrected Equipment
+  Categories/Doc Types/Hire Rates). CRUD lives in `SettingsService`-exported methods
+  (`createVendorCategory()` etc.); this module's own `/partners/vendor-categories` controller
+  calls those exported methods rather than querying the table directly (Principle I).
+- **FR-002b**: GSTIN MUST be validated as exactly 15 characters matching the standard GSTIN
+  format (`\d{2}[A-Z]{5}\d{4}[A-Z]{1}\d[Z][A-Z\d]`); PAN MUST be validated as exactly 10
+  characters matching the standard PAN format (`[A-Z]{5}\d{4}[A-Z]`) — both rejected at the DTO
+  level if provided but malformed, per master PRD §7.7.1's explicit "Format validated" note. Found
+  missing during a master-PRD alignment audit — this feature originally accepted both as
+  unvalidated optional strings.
 - **FR-003**: A Vendor contact list MUST support multiple contacts per vendor stored in a
   dedicated `VendorContact` table; contacts are always replaced atomically on update (no
   partial contact patch).
@@ -357,19 +375,27 @@ and labourAmount=₹20k, materialAmount=₹10k within the date range); call
   verify), and BOCW payments MUST be written to the audit log.
 - **FR-014**: `DELETE /partners/vendor-categories/:id` MUST return `409` if any vendors
   reference that category via `VendorDealsIn`.
-- **FR-015**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission()` using
-  enum values added to Settings' existing `Permission` enum: `VENDORS` (vendor CRUD + categories),
-  `CONTRACTORS` (contractor vault + compliance + RAG), `BOCW` (BOCW cess).
+- **FR-015**: Every endpoint MUST be gated by `JwtAuthGuard` + `@RequirePermission(Permission.
+  PARTNERS)`, reusing Settings' already-existing `PARTNERS` enum value verbatim — corrected during
+  a master-PRD alignment audit; this feature originally invented three new values (`VENDORS`/
+  `CONTRACTORS`/`BOCW`) where `PARTNERS` already existed reserved by name for exactly this module
+  (matching the same failure pattern found and fixed in the Machinery spec). Vendor Categories
+  (US1, a `settings`-schema master per FR-002a) are guarded with the existing `SETTINGS`
+  permission instead, consistent with how every other reference-data master in this project is
+  gated.
 
 ### Key Entities
 
-- **VendorCategory** (`partners` schema): `id`, `companyId`, `name`, `description?`, `isDefault`
-  (boolean — seeded defaults), `createdAt`.
+- **VendorCategory** (`settings` schema, corrected per FR-002a): `id`, `companyId`, `name`,
+  `description?`, `isDefault` (boolean — seeded defaults), `createdAt`.
 - **Vendor** (`partners` schema): `id`, `companyId`, `code` (auto-generated), `name`,
-  `type` (material | fuel | hire | service | subcontractor | labour_contractor), `gstin?`,
-  `pan?`, `tdsSection?`, `tdsRate?` (decimal), `active` (boolean, default true), `address?`,
-  `city?`, `state?`, `pinCode?`, `vendorCurrency` (default INR), `exchangeRate` (default 1.0),
-  `createdAt`, `updatedAt`.
+  `type` (material | fuel | hire | service | subcontractor | labour_contractor), `gstin?`
+  (validated 15-char format, FR-002b), `pan?` (validated 10-char format, FR-002b), `tdsSection?`
+  (string, validated against the Income Tax Act TDS-section pattern — e.g. `194C`, `194J`,
+  `194I` — not a closed enum, since the statutory list is open-ended per master PRD's own "etc."),
+  `tdsRate?` (decimal), `active` (boolean, default true), `address?`, `city?`, `state?`,
+  `pinCode?`, `vendorCurrency` (default INR), `exchangeRate` (default 1.0), `createdAt`,
+  `updatedAt`.
 - **VendorContact** (`partners` schema): `id`, `vendorId` FK→Vendor, `name`, `phone?`, `email?`.
 - **VendorDealsIn** (`partners` schema — join): `vendorId` FK, `categoryId` FK.
 - **VendorHireDetail** (`partners` schema — for subcontractor/hire types): `id`, `vendorId` FK,
@@ -413,8 +439,8 @@ and labourAmount=₹20k, materialAmount=₹10k within the date range); call
 
 ## Assumptions
 
-- Settings (002) already has the `Permission` enum infrastructure; this feature adds `VENDORS`,
-  `CONTRACTORS`, and `BOCW` to it.
+- Settings (002) already has the `Permission` enum infrastructure and already reserves `PARTNERS`
+  by name for this module — this feature reuses it verbatim (FR-015, corrected).
 - Settings (002) does not yet have BOCW cess rate as a company field; this feature adds
   `bocwCessRate` (decimal, default 0.01) to `settings.Company` via an additive migration, owned
   by the `settings` module (consistent with how 005 added `otMultiplier`).

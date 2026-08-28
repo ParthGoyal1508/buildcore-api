@@ -43,13 +43,20 @@ radius). Clients are a new master record type owned exclusively by this module."
   accepted with defaults.
 - Q: What `Permission` enum values should gate the `projects` module endpoints? → A: Three focused
   permissions — `PROJECTS` (portfolio/clients/sites/BOQ), `DWR` (daily work reports),
-  `PROJECT_FINANCIALS` (revenue/RA bills/P&L). These are added to 002's existing `Permission` enum
-  alongside EMPLOYEES/ATTENDANCE/PAYROLL/CHALLANS/LOANS/DAILY_WORKER_REGISTRY.
+  `PROJECT_FINANCIALS` (revenue/RA bills/P&L). `PROJECTS` already exists in 002's pre-built enum;
+  `DWR` and `PROJECT_FINANCIALS` are genuinely new (002 did not anticipate this module needing two
+  finer-grained permissions) and have been reconciled into 002's own data-model.md/tasks.md as the
+  canonical source of truth for the enum, not just declared here (master-PRD alignment audit).
 - Q: Should the `Site` entity be owned by the `projects` schema or the `hr` schema? → A: `projects`
-  schema owns the full `Site` entity (replacing 003's placeholder). HR's attendance module reads
-  geofence data via `ProjectsService.getSiteById()` — an exported service call, never a direct
-  cross-schema query. The migration that adds geofence columns (Latitude, Longitude, GeofenceRadius)
-  belongs to this feature's migration set.
+  schema already owns `Site` — feature 003 built it there directly (not in `hr`), anticipating this
+  feature's needs, with geofence fields (`latitude`, `longitude`, `geofenceRadiusMeters`) and
+  `weeklyOffDay`/`holidays` already in place. This feature does not move or re-add geofence columns;
+  it extends the existing `Site` table with the fields it's still missing (`projectId` FK, `Address`,
+  `Status`) via an additive migration. HR's attendance module continues reading geofence/holiday
+  data via 003's existing exported methods — `SitesService.getGeofence(siteId)`,
+  `.getHolidayCalendar(siteId)`, `.getWeeklyOffDay(siteId)` — unchanged. This feature adds a new,
+  separate `getSiteById(siteId)` export (full Site row, not just geofence fields) for its own
+  DWR/BOQ/project-detail consumers; HR does not switch to it (research.md §2).
 - Q: Where do the per-category Budget figures in the P&L Cost Breakdown table come from? → A:
   Manually entered — an admin enters a Budget amount per P&L category per project, stored as a
   `ProjectBudget` table (`projectId`, `category`, `amount`, `companyId`). Budget entry is its own
@@ -60,6 +67,16 @@ radius). Clients are a new master record type owned exclusively by this module."
   type dropdown (Name, File, Path, Remark). Endpoint: `POST /projects/:id/documents` (upload),
   `GET /projects/:id/documents` (list), `DELETE /projects/:id/documents/:docId` (remove row).
   Gated by `PROJECTS` permission. Uses the same object-storage reference pattern as 005.
+- Q: Should BOQ item `doneQty` count Submitted or only Approved DWR quantities? → A: Only
+  **Approved** DWRs count toward BOQ progress (master PRD §7.5.3: "Only Approved DWRs count toward
+  project progress % calculation"). Submitting a DWR does not move `doneQty`; approving it does.
+  This corrects the original draft's US5 AC2/FR-006, which incremented `doneQty` on submission.
+- Q: Is BOQ Excel import a single-step commit or a validate-then-confirm two-step flow? → A:
+  Two-step, matching master PRD §7.5.3 ("Errors displayed per row before import confirmed") and
+  §11's cross-cutting import pattern. `POST /projects/:id/boq/import/validate` uploads the file and
+  returns a per-row validation report (valid rows + errors) without writing anything; a separate
+  `POST /projects/:id/boq/import/confirm` (referencing the validated batch) commits the valid rows.
+  This corrects the original draft's single-endpoint blind commit.
 - Q: Should the P&L report "Machinery & Fuel" as a single combined cost line or two separate
   lines? → A: **Two separate lines** — Machinery Cost and Fuel Cost are distinct P&L categories
   matching the master PRD §7.5.4. Machinery Cost comes from `PlantService.getMachineryCostByProject()`
@@ -177,8 +194,9 @@ Excel with row-level validation, and tracks BOQ quantities as DWRs are submitted
 it, DWR entries have no baseline to measure progress against. Depends on Project (US3).
 
 **Independent Test**: Can be fully tested by creating a BOQ task group, adding three task items
-to it, importing a five-row Excel BOQ (with one deliberately malformed row), confirming the four
-valid rows are imported and the error report identifies the bad row — independent of DWR or P&L.
+to it, validating a five-row Excel BOQ (with one deliberately malformed row) via the
+`validate` endpoint, confirming the report identifies the bad row and shows four valid rows, then
+calling `confirm` and confirming exactly those four rows are created — independent of DWR or P&L.
 
 **Acceptance Scenarios**:
 
@@ -193,9 +211,11 @@ valid rows are imported and the error report identifies the bad row — independ
    — computed from submitted DWR entries.
 4. **Given** an Excel file with the required BOQ columns (BOQ No., Task Group, Task Name, Unit,
    Scope Qty, Start Date, Finish Date, Duration, Per Day Qty), **When** `POST
-   /projects/:id/boq/import` is called, **Then** valid rows are created and any rows with missing
-   or non-parseable required columns are rejected with a downloadable error report (CSV) listing
-   the row number, column name, and error reason.
+   /projects/:id/boq/import/validate` is called, **Then** it returns a per-row validation report
+   (valid rows + rows with missing/non-parseable required columns, each with row number, column
+   name, and error reason) without writing anything, downloadable as CSV; **When** `POST
+   /projects/:id/boq/import/confirm` is then called referencing that validated batch, **Then** only
+   the valid rows are created.
 5. **Given** a locked project, **When** any BOQ write endpoint is called, **Then** `423 Locked` is
    returned.
 6. **Given** a BOQ Estimate Excel file, **When** `POST /projects/:id/boq/estimate-import` is
@@ -215,8 +235,8 @@ progress tracking and the P&L's activity level. Depends on BOQ (US4) and Sites (
 
 **Independent Test**: Can be fully tested by creating a DWR for a seeded project/BOQ item,
 computing Actual Qty from the measurement formula (Nos × Nos × Length × Breadth × Depth ×
-Density), confirming the BOQ item's Done Qty increments on submission, and confirming an approval
-action moves the DWR from Submitted to Approved — independent of revenue or P&L.
+Density), submitting it and confirming the BOQ item's Done Qty does **not** change yet, then
+approving it and confirming Done Qty increments at that point — independent of revenue or P&L.
 
 **Acceptance Scenarios**:
 
@@ -225,11 +245,12 @@ action moves the DWR from Submitted to Approved — independent of revenue or P&
    Progress %, and Weather, **Then** the DWR is created with status `draft` and the DPR Number
    auto-generated as `{siteCode}-{sequence}`.
 2. **Given** a draft DWR, **When** `PATCH /projects/dwr/:id` sets `status: 'submitted'`, **Then**
-   the BOQ item's `doneQty` increments by the DWR's Actual Qty and the pending/remaining fields
-   recompute.
+   the DWR moves to `submitted` status; the BOQ item's `doneQty` does **not** change yet (master PRD
+   §7.5.3 — only Approved DWRs count toward progress).
 3. **Given** a submitted DWR, **When** `PATCH /projects/dwr/:id/approve` is called by an admin,
-   **Then** the DWR moves to `approved` status and the approval is recorded with actor and
-   timestamp.
+   **Then** the DWR moves to `approved` status, the approval is recorded with actor and timestamp,
+   and the BOQ item's `doneQty` increments by the DWR's Actual Qty (pending/remaining fields
+   recompute at this point, not at submission).
 4. **Given** the DWR list, **When** `GET /projects/dwr?projectId=&dateFrom=&dateTo=&status=` is
    called, **Then** results are filterable by project, date range, and status, server-side
    paginated.
@@ -371,15 +392,18 @@ one and confirming it no longer appears.
   when none is provided, following the same pattern as Employee Code generation (005).
 - **FR-003**: System MUST enforce the `Is Locked` flag server-side: any write operation (DWR,
   Revenue, Bills, BOQ quantity update) against a locked project MUST return `423 Locked`.
-- **FR-004**: System MUST validate BOQ Excel imports against the required column schema; invalid
-  rows MUST be rejected with a downloadable error report (CSV with row number, column, error
-  reason) — partial application (valid rows committed, invalid rows reported) is the required
-  behaviour.
+- **FR-004**: System MUST validate BOQ Excel imports in two steps: `POST
+  /projects/:id/boq/import/validate` checks the required column schema and returns a per-row
+  report (valid rows + invalid rows with row number, column, error reason, downloadable as CSV)
+  without writing anything; `POST /projects/:id/boq/import/confirm` then commits only the valid
+  rows from that validated batch (master PRD §7.5.3 — "errors displayed per row before import
+  confirmed").
 - **FR-005**: System MUST compute DWR Actual Qty server-side from the submitted measurement
   formula fields (Nos × Nos × Length × Breadth × Depth × Density) — the client submits the raw
   components, the server computes the total.
 - **FR-006**: System MUST update BOQ item `doneQty`, `pendingQty`, `avgQtyPerDay`, and
-  `daysToComplete` in response to DWR submissions against that BOQ item.
+  `daysToComplete` when a DWR against that BOQ item is **approved** — not on submission (master PRD
+  §7.5.3: "Only Approved DWRs count toward project progress % calculation").
 - **FR-007**: System MUST enforce RA Bill state transitions (Draft → Submitted → Approved /
   Draft ← Submitted via Reject) and reject out-of-order transitions with `409`.
 - **FR-008**: System MUST compute Project P&L on-demand from live cross-module data via the source
@@ -391,10 +415,12 @@ one and confirming it no longer appears.
   the P&L endpoint, restricting all cost/revenue aggregations to the selected date range.
 - **FR-011**: System MUST auto-generate DPR Number as `{siteCode}-{sequence}` when a DWR is
   created.
-- **FR-012**: `projects` schema owns `Site`; HR's attendance module MUST read site/geofence data
-  via `ProjectsService.getSiteById()` — never a direct `hr` → `projects` cross-schema query
-  (Constitution Principle I). The geofence columns (Latitude, Longitude, GeofenceRadius) are added
-  to `Site` by this feature's migration, replacing 003's placeholder.
+- **FR-012**: `projects` schema already owns `Site` (built there by feature 003). This feature
+  extends `Site` additively with `projectId`, `Address`, `Status` — it does not touch the existing
+  geofence columns. HR's attendance module continues reading geofence/holiday data via 003's
+  existing exported methods (`SitesService.getGeofence()`/`.getHolidayCalendar()`/
+  `.getWeeklyOffDay()`), unchanged. This feature adds a separate `getSiteById()` export for its own
+  consumers (Constitution Principle I — no direct cross-schema queries either way).
 - **FR-013**: Approved RA bills MUST contribute to `revenueBooked` in the P&L calculation
   alongside direct `revenue` entries.
 - **FR-014**: System MUST write audit log entries for: project create/edit/lock/unlock, client
@@ -424,8 +450,10 @@ one and confirming it no longer appears.
   ExpectedEndDate, Status (planning/ongoing/on_hold/completed), ProjectManagerEmployeeId, Division,
   SiteType, IsHO, IsLocked, DepartmentType, ProjectType, PurchaseLimit, OrderNumber, Description,
   `companyId`.
-- **Site** (`projects` schema — replaces 003's minimal `Site`): Name, `projectId`, Address,
-  Latitude, Longitude, GeofenceRadius (meters), Status (active/inactive), `companyId`.
+- **Site** (`projects` schema — extends 003's existing `Site` in place, not a replacement):
+  Name, `latitude`/`longitude`/`geofenceRadiusMeters`/`weeklyOffDay`/`holidays` (already present
+  from 003), plus this feature's additions — `projectId` (FK), `Address`, `Status`
+  (active/inactive) — `companyId`.
 - **BOQTaskGroup** (`projects` schema): BOQNo, Name, `projectId`, StartDate, FinishDate,
   ScopeQty, `companyId`.
 - **BOQTaskItem** (`projects` schema): BOQNo, `groupId`, TaskName, Unit, ScopeQty, StartDate,
@@ -459,7 +487,8 @@ one and confirming it no longer appears.
 - **SC-002**: Cost overrun detection — any category exceeding its budget by >10% is flagged within
   the same P&L API response (no separate polling required).
 - **SC-003**: BOQ progress accuracy — `doneQty` on a BOQ item equals the arithmetic sum of all
-  approved-or-submitted DWR task quantities for that item, within floating-point tolerance.
+  **approved** DWR task quantities for that item (submitted-but-unapproved DWRs are excluded),
+  within floating-point tolerance.
 - **SC-004**: BOQ import — a 100-row Excel import completes (including error report generation) in
   under 5 seconds.
 - **SC-005**: Project lock is enforced within a single API request — a write to a locked project
@@ -482,11 +511,15 @@ one and confirming it no longer appears.
   method for P&L — same fallback applies.
 - The `inventory` module exposes a `getMaterialCostByProject(projectId, period)` service method
   for P&L — same fallback applies.
-- HR's payroll module exposes a `getLabourCostByProject(projectId, period)` service method that
-  aggregates `PayrollLineItem` amounts for employees whose `projectId` matches — same fallback.
-- 003's minimal `Site` (siteId, name, companyId) is extended in-place by this feature; no data
-  migration is needed for the existing Site rows (new geofence columns are nullable and default
-  to permissive values until explicitly set).
+- HR's payroll module does **not yet** expose a `getLabourCostByProject(projectId, period)` method
+  as of 005's current spec, and `PayrollLineItem` does not yet carry a `projectId` field — both are
+  required for this P&L line and are added by amending 005's spec/data-model/tasks as part of this
+  feature's build-out (research.md §X), not assumed pre-existing. Until that lands, the Labour P&L
+  line returns zero with `unavailableModules: ['hr']`, same as the other cross-module fallbacks.
+- 003's `Site` (id, companyId, name, latitude, longitude, geofenceRadiusMeters, weeklyOffDay,
+  holidays) already exists in the `projects` schema; this feature extends it in-place with
+  `projectId`, `Address`, `Status` via an additive migration — no data migration needed, and no
+  geofence columns are re-added (they already exist from 003).
 - File attachments (DWR, BOQ error reports) use the same object-storage reference pattern
   established in 005 (EmployeeDocument) — no new storage infrastructure.
 - BOQ import is synchronous for files up to 1,000 rows; larger files are out of scope for this

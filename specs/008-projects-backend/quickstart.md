@@ -2,10 +2,11 @@
 
 ## Prerequisites
 
-- Seeded company (002), at least one Site row from 003 (will be extended by this feature's
-  migration), an admin session token.
-- Local Postgres migrations applied: `projects` schema with all 12 tables, geofence columns added
-  to existing `Site`, `Permission` enum extended with `PROJECTS`/`DWR`/`PROJECT_FINANCIALS`.
+- Seeded company (002), at least one Site row from 003 (already in `projects` schema with
+  geofence data; this feature adds `projectId`/`address`/`status` to it), an admin session token.
+- Local Postgres migrations applied: 11 new `projects` schema tables, `projectId`/`address`/
+  `status` columns added to the existing `Site` (geofence columns untouched), `Permission` enum
+  extended with `DWR`/`PROJECT_FINANCIALS` (`PROJECTS` already existed).
 
 ---
 
@@ -14,11 +15,13 @@
 1. `POST /projects/clients` with Name, Contact, Phone, Email, GSTIN. **Expected**: 201.
 2. `POST /projects/clients` with the same GSTIN. **Expected**: 409 (duplicate GSTIN).
 3. `GET /projects/clients?search=<name>`. **Expected**: the created client in results.
-4. `POST /projects/sites` with the `projectId` from Scenario 2, Latitude, Longitude, and
-   GeofenceRadius. **Expected**: 201; `GET /projects/sites/:id` returns geofence fields.
+4. `POST /projects/sites` with the `projectId` from Scenario 2, Address, Latitude, Longitude, and
+   GeofenceRadiusMeters. **Expected**: 201; `GET /projects/sites/:id` returns both this feature's
+   fields (`projectId`, `address`, `status`) and 003's pre-existing geofence fields.
 5. Attempt an HR attendance punch (003's `/my/punch`) from a location outside the geofence
-   radius. **Expected**: HR's attendance module returns a geofence-exception flag, now reading
-   the real radius via `ProjectsService.getSiteById()`.
+   radius. **Expected**: HR's attendance module returns a geofence-exception flag — unchanged
+   behaviour, since HR was already reading real radius data from 003 via `SitesService
+   .getGeofence()` before this feature existed.
 
 ---
 
@@ -41,14 +44,19 @@
 1. `POST /projects/:id/boq/groups` with BOQ No., Name, Scope Qty. **Expected**: 201.
 2. `POST /projects/:id/boq/items` with the groupId, Scope Qty 100, Per Day Qty 10. **Expected**:
    201; `GET /projects/:id/boq` shows `doneQty: 0`, `pendingQty: 100`.
-3. `POST /projects/:id/boq/import` with a 5-row Excel file (one row missing the Unit column).
-   **Expected**: `{ imported: 4, errors: [{ row: 3, column: "Unit", reason: "required" }],
-   errorReportUrl: "..." }`.
+3. `POST /projects/:id/boq/import/validate` with a 5-row Excel file (one row missing the Unit
+   column). **Expected**: `{ batchId: "...", validRowCount: 4,
+   errors: [{ row: 3, column: "Unit", reason: "required" }], errorReportUrl: "..." }` — nothing
+   written yet (`GET /projects/:id/boq` still shows only the item from step 2).
+   `POST /projects/:id/boq/import/confirm` with that `batchId`. **Expected**:
+   `{ imported: 4 }`; the 4 valid rows now appear in `GET /projects/:id/boq`.
 4. `POST /projects/dwr` with the BOQ item, and task fields `nos1:2, nos2:1, length:10, breadth:1,
    depth:1, density:1`. **Expected**: 201, `actualQty = 20`.
 5. `PATCH /projects/dwr/:id` with `{ status: "submitted" }`. **Expected**: 200; `GET
-   /projects/:id/boq` now shows `doneQty: 20`, `pendingQty: 80`.
-6. `PATCH /projects/dwr/:id/approve`. **Expected**: 200, DWR status = `approved`.
+   /projects/:id/boq` still shows `doneQty: 0`, `pendingQty: 100` (only Approved DWRs count —
+   master PRD §7.5.3).
+6. `PATCH /projects/dwr/:id/approve`. **Expected**: 200, DWR status = `approved`; **now** `GET
+   /projects/:id/boq` shows `doneQty: 20`, `pendingQty: 80`.
 
 ---
 
@@ -64,8 +72,10 @@
    { category: "materials", amount: 150000 }] }`. **Expected**: 200; `GET /projects/:id/budget`
    returns both rows.
 7. `GET /projects/:id/pnl?period=cumulative`. **Expected**: `revenueBooked = 700000` (500k revenue
-   + 200k approved RA bill), `costBreakdown` rows with `actual: 0` and `unavailableModules`
-   listing the not-yet-built modules, `grossProfit = 700000`.
+   + 200k approved RA bill); `costBreakdown` rows for `machinery`/`fuel`/`labour` reflect real
+   seeded 006/005 data (0 if none seeded); `materials`/`subcontractors` rows show `actual: 0` with
+   `unavailableModules: ['inventory', 'partners']` (the two still-stubbed sources);
+   `grossProfit = revenueBooked − sum(all actual cost rows)`.
 
 ---
 

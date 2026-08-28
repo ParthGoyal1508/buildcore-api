@@ -1,7 +1,8 @@
 # Contract: `/projects/*` endpoints
 
 All endpoints require `JwtAuthGuard` plus the matching `@RequirePermission()` value from 002's
-`Permission` enum (extended by this feature with three new values). No endpoint is public.
+`Permission` enum (`PROJECTS` reused; `DWR`/`PROJECT_FINANCIALS` genuinely new, reconciled into
+002's own enum definition). No endpoint is public.
 
 Permission groupings:
 - `PROJECTS` — portfolio, clients, sites, BOQ, project documents
@@ -23,10 +24,16 @@ Permission groupings:
 
 ## Sites — `/projects/sites` (permission: `PROJECTS`)
 
+Site already exists in the `projects` schema (built by 003, with `latitude`/`longitude`/
+`geofenceRadiusMeters`/`weeklyOffDay`/`holidays`) — this feature only adds `projectId`/`address`/
+`status` management on top of it; no geofence fields are being introduced here.
+
 - `GET /projects/sites?projectId=&status=&page=` — paginated list.
 - `POST /projects/sites` — `{ name, projectId?, address?, latitude?, longitude?,
-  geofenceRadius?, status? }` → 201.
-- `GET /projects/sites/:id` — single site with all geofence fields.
+  geofenceRadiusMeters?, weeklyOffDay?, status? }` → 201 (geofence/weekly-off fields accepted here
+  since site creation is this feature's endpoint, but their validation/semantics are unchanged
+  from 003).
+- `GET /projects/sites/:id` — single site including 003's pre-existing geofence/holiday fields.
 - `PATCH /projects/sites/:id` — partial update. Audit-logged.
 - `DELETE /projects/sites/:id` — `409` if active employees or DWRs reference this site.
 
@@ -75,14 +82,18 @@ All BOQ write endpoints subject to `ProjectLockGuard` (→ `423` if `isLocked`).
   finishDate, duration, perDayQty, isEstimate? }` → 201.
 - `PATCH /projects/:id/boq/items/:itemId` — partial update.
 - `DELETE /projects/:id/boq/items/:itemId` — `409` if DWR tasks reference this item.
-- `POST /projects/:id/boq/import` — `multipart/form-data` with `file` (Excel). Returns:
+- `POST /projects/:id/boq/import/validate` — `multipart/form-data` with `file` (Excel). Validates
+  only — writes nothing. Returns:
   ```json
-  { "imported": 42, "errors": [{ "row": 5, "column": "Scope Qty", "reason": "not a number" }],
+  { "batchId": "...", "validRowCount": 42,
+    "errors": [{ "row": 5, "column": "Scope Qty", "reason": "not a number" }],
     "errorReportUrl": "https://..." }
   ```
   `413` if file row count > 1,000.
-- `POST /projects/:id/boq/estimate-import` — same validation pipeline; items stored with
-  `isEstimate: true`.
+- `POST /projects/:id/boq/import/confirm` — `{ batchId }`. Commits the previously-validated rows
+  for that batch. Returns `{ "imported": 42 }`.
+- `POST /projects/:id/boq/estimate-import/validate` / `.../confirm` — same two-step pipeline;
+  items stored with `isEstimate: true`.
 - `GET /projects/:id/boq/alerts` — `{ todayTask: [...], delayed: [...], toBeDelayed: [...] }`.
 
 ---
@@ -98,9 +109,10 @@ Write endpoints subject to `ProjectLockGuard`.
   roadSide?, paymentMode, nos1, nos2, length, breadth, depth, density, engineerName?, remark? }`.
   Server computes `actualQty` per task and sets `dprNumber` and `exceedsScope`. → 201.
 - `GET /projects/dwr/:id` — full DWR with tasks, BOQ item context per task, attachments.
-- `PATCH /projects/dwr/:id` — update draft DWR fields or set `status: 'submitted'`. Setting
-  `submitted` triggers BOQ `doneQty` increment.
-- `PATCH /projects/dwr/:id/approve` — admin-only; moves `submitted → approved`. Audit-logged.
+- `PATCH /projects/dwr/:id` — update draft DWR fields or set `status: 'submitted'`. Submitting
+  does **not** move BOQ `doneQty` (master PRD §7.5.3 — only Approved DWRs count).
+- `PATCH /projects/dwr/:id/approve` — admin-only; moves `submitted → approved`, audit-logged, and
+  **this is the point at which** the BOQ item's `doneQty` increments.
 - `DELETE /projects/dwr/:id` — draft only; `409` if submitted/approved.
 - `POST /projects/dwr/:id/attachments` — `multipart/form-data` → stores file, returns
   `{ fileRef, url }`.
@@ -161,8 +173,10 @@ Subject to `ProjectLockGuard`.
 ## P&L — `/projects/:id/pnl` (permission: `PROJECT_FINANCIALS`)
 
 - `GET /projects/:id/pnl?period=cumulative|monthly|quarterly|yearly&month=&quarter=&year=` —
-  computes P&L on demand. Response shape: see data-model.md P&L Response Shape.
-  `unavailableModules` is populated (not a 500) when source-module services return errors.
+  computes P&L on demand. Response shape: see data-model.md P&L Response Shape. Machinery/Fuel
+  (006) and Labour (005) are real source calls; Materials (Inventory)/Subcontractors (Partners)
+  are stubbed until those features ship, and `unavailableModules` is populated for those (not a
+  500) rather than for the whole response.
 
 ---
 

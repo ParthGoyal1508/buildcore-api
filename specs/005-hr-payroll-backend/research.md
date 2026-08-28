@@ -187,3 +187,110 @@ feature's PRD areas map 1:1 onto already-existing, specific permission values).
 name (research.md §4 there) — this is exactly the payoff of that earlier design decision.
 
 **Alternatives considered**: None needed — the mapping is direct.
+
+## 12. Offboarding & F&F: reusing the payroll engine, not a parallel calculator
+
+**Decision**: `ExitRecord` is a new `hr` table. F&F computation (`fnf.service.ts`) computes pending
+salary/EL-encashment/loan-recovery as inputs, then hands off to US5's existing payroll engine to
+produce an F&F-flagged `PayrollRun` — never a second, parallel payroll-calculation path. EL
+encashment rate is `employee.basic / 26` per day; loan recovery is the full outstanding balance
+(not a partial write-off) unless separately waived — both fixed computation rules, not
+company-configurable settings, matching spec's own Assumptions text.
+
+**Rationale**: A second payroll calculator for F&F would duplicate US5's already-audited PF/ESIC/
+PT/TDS logic for exactly the values that most need to be correct (a departing employee's final
+pay) — reuse is both less code and lower-risk.
+
+**Alternatives considered**: A standalone F&F calculator independent of the payroll engine —
+rejected for the duplication/correctness-risk reason above.
+
+## 13. Reimbursements Admin: extends 003's table, no second one
+
+**Decision**: This feature's admin layer (list/approve/reject/pay/register) operates directly on
+feature 003's `hr.ReimbursementClaim` table (003 research.md §10) — this feature does not create
+its own reimbursement table. `ReimbursementCategory` is a new table this feature adds to
+`settings` (spec Assumptions), consumed by 003 via `SettingsService.getReimbursementCategories()`.
+
+**Rationale**: Exactly the same shape as this feature's existing Leave admin story (US4) reusing
+003's `LeaveApplication` table — one entity, one owning schema (`hr`, since the employee
+self-originates it), a thin admin layer added wherever the review workflow needs it.
+
+**Alternatives considered**: A separate `payroll.ReimbursementClaim` admin-side table, synced from
+003's — rejected: introduces a sync-consistency problem (which one is authoritative?) for no
+benefit over directly extending the one table with admin-only fields (`status` transitions beyond
+`submitted`, `paymentMode`, `paymentReference`).
+
+## 14. Bulk Attendance Import: reuses US3's write path, doesn't duplicate it
+
+**Decision**: `attendance-import.service.ts`'s `commit()` step calls US3's existing
+`attendance-admin.service.ts` record-creation function row-by-row (after validation), rather than
+writing `AttendanceRecord` rows directly — so Total-Hours computation, status derivation, and the
+payroll-lock rejection rule (FR-009) all come from the single existing implementation, never a
+second copy that could drift.
+
+**Rationale**: The PRD's own validation-report-before-commit shape (mirroring BOQ Import and
+Employee Master bulk import elsewhere in the master PRD) is a batching/UX concern layered on top
+of attendance creation — the underlying record-creation rules shouldn't differ based on which UI
+path produced the record.
+
+**Alternatives considered**: A separate bulk-insert path bypassing per-row validation for
+performance — rejected: attendance data feeds payroll; a bypassed lock-check or status-computation
+bug here is a correctness risk the PRD's own emphasis on payroll accuracy weighs against, and
+typical import batch sizes (per site, per pay period) don't need bulk-insert-level throughput.
+
+## 15. Reimbursement Categories CRUD — a second gap found on re-audit
+
+**Decision**: `/settings/reimbursement-categories` gets the exact same CRUD shape as 002's
+existing Department/Designation/Document Type/Shift masters (research.md — 002's own §-numbered
+decision for that pattern), guarded with the same `EMPLOYEES` permission, living in
+`src/settings/reimbursement-categories/` (`settings` schema).
+
+**Rationale**: This was missed in the first alignment-audit pass — §13's decision (Reimbursements
+Admin) only addressed the *claim* review workflow and assumed the category master's CRUD existed
+somewhere, but nothing in this feature (or any other) ever built it; category creation was
+implicitly assumed to be seed-only, which the master PRD does not support (§7.8.4 lists it as an
+admin-editable master, matching every sibling in that table). Caught on a second pass specifically
+re-checking Reimbursement coverage end-to-end.
+
+**Alternatives considered**: None — this is a straightforward gap-fill matching an already
+-established pattern, not a design decision.
+
+## 16. `getLabourCostByProject()` — a cross-module contract 008 needed that didn't exist
+
+**Decision**: Add a nullable `projectId` column to `PayrollLineItem` (FR-046) and an exported
+`HrPayrollService.getLabourCostByProject(projectId, dateRange)` summing `netPay` across matching
+line items. `projectId` is set at payroll-run generation time from the employee's current site/
+project assignment (existing `Employee` data); it is not retroactively backfillable for historical
+runs predating this field, which simply return null/unattributed for those periods.
+
+**Rationale**: `008-projects-backend`'s Project P&L (research.md §10 there) assumed this method and
+field already existed on this feature and defined a stub-fallback contract for the case they
+didn't ship yet — but the assumption itself was wrong: this feature never attributed payroll line
+items to a project at all. Found during 008's master-PRD alignment audit sweep; fixed here rather
+than left as a permanent P&L zero-value fallback, since Labour is the single largest cost line in
+a construction project P&L and a permanently-stubbed value would defeat the P&L's purpose.
+
+**Alternatives considered**: Deriving labour cost from `Employee.projectId` × days-in-period
+instead of a stored per-line-item `projectId` — rejected: an employee can be reassigned mid-period,
+and `PayrollLineItem` is already the period-scoped source of truth every other consumer
+(`/hr/challans/*`, `/my/salary`) reads from; adding the field there keeps one source of truth
+rather than two divergent computations of the same cost.
+
+## 17. `getUnlinkedEmployees()`/`linkEmployeeToUser()` — needed by the new Account Creation feature
+
+**Decision**: Add two exported `HrService` methods: `getUnlinkedEmployees(companyId, search?)` —
+lists `Employee` rows with no `userId` set, for the Account Creation feature's employee-picker
+dropdown — and `linkEmployeeToUser(employeeId, userId)` — sets `Employee.userId`, throwing if
+already set. No new fields; `Employee.userId` has existed since 003.
+
+**Rationale**: `010-account-creation-backend` (the feature that finally implements master PRD
+§7.1's Invite Flow, closing a gap 001 and 002 both explicitly deferred to "a separate Account
+Creation feature" that was never built) is the first feature to ever need to query "which
+employees have no login yet" or write `Employee.userId` — no prior feature had a reason to. This
+mirrors §16's pattern exactly: a downstream feature assumed a capability existed here, it didn't,
+so it's added here as a small amendment rather than worked around.
+
+**Alternatives considered**: Having Account Creation query `hr.Employee` directly since it's a
+small, simple filter — rejected: still a cross-schema query from `account-creation`'s eventual
+module into `hr`'s schema, which Constitution Principle I forbids regardless of query complexity;
+the exported-method boundary exists precisely to avoid this kind of "just this once" exception.

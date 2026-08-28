@@ -25,15 +25,19 @@ implementation and testing of each story.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 [P] Extend `src/settings/permission.enum.ts` with three new values: `PROJECTS`,
-      `DWR`, `PROJECT_FINANCIALS` — spec FR-016, research.md §8
+- [ ] T001 [P] Extend `src/settings/permission.enum.ts` with two new values: `DWR`,
+      `PROJECT_FINANCIALS` (`PROJECTS` already exists — reused, not re-added; also add `DWR`/
+      `PROJECT_FINANCIALS` to 002's own `permission.enum.ts` addition task if not already applied
+      there) — spec FR-016, research.md §8, §14
 - [ ] T002 [P] Scaffold `src/projects/` directory and `ProjectsModule` in
       `src/projects/projects.module.ts` with the sub-module structure from plan.md
 - [ ] T003 Create `src/projects/guards/project-lock.guard.ts`: reads `projectId` from route
       params, queries `Project.isLocked`, returns `423` if true — research.md §6
 - [ ] T004 [P] Create `src/projects/interfaces/pnl-sources.interface.ts` defining the four
       cross-module service interfaces (`PlantService`, `InventoryService`, `PartnersService`,
-      `HrPayrollService`) and stub implementations returning 0 — research.md §10
+      `HrPayrollService`). Only `InventoryService`/`PartnersService` get stub implementations
+      returning 0 — `PlantService` (006) and `HrPayrollService` (005, amended by this feature) are
+      real and injected directly — research.md §10
 - [ ] T005 [P] Create `src/projects/constants/projects.constants.ts` with `COST_OVERRUN_THRESHOLD
       = 0.10` and `MAX_BOQ_IMPORT_ROWS = 1000` — Constitution Principle III (no hardcoded values)
 
@@ -45,28 +49,29 @@ implementation and testing of each story.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T006 Add geofence columns to existing `Site` model in `prisma/schema.prisma`:
-      `address String?`, `latitude Decimal?`, `longitude Decimal?`, `geofenceRadius Int?`,
-      `status SiteStatus`, `projectId String?` FK→Project (nullable for backward compat),
-      move model to `projects` schema block — data-model.md §Site, research.md §2
+- [ ] T006 Add new columns to the existing `Site` model (already in the `projects` schema block
+      from 003 — do not move it) in `prisma/schema.prisma`: `address String?`,
+      `status SiteStatus`, `projectId String?` FK→Project (nullable for backward compat). Do
+      **not** touch the existing `latitude`/`longitude`/`geofenceRadiusMeters`/`weeklyOffDay`/
+      `holidays` columns — those already exist from 003 — data-model.md §Site, research.md §2
 - [ ] T007 Add all 11 new `projects` schema models to `prisma/schema.prisma`: `Client`,
       `Project`, `BOQTaskGroup`, `BOQTaskItem`, `DailyWorkReport`, `DWRTask`, `Revenue`,
       `RABill`, `WorkOrder`, `ProjectBudget`, `ProjectDocument` — data-model.md
-- [ ] T008 Generate and apply Site extension migration first (`npm run migrate:dev:create` for
-      the Site additive columns), then generate and apply the `projects` schema migration for
-      all 11 new models — Constitution Principle VI (schema-per-module, safe migrations)
-- [ ] T009 Add RLS policies for all `projects` schema tables (Client, Project, Site, BOQTaskGroup,
+- [ ] T008 Generate and apply the Site extension migration first (`npm run migrate:dev:create`
+      for the three new additive `Site` columns only), then generate and apply the `projects`
+      schema migration for all 11 new models — Constitution Principle VI (schema-per-module, safe
+      migrations)
+- [ ] T009 Add RLS policies for the 11 new `projects` schema tables (Client, Project, BOQTaskGroup,
       BOQTaskItem, DailyWorkReport, DWRTask, Revenue, RABill, WorkOrder, ProjectBudget,
-      ProjectDocument) — Constitution Principle IV
+      ProjectDocument) — `Site`'s RLS policy already exists from 003, no change needed —
+      Constitution Principle IV
 - [ ] T010 [P] Extend `shared.AuditLogEntry.entityType` enum with: `PROJECT`, `CLIENT`, `SITE`,
       `BOQ_GROUP`, `BOQ_ITEM`, `DWR`, `REVENUE`, `RA_BILL`, `WORK_ORDER`, `PROJECT_BUDGET`,
       `PROJECT_DOCUMENT` — contracts/projects-api.md "Audit logging"
-- [ ] T011 [P] Update `src/hr/sites/sites.service.ts` (or equivalent HR attendance service) to
-      call `ProjectsService.getSiteById(siteId)` instead of querying `hr.Site` directly —
-      research.md §2 (HR reads geofence data via exported method, not cross-schema query)
 
-**Checkpoint**: Schema, RLS, audit enum, and HR→Projects service wiring complete. All user story
-phases can now proceed in parallel per story grouping.
+**Checkpoint**: Schema and RLS/audit-enum extensions complete. HR's site/geofence call sites are
+untouched (research.md §2) — no HR-side task needed. All user story phases can now proceed in
+parallel per story grouping.
 
 ---
 
@@ -98,28 +103,32 @@ verify listed correctly — without any project data.
 
 ## Phase 4: User Story 2 — Manage Sites (Priority: P1)
 
-**Goal**: Full Site CRUD using the extended Site model; exports `getSiteById()` for HR module;
-geofence columns included.
+**Goal**: Full Site CRUD extending 003's existing `sites.service.ts` in place — adds
+`projectId`/`address`/`status` management and a new `getSiteById()` export for this feature's own
+consumers (DWR, BOQ, project detail). 003's existing `getGeofence()`/`getHolidayCalendar()`/
+`getWeeklyOffDay()` exports (which HR depends on) are not touched.
 
-**Independent Test**: Create a site with lat/lng/radius, edit it, set inactive, confirm HR's
-attendance geofence validation now uses the real radius.
+**Independent Test**: Create a site with a `projectId`/`address`, edit it, set inactive, confirm
+`getSiteById()` returns the full row including 003's pre-existing geofence fields — independent of
+any change to HR's own call sites.
 
 ### Implementation for User Story 2
 
 - [ ] T017 [P] [US2] Create `src/projects/sites/dto/create-site.dto.ts` and
-      `update-site.dto.ts` with lat/lng range validation (`@Min(-90)/@Max(90)` for lat,
-      `@Min(-180)/@Max(180)` for lng, `@IsPositive()` for radius)
-- [ ] T018 [P] [US2] Implement `SitesService` in `src/projects/sites/sites.service.ts`:
-      `create`, `findAll` (filtered by projectId/status), `findOne`, `update`, `delete` (→ 409
-      if active employees or DWRs reference site), plus `getSiteById(id)` exported method for
-      HR module consumption
+      `update-site.dto.ts` for the new fields (`projectId`, `address`, `status`) — no lat/lng/
+      radius validation needed here, those fields and their validation already exist from 003
+- [ ] T018 [P] [US2] Extend the existing `src/projects/sites/sites.service.ts` (003's file — do
+      not create a new one) with: `create`, `findAll` (filtered by projectId/status), `update`,
+      `delete` (→ 409 if active employees or DWRs reference site), plus a new `getSiteById(id)`
+      exported method (full row) for this feature's own consumers. 003's existing `getGeofence()`/
+      `getHolidayCalendar()`/`getWeeklyOffDay()` methods are unchanged
 - [ ] T019 [US2] Implement `SitesController` in `src/projects/sites/sites.controller.ts`:
       `GET /projects/sites`, `POST /projects/sites`, `GET /projects/sites/:id`,
       `PATCH /projects/sites/:id`, `DELETE /projects/sites/:id` — `Permission.PROJECTS`
-- [ ] T020 [US2] Export `SitesService` from `ProjectsModule` so `HrModule` can inject it
-      without a circular dependency — update `projects.module.ts`
 
-**Checkpoint**: Site CRUD functional; HR module can read geofence data via `SitesService`.
+**Checkpoint**: Site CRUD functional (projectId/address/status alongside 003's existing geofence
+data); `getSiteById()` available for this feature's own use. HR's existing exports are unaffected
+— no HR-side task needed.
 
 ---
 
@@ -142,8 +151,9 @@ lock it (DWR write → 423), unlock (DWR write succeeds).
       `delete` (→ 409 if DWRs/revenue/RA bills/BOQ items exist)
 - [ ] T023 [US3] Implement `ProjectsController` in
       `src/projects/portfolio/projects.controller.ts`: all 5 CRUD endpoints, `Permission.PROJECTS`
-- [ ] T024 [P] [US3] Unit test `ProjectsService.findOne()`: verify cross-module stubs return
-      empty arrays without error — `src/projects/portfolio/projects.service.spec.ts`
+- [ ] T024 [P] [US3] Unit test `ProjectsService.findOne()`: verify Inventory/Partners stub calls
+      return empty arrays without error; Machinery (006) and Labour (005) calls are real, not
+      stubbed — `src/projects/portfolio/projects.service.spec.ts`
 - [ ] T025 [US3] E2e test: `POST /projects` (auto-code), lock toggle → `POST /projects/dwr` 423,
       unlock → DWR succeeds, delete with DWRs → 409 — `test/projects.e2e-spec.ts`
 
@@ -162,19 +172,24 @@ error report), check alerts — no DWR data needed.
 ### Implementation for User Story 4
 
 - [ ] T026 [P] [US4] Create BOQ DTOs: `create-boq-group.dto.ts`, `create-boq-item.dto.ts`,
-      `import-boq.dto.ts` in `src/projects/boq/dto/`
-- [ ] T027 [P] [US4] Implement `BOQImportService` in `src/projects/boq/boq-import.service.ts`:
-      `exceljs` workbook parsing, 9-column schema validation, row-by-row error collection, valid
-      rows committed in single Prisma transaction (group created on first reference), CSV error
-      report generated as Buffer and stored to object storage, returns
-      `{ imported, errors, errorReportUrl }` — research.md §4
-- [ ] T028 [P] [US4] Unit test `BOQImportService`: all-valid file → 0 errors; file with 3
-      invalid rows → correct error objects; file > 1000 rows → 413 thrown —
-      `src/projects/boq/boq-import.service.spec.ts`
+      `import-boq-validate.dto.ts`, `import-boq-confirm.dto.ts` (`{ batchId }`) in
+      `src/projects/boq/dto/`
+- [ ] T027 [P] [US4] Implement `BOQImportService` in `src/projects/boq/boq-import.service.ts` with
+      two methods: `validate(file)` — `exceljs` workbook parsing, 9-column schema validation,
+      row-by-row error collection, holds valid rows server-side keyed by a generated `batchId`
+      (TTL'd), generates CSV error report as Buffer stored to object storage, returns
+      `{ batchId, validRows, errors, errorReportUrl }` without writing anything; and
+      `confirm(batchId)` — commits the held valid rows in a single Prisma transaction (group
+      created on first reference), returns `{ imported }` — research.md §4, §12
+- [ ] T028 [P] [US4] Unit test `BOQImportService`: `validate()` on an all-valid file → 0 errors,
+      writes nothing; `validate()` on a file with 3 invalid rows → correct error objects, writes
+      nothing; `confirm()` on a validated batch → exactly the valid rows created; file > 1000 rows
+      → 413 thrown — `src/projects/boq/boq-import.service.spec.ts`
 - [ ] T029 [US4] Implement `BOQService` in `src/projects/boq/boq.service.ts`:
       `createGroup`, `createItem`, `getTree` (groups + items with computed pendingQty/
       avgQtyPerDay/daysToComplete), `getAlerts` (today/delayed/toBeDelayed), `updateDoneQty`
-      (called by DWR service on submission), `deleteItem` (→ 409 if DWRTask references it)
+      (called by DWR service on **approval**, not submission — research.md §13), `deleteItem`
+      (→ 409 if DWRTask references it)
 - [ ] T030 [US4] Implement `BOQController` in `src/projects/boq/boq.controller.ts`: all BOQ
       endpoints from contracts — `Permission.PROJECTS`, `ProjectLockGuard` on writes
 
@@ -184,11 +199,11 @@ error report), check alerts — no DWR data needed.
 
 ## Phase 7: User Story 5 — Daily Work Reports (Priority: P2)
 
-**Goal**: DWR CRUD with server-side Actual Qty computation, BOQ doneQty increment on submission,
-approve workflow, file attachments.
+**Goal**: DWR CRUD with server-side Actual Qty computation, BOQ doneQty increment on **approval**
+(not submission — master PRD §7.5.3, research.md §13), approve workflow, file attachments.
 
 **Independent Test**: Create DWR with measurement fields → verify server-computed actualQty,
-submit → BOQ doneQty increments, approve → status = approved.
+submit → BOQ doneQty unchanged, approve → status = approved and BOQ doneQty increments.
 
 ### Implementation for User Story 5
 
@@ -201,13 +216,14 @@ submit → BOQ doneQty increments, approve → status = approved.
 - [ ] T033 [P] [US5] Unit test `DWRTaskService.computeActualQty()`: normal case, zero-value
       case, exceedsScope true and false — `src/projects/dwr/dwr-task.service.spec.ts`
 - [ ] T034 [US5] Implement `DWRService` in `src/projects/dwr/dwr.service.ts`: `create` (auto-
-      DPR number `{siteCode}-{seq}`, compute actualQty per task), `submit` (status → submitted,
-      calls `BOQService.updateDoneQty()`), `approve` (status → approved, audit-log), `findAll`
+      DPR number `{siteCode}-{seq}`, compute actualQty per task), `submit` (status → submitted
+      only — does **not** call `BOQService.updateDoneQty()`), `approve` (status → approved,
+      audit-log, **then** calls `BOQService.updateDoneQty()` — research.md §13), `findAll`
       (paginated, filtered), `findOne`, `delete` (draft only), `addAttachment`
 - [ ] T035 [US5] Implement `DWRController` in `src/projects/dwr/dwr.controller.ts`: all DWR
       endpoints — `Permission.DWR`, `ProjectLockGuard` on writes
-- [ ] T036 [US5] E2e test: create DWR → verify actualQty, submit → BOQ doneQty check, approve,
-      locked project → 423 — `test/projects.e2e-spec.ts`
+- [ ] T036 [US5] E2e test: create DWR → verify actualQty, submit → BOQ doneQty **unchanged**,
+      approve → BOQ doneQty increments, locked project → 423 — `test/projects.e2e-spec.ts`
 
 **Checkpoint**: DWR lifecycle and BOQ progress tracking fully functional.
 
@@ -247,31 +263,36 @@ RA bill amount appears in P&L revenueBooked total.
 ## Phase 9: User Story 7 — Project P&L (Priority: P3)
 
 **Goal**: On-demand P&L computation via `Promise.allSettled`, budget upsert, 10% overrun flag,
-period filter.
+period filter. Machinery/Fuel (006) and Labour (005) are real calls; Materials/Subcontractors
+(Inventory/Partners) are still stubbed pending those features.
 
-**Independent Test**: Call P&L with seeded revenue/RA bill data; verify revenueBooked, zero
-actuals from stubs, `unavailableModules` populated, overrun flag when actual > budget × 1.10.
+**Independent Test**: Call P&L with seeded revenue/RA bill/logbook/fuel/payroll data; verify
+revenueBooked, real Machinery/Fuel/Labour figures, zero actuals from the two remaining stubs,
+`unavailableModules` populated only for those two, overrun flag when actual > budget × 1.10.
 
-### Implementation for User Story 9
+### Implementation for User Story 7
 
 - [ ] T043 [P] [US7] Create `src/projects/pnl/dto/pnl-query.dto.ts` and
-      `src/projects/pnl/dto/pnl-response.dto.ts` matching data-model.md P&L Response Shape      (6 cost categories: labour, materials, machinery, fuel, subcontractors, overheads)
-- [ ] T044a [P] [US7] Add `getFuelCostByProject(projectId, range): Promise<number>` stub to
-      `src/projects/interfaces/pnl-sources.interface.ts` alongside `getMachineryCostByProject`
-      — two separate Plant stubs for two separate P&L lines (master PRD §7.5.4)- [ ] T044 [P] [US7] Create `src/projects/pnl/dto/budget.dto.ts` and
+      `src/projects/pnl/dto/pnl-response.dto.ts` matching data-model.md P&L Response Shape
+      (6 cost categories: labour, materials, machinery, fuel, subcontractors, overheads)
+- [ ] T044 [P] [US7] Create `src/projects/pnl/dto/budget.dto.ts` and
       `src/projects/budget/budget.service.ts`: upsert per category in single Prisma transaction,
       `getByProject` returning all 5 rows (0 for unset)
 - [ ] T045 [US7] Implement `PnlService` in `src/projects/pnl/pnl.service.ts`:
       - Resolve date range from `period` + optional `month`/`quarter`/`year` params
-      - `Promise.allSettled` over **5** cross-module stub calls (labour, materials, machinery,
-        fuel, subcontractors — machinery and fuel are separate calls to `PlantService`)
+      - `Promise.allSettled` over 5 cross-module calls: `HrPayrollService.getLabourCostByProject()`
+        (005, real), `InventoryService.getMaterialCostByProject()` (stub), `PlantService
+        .getMachineryCostByProject()` and `.getFuelCostByProject()` (006, real, two separate
+        calls per master PRD §7.5.4), `PartnersService.getSubcontractorCostByProject()` (stub)
       - Sum `revenueBooked` from approved RABills + received Revenue in date range
       - Merge budget rows for all 6 categories, compute variance/variancePct, set
         `costOverrunAlert` when `actual > budget × COST_OVERRUN_THRESHOLD` — spec FR-009
-      - Populate `unavailableModules` from rejected promises
-- [ ] T046 [P] [US7] Unit test `PnlService.compute()`: all stubs return 0 → correct zero rows;
-      one stub rejects → `unavailableModules` populated; actual > budget × 1.10 → overrun flag
-      set — `src/projects/pnl/pnl.service.spec.ts`
+      - Populate `unavailableModules` from rejected promises (expected only for Inventory/Partners
+        until those features ship)
+- [ ] T046 [P] [US7] Unit test `PnlService.compute()`: Inventory/Partners stubs return 0 →
+      correct zero rows; a stub rejects → `unavailableModules` populated; Machinery/Fuel/Labour
+      return real seeded values; actual > budget × 1.10 → overrun flag set —
+      `src/projects/pnl/pnl.service.spec.ts`
 - [ ] T047 [US7] Implement `PnlController` in `src/projects/pnl/pnl.controller.ts` and
       `BudgetController` in `src/projects/pnl/budget.controller.ts` — `Permission.PROJECT_FINANCIALS`
 - [ ] T048 [US7] E2e test: seed revenue + approved RA bill → call P&L → verify `revenueBooked`;
@@ -305,16 +326,17 @@ actuals from stubs, `unavailableModules` populated, overrun flag when actual > b
 
 ## Phase 11: Polish & Cross-Cutting
 
-- [ ] T052 [P] Verify `ProjectsModule` exports `SitesService` (for HR) and `ProjectsService`
-      (exported method `getProjectById` for use by other modules); confirm no circular import
+- [ ] T052 [P] Verify `ProjectsModule` exports `SitesService` (extended in place, still importable
+      by `HrModule` exactly as 003 wired it) and `ProjectsService` (exported method
+      `getProjectById` for use by other modules); confirm no circular import
 - [ ] T053 [P] Add Swagger `@ApiTags('Projects')` and `@ApiOperation` decorators to all
       controllers — Constitution Principle II
 - [ ] T054 [P] Run `npm run lint` and fix any issues — Constitution dev workflow gate
 - [ ] T055 [P] Run `npm run build` (tsc typecheck) and fix any issues — Constitution dev workflow gate
-- [ ] T056 Add `TODO(006): replace PlantServiceStub` and `TODO(007): replace InventoryServiceStub`
-      and `TODO(007): replace PartnersServiceStub` comments in `pnl-sources.interface.ts` and
-      `TODO(005): add projectId param to getLabourCostByProject` in `HrPayrollService` interface —
-      plan.md TODO section
+- [ ] T056 Add `TODO(009): replace InventoryServiceStub` and `TODO(007): replace
+      PartnersServiceStub` comments in `pnl-sources.interface.ts` — these are the only two
+      remaining stubs; `PlantService` (006) and `HrPayrollService` (005) are wired to real
+      implementations, not stubs — plan.md TODO section
 
 ---
 

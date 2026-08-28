@@ -1,11 +1,17 @@
 # Contract: `/partners/*` endpoints
 
-All endpoints require `JwtAuthGuard` + `@RequirePermission()` using one of three new values
-added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
+All endpoints require `JwtAuthGuard` + `@RequirePermission(Permission.PARTNERS)` — reusing
+Settings' already-existing `PARTNERS` value verbatim (corrected during a master-PRD alignment
+audit; no new enum values are added by this feature). Vendor Categories are gated with the
+existing `SETTINGS` value instead (now a `settings`-schema master, research.md §1).
 
 ---
 
-## Vendor Categories — `/partners/vendor-categories` (permission: `VENDORS`)
+## Vendor Categories — `settings` schema (permission: `SETTINGS`, via `SettingsService`)
+
+Routes stay under `/partners/vendor-categories` (matching the module's own grouping); each
+controller action is a thin call into `SettingsService`'s exported methods — no direct query
+against the `settings` schema tables (Principle I, research.md §1).
 
 - `GET /partners/vendor-categories` — list all categories with `vendorCount`.
 - `POST /partners/vendor-categories` — `{ name, description? }` → 201.
@@ -16,7 +22,7 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 
 ---
 
-## Vendors — `/partners/vendors` (permission: `VENDORS`)
+## Vendors — `/partners/vendors` (permission: `PARTNERS`)
 
 - `GET /partners/vendors?search=&type=&active=&page=` — paginated list. Response includes
   `dealsIn` (array of category names), `primaryContact` (first contact's name+phone), `tdsSection`,
@@ -24,19 +30,22 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 - `POST /partners/vendors` — `{ name, type, gstin?, pan?, tdsSection?, tdsRate?, active?,
   address?, city?, state?, pinCode?, vendorCurrency?, exchangeRate?,
   contacts: VendorContactInput[], categoryIds: string[],
-  hireDetail?: VendorHireDetailInput }` → 201. Contacts and category tags atomically inserted.
+  hireDetail?: VendorHireDetailInput }` → 201. `gstin`/`pan` rejected with a field-level `400` if
+  provided but malformed (research.md §13). Contacts and category tags atomically inserted.
   Code auto-generated via `CodeSeriesService('VENDORS', companyId)`.
 - `GET /partners/vendors/:id` — full vendor with `contacts`, `dealsIn` (category objects),
   `hireDetail?`, and `contractorProfile?` (if a ContractorProfile exists for this vendor).
 - `PATCH /partners/vendors/:id` — partial update. If `contacts` array is provided, it atomically
   replaces all existing contacts. If `categoryIds` array is provided, it atomically replaces all
   `VendorDealsIn` rows. Audit-logged.
-- `GET /partners/vendors/:id/tds` — `{ tdsSection, tdsRate }` — minimal payload for Inventory
-  and Machinery modules (consumed via exported service, not direct cross-schema query).
+- `GET /partners/vendors/:id/tds` — `{ tdsSection, tdsRate }` — thin HTTP wrapper around
+  `PartnersService.getVendorTds()` (research.md §12), for direct frontend consumption. Inventory
+  and Machinery modules consume `getVendorById()`/`getVendorTds()` as exported in-process methods,
+  never this HTTP endpoint (Principle I).
 
 ---
 
-## Contractors — `/partners/contractors` (permission: `CONTRACTORS`)
+## Contractors — `/partners/contractors` (permission: `PARTNERS`)
 
 - `GET /partners/contractors?complianceStatus=&page=` — paginated list of ContractorProfiles
   where `vendor.active = true`. Response includes vendor name, registration numbers,
@@ -56,7 +65,7 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 
 ---
 
-## Monthly Compliance — `/partners/compliance` (permission: `CONTRACTORS`)
+## Monthly Compliance — `/partners/compliance` (permission: `PARTNERS`)
 
 - `GET /partners/compliance?contractorId=&month=&status=&page=` — paginated list. `contractorId`
   accepts any profile ID (active or inactive vendors included in history reads).
@@ -72,7 +81,7 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 
 ---
 
-## RAG Matrix — `/partners/rag` (permission: `CONTRACTORS`)
+## RAG Matrix — `/partners/rag` (permission: `PARTNERS`)
 
 - `GET /partners/rag?fy=2025-26` — returns full matrix for the FY. Response shape: see
   data-model.md `RagMatrixResponse`. Only active-vendor contractors are included as rows.
@@ -80,7 +89,7 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 
 ---
 
-## BOCW Cess — `/partners/bocw` (permission: `BOCW`)
+## BOCW Cess — `/partners/bocw` (permission: `PARTNERS`)
 
 - `GET /partners/bocw?page=` — paginated list of projects with cess computation. Each row:
   `{ projectId, projectName, contractValue, cessRate, cessLiability, totalPaid, balance,
@@ -92,10 +101,10 @@ added to Settings' `Permission` enum: `VENDORS`, `CONTRACTORS`, `BOCW`.
 
 ---
 
-## Exported service method (for ProjectsModule P&L)
+## Exported service methods (for ProjectsModule, PlantModule, InventoryModule)
 
 ```typescript
-// Exported from PartnersModule for injection by ProjectsModule
+// Exported from PartnersModule for in-process injection — never called via HTTP self-call
 class PartnersService {
   async getSubcontractorCostByProject(
     projectId: string,
@@ -103,6 +112,14 @@ class PartnersService {
   ): Promise<number>
   // Implementation: calls ProjectsService.getWorkOrderTotalByProject() stub
   // Returns 0 until TODO(008) ships the real method
+
+  async getVendorById(vendorId: string): Promise<{ id: string; name: string; type: string; active: boolean } | null>
+  // Consumed by PlantModule (006) and InventoryModule (009) for vendor name display —
+  // research.md §12, found missing on re-audit
+
+  async getVendorTds(vendorId: string): Promise<{ tdsSection: string | null; tdsRate: number | null } | null>
+  // Consumed by PlantModule (006, Hire Bills) and InventoryModule (009, Purchases/Payments)
+  // for TDS calculation — same underlying data as GET /partners/vendors/:id/tds
 }
 ```
 
