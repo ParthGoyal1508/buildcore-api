@@ -34,7 +34,9 @@
     "docker:db": "docker-compose -f docker-compose.db.yml up -d",
     "docker:seed": "docker exec -it buildcore-api npm run seed",
     "docker": "docker-compose up -d",
-    "docker:build": "docker-compose build"
+    "docker:build": "docker-compose build",
+    "studio": "prisma studio",
+    "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'"
   },
   "dependencies": {
     "@nestjs/common": "10.1.0",
