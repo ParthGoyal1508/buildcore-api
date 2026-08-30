@@ -1,5 +1,5 @@
 import { PrismaService } from 'nestjs-prisma';
-import { AuditEventType, Permission, User } from '@prisma/client';
+import { AuditEntityType, Permission, User } from '@prisma/client';
 import {
   ForbiddenException,
   HttpException,
@@ -99,11 +99,13 @@ export class AuthService {
     const user = await this.findByIdentifier(identifier);
 
     if (!user) {
-      await this.auditLogService.record({
-        eventType: AuditEventType.login_failure,
-        attemptedEmail: identifier,
-        ipAddress,
-      });
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.LOGIN_FAILURE,
+        {
+          attemptedEmail: identifier,
+          ipAddress,
+        },
+      );
       throw new UnauthorizedException(GENERIC_INVALID_CREDENTIALS);
     }
 
@@ -132,19 +134,32 @@ export class AuthService {
       if (!passwordValid && user.status === 'active') {
         await this.registerFailedAttempt(user, maxAttempts, durationMinutes);
       }
-      await this.auditLogService.record({
-        eventType: AuditEventType.login_failure,
-        accountId: user.id,
-        companyId: user.companyId,
-        ipAddress,
-      });
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.LOGIN_FAILURE,
+        {
+          accountId: user.id,
+          companyId: user.companyId,
+          ipAddress,
+        },
+      );
       throw new UnauthorizedException(GENERIC_INVALID_CREDENTIALS);
     }
 
-    await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
+    // System context, not the caller's own company scope: this is the server's own
+    // post-authentication bookkeeping on a row it has just identified by verified
+    // credentials — one of the lookups rls-context.ts calls out as legitimately
+    // running with the bypass. Under the caller's scope it silently matches no row
+    // for an account with no companyId (and no CROSS_COMPANY_ACCESS), which makes
+    // login fail outright wherever RLS is actually enforced.
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.user.update({
         where: { id: user.id },
-        data: { consecutiveFailures: 0 },
+        data: {
+          consecutiveFailures: 0,
+          // Stamped on every successful authentication (002 FR-017); surfaced by
+          // the Settings Users list (FR-013).
+          lastLoginAt: new Date(),
+        },
       }),
     );
 
@@ -154,8 +169,7 @@ export class AuthService {
       rememberMe,
     });
 
-    await this.auditLogService.record({
-      eventType: AuditEventType.login_success,
+    await this.auditLogService.recordAuthEvent(AuditEntityType.LOGIN_SUCCESS, {
       accountId: user.id,
       companyId: user.companyId,
       ipAddress,
@@ -190,12 +204,14 @@ export class AuthService {
 
     if (justLocked) {
       await this.mailService.sendAccountLockedEmail(user.email, lockedUntil);
-      await this.auditLogService.record({
-        eventType: AuditEventType.account_locked,
-        accountId: user.id,
-        companyId: user.companyId,
-        ipAddress: '',
-      });
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.ACCOUNT_LOCKED,
+        {
+          accountId: user.id,
+          companyId: user.companyId,
+          ipAddress: '',
+        },
+      );
     }
   }
 
@@ -207,11 +223,13 @@ export class AuthService {
     }
 
     if (result.outcome === 'reuse') {
-      await this.auditLogService.record({
-        eventType: AuditEventType.refresh_reuse_detected,
-        accountId: result.accountId,
-        ipAddress,
-      });
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.REFRESH_REUSE_DETECTED,
+        {
+          accountId: result.accountId,
+          ipAddress,
+        },
+      );
       throw new ForbiddenException();
     }
 
@@ -300,11 +318,13 @@ export class AuthService {
 
     await this.refreshTokenService.revokeAllForAccount(target.id);
 
-    await this.auditLogService.record({
-      eventType: AuditEventType.admin_password_reset,
-      accountId: target.id,
-      companyId: target.companyId,
-      ipAddress,
-    });
+    await this.auditLogService.recordAuthEvent(
+      AuditEntityType.ADMIN_PASSWORD_RESET,
+      {
+        accountId: target.id,
+        companyId: target.companyId,
+        ipAddress,
+      },
+    );
   }
 }

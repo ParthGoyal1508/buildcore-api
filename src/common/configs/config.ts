@@ -1,5 +1,14 @@
 import type { Config } from './config.interface';
 
+/** Parses a numeric env override, falling back when unset or non-numeric. */
+function numberFromEnv(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 const config: Config = {
   nest: {
     port: 3000,
@@ -45,6 +54,27 @@ const config: Config = {
       ttlSeconds: 60,
       limit: 10,
     },
+  },
+  settings: {
+    // Statutory defaults applied to a company at creation time, overridable per
+    // company thereafter (FR-002). Env-overridable so a rate change shipped by
+    // legislation doesn't require a code release (research.md §11).
+    defaultRates: {
+      pfEmployer: numberFromEnv(
+        process.env.SETTINGS_DEFAULT_PF_EMPLOYER_RATE,
+        12,
+      ),
+      esicEmployer: numberFromEnv(
+        process.env.SETTINGS_DEFAULT_ESIC_EMPLOYER_RATE,
+        3.25,
+      ),
+      gratuity: numberFromEnv(process.env.SETTINGS_DEFAULT_GRATUITY_RATE, 4.81),
+      bonus: numberFromEnv(process.env.SETTINGS_DEFAULT_BONUS_RATE, 8.33),
+    },
+    defaultPayrollLockDay: numberFromEnv(
+      process.env.SETTINGS_DEFAULT_PAYROLL_LOCK_DAY,
+      7,
+    ),
   },
 };
 

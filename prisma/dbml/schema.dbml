@@ -17,6 +17,8 @@ effective permissions are the union across every assigned role\'s permissions.']
 role with CROSS_COMPANY_ACCESS (research.md §5 update) — cross-company access
 is now a permission, not a null-companyId special case, so a "super admin"
 account can still meaningfully belong to one home company.']
+  lastLoginAt DateTime [note: 'Set on every successful authentication (001 FR-017); read by 002\'s Users list
+(FR-013) via the exported UsersService, never by a direct cross-schema query.']
   status UserStatus [not null, default: 'active']
   mustChangePassword Boolean [not null, default: false]
   consecutiveFailures Int [not null, default: 0, note: 'Resets to 0 on next successful login (FR-013).']
@@ -69,6 +71,133 @@ from the user at assignment time, so it follows the same RLS pattern as every
 other tenant-scoped table this feature relies on (FR-020).'
 }
 
+Table Company {
+  id String [pk]
+  name String [not null]
+  shortCode String [unique, not null, note: 'Unique across all companies, case-insensitively — normalized to trimmed
+uppercase on write, with a `lower()` functional unique index as the
+database-level backstop (FR-004). Drives employee code generation.']
+  logoUrl String
+  status CompanyStatus [not null, default: 'active']
+  gstin String
+  pan String
+  cin String
+  tan String
+  address String
+  city String
+  state String
+  pinCode String
+  pfEstablishmentCode String
+  esicCode String
+  professionalTaxRegNumber String
+  bocwRegNumber String
+  payCycle PayCycle [not null, default: 'monthly', note: 'Fixed at `monthly` per the PRD; modeled as an enum of one for forward
+compatibility rather than a bare constant.']
+  payrollLockDay Int [not null, note: 'Day-of-month after which attendance edits lock for payroll processing.']
+  pfEmployerRate Decimal [not null]
+  esicEmployerRate Decimal [not null]
+  gratuityRate Decimal [not null]
+  bonusRate Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  departments Department [not null]
+  designations Designation [not null]
+  documentTypes DocumentType [not null]
+  shifts Shift [not null]
+  employeeCodeSeq EmployeeCodeSequence
+
+  Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
+(a company has no companyId; it *is* the company). Access is gated by the
+COMPANY_SETTINGS permission instead (research.md §8, FR-001).'
+}
+
+Table Department {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'Per-company Employee master reference data. Feeds the Employee form\'s dropdowns;
+deletion is blocked while an Employee still references it (FR-018).'
+}
+
+Table Designation {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'Same shape and deletion-guard behavior as Department (data-model.md).'
+}
+
+Table DocumentType {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  code String [not null]
+  name String [not null]
+  isMandatory Boolean [not null, default: false, note: 'Gates attendance marking for an employee missing this document (FR-021).']
+  hasExpiry Boolean [not null, default: false]
+  needsNumber Boolean [not null, default: false]
+  sortOrder Int [not null, default: 0]
+  isActive Boolean [not null, default: true, note: 'Inactive types are excluded from new-upload selection; historical employee
+records referencing them are unaffected (FR-019).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
+
+  Note: 'Per-company employee document types. The display flag
+(MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
+NOT stored — it is a pure function of the three booleans below, computed on read
+so it can never drift from them (research.md §7).'
+}
+
+Table Shift {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  inTime DateTime [not null, note: 'Wall-clock times of day, not instants — Postgres `time`, no date or zone
+component (data-model.md "Shift").']
+  outTime DateTime [not null]
+  graceMinutes Int [not null, default: 0, note: 'Late-arrival tolerance, in minutes.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'Per-company shift definitions feeding the Employee form and overtime
+calculation; deletion blocked while referenced by an Employee (FR-022).'
+}
+
+Table EmployeeCodeSequence {
+  companyId String [pk]
+  company Company [not null]
+  lastNumber Int [not null, default: 0]
+
+  Note: 'One counter row per company, incremented via a single atomic
+`UPDATE ... RETURNING` so concurrent employee creation can never produce a
+duplicate or a gap (research.md §6, SC-007). Never read or written directly by
+another module — only through `EmployeeCodeService.getNextEmployeeCode()`.'
+}
+
 Table RefreshToken {
   id String [pk]
   tokenHash String [unique, not null, note: 'HMAC-hashed opaque token value (SecurityConfig.refreshTokenHashSecret as pepper) —
@@ -94,7 +223,15 @@ sharing a `familyId` — see data-model.md "Refresh Token".'
 
 Table AuditLogEntry {
   id String [pk]
-  eventType AuditEventType [not null]
+  entityType AuditEntityType [not null, note: 'What the event was *about* — a login-lifecycle event (feature 001) or a
+settings entity that was changed (feature 002). Generalized from feature 001\'s
+flat `eventType` so every module shares one audit trail rather than growing a
+per-module enum (002 research.md §9).']
+  action AuditAction [not null, note: 'What happened to it — separated from `entityType` so `COMPANY`+`UPDATE` and
+`COMPANY`+`DELETE` don\'t need distinct enum values.']
+  entityId String [note: 'The Company/Role/Department/... row affected; null for login-related events,
+which key off `accountId`/`attemptedEmail` as before.']
+  changes Json [note: 'Optional before/after snapshot for update actions.']
   accountId String
   account User
   attemptedEmail String [note: 'Populated only when accountId is null (an unregistered-identifier login_failure),
@@ -139,18 +276,56 @@ Enum Permission {
   CROSS_COMPANY_ACCESS
 }
 
-Enum AuditEventType {
-  login_success
-  login_failure
-  account_locked
-  logout
-  refresh_reuse_detected
-  admin_password_reset
+Enum CompanyStatus {
+  active
+  inactive
+}
+
+Enum PayCycle {
+  monthly
+}
+
+Enum AuditEntityType {
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  ACCOUNT_LOCKED
+  LOGOUT
+  REFRESH_REUSE_DETECTED
+  ADMIN_PASSWORD_RESET
+  COMPANY
+  ROLE
+  DEPARTMENT
+  DESIGNATION
+  DOCUMENT_TYPE
+  SHIFT
+  USER_ACCOUNT
+}
+
+Enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  ACCOUNT_LOCKED
+  LOGOUT
+  REFRESH_REUSE_DETECTED
+  ADMIN_PASSWORD_RESET
 }
 
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
+
+Ref: Department.companyId > Company.id [delete: Cascade]
+
+Ref: Designation.companyId > Company.id [delete: Cascade]
+
+Ref: DocumentType.companyId > Company.id [delete: Cascade]
+
+Ref: Shift.companyId > Company.id [delete: Cascade]
+
+Ref: EmployeeCodeSequence.companyId - Company.id [delete: Cascade]
 
 Ref: RefreshToken.accountId > User.id
 

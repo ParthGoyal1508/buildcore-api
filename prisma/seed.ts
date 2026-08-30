@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { hash } from 'argon2';
+import { seedDefaultRoles } from './seeds/settings.seed';
 
 const prisma = new PrismaClient();
 
@@ -18,6 +19,10 @@ async function main() {
   await prisma.auditLogEntry.deleteMany();
   await prisma.userRole.deleteMany();
   await prisma.user.deleteMany();
+
+  // The nine default roles (002 FR-006) — upserted by name, so this is safe to
+  // re-run and refreshes permission sets without orphaning UserRole assignments.
+  await seedDefaultRoles(prisma);
 
   const password = await hash('secret42');
 

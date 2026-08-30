@@ -2,9 +2,10 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { PrismaClientExceptionFilter } from 'nestjs-prisma';
+import { PrismaClientExceptionFilter, PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { assertRlsEnforceable } from './common/prisma/rls-preflight';
 import type {
   CorsConfig,
   NestConfig,
@@ -26,6 +27,14 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
       transform: true,
     }),
+  );
+
+  // Refuse to serve traffic if the database role silently bypasses row-level
+  // security — in production that means no tenant isolation at all, with nothing
+  // in the logs to say so.
+  await assertRlsEnforceable(
+    app.get(PrismaService),
+    process.env.NODE_ENV === 'production',
   );
 
   // enable shutdown hook

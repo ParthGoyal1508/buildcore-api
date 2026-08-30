@@ -21,6 +21,48 @@ Your `.env.example` already anticipates this (`DATABASE_URL` comment mentions Ne
 - [ ] Copy the **pooled** connection string (Neon: use the `-pooler` endpoint; needed because serverless/scale-to-zero platforms open many short-lived connections that will exhaust a direct Postgres connection limit).
 - [ ] Update `DATABASE_URL` for prod: change `sslmode=prefer` → `sslmode=require` (or whatever the provider mandates).
 
+### 2a. The application MUST connect as a non-superuser role (row-level security)
+
+Multi-tenant isolation in this codebase is enforced by Postgres row-level security
+policies (see `prisma/migrations/*_rls_policies`, `src/common/prisma/rls-context.ts`).
+**A Postgres superuser, and any role holding `BYPASSRLS`, ignores those policies
+entirely** — the tables are then readable and writable across every company, and no
+error is raised to tell you so.
+
+- [ ] Create a dedicated application role that is **`NOSUPERUSER`** and **`NOBYPASSRLS`**:
+
+      CREATE ROLE buildcore_app LOGIN PASSWORD '<secret>'
+        NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      GRANT CONNECT ON DATABASE <db> TO buildcore_app;
+      -- Repeat per schema (shared, settings, public):
+      GRANT USAGE ON SCHEMA "<schema>" TO buildcore_app;
+      GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "<schema>" TO buildcore_app;
+      GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA "<schema>" TO buildcore_app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA "<schema>"
+        GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO buildcore_app;
+      ALTER DEFAULT PRIVILEGES IN SCHEMA "<schema>"
+        GRANT USAGE, SELECT ON SEQUENCES TO buildcore_app;
+
+- [ ] Point the app's runtime `DATABASE_URL` at that role.
+- [ ] Keep **migrations** running as the owning/admin role — `prisma migrate deploy` needs
+      DDL rights the application role must not have.
+- [ ] Verify after deploy:
+
+      SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+
+      Both MUST be `false`. If either is `true`, tenant isolation is not in effect.
+
+A local role matching this shape (`buildcore_app`) has been created for development, and
+the e2e suite passes against it with the policies actually enforced.
+
+**The application enforces this itself.** On startup it queries `rolsuper`/`rolbypassrls`
+for its own connection (`src/common/prisma/rls-preflight.ts`) and, when `NODE_ENV` is
+`production`, **refuses to boot** if either is true — a deploy that would silently run
+without tenant isolation fails loudly instead of coming up healthy. Outside production it
+logs a warning and continues, so a local superuser setup still works. If the check itself
+cannot run (e.g. a missing catalog grant) it warns and continues rather than blocking a
+deploy on an inconclusive result.
+
 ## 3. Object storage (files/documents) — not yet implemented, but required
 
 Multiple specs require "encrypted object-storage references" for uploaded files, though **no
