@@ -31,8 +31,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  email     String @unique
-  username  String @unique
+  email     String  @unique
+  username  String  @unique
   password  String
   firstname String?
   lastname  String?
@@ -47,12 +47,16 @@ model User {
   /// account can still meaningfully belong to one home company.
   companyId String?
 
-  status               UserStatus @default(active)
-  mustChangePassword   Boolean    @default(false)
+  /// Set on every successful authentication (001 FR-017); read by 002's Users list
+  /// (FR-013) via the exported UsersService, never by a direct cross-schema query.
+  lastLoginAt DateTime?
+
+  status              UserStatus @default(active)
+  mustChangePassword  Boolean    @default(false)
   /// Resets to 0 on next successful login (FR-013).
-  consecutiveFailures  Int        @default(0)
+  consecutiveFailures Int        @default(0)
   /// Set when consecutiveFailures reaches the configured threshold (FR-012).
-  lockedUntil          DateTime?
+  lockedUntil         DateTime?
 
   refreshTokens   RefreshToken[]
   auditLogEntries AuditLogEntry[]
@@ -145,6 +149,177 @@ enum Permission {
   @@schema("settings")
 }
 
+/// The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
+/// (a company has no companyId; it *is* the company). Access is gated by the
+/// COMPANY_SETTINGS permission instead (research.md §8, FR-001).
+model Company {
+  id String @id @default(cuid())
+
+  name      String
+  /// Unique across all companies, case-insensitively — normalized to trimmed
+  /// uppercase on write, with a `lower()` functional unique index as the
+  /// database-level backstop (FR-004). Drives employee code generation.
+  shortCode String  @unique
+  logoUrl   String?
+
+  status CompanyStatus @default(active)
+
+  // Statutory registration identifiers. GSTIN/PAN are format-validated at the DTO
+  // boundary (research.md §10) because downstream Challan generation depends on
+  // them being well-formed.
+  gstin String?
+  pan   String?
+  cin   String?
+  tan   String?
+
+  address String?
+  city    String?
+  state   String?
+  pinCode String?
+
+  pfEstablishmentCode      String?
+  esicCode                 String?
+  professionalTaxRegNumber String?
+  bocwRegNumber            String?
+
+  /// Fixed at `monthly` per the PRD; modeled as an enum of one for forward
+  /// compatibility rather than a bare constant.
+  payCycle       PayCycle @default(monthly)
+  /// Day-of-month after which attendance edits lock for payroll processing.
+  payrollLockDay Int
+
+  // Seeded from SettingsConfig at creation time, per-company editable thereafter
+  // (FR-002, research.md §11). Decimal, not Float — these are money-adjacent
+  // statutory percentages where binary rounding drift is unacceptable.
+  pfEmployerRate   Decimal @db.Decimal(5, 2)
+  esicEmployerRate Decimal @db.Decimal(5, 2)
+  gratuityRate     Decimal @db.Decimal(5, 2)
+  bonusRate        Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  departments     Department[]
+  designations    Designation[]
+  documentTypes   DocumentType[]
+  shifts          Shift[]
+  employeeCodeSeq EmployeeCodeSequence?
+
+  @@schema("settings")
+}
+
+enum CompanyStatus {
+  active
+  inactive
+
+  @@schema("settings")
+}
+
+enum PayCycle {
+  monthly
+
+  @@schema("settings")
+}
+
+/// Per-company Employee master reference data. Feeds the Employee form's dropdowns;
+/// deletion is blocked while an Employee still references it (FR-018).
+model Department {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// Same shape and deletion-guard behavior as Department (data-model.md).
+model Designation {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// Per-company employee document types. The display flag
+/// (MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
+/// NOT stored — it is a pure function of the three booleans below, computed on read
+/// so it can never drift from them (research.md §7).
+model DocumentType {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+
+  /// Gates attendance marking for an employee missing this document (FR-021).
+  isMandatory Boolean @default(false)
+  hasExpiry   Boolean @default(false)
+  needsNumber Boolean @default(false)
+
+  sortOrder Int     @default(0)
+  /// Inactive types are excluded from new-upload selection; historical employee
+  /// records referencing them are unaffected (FR-019).
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// Per-company shift definitions feeding the Employee form and overtime
+/// calculation; deletion blocked while referenced by an Employee (FR-022).
+model Shift {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name         String
+  /// Wall-clock times of day, not instants — Postgres `time`, no date or zone
+  /// component (data-model.md "Shift").
+  inTime       DateTime @db.Time(0)
+  outTime      DateTime @db.Time(0)
+  /// Late-arrival tolerance, in minutes.
+  graceMinutes Int      @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// One counter row per company, incremented via a single atomic
+/// `UPDATE ... RETURNING` so concurrent employee creation can never produce a
+/// duplicate or a gap (research.md §6, SC-007). Never read or written directly by
+/// another module — only through `EmployeeCodeService.getNextEmployeeCode()`.
+model EmployeeCodeSequence {
+  companyId String  @id
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  lastNumber Int @default(0)
+
+  @@schema("settings")
+}
+
 /// One signed-in period on one device/client, as a chain of rotating refresh tokens
 /// sharing a `familyId` — see data-model.md "Refresh Token".
 model RefreshToken {
@@ -181,17 +356,30 @@ model RefreshToken {
 /// Immutable security-event record — write-only in this feature (spec.md 2026-08-26
 /// clarification: reading/querying is a separate, later Activity Log feature).
 model AuditLogEntry {
-  id        String         @id @default(cuid())
-  eventType AuditEventType
+  id String @id @default(cuid())
 
-  accountId String?
-  account   User?   @relation(fields: [accountId], references: [id])
+  /// What the event was *about* — a login-lifecycle event (feature 001) or a
+  /// settings entity that was changed (feature 002). Generalized from feature 001's
+  /// flat `eventType` so every module shares one audit trail rather than growing a
+  /// per-module enum (002 research.md §9).
+  entityType AuditEntityType
+  /// What happened to it — separated from `entityType` so `COMPANY`+`UPDATE` and
+  /// `COMPANY`+`DELETE` don't need distinct enum values.
+  action     AuditAction
+  /// The Company/Role/Department/... row affected; null for login-related events,
+  /// which key off `accountId`/`attemptedEmail` as before.
+  entityId   String?
+  /// Optional before/after snapshot for update actions.
+  changes    Json?
+
+  accountId      String?
+  account        User?   @relation(fields: [accountId], references: [id])
   /// Populated only when accountId is null (an unregistered-identifier login_failure),
   /// so that failure is still traceable without inventing an account reference.
   attemptedEmail String?
   /// Copied from the account at event time; null for an unregistered-identifier
   /// failure and for any event with no company-scoped account.
-  companyId String?
+  companyId      String?
 
   ipAddress String
   createdAt DateTime @default(now())
@@ -200,13 +388,42 @@ model AuditLogEntry {
   @@schema("shared")
 }
 
-enum AuditEventType {
-  login_success
-  login_failure
-  account_locked
-  logout
-  refresh_reuse_detected
-  admin_password_reset
+enum AuditEntityType {
+  // Login-lifecycle values carried over from feature 001 (uppercased in the 002
+  // generalization so both halves of the enum read consistently).
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  ACCOUNT_LOCKED
+  LOGOUT
+  REFRESH_REUSE_DETECTED
+  ADMIN_PASSWORD_RESET
+
+  // Settings entities audited by feature 002 (FR-025).
+  COMPANY
+  ROLE
+  DEPARTMENT
+  DESIGNATION
+  DOCUMENT_TYPE
+  SHIFT
+  /// Shared with 010-account-creation-backend so both features' writes to the same
+  /// account surface under one type in the Activity Log (002 tasks T048).
+  USER_ACCOUNT
+
+  @@schema("shared")
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+
+  // Login-lifecycle actions — the action *is* the event for these.
+  LOGIN_SUCCESS
+  LOGIN_FAILURE
+  ACCOUNT_LOCKED
+  LOGOUT
+  REFRESH_REUSE_DETECTED
+  ADMIN_PASSWORD_RESET
 
   @@schema("shared")
 }

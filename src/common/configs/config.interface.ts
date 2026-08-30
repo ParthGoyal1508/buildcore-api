@@ -3,6 +3,7 @@ export interface Config {
   cors: CorsConfig;
   swagger: SwaggerConfig;
   security: SecurityConfig;
+  settings: SettingsConfig;
 }
 
 export interface NestConfig {
@@ -72,4 +73,27 @@ export interface SecurityConfig {
     /** Max requests per window per source address, for /auth/* (FR-016). */
     limit: number;
   };
+}
+
+/**
+ * Seed-time defaults for a newly created company's statutory/payroll rates
+ * (Constitution Principle III — these are statutory percentages that change by
+ * legislation, so they must not be magic numbers inside CompaniesService).
+ *
+ * These supply the *initial* value at company-creation time only; every rate stays
+ * per-company editable afterwards (spec FR-002, research.md §11).
+ */
+export interface SettingsConfig {
+  defaultRates: {
+    /** Employer PF contribution, percent. */
+    pfEmployer: number;
+    /** Employer ESIC contribution, percent. */
+    esicEmployer: number;
+    /** Gratuity accrual, percent. */
+    gratuity: number;
+    /** Statutory bonus, percent. */
+    bonus: number;
+  };
+  /** Day-of-month after which attendance edits lock for payroll processing. */
+  defaultPayrollLockDay: number;
 }

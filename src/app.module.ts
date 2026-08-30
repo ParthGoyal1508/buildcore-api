@@ -5,6 +5,7 @@ import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { SettingsModule } from './settings/settings.module';
 import { UsersModule } from './users/users.module';
 import config from './common/configs/config';
 import type { SecurityConfig } from './common/configs/config.interface';
@@ -35,6 +36,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
 
     AuthModule,
     UsersModule,
+    SettingsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
