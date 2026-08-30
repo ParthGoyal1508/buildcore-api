@@ -69,9 +69,14 @@ describe('PunchService', () => {
     opts: {
       openPunchIn?: { id: string } | null;
       enrolled?: boolean;
+      enrolmentStatus?: FaceEnrolmentStatus;
     } = {},
   ) => {
-    const { openPunchIn = null, enrolled = true } = opts;
+    const {
+      openPunchIn = null,
+      enrolled = true,
+      enrolmentStatus = FaceEnrolmentStatus.enrolled,
+    } = opts;
     biometrics = new FakeBiometrics();
 
     const created: Record<string, unknown>[] = [];
@@ -81,7 +86,7 @@ describe('PunchService', () => {
           enrolled
             ? {
                 id: 'enr-1',
-                status: FaceEnrolmentStatus.enrolled,
+                status: enrolmentStatus,
                 descriptor: Buffer.from(
                   ENROLLED.buffer,
                   ENROLLED.byteOffset,
@@ -234,6 +239,19 @@ describe('PunchService', () => {
       await expect(
         service.submitPunch(caller, punchDto()),
       ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('still accepts a punch while a re-enrolment request is pending', async () => {
+      // FR-014 calls the requester an "already-enrolled employee", and FR-016 keeps
+      // the old template until a re-enrolment actually completes. Blocking here
+      // would lock someone out of attendance for as long as an admin took to
+      // respond — and the usual reason to request re-enrolment is that your face has
+      // stopped matching well, so it penalised precisely the wrong people.
+      const { service } = build({
+        enrolmentStatus: FaceEnrolmentStatus.re_enrolment_requested,
+      });
+      const result = await service.submitPunch(caller, punchDto());
+      expect(result.faceMatchResult).toBe(FaceMatchResult.matched);
     });
 
     it('rejects a punch older than the offline-queue window', async () => {

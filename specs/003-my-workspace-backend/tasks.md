@@ -468,11 +468,11 @@ Appended by a convergence pass over the codebase after Phases 1–11. Each item 
 to the spec/plan artifact it is missing against; none of them blocks a P1 or P2 user
 story, which is why they are listed here rather than reopening an earlier phase.
 
-- [ ] T091 Apply the two migrations written but not yet run
+- [X] T091 Apply the two migrations written but not yet run
       (`20260830140000_reimbursements_and_salary_slips`,
       `20260830140100_reimbursement_and_salary_rls_policies`) via `npm run migrate:dev`,
       then confirm `npm run migrate:status` is clean per plan: Prisma multi-schema (missing)
-- [ ] T092 Run `npm run test:e2e` against a live Postgres — `test/my-workspace.e2e-spec.ts`
+- [X] T092 Run `npm run test:e2e` against a live Postgres — `test/my-workspace.e2e-spec.ts`
       now covers US1–US8 and the audit trail but has never been executed
       per plan: Testing strategy (missing)
 - [ ] T093 Build a notification transport and queue employee/HR notifications on leave
@@ -491,3 +491,43 @@ story, which is why they are listed here rather than reopening an earlier phase.
 - [ ] T096 Run the full `quickstart.md` validation scenarios end-to-end and record
       results (the T087 that Phase 11 could not complete without a running database)
       per plan: quickstart.md (missing)
+
+---
+
+## Phase 13: Convergence
+
+Appended by a second convergence pass, run after Phases 1–12 with all migrations applied
+and the full test suite green. The constitution checks were clean (no cross-schema
+queries, no hardcoded magic values, RLS enabled and forced with a policy on all ten new
+tables), and every endpoint in `contracts/my-workspace-api.md` is implemented. The items
+below are the gaps that remain, and the first one blocks both P1 stories in real use.
+
+- [X] T097 **CRITICAL** — Configure an explicit request body-size limit large enough for
+      base64 photo payloads (e.g. `NestFactory.create(AppModule, { bodyParser: true })`
+      plus `app.use(json({ limit: ... }))`, with the value in centralized config per
+      Principle III, not inline). `src/main.ts` sets none today, so Express's 100 KB JSON
+      default applies, and every realistic enrolment and punch fails with
+      `413 request entity too large`. Verified live against the running API: a three-photo
+      enrolment built from real photographs is 565 KB and returns 413. Punch is worse —
+      `camera-capture.tsx` uploads at full sensor resolution, so a single frame commonly
+      exceeds the limit several times over. Size the limit against the frontend's actual
+      capture output (see the companion task in the web repo) rather than picking a round
+      number, and reject oversized bodies with a message that names the real cause
+      per contract `/my/face-enrol` + `/my/punch`, FR-001, FR-005 (missing)
+
+- [X] T098 Add an e2e case that posts a realistically-sized photo payload — the current
+      fixture in `test/my-workspace.e2e-spec.ts` is a 160-byte 1x1 JPEG, so all 88 tests
+      pass against payloads roughly 3500x smaller than production traffic. That gap is the
+      reason T097 went undetected through a full green suite. Use a photo of representative
+      dimensions (the `@vladmandic/face-api` package ships sample images under `demo/`) and
+      assert the enrolment and punch endpoints accept it
+      per plan: Testing strategy (partial)
+
+- [ ] T099 Make `STORAGE_DRIVER=local` a fatal startup error when `NODE_ENV=production`
+      rather than a logged warning in `src/common/storage/storage.module.ts`. The
+      production host's filesystem is ephemeral, so the current behaviour is an application
+      that starts cleanly, serves correctly, and silently destroys every stored biometric
+      photo on the next deploy or idle spin-down — leaving the retention and deletion
+      obligations unmeetable, with only a log line to say so. Failing to boot is the safer
+      outcome for a misconfiguration whose symptom is otherwise invisible until the data is
+      already gone per FR-026, research.md §8 (partial)

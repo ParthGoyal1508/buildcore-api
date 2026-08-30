@@ -10,6 +10,24 @@ export interface Config {
 
 export interface NestConfig {
   port: number;
+  /**
+   * Maximum accepted request body, as a byte-size string body-parser understands
+   * (e.g. '10mb').
+   *
+   * Express defaults to 100 KB, which is far below what this API actually
+   * receives: enrolment posts three to five base64-encoded photos in one JSON body
+   * and a punch posts one, and base64 adds roughly a third on top of the encoded
+   * bytes. Left at the default, every real enrolment and punch fails with
+   * `413 request entity too large` — while a test suite using small fixture images
+   * passes, which is exactly how that defect survives CI.
+   *
+   * Sized against the frontend's capture cap rather than picked as a round number:
+   * `camera-capture.tsx` limits a frame to 1280px on its longest edge at JPEG
+   * quality 0.85, so five enrolment photos land near 1.5 MB as base64. The default
+   * below leaves generous headroom for larger devices while still bounding how much
+   * a single request can make the server buffer.
+   */
+  maxRequestBodySize: string;
 }
 
 export interface CorsConfig {

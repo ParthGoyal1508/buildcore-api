@@ -9,7 +9,6 @@ import {
   AuditAction,
   AuditEntityType,
   ExceptionResolution,
-  FaceEnrolmentStatus,
   FaceMatchResult,
   GeofenceResult,
   Prisma,
@@ -91,11 +90,22 @@ export class PunchService {
     const enrolment = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
     );
-    if (
-      !enrolment ||
-      enrolment.status !== FaceEnrolmentStatus.enrolled ||
-      !enrolment.descriptor
-    ) {
+    // Gated on holding a usable template, NOT on `status === enrolled`.
+    //
+    // `re_enrolment_requested` means the employee has asked to replace their
+    // template, not that they have lost it: FR-014 describes the requester as an
+    // "already-enrolled employee", and FR-016 deletes the old template only once a
+    // re-enrolment actually completes. Requiring the `enrolled` literal here locked
+    // those employees out of attendance entirely while their request sat waiting for
+    // an admin — and since the reason to request re-enrolment is usually that your
+    // face has stopped matching well, this punished exactly the people already
+    // having the worst time of it.
+    //
+    // Checking the descriptor also makes the three statuses collapse to the only
+    // question that matters, with no list of allowed statuses to keep in sync:
+    // consent withdrawal nulls the descriptor (FR-004), so `not_enrolled` fails
+    // this on its own.
+    if (!enrolment || !enrolment.descriptor) {
       throw new BadRequestException(
         'No enrolled face template. Complete face enrolment before punching.',
       );

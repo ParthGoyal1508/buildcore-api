@@ -21,6 +21,10 @@ function booleanFromEnv(raw: string | undefined, fallback: boolean): boolean {
 const config: Config = {
   nest: {
     port: 3000,
+    // See NestConfig.maxRequestBodySize for why the Express default is unusable
+    // here. Env-overridable so a fleet capturing larger frames can be accommodated
+    // without a code release.
+    maxRequestBodySize: process.env.MAX_REQUEST_BODY_SIZE || '10mb',
   },
   cors: {
     enabled: true,
@@ -31,7 +35,19 @@ const config: Config = {
       : true,
   },
   swagger: {
-    enabled: true,
+    // Off in production unless explicitly switched on. The generated document
+    // describes every route this API exposes — including the `/workspace-admin/*`
+    // endpoints that resolve attendance exceptions and decide leave — so serving it
+    // publicly hands an attacker an accurate, always-current map of the surface to
+    // probe, with the exact shape of each request body. It stays on everywhere else,
+    // where it is the fastest way to try an endpoint.
+    //
+    // SWAGGER_ENABLED overrides in either direction, so a staging deployment can
+    // turn it back on without a code change.
+    enabled: booleanFromEnv(
+      process.env.SWAGGER_ENABLED,
+      process.env.NODE_ENV !== 'production',
+    ),
     title: 'BuildCore API',
     description: 'BuildCore ERP — REST API',
     version: '1.0',

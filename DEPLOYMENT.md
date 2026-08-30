@@ -78,24 +78,66 @@ logs a warning and continues, so a local superuser setup still works. If the che
 cannot run (e.g. a missing catalog grant) it warns and continues rather than blocking a
 deploy on an inconclusive result.
 
-## 3. Object storage (files/documents) — not yet implemented, but required
+## 3. Object storage (Cloudflare R2) — implemented, credentials required
 
-Multiple specs require "encrypted object-storage references" for uploaded files, though **no
-vendor has been chosen yet** — this is an open infra decision, not just a deployment step:
+Implemented as of feature 003 (constitution v1.4.0). `StorageService` has two adapters chosen by
+`STORAGE_DRIVER`: `local` (AES-256-GCM encrypted files, dev/test only) and `s3` (any S3-compatible
+provider). Blobs are encrypted **in the application before upload**, so the provider only ever holds
+ciphertext it has no key for — that is why provider-side encryption alone was not sufficient.
 
-- `specs/003-my-workspace-backend`: biometric enrolment photos, expense `receiptRef`
-- `specs/005-hr-payroll-backend`: `EmployeeDocument.fileRef`
-- `specs/007-partners-backend`: contractor vault document uploads (FR-011)
-- `specs/008-projects-backend`: per-project file attachments
+Consumers today: biometric enrolment photos and punch photos (003). Later: expense `receiptRef`
+(003), `EmployeeDocument.fileRef` (005), contractor vault uploads (007), project attachments (008).
 
-- [ ] Pick a provider (free-tier options, all S3-API-compatible so the code stays portable):
-  - **Cloudflare R2** — 10GB storage free, **zero egress fees** (the others charge for egress) — best fit if downloads matter.
-  - **Supabase Storage** — 1GB free; only worth it if you also pick Supabase for Postgres (§2), otherwise skip.
-  - **Backblaze B2** — 10GB free, small egress allowance.
-  - ~~AWS S3~~ — free tier is 12 months only, then billed; skip unless you're already in the AWS ecosystem.
-- [ ] Decide where encryption happens: server-side encryption at the bucket (provider-managed) vs. app-level encryption before upload — the specs say "encrypted," check which tier they mean before building the upload handler.
-- [ ] Add bucket credentials (access key/secret, bucket name, endpoint) as platform secrets alongside `DATABASE_URL`/JWT secrets.
-- [ ] Note: `specs/005-hr-payroll-backend/research.md` §10 explicitly defers virus scanning on uploads (`TODO(VIRUS_SCAN)`) — tracked as a known gap, not blocking deployment, but worth remembering before this goes live with real user uploads.
+> **`STORAGE_DRIVER=local` in production silently destroys data.** Render's filesystem is ephemeral
+> and free instances cannot attach a persistent disk, so every stored photo is lost on the next
+> deploy or idle spin-down. The app logs a warning but still starts. Treat setting `s3` as mandatory.
+
+### 3a. Create the R2 bucket
+
+- [ ] Sign up at <https://dash.cloudflare.com/sign-up> (free; email verification required).
+- [ ] R2 requires a payment method on file even though the free tier bills $0 — add a card under
+      **Manage Account → Billing → Payment info**. If you would rather not, Backblaze B2 (10 GB) or
+      Supabase Storage (1 GB, no card) work with the same adapter; only the endpoint changes.
+- [ ] **R2 → Overview → Create bucket**. Name it (e.g. `buildcore-blobs`), pick a location hint near
+      your users, and leave public access **off** — every read goes through the API, never the browser.
+- [ ] **R2 → Manage API Tokens → Create API Token**, scoped **Object Read & Write** and restricted to
+      that one bucket. Copy the **Access Key ID** and **Secret Access Key** — the secret is shown once.
+- [ ] Note the **Account ID** from the R2 overview page; the endpoint is
+      `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+
+### 3b. Set the environment variables
+
+- [ ] Generate the blob encryption key — **32 bytes, hex**:
+      ```
+      node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      ```
+      Store it somewhere durable before deploying. It is not recoverable, and losing it makes every
+      stored photo permanently undecryptable — the blobs survive, the ability to read them does not.
+- [ ] Set on the platform (never commit these):
+      ```
+      STORAGE_DRIVER=s3
+      STORAGE_ENCRYPTION_KEY=<64 hex chars>
+      STORAGE_S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      STORAGE_S3_REGION=auto
+      STORAGE_S3_BUCKET=buildcore-blobs
+      STORAGE_S3_ACCESS_KEY_ID=<from the API token>
+      STORAGE_S3_SECRET_ACCESS_KEY=<from the API token>
+      STORAGE_S3_FORCE_PATH_STYLE=true
+      ```
+      `STORAGE_S3_FORCE_PATH_STYLE=true` is required by R2 and most S3-compatible providers; real
+      AWS S3 wants `false`. `region=auto` is R2's convention.
+- [ ] The S3 adapter validates all of these at construction, so a missing variable fails at startup
+      rather than on a worker's first punch.
+
+### 3c. Retention
+
+- [ ] `WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS` (default 15) exists and is read into config, but **no
+      job consumes it yet** — see open task T094. Until that lands, punch photos accumulate
+      indefinitely, which both grows toward the 10 GB free ceiling and leaves FR-026's
+      retention-policy requirement unmet. Not a hard blocker for a pilot; is one before real scale.
+- [ ] Virus scanning on uploads is explicitly deferred (`TODO(VIRUS_SCAN)`,
+      `specs/005-hr-payroll-backend/research.md` §10) — a known gap, worth remembering before real
+      user uploads.
 
 ## 4. Redis (BullMQ job queue) — not yet implemented, but required
 
@@ -119,12 +161,9 @@ export (tasks.md T001-T002). Not yet in `docker-compose.yml` or `package.json`.
   ```
 - [ ] Set `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PORT` in the platform's env var / secrets UI (never commit `.env`).
 - [ ] Set `NODE_ENV=production`.
-- [ ] **Restrict CORS.** `src/main.ts` currently calls `app.enableCors()` with no options — this allows *any* origin. Before going live, lock it to the deployed frontend domain(s), e.g.:
-  ```ts
-  app.enableCors({ origin: [process.env.FRONTEND_URL, 'https://*.vercel.app'] });
-  ```
-  (Coordinate the exact origin(s) with the frontend checklist.)
-- [ ] Decide whether Swagger (`/api` docs) should stay open in prod — currently `swagger.enabled: true` unconditionally in `src/common/configs/config.ts`. If it should be gated, wire it off an env var.
+- [ ] **Restrict CORS.** Driven by `CORS_ORIGINS` (comma-separated) in `src/common/configs/config.ts`; unset means *allow any origin*, which is fine locally and wrong in production. Set it to the deployed frontend domain(s). Note this also flips the refresh cookie to `SameSite=none`, which is required for the split-origin (Vercel + Render) deployment.
+- [ ] **Swagger is now gated** — `swagger.enabled` defaults to `NODE_ENV !== 'production'`, so `/api` and `/api-json` return 404 in production without any further action. Set `SWAGGER_ENABLED=true` only if you deliberately want docs on a staging deployment.
+- [ ] Set `MAX_REQUEST_BODY_SIZE` if your devices produce unusually large captures; the 10 MB default covers a five-photo enrolment with headroom.
 
 ## 6. Docker / build
 

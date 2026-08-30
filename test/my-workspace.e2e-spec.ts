@@ -1,10 +1,13 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 import { hash } from 'argon2';
+import { readFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { Permission } from '@prisma/client';
 import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import {
   BiometricsService,
@@ -181,14 +184,12 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       .useValue(biometrics)
       .compile();
 
-    app = moduleFixture.createNestApplication();
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
+    // `bodyParser: false` + configureApp() applies the SAME parsers and pipes
+    // main.ts does, rather than hand-copying a subset of them. Mirroring by hand is
+    // what previously let the suite pass against an app configured differently from
+    // the deployed one — see configure-app.ts.
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
     await app.init();
 
     prisma = app.get(PrismaService);
@@ -1550,6 +1551,69 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
   });
 
   // -------------------------------------------------------------- Audit trail
+  // -------------------------------------------------- Realistic payload sizes
+  describe('Accepts realistically-sized photo payloads (T098)', () => {
+    /**
+     * Every other test in this suite posts a 160-byte 1x1 JPEG, which is roughly
+     * 3500x smaller than what the app actually uploads. That gap is not academic:
+     * it let the API ship with Express's 100 KB body default still in place, so a
+     * fully green suite coexisted with an enrolment endpoint that returned
+     * `413 request entity too large` for every real request.
+     *
+     * These cases post photographs of representative dimensions — the face-api
+     * package ships sample images — so a body limit regression fails here instead
+     * of in the field.
+     */
+    const demoDir = join(
+      dirname(require.resolve('@vladmandic/face-api/package.json')),
+      'demo',
+    );
+    const realPhoto = () =>
+      readFileSync(join(demoDir, 'sample1.jpg')).toString('base64');
+
+    beforeAll(async () => {
+      await http().delete('/my/face-enrol/consent').set(auth(employeeToken));
+    });
+
+    it('accepts a three-photo enrolment built from real photographs', async () => {
+      const photos = [realPhoto(), realPhoto(), realPhoto()];
+      const payloadKb = Math.round(JSON.stringify({ photos }).length / 1024);
+      // Guards the guard: if the fixture ever shrinks back to a token image, this
+      // test would still pass while testing nothing.
+      expect(payloadKb).toBeGreaterThan(100);
+
+      biometrics.nextValue = 0.5;
+      const res = await http()
+        .post('/my/face-enrol')
+        .set(auth(employeeToken))
+        .send({
+          photos,
+          consentMethod: 'digital',
+          consentAcknowledged: true,
+        });
+
+      expect(res.status).not.toBe(413);
+      expect(res.status).toBe(201);
+      expect(res.body.status).toBe('enrolled');
+    });
+
+    it('accepts a punch carrying a real photograph', async () => {
+      const res = await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(punchBody({ photo: realPhoto() }));
+
+      expect(res.status).not.toBe(413);
+      expect(res.status).toBe(201);
+
+      await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(punchBody({ type: 'out', photo: realPhoto() }))
+        .expect(201);
+    });
+  });
+
   describe('Audit trail covers every new entity type (T087a, SC-009)', () => {
     it('writes a correctly attributed entry for each of the five types', async () => {
       // Every action in the suites above has already happened; this asserts that

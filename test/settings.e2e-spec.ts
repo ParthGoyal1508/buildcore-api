@@ -1,9 +1,10 @@
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 import { hash } from 'argon2';
 import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/common/configure-app';
 import { ReferenceDataService } from '../src/settings/reference-data/reference-data.service';
 import { EmployeeCodeService } from '../src/settings/employee-code/employee-code.service';
 import { CompaniesService } from '../src/settings/companies/companies.service';
@@ -66,15 +67,12 @@ describe('Settings module (e2e)', () => {
       imports: [AppModule],
     }).compile();
 
-    app = moduleFixture.createNestApplication();
-    // Mirrors main.ts — without it, DTO validation (and its 400s) wouldn't run.
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
+    // `bodyParser: false` + configureApp() applies the SAME parsers and pipes
+    // main.ts does, rather than hand-copying a subset of them. Mirroring by hand is
+    // what previously let the suite pass against an app configured differently from
+    // the deployed one — see configure-app.ts.
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
     await app.init();
 
     prisma = app.get(PrismaService);
