@@ -35,4 +35,9 @@ lerna-debug.log*
 !.vscode/extensions.json
 
 .env
+# Any local env file may hold real credentials (production connection strings for
+# Studio/psql, for instance). Ignore them all; .env.example is the one exception,
+# and it must never contain a real secret.
+.env*
+!.env.example
 .github/instructions/wmt-copilot.instructions.md
