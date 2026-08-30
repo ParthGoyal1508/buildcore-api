@@ -176,18 +176,18 @@ status is correct.
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T040 [P] [US3] E2e test: month history reflects Present/Absent/On Leave/Weekly Off/Holiday
+- [X] T040 [P] [US3] E2e test: month history reflects Present/Absent/On Leave/Weekly Off/Holiday
       correctly; empty months return blank rather than error; another employee's history is
       rejected in `test/my-workspace.e2e-spec.ts`
-- [ ] T041 [P] [US3] Unit test for the per-day status computation function (research.md §6) in
+- [X] T041 [P] [US3] Unit test for the per-day status computation function (research.md §6) in
       `src/hr/punch/attendance-history.service.spec.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T042 [US3] Implement `src/hr/punch/attendance-history.service.ts`: `getMonthHistory(employeeId,
+- [X] T042 [US3] Implement `src/hr/punch/attendance-history.service.ts`: `getMonthHistory(employeeId,
       month, year)` computing per-day status from punches, approved leave (`LeaveModule`'s exported
       lookup), and `SitesService`'s holiday/weekly-off data (research.md §6) (depends on T015, T016)
-- [ ] T043 [US3] Add `GET /my/punch/history?month=&year=` to `punch.controller.ts` (depends on T042)
+- [X] T043 [US3] Add `GET /my/punch/history?month=&year=` to `punch.controller.ts` (depends on T042)
 
 **Checkpoint**: User Stories 1–3 independently functional.
 
@@ -203,34 +203,34 @@ admin approves another application and the covered dates show On Leave in attend
 
 ### Tests for User Story 4 ⚠️
 
-- [ ] T044 [P] [US4] E2e test: leave balance view; apply (day-count excludes weekends/holidays);
+- [X] T044 [P] [US4] E2e test: leave balance view; apply (day-count excludes weekends/holidays);
       over-balance rejection (non-LWP); LWP never balance-checked in `test/my-workspace.e2e-spec.ts`
-- [ ] T045 [P] [US4] E2e test: cancel a Pending application (success + 409 on non-Pending), and a
+- [X] T045 [P] [US4] E2e test: cancel a Pending application (success + 409 on non-Pending), and a
       caller cannot list, cancel, or view another employee's leave balance/applications (FR-022,
       FR-028) in `test/my-workspace.e2e-spec.ts`
-- [ ] T046 [P] [US4] E2e test: admin approve/reject (remarks required on reject), notification
+- [X] T046 [P] [US4] E2e test: admin approve/reject (remarks required on reject), notification
       queued, approved dates show On Leave in attendance history in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T047 [P] [US4] E2e test: leave create/edit rejected (423) within an already payroll-locked
+- [X] T047 [P] [US4] E2e test: leave create/edit rejected (423) within an already payroll-locked
       period in `test/my-workspace.e2e-spec.ts`
-- [ ] T048 [P] [US4] Unit test for the day-count calculation (excludes weekends + site holidays) in
+- [X] T048 [P] [US4] Unit test for the day-count calculation (excludes weekends + site holidays) in
       `src/hr/leave/leave.service.spec.ts`
 
 ### Implementation for User Story 4
 
-- [ ] T049 [P] [US4] Create `src/hr/leave/dto/leave-application.dto.ts` and
+- [X] T049 [P] [US4] Create `src/hr/leave/dto/leave-application.dto.ts` and
       `src/hr/leave/dto/leave-decision.dto.ts`
-- [ ] T050 [US4] Implement `src/hr/leave/leave.service.ts`: `getBalance()`, `apply()` (day-count via
+- [X] T050 [US4] Implement `src/hr/leave/leave.service.ts`: `getBalance()`, `apply()` (day-count via
       `SitesService.getHolidayCalendar()`, balance check), `cancel()`, `listMine()`, `decide()`
       (admin approve/reject, notification queue) — FR-018–FR-022a (depends on T015, T016)
-- [ ] T051 [US4] Implement `src/hr/leave/leave.controller.ts`: `GET /my/leave/balance`,
+- [X] T051 [US4] Implement `src/hr/leave/leave.controller.ts`: `GET /my/leave/balance`,
       `GET/POST /my/leave/applications`, `POST /my/leave/applications/:id/cancel` (depends on T050)
-- [ ] T052 [US4] Implement `src/hr/leave/leave-admin.controller.ts`:
+- [X] T052 [US4] Implement `src/hr/leave/leave-admin.controller.ts`:
       `GET /workspace-admin/leave-applications`,
       `POST /workspace-admin/leave-applications/:id/decide`, permission-guarded (depends on T050)
-- [ ] T053 [US4] Wire audit logging (entityType `LEAVE_APPLICATION`) into apply/cancel/decide paths
+- [X] T053 [US4] Wire audit logging (entityType `LEAVE_APPLICATION`) into apply/cancel/decide paths
       of `leave.service.ts` — FR-027
-- [ ] T054 [US4] Register `LeaveController`, `LeaveAdminController`, `LeaveService` in
+- [X] T054 [US4] Register `LeaveController`, `LeaveAdminController`, `LeaveService` in
       `src/hr/hr.module.ts`
 
 **Checkpoint**: User Stories 1–4 independently functional.
@@ -246,22 +246,22 @@ same figures for a Processed period.
 
 ### Tests for User Story 5 ⚠️
 
-- [ ] T055 [P] [US5] E2e test: available-periods excludes Draft; slip view returns full projection;
+- [X] T055 [P] [US5] E2e test: available-periods excludes Draft; slip view returns full projection;
       PDF download returns `application/pdf` with matching figures; 404 for a Draft period; another
       employee's slip is rejected in `test/my-workspace.e2e-spec.ts`
-- [ ] T056 [P] [US5] Unit test for `SalaryPdfService`'s figure-to-PDF mapping (same source data,
+- [X] T056 [P] [US5] Unit test for `SalaryPdfService`'s figure-to-PDF mapping (same source data,
       no divergence from the JSON response) in `src/payroll/salary/salary-pdf.service.spec.ts`
 
 ### Implementation for User Story 5
 
-- [ ] T057 [P] [US5] Implement `src/payroll/salary/salary.service.ts`: `getAvailablePeriods()`
+- [X] T057 [P] [US5] Implement `src/payroll/salary/salary.service.ts`: `getAvailablePeriods()`
       (filters `PayrollRun.status`), `getSlip(period)`
-- [ ] T058 [US5] Implement `src/payroll/salary/salary-pdf.service.ts`: `pdfkit`-based rendering
+- [X] T058 [US5] Implement `src/payroll/salary/salary-pdf.service.ts`: `pdfkit`-based rendering
       from the same slip projection `salary.service.ts` returns — research.md §7
-- [ ] T059 [US5] Implement `src/payroll/salary/salary.controller.ts`:
+- [X] T059 [US5] Implement `src/payroll/salary/salary.controller.ts`:
       `GET /my/salary/available-periods`, `GET /my/salary/:period`, `GET /my/salary/:period/pdf`
       (depends on T057, T058)
-- [ ] T060 [US5] Register `SalaryController`/`SalaryService`/`SalaryPdfService` in
+- [X] T060 [US5] Register `SalaryController`/`SalaryService`/`SalaryPdfService` in
       `src/payroll/payroll.module.ts`
 
 **Checkpoint**: User Stories 1–5 independently functional.
@@ -278,16 +278,16 @@ validated (geofence/face/payroll-lock) against that declared date, not the reque
 
 ### Tests for User Story 6 ⚠️
 
-- [ ] T061 [P] [US6] E2e test: offline-synced punch preserves declared `capturedAt`, tags
+- [X] T061 [P] [US6] E2e test: offline-synced punch preserves declared `capturedAt`, tags
       `isOfflineSync: true`, stores `receivedAt` separately in `test/my-workspace.e2e-spec.ts`
-- [ ] T062 [P] [US6] E2e test: `capturedAt` older than the configured max offline-queue age is
+- [X] T062 [P] [US6] E2e test: `capturedAt` older than the configured max offline-queue age is
       rejected (400) in `test/my-workspace.e2e-spec.ts`
-- [ ] T063 [P] [US6] Unit test for the offline-sync tagging + clock-skew-tolerance logic
+- [X] T063 [P] [US6] Unit test for the offline-sync tagging + clock-skew-tolerance logic
       (research.md §4) in `src/hr/punch/punch.service.spec.ts`
 
 ### Implementation for User Story 6
 
-- [ ] T064 [US6] Extend `punch.service.ts`'s `submitPunch()` (T035) with the
+- [X] T064 [US6] Extend `punch.service.ts`'s `submitPunch()` (T035) with the
       `isOfflineSync`/`maxOfflineQueueAgeHours` logic from research.md §4 (depends on T035)
 
 **Checkpoint**: User Stories 1–6 independently functional.
@@ -304,32 +304,32 @@ unlock consumed; separately, a completion attempt with no/expired/consumed unloc
 
 ### Tests for User Story 7 ⚠️
 
-- [ ] T065 [P] [US7] E2e test: request → approve (employee notified) → complete (old template
+- [X] T065 [P] [US7] E2e test: request → approve (employee notified) → complete (old template
       replaced, unlock consumed) in `test/my-workspace.e2e-spec.ts`
-- [ ] T066 [P] [US7] E2e test: reject (remarks required, no unlock granted, employee notified);
+- [X] T066 [P] [US7] E2e test: reject (remarks required, no unlock granted, employee notified);
       completion with no unlock (403); completion after unlock already consumed (403) in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T067 [P] [US7] E2e test: completion after 7-day unlock expiry is rejected (403) in
+- [X] T067 [P] [US7] E2e test: completion after 7-day unlock expiry is rejected (403) in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T068 [P] [US7] E2e test: consent withdrawal while a request is pending auto-closes it and
+- [X] T068 [P] [US7] E2e test: consent withdrawal while a request is pending auto-closes it and
       reverts status in `test/my-workspace.e2e-spec.ts`
-- [ ] T069 [P] [US7] Unit test for the unlock-validity check (active/unexpired/unconsumed) in
+- [X] T069 [P] [US7] Unit test for the unlock-validity check (active/unexpired/unconsumed) in
       `src/hr/biometrics/face-enrolment.service.spec.ts`
 
 ### Implementation for User Story 7
 
-- [ ] T070 [P] [US7] Create `src/hr/biometrics/dto/re-enrolment-request.dto.ts` and
+- [X] T070 [P] [US7] Create `src/hr/biometrics/dto/re-enrolment-request.dto.ts` and
       `dto/re-enrolment-complete.dto.ts`
-- [ ] T071 [US7] Extend `face-enrolment.service.ts` (T024) with `requestReEnrolment()`,
+- [X] T071 [US7] Extend `face-enrolment.service.ts` (T024) with `requestReEnrolment()`,
       `decideReEnrolment()` (admin approve/reject, unlock issuance, queues an employee notification
       on both approval and rejection per FR-023), `completeReEnrolment()` (unlock-validity check,
       template replace, unlock consume) — FR-013–FR-016, FR-023
-- [ ] T072 [US7] Extend `face-enrolment.controller.ts` (T025) with
+- [X] T072 [US7] Extend `face-enrolment.controller.ts` (T025) with
       `POST /my/face-enrol/re-enrolment-request`, `POST /my/face-enrol/re-enrolment-complete`, and
       an admin decide endpoint (permission-guarded) (depends on T071)
-- [ ] T073 [US7] Wire the consent-withdrawal auto-close-pending-request behavior (FR-017) into
+- [X] T073 [US7] Wire the consent-withdrawal auto-close-pending-request behavior (FR-017) into
       `withdrawConsent()` (T024)
-- [ ] T074 [US7] Wire audit logging (entityType `RE_ENROLMENT_REQUEST`) into request/decide/
+- [X] T074 [US7] Wire audit logging (entityType `RE_ENROLMENT_REQUEST`) into request/decide/
       complete paths of `face-enrolment.service.ts` — FR-027
 
 **Checkpoint**: All seven original user stories independently functional.
@@ -346,26 +346,26 @@ receipt (rejected), then with one (created, Submitted); confirm it appears in ow
 
 ### Tests for User Story 8 ⚠️
 
-- [ ] T078 [P] [US8] E2e test: create claim below/above receipt threshold (with/without receipt)
+- [X] T078 [P] [US8] E2e test: create claim below/above receipt threshold (with/without receipt)
       in `test/my-workspace.e2e-spec.ts`
-- [ ] T079 [P] [US8] E2e test: edit/delete a Draft claim; withdraw a Submitted claim only while
+- [X] T079 [P] [US8] E2e test: edit/delete a Draft claim; withdraw a Submitted claim only while
       Pending in `test/my-workspace.e2e-spec.ts`
-- [ ] T080 [P] [US8] E2e test: one employee cannot read or act on another's claim in
+- [X] T080 [P] [US8] E2e test: one employee cannot read or act on another's claim in
       `test/my-workspace.e2e-spec.ts`
 
 ### Implementation for User Story 8
 
-- [ ] T081 [P] [US8] Create `src/hr/reimbursements/dto/create-claim.dto.ts` and
+- [X] T081 [P] [US8] Create `src/hr/reimbursements/dto/create-claim.dto.ts` and
       `dto/update-claim.dto.ts`
-- [ ] T082 [US8] Implement `src/hr/reimbursements/reimbursement.service.ts` — `createClaim()`
+- [X] T082 [US8] Implement `src/hr/reimbursements/reimbursement.service.ts` — `createClaim()`
       (reads category config via `SettingsService.getReimbursementCategories()`, enforces the
       receipt-threshold rule), `updateClaim()`, `withdrawClaim()`, `listOwnClaims()` — FR-029–
       FR-032 (depends on T081)
-- [ ] T083 [US8] Implement `src/hr/reimbursements/reimbursement.controller.ts` — `POST /my/
+- [X] T083 [US8] Implement `src/hr/reimbursements/reimbursement.controller.ts` — `POST /my/
       reimbursements`, `PATCH /my/reimbursements/:id`, `POST /my/reimbursements/:id/withdraw`,
       `GET /my/reimbursements` — all scoped to the caller's own employee record (FR-033),
       permission-guarded (depends on T082)
-- [ ] T084 [US8] Wire audit logging (entityType `REIMBURSEMENT_CLAIM`) into
+- [X] T084 [US8] Wire audit logging (entityType `REIMBURSEMENT_CLAIM`) into
       `reimbursement.service.ts` — FR-027
 
 **Checkpoint**: All eight user stories independently functional.
@@ -374,20 +374,20 @@ receipt (rejected), then with one (created, Submitted); confirm it appears in ow
 
 ## Phase 11: Polish & Cross-Cutting Concerns
 
-- [ ] T085 [P] Run `npm run lint` and `npm run build` across all new/modified files
-- [ ] T086 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`,
+- [X] T085 [P] Run `npm run lint` and `npm run build` across all new/modified files
+- [X] T086 [P] Add `@nestjs/swagger` decorators to every controller under `src/hr/`,
       `src/projects/`, `src/payroll/salary/`
 - [ ] T087 Run the full `quickstart.md` validation scenarios end-to-end and record results
-- [ ] T087a [P] E2e test: perform one action producing each new `AuditLogEntry.entityType`
+- [X] T087a [P] E2e test: perform one action producing each new `AuditLogEntry.entityType`
       (`PUNCH`, `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST`,
       `REIMBURSEMENT_CLAIM`), then query `AuditLogEntry` directly and assert each row's
       `entityType`, `action`, `entityId`, acting account, `companyId`, and timestamp are correct —
       spec SC-009 — in `test/my-workspace.e2e-spec.ts`
-- [ ] T088 [P] Review every `companyId`-scoped table for RLS coverage and confirm the Super Admin
+- [X] T088 [P] Review every `companyId`-scoped table for RLS coverage and confirm the Super Admin
       bypass flag still behaves correctly — Constitution Principle IV
-- [ ] T089 [P] Confirm biometric photo/descriptor storage is encrypted at rest and every access is
+- [X] T089 [P] Confirm biometric photo/descriptor storage is encrypted at rest and every access is
       audit-logged — FR-026, research.md §8
-- [ ] T090 Update `.env.example` with any new `WorkspaceConfig` environment variables
+- [X] T090 Update `.env.example` with any new `WorkspaceConfig` environment variables
 
 ---
 
@@ -459,3 +459,35 @@ Task: "Create src/hr/biometrics/dto/enrol.dto.ts"
    portal
 4. US6 (Offline sync) → US7 (Re-enrolment) → each tested independently → resilience + biometric
    lifecycle complete
+
+---
+
+## Phase 12: Convergence
+
+Appended by a convergence pass over the codebase after Phases 1–11. Each item traces
+to the spec/plan artifact it is missing against; none of them blocks a P1 or P2 user
+story, which is why they are listed here rather than reopening an earlier phase.
+
+- [ ] T091 Apply the two migrations written but not yet run
+      (`20260830140000_reimbursements_and_salary_slips`,
+      `20260830140100_reimbursement_and_salary_rls_policies`) via `npm run migrate:dev`,
+      then confirm `npm run migrate:status` is clean per plan: Prisma multi-schema (missing)
+- [ ] T092 Run `npm run test:e2e` against a live Postgres — `test/my-workspace.e2e-spec.ts`
+      now covers US1–US8 and the audit trail but has never been executed
+      per plan: Testing strategy (missing)
+- [ ] T093 Build a notification transport and queue employee/HR notifications on leave
+      approval and rejection, re-enrolment approval and rejection, re-enrolment request
+      submission, and attendance-exception resolution. Every one of those call sites
+      currently records the decision and stops — the only transport in the codebase is
+      `MailService.sendAccountLockedEmail` per FR-023, FR-014, FR-011a, FR-022a (missing)
+- [ ] T094 Add the punch-photo purge that `WorkspaceConfig.photoRetention.punchPhotoDays`
+      exists for. The setting is configured and documented in `.env.example` but has no
+      consumer anywhere in `src/`, so punch photos are currently retained indefinitely
+      per FR-026, research.md §8 (missing)
+- [ ] T095 Measure a punch-in round trip (photo + GPS submission through recorded
+      response) against SC-001's 10-second budget with the real face-api backend, and
+      record the result — the e2e suite substitutes a deterministic matcher, so nothing
+      currently exercises real inference latency per SC-001 (missing)
+- [ ] T096 Run the full `quickstart.md` validation scenarios end-to-end and record
+      results (the T087 that Phase 11 could not complete without a running database)
+      per plan: quickstart.md (missing)

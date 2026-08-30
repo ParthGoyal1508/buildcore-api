@@ -1,13 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { PunchType } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
   IsEnum,
   IsIn,
+  IsInt,
   IsISO8601,
   IsLatitude,
   IsLongitude,
   IsNotEmpty,
   IsString,
+  Max,
+  Min,
 } from 'class-validator';
 
 export class SubmitPunchDto {
@@ -62,4 +66,27 @@ export class ResolveExceptionDto {
   @ApiProperty({ enum: ['confirmed', 'rejected'] })
   @IsIn(['confirmed', 'rejected'])
   resolution: 'confirmed' | 'rejected';
+}
+
+/**
+ * The month an attendance-history request is for.
+ *
+ * `@Type(() => Number)` because query parameters arrive as strings and the range
+ * validators below would otherwise reject every request; the global ValidationPipe
+ * runs with `transform: true`, which is what makes the conversion happen.
+ */
+export class AttendanceHistoryQueryDto {
+  @ApiProperty({ minimum: 1, maximum: 12, example: 9 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  month: number;
+
+  @ApiProperty({ minimum: 2000, maximum: 2999, example: 2026 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2999)
+  year: number;
 }

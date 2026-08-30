@@ -1,5 +1,13 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
-import { ConsentMethod, FaceEnrolmentStatus } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
+import {
+  ConsentMethod,
+  FaceEnrolmentStatus,
+  ReEnrolmentRequestStatus,
+} from '@prisma/client';
 import { createPrismaMock } from '../../settings/testing/prisma-mock';
 import {
   BiometricsService,
@@ -60,7 +68,10 @@ describe('FaceEnrolmentService', () => {
   };
   let auditLog: { record: jest.Mock };
 
-  const build = (existingEnrolment: unknown = null) => {
+  const build = (
+    existingEnrolment: unknown = null,
+    reEnrolmentOverrides: Record<string, unknown> = {},
+  ) => {
     biometrics = new FakeBiometrics();
     storage = {
       put: jest.fn().mockResolvedValue('face-enrolment/ref-1'),
@@ -81,9 +92,14 @@ describe('FaceEnrolmentService', () => {
           id: 'enr-1',
           status: FaceEnrolmentStatus.not_enrolled,
         }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       reEnrolmentRequest: {
         updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'req-1' }),
+        update: jest.fn().mockResolvedValue({ id: 'req-1' }),
+        ...reEnrolmentOverrides,
       },
     });
 
@@ -103,6 +119,7 @@ describe('FaceEnrolmentService', () => {
           minEnrolmentPhotos: 3,
           maxEnrolmentPhotos: 5,
         },
+        reEnrolment: { unlockDurationDays: 7 },
       }),
     };
 
@@ -227,6 +244,117 @@ describe('FaceEnrolmentService', () => {
           where: { employeeId: 'emp-1', status: 'pending' },
         }),
       );
+    });
+  });
+
+  /**
+   * The unlock check (T069, FR-013/FR-015/FR-016).
+   *
+   * Three things have to be true at once for a fresh capture to be allowed: an
+   * approval exists, its window has not closed, and it has not already been spent.
+   * Each is asserted separately below, because dropping any one of them turns a
+   * single approval into a standing licence to replace the face template.
+   */
+  describe('completeReEnrolment', () => {
+    const enrolled = {
+      id: 'enr-1',
+      status: FaceEnrolmentStatus.re_enrolment_requested,
+      photoRefs: ['old-a'],
+    };
+    /** The query the service issues already encodes "active"; a null result is
+     * how the database says none of the three conditions held. */
+    const noActiveUnlock = { findFirst: jest.fn().mockResolvedValue(null) };
+    const activeUnlock = {
+      findFirst: jest.fn().mockResolvedValue({
+        id: 'req-1',
+        unlockExpiresAt: new Date(Date.now() + 86_400_000),
+        unlockConsumedAt: null,
+      }),
+    };
+
+    it('replaces the template when an active unlock exists', async () => {
+      const { service, prisma } = build(enrolled, activeUnlock);
+      prisma.tx.faceEnrolment.update = jest.fn().mockResolvedValue({
+        id: 'enr-1',
+        status: FaceEnrolmentStatus.enrolled,
+        enrolledAt: new Date(),
+      });
+
+      const result = await service.completeReEnrolment(caller, photos(3));
+      expect(result.status).toBe(FaceEnrolmentStatus.enrolled);
+    });
+
+    it('consumes the unlock in the same transaction as the replacement', async () => {
+      // If consumption could fail separately, a spent unlock would still look
+      // available and the approval would be reusable.
+      const { service, prisma } = build(enrolled, activeUnlock);
+      prisma.tx.faceEnrolment.update = jest.fn().mockResolvedValue({
+        id: 'enr-1',
+        status: FaceEnrolmentStatus.enrolled,
+        enrolledAt: new Date(),
+      });
+
+      await service.completeReEnrolment(caller, photos(3));
+      expect(prisma.tx.reEnrolmentRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'req-1' },
+          data: expect.objectContaining({
+            unlockConsumedAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('deletes the previous photos once the new template is in place', async () => {
+      const { service, prisma } = build(enrolled, activeUnlock);
+      prisma.tx.faceEnrolment.update = jest.fn().mockResolvedValue({
+        id: 'enr-1',
+        status: FaceEnrolmentStatus.enrolled,
+        enrolledAt: new Date(),
+      });
+
+      await service.completeReEnrolment(caller, photos(3));
+      expect(storage.deleteMany).toHaveBeenCalledWith(['old-a']);
+    });
+
+    it('rejects a capture with no unlock at all', async () => {
+      const { service } = build(enrolled, noActiveUnlock);
+      await expect(
+        service.completeReEnrolment(caller, photos(3)),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('asks only for unlocks that are approved, unexpired, and unconsumed', async () => {
+      // The three conditions live in the query, so this asserts the query rather
+      // than re-implementing the check in the test.
+      const { service, prisma } = build(enrolled, noActiveUnlock);
+      await expect(
+        service.completeReEnrolment(caller, photos(3)),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      const where = (prisma.tx.reEnrolmentRequest.findFirst as jest.Mock).mock
+        .calls[0][0].where;
+      expect(where.status).toBe(ReEnrolmentRequestStatus.approved);
+      expect(where.unlockConsumedAt).toBeNull();
+      expect(where.unlockExpiresAt).toEqual({ gt: expect.any(Date) });
+      expect(where.employeeId).toBe('emp-1');
+    });
+
+    it('never touches the stored template when the unlock check fails', async () => {
+      const { service, prisma } = build(enrolled, noActiveUnlock);
+      await expect(
+        service.completeReEnrolment(caller, photos(3)),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+
+      expect(prisma.tx.faceEnrolment.update).not.toHaveBeenCalled();
+      expect(storage.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('enforces the photo bounds before looking for an unlock', async () => {
+      const { service } = build(enrolled, activeUnlock);
+      await expect(
+        service.completeReEnrolment(caller, photos(2)),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });

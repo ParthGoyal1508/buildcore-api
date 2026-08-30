@@ -288,5 +288,78 @@ describe('PunchService', () => {
       );
       expect(result.isOfflineSync).toBe(true);
     });
+
+    it('does not flag a punch just inside the skew tolerance', async () => {
+      // The tolerance is configured at 5 minutes; 4 is ordinary drift, and
+      // labelling it an offline sync would mark almost every normal punch.
+      const { service } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({
+          capturedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+        }),
+      );
+      expect(result.isOfflineSync).toBe(false);
+    });
+
+    it('flags a punch just outside the skew tolerance', async () => {
+      const { service } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({
+          capturedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
+        }),
+      );
+      expect(result.isOfflineSync).toBe(true);
+    });
+
+    it('does not flag a punch whose clock runs ahead of the server', async () => {
+      // A client clock a little fast produces a future capturedAt. That is drift
+      // in the other direction, not a queued punch, and treating it as offline
+      // would misreport a perfectly ordinary punch.
+      const { service } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: new Date(Date.now() + 60_000).toISOString() }),
+      );
+      expect(result.isOfflineSync).toBe(false);
+    });
+
+    it('records the declared capture time and the receipt time separately', async () => {
+      // FR-012 requires both: flattening them into one timestamp would hide that
+      // the punch was written retroactively.
+      const queued = new Date(Date.now() - 2 * 3_600_000);
+      const { service, created } = build();
+      await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: queued.toISOString() }),
+      );
+
+      const row = created[0] as {
+        capturedAt: Date;
+        receivedAt: Date;
+        isOfflineSync: boolean;
+      };
+      expect(row.capturedAt.toISOString()).toBe(queued.toISOString());
+      expect(row.receivedAt.getTime()).toBeGreaterThan(
+        row.capturedAt.getTime(),
+      );
+      expect(row.isOfflineSync).toBe(true);
+    });
+
+    it('validates a synced punch against its declared date, not the arrival time', async () => {
+      // The whole point of honouring capturedAt: a punch queued inside a locked
+      // period stays locked even though it arrives while the current period is
+      // open.
+      const { service } = build();
+      const lastPeriod = new Date();
+      lastPeriod.setUTCMonth(lastPeriod.getUTCMonth() - 2);
+      await expect(
+        service.submitPunch(
+          caller,
+          punchDto({ capturedAt: lastPeriod.toISOString() }),
+        ),
+      ).rejects.toBeInstanceOf(HttpException);
+    });
   });
 });

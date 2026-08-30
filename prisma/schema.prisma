@@ -205,6 +205,8 @@ model Company {
   shifts          Shift[]
   employeeCodeSeq EmployeeCodeSequence?
 
+  reimbursementCategories ReimbursementCategory[]
+
   @@schema("settings")
 }
 
@@ -320,6 +322,35 @@ model EmployeeCodeSequence {
   @@schema("settings")
 }
 
+/// The master a reimbursement claim's category and receipt rule come from.
+///
+/// Lives in `settings` because it is per-company configuration, not employee data
+/// (research.md §10). Feature 005 owns its admin CRUD; feature 003 only reads it,
+/// through `ReimbursementCategoriesService`, to answer one question per claim: is a
+/// receipt mandatory at this amount?
+model ReimbursementCategory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  code String
+  name String
+
+  /// Claims strictly above this amount must carry a receipt (FR-030). Null means a
+  /// receipt is never required for this category — distinct from `0`, which would
+  /// require one on every claim.
+  receiptRequiredAbove Decimal? @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@schema("settings")
+}
+
 /// One signed-in period on one device/client, as a chain of rotating refresh tokens
 /// sharing a `familyId` — see data-model.md "Refresh Token".
 model RefreshToken {
@@ -416,6 +447,9 @@ enum AuditEntityType {
   LEAVE_APPLICATION
   FACE_ENROLMENT
   RE_ENROLMENT_REQUEST
+  /// Shared with 005-hr-payroll-backend, which adds the approve/reject/pay layer
+  /// over the same claims this feature's employees create (research.md §10).
+  REIMBURSEMENT_CLAIM
 
   @@schema("shared")
 }
@@ -520,6 +554,8 @@ model Employee {
   punchRecords        PunchRecord[]
   leaveBalances       LeaveBalance[]
   leaveApplications   LeaveApplication[]
+  reimbursementClaims ReimbursementClaim[]
+  salarySlips         SalarySlip[]
 
   @@unique([companyId, employeeCode])
   @@index([companyId])
@@ -775,6 +811,78 @@ enum LeaveApplicationStatus {
   @@schema("hr")
 }
 
+/// An employee-originated expense claim (US8).
+///
+/// In `hr`, not `payroll`, because the claim exists as the employee's own record
+/// long before payroll has any interest in it — the same shape Leave already has
+/// (research.md §10). Feature 005 adds the admin review layer over this same table;
+/// it does not get a second one. This feature writes only `draft` → `submitted` →
+/// `withdrawn`; the approval and payment fields below are read-only here.
+model ReimbursementClaim {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Denormalized from the owning Employee so the claim can be RLS-filtered by a
+  /// plain equality. Unlike the attendance tables, a claim is a financial document
+  /// that must stay with the company it was incurred against even if the employee
+  /// later moves — so the copy here is the intended record, not a cache of
+  /// Employee's value.
+  companyId String
+
+  /// FK to `settings.ReimbursementCategory` by value only. No Prisma relation:
+  /// Principle I routes the read through `ReimbursementCategoriesService`, and a
+  /// declared relation is exactly the cross-schema join that would bypass it.
+  categoryId String
+
+  amount      Decimal  @db.Decimal(12, 2)
+  expenseDate DateTime @db.Date
+  description String
+
+  /// Encrypted object-storage reference to the receipt image. Mandatory above the
+  /// category's configured threshold (FR-030).
+  receiptRef String?
+
+  status      ReimbursementClaimStatus @default(submitted)
+  /// Written by feature 005 once a claim is approved and paid; never by this one.
+  paymentMode ReimbursementPaymentMode?
+  paymentReference String?
+
+  /// Feature 005's decision fields. Present here because the table is shared, and
+  /// splitting them into a second table would make "one claim, one status" untrue.
+  decidedByUserId String?
+  decidedAt       DateTime?
+  adminRemarks    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([employeeId, status])
+  @@index([companyId, status])
+  @@schema("hr")
+}
+
+enum ReimbursementClaimStatus {
+  draft
+  submitted
+  approved
+  rejected
+  paid
+  /// Employee-initiated retraction while still pending review (FR-032). Distinct
+  /// from `rejected`, which is an admin's verdict — collapsing the two would lose
+  /// the difference between "I changed my mind" and "this was refused".
+  withdrawn
+
+  @@schema("hr")
+}
+
+enum ReimbursementPaymentMode {
+  payroll
+  direct
+
+  @@schema("hr")
+}
+
 // ============================================================================
 // payroll schema — feature 003 reads these; it does not compute payroll.
 // ============================================================================
@@ -804,5 +912,68 @@ enum PayrollRunStatus {
   processed
   paid
 
+  @@schema("payroll")
+}
+
+/// The per-employee, per-period payslip figures this feature serves as JSON and
+/// PDF (data-model.md "Salary Slip").
+///
+/// A stored projection, not a computation: feature 003 formats a payslip, it does
+/// not calculate one. Whichever feature owns payroll processing writes these rows
+/// when a run moves to `processed`; a slip whose run is still `draft` is never
+/// served (FR-024).
+///
+/// Every figure is `Decimal`, never `Float` — these are money, and binary rounding
+/// drift in a payslip is a wage dispute.
+model SalarySlip {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Matches `PayrollRun.period`, e.g. "2026-07". Referenced by value rather than
+  /// by FK because a run is company-scoped while a slip is employee-scoped; the
+  /// service pairs them explicitly so the `draft` check can never be skipped.
+  period String
+
+  monthDays   Int
+  payableDays Decimal @db.Decimal(5, 2)
+  lopDays     Decimal @db.Decimal(5, 2)
+  otHours     Decimal @db.Decimal(6, 2)
+
+  earningBasic            Decimal @db.Decimal(12, 2)
+  earningHra              Decimal @db.Decimal(12, 2)
+  earningConveyance       Decimal @db.Decimal(12, 2)
+  earningSiteAllowance    Decimal @db.Decimal(12, 2)
+  earningSpecialAllowance Decimal @db.Decimal(12, 2)
+  earningOt               Decimal @db.Decimal(12, 2)
+
+  deductionPf              Decimal @db.Decimal(12, 2)
+  deductionEsic            Decimal @db.Decimal(12, 2)
+  deductionPt              Decimal @db.Decimal(12, 2)
+  deductionTds             Decimal @db.Decimal(12, 2)
+  deductionLoanEmi         Decimal @db.Decimal(12, 2)
+  deductionAdvanceRecovery Decimal @db.Decimal(12, 2)
+
+  /// Informational on the payslip — shown to the employee, not subtracted from
+  /// `netPay`.
+  employerPf           Decimal @db.Decimal(12, 2)
+  employerEps          Decimal @db.Decimal(12, 2)
+  employerEdli         Decimal @db.Decimal(12, 2)
+  employerAdminCharges Decimal @db.Decimal(12, 2)
+  employerGratuity     Decimal @db.Decimal(12, 2)
+  employerBonus        Decimal @db.Decimal(12, 2)
+
+  /// Stored rather than derived on read: a payslip already issued must keep showing
+  /// the figure it was issued with, even if a later correction changes its inputs.
+  netPay Decimal @db.Decimal(12, 2)
+
+  /// The statutory-compliance line the payslip carries.
+  minimumWagesNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([employeeId, period])
+  @@index([employeeId])
   @@schema("payroll")
 }

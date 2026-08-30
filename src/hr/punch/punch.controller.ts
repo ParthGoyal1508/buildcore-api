@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -18,7 +20,15 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { callerFrom } from '../caller-context';
-import { PunchResultDto, SubmitPunchDto } from './dto/punch.dto';
+import {
+  AttendanceMonth,
+  AttendanceHistoryService,
+} from './attendance-history.service';
+import {
+  AttendanceHistoryQueryDto,
+  PunchResultDto,
+  SubmitPunchDto,
+} from './dto/punch.dto';
 import { PunchService } from './punch.service';
 
 @ApiTags('My Workspace')
@@ -26,7 +36,10 @@ import { PunchService } from './punch.service';
 @UseGuards(JwtAuthGuard)
 @Controller('my/punch')
 export class PunchController {
-  constructor(private readonly punch: PunchService) {}
+  constructor(
+    private readonly punch: PunchService,
+    private readonly attendanceHistory: AttendanceHistoryService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -47,5 +60,24 @@ export class PunchController {
     @Body() dto: SubmitPunchDto,
   ): Promise<PunchResultDto> {
     return this.punch.submitPunch(callerFrom(user, request), dto);
+  }
+
+  @Get('history')
+  @ApiOperation({ summary: "The caller's own attendance for one month" })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Every date in the month with its computed status. A month with no activity returns days marked absent/weekly off/holiday rather than an error (FR-011).',
+  })
+  async history(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query() query: AttendanceHistoryQueryDto,
+  ): Promise<AttendanceMonth> {
+    return this.attendanceHistory.getMonthHistory(
+      callerFrom(user, request),
+      query.month,
+      query.year,
+    );
   }
 }

@@ -1,7 +1,9 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -10,6 +12,8 @@ import {
   ConsentMethod,
   FaceEnrolmentStatus,
   Prisma,
+  ReEnrolmentRequest,
+  ReEnrolmentRequestStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
@@ -27,6 +31,29 @@ const ENROLMENT_NAMESPACE = 'face-enrolment';
 export interface EnrolmentStatusView {
   status: FaceEnrolmentStatus;
   enrolledAt: string | null;
+  /**
+   * The caller's latest re-enrolment request, or null if they have never made one.
+   *
+   * Returned alongside the status because `status` alone cannot distinguish the
+   * three states the employee-facing screen has to tell apart: waiting on a
+   * decision, refused (and why), and approved-with-an-unlock-still-usable. Without
+   * this the UI would have to offer "Re-enrol Now" speculatively and discover from
+   * a 403 that there was never an unlock.
+   */
+  reEnrolment: ReEnrolmentStateView | null;
+}
+
+export interface ReEnrolmentStateView {
+  id: string;
+  status: ReEnrolmentRequestStatus;
+  reason: string;
+  adminRemarks: string | null;
+  requestedAt: string;
+  decidedAt: string | null;
+  unlockExpiresAt: string | null;
+  /** Approved, unexpired, and unconsumed — the same three conditions
+   * `completeReEnrolment` checks, so the button and the endpoint agree. */
+  unlockActive: boolean;
 }
 
 /** Everything a call into this service needs about who is asking. */
@@ -73,6 +100,12 @@ export class FaceEnrolmentService {
     const enrolment = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
     );
+    const latestRequest = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.reEnrolmentRequest.findFirst({
+        where: { employeeId: employee.id },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
 
     await this.auditLog.record({
       entityType: AuditEntityType.FACE_ENROLMENT,
@@ -86,6 +119,23 @@ export class FaceEnrolmentService {
     return {
       status: enrolment?.status ?? FaceEnrolmentStatus.not_enrolled,
       enrolledAt: enrolment?.enrolledAt?.toISOString() ?? null,
+      reEnrolment: latestRequest
+        ? {
+            id: latestRequest.id,
+            status: latestRequest.status,
+            reason: latestRequest.reason,
+            adminRemarks: latestRequest.adminRemarks,
+            requestedAt: latestRequest.createdAt.toISOString(),
+            decidedAt: latestRequest.decidedAt?.toISOString() ?? null,
+            unlockExpiresAt:
+              latestRequest.unlockExpiresAt?.toISOString() ?? null,
+            unlockActive:
+              latestRequest.status === ReEnrolmentRequestStatus.approved &&
+              latestRequest.unlockConsumedAt === null &&
+              latestRequest.unlockExpiresAt !== null &&
+              latestRequest.unlockExpiresAt.getTime() > Date.now(),
+          }
+        : null,
     };
   }
 
@@ -99,21 +149,7 @@ export class FaceEnrolmentService {
       caller.rls,
       caller.userId,
     );
-    const { minEnrolmentPhotos, maxEnrolmentPhotos } = this.workspace.faceMatch;
-
-    // Re-checked against config even though the DTO already bounds the array: the
-    // DTO's literals exist for Swagger and cannot read ConfigService, so this is
-    // where the configured values are actually enforced.
-    if (photos.length < minEnrolmentPhotos) {
-      throw new BadRequestException(
-        `At least ${minEnrolmentPhotos} photos are required to enrol.`,
-      );
-    }
-    if (photos.length > maxEnrolmentPhotos) {
-      throw new BadRequestException(
-        `At most ${maxEnrolmentPhotos} photos may be submitted.`,
-      );
-    }
+    this.assertPhotoCount(photos);
 
     const existing = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
@@ -126,33 +162,11 @@ export class FaceEnrolmentService {
       );
     }
 
-    const decoded = photos.map((photo, index) =>
-      decodePhotoPayload(photo, `Photo ${index + 1}`),
-    );
-
     // Compress first, then derive the descriptor from the same bytes that get
     // stored. Computing it from the originals instead would mean the stored photos
     // are not quite what the template was built from — a discrepancy nobody could
     // reproduce later when investigating a match failure.
-    const compressed = await Promise.all(
-      decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),
-    );
-
-    let descriptor: Float32Array;
-    try {
-      descriptor = await this.biometrics.computeDescriptor(compressed);
-    } catch (error) {
-      if (error instanceof NoFaceDetectedError) {
-        throw new BadRequestException(error.message);
-      }
-      throw error;
-    }
-
-    const photoRefs = await Promise.all(
-      compressed.map((photo) =>
-        this.storage.put(ENROLMENT_NAMESPACE, photo, 'image/jpeg'),
-      ),
-    );
+    const { descriptor, photoRefs } = await this.buildTemplate(photos);
 
     const enrolledAt = new Date();
     const record = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -204,6 +218,7 @@ export class FaceEnrolmentService {
     return {
       status: record.status,
       enrolledAt: record.enrolledAt?.toISOString() ?? null,
+      reEnrolment: null,
     };
   }
 
@@ -222,7 +237,11 @@ export class FaceEnrolmentService {
 
     if (!existing) {
       // Idempotent: nothing enrolled is the state the caller asked for.
-      return { status: FaceEnrolmentStatus.not_enrolled, enrolledAt: null };
+      return {
+        status: FaceEnrolmentStatus.not_enrolled,
+        enrolledAt: null,
+        reEnrolment: null,
+      };
     }
 
     const updated = await withRlsContext(
@@ -267,6 +286,340 @@ export class FaceEnrolmentService {
       ipAddress: caller.ipAddress,
     });
 
-    return { status: updated.status, enrolledAt: null };
+    // Null rather than the just-expired request: `reEnrolment` describes what the
+    // employee can still act on, and consent withdrawal leaves nothing actionable.
+    return { status: updated.status, enrolledAt: null, reEnrolment: null };
+  }
+
+  // --------------------------------------------------------------------- US7
+  //
+  // Re-enrolment is approval-gated rather than self-service (FR-013–FR-016).
+  // Replacing a face template is the one operation that can silently redirect an
+  // identity: whoever's face goes in next is who the system will accept at the
+  // gate from then on. So it takes an approver's decision, a bounded window, and a
+  // one-shot unlock, and every step of it is audited.
+
+  /** Asks HR/Admin to reopen enrolment for the caller (FR-013). */
+  async requestReEnrolment(
+    caller: Caller,
+    reason: string,
+  ): Promise<ReEnrolmentRequest> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+
+    const created = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const enrolment = await tx.faceEnrolment.findUnique({
+          where: { employeeId: employee.id },
+        });
+        if (
+          !enrolment ||
+          enrolment.status === FaceEnrolmentStatus.not_enrolled
+        ) {
+          // Nothing to replace. Enrolling outright is the right path here, and it
+          // is already open to them without an approval.
+          throw new BadRequestException(
+            'You are not enrolled. Complete face enrolment instead of requesting a re-enrolment.',
+          );
+        }
+
+        const outstanding = await tx.reEnrolmentRequest.findFirst({
+          where: {
+            employeeId: employee.id,
+            status: {
+              in: [
+                ReEnrolmentRequestStatus.pending,
+                ReEnrolmentRequestStatus.approved,
+              ],
+            },
+          },
+        });
+        if (outstanding) {
+          throw new ConflictException(
+            outstanding.status === ReEnrolmentRequestStatus.pending
+              ? 'You already have a re-enrolment request awaiting a decision.'
+              : 'Your re-enrolment has already been approved — complete the fresh capture.',
+          );
+        }
+
+        const request = await tx.reEnrolmentRequest.create({
+          data: {
+            employeeId: employee.id,
+            reason,
+            status: ReEnrolmentRequestStatus.pending,
+          },
+        });
+        await tx.faceEnrolment.update({
+          where: { employeeId: employee.id },
+          data: { status: FaceEnrolmentStatus.re_enrolment_requested },
+        });
+        return request;
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.RE_ENROLMENT_REQUEST,
+      action: AuditAction.CREATE,
+      entityId: created.id,
+      changes: { reason } as Prisma.InputJsonValue,
+      accountId: caller.userId,
+      companyId: employee.companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    return created;
+  }
+
+  /** The approver's queue. RLS confines it to their own company. */
+  async listReEnrolmentRequests(
+    caller: Caller,
+    status: ReEnrolmentRequestStatus = ReEnrolmentRequestStatus.pending,
+  ): Promise<ReEnrolmentRequest[]> {
+    return withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.reEnrolmentRequest.findMany({
+        where: { status },
+        orderBy: { createdAt: 'asc' },
+      }),
+    );
+  }
+
+  /**
+   * Approves or rejects a request (FR-014, FR-015).
+   *
+   * An approval issues a time-boxed, single-use unlock rather than simply flipping
+   * the employee back to "may enrol". An open-ended permission granted once would
+   * stay usable indefinitely, which turns one approval into a standing licence to
+   * replace the template whenever convenient.
+   */
+  async decideReEnrolment(
+    caller: Caller,
+    requestId: string,
+    decision: 'approved' | 'rejected',
+    remarks?: string,
+  ): Promise<ReEnrolmentRequest> {
+    const decided = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const request = await tx.reEnrolmentRequest.findFirst({
+          where: { id: requestId },
+        });
+        if (!request) {
+          throw new NotFoundException('Re-enrolment request not found');
+        }
+        if (request.status !== ReEnrolmentRequestStatus.pending) {
+          throw new ConflictException(
+            `This request is already ${request.status}.`,
+          );
+        }
+
+        const now = new Date();
+        const updated = await tx.reEnrolmentRequest.update({
+          where: { id: requestId },
+          data: {
+            status:
+              decision === 'approved'
+                ? ReEnrolmentRequestStatus.approved
+                : ReEnrolmentRequestStatus.rejected,
+            adminRemarks: remarks ?? null,
+            decidedByUserId: caller.userId,
+            decidedAt: now,
+            unlockExpiresAt:
+              decision === 'approved'
+                ? new Date(
+                    now.getTime() +
+                      this.workspace.reEnrolment.unlockDurationDays *
+                        86_400_000,
+                  )
+                : null,
+          },
+        });
+
+        // A rejection leaves the employee enrolled with their existing template —
+        // the request is closed, not their enrolment. Without this the status would
+        // stay `re_enrolment_requested` forever, showing a pending request that no
+        // longer exists.
+        if (decision === 'rejected') {
+          await tx.faceEnrolment.updateMany({
+            where: {
+              employeeId: request.employeeId,
+              status: FaceEnrolmentStatus.re_enrolment_requested,
+            },
+            data: { status: FaceEnrolmentStatus.enrolled },
+          });
+        }
+
+        return updated;
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.RE_ENROLMENT_REQUEST,
+      action: AuditAction.UPDATE,
+      entityId: decided.id,
+      changes: {
+        decision,
+        remarks: remarks ?? null,
+        unlockExpiresAt: decided.unlockExpiresAt?.toISOString() ?? null,
+      } as Prisma.InputJsonValue,
+      accountId: caller.userId,
+      companyId: caller.companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    // FR-023 asks for the employee to be notified on both outcomes. As with leave
+    // decisions, there is no notification transport in this codebase yet; the
+    // decision is recorded and visible on the employee's own enrolment status.
+    return decided;
+  }
+
+  /** Consumes an approved unlock with a fresh capture (FR-016). */
+  async completeReEnrolment(
+    caller: Caller,
+    photos: string[],
+  ): Promise<EnrolmentStatusView> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    this.assertPhotoCount(photos);
+
+    const now = new Date();
+    const unlock = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.reEnrolmentRequest.findFirst({
+        where: {
+          employeeId: employee.id,
+          status: ReEnrolmentRequestStatus.approved,
+          unlockConsumedAt: null,
+          unlockExpiresAt: { gt: now },
+        },
+        orderBy: { decidedAt: 'desc' },
+      }),
+    );
+    if (!unlock) {
+      // 403, not 404: the request may well exist — it is the *permission* that is
+      // absent, expired, or already spent, and saying so is what tells the
+      // employee to ask for a new approval rather than retry.
+      throw new ForbiddenException(
+        'No active re-enrolment unlock. Request re-enrolment and wait for approval before capturing.',
+      );
+    }
+
+    const existing = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.faceEnrolment.findUnique({ where: { employeeId: employee.id } }),
+    );
+
+    const { descriptor, photoRefs } = await this.buildTemplate(photos);
+
+    const record = await withRlsContext(this.prisma, caller.rls, async (tx) => {
+      const updated = await tx.faceEnrolment.update({
+        where: { employeeId: employee.id },
+        data: {
+          descriptor: this.biometrics.serializeDescriptor(descriptor),
+          photoRefs,
+          enrolledAt: now,
+          consentAcknowledgedAt: now,
+          status: FaceEnrolmentStatus.enrolled,
+        },
+      });
+      // Consumed inside the same transaction that replaces the template, so a
+      // failure part-way cannot leave an unlock that has already been spent still
+      // looking available.
+      await tx.reEnrolmentRequest.update({
+        where: { id: unlock.id },
+        data: {
+          status: ReEnrolmentRequestStatus.completed,
+          unlockConsumedAt: now,
+        },
+      });
+      return updated;
+    });
+
+    // "Previous template securely deleted" (FR-016) — the row already points at
+    // the new photos, so these are unreferenced biometric data.
+    if (existing?.photoRefs?.length) {
+      await this.storage.deleteMany(existing.photoRefs);
+    }
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.RE_ENROLMENT_REQUEST,
+      action: AuditAction.UPDATE,
+      entityId: unlock.id,
+      changes: {
+        status: ReEnrolmentRequestStatus.completed,
+      } as Prisma.InputJsonValue,
+      accountId: caller.userId,
+      companyId: employee.companyId,
+      ipAddress: caller.ipAddress,
+    });
+    await this.auditLog.record({
+      entityType: AuditEntityType.FACE_ENROLMENT,
+      action: AuditAction.UPDATE,
+      entityId: record.id,
+      changes: {
+        reason: 're_enrolment_completed',
+        photoCount: photoRefs.length,
+      } as Prisma.InputJsonValue,
+      accountId: caller.userId,
+      companyId: employee.companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    return {
+      status: record.status,
+      enrolledAt: record.enrolledAt?.toISOString() ?? null,
+      // The unlock is spent, so there is nothing left to act on.
+      reEnrolment: null,
+    };
+  }
+
+  /** Enforces the configured photo bounds. The DTO's literals exist for Swagger;
+   * these configured values are the ones that actually decide. */
+  private assertPhotoCount(photos: string[]): void {
+    const { minEnrolmentPhotos, maxEnrolmentPhotos } = this.workspace.faceMatch;
+    if (photos.length < minEnrolmentPhotos) {
+      throw new BadRequestException(
+        `At least ${minEnrolmentPhotos} photos are required to enrol.`,
+      );
+    }
+    if (photos.length > maxEnrolmentPhotos) {
+      throw new BadRequestException(
+        `At most ${maxEnrolmentPhotos} photos may be submitted.`,
+      );
+    }
+  }
+
+  /** Decode → compress → derive descriptor → store, in that order. Shared by
+   * enrolment and re-enrolment so both produce templates the same way. */
+  private async buildTemplate(
+    photos: string[],
+  ): Promise<{ descriptor: Float32Array; photoRefs: string[] }> {
+    const decoded = photos.map((photo, index) =>
+      decodePhotoPayload(photo, `Photo ${index + 1}`),
+    );
+    const compressed = await Promise.all(
+      decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),
+    );
+
+    let descriptor: Float32Array;
+    try {
+      descriptor = await this.biometrics.computeDescriptor(compressed);
+    } catch (error) {
+      if (error instanceof NoFaceDetectedError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
+    }
+
+    const photoRefs = await Promise.all(
+      compressed.map((photo) =>
+        this.storage.put(ENROLMENT_NAMESPACE, photo, 'image/jpeg'),
+      ),
+    );
+    return { descriptor, photoRefs };
   }
 }

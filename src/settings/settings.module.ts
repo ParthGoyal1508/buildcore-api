@@ -10,6 +10,7 @@ import { DocumentTypesController } from './reference-data/document-types.control
 import { DocumentTypesService } from './reference-data/document-types.service';
 import { ReferenceDataService } from './reference-data/reference-data.service';
 import { ShiftsController } from './reference-data/shifts.controller';
+import { ReimbursementCategoriesService } from './reimbursement-categories/reimbursement-categories.service';
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
 import { UsersAdminController } from './users-admin/users-admin.controller';
@@ -44,6 +45,7 @@ import { UsersAdminService } from './users-admin/users-admin.service';
     ReferenceDataService,
     DocumentTypesService,
     EmployeeCodeService,
+    ReimbursementCategoriesService,
     AuditLogService,
   ],
   exports: [
@@ -54,6 +56,9 @@ import { UsersAdminService } from './users-admin/users-admin.service';
     // Exported for `hr`, which reads a shift's duration to compute overtime
     // (research.md §9) — a service call rather than a cross-schema query.
     ReferenceDataService,
+    // Exported for `hr`'s reimbursement claims, which validate their
+    // mandatory-receipt rule against this master (research.md §10).
+    ReimbursementCategoriesService,
   ],
 })
 export class SettingsModule {}

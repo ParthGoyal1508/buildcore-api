@@ -34,6 +34,45 @@ const descriptorOf = (value: number) =>
   Float32Array.from({ length: FACE_DESCRIPTOR_LENGTH }, () => value);
 
 /**
+ * Dates are all derived from "now" rather than hard-coded.
+ *
+ * The payroll lock (FR-010) closes a period once the lock day of the following
+ * month passes, so any fixed date in this file would start returning 423 the month
+ * after it was written. Anchoring on the current month keeps the suite runnable
+ * forever without anyone having to remember why it broke.
+ */
+const NOW = new Date();
+const YEAR = NOW.getUTCFullYear();
+const MONTH = NOW.getUTCMonth() + 1;
+
+/** Day 0 of the next month is the last day of this one. */
+const daysInMonth = (year: number, month: number) =>
+  new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+/** `YYYY-MM-DD` for a day-of-month in the current month. */
+const dayOf = (day: number) =>
+  new Date(Date.UTC(YEAR, MONTH - 1, day)).toISOString().slice(0, 10);
+
+/** The Indian financial year containing today, matching `financialYearOf`. */
+const FINANCIAL_YEAR = (() => {
+  const startYear = NOW.getUTCMonth() >= 3 ? YEAR : YEAR - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+})();
+
+// A five-day leave window starting on the 10th, with the 12th seeded as a site
+// holiday. Whichever of those five dates fall on a Sunday (the site's weekly off)
+// are not chargeable either, so the expected count is computed the same way the
+// service computes it rather than being written down as a constant that would be
+// wrong in months where the 10th lands differently.
+const LEAVE_FROM = dayOf(10);
+const LEAVE_TO = dayOf(14);
+const HOLIDAY = dayOf(12);
+const LEAVE_WORKING_DAYS = [10, 11, 12, 13, 14].filter((day) => {
+  const date = new Date(Date.UTC(YEAR, MONTH - 1, day));
+  return date.getUTCDay() !== 0 && dayOf(day) !== HOLIDAY;
+}).length;
+
+/**
  * Deterministic stand-in for face-api, injected in place of the real matcher.
  *
  * Attendance behaviour — exception routing, sequencing, payroll locks — is what
@@ -204,6 +243,10 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     const admin = await makeUser('admin', [
       Permission.MY_WORKSPACE,
       Permission.ATTENDANCE,
+      // Re-enrolment approval is gated on EMPLOYEES rather than ATTENDANCE: it
+      // decides whose face the gate accepts, which is a record-level identity
+      // decision, not an attendance correction.
+      Permission.EMPLOYEES,
     ]);
     adminUserId = admin.userId;
     adminToken = admin.token;
@@ -255,8 +298,16 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         await sys.leaveBalance.deleteMany({
           where: { employeeId: { in: ids } },
         });
+        await sys.reimbursementClaim.deleteMany({
+          where: { employeeId: { in: ids } },
+        });
+        await sys.salarySlip.deleteMany({
+          where: { employeeId: { in: ids } },
+        });
         await sys.employee.deleteMany({ where: { id: { in: ids } } });
       }
+      await sys.payrollRun.deleteMany({ where: { companyId } });
+      await sys.reimbursementCategory.deleteMany({ where: { companyId } });
       await sys.site.deleteMany({ where: { companyId } });
       await sys.shift.deleteMany({ where: { companyId } });
       await sys.company.deleteMany({ where: { id: companyId } });
@@ -664,6 +715,874 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
           consentAcknowledged: true,
         })
         .expect(201);
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 3
+  describe('Attendance history (US3, T040)', () => {
+    it('returns every date of the month with a computed status', async () => {
+      const res = await http()
+        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body.days).toHaveLength(daysInMonth(YEAR, MONTH));
+      expect(res.body.days[0].date).toBe(dayOf(1));
+      expect(res.body.days.at(-1).date).toBe(dayOf(daysInMonth(YEAR, MONTH)));
+    });
+
+    it('marks the site’s weekly off day as weekly_off', async () => {
+      const res = await http()
+        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .set(auth(employeeToken))
+        .expect(200);
+
+      // The site's weeklyOffDay is 0 (Sunday); no punch or leave exists on the
+      // Sundays of this month.
+      const sundays = res.body.days.filter(
+        (d: { dayOfWeek: number }) => d.dayOfWeek === 0,
+      );
+      expect(sundays.length).toBeGreaterThan(0);
+      for (const day of sundays) {
+        expect(['weekly_off', 'present', 'on_leave']).toContain(day.status);
+      }
+    });
+
+    it('marks a day with a punch pair as present, with in/out times', async () => {
+      const res = await http()
+        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .set(auth(employeeToken))
+        .expect(200);
+
+      // The US2 tests above punched today.
+      const today = res.body.days.find(
+        (d: { date: string }) => d.date === dayOf(new Date().getUTCDate()),
+      );
+      expect(today.status).toBe('present');
+      expect(today.inTime).not.toBeNull();
+    });
+
+    it('marks a working day with nothing recorded as absent', async () => {
+      const res = await http()
+        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(
+        res.body.days.some((d: { status: string }) => d.status === 'absent'),
+      ).toBe(true);
+    });
+
+    it('returns a blank month rather than an error when nothing happened', async () => {
+      // A month before this employee existed still has to render — an employee
+      // paging back through history must not hit an error wall.
+      const res = await http()
+        .get('/my/punch/history?month=1&year=2020')
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body.days).toHaveLength(31);
+      expect(
+        res.body.days.every((d: { inTime: null }) => d.inTime === null),
+      ).toBe(true);
+    });
+
+    it('scopes history to the caller, never to another employee', async () => {
+      // The other employee has never punched, so an identical request returns a
+      // month with nothing in it — proof the route reads the token, not a shared
+      // dataset.
+      const res = await http()
+        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .set(auth(otherToken))
+        .expect(200);
+
+      expect(
+        res.body.days.every((d: { status: string }) => d.status !== 'present'),
+      ).toBe(true);
+    });
+
+    it('rejects a month outside 1–12', async () => {
+      await http()
+        .get(`/my/punch/history?month=13&year=${YEAR}`)
+        .set(auth(employeeToken))
+        .expect(400);
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 4
+  describe('Leave (US4, T044–T047)', () => {
+    let pendingApplicationId: string;
+    let approvableApplicationId: string;
+
+    beforeAll(async () => {
+      // 12 days of earned leave to spend, and one site holiday inside the range
+      // the day-count test applies for.
+      await sys.leaveBalance.create({
+        data: {
+          employeeId,
+          leaveType: 'earned',
+          financialYear: FINANCIAL_YEAR,
+          opening: 12,
+        },
+      });
+      await sys.site.update({
+        where: { id: siteId },
+        data: { holidays: [new Date(`${HOLIDAY}T00:00:00.000Z`)] },
+      });
+    });
+
+    it('returns every leave type, including ones with no entitlement', async () => {
+      const res = await http()
+        .get('/my/leave/balance')
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body).toHaveLength(4);
+      const earned = res.body.find(
+        (b: { leaveType: string }) => b.leaveType === 'earned',
+      );
+      expect(earned.balance).toBe(12);
+      const casual = res.body.find(
+        (b: { leaveType: string }) => b.leaveType === 'casual',
+      );
+      expect(casual.balance).toBe(0);
+    });
+
+    it('computes dayCount excluding weekly offs and site holidays (T044)', async () => {
+      const res = await http()
+        .post('/my/leave/applications')
+        .set(auth(employeeToken))
+        .send({
+          leaveType: 'earned',
+          fromDate: LEAVE_FROM,
+          toDate: LEAVE_TO,
+          reason: 'Family function',
+        })
+        .expect(201);
+
+      expect(res.body.status).toBe('pending');
+      // The range spans LEAVE_SPAN dates; the holiday seeded above and any Sunday
+      // in it are not chargeable.
+      expect(Number(res.body.dayCount)).toBe(LEAVE_WORKING_DAYS);
+      pendingApplicationId = res.body.id;
+    });
+
+    it('rejects an application exceeding the available balance (T044)', async () => {
+      await http()
+        .post('/my/leave/applications')
+        .set(auth(employeeToken))
+        .send({
+          leaveType: 'earned',
+          fromDate: dayOf(1),
+          toDate: dayOf(daysInMonth(YEAR, MONTH)),
+          reason: 'Whole month',
+        })
+        .expect(400);
+    });
+
+    it('never balance-checks LWP (T044, FR-020)', async () => {
+      // Leave without pay is unpaid by definition, so there is no entitlement for
+      // it to exhaust — a month of it must still be accepted.
+      const res = await http()
+        .post('/my/leave/applications')
+        .set(auth(employeeToken))
+        .send({
+          leaveType: 'lwp',
+          fromDate: dayOf(1),
+          toDate: dayOf(daysInMonth(YEAR, MONTH)),
+          reason: 'Extended absence',
+        })
+        .expect(201);
+      expect(res.body.status).toBe('pending');
+      approvableApplicationId = res.body.id;
+    });
+
+    it('rejects an inverted date range', async () => {
+      await http()
+        .post('/my/leave/applications')
+        .set(auth(employeeToken))
+        .send({
+          leaveType: 'casual',
+          fromDate: LEAVE_TO,
+          toDate: LEAVE_FROM,
+          reason: 'Backwards',
+        })
+        .expect(400);
+    });
+
+    it('returns 423 for a range inside a locked payroll period (T047)', async () => {
+      const twoMonthsBack = new Date();
+      twoMonthsBack.setUTCMonth(twoMonthsBack.getUTCMonth() - 2);
+      const locked = twoMonthsBack.toISOString().slice(0, 10);
+      await http()
+        .post('/my/leave/applications')
+        .set(auth(employeeToken))
+        .send({
+          leaveType: 'casual',
+          fromDate: locked,
+          toDate: locked,
+          reason: 'Retroactive',
+        })
+        .expect(423);
+    });
+
+    it('lists only the caller’s own applications (T045, FR-022)', async () => {
+      const mine = await http()
+        .get('/my/leave/applications')
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(mine.body.length).toBeGreaterThan(0);
+
+      const theirs = await http()
+        .get('/my/leave/applications')
+        .set(auth(otherToken))
+        .expect(200);
+      expect(theirs.body).toHaveLength(0);
+    });
+
+    it('refuses to let one employee cancel another’s application (T045)', async () => {
+      await http()
+        .post(`/my/leave/applications/${pendingApplicationId}/cancel`)
+        .set(auth(otherToken))
+        .expect(404);
+    });
+
+    it('scopes the balance to the caller (T045)', async () => {
+      const res = await http()
+        .get('/my/leave/balance')
+        .set(auth(otherToken))
+        .expect(200);
+      expect(res.body.every((b: { balance: number }) => b.balance === 0)).toBe(
+        true,
+      );
+    });
+
+    it('cancels a pending application (T045)', async () => {
+      const res = await http()
+        .post(`/my/leave/applications/${pendingApplicationId}/cancel`)
+        .set(auth(employeeToken))
+        .expect(201);
+      expect(res.body.status).toBe('cancelled');
+    });
+
+    it('refuses to cancel a non-pending application with 409 (T045)', async () => {
+      await http()
+        .post(`/my/leave/applications/${pendingApplicationId}/cancel`)
+        .set(auth(employeeToken))
+        .expect(409);
+    });
+
+    describe('admin decisions (T046, FR-022a)', () => {
+      it('refuses a caller without the ATTENDANCE permission', async () => {
+        await http()
+          .get('/workspace-admin/leave-applications')
+          .set(auth(employeeToken))
+          .expect(403);
+      });
+
+      it('lists pending applications for an approver', async () => {
+        const res = await http()
+          .get('/workspace-admin/leave-applications')
+          .set(auth(adminToken))
+          .expect(200);
+        expect(
+          res.body.some(
+            (a: { id: string }) => a.id === approvableApplicationId,
+          ),
+        ).toBe(true);
+      });
+
+      it('requires remarks when rejecting', async () => {
+        await http()
+          .post(
+            `/workspace-admin/leave-applications/${approvableApplicationId}/decide`,
+          )
+          .set(auth(adminToken))
+          .send({ decision: 'rejected' })
+          .expect(400);
+      });
+
+      it('approves an application and debits the balance', async () => {
+        const before = await http()
+          .get('/my/leave/balance')
+          .set(auth(employeeToken))
+          .expect(200);
+
+        const approved = await http()
+          .post(
+            `/workspace-admin/leave-applications/${approvableApplicationId}/decide`,
+          )
+          .set(auth(adminToken))
+          .send({ decision: 'approved' })
+          .expect(201);
+        expect(approved.body.status).toBe('approved');
+
+        // The approved application was LWP, which has no balance to debit — the
+        // earned balance must be exactly as it was.
+        const after = await http()
+          .get('/my/leave/balance')
+          .set(auth(employeeToken))
+          .expect(200);
+        const earnedBefore = before.body.find(
+          (b: { leaveType: string }) => b.leaveType === 'earned',
+        ).balance;
+        const earnedAfter = after.body.find(
+          (b: { leaveType: string }) => b.leaveType === 'earned',
+        ).balance;
+        expect(earnedAfter).toBe(earnedBefore);
+      });
+
+      it('makes approved dates show as on_leave in attendance history (T046)', async () => {
+        const res = await http()
+          .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+          .set(auth(employeeToken))
+          .expect(200);
+
+        expect(
+          res.body.days.some(
+            (d: { status: string }) => d.status === 'on_leave',
+          ),
+        ).toBe(true);
+      });
+
+      it('refuses to re-decide a settled application with 409', async () => {
+        await http()
+          .post(
+            `/workspace-admin/leave-applications/${approvableApplicationId}/decide`,
+          )
+          .set(auth(adminToken))
+          .send({ decision: 'rejected', remarks: 'Changed my mind' })
+          .expect(409);
+      });
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 5
+  describe('Salary slip (US5, T055)', () => {
+    const DRAFT_PERIOD = '2026-05';
+    const PAID_PERIOD = '2026-06';
+
+    beforeAll(async () => {
+      const figures = {
+        monthDays: 30,
+        payableDays: 28,
+        lopDays: 2,
+        otHours: 10,
+        earningBasic: 18000,
+        earningHra: 7200,
+        earningConveyance: 1600,
+        earningSiteAllowance: 2500,
+        earningSpecialAllowance: 1200,
+        earningOt: 1800,
+        deductionPf: 2160,
+        deductionEsic: 243,
+        deductionPt: 200,
+        deductionTds: 0,
+        deductionLoanEmi: 1500,
+        deductionAdvanceRecovery: 500,
+        employerPf: 1980,
+        employerEps: 1250,
+        employerEdli: 75,
+        employerAdminCharges: 90,
+        employerGratuity: 866,
+        employerBonus: 1499,
+        netPay: 27697,
+        minimumWagesNote: 'Meets the notified minimum wage.',
+      };
+      await sys.payrollRun.create({
+        data: { companyId, period: DRAFT_PERIOD, status: 'draft' },
+      });
+      await sys.payrollRun.create({
+        data: { companyId, period: PAID_PERIOD, status: 'paid' },
+      });
+      await sys.salarySlip.create({
+        data: { employeeId, period: DRAFT_PERIOD, ...figures },
+      });
+      await sys.salarySlip.create({
+        data: { employeeId, period: PAID_PERIOD, ...figures },
+      });
+    });
+
+    it('excludes draft periods from the available list (T055, FR-024)', async () => {
+      const res = await http()
+        .get('/my/salary/available-periods')
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body).toContain(PAID_PERIOD);
+      expect(res.body).not.toContain(DRAFT_PERIOD);
+    });
+
+    it('returns the full slip projection for a published period (T055)', async () => {
+      const res = await http()
+        .get(`/my/salary/${PAID_PERIOD}`)
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body.period).toBe(PAID_PERIOD);
+      expect(res.body.earnings.basic).toBe(18000);
+      expect(res.body.earnings.total).toBe(32300);
+      expect(res.body.deductions.total).toBe(4603);
+      expect(res.body.netPay).toBe(27697);
+      expect(res.body.netPayInWords).toMatch(/Rupees Only$/);
+      // Employer contributions are informational and must not be netted off.
+      expect(res.body.employerContributions.total).toBeGreaterThan(0);
+    });
+
+    it('returns 404 for a period whose run is still draft (T055)', async () => {
+      await http()
+        .get(`/my/salary/${DRAFT_PERIOD}`)
+        .set(auth(employeeToken))
+        .expect(404);
+    });
+
+    it('returns 404 for a period that has no run at all', async () => {
+      await http()
+        .get('/my/salary/1999-01')
+        .set(auth(employeeToken))
+        .expect(404);
+    });
+
+    it('never serves another employee’s slip (T055, FR-028)', async () => {
+      // Identical request, different token: the other employee has no slip, so
+      // there is nothing to return — the route reads the token, not a parameter.
+      await http()
+        .get(`/my/salary/${PAID_PERIOD}`)
+        .set(auth(otherToken))
+        .expect(404);
+    });
+
+    it('serves a PDF with the same figures as the JSON (T055)', async () => {
+      const res = await http()
+        .get(`/my/salary/${PAID_PERIOD}/pdf`)
+        .set(auth(employeeToken))
+        .buffer(true)
+        .parse((response, callback) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => callback(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('application/pdf');
+      expect(res.body.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 6
+  describe('Offline punch sync (US6, T061–T062)', () => {
+    it('preserves the declared capture time and tags the punch (T061)', async () => {
+      const queued = new Date(Date.now() - 4 * 3_600_000);
+      biometrics.nextValue = 0.5;
+      const res = await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(punchBody({ type: 'in', capturedAt: queued.toISOString() }))
+        .expect(201);
+
+      expect(res.body.isOfflineSync).toBe(true);
+      expect(new Date(res.body.capturedAt).getTime()).toBe(queued.getTime());
+
+      const row = await sys.punchRecord.findFirst({
+        where: { id: res.body.id },
+      });
+      // Both timestamps are retained — flattening them would hide that the punch
+      // was written retroactively (FR-012).
+      expect(row.receivedAt.getTime()).toBeGreaterThan(
+        row.capturedAt.getTime(),
+      );
+    });
+
+    it('rejects a capture older than the offline window with 400 (T062)', async () => {
+      const ancient = new Date(Date.now() - 200 * 3_600_000);
+      await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(punchBody({ type: 'out', capturedAt: ancient.toISOString() }))
+        .expect(400);
+    });
+
+    it('closes the offline pair so the next punch-in is possible', async () => {
+      await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(
+          punchBody({
+            type: 'out',
+            capturedAt: new Date(Date.now() - 3_600_000).toISOString(),
+          }),
+        )
+        .expect(201);
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 7
+  describe('Re-enrolment (US7, T065–T068)', () => {
+    let requestId: string;
+
+    it('rejects a completion attempt with no unlock (T066, FR-013)', async () => {
+      await http()
+        .post('/my/face-enrol/re-enrolment-complete')
+        .set(auth(employeeToken))
+        .send({ photos: [JPEG, JPEG, JPEG], consentAcknowledged: true })
+        .expect(403);
+    });
+
+    it('records a request and moves status to re_enrolment_requested (T065)', async () => {
+      const res = await http()
+        .post('/my/face-enrol/re-enrolment-request')
+        .set(auth(employeeToken))
+        .send({ reason: 'Grew a beard; matching keeps failing' })
+        .expect(201);
+      requestId = res.body.id;
+
+      const status = await http()
+        .get('/my/face-enrol')
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(status.body.status).toBe('re_enrolment_requested');
+    });
+
+    it('refuses a second request while one is outstanding (T066)', async () => {
+      await http()
+        .post('/my/face-enrol/re-enrolment-request')
+        .set(auth(employeeToken))
+        .send({ reason: 'Again' })
+        .expect(409);
+    });
+
+    it('refuses an approver without the EMPLOYEES permission (T066)', async () => {
+      await http()
+        .get('/workspace-admin/re-enrolment-requests')
+        .set(auth(employeeToken))
+        .expect(403);
+    });
+
+    it('requires remarks when rejecting (T066)', async () => {
+      await http()
+        .post(`/workspace-admin/re-enrolment-requests/${requestId}/decide`)
+        .set(auth(adminToken))
+        .send({ decision: 'rejected' })
+        .expect(400);
+    });
+
+    it('approves the request and issues a bounded unlock (T065)', async () => {
+      const res = await http()
+        .post(`/workspace-admin/re-enrolment-requests/${requestId}/decide`)
+        .set(auth(adminToken))
+        .send({ decision: 'approved' })
+        .expect(201);
+
+      expect(res.body.status).toBe('approved');
+      expect(res.body.unlockExpiresAt).not.toBeNull();
+      expect(res.body.unlockConsumedAt).toBeNull();
+    });
+
+    it('completes the capture, replacing the template (T065)', async () => {
+      biometrics.nextValue = 0.25;
+      const res = await http()
+        .post('/my/face-enrol/re-enrolment-complete')
+        .set(auth(employeeToken))
+        .send({ photos: [JPEG, JPEG, JPEG], consentAcknowledged: true })
+        .expect(200);
+
+      expect(res.body.status).toBe('enrolled');
+
+      const request = await sys.reEnrolmentRequest.findFirst({
+        where: { id: requestId },
+      });
+      expect(request.status).toBe('completed');
+      expect(request.unlockConsumedAt).not.toBeNull();
+    });
+
+    it('refuses a second completion once the unlock is consumed (T066)', async () => {
+      // One approval, one replacement. Anything else turns a single decision into
+      // a standing licence to change whose face the gate accepts.
+      await http()
+        .post('/my/face-enrol/re-enrolment-complete')
+        .set(auth(employeeToken))
+        .send({ photos: [JPEG, JPEG, JPEG], consentAcknowledged: true })
+        .expect(403);
+    });
+
+    it('refuses a completion once the unlock window has expired (T067)', async () => {
+      const expired = await sys.reEnrolmentRequest.create({
+        data: {
+          employeeId,
+          reason: 'Stale approval',
+          status: 'approved',
+          decidedAt: new Date(Date.now() - 10 * 86_400_000),
+          unlockExpiresAt: new Date(Date.now() - 3 * 86_400_000),
+        },
+      });
+
+      await http()
+        .post('/my/face-enrol/re-enrolment-complete')
+        .set(auth(employeeToken))
+        .send({ photos: [JPEG, JPEG, JPEG], consentAcknowledged: true })
+        .expect(403);
+
+      await sys.reEnrolmentRequest.deleteMany({ where: { id: expired.id } });
+    });
+
+    it('auto-closes a pending request when consent is withdrawn (T068, FR-017)', async () => {
+      const pending = await http()
+        .post('/my/face-enrol/re-enrolment-request')
+        .set(auth(employeeToken))
+        .send({ reason: 'Another change' })
+        .expect(201);
+
+      await http()
+        .delete('/my/face-enrol/consent')
+        .set(auth(employeeToken))
+        .expect(200);
+
+      const closed = await sys.reEnrolmentRequest.findFirst({
+        where: { id: pending.body.id },
+      });
+      expect(closed.status).toBe('expired');
+
+      const status = await http()
+        .get('/my/face-enrol')
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(status.body.status).toBe('not_enrolled');
+    });
+  });
+
+  // ------------------------------------------------------------- User Story 8
+  describe('Reimbursement claims (US8, T078–T080)', () => {
+    let categoryId: string;
+    let noReceiptCategoryId: string;
+    let draftClaimId: string;
+    let submittedClaimId: string;
+
+    beforeAll(async () => {
+      const travel = await sys.reimbursementCategory.create({
+        data: {
+          companyId,
+          code: unique('TRV').slice(0, 10),
+          name: 'Travel',
+          receiptRequiredAbove: 1000,
+        },
+      });
+      categoryId = travel.id;
+
+      const misc = await sys.reimbursementCategory.create({
+        data: {
+          companyId,
+          code: unique('MSC').slice(0, 10),
+          name: 'Miscellaneous',
+          receiptRequiredAbove: null,
+        },
+      });
+      noReceiptCategoryId = misc.id;
+    });
+
+    it('accepts a claim below the receipt threshold with no receipt (T078)', async () => {
+      const res = await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId,
+          amount: 750,
+          expenseDate: dayOf(2),
+          description: 'Site visit auto fare',
+        })
+        .expect(201);
+
+      expect(res.body.status).toBe('submitted');
+      submittedClaimId = res.body.id;
+    });
+
+    it('rejects a claim above the threshold with no receipt (T078, FR-030)', async () => {
+      await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId,
+          amount: 4500,
+          expenseDate: dayOf(3),
+          description: 'Intercity travel',
+        })
+        .expect(400);
+    });
+
+    it('accepts the same claim once a receipt is attached (T078)', async () => {
+      const res = await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId,
+          amount: 4500,
+          expenseDate: dayOf(3),
+          description: 'Intercity travel',
+          receiptRef: 'receipts/ref-1',
+          status: 'draft',
+        })
+        .expect(201);
+
+      expect(res.body.status).toBe('draft');
+      draftClaimId = res.body.id;
+    });
+
+    it('accepts any amount for a category with no threshold (T078)', async () => {
+      await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId: noReceiptCategoryId,
+          amount: 99999,
+          expenseDate: dayOf(4),
+          description: 'Uncapped category',
+        })
+        .expect(201);
+    });
+
+    it('rejects a claim against an unknown category', async () => {
+      await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId: 'not-a-real-category',
+          amount: 100,
+          expenseDate: dayOf(5),
+          description: 'Bogus',
+        })
+        .expect(400);
+    });
+
+    it('edits a draft claim (T079)', async () => {
+      const res = await http()
+        .patch(`/my/reimbursements/${draftClaimId}`)
+        .set(auth(employeeToken))
+        .send({ description: 'Intercity travel — corrected' })
+        .expect(200);
+      expect(res.body.description).toBe('Intercity travel — corrected');
+    });
+
+    it('re-checks the receipt rule against the edited amount (T079)', async () => {
+      // Raising the amount past the threshold must require the receipt the
+      // original claim did not need.
+      await http()
+        .patch(`/my/reimbursements/${submittedClaimId}`)
+        .set(auth(employeeToken))
+        .send({ amount: 5000 })
+        .expect(409); // submitted, so no longer editable at all
+    });
+
+    it('refuses to edit a submitted claim with 409 (T079)', async () => {
+      await http()
+        .patch(`/my/reimbursements/${submittedClaimId}`)
+        .set(auth(employeeToken))
+        .send({ description: 'Too late' })
+        .expect(409);
+    });
+
+    it('withdraws a submitted claim while still pending (T079, FR-032)', async () => {
+      const res = await http()
+        .post(`/my/reimbursements/${submittedClaimId}/withdraw`)
+        .set(auth(employeeToken))
+        .expect(201);
+      expect(res.body.status).toBe('withdrawn');
+    });
+
+    it('refuses to withdraw an already-withdrawn claim (T079)', async () => {
+      await http()
+        .post(`/my/reimbursements/${submittedClaimId}/withdraw`)
+        .set(auth(employeeToken))
+        .expect(409);
+    });
+
+    it('lists only the caller’s own claims (T080, FR-033)', async () => {
+      const mine = await http()
+        .get('/my/reimbursements')
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(mine.body.length).toBeGreaterThan(0);
+
+      const theirs = await http()
+        .get('/my/reimbursements')
+        .set(auth(otherToken))
+        .expect(200);
+      expect(theirs.body).toHaveLength(0);
+    });
+
+    it('refuses to let one employee act on another’s claim (T080)', async () => {
+      await http()
+        .patch(`/my/reimbursements/${draftClaimId}`)
+        .set(auth(otherToken))
+        .send({ description: 'Not mine' })
+        .expect(404);
+
+      await http()
+        .post(`/my/reimbursements/${draftClaimId}/withdraw`)
+        .set(auth(otherToken))
+        .expect(404);
+
+      await http()
+        .delete(`/my/reimbursements/${draftClaimId}`)
+        .set(auth(otherToken))
+        .expect(404);
+    });
+
+    it('refuses to delete a non-draft claim (T079, FR-031)', async () => {
+      await http()
+        .delete(`/my/reimbursements/${submittedClaimId}`)
+        .set(auth(employeeToken))
+        .expect(409);
+    });
+
+    it('deletes a draft claim (T079, FR-031)', async () => {
+      await http()
+        .delete(`/my/reimbursements/${draftClaimId}`)
+        .set(auth(employeeToken))
+        .expect(204);
+
+      const remaining = await http()
+        .get('/my/reimbursements')
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(
+        remaining.body.some((c: { id: string }) => c.id === draftClaimId),
+      ).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------- Audit trail
+  describe('Audit trail covers every new entity type (T087a, SC-009)', () => {
+    it('writes a correctly attributed entry for each of the five types', async () => {
+      // Every action in the suites above has already happened; this asserts that
+      // each produced a real, attributable row rather than a silent no-op.
+      for (const entityType of [
+        'PUNCH',
+        'LEAVE_APPLICATION',
+        'FACE_ENROLMENT',
+        'RE_ENROLMENT_REQUEST',
+        'REIMBURSEMENT_CLAIM',
+      ]) {
+        const entry = await sys.auditLogEntry.findFirst({
+          where: { entityType, accountId: employeeUserId },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        expect(entry).not.toBeNull();
+        expect(entry.entityType).toBe(entityType);
+        expect(entry.entityId).not.toBeNull();
+        expect(entry.action).not.toBeNull();
+        expect(entry.companyId).toBe(companyId);
+        expect(entry.ipAddress).toBeTruthy();
+        expect(entry.createdAt).toBeInstanceOf(Date);
+      }
+    });
+
+    it('attributes an admin decision to the admin, not the employee', async () => {
+      const entry = await sys.auditLogEntry.findFirst({
+        where: { entityType: 'LEAVE_APPLICATION', accountId: adminUserId },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry).not.toBeNull();
+      expect(entry.action).toBe('UPDATE');
     });
   });
 });

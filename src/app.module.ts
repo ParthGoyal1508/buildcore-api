@@ -6,6 +6,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { HrModule } from './hr/hr.module';
+import { PayrollModule } from './payroll/payroll.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SettingsModule } from './settings/settings.module';
 import { StorageModule } from './common/storage/storage.module';
@@ -44,6 +45,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     SettingsModule,
     ProjectsModule,
     HrModule,
+    PayrollModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -105,6 +105,7 @@ compatibility rather than a bare constant.']
   documentTypes DocumentType [not null]
   shifts Shift [not null]
   employeeCodeSeq EmployeeCodeSequence
+  reimbursementCategories ReimbursementCategory [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -196,6 +197,31 @@ Table EmployeeCodeSequence {
 `UPDATE ... RETURNING` so concurrent employee creation can never produce a
 duplicate or a gap (research.md §6, SC-007). Never read or written directly by
 another module — only through `EmployeeCodeService.getNextEmployeeCode()`.'
+}
+
+Table ReimbursementCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  code String [not null]
+  name String [not null]
+  receiptRequiredAbove Decimal [note: 'Claims strictly above this amount must carry a receipt (FR-030). Null means a
+receipt is never required for this category — distinct from `0`, which would
+require one on every claim.']
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
+
+  Note: 'The master a reimbursement claim\'s category and receipt rule come from.
+
+Lives in `settings` because it is per-company configuration, not employee data
+(research.md §10). Feature 005 owns its admin CRUD; feature 003 only reads it,
+through `ReimbursementCategoriesService`, to answer one question per claim: is a
+receipt mandatory at this amount?'
 }
 
 Table RefreshToken {
@@ -295,6 +321,8 @@ accept an employeeId parameter (FR-028).']
   punchRecords PunchRecord [not null]
   leaveBalances LeaveBalance [not null]
   leaveApplications LeaveApplication [not null]
+  reimbursementClaims ReimbursementClaim [not null]
+  salarySlips SalarySlip [not null]
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -430,6 +458,42 @@ the cost of their own leave.']
   updatedAt DateTime [not null]
 }
 
+Table ReimbursementClaim {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  companyId String [not null, note: 'Denormalized from the owning Employee so the claim can be RLS-filtered by a
+plain equality. Unlike the attendance tables, a claim is a financial document
+that must stay with the company it was incurred against even if the employee
+later moves — so the copy here is the intended record, not a cache of
+Employee\'s value.']
+  categoryId String [not null, note: 'FK to `settings.ReimbursementCategory` by value only. No Prisma relation:
+Principle I routes the read through `ReimbursementCategoriesService`, and a
+declared relation is exactly the cross-schema join that would bypass it.']
+  amount Decimal [not null]
+  expenseDate DateTime [not null]
+  description String [not null]
+  receiptRef String [note: 'Encrypted object-storage reference to the receipt image. Mandatory above the
+category\'s configured threshold (FR-030).']
+  status ReimbursementClaimStatus [not null, default: 'submitted']
+  paymentMode ReimbursementPaymentMode [note: 'Written by feature 005 once a claim is approved and paid; never by this one.']
+  paymentReference String
+  decidedByUserId String [note: 'Feature 005\'s decision fields. Present here because the table is shared, and
+splitting them into a second table would make "one claim, one status" untrue.']
+  decidedAt DateTime
+  adminRemarks String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'An employee-originated expense claim (US8).
+
+In `hr`, not `payroll`, because the claim exists as the employee\'s own record
+long before payroll has any interest in it — the same shape Leave already has
+(research.md §10). Feature 005 adds the admin review layer over this same table;
+it does not get a second one. This feature writes only `draft` → `submitted` →
+`withdrawn`; the approval and payment fields below are read-only here.'
+}
+
 Table PayrollRun {
   id String [pk]
   companyId String [not null, note: 'RLS-protected. Bare id — see the note on `Site.companyId`.']
@@ -445,6 +509,58 @@ Table PayrollRun {
   Note: 'Status only. This feature reads it for two things: whether a period is locked to
 further attendance writes (FR-010), and whether a salary slip may be served at
 all (a `draft` run has no publishable figures).'
+}
+
+Table SalarySlip {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  period String [not null, note: 'Matches `PayrollRun.period`, e.g. "2026-07". Referenced by value rather than
+by FK because a run is company-scoped while a slip is employee-scoped; the
+service pairs them explicitly so the `draft` check can never be skipped.']
+  monthDays Int [not null]
+  payableDays Decimal [not null]
+  lopDays Decimal [not null]
+  otHours Decimal [not null]
+  earningBasic Decimal [not null]
+  earningHra Decimal [not null]
+  earningConveyance Decimal [not null]
+  earningSiteAllowance Decimal [not null]
+  earningSpecialAllowance Decimal [not null]
+  earningOt Decimal [not null]
+  deductionPf Decimal [not null]
+  deductionEsic Decimal [not null]
+  deductionPt Decimal [not null]
+  deductionTds Decimal [not null]
+  deductionLoanEmi Decimal [not null]
+  deductionAdvanceRecovery Decimal [not null]
+  employerPf Decimal [not null, note: 'Informational on the payslip — shown to the employee, not subtracted from
+`netPay`.']
+  employerEps Decimal [not null]
+  employerEdli Decimal [not null]
+  employerAdminCharges Decimal [not null]
+  employerGratuity Decimal [not null]
+  employerBonus Decimal [not null]
+  netPay Decimal [not null, note: 'Stored rather than derived on read: a payslip already issued must keep showing
+the figure it was issued with, even if a later correction changes its inputs.']
+  minimumWagesNote String [note: 'The statutory-compliance line the payslip carries.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (employeeId, period) [unique]
+  }
+
+  Note: 'The per-employee, per-period payslip figures this feature serves as JSON and
+PDF (data-model.md "Salary Slip").
+
+A stored projection, not a computation: feature 003 formats a payslip, it does
+not calculate one. Whichever feature owns payroll processing writes these rows
+when a run moves to `processed`; a slip whose run is still `draft` is never
+served (FR-024).
+
+Every figure is `Decimal`, never `Float` — these are money, and binary rounding
+drift in a payslip is a wage dispute.'
 }
 
 Enum UserStatus {
@@ -505,6 +621,7 @@ Enum AuditEntityType {
   LEAVE_APPLICATION
   FACE_ENROLMENT
   RE_ENROLMENT_REQUEST
+  REIMBURSEMENT_CLAIM
 }
 
 Enum AuditAction {
@@ -575,6 +692,20 @@ Enum LeaveApplicationStatus {
   cancelled
 }
 
+Enum ReimbursementClaimStatus {
+  draft
+  submitted
+  approved
+  rejected
+  paid
+  withdrawn
+}
+
+Enum ReimbursementPaymentMode {
+  payroll
+  direct
+}
+
 Enum PayrollRunStatus {
   draft
   processed
@@ -595,6 +726,8 @@ Ref: Shift.companyId > Company.id [delete: Cascade]
 
 Ref: EmployeeCodeSequence.companyId - Company.id [delete: Cascade]
 
+Ref: ReimbursementCategory.companyId > Company.id [delete: Cascade]
+
 Ref: RefreshToken.accountId > User.id
 
 Ref: AuditLogEntry.accountId > User.id
@@ -608,3 +741,7 @@ Ref: PunchRecord.employeeId > Employee.id [delete: Cascade]
 Ref: LeaveBalance.employeeId > Employee.id [delete: Cascade]
 
 Ref: LeaveApplication.employeeId > Employee.id [delete: Cascade]
+
+Ref: ReimbursementClaim.employeeId > Employee.id [delete: Cascade]
+
+Ref: SalarySlip.employeeId > Employee.id [delete: Cascade]
