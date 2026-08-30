@@ -180,6 +180,14 @@ only need doing once.
 - [ ] Confirm `CORS_ORIGINS` includes the deployed frontend origin (the Settings screens are
       entirely browser-driven; without this every call fails at the preflight).
 
+- [ ] **Confirm auto-deploy actually fires.** The service is set to `autoDeploy: yes` with
+      `autoDeployTrigger: commit`, but that only works if the **Render GitHub App is installed
+      on the repository** — Render can clone a public repo without it, so builds and manual
+      deploys succeed while pushes are silently ignored. After pushing to `main`, check Render
+      → Events: a webhook-driven deploy shows a trigger of `deploy`/`new commit`, not `manual`,
+      `api` or `CLI`. If every deploy in the history is manual, the App is missing: Settings →
+      repository → Disconnect, then Connect via GitHub and grant access to this repo.
+
 - [ ] `SETTINGS_DEFAULT_*` are optional — the statutory defaults (PF 12, ESIC 3.25, Gratuity
       4.81, Bonus 8.33, lock day 7) apply when unset. Set them only to override.
 
