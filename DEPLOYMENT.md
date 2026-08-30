@@ -55,6 +55,21 @@ error is raised to tell you so.
 A local role matching this shape (`buildcore_app`) has been created for development, and
 the e2e suite passes against it with the policies actually enforced.
 
+**Neon-specific:** a role created with `CREATE ROLE ... PASSWORD ...` over SQL will show up
+in `pg_roles` *and* in Neon's API, but **cannot authenticate** — Neon's connection proxy
+checks its own stored credential, which it never learned for a SQL-created role, so you
+get `password authentication failed`. After running the provisioning script, reset the
+role's password through Neon so the control plane learns it:
+
+```bash
+curl -X POST -H "Authorization: Bearer $NEON_API_KEY" \
+  "https://console.neon.tech/api/v2/projects/<project-id>/branches/<branch-id>/roles/buildcore_app/reset_password"
+```
+
+The response contains the password to put in `DATABASE_URL`. (Or use the Neon Console:
+Roles → buildcore_app → Reset password.) Use the **direct**, non-`-pooler` host for
+migrations.
+
 **The application enforces this itself.** On startup it queries `rolsuper`/`rolbypassrls`
 for its own connection (`src/common/prisma/rls-preflight.ts`) and, when `NODE_ENV` is
 `production`, **refuses to boot** if either is true — a deploy that would silently run
