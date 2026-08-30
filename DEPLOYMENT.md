@@ -129,6 +129,45 @@ export (tasks.md T001-T002). Not yet in `docker-compose.yml` or `package.json`.
 - [ ] Use the platform's built-in log viewer (both Render and Cloud Run include this free).
 - [ ] Optional: Sentry free tier (5k events/month) for error tracking.
 
+## 8a. Deploying the Settings module (feature 002) — one-time checks
+
+Migrations run themselves: the Dockerfile's `CMD` is `start:migrate:prod`
+(`prisma migrate deploy && node dist/main`), so a Render auto-deploy applies any pending
+migration before the app starts. The three checks below are specific to this release and
+only need doing once.
+
+- [ ] **Confirm the database role does not bypass RLS — this can fail the deploy.**
+      The app refuses to boot under `NODE_ENV=production` when its role is a superuser or
+      holds `BYPASSRLS`, because every RLS policy is silently inert in that case (§2a).
+      Run against production first:
+      ```sql
+      SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+      ```
+      Both MUST be `false`. Supabase's default `postgres` role has `rolbypassrls = true`
+      and **will** fail this; provision the role from §2a and repoint `DATABASE_URL`.
+
+- [ ] **Never run `npm run seed` against production.** `prisma/seed.ts` deletes every
+      `User`, `UserRole`, `RefreshToken` and `AuditLogEntry` before seeding — correct for a
+      local fixture reset, catastrophic against real data. The nine default roles that
+      production needs are seeded by migration `20260830090000_seed_default_roles` instead,
+      which is idempotent and keyed on `Role.name`, so it refreshes permission sets without
+      changing any role's `id` (existing `UserRole` assignments survive).
+
+- [ ] **Expect existing accounts to lose their permissions.** Migration
+      `20260828170000_role_permission_model` backfills only `ADMIN → Super Admin`; anyone
+      who was `USER` ends up with no role and gets `403` on permission-gated endpoints until
+      reassigned via Settings → Users. Before deploying, confirm at least one admin exists,
+      or no one will be able to log in and fix it:
+      ```sql
+      SELECT email, role FROM shared."User" WHERE role = 'ADMIN';
+      ```
+
+- [ ] Confirm `CORS_ORIGINS` includes the deployed frontend origin (the Settings screens are
+      entirely browser-driven; without this every call fails at the preflight).
+
+- [ ] `SETTINGS_DEFAULT_*` are optional — the statutory defaults (PF 12, ESIC 3.25, Gratuity
+      4.81, Bonus 8.33, lock day 7) apply when unset. Set them only to override.
+
 ## 9. Post-deploy verification
 
 - [ ] Hit the deployed health endpoint and `/api` (Swagger) if enabled.

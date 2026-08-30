@@ -7,6 +7,17 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('Seeding...');
 
+  // DESTRUCTIVE — local development fixtures only. The deleteMany() calls below
+  // remove every account, session and audit record in the target database. Never
+  // point this at production: the default roles it seeds are applied there by
+  // migration 20260830090000_seed_default_roles instead (see DEPLOYMENT.md §8a).
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'prisma/seed.ts is destructive and must never run against production — ' +
+        'default roles are seeded by migration 20260830090000_seed_default_roles.',
+    );
+  }
+
   // Standalone script, outside the Nest app's DI — set the same RLS bypass
   // src/common/prisma/rls-context.ts's withRlsContext() sets for system-level
   // writes, session-wide (`is_local = false`) since this whole script is one
@@ -20,8 +31,10 @@ async function main() {
   await prisma.userRole.deleteMany();
   await prisma.user.deleteMany();
 
-  // The nine default roles (002 FR-006) — upserted by name, so this is safe to
-  // re-run and refreshes permission sets without orphaning UserRole assignments.
+  // The nine default roles (002 FR-006). Also applied by migration
+  // 20260830090000_seed_default_roles, which is what production relies on — this
+  // script must never run there, since the deleteMany() calls above would wipe real
+  // accounts. Kept here so a local `migrate reset` + seed still ends up complete.
   await seedDefaultRoles(prisma);
 
   const password = await hash('secret42');
