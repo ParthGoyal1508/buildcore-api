@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+coverage/
+package-lock.json
+prisma/migrations/
+# Vendored face-api model weights are generated binary/JSON artifacts, not source.
+assets/models/
+var/storage/

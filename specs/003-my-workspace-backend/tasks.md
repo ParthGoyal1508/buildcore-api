@@ -26,13 +26,13 @@ implementation and testing of each story.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Add `@vladmandic/face-api` and `pdfkit` as dependencies (constitution v1.1.0
+- [X] T001 Add `@vladmandic/face-api` and `pdfkit` as dependencies (constitution v1.1.0
       pre-approval) in `package.json`
-- [ ] T002 [P] Extend `src/common/configs/config.interface.ts` with `WorkspaceConfig` (face-match
+- [X] T002 [P] Extend `src/common/configs/config.interface.ts` with `WorkspaceConfig` (face-match
       distance threshold, max offline-queue age hours, re-enrolment unlock duration days,
       clock-skew tolerance minutes) — research.md §2, §4, §8
-- [ ] T003 [P] Populate `WorkspaceConfig` defaults in `src/common/configs/config.ts`
-- [ ] T004 [P] Create `src/hr/hr.module.ts`, `src/projects/projects.module.ts` shells, and extend
+- [X] T003 [P] Populate `WorkspaceConfig` defaults in `src/common/configs/config.ts`
+- [X] T004 [P] Create `src/hr/hr.module.ts`, `src/projects/projects.module.ts` shells, and extend
       (or create) `src/payroll/payroll.module.ts`, registered in `src/app.module.ts`
 
 **Checkpoint**: Config plumbing and module shells ready.
@@ -43,40 +43,40 @@ implementation and testing of each story.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T005 Add the `hr` Postgres schema block to `prisma/schema.prisma` (Prisma multi-schema,
+- [X] T005 Add the `hr` Postgres schema block to `prisma/schema.prisma` (Prisma multi-schema,
       matching features 001/002's pattern) — research.md §1
-- [ ] T006 [P] Add the `projects` Postgres schema block with the `Site` model (companyId,
+- [X] T006 [P] Add the `projects` Postgres schema block with the `Site` model (companyId,
       latitude/longitude, geofenceRadiusMeters, weeklyOffDay, holidays) — data-model.md "Site"
-- [ ] T007 [P] Add the `Employee` model to the `hr` schema (userId, companyId, siteId, shiftId,
+- [X] T007 [P] Add the `Employee` model to the `hr` schema (userId, companyId, siteId, shiftId,
       employeeCode) — data-model.md "Employee"
-- [ ] T008 [P] Add the `FaceEnrolment` and `ReEnrolmentRequest` models to the `hr` schema —
+- [X] T008 [P] Add the `FaceEnrolment` and `ReEnrolmentRequest` models to the `hr` schema —
       data-model.md
-- [ ] T009 [P] Add the `PunchRecord` model to the `hr` schema (type, capturedAt, receivedAt,
+- [X] T009 [P] Add the `PunchRecord` model to the `hr` schema (type, capturedAt, receivedAt,
       isOfflineSync, photoRef, faceMatchResult, geofenceResult, exceptionResolution) —
       data-model.md "Punch Record"
-- [ ] T010 [P] Add `LeaveType`/`LeaveBalance`/`LeaveApplication` models to the `hr` schema —
+- [X] T010 [P] Add `LeaveType`/`LeaveBalance`/`LeaveApplication` models to the `hr` schema —
       data-model.md
-- [ ] T011 [P] Add `PayrollRun` (status only) and the `SalarySlip` read-projection shape to the
+- [X] T011 [P] Add `PayrollRun` (status only) and the `SalarySlip` read-projection shape to the
       `payroll` schema — data-model.md
-- [ ] T012 Extend `shared.AuditLogEntry.entityType` in `prisma/schema.prisma` with `PUNCH`,
+- [X] T012 Extend `shared.AuditLogEntry.entityType` in `prisma/schema.prisma` with `PUNCH`,
       `LEAVE_APPLICATION`, `FACE_ENROLMENT`, `RE_ENROLMENT_REQUEST` — data-model.md cross-reference
-- [ ] T013 Generate and apply the migration for T005–T012 via `npm run migrate:dev:create` then
+- [X] T013 Generate and apply the migration for T005–T012 via `npm run migrate:dev:create` then
       `npm run migrate:dev`
-- [ ] T014 Add Postgres RLS policies for every `companyId`-scoped table introduced above (`Site`,
+- [X] T014 Add Postgres RLS policies for every `companyId`-scoped table introduced above (`Site`,
       `Employee`, `PunchRecord` via `Employee`, `LeaveApplication` via `Employee`, `PayrollRun`),
       reusing the `app.current_company_id` session-variable pattern from features 001/002
-- [ ] T015 [P] Create `src/hr/employees/employees.service.ts`: `getByUserId(userId)`,
+- [X] T015 [P] Create `src/hr/employees/employees.service.ts`: `getByUserId(userId)`,
       `getById(employeeId)`, exported for other modules to resolve the caller's own Employee record
       — research.md §9
-- [ ] T016 [P] Create `src/projects/sites/sites.service.ts`: `getGeofence(siteId)`,
+- [X] T016 [P] Create `src/projects/sites/sites.service.ts`: `getGeofence(siteId)`,
       `getHolidayCalendar(siteId)`, `getWeeklyOffDay(siteId)`, exported for `hr` to call —
       research.md §1
-- [ ] T017 [P] Create `src/hr/biometrics/biometrics.service.ts`: `computeDescriptor(photos)` and
+- [X] T017 [P] Create `src/hr/biometrics/biometrics.service.ts`: `computeDescriptor(photos)` and
       `compareDescriptors(a, b): { matched: boolean, distance: number }` using
       `@vladmandic/face-api`, reading the threshold from `WorkspaceConfig` — research.md §2
-- [ ] T018 [P] Create a geofence-distance utility (Haversine formula) in
+- [X] T018 [P] Create a geofence-distance utility (Haversine formula) in
       `src/hr/punch/geofence.util.ts` — research.md §3
-- [ ] T019 [P] Extend `src/auth/audit-log.service.ts`'s `record()` call sites list (no signature
+- [X] T019 [P] Extend `src/auth/audit-log.service.ts`'s `record()` call sites list (no signature
       change needed beyond feature 002's generalization) to accept the four new `entityType` values
       from T012
 
@@ -95,25 +95,25 @@ descriptor; withdraw consent, confirm deletion and status reverts.
 
 ### Tests for User Story 1 ⚠️
 
-- [ ] T020 [P] [US1] E2e test: enrol (success, <3 photos → 400, unchecked consent → 400,
+- [X] T020 [P] [US1] E2e test: enrol (success, <3 photos → 400, unchecked consent → 400,
       already-enrolled → 409) in `test/my-workspace.e2e-spec.ts`
-- [ ] T021 [P] [US1] E2e test: consent withdrawal deletes photos/descriptor and reverts status in
+- [X] T021 [P] [US1] E2e test: consent withdrawal deletes photos/descriptor and reverts status in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T022 [P] [US1] Unit test for `FaceEnrolmentService` (minimum-photo/consent gating,
+- [X] T022 [P] [US1] Unit test for `FaceEnrolmentService` (minimum-photo/consent gating,
       already-enrolled rejection) in `src/hr/biometrics/face-enrolment.service.spec.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T023 [P] [US1] Create `src/hr/biometrics/dto/enrol.dto.ts` (photos, consentMethod,
+- [X] T023 [P] [US1] Create `src/hr/biometrics/dto/enrol.dto.ts` (photos, consentMethod,
       consentAcknowledged)
-- [ ] T024 [US1] Implement `src/hr/biometrics/face-enrolment.service.ts`: `enrol()` (gating,
+- [X] T024 [US1] Implement `src/hr/biometrics/face-enrolment.service.ts`: `enrol()` (gating,
       `BiometricsService.computeDescriptor()`, encrypted storage), `getStatus()`,
       `withdrawConsent()` (depends on T015, T017)
-- [ ] T025 [US1] Implement `src/hr/biometrics/face-enrolment.controller.ts`:
+- [X] T025 [US1] Implement `src/hr/biometrics/face-enrolment.controller.ts`:
       `GET/POST /my/face-enrol`, `DELETE /my/face-enrol/consent` (depends on T024)
-- [ ] T026 [US1] Wire audit logging (entityType `FACE_ENROLMENT`) into enrol/withdraw paths of
+- [X] T026 [US1] Wire audit logging (entityType `FACE_ENROLMENT`) into enrol/withdraw paths of
       `face-enrolment.service.ts` — FR-027
-- [ ] T027 [US1] Register `FaceEnrolmentController`/`FaceEnrolmentService`/`BiometricsService` in
+- [X] T027 [US1] Register `FaceEnrolmentController`/`FaceEnrolmentService`/`BiometricsService` in
       `src/hr/hr.module.ts`
 
 **Checkpoint**: User Story 1 fully functional and independently testable.
@@ -130,36 +130,36 @@ out-of-geofence or non-matching photo → recorded as an exception, resolvable b
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T028 [P] [US2] E2e test: punch in/out success (worked hours, OT computed) in
+- [X] T028 [P] [US2] E2e test: punch in/out success (worked hours, OT computed) in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T029 [P] [US2] E2e test: no-enrolment rejection, double punch-in rejection, punch-out with no
+- [X] T029 [P] [US2] E2e test: no-enrolment rejection, double punch-in rejection, punch-out with no
       open punch-in rejection, and a caller cannot submit or read a punch for another employee (all
       endpoints resolve strictly from the caller's own token per FR-028) in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T030 [P] [US2] E2e test: out-of-geofence and non-matching-photo punches recorded as
+- [X] T030 [P] [US2] E2e test: out-of-geofence and non-matching-photo punches recorded as
       exceptions; admin resolve (confirmed/rejected) in `test/my-workspace.e2e-spec.ts`
-- [ ] T031 [P] [US2] E2e test: punch rejected (423) within an already payroll-locked period in
+- [X] T031 [P] [US2] E2e test: punch rejected (423) within an already payroll-locked period in
       `test/my-workspace.e2e-spec.ts`
-- [ ] T032 [P] [US2] Unit test for the one-open-punch-in-at-a-time transactional guard (research.md
+- [X] T032 [P] [US2] Unit test for the one-open-punch-in-at-a-time transactional guard (research.md
       §5) in `src/hr/punch/punch.service.spec.ts`
-- [ ] T033 [P] [US2] Unit test for OT-hours computation against `Employee.shiftId` duration in
+- [X] T033 [P] [US2] Unit test for OT-hours computation against `Employee.shiftId` duration in
       `src/hr/punch/punch.service.spec.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T034 [P] [US2] Create `src/hr/punch/dto/punch.dto.ts` (type, photo, latitude, longitude,
+- [X] T034 [P] [US2] Create `src/hr/punch/dto/punch.dto.ts` (type, photo, latitude, longitude,
       capturedAt)
-- [ ] T035 [US2] Implement `src/hr/punch/punch.service.ts`: `submitPunch()` (payroll-lock check via
+- [X] T035 [US2] Implement `src/hr/punch/punch.service.ts`: `submitPunch()` (payroll-lock check via
       `SettingsModule`'s exported company lookup, open-punch-in transactional guard, geofence calc
       via `geofence.util.ts`/`SitesService`, face match via `BiometricsService`, OT computation via
       `Employee.shiftId` → `SettingsModule.getShift()`) (depends on T015–T018)
-- [ ] T036 [US2] Implement `src/hr/punch/punch.controller.ts`: `POST /my/punch` (depends on T035)
-- [ ] T037 [US2] Implement `src/hr/attendance-exceptions/attendance-exceptions.controller.ts` +
+- [X] T036 [US2] Implement `src/hr/punch/punch.controller.ts`: `POST /my/punch` (depends on T035)
+- [X] T037 [US2] Implement `src/hr/attendance-exceptions/attendance-exceptions.controller.ts` +
       a resolution method on `punch.service.ts`: `GET/POST /workspace-admin/attendance-exceptions*`,
       guarded with an admin permission check — FR-011a
-- [ ] T038 [US2] Wire audit logging (entityType `PUNCH`) into submit and resolve paths of
+- [X] T038 [US2] Wire audit logging (entityType `PUNCH`) into submit and resolve paths of
       `punch.service.ts` — FR-027
-- [ ] T039 [US2] Register `PunchController`, `AttendanceExceptionsController`, `PunchService` in
+- [X] T039 [US2] Register `PunchController`, `AttendanceExceptionsController`, `PunchService` in
       `src/hr/hr.module.ts`
 
 **Checkpoint**: User Stories 1 AND 2 both independently functional.

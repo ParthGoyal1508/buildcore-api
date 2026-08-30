@@ -245,6 +245,208 @@ failure and for any event with no company-scoped account.']
 clarification: reading/querying is a separate, later Activity Log feature).'
 }
 
+Table Site {
+  id String [pk]
+  companyId String [not null, note: 'RLS-protected. No Prisma relation to `settings.Company` on purpose: Principle I
+routes every cross-module read through the owning module\'s exported service, and
+declaring a relation here is what would make an accidental cross-schema join
+possible in the first place. Same rationale as `shared.User.companyId`.']
+  name String [not null]
+  latitude Decimal [not null, note: 'Geofence centre. Decimal, not Float — 7 decimal places is ~1 cm of latitude, and
+binary floating point would make a boundary punch\'s in/out verdict depend on
+representation error rather than on where the worker actually stood.']
+  longitude Decimal [not null]
+  geofenceRadiusMeters Int [not null]
+  weeklyOffDay Int [not null, note: 'Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).']
+  holidays DateTime[] [not null, note: 'Site-specific non-working days. A scalar date list rather than its own table:
+this is read as a whole calendar for one site at a time and never queried
+across sites, so a join table would buy nothing (data-model.md "Site").']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'A construction site: the geofence centre a punch is validated against, plus the
+non-working-day calendar that attendance-status computation reads.
+
+Lives in `projects`, not `hr`, even though this feature is its only current
+consumer — a site is a projects-module concept per the constitution\'s module
+list, and putting it in `hr` would misplace a concept that already has a home
+(research.md §1). `hr` reaches it only through `SitesService`.'
+}
+
+Table Employee {
+  id String [pk]
+  userId String [unique, not null, note: 'The account this employee record belongs to (`shared.User.id`). Unique: an
+account maps to exactly one employee record, which is what lets every `/my/*`
+endpoint resolve the caller\'s own employee from their token alone and never
+accept an employeeId parameter (FR-028).']
+  companyId String [not null, note: 'RLS-protected. Bare id, not a relation — see the note on `Site.companyId`.']
+  siteId String [not null, note: '`projects.Site.id`; read through `SitesService`.']
+  shiftId String [not null, note: '`settings.Shift.id`; the shift duration OT is computed against, read through
+`SettingsModule`\'s exported service (research.md §9).']
+  employeeCode String [not null, note: 'Allocated by `settings`\' employee-code sequence (feature 002).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  faceEnrolment FaceEnrolment
+  reEnrolmentRequests ReEnrolmentRequest [not null]
+  punchRecords PunchRecord [not null]
+  leaveBalances LeaveBalance [not null]
+  leaveApplications LeaveApplication [not null]
+
+  indexes {
+    (companyId, employeeCode) [unique]
+  }
+
+  Note: 'The minimal Employee record this feature needs: the bridge from a logged-in
+account to the site, shift, and attendance data that hang off it. A future HR &
+Payroll admin feature extends this (department, designation, joining date)
+rather than redefining it (research.md §9).'
+}
+
+Table FaceEnrolment {
+  id String [pk]
+  employeeId String [unique, not null]
+  employee Employee [not null]
+  descriptor Bytes [note: 'The derived 128-float face descriptor, encrypted at rest — never the raw
+photos, which is the whole point of storing a descriptor (research.md §2):
+a punch compares one vector instead of re-running inference against every
+enrolled image. Null while `status` is `not_enrolled`.']
+  photoRefs String[] [not null, note: 'Encrypted object-storage references to the 3–5 captured photos. The blobs
+themselves live in `StorageService`, not here — only large binaries leave
+Postgres (constitution v1.4.0).']
+  consentMethod ConsentMethod
+  consentAcknowledgedAt DateTime
+  enrolledAt DateTime
+  status FaceEnrolmentStatus [not null, default: 'not_enrolled']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Exactly one row per employee. A completed re-enrolment replaces `descriptor`,
+`photoRefs`, and `enrolledAt` in place — "previous template securely deleted"
+(FR-016) means the prior values are overwritten, never retained as history.'
+}
+
+Table ReEnrolmentRequest {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  reason String [not null]
+  status ReEnrolmentRequestStatus [not null, default: 'pending']
+  adminRemarks String [note: 'Mandatory when `status` is `rejected` — enforced at the DTO/service layer,
+since a conditional NOT NULL is not expressible in the schema.']
+  decidedByUserId String
+  decidedAt DateTime
+  unlockExpiresAt DateTime [note: 'Set on approval, `reEnrolment.unlockDurationDays` out (FR-015).']
+  unlockConsumedAt DateTime [note: 'Set when the fresh capture completes, so one approval cannot be reused (FR-016).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'An employee\'s request to re-capture their face template (e.g. after an injury or
+a persistent match failure), and the admin decision on it. Approval opens a
+time-boxed unlock that a single fresh capture consumes (FR-013–FR-016).'
+}
+
+Table PunchRecord {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  type PunchType [not null]
+  capturedAt DateTime [not null, note: 'The official punch time, declared by the client so an offline-queued punch
+records when the worker actually punched rather than when connectivity
+returned (research.md §4).']
+  receivedAt DateTime [default: `now()`, not null, note: 'Server receipt time. Both are retained because FR-012 requires offline syncs
+to stay visible in audit rather than being flattened into one timestamp.']
+  isOfflineSync Boolean [not null, default: false, note: 'Derived: `capturedAt` trails `receivedAt` by more than the configured clock-skew
+tolerance. The tolerance is what stops ordinary clock drift from labelling every
+normal punch an offline sync.']
+  photoRef String [not null, note: 'Encrypted object-storage reference to the captured selfie.']
+  faceMatchResult FaceMatchResult [not null]
+  faceMatchDistance Decimal [note: 'The measured descriptor distance behind `faceMatchResult`. Kept so an admin
+resolving an exception can see how near the miss was, and so the configured
+threshold can be retuned against real data instead of guesswork.']
+  latitude Decimal [not null]
+  longitude Decimal [not null]
+  geofenceResult GeofenceResult [not null]
+  geofenceDistanceMeters Decimal [note: 'Measured metres from the site centre, retained for the same reason as
+`faceMatchDistance`.']
+  closedByPunchId String [unique, note: 'On a punch-in, the id of the punch-out that closed it; null while the punch-in
+is still open. This is what makes "at most one open punch-in per employee"
+(FR-008) enforceable as a partial unique index in the database, instead of
+resting solely on an application-level check that two concurrent requests can
+both pass. Always null on a punch-out record.']
+  exceptionResolution ExceptionResolution [note: 'Null unless either result above is `exception`; then `pending` until an admin
+acts (FR-011a).']
+  resolvedByUserId String
+  resolvedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One punch event. Recorded whether or not verification succeeded: a failed face
+match or an out-of-geofence position becomes an exception for an admin to
+resolve, never a rejected request (FR-007) — a worker who is physically present
+must not be silently absent from payroll because of a bad camera angle.'
+}
+
+Table LeaveBalance {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  leaveType LeaveTypeCode [not null]
+  financialYear String [not null, note: 'Indian financial year, e.g. "2026-27".']
+  opening Decimal [not null, default: 0]
+  accrued Decimal [not null, default: 0]
+  used Decimal [not null, default: 0]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (employeeId, leaveType, financialYear) [unique]
+  }
+
+  Note: 'Per-employee, per-financial-year leave entitlement. `balance` is deliberately not
+a column: storing `opening + accrued - used` alongside its own inputs is a second
+source of truth that drifts the first time one of them is written without the
+other (data-model.md "Leave Balance").'
+}
+
+Table LeaveApplication {
+  id String [pk]
+  employeeId String [not null]
+  employee Employee [not null]
+  leaveType LeaveTypeCode [not null]
+  fromDate DateTime [not null]
+  toDate DateTime [not null]
+  dayCount Decimal [not null, note: 'Computed server-side at submission, excluding weekly offs and site holidays
+(FR-019) — never taken from the client, which would let a caller understate
+the cost of their own leave.']
+  reason String [not null]
+  status LeaveApplicationStatus [not null, default: 'pending']
+  adminRemarks String [note: 'Mandatory when `status` is `rejected` (FR-022a); enforced at the service layer.']
+  decidedByUserId String
+  decidedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
+Table PayrollRun {
+  id String [pk]
+  companyId String [not null, note: 'RLS-protected. Bare id — see the note on `Site.companyId`.']
+  period String [not null, note: 'Period key, e.g. "2026-07".']
+  status PayrollRunStatus [not null, default: 'draft']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, period) [unique]
+  }
+
+  Note: 'Status only. This feature reads it for two things: whether a period is locked to
+further attendance writes (FR-010), and whether a salary slip may be served at
+all (a `draft` run has no publishable figures).'
+}
+
 Enum UserStatus {
   active
   deactivated
@@ -299,18 +501,84 @@ Enum AuditEntityType {
   DOCUMENT_TYPE
   SHIFT
   USER_ACCOUNT
+  PUNCH
+  LEAVE_APPLICATION
+  FACE_ENROLMENT
+  RE_ENROLMENT_REQUEST
 }
 
 Enum AuditAction {
   CREATE
   UPDATE
   DELETE
+  READ
   LOGIN_SUCCESS
   LOGIN_FAILURE
   ACCOUNT_LOCKED
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+}
+
+Enum FaceEnrolmentStatus {
+  not_enrolled
+  enrolled
+  re_enrolment_requested
+}
+
+Enum ConsentMethod {
+  signed_paper
+  digital
+  verbal
+}
+
+Enum ReEnrolmentRequestStatus {
+  pending
+  approved
+  rejected
+  completed
+  expired
+}
+
+Enum PunchType {
+  in
+  out
+}
+
+Enum FaceMatchResult {
+  matched
+  exception
+}
+
+Enum GeofenceResult {
+  in_range
+  exception
+}
+
+Enum ExceptionResolution {
+  pending
+  confirmed
+  rejected
+}
+
+Enum LeaveTypeCode {
+  earned
+  casual
+  sick
+  lwp
+}
+
+Enum LeaveApplicationStatus {
+  pending
+  approved
+  rejected
+  cancelled
+}
+
+Enum PayrollRunStatus {
+  draft
+  processed
+  paid
 }
 
 Ref: UserRole.userId > User.id
@@ -330,3 +598,13 @@ Ref: EmployeeCodeSequence.companyId - Company.id [delete: Cascade]
 Ref: RefreshToken.accountId > User.id
 
 Ref: AuditLogEntry.accountId > User.id
+
+Ref: FaceEnrolment.employeeId - Employee.id [delete: Cascade]
+
+Ref: ReEnrolmentRequest.employeeId > Employee.id [delete: Cascade]
+
+Ref: PunchRecord.employeeId > Employee.id [delete: Cascade]
+
+Ref: LeaveBalance.employeeId > Employee.id [delete: Cascade]
+
+Ref: LeaveApplication.employeeId > Employee.id [delete: Cascade]

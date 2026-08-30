@@ -1,0 +1,292 @@
+import { BadRequestException, HttpException } from '@nestjs/common';
+import {
+  ExceptionResolution,
+  FaceEnrolmentStatus,
+  FaceMatchResult,
+  GeofenceResult,
+  PunchType,
+} from '@prisma/client';
+import { createPrismaMock } from '../../settings/testing/prisma-mock';
+import {
+  BiometricsService,
+  FACE_DESCRIPTOR_LENGTH,
+  FaceMatch,
+  euclideanDistance,
+} from '../biometrics/biometrics.service';
+import type { Caller } from '../biometrics/face-enrolment.service';
+import { PunchService } from './punch.service';
+
+const JPEG_BASE64 =
+  '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==';
+
+/** The enrolled template every test compares against. */
+const ENROLLED = Float32Array.from(
+  { length: FACE_DESCRIPTOR_LENGTH },
+  () => 0.5,
+);
+
+class FakeBiometrics extends BiometricsService {
+  /** What the next punch photo will "look like". Set far from ENROLLED to
+   * simulate a stranger; set to null to simulate no detectable face. */
+  public next: Float32Array | null = ENROLLED;
+
+  async computeDescriptor(): Promise<Float32Array> {
+    if (!this.next) {
+      throw new Error('no face');
+    }
+    return this.next;
+  }
+  compareDescriptors(a: Float32Array, b: Float32Array): FaceMatch {
+    const distance = euclideanDistance(a, b);
+    return { matched: distance <= 0.6, distance };
+  }
+}
+
+const SITE = {
+  siteId: 'site-1',
+  latitude: 19.076,
+  longitude: 72.8777,
+  geofenceRadiusMeters: 200,
+};
+
+describe('PunchService', () => {
+  const employee = {
+    id: 'emp-1',
+    companyId: 'co-1',
+    siteId: 'site-1',
+    shiftId: 'sh-1',
+  };
+  const caller: Caller = {
+    userId: 'user-1',
+    companyId: 'co-1',
+    ipAddress: '127.0.0.1',
+    rls: { isSuperAdmin: false, companyId: 'co-1' },
+  };
+
+  let biometrics: FakeBiometrics;
+
+  const build = (
+    opts: {
+      openPunchIn?: { id: string } | null;
+      enrolled?: boolean;
+    } = {},
+  ) => {
+    const { openPunchIn = null, enrolled = true } = opts;
+    biometrics = new FakeBiometrics();
+
+    const created: Record<string, unknown>[] = [];
+    const prisma = createPrismaMock({
+      faceEnrolment: {
+        findUnique: jest.fn().mockResolvedValue(
+          enrolled
+            ? {
+                id: 'enr-1',
+                status: FaceEnrolmentStatus.enrolled,
+                descriptor: Buffer.from(
+                  ENROLLED.buffer,
+                  ENROLLED.byteOffset,
+                  ENROLLED.byteLength,
+                ),
+              }
+            : null,
+        ),
+      },
+      punchRecord: {
+        create: jest.fn().mockImplementation(({ data }: never) => {
+          const row = {
+            id: `punch-${created.length + 1}`,
+            ...(data as Record<string, unknown>),
+          };
+          created.push(row);
+          return row;
+        }),
+        update: jest.fn().mockResolvedValue({}),
+        findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    });
+    // The FOR UPDATE lock query returns the employee's open punch-in, if any.
+    prisma.tx.$queryRaw = jest
+      .fn()
+      .mockResolvedValue(openPunchIn ? [openPunchIn] : []);
+
+    const service = new PunchService(
+      prisma as never,
+      { requireByUserId: jest.fn().mockResolvedValue(employee) } as never,
+      { getGeofence: jest.fn().mockResolvedValue(SITE) } as never,
+      { getPayrollLockDay: jest.fn().mockResolvedValue(7) } as never,
+      biometrics,
+      { compressPunchPhoto: jest.fn(async (b: Buffer) => b) } as never,
+      { put: jest.fn().mockResolvedValue('punch/ref-1') } as never,
+      { record: jest.fn().mockResolvedValue(undefined) } as never,
+      {
+        get: () => ({
+          faceMatch: { distanceThreshold: 0.6 },
+          offlineQueue: { maxAgeHours: 72, clockSkewToleranceMinutes: 5 },
+          imageProcessing: { punch: { maxDimension: 640, jpegQuality: 72 } },
+        }),
+      } as never,
+    );
+    return { service, prisma, created };
+  };
+
+  const punchDto = (overrides: Record<string, unknown> = {}) =>
+    ({
+      type: PunchType.in,
+      photo: JPEG_BASE64,
+      latitude: SITE.latitude,
+      longitude: SITE.longitude,
+      capturedAt: new Date().toISOString(),
+      ...overrides,
+    } as never);
+
+  describe('one open punch-in at a time (FR-008)', () => {
+    it('accepts a punch-in when none is open', async () => {
+      const { service } = build({ openPunchIn: null });
+      const result = await service.submitPunch(caller, punchDto());
+      expect(result.type).toBe(PunchType.in);
+    });
+
+    it('rejects a second punch-in while one is open', async () => {
+      const { service } = build({ openPunchIn: { id: 'punch-open' } });
+      await expect(
+        service.submitPunch(caller, punchDto({ type: PunchType.in })),
+      ).rejects.toThrow(/already have an open punch-in/);
+    });
+
+    it('rejects a punch-out with no open punch-in', async () => {
+      const { service } = build({ openPunchIn: null });
+      await expect(
+        service.submitPunch(caller, punchDto({ type: PunchType.out })),
+      ).rejects.toThrow(/no open punch-in/);
+    });
+
+    it('closes the open punch-in when punching out', async () => {
+      // Closing the pair is what frees the partial unique index for the next
+      // punch-in; leaving it open would block the employee permanently.
+      const { service, prisma } = build({ openPunchIn: { id: 'punch-open' } });
+      await service.submitPunch(caller, punchDto({ type: PunchType.out }));
+
+      expect(prisma.tx.punchRecord.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'punch-open' },
+          data: expect.objectContaining({
+            closedByPunchId: expect.any(String),
+          }),
+        }),
+      );
+    });
+
+    it('takes a row lock before deciding, so concurrent punch-ins serialise', async () => {
+      const { service, prisma } = build({ openPunchIn: null });
+      await service.submitPunch(caller, punchDto());
+      const sql = prisma.tx.$queryRaw.mock.calls[0][0].join('?');
+      expect(sql).toMatch(/FOR UPDATE/);
+    });
+  });
+
+  describe('verification outcomes', () => {
+    it('records a matching, in-geofence punch as clean', async () => {
+      const { service, created } = build();
+      const result = await service.submitPunch(caller, punchDto());
+
+      expect(result.faceMatchResult).toBe(FaceMatchResult.matched);
+      expect(result.geofenceResult).toBe(GeofenceResult.in_range);
+      expect(created[0].exceptionResolution).toBeNull();
+    });
+
+    it('records a non-matching face as an exception rather than rejecting it', async () => {
+      // FR-007: someone physically present must not be absent from payroll
+      // because of a bad camera angle.
+      const { service, created } = build();
+      biometrics.next = Float32Array.from(
+        { length: FACE_DESCRIPTOR_LENGTH },
+        () => 5,
+      );
+      const result = await service.submitPunch(caller, punchDto());
+
+      expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+      expect(created[0].exceptionResolution).toBe(ExceptionResolution.pending);
+    });
+
+    it('records an out-of-geofence punch as an exception', async () => {
+      const { service, created } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ latitude: SITE.latitude + 0.05 }),
+      );
+
+      expect(result.geofenceResult).toBe(GeofenceResult.exception);
+      expect(created[0].exceptionResolution).toBe(ExceptionResolution.pending);
+    });
+
+    it('records an undetectable face as an exception, not a 400', async () => {
+      const { service } = build();
+      biometrics.next = null;
+      const result = await service.submitPunch(caller, punchDto());
+      expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+    });
+  });
+
+  describe('gates', () => {
+    it('rejects a punch with no enrolled template', async () => {
+      const { service } = build({ enrolled: false });
+      await expect(
+        service.submitPunch(caller, punchDto()),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('rejects a punch older than the offline-queue window', async () => {
+      const { service } = build();
+      // Stale, but still inside the current (unlocked) month, so the offline-age
+      // gate is the one that must fire.
+      const now = new Date();
+      const stale = new Date(now.getTime() - 80 * 3_600_000);
+      if (stale.getUTCMonth() !== now.getUTCMonth()) {
+        // Near a month boundary this fixture would trip the payroll lock instead;
+        // pin "now" to mid-month so the test asserts the gate it means to.
+        jest.useFakeTimers().setSystemTime(new Date(Date.UTC(2026, 7, 20)));
+      }
+      const capturedAt = new Date(Date.now() - 80 * 3_600_000).toISOString();
+      await expect(
+        service.submitPunch(caller, punchDto({ capturedAt })),
+      ).rejects.toThrow(/offline sync window/);
+      jest.useRealTimers();
+    });
+
+    it('returns 423 for a punch inside a locked payroll period', async () => {
+      const { service } = build();
+      // Two months back is locked regardless of the lock day.
+      const old = new Date();
+      old.setUTCMonth(old.getUTCMonth() - 2);
+      const error = await service
+        .submitPunch(caller, punchDto({ capturedAt: old.toISOString() }))
+        .catch((e) => e);
+
+      expect(error).toBeInstanceOf(HttpException);
+      expect((error as HttpException).getStatus()).toBe(423);
+    });
+  });
+
+  describe('offline sync detection', () => {
+    it('does not flag ordinary clock drift as an offline sync', async () => {
+      const { service } = build();
+      const slightlyStale = new Date(Date.now() - 60_000).toISOString();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: slightlyStale }),
+      );
+      expect(result.isOfflineSync).toBe(false);
+    });
+
+    it('flags a punch queued well before it arrived', async () => {
+      const { service } = build();
+      const queued = new Date(Date.now() - 3 * 3_600_000).toISOString();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: queued }),
+      );
+      expect(result.isOfflineSync).toBe(true);
+    });
+  });
+});

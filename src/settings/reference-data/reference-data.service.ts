@@ -298,4 +298,49 @@ export class ReferenceDataService {
         return tx.shift;
     }
   }
+
+  /**
+   * A shift's scheduled length in hours — what `hr` measures overtime against
+   * (spec FR-009, research.md §9).
+   *
+   * Exported rather than letting `hr` read `settings.Shift` directly (Principle I),
+   * and returned as a duration rather than as the raw in/out times so the caller
+   * never has to re-derive the overnight-shift arithmetic below.
+   */
+  async getShiftDurationHours(shiftId: string): Promise<number> {
+    const shift = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.shift.findUnique({
+          where: { id: shiftId },
+          select: { inTime: true, outTime: true },
+        }),
+    );
+    if (!shift) {
+      throw new NotFoundException('Shift not found');
+    }
+    return shiftDurationHours(shift.inTime, shift.outTime);
+  }
+}
+
+/**
+ * Hours between two wall-clock times, handling a shift that crosses midnight.
+ *
+ * `inTime`/`outTime` are Postgres `time` values, which Prisma surfaces as Dates on
+ * an arbitrary epoch day — so only their time-of-day components are meaningful, and
+ * subtracting the Dates directly would be wrong. A night shift (22:00 → 06:00)
+ * yields a negative difference, which means it ended the following day, so a full
+ * day is added rather than reporting a negative shift length.
+ */
+export function shiftDurationHours(inTime: Date, outTime: Date): number {
+  const MS_PER_HOUR = 3_600_000;
+  const MS_PER_DAY = 86_400_000;
+  const timeOfDayMs = (d: Date) =>
+    d.getUTCHours() * MS_PER_HOUR +
+    d.getUTCMinutes() * 60_000 +
+    d.getUTCSeconds() * 1000;
+
+  const delta = timeOfDayMs(outTime) - timeOfDayMs(inTime);
+  return (delta > 0 ? delta : delta + MS_PER_DAY) / MS_PER_HOUR;
 }

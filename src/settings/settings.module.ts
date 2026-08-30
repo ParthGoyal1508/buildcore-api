@@ -51,6 +51,9 @@ import { UsersAdminService } from './users-admin/users-admin.service';
     CompaniesService,
     EmployeeCodeService,
     DocumentTypesService,
+    // Exported for `hr`, which reads a shift's duration to compute overtime
+    // (research.md §9) — a service call rather than a cross-schema query.
+    ReferenceDataService,
   ],
 })
 export class SettingsModule {}

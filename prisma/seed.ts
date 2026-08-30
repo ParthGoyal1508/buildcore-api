@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import { hash } from 'argon2';
 import { seedDefaultRoles } from './seeds/settings.seed';
+import { seedWorkspaceFixtures } from './seeds/workspace.seed';
 
 const prisma = new PrismaClient();
 
@@ -24,6 +25,17 @@ async function main() {
   // short-lived connection anyway. Harmless if the connecting role happens to be
   // a Postgres superuser (bypasses RLS regardless), required if it isn't.
   await prisma.$executeRaw`SELECT set_config('app.is_super_admin', 'true', false)`;
+  // My Workspace rows hang off Employee, which hangs off the accounts wiped below,
+  // so they are cleared first. Site/Shift/Company are deliberately NOT deleted:
+  // seedWorkspaceFixtures() finds-or-creates them, so re-seeding neither duplicates
+  // fixtures nor destroys companies created through the Settings UI.
+  await prisma.punchRecord.deleteMany();
+  await prisma.faceEnrolment.deleteMany();
+  await prisma.reEnrolmentRequest.deleteMany();
+  await prisma.leaveApplication.deleteMany();
+  await prisma.leaveBalance.deleteMany();
+  await prisma.employee.deleteMany();
+
   // FK-dependent rows first — every login/refresh creates RefreshToken and
   // AuditLogEntry rows referencing the account, which otherwise block re-seeding.
   await prisma.refreshToken.deleteMany();
@@ -65,6 +77,11 @@ async function main() {
       password,
     },
   });
+
+  // Company → Shift → Site → Employee for the admin account, so `/my/*` is
+  // reachable immediately. Without this every My Workspace endpoint returns 403,
+  // since none of them accept an employee identifier (FR-028).
+  await seedWorkspaceFixtures(prisma, admin.id);
 
   console.log({ admin, user });
 }

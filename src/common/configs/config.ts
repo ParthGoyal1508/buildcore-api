@@ -9,6 +9,15 @@ function numberFromEnv(raw: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** Parses a boolean env override ('true'/'1' → true), falling back when unset. */
+function booleanFromEnv(raw: string | undefined, fallback: boolean): boolean {
+  if (raw === undefined || raw.trim() === '') {
+    return fallback;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1';
+}
+
 const config: Config = {
   nest: {
     port: 3000,
@@ -75,6 +84,100 @@ const config: Config = {
       process.env.SETTINGS_DEFAULT_PAYROLL_LOCK_DAY,
       7,
     ),
+  },
+  workspace: {
+    faceMatch: {
+      // face-api's own documented default, and the threshold its published accuracy
+      // numbers are quoted at (research.md §2). Env-overridable because the right
+      // strictness is a field-tuning question, not a code question — a site with
+      // harsh outdoor lighting may need it loosened, and that must not need a deploy.
+      distanceThreshold: numberFromEnv(
+        process.env.WORKSPACE_FACE_MATCH_DISTANCE_THRESHOLD,
+        0.6,
+      ),
+      minEnrolmentPhotos: numberFromEnv(
+        process.env.WORKSPACE_MIN_ENROLMENT_PHOTOS,
+        3,
+      ),
+      maxEnrolmentPhotos: numberFromEnv(
+        process.env.WORKSPACE_MAX_ENROLMENT_PHOTOS,
+        5,
+      ),
+    },
+    offlineQueue: {
+      // 72h covers a long weekend of lost connectivity without letting a device
+      // rewrite attendance from an arbitrarily distant past (FR-012).
+      maxAgeHours: numberFromEnv(
+        process.env.WORKSPACE_MAX_OFFLINE_AGE_HOURS,
+        72,
+      ),
+      clockSkewToleranceMinutes: numberFromEnv(
+        process.env.WORKSPACE_CLOCK_SKEW_TOLERANCE_MINUTES,
+        5,
+      ),
+    },
+    reEnrolment: {
+      // FR-015 fixes the unlock window at 7 days.
+      unlockDurationDays: numberFromEnv(
+        process.env.WORKSPACE_REENROLMENT_UNLOCK_DAYS,
+        7,
+      ),
+    },
+    photoRetention: {
+      punchPhotoDays: numberFromEnv(
+        process.env.WORKSPACE_PUNCH_PHOTO_RETENTION_DAYS,
+        15,
+      ),
+    },
+    imageProcessing: {
+      // Enrolment photos feed descriptor computation, so they keep more detail.
+      enrolment: {
+        maxDimension: numberFromEnv(
+          process.env.WORKSPACE_ENROLMENT_PHOTO_MAX_DIMENSION,
+          800,
+        ),
+        jpegQuality: numberFromEnv(
+          process.env.WORKSPACE_ENROLMENT_PHOTO_JPEG_QUALITY,
+          80,
+        ),
+      },
+      // Punch photos only need to be recognisable to a human reviewer; ~640px at
+      // q72 lands around 30 KB, which is what keeps blob storage bounded.
+      punch: {
+        maxDimension: numberFromEnv(
+          process.env.WORKSPACE_PUNCH_PHOTO_MAX_DIMENSION,
+          640,
+        ),
+        jpegQuality: numberFromEnv(
+          process.env.WORKSPACE_PUNCH_PHOTO_JPEG_QUALITY,
+          72,
+        ),
+      },
+    },
+  },
+  storage: {
+    // Local by default so a fresh clone and the e2e suite work with no cloud
+    // credentials. Production sets STORAGE_DRIVER=s3 — see DEPLOYMENT.md; leaving it
+    // 'local' on the deployed host would silently lose blobs on every redeploy,
+    // because that filesystem is ephemeral.
+    driver: (process.env.STORAGE_DRIVER as 'local' | 's3') || 'local',
+    encryptionKey: process.env.STORAGE_ENCRYPTION_KEY,
+    local: {
+      path: process.env.STORAGE_LOCAL_PATH || 'var/storage',
+    },
+    s3: {
+      endpoint: process.env.STORAGE_S3_ENDPOINT,
+      region: process.env.STORAGE_S3_REGION || 'auto',
+      bucket: process.env.STORAGE_S3_BUCKET,
+      accessKeyId: process.env.STORAGE_S3_ACCESS_KEY_ID,
+      secretAccessKey: process.env.STORAGE_S3_SECRET_ACCESS_KEY,
+      // R2 requires path-style; real AWS S3 does not. Defaults to true because R2
+      // is the documented target (constitution v1.4.0).
+      forcePathStyle: booleanFromEnv(
+        process.env.STORAGE_S3_FORCE_PATH_STYLE,
+        true,
+      ),
+    },
   },
 };
 
