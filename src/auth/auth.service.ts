@@ -11,7 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PasswordService } from './password.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuditLogService } from './audit-log.service';
-import { MailService } from './mail.service';
+import { EmailService } from '../shared/email/email.service';
 import { TokenDto } from './dto/token.dto';
 import { JwtDto } from './dto/jwt.dto';
 import { ConfigService } from '@nestjs/config';
@@ -48,7 +48,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly refreshTokenService: RefreshTokenService,
     private readonly auditLogService: AuditLogService,
-    private readonly mailService: MailService,
+    private readonly emailService: EmailService,
   ) {}
 
   private accessTokenFor(user: AuthenticatedUser): string {
@@ -203,7 +203,10 @@ export class AuthService {
     );
 
     if (justLocked) {
-      await this.mailService.sendAccountLockedEmail(user.email, lockedUntil);
+      await this.emailService.sendAccountLockedEmail({
+        to: user.email,
+        unlockAt: lockedUntil,
+      });
       await this.auditLogService.recordAuthEvent(
         AuditEntityType.ACCOUNT_LOCKED,
         {

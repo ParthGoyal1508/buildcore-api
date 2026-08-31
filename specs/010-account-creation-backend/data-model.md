@@ -18,12 +18,27 @@ set-password succeeds) — 001's column was implicitly non-null in practice sinc
 accounts existed before this feature; this is an additive nullability relaxation, not a breaking
 change to any existing row (all pre-existing rows already have a password).
 
-`username` is 001's field (its 2026-08-28 clarification), owned here: this feature's `create()`
-must accept and assign it — an admin sets it explicitly when inviting the account (not
-self-chosen, not derived from email). **Not yet decided**: the exact format/uniqueness validation
-rule (allowed characters, min/max length) — 001 deliberately left that open for this feature to
-settle when it's actually built; resolve it via `speckit-clarify` on this feature rather than
-guessing, since it wasn't part of the 001 implementation pass that added this note.
+`username` is 001's field (its 2026-08-28 clarification), owned here. **Resolved 2026-08-30**
+(user decision during implementation, superseding the note below): the username is
+**auto-generated server-side** from the email local-part, lowercased, restricted to
+`[a-z0-9._-]`, trimmed to 30 characters, and de-duplicated with a numeric suffix on collision
+(`parth.goyal`, `parth.goyal2`, …). It is not an input on the create-user form, which is why
+`contracts/account-creation-api.md` and task T010 both omit it — those were consistent with the
+implementation all along, and this paragraph was the outlier.
+
+This deliberately overrides the original "not self-chosen, not derived from email" wording
+retained below. The reason: `shared.User.username` is `NOT NULL UNIQUE`, so *something* must
+supply a value at insert time, and asking an admin to invent an identifier on another person's
+behalf adds a field to the form, a format rule to teach, and a collision error to handle — for a
+value that only exists as an alternate login handle. Login is unaffected: 001 resolves its
+`identifier` against email or username, so a generated username simply works as a second way in.
+
+> *Superseded original note*: "an admin sets it explicitly when inviting the account (not
+> self-chosen, not derived from email). **Not yet decided**: the exact format/uniqueness
+> validation rule (allowed characters, min/max length) — 001 deliberately left that open for this
+> feature to settle when it's actually built; resolve it via `speckit-clarify` on this feature
+> rather than guessing."
+
 
 ## Invite Token (`shared` schema — new)
 

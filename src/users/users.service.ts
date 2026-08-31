@@ -147,10 +147,26 @@ export class UsersService {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const existing = await tx.user.findUnique({
         where: { id },
-        select: { id: true, companyId: true },
+        select: { id: true, companyId: true, status: true },
       });
       if (!existing) {
         throw new NotFoundException(`User ${id} not found`);
+      }
+
+      // FR-008 (010-account-creation-backend). Activating an account means proving
+      // control of its inbox and choosing a password; writing `active` directly
+      // would produce an account marked usable whose password column is still null,
+      // which login then has to treat as an invalid credential forever. The guard
+      // lives on the service rather than in a controller so it holds for every
+      // caller — 002's PATCH /settings/users/:id is the entry point that reaches it
+      // today.
+      if (
+        changes.status === UserStatus.active &&
+        existing.status === UserStatus.pending
+      ) {
+        throw new BadRequestException(
+          'That account has not accepted its invite yet, so it cannot be activated directly. Resend the invite instead.',
+        );
       }
 
       if (changes.roleId) {

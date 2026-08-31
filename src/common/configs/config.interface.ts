@@ -6,6 +6,7 @@ export interface Config {
   settings: SettingsConfig;
   workspace: WorkspaceConfig;
   storage: StorageConfig;
+  email: EmailConfig;
 }
 
 export interface NestConfig {
@@ -213,4 +214,28 @@ export interface StorageConfig {
      */
     forcePathStyle: boolean;
   };
+}
+
+/** Which `EmailService` adapter backs transactional email, and its settings. */
+export interface EmailConfig {
+  /**
+   * `console` writes the message — including the full set-password URL — to the
+   * application log instead of sending it. That is the dev/test default and makes
+   * the invite flow clickable with no API key and no verified sending domain, which
+   * is otherwise a hard prerequisite before any of it can be exercised.
+   */
+  driver: 'console' | 'resend';
+  /** Resend API key. Required when `driver` is `resend`. */
+  apiKey: string;
+  /**
+   * The From address. Resend rejects a send from a domain that has not been verified
+   * in the account, so this is not free-form once live.
+   */
+  fromAddress: string;
+  /**
+   * Public base URL of the frontend, used to build the set-password link an invite
+   * carries. Wrong here means every invite email points somewhere useless, so it has
+   * no localhost default in production.
+   */
+  appBaseUrl: string;
 }

@@ -171,6 +171,17 @@ const config: Config = {
       },
     },
   },
+  email: {
+    // Console by default so a fresh clone can run the whole invite flow offline.
+    // Production must set 'resend'; the adapter validates its own required values at
+    // startup rather than failing on the first invite someone actually needs.
+    driver: (process.env.EMAIL_DRIVER as 'console' | 'resend') || 'console',
+    apiKey: process.env.RESEND_API_KEY,
+    fromAddress:
+      process.env.EMAIL_FROM_ADDRESS || 'BuildCore <onboarding@resend.dev>',
+    // Where the set-password link points. Defaults to the local frontend port.
+    appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3001',
+  },
   storage: {
     // Local by default so a fresh clone and the e2e suite work with no cloud
     // credentials. Production sets STORAGE_DRIVER=s3 — see DEPLOYMENT.md; leaving it
