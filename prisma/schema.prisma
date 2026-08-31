@@ -736,6 +736,20 @@ model PunchRecord {
   /// (FR-008) enforceable as a partial unique index in the database, instead of
   /// resting solely on an application-level check that two concurrent requests can
   /// both pass. Always null on a punch-out record.
+  /// The calendar day this punch counts for, in the configured timezone (FR-018a).
+  ///
+  /// Stamped at insert rather than derived on read: `AT TIME ZONE` with a named zone
+  /// is STABLE, not IMMUTABLE, so Postgres will not build a unique index over the
+  /// expression — and FR-008c needs exactly that index. The cost is that changing
+  /// APP_TIMEZONE later does not reclassify punches already recorded, which for
+  /// payroll data is the safer direction.
+  punchDate DateTime @db.Date
+
+  /// Who wrote this punch. The FR-008c uniqueness constraint binds only `employee`
+  /// rows, so feature 005's future corrections are not forbidden by the schema, and
+  /// rows predating FR-008 (`legacy`) keep their multiple pairs per day.
+  source PunchSource @default(employee)
+
   closedByPunchId String? @unique
 
   /// Null unless either result above is `exception`; then `pending` until an admin
@@ -749,6 +763,7 @@ model PunchRecord {
   /// Serves both the open-punch-in lookup on the write path and the month-range
   /// history query on the read path.
   @@index([employeeId, capturedAt])
+  @@index([employeeId, punchDate])
   @@index([exceptionResolution])
   @@schema("hr")
 }
@@ -756,6 +771,17 @@ model PunchRecord {
 enum PunchType {
   in
   out
+
+  @@schema("hr")
+}
+
+enum PunchSource {
+  /// Self-service, made through `/my/punch`. The only kind FR-008 constrains.
+  employee
+  /// Reserved for feature 005's administrative fix-ups.
+  admin_correction
+  /// Recorded before FR-008 existed, when a day could hold several pairs.
+  legacy
 
   @@schema("hr")
 }

@@ -175,6 +175,41 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     return { userId: user.id, roleId: role.id, token: login.body.accessToken };
   };
 
+  /**
+   * A signed-in, enrolled employee with an untouched punch day.
+   *
+   * FR-008 allows one punch-in and one punch-out per employee per day, so scenarios
+   * that each need their own punch cannot share `employeeToken` — the second would
+   * be refused with 409. Giving each its own employee keeps them independent
+   * without dating punches into other months, which the payroll lock would close
+   * (see the note on date handling at the top of this file).
+   *
+   * Enrolled through the real endpoint rather than seeded, so the descriptor is
+   * produced and stored exactly as production would.
+   */
+  const enrolledWorker = async (label: string) => {
+    const worker = await makeUser(label, [Permission.MY_WORKSPACE]);
+    const employee = await sys.employee.create({
+      data: {
+        userId: worker.userId,
+        companyId,
+        siteId,
+        shiftId,
+        employeeCode: unique(label.toUpperCase()).slice(0, 12),
+      },
+    });
+    await http()
+      .post('/my/face-enrol')
+      .set(auth(worker.token))
+      .send({
+        photos: [JPEG, JPEG, JPEG],
+        consentMethod: 'digital',
+        consentAcknowledged: true,
+      })
+      .expect(201);
+    return { ...worker, employeeId: employee.id };
+  };
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -452,12 +487,12 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       expect(res.body.isOfflineSync).toBe(false);
     });
 
-    it('rejects a second punch-in while one is open (T029, FR-008)', async () => {
+    it('rejects a second punch-in while the first is open (T029, FR-008)', async () => {
       await http()
         .post('/my/punch')
         .set(auth(employeeToken))
         .send(punchBody())
-        .expect(400);
+        .expect(409);
     });
 
     it('accepts the punch-out that closes the pair (T028)', async () => {
@@ -475,19 +510,56 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       expect(open).toHaveLength(0);
     });
 
-    it('rejects a punch-out with no open punch-in (T029, FR-008)', async () => {
+    it('rejects a second punch-out on the same day (T029, FR-008)', async () => {
+      // Renamed to what it actually exercises: the pair above is already complete,
+      // so this is the second punch-out, not a punch-out with nothing to close.
+      // The genuine no-punch-in case is covered on a fresh employee below.
       await http()
         .post('/my/punch')
         .set(auth(employeeToken))
         .send(punchBody({ type: 'out' }))
-        .expect(400);
+        .expect(409);
+    });
+
+    it('rejects a punch-out with no punch-in that day (T123, FR-008)', async () => {
+      const worker = await enrolledWorker('nopunchin');
+      await http()
+        .post('/my/punch')
+        .set(auth(worker.token))
+        .send(punchBody({ type: 'out' }))
+        .expect(409);
+    });
+
+    it('rejects a second punch-in after the day is closed (T121, FR-008)', async () => {
+      // The rule this amendment introduces: a completed pair used to free the day
+      // for another punch-in, and no longer does.
+      await http()
+        .post('/my/punch')
+        .set(auth(employeeToken))
+        .send(punchBody())
+        .expect(409);
+    });
+
+    it('reports the day as complete once both punches are in (T121, FR-008b)', async () => {
+      const res = await http()
+        .get('/my/punch/open')
+        .set(auth(employeeToken))
+        .expect(200);
+
+      expect(res.body.punchedInAt).toEqual(expect.any(String));
+      expect(res.body.punchedOutAt).toEqual(expect.any(String));
+      expect(res.body.isComplete).toBe(true);
     });
 
     it('records an out-of-geofence punch as an exception, still 201 (T030)', async () => {
+      // Its own employee: `employeeToken` has already used today's one pair
+      // (FR-008), so reusing it here would be refused with 409 rather than
+      // exercising the geofence path.
+      const worker = await enrolledWorker('geofence');
       // ~5.5 km from the site centre, well outside the 200 m radius.
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ latitude: SITE_LAT + 0.05 }))
         .expect(201);
 
@@ -499,17 +571,17 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     });
 
     it('records a non-matching face as an exception, still 201 (T030, FR-007)', async () => {
-      await http()
-        .post('/my/punch')
-        .set(auth(employeeToken))
-        .send(punchBody({ type: 'out' }))
-        .expect(201);
+      // Enrolled at the usual descriptor, then punched by "someone else". The
+      // punch-out that used to open this test existed only to free the old
+      // one-open-punch-in slot; under FR-008 a fresh employee is what a fresh
+      // punch needs.
+      const worker = await enrolledWorker('facemismatch');
 
       // A different person's descriptor: distance far above the 0.6 threshold.
       biometrics.nextValue = 5;
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody())
         .expect(201);
 
@@ -518,23 +590,25 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     });
 
     it('flags an offline-queued punch (research.md §4)', async () => {
-      await http()
-        .post('/my/punch')
-        .set(auth(employeeToken))
-        .send(punchBody({ type: 'out' }))
-        .expect(201);
+      // Its own employee, so the queued punch-in lands on an untouched day. The
+      // punch-out bracketing this test previously existed only to free the old
+      // one-open-punch-in slot, and under FR-008 would now be refused.
+      const worker = await enrolledWorker('queued');
 
+      // Three hours old: well past the clock-skew tolerance, well inside the
+      // offline-queue window.
       const queued = new Date(Date.now() - 3 * 3_600_000).toISOString();
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ capturedAt: queued }))
         .expect(201);
       expect(res.body.isOfflineSync).toBe(true);
 
+      // And the day's punch-out still closes it.
       await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ type: 'out' }))
         .expect(201);
     });

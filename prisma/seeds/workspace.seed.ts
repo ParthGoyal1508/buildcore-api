@@ -34,6 +34,22 @@ const DEFAULT_LONGITUDE = 72.8777;
  * verdict while you are testing. */
 const DEFAULT_RADIUS_METERS = 500;
 
+/**
+ * The claim categories US8's form offers, with deliberately varied receipt rules so
+ * all three cases are reachable by hand: a threshold, `0` (receipt always
+ * required), and `null` (never required).
+ *
+ * Feature 005 owns creating these for real; seeding them here is what makes the
+ * employee-side claim form exercisable before that exists.
+ */
+const REIMBURSEMENT_CATEGORIES = [
+  { code: 'TRAVEL', name: 'Travel', receiptRequiredAbove: 1000 },
+  { code: 'FUEL', name: 'Fuel', receiptRequiredAbove: 500 },
+  { code: 'FOOD', name: 'Food', receiptRequiredAbove: 500 },
+  { code: 'MEDICAL', name: 'Medical', receiptRequiredAbove: 0 },
+  { code: 'OTHER', name: 'Other', receiptRequiredAbove: null },
+];
+
 function numberFromEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
     return fallback;
@@ -119,6 +135,19 @@ export async function seedWorkspaceFixtures(
           holidays: [],
         },
       });
+
+  // Upserted rather than created: re-seeding must not duplicate a company's
+  // categories, and an admin who edited one through Settings keeps their change to
+  // the name while the code stays the stable key.
+  for (const category of REIMBURSEMENT_CATEGORIES) {
+    await prisma.reimbursementCategory.upsert({
+      where: {
+        companyId_code: { companyId: company.id, code: category.code },
+      },
+      create: { companyId: company.id, ...category },
+      update: {},
+    });
+  }
 
   const existingEmployee = await prisma.employee.findFirst({
     where: { userId },

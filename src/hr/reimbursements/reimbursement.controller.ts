@@ -53,6 +53,19 @@ export class ReimbursementController {
     );
   }
 
+  // Declared before any parameterised GET so a future `:id` route can never
+  // swallow it.
+  @Get('categories')
+  @ApiOperation({
+    summary: "Categories the caller's company allows claims against",
+  })
+  async categories(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.reimbursements.listCategories(callerFrom(user, request));
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'File a reimbursement claim' })

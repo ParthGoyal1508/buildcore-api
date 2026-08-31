@@ -523,11 +523,173 @@ below are the gaps that remain, and the first one blocks both P1 stories in real
       assert the enrolment and punch endpoints accept it
       per plan: Testing strategy (partial)
 
-- [ ] T099 Make `STORAGE_DRIVER=local` a fatal startup error when `NODE_ENV=production`
+- [X] T099 Make `STORAGE_DRIVER=local` a fatal startup error when `NODE_ENV=production`
       rather than a logged warning in `src/common/storage/storage.module.ts`. The
       production host's filesystem is ephemeral, so the current behaviour is an application
       that starts cleanly, serves correctly, and silently destroys every stored biometric
       photo on the next deploy or idle spin-down — leaving the retention and deletion
       obligations unmeetable, with only a log line to say so. Failing to boot is the safer
       outcome for a misconfiguration whose symptom is otherwise invisible until the data is
-      already gone per FR-026, research.md §8 (partial)
+      already gone per FR-026, research.md §8 — done; recorded as T107 in Phase 14
+
+---
+
+## Phase 14: Amendment 2026-09-01 — timezone, open-punch state, reimbursement wiring
+
+Appended after Phases 1–13. Each task below is already implemented; they are recorded so
+`tasks.md` still describes the code that exists.
+
+- [X] T100 Add a configured application timezone (`APP_TIMEZONE`, default `Asia/Kolkata`) to
+      `SettingsConfig` and reckon every calendar day against it
+      per FR-018a
+
+- [X] T101 Add `zonedDateOnly()` and `zonedDayBounds()` to `src/hr/leave/leave-days.ts` — the
+      instant-to-calendar-day boundary `toDateOnly()` must not be used for. `toDateOnly` and
+      `parseDateOnly` are deliberately unchanged: they operate on calendar strings and
+      `@db.Date` values that genuinely are UTC-midnight, and are DST-free by construction.
+      `zonedDayBounds` measures the zone's offset rather than assuming one, so a DST date
+      returns a 23- or 25-hour day instead of dropping or double-counting an hour
+      per FR-018a
+
+- [X] T102 Apply the zone at every boundary where an instant becomes a day: punch grouping and
+      the month range query in `attendance-history.service.ts` (its month edges were losing
+      punches to the neighbouring months), the current-financial-year default in
+      `leave.service.ts`, and both `isPayrollLocked()` call sites
+      per FR-018a, FR-010, FR-019
+
+- [X] T103 Extend `payroll-lock.spec.ts` with IST cases: a post-midnight punch attributed to the
+      wrong period, and the lock closing a day early because 02:00 IST on the lock day is still
+      the previous day in UTC. Existing cases pass `'UTC'` explicitly, preserving their original
+      intent rather than re-deriving every expectation
+      per FR-018a
+
+- [X] T104 Add `GET /my/punch/open`, returning the caller's open punch-in or `null`, from the
+      same `closedByPunchId IS NULL` condition the FR-008 rule is enforced against
+      per FR-008b
+
+- [X] T105 Add `GET /my/reimbursements/categories`, exposing the caller's company's active
+      categories and their receipt thresholds so a claim form can be built at all
+      per FR-029a
+
+- [X] T106 Accept a base64 `receipt` on claim create/edit, store it via `StorageService`, and
+      normalise it through `ImageProcessingService.compressReceipt()` first — which strips EXIF
+      (GPS included) and makes the stored `image/jpeg` content type honest, where storing the
+      raw bytes mislabelled every PNG and WebP the decoder accepts
+      per FR-029b, FR-026
+
+- [X] T107 Make `STORAGE_DRIVER=local` a fatal startup error under `NODE_ENV=production`, with an
+      explicit `ALLOW_LOCAL_STORAGE` opt-out for deployments serving no real users
+      per FR-026a — supersedes T099
+
+---
+
+## Phase 15: Amendment 2026-09-01 (b) — one punch-in and one punch-out per day (FR-008)
+
+**Goal**: An employee can punch in once and out once per calendar day, and nothing else.
+
+**Independent Test**: Punch in, punch out, then attempt a second punch-in and a second punch-out —
+both refused with 409. On a fresh day, punch in succeeds again. With a stale open punch-in from an
+earlier day present, today's punch-in still succeeds.
+
+### Migration (blocking — every task below depends on it)
+
+- [X] T108 Add the `PunchSource` enum (`employee` | `admin_correction` | `legacy`) and a `source`
+      column on `PunchRecord` defaulting to `employee`, in `prisma/schema.prisma`
+      per FR-008c, data-model.md
+
+- [X] T109 Add a `punchDate` date column on `PunchRecord`, backfilled for existing rows from
+      `capturedAt` at the default zone. Stored rather than computed: `AT TIME ZONE` with a named
+      zone is STABLE, not IMMUTABLE, so Postgres will not index the expression
+      per FR-008c, FR-018a, plan §2
+
+- [X] T110 In the same migration, set every pre-existing row's `source` to `legacy`. The current
+      data already contains multiple pairs on a day and the decision is to leave it; marking it
+      `legacy` excludes it from the new index without deleting anything. Bounded by
+      `createdAt <= NOW()` rather than "all rows", so replaying the statement can never
+      reclassify punches made after the migration
+      per FR-008c, clarification 2026-09-01
+
+- [X] T111 Drop `PunchRecord_one_open_punch_in_per_employee`. It contradicts FR-008a — which
+      requires two open punch-in rows to be able to coexist across days — and its rule is subsumed
+      now that a day admits at most one punch-in
+      per FR-008a, plan §3
+
+- [X] T112 Create the partial unique index on `("employeeId", "type", "punchDate")
+      WHERE "source" = 'employee'`
+      per FR-008c
+
+- [X] T113 Run the migration against the local database and confirm it applies cleanly with the
+      existing multi-pair data present — if any `employee`-sourced duplicate remains, index
+      creation fails and the deploy would stop. Verify with `npm run migrate:status`
+      per plan §4
+
+### Service and contract
+
+- [X] T114 [US2] Stamp `punchDate` and `source: 'employee'` on every punch written by
+      `submitPunch()` in `src/hr/punch/punch.service.ts`, using `zonedDateOnly()` against the
+      configured zone
+      per FR-008, FR-018a
+
+- [X] T115 [US2] Replace the open-punch gate in `submitPunch()` with the day-scoped rule: reject a
+      punch-in when that day already has one (closed or not), a punch-out when that day has no
+      punch-in, and a punch-out when the day's punch is already closed. The check considers every
+      punch on the day whatever its `source` — the rule is about the day's record, not who wrote it
+      per FR-008
+
+- [X] T116 [US2] Ensure a stale open punch-in from an earlier day does not block today's punch-in,
+      and is not closable by today's punch-out
+      per FR-008a
+
+- [X] T117 [US2] Raise `ConflictException` (409) instead of `BadRequestException` (400) for every
+      FR-008 refusal, including the pre-existing unmatched-punch-out case
+      per FR-008, clarification 2026-09-01
+
+- [X] T118 [US2] Reshape `getOpenPunchIn()` and `GET /my/punch/open` to today's state —
+      `{ punchedInAt, punchedOutAt, isComplete }` — excluding any stale open punch-in from an
+      earlier day, which is neither actionable nor closable
+      per FR-008b, contracts/my-workspace-api.md
+
+- [X] T119 [US2] Refuse a queued offline punch that drains onto a day already holding a punch of
+      that type, with the same 409, so the recorded punch stands
+      per FR-008, clarification 2026-09-01
+
+### Tests
+
+- [X] T120 [P] [US2] Unit-test the day rule in `src/hr/punch/punch.service.spec.ts`: second
+      punch-in refused after the first is closed, punch-out with no punch-in refused, second
+      punch-out refused, new day allowed, stale open punch-in from an earlier day non-blocking
+      per FR-008, FR-008a
+
+- [X] T121 [US2] Update `test/my-workspace.e2e-spec.ts` for the 400 → 409 change and add coverage
+      for the one-pair-per-day refusals
+      per FR-008
+
+---
+
+## Phase 16: Convergence
+
+Appended by a convergence pass after Phase 15. These are gaps between the amended spec and the
+code as it stands.
+
+- [X] T122 Restructure the punch e2e scenarios that submit more than one punch of a type per
+      employee per day in `test/my-workspace.e2e-spec.ts` — the out-of-geofence (line ~507),
+      non-matching-face (~522) and offline-queued (~541) cases each assert 201 while reusing the
+      same employee on the same day, which FR-008 now refuses with 409. Give each its own
+      `capturedAt` day or its own employee rather than relaxing the assertions
+      per FR-008 (contradicts)
+
+- [X] T123 Fix the scenario at `test/my-workspace.e2e-spec.ts` ~line 478: "rejects a punch-out
+      with no punch-in that day" runs after the pair is already complete, so it exercises
+      "already punched out today" instead. It passes for the wrong reason — move it ahead of the
+      punch-in, or rename it to what it actually tests
+      per FR-008 (partial)
+
+- [ ] T124 (NOT RUN — user deferred) Run `npm run test:e2e` against a live Postgres with the new migration applied, and fix
+      whatever T122 and T123 do not already cover. The suite has not been executed since the
+      one-pair-per-day rule landed
+      per FR-008, FR-008b (missing)
+
+- [ ] T125 Walk the Punch screen through its three states in a browser — no punch today, open
+      shift, day complete — confirming the control appears, changes, and disappears, and that no
+      disabled button is ever shown. Typecheck, lint and build pass, but no browser pass has run
+      per FR-019c, FR-019d (missing)

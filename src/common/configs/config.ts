@@ -100,6 +100,9 @@ const config: Config = {
       process.env.SETTINGS_DEFAULT_PAYROLL_LOCK_DAY,
       7,
     ),
+    // IANA zone name. Everything statutory here is Indian, so Asia/Kolkata is the
+    // default; it is configurable so a test or another market can move it.
+    timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata',
   },
   workspace: {
     faceMatch: {
@@ -194,6 +197,11 @@ const config: Config = {
     // because that filesystem is ephemeral.
     driver: (process.env.STORAGE_DRIVER as 'local' | 's3') || 'local',
     encryptionKey: process.env.STORAGE_ENCRYPTION_KEY,
+    // Off unless a deployment explicitly asks for it — see the interface comment.
+    allowLocalInProduction: booleanFromEnv(
+      process.env.ALLOW_LOCAL_STORAGE,
+      false,
+    ),
     local: {
       path: process.env.STORAGE_LOCAL_PATH || 'var/storage',
     },

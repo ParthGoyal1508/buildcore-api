@@ -14,8 +14,10 @@ import {
   LeaveTypeCode,
   Prisma,
 } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
+import type { SettingsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { SitesService } from '../../projects/sites/sites.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
@@ -30,6 +32,7 @@ import {
   financialYearOf,
   parseDateOnly,
   toDateOnly,
+  zonedDateOnly,
 } from './leave-days';
 
 /** HTTP 423 Locked — the contract's status for a write into a closed payroll
@@ -58,13 +61,23 @@ export interface LeaveBalanceView {
  */
 @Injectable()
 export class LeaveService {
+  private readonly timeZone: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly sites: SitesService,
     private readonly companies: CompaniesService,
     private readonly auditLog: AuditLogService,
-  ) {}
+    configService: ConfigService,
+  ) {
+    this.timeZone = configService.get<SettingsConfig>('settings').timezone;
+  }
+
+  /** Today's calendar date for the employee, as `YYYY-MM-DD`. */
+  private today(): string {
+    return zonedDateOnly(new Date(), this.timeZone);
+  }
 
   /** The caller's own entitlement for a financial year, defaulting to the current
    * one (FR-018). */
@@ -76,7 +89,10 @@ export class LeaveService {
       caller.rls,
       caller.userId,
     );
-    const year = financialYear ?? financialYearOf(new Date());
+    // The financial year it is *here*, not at UTC: on 1 April the two disagree
+    // for the first five and a half hours, and an employee opening the app that
+    // morning would be shown last year's entitlement.
+    const year = financialYear ?? financialYearOf(parseDateOnly(this.today()));
 
     const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.leaveBalance.findMany({
@@ -411,7 +427,7 @@ export class LeaveService {
     // Only the start date is checked: a range runs forward, so if its first day is
     // open every later day is too, and if its first day is locked the application
     // would rewrite a closed period regardless of where it ends.
-    if (isPayrollLocked(from, payrollLockDay, new Date())) {
+    if (isPayrollLocked(from, payrollLockDay, new Date(), this.timeZone)) {
       throw new HttpException(
         'That date range falls in a payroll period that is already locked.',
         HTTP_STATUS_LOCKED,

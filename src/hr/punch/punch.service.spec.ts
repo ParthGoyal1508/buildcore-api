@@ -67,13 +67,14 @@ describe('PunchService', () => {
 
   const build = (
     opts: {
-      openPunchIn?: { id: string } | null;
+      /** Punches already recorded on the punch's own calendar day (FR-008). */
+      dayPunches?: { id: string; type: PunchType }[];
       enrolled?: boolean;
       enrolmentStatus?: FaceEnrolmentStatus;
     } = {},
   ) => {
     const {
-      openPunchIn = null,
+      dayPunches = [],
       enrolled = true,
       enrolmentStatus = FaceEnrolmentStatus.enrolled,
     } = opts;
@@ -110,10 +111,9 @@ describe('PunchService', () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
     });
-    // The FOR UPDATE lock query returns the employee's open punch-in, if any.
-    prisma.tx.$queryRaw = jest
-      .fn()
-      .mockResolvedValue(openPunchIn ? [openPunchIn] : []);
+    // The FOR UPDATE lock query returns every punch already recorded on the
+    // punch's own calendar day (FR-008) — not just an open one.
+    prisma.tx.$queryRaw = jest.fn().mockResolvedValue(dayPunches);
 
     const service = new PunchService(
       prisma as never,
@@ -125,11 +125,19 @@ describe('PunchService', () => {
       { put: jest.fn().mockResolvedValue('punch/ref-1') } as never,
       { record: jest.fn().mockResolvedValue(undefined) } as never,
       {
-        get: () => ({
-          faceMatch: { distanceThreshold: 0.6 },
-          offlineQueue: { maxAgeHours: 72, clockSkewToleranceMinutes: 5 },
-          imageProcessing: { punch: { maxDimension: 640, jpegQuality: 72 } },
-        }),
+        get: (key: string) =>
+          key === 'settings'
+            ? { timezone: 'Asia/Kolkata' }
+            : {
+                faceMatch: { distanceThreshold: 0.6 },
+                offlineQueue: {
+                  maxAgeHours: 72,
+                  clockSkewToleranceMinutes: 5,
+                },
+                imageProcessing: {
+                  punch: { maxDimension: 640, jpegQuality: 72 },
+                },
+              },
       } as never,
     );
     return { service, prisma, created };
@@ -145,31 +153,69 @@ describe('PunchService', () => {
       ...overrides,
     } as never);
 
-  describe('one open punch-in at a time (FR-008)', () => {
-    it('accepts a punch-in when none is open', async () => {
-      const { service } = build({ openPunchIn: null });
+  describe('one punch-in and one punch-out per day (FR-008)', () => {
+    const openIn = { id: 'punch-open', type: PunchType.in };
+    const closedOut = { id: 'punch-out', type: PunchType.out };
+
+    it('accepts a punch-in on a day with no punches', async () => {
+      const { service } = build({ dayPunches: [] });
       const result = await service.submitPunch(caller, punchDto());
       expect(result.type).toBe(PunchType.in);
     });
 
-    it('rejects a second punch-in while one is open', async () => {
-      const { service } = build({ openPunchIn: { id: 'punch-open' } });
+    it('rejects a second punch-in while the first is still open', async () => {
+      const { service } = build({ dayPunches: [openIn] });
       await expect(
         service.submitPunch(caller, punchDto({ type: PunchType.in })),
-      ).rejects.toThrow(/already have an open punch-in/);
+      ).rejects.toThrow(/already punched in today/);
     });
 
-    it('rejects a punch-out with no open punch-in', async () => {
-      const { service } = build({ openPunchIn: null });
+    it('rejects a second punch-in even after the day is closed', async () => {
+      // The distinction from the old rule: a closed pair used to free the day for
+      // another punch-in. One pair is now the whole allowance.
+      const { service } = build({ dayPunches: [openIn, closedOut] });
+      await expect(
+        service.submitPunch(caller, punchDto({ type: PunchType.in })),
+      ).rejects.toThrow(/already punched in today/);
+    });
+
+    it('rejects a punch-out when the day has no punch-in', async () => {
+      const { service } = build({ dayPunches: [] });
       await expect(
         service.submitPunch(caller, punchDto({ type: PunchType.out })),
-      ).rejects.toThrow(/no open punch-in/);
+      ).rejects.toThrow(/not punched in today/);
     });
 
-    it('closes the open punch-in when punching out', async () => {
-      // Closing the pair is what frees the partial unique index for the next
-      // punch-in; leaving it open would block the employee permanently.
-      const { service, prisma } = build({ openPunchIn: { id: 'punch-open' } });
+    it('rejects a second punch-out on the same day', async () => {
+      const { service } = build({ dayPunches: [openIn, closedOut] });
+      await expect(
+        service.submitPunch(caller, punchDto({ type: PunchType.out })),
+      ).rejects.toThrow(/already punched out today/);
+    });
+
+    it('does not let a punch-in from an earlier day block today (FR-008a)', async () => {
+      // The day query is scoped to `punchDate`, so a stale open punch-in simply is
+      // not in the result set. Nothing can close it, so blocking on it would lock
+      // the employee out for good.
+      const { service } = build({ dayPunches: [] });
+      const result = await service.submitPunch(caller, punchDto());
+      expect(result.type).toBe(PunchType.in);
+    });
+
+    it('stamps the calendar day and marks the punch employee-sourced', async () => {
+      const { service, created } = build({ dayPunches: [] });
+      await service.submitPunch(
+        caller,
+        // 00:07 IST on 1 September — 31 August in UTC. The stamped day must be the
+        // employee's, not the server's (FR-018a).
+        punchDto({ capturedAt: '2026-08-31T18:37:00.000Z' }),
+      );
+      expect(created[0].punchDate).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+      expect(created[0].source).toBe('employee');
+    });
+
+    it("closes the day's punch-in when punching out", async () => {
+      const { service, prisma } = build({ dayPunches: [openIn] });
       await service.submitPunch(caller, punchDto({ type: PunchType.out }));
 
       expect(prisma.tx.punchRecord.update).toHaveBeenCalledWith(
@@ -183,7 +229,7 @@ describe('PunchService', () => {
     });
 
     it('takes a row lock before deciding, so concurrent punch-ins serialise', async () => {
-      const { service, prisma } = build({ openPunchIn: null });
+      const { service, prisma } = build({ dayPunches: [] });
       await service.submitPunch(caller, punchDto());
       const sql = prisma.tx.$queryRaw.mock.calls[0][0].join('?');
       expect(sql).toMatch(/FOR UPDATE/);
