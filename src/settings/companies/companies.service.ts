@@ -31,6 +31,30 @@ export class CompaniesService {
     private readonly documentTypes: DocumentTypesService,
   ) {}
 
+  /**
+   * The day-of-month after which attendance for the previous period is locked to
+   * further edits.
+   *
+   * Exported for `hr`, which must reject a punch or leave application landing in an
+   * already-locked period (FR-010). Principle I requires that read to be a service
+   * call: `hr` may not query `settings.Company` itself.
+   */
+  async getPayrollLockDay(companyId: string): Promise<number> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { payrollLockDay: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company.payrollLockDay;
+  }
+
   /** Every company, whatever its status — the Settings UI's own admin list. Not the
    * source other modules' dropdowns read (see `listActiveForOtherModules`). */
   async findAll(): Promise<Company[]> {

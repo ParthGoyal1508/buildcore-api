@@ -1,0 +1,8 @@
+node_modules/
+dist/
+build/
+coverage/
+*.min.js
+prisma/migrations/
+assets/models/
+var/storage/

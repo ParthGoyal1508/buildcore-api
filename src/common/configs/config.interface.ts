@@ -4,10 +4,30 @@ export interface Config {
   swagger: SwaggerConfig;
   security: SecurityConfig;
   settings: SettingsConfig;
+  workspace: WorkspaceConfig;
+  storage: StorageConfig;
 }
 
 export interface NestConfig {
   port: number;
+  /**
+   * Maximum accepted request body, as a byte-size string body-parser understands
+   * (e.g. '10mb').
+   *
+   * Express defaults to 100 KB, which is far below what this API actually
+   * receives: enrolment posts three to five base64-encoded photos in one JSON body
+   * and a punch posts one, and base64 adds roughly a third on top of the encoded
+   * bytes. Left at the default, every real enrolment and punch fails with
+   * `413 request entity too large` — while a test suite using small fixture images
+   * passes, which is exactly how that defect survives CI.
+   *
+   * Sized against the frontend's capture cap rather than picked as a round number:
+   * `camera-capture.tsx` limits a frame to 1280px on its longest edge at JPEG
+   * quality 0.85, so five enrolment photos land near 1.5 MB as base64. The default
+   * below leaves generous headroom for larger devices while still bounding how much
+   * a single request can make the server buffer.
+   */
+  maxRequestBodySize: string;
 }
 
 export interface CorsConfig {
@@ -96,4 +116,101 @@ export interface SettingsConfig {
   };
   /** Day-of-month after which attendance edits lock for payroll processing. */
   defaultPayrollLockDay: number;
+}
+
+/**
+ * My Workspace (feature 003) tunables — Principle III keeps every one of these out of
+ * the services that read them, because each is a policy value someone will want to
+ * change without a code review: a biometric threshold that turns out too strict in
+ * the field, a queue window that has to widen for a site with worse connectivity.
+ */
+export interface WorkspaceConfig {
+  faceMatch: {
+    /**
+     * Maximum Euclidean distance between two 128-float face descriptors for a punch
+     * to count as the same person (research.md §2). Lower is stricter. 0.6 is
+     * face-api's own documented default and the value its published accuracy
+     * figures are measured at; below ~0.4 legitimate matches start failing on
+     * lighting changes alone, which on a construction site means a worker who
+     * cannot punch in.
+     */
+    distanceThreshold: number;
+    /**
+     * Minimum photos required to enrol, and the cap the DTO validates against
+     * (contract: 3–5). Enrolling from several photos averages out one bad frame.
+     */
+    minEnrolmentPhotos: number;
+    maxEnrolmentPhotos: number;
+  };
+  offlineQueue: {
+    /**
+     * How stale a client-declared `capturedAt` may be before a synced punch is
+     * rejected outright (FR-012). Bounds how far back an offline device can
+     * retroactively write attendance.
+     */
+    maxAgeHours: number;
+    /**
+     * Client and server clocks are never exactly aligned; a punch whose
+     * `capturedAt` trails `receivedAt` by less than this is treated as a normal
+     * online punch rather than being mislabelled an offline sync (research.md §4).
+     */
+    clockSkewToleranceMinutes: number;
+  };
+  reEnrolment: {
+    /** How long an approved re-enrolment unlock stays usable (FR-015). */
+    unlockDurationDays: number;
+  };
+  photoRetention: {
+    /**
+     * Punch photos are evidence for exception review, not a permanent record — they
+     * are purged this many days after capture. Deliberately short: at roughly 30 KB
+     * a photo and two punches per employee per day, a long window is what turns
+     * blob storage into a cost centre, and nothing in the spec needs an old selfie
+     * once its exception is resolved.
+     */
+    punchPhotoDays: number;
+  };
+  /**
+   * Re-encode parameters applied before a photo is ever stored. Enrolment photos are
+   * kept larger and cleaner because descriptor quality depends on them and they are
+   * written once per employee; punch photos are captured constantly and only ever
+   * need to be good enough for a human reviewer to recognise a face.
+   */
+  imageProcessing: {
+    enrolment: { maxDimension: number; jpegQuality: number };
+    punch: { maxDimension: number; jpegQuality: number };
+  };
+}
+
+/** Which `StorageService` adapter backs blob persistence, and its settings. */
+export interface StorageConfig {
+  /**
+   * `local` writes AES-256-GCM encrypted files under `localPath` — the dev/test
+   * default, and viable *only* there: the production host's filesystem is ephemeral,
+   * so a local blob does not survive a deploy (constitution v1.4.0).
+   */
+  driver: 'local' | 's3';
+  /**
+   * Key for encrypting blobs at rest. 32 bytes, hex-encoded. Required by both
+   * adapters — the S3 adapter encrypts client-side too, so the storage provider
+   * never holds decryptable biometric data.
+   */
+  encryptionKey: string;
+  local: {
+    /** Directory the local adapter writes under. Git- and Docker-ignored. */
+    path: string;
+  };
+  s3: {
+    /** R2: `https://<account-id>.r2.cloudflarestorage.com`. */
+    endpoint: string;
+    region: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    /**
+     * R2 and most S3-compatible providers require path-style addressing; real AWS
+     * S3 prefers virtual-host style.
+     */
+    forcePathStyle: boolean;
+  };
 }

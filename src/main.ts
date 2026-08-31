@@ -1,10 +1,10 @@
-import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { PrismaClientExceptionFilter, PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
+import { configureApp } from './common/configure-app';
 import { assertRlsEnforceable } from './common/prisma/rls-preflight';
 import type {
   CorsConfig,
@@ -13,21 +13,20 @@ import type {
 } from './common/configs/config.interface';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // `bodyParser: false` disables Nest's built-in parsers so the ones registered
+  // below — with an explicit size limit — are the only ones handling a body.
+  // Raising the limit on Nest's defaults after the fact is not reliable: they are
+  // already installed by this point, so the first parser to see a request is the
+  // one with the 100 KB default still applied.
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+
+  // Body parsers and the validation pipe — shared with the e2e suites so the app
+  // under test is configured exactly like the one that ships.
+  configureApp(app);
 
   // Refresh tokens are delivered/read exclusively as HttpOnly cookies (FR-006) —
   // req.cookies is otherwise undefined under Express.
   app.use(cookieParser());
-
-  // Validation — whitelist/forbidNonWhitelisted reject any unexpected field
-  // (Principle II, FR-001/FR-018), transform coerces payloads to their DTO classes.
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
 
   // Refuse to serve traffic if the database role silently bypasses row-level
   // security — in production that means no tenant isolation at all, with nothing

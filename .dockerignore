@@ -4,3 +4,15 @@ npm-debug.log
 dist/
 graphql/
 test/
+# Appended for feature 003: build/test noise and secrets must never enter the image.
+.git/
+coverage/
+*.log
+*.log.*
+.env*
+!.env.example
+specs/
+.specify/
+# Local object-storage blobs written by the dev StorageService adapter — never baked
+# into an image; production uses the S3-compatible adapter instead.
+var/storage/

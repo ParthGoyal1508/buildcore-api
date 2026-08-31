@@ -5,7 +5,11 @@ import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { HrModule } from './hr/hr.module';
+import { PayrollModule } from './payroll/payroll.module';
+import { ProjectsModule } from './projects/projects.module';
 import { SettingsModule } from './settings/settings.module';
+import { StorageModule } from './common/storage/storage.module';
 import { UsersModule } from './users/users.module';
 import config from './common/configs/config';
 import type { SecurityConfig } from './common/configs/config.interface';
@@ -34,9 +38,14 @@ import type { SecurityConfig } from './common/configs/config.interface';
       },
     }),
 
+    StorageModule,
+
     AuthModule,
     UsersModule,
     SettingsModule,
+    ProjectsModule,
+    HrModule,
+    PayrollModule,
   ],
   controllers: [AppController],
   providers: [AppService],

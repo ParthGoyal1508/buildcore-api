@@ -41,3 +41,6 @@ lerna-debug.log*
 .env*
 !.env.example
 .github/instructions/wmt-copilot.instructions.md
+
+# Local object-storage blobs written by the dev StorageService adapter (feature 003).
+/var/storage

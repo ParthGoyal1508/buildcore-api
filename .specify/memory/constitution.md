@@ -1,14 +1,26 @@
 <!--
 Sync Impact Report
-- Version change: 1.2.0 → 1.3.0
+- Version change: 1.3.0 → 1.4.0
 - Modified principles: n/a
 - Added sections:
-  - Technology Stack & Standards: pre-approved `resend` (Resend's Node SDK) for any module needing
-    transactional email delivery (invite/set-password links, OTP codes, lockout/notification
-    emails) — introduced by the Account Creation feature, and retroactively documents the delivery
-    mechanism the User Login feature's account-lockout email (FR-015) and master PRD §7.1's Forgot
-    Password OTP already assumed without naming a library.
-- Previous amendment (v1.2.0, for reference, unchanged): pre-approved `exceljs` for any module
+  - Technology Stack & Standards: pre-approved (1) **S3-compatible object storage** via
+    `@aws-sdk/client-s3` for any module needing binary/blob persistence, reachable only through a
+    `StorageService` interface with two config-selected adapters — a local encrypted-filesystem
+    adapter for dev/test and an S3-compatible adapter for production (targeting Cloudflare R2);
+    (2) **`sharp`** (libvips) for server-side image decode, downscale, re-encode, and EXIF
+    stripping. Both were introduced by the My Workspace feature, whose biometric enrolment and
+    punch photos are the first blobs the system persists.
+- Modified sections:
+  - Technology Stack & Standards → Biometric face matching: added a companion note recording that
+    the existing "no native-binding build step" constraint means face-api runs on the TensorFlow.js
+    WASM/CPU backend and therefore depends on `sharp` — not `@tensorflow/tfjs-node` — to decode
+    uploaded images. This clarifies the v1.1.0 pre-approval; it does not narrow or widen it.
+- Previous amendment (v1.3.0, for reference, unchanged): pre-approved `resend` (Resend's Node SDK)
+  for any module needing transactional email delivery (invite/set-password links, OTP codes,
+  lockout/notification emails) — introduced by the Account Creation feature, and retroactively
+  documents the delivery mechanism the User Login feature's account-lockout email (FR-015) and
+  master PRD §7.1's Forgot Password OTP already assumed without naming a library.
+- Earlier amendment (v1.2.0, for reference, unchanged): pre-approved `exceljs` for any module
   needing downloadable Excel (.xlsx) generation, per the user's explicit choice when asked — the
   Dashboard & General feature's Reports module was the first consumer.
 - Earlier amendment (v1.1.0, for reference, unchanged): pre-approved (1) a specific in-process,
@@ -142,6 +154,12 @@ production incident is far more expensive than wiring them from the start.
   This is an explicit, narrow exception to needing a fresh amendment per module — a second,
   materially different face-matching mechanism (a native-binding library, a hosted third-party
   face-recognition API) still requires its own amendment before introduction.
+  *Companion note (v1.4.0)*: because this pre-approval permits only pure JS/WASM inference with no
+  native-binding build step, face-api MUST run on the TensorFlow.js WASM/CPU backend, which rules
+  out `@tensorflow/tfjs-node` and its bundled image decoder. Decoding an uploaded photo into a
+  tensor for inference therefore goes through `sharp` (see **Image processing** below). Adopting
+  `@tensorflow/tfjs-node` for speed would be a native-binding library and requires its own
+  amendment.
 - **PDF generation**: `pdfkit` (pure-Node, no headless-browser dependency) is pre-approved for any
   module that needs to generate a downloadable PDF document (e.g. a salary slip). A second,
   materially different PDF-generation mechanism (a headless-browser HTML-to-PDF renderer, a hosted
@@ -154,6 +172,35 @@ production incident is far more expensive than wiring them from the start.
   master PRD §7.1, the system's named provider. A second, materially different email-delivery
   mechanism (a different ESP, a self-hosted SMTP relay) still requires its own amendment before
   introduction.
+- **Object storage**: S3-compatible object storage via `@aws-sdk/client-s3` is pre-approved for any
+  module that needs to persist binary blobs (biometric enrolment photos, punch photos, and future
+  document/attachment storage). Modules MUST NOT call the SDK directly: all access goes through a
+  `StorageService` interface with two adapters selected by centralized config (Principle III) — a
+  local encrypted-filesystem adapter for dev/test, and an S3-compatible adapter for production,
+  targeting Cloudflare R2 (the same adapter works unchanged against Supabase Storage or Backblaze
+  B2, since all three expose the S3 API). Stored blobs MUST be encrypted at rest and every read
+  MUST be written to the audit log, matching the Principle IV protection tier for PII. Small
+  derived values (e.g. a 128-float face descriptor) are NOT blobs and MUST stay in encrypted
+  Postgres columns; only large binaries belong in object storage.
+  **Rationale**: production runs as a Render free web service, whose filesystem is ephemeral and
+  which cannot attach a persistent disk, so local-disk storage would silently lose data on every
+  deploy or idle spin-down; and the database is Neon Postgres on a ~0.5 GB free tier, which photo
+  blobs would exhaust while bloating every backup. Neither local disk nor Postgres `bytea` is a
+  viable home for blobs, so a storage tier is required rather than optional. A materially different
+  storage mechanism (a non-S3-compatible provider SDK, a database-backed blob store) still requires
+  its own amendment before introduction.
+- **Image processing**: `sharp` (libvips) is pre-approved for server-side image decoding,
+  downscaling, re-encoding, and EXIF stripping. **Rationale**: it serves two distinct needs with a
+  single dependency. First, decode — the biometric pre-approval above permits only WASM/CPU
+  inference, so `sharp` is what turns an uploaded photo into a tensor for face-api. Second,
+  compression — photos MUST be downscaled and re-encoded before storage (punch selfies to roughly
+  640px longest edge at JPEG q72, enrolment photos to roughly 800px at q80) to keep object-storage
+  growth bounded, with the exact values in centralized config per Principle III rather than inline.
+  Stripping EXIF is also a Principle IV requirement, not merely a size optimization: phone cameras
+  embed GPS coordinates in EXIF, which would otherwise persist a second, unvalidated, unaudited
+  copy of location PII inside the blob, outside the audited coordinate columns that are the
+  system's system of record for punch location. `sharp` ships prebuilt Debian x64 binaries and the
+  project's Dockerfile is `node:20-slim`, so this adds no build-time toolchain.
 
 ## Development Workflow & Quality Gates
 
@@ -186,4 +233,4 @@ Workflow & Quality Gates); a reviewer who approves a change that knowingly viola
 NON-NEGOTIABLE principle MUST record the justification in the PR description, and that
 justification MUST itself prompt a constitution amendment if the exception is expected to recur.
 
-**Version**: 1.3.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-28
+**Version**: 1.4.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-30
