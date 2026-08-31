@@ -78,10 +78,23 @@ async function main() {
     },
   });
 
-  // Company → Shift → Site → Employee for the admin account, so `/my/*` is
-  // reachable immediately. Without this every My Workspace endpoint returns 403,
-  // since none of them accept an employee identifier (FR-028).
+  // Site User — DASHBOARD + MY_WORKSPACE + ATTENDANCE (002 FR-006). The narrowest
+  // default role that can actually reach `/my/*`, which is what this account is for:
+  // exercising the employee side without Super Admin's blanket permissions hiding a
+  // missing authorization check.
+  const siteUserRole = await prisma.role.findUniqueOrThrow({
+    where: { name: 'Site User' },
+  });
+  await prisma.userRole.create({
+    data: { userId: user.id, roleId: siteUserRole.id },
+  });
+
+  // Company → Shift → Site → Employee for both accounts, so `/my/*` is reachable
+  // immediately. Without this every My Workspace endpoint returns 403, since none of
+  // them accept an employee identifier (FR-028). Both land in the same demo company
+  // and site, on separate employee codes.
   await seedWorkspaceFixtures(prisma, admin.id);
+  await seedWorkspaceFixtures(prisma, user.id, 'DEMO-0002', 'user');
 
   console.log({ admin, user });
 }
