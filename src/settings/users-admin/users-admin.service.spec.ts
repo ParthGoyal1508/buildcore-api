@@ -1,11 +1,31 @@
 import { ConflictException, ForbiddenException } from '@nestjs/common';
-import { UserStatus } from '@prisma/client';
+import { UserStatus, Permission } from '@prisma/client';
 import { UsersAdminService } from './users-admin.service';
 import { callerFor } from '../testing/prisma-mock';
 
-const superAdmin = callerFor('company-1', { roleNames: ['Super Admin'] });
-const hoUser = callerFor('company-1', { roleNames: ['HO User'] });
-const siteEngineer = callerFor('company-1', { roleNames: ['Site Engineer'] });
+// Account administration is gated on the USER_MANAGEMENT permission rather than on
+// role names (FR-014, amended 2026-08-31), so these fixtures carry the permission
+// their real seeded counterparts hold. `roleNames` stays because FR-016's
+// last-Super-Admin guard still reasons about which role an account holds.
+const superAdmin = callerFor('company-1', {
+  roleNames: ['Super Admin'],
+  permissions: [Permission.USER_MANAGEMENT],
+});
+const hoUser = callerFor('company-1', {
+  roleNames: ['HO User'],
+  permissions: [Permission.USER_MANAGEMENT],
+});
+/** Holds neither the permission nor an administrative role. */
+const siteEngineer = callerFor('company-1', {
+  roleNames: ['Site Engineer'],
+  permissions: [Permission.MY_WORKSPACE],
+});
+/** The case the old role-name check wrongly refused: a custom role created through
+ * this very feature and granted the permission. */
+const customAdmin = callerFor('company-1', {
+  roleNames: ['Regional Administrator'],
+  permissions: [Permission.USER_MANAGEMENT],
+});
 
 function build(users: Record<string, jest.Mock> = {}) {
   const usersService = {
@@ -25,20 +45,43 @@ function build(users: Record<string, jest.Mock> = {}) {
 }
 
 describe('UsersAdminService', () => {
-  describe('access control (FR-014)', () => {
+  describe('access control (FR-014, amended 2026-08-31)', () => {
     it.each([
       ['Super Admin', superAdmin],
       ['HO User', hoUser],
-    ])('allows a %s', async (_label, caller) => {
+    ])(
+      'allows the seeded %s, which carries USER_MANAGEMENT',
+      async (_l, caller) => {
+        const { service } = build();
+        await expect(service.findAll(caller)).resolves.toEqual([]);
+      },
+    );
+
+    it('allows a custom role granted USER_MANAGEMENT', async () => {
+      // The case the previous role-name check refused. This feature lets an
+      // administrator create such a role, so refusing it meant the controller's
+      // permission guard and this service disagreed about the same request.
       const { service } = build();
-      await expect(service.findAll(caller)).resolves.toEqual([]);
+      await expect(service.findAll(customAdmin)).resolves.toEqual([]);
     });
 
-    it('rejects any other role, even one holding USER_MANAGEMENT', async () => {
+    it('rejects a caller without USER_MANAGEMENT', async () => {
       const { service } = build();
       await expect(service.findAll(siteEngineer)).rejects.toBeInstanceOf(
         ForbiddenException,
       );
+    });
+
+    it('does not depend on the role being named a particular thing', async () => {
+      // `HO User` is not a protected role, so 002's own role editor can rename it.
+      // Under the old check that silently stripped account administration from
+      // every holder while their permissions were untouched.
+      const renamed = callerFor('company-1', {
+        roleNames: ['Head Office Staff'],
+        permissions: [Permission.USER_MANAGEMENT],
+      });
+      const { service } = build();
+      await expect(service.findAll(renamed)).resolves.toEqual([]);
     });
   });
 

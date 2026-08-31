@@ -81,13 +81,7 @@ describe('Account creation — invite flow (e2e)', () => {
 
   let adminToken: string;
   let adminUserId: string;
-  /**
-   * The seeded Super Admin. Needed because 002's `/settings/users` gates on role
-   * *name* (`Super Admin` / `HO User`) rather than on the USER_MANAGEMENT
-   * permission, so a purpose-made role with the right permission is still refused
-   * there. Only used for the two FR-008 assertions below.
-   */
-  let superAdminToken: string;
+
   let adminRoleId: string;
   let companyId: string;
   let scopedRoleId: string;
@@ -163,16 +157,6 @@ describe('Account creation — invite flow (e2e)', () => {
       })
       .expect(201);
     adminToken = login.body.accessToken;
-
-    const superAdminLogin = await http()
-      .post('/auth/login')
-      .send({
-        identifier: 'admin@buildcore.dev',
-        password: 'secret42',
-        rememberMe: false,
-      })
-      .expect(201);
-    superAdminToken = superAdminLogin.body.accessToken;
   });
 
   afterAll(async () => {
@@ -480,7 +464,7 @@ describe('Account creation — invite flow (e2e)', () => {
       // service nothing called, so the rule was unenforced exactly here.
       await http()
         .patch(`/settings/users/${pendingId}`)
-        .set(auth(superAdminToken))
+        .set(auth(adminToken))
         .send({ status: 'active' })
         .expect(400)
         .expect((r) =>
@@ -495,7 +479,7 @@ describe('Account creation — invite flow (e2e)', () => {
     it('still allows deactivating a pending account (cancelling the invite)', async () => {
       await http()
         .patch(`/settings/users/${pendingId}`)
-        .set(auth(superAdminToken))
+        .set(auth(adminToken))
         .send({ status: 'deactivated' })
         .expect(200);
     });
