@@ -28,6 +28,10 @@ submitted photo (spec Edge Cases).
 Withdraws consent. **Response — 200**: photos/descriptor deleted, `status` reverts to
 `not_enrolled`; any pending re-enrolment request is auto-closed (FR-017).
 
+> **UI note (2026-08-31)**: this endpoint is unchanged and still the withdrawal route required by
+> FR-004, but the employee-facing Face Enrolment screen no longer surfaces it — see the frontend
+> spec's FR-002b (`buildcore-web/specs/003-my-workspace`). Withdrawal is API-level only.
+
 ### `POST /my/face-enrol/re-enrolment-request`
 **Request**: `{ reason: string }`. **Response — 201**: `{ status:
 're_enrolment_requested' }`; notifies HR/Admin.

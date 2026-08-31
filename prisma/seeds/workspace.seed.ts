@@ -45,6 +45,11 @@ function numberFromEnv(raw: string | undefined, fallback: number): number {
 export async function seedWorkspaceFixtures(
   prisma: PrismaClient,
   userId: string,
+  // Every account seeded here needs its own code: Employee is unique on
+  // (companyId, employeeCode), so a second account reusing DEMO-0001 would collide
+  // rather than get its own employee record.
+  employeeCode = `${DEMO_SHORT_CODE}-0001`,
+  accountLabel = 'admin',
 ): Promise<void> {
   const company =
     (await prisma.company.findFirst({ where: { shortCode: DEMO_SHORT_CODE } })) ??
@@ -125,20 +130,20 @@ export async function seedWorkspaceFixtures(
         companyId: company.id,
         siteId: site.id,
         shiftId: shift.id,
-        employeeCode: `${DEMO_SHORT_CODE}-0001`,
+        employeeCode,
       },
     });
   } else {
     await prisma.employee.update({
       where: { id: existingEmployee.id },
-      data: { companyId: company.id, siteId: site.id, shiftId: shift.id },
+      data: { companyId: company.id, siteId: site.id, shiftId: shift.id, employeeCode },
     });
   }
 
   console.log(
     `My Workspace fixtures: company "${company.name}", site "${site.name}" ` +
       `at ${latitude},${longitude} (radius ${geofenceRadiusMeters}m), ` +
-      `employee ${DEMO_SHORT_CODE}-0001 linked to the admin account.`,
+      `employee ${employeeCode} linked to the ${accountLabel} account.`,
   );
   console.log(
     '  To test an in-geofence punch, set SEED_SITE_LATITUDE / SEED_SITE_LONGITUDE ' +
