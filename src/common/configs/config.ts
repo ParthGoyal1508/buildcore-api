@@ -181,6 +181,11 @@ const config: Config = {
       process.env.EMAIL_FROM_ADDRESS || 'BuildCore <onboarding@resend.dev>',
     // Where the set-password link points. Defaults to the local frontend port.
     appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3001',
+    // Off unless a deployment explicitly asks for it — see the interface comment.
+    allowConsoleInProduction: booleanFromEnv(
+      process.env.ALLOW_CONSOLE_EMAIL,
+      false,
+    ),
   },
   storage: {
     // Local by default so a fresh clone and the e2e suite work with no cloud

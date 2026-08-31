@@ -32,9 +32,27 @@ import { ResendEmailAdapter } from './resend-email.adapter';
         // full set-password link, so running it in production would write live
         // credential-setting URLs into the log stream — and invites would silently
         // never reach anyone. Both failures are worse than not booting.
-        if (process.env.NODE_ENV === 'production') {
+        //
+        // A preview or staging deployment can opt out: it sets NODE_ENV=production
+        // like everything else but serves nobody real, and blocking it until a
+        // sending domain is DNS-verified stops work unrelated to email. The opt-out
+        // is explicit and never inferred, so a real production environment that
+        // simply forgets to configure Resend still fails loudly rather than quietly
+        // logging credentials.
+        if (
+          process.env.NODE_ENV === 'production' &&
+          !config.allowConsoleInProduction
+        ) {
           throw new Error(
-            'EMAIL_DRIVER is "console" in production. That would log set-password links instead of sending them, and no invite would ever be delivered. Set EMAIL_DRIVER=resend with RESEND_API_KEY, EMAIL_FROM_ADDRESS and APP_BASE_URL.',
+            'EMAIL_DRIVER is "console" in production. That would log set-password links instead of sending them, and no invite would ever be delivered. Set EMAIL_DRIVER=resend with RESEND_API_KEY, EMAIL_FROM_ADDRESS and APP_BASE_URL — or, for a preview environment that serves no real users, set ALLOW_CONSOLE_EMAIL=true.',
+          );
+        }
+        if (process.env.NODE_ENV === 'production') {
+          // Loud, and every time. This deployment writes working credential-setting
+          // links into its logs and delivers no mail; that must not be something
+          // anyone discovers by accident later.
+          logger.warn(
+            'ALLOW_CONSOLE_EMAIL is set: invite emails are being LOGGED, NOT SENT, and the logs contain live set-password links. Never use this for a deployment with real users.',
           );
         }
 

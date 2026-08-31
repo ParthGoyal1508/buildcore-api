@@ -238,4 +238,19 @@ export interface EmailConfig {
    * no localhost default in production.
    */
   appBaseUrl: string;
+  /**
+   * Permits the console adapter to run even when `NODE_ENV=production`.
+   *
+   * Exists for preview and staging deployments, which set `NODE_ENV=production`
+   * like everything else but serve nobody real. Without it those environments
+   * cannot start at all until a sending domain has been DNS-verified — blocking a
+   * whole deployment on a prerequisite unrelated to the change under review.
+   *
+   * Deliberately an explicit opt-in rather than something inferred: the operator has
+   * to state that logged-instead-of-sent email is acceptable here. Real production
+   * simply omits it and keeps the hard failure, which is the behaviour that matters
+   * — an invite flow that silently logs credential links is worse than one that
+   * refuses to boot.
+   */
+  allowConsoleInProduction: boolean;
 }
