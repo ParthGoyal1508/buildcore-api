@@ -43,6 +43,28 @@ error is raised to tell you so.
       ALTER DEFAULT PRIVILEGES IN SCHEMA "<schema>"
         GRANT USAGE, SELECT ON SEQUENCES TO buildcore_app;
 
+- [ ] **Neon specifically**: the default `neondb_owner` role holds `BYPASSRLS`
+      (`SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user` returns `t`).
+      The application **refuses to boot in production** against it — deliberately, since
+      every tenant-isolation policy would otherwise be silently ignored. The symptom is
+      a deploy where migrations succeed and the process is then killed with `SIGTERM`
+      without ever binding its port, because the preflight throws before `app.listen()`.
+      Run `scripts/provision-app-role.sql` against the database and point the runtime
+      `DATABASE_URL` at the role it creates:
+
+      ```
+      psql "<owner connection string>" \
+        -v ON_ERROR_STOP=1 -v app_role=buildcore_app -v app_password='<secret>' \
+        -f scripts/provision-app-role.sql
+      ```
+
+      It prints `rolsuper` and `rolbypassrls` at the end; both must be `f`. Keep the
+      owner connection string for migrations — `start:migrate:prod` runs
+      `prisma migrate deploy`, and the app role owns the tables so it can apply them.
+- [ ] Re-run `scripts/provision-app-role.sql` whenever a migration adds a **new schema**.
+      Its `owned_schemas` list is the single place that needs updating, and a schema
+      missing from it leaves the role with no rights there at all — every query against
+      it fails on permissions after an otherwise-successful deploy.
 - [ ] Point the app's runtime `DATABASE_URL` at that role.
 - [ ] Keep **migrations** running as the owning/admin role — `prisma migrate deploy` needs
       DDL rights the application role must not have.
