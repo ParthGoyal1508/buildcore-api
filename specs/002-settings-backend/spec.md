@@ -312,13 +312,32 @@ collision, even in concurrent requests.
 - **FR-013**: The system MUST provide a list of existing user accounts (name, email, role, status
   — including `pending`, `inviteExpiresAt` when applicable — last-login timestamp) scoped to the
   requesting admin's company, except for a cross-company Super Admin.
-- **FR-014**: The system MUST allow a Super Admin or HO User to edit an existing user account's
-  assigned role or active/inactive status, and MUST reject the same operation from any other role.
-  A direct write of `status: 'active'` against a currently-`pending` account MUST be rejected with
-  `400` — that transition only happens via `010-account-creation-backend`'s set-password flow.
-- **FR-015**: The system MUST allow a Super Admin or HO User to delete an existing user account,
-  after which it can no longer authenticate and no longer counts toward any role's assigned-user
-  count.
+- **FR-014**: The system MUST allow a caller holding the `USER_MANAGEMENT` permission to edit an
+  existing user account's assigned role or active/inactive status, and MUST reject the same
+  operation from any caller without it. A direct write of `status: 'active'` against a
+  currently-`pending` account MUST be rejected with `400` — that transition only happens via
+  `010-account-creation-backend`'s set-password flow.
+- **FR-015**: The system MUST allow a caller holding the `USER_MANAGEMENT` permission to delete an
+  existing user account, after which it can no longer authenticate and no longer counts toward any
+  role's assigned-user count.
+
+> **Amended 2026-08-31.** FR-014 and FR-015 previously named the roles "Super Admin or HO User"
+> directly. That was changed to the `USER_MANAGEMENT` permission for three reasons, found while
+> implementing `010-account-creation-backend`:
+>
+> 1. `HO User` is not a protected role (`isProtected = false`), so this feature's own role editor
+>    could rename it — silently stripping account administration from every holder, with their
+>    permissions unchanged and no error raised anywhere.
+> 2. This feature lets an administrator create a role and grant it `USER_MANAGEMENT`. Such a role
+>    passed the controller's permission guard and was then refused by the service, so the two gates
+>    disagreed about the same request.
+> 3. It contradicted the 2026-08-28 redesign that replaced the hardcoded `role === SUPER_ADMIN`
+>    check with the `CROSS_COMPANY_ACCESS` permission, on the principle that roles are data an
+>    administrator edits and a capability must not be keyed to a display string.
+>
+> The seeded Super Admin and HO User roles both carry `USER_MANAGEMENT`, so the set of accounts
+> that can administer accounts is unchanged on any existing deployment — this widens the rule to
+> custom roles rather than altering who can do it today.
 - **FR-016**: The system MUST NOT allow the last remaining active Super Admin account to be
   deactivated, deleted, or reassigned to a different role.
 - **FR-017**: The system MUST update a user account's last-login timestamp on every successful

@@ -3,7 +3,12 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
-import { AuditAction, AuditEntityType, UserStatus } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  Permission,
+  UserStatus,
+} from '@prisma/client';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
@@ -11,9 +16,21 @@ import { UserSummary } from '../../users/user-summary';
 import { UsersService } from '../../users/users.service';
 import { UpdateUserAccountDto } from './dto/update-user.dto';
 
-/** Only these roles may administer accounts (FR-014) — enforced here, server-side,
- * in addition to the USER_MANAGEMENT permission the guard checks. */
-const ACCOUNT_ADMIN_ROLES = ['Super Admin', 'HO User'];
+/**
+ * Account administration is gated on the USER_MANAGEMENT permission, checked here
+ * server-side as well as by the controller's guard (FR-014, amended 2026-08-31).
+ *
+ * This replaced a check against the role *names* "Super Admin" and "HO User", which
+ * had three problems. `HO User` is not a protected role, so 002's own role editor
+ * could rename it — silently removing account administration from everyone holding
+ * it, with identical permissions and no error anywhere. A role created through this
+ * same feature and granted USER_MANAGEMENT passed the controller guard and was then
+ * refused by this service, so the two gates disagreed. And it contradicted the
+ * 2026-08-28 redesign that replaced the hardcoded `role === SUPER_ADMIN` check with
+ * the CROSS_COMPANY_ACCESS permission for exactly this reason: roles are data an
+ * administrator edits, so a capability must not be keyed to a display string.
+ */
+const ACCOUNT_ADMIN_PERMISSION = Permission.USER_MANAGEMENT;
 
 @Injectable()
 export class UsersAdminService {
@@ -101,12 +118,12 @@ export class UsersAdminService {
   }
 
   private assertMayAdminister(caller: AuthenticatedUser): void {
-    const allowed = caller.roleNames.some((name) =>
-      ACCOUNT_ADMIN_ROLES.includes(name),
-    );
-    if (!allowed) {
+    // `permissions` is the union across every role the caller holds
+    // (authenticated-user.ts), so this admits any role granted the capability
+    // rather than a fixed pair of names.
+    if (!caller.permissions.includes(ACCOUNT_ADMIN_PERMISSION)) {
       throw new ForbiddenException(
-        'Only a Super Admin or HO User may administer user accounts',
+        'Administering user accounts requires the User Management permission',
       );
     }
   }

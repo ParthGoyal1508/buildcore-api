@@ -9,7 +9,6 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { RefreshTokenService } from './refresh-token.service';
 import { AuditLogService } from './audit-log.service';
-import { MailService } from './mail.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { SecurityConfig } from '../common/configs/config.interface';
 
@@ -38,7 +37,6 @@ import { SecurityConfig } from '../common/configs/config.interface';
     PasswordService,
     RefreshTokenService,
     AuditLogService,
-    MailService,
   ],
   exports: [JwtAuthGuard, PermissionsGuard],
 })

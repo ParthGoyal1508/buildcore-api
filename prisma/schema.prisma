@@ -31,11 +31,23 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  email     String  @unique
-  username  String  @unique
-  password  String
-  firstname String?
-  lastname  String?
+  email       String  @unique
+  /// Auto-generated from the email local-part at invite time (010 data-model.md),
+  /// not supplied by the admin. Nullable because a `pending` row is created before
+  /// anything has been generated for it, and because rows predating feature 010
+  /// were never guaranteed one by any code path other than the seed.
+  username    String? @unique
+  /// Null until the invitee sets it (010). Every row created before feature 010
+  /// already has one, so relaxing this is additive rather than a change to
+  /// existing data.
+  password    String?
+  /// Shown in the account list when no `hr.Employee` is linked — a Super Admin or a
+  /// vendor-facing login has no HR record to take a name from. Required by
+  /// `UsersService.create()` in exactly that case, enforced at the service layer
+  /// since a conditional NOT NULL is not expressible here (010 data-model.md).
+  displayName String?
+  firstname   String?
+  lastname    String?
 
   /// A user can hold more than one role at once (2026-08-28 clarification) — their
   /// effective permissions are the union across every assigned role's permissions.
@@ -59,12 +71,17 @@ model User {
   lockedUntil         DateTime?
 
   refreshTokens   RefreshToken[]
+  inviteTokens    InviteToken[]
   auditLogEntries AuditLogEntry[]
 
   @@schema("shared")
 }
 
 enum UserStatus {
+  /// Invited but not yet activated: the row exists so the account can be listed,
+  /// audited and re-invited, but it has no password and cannot authenticate until
+  /// the invitee consumes their token (010 research.md §3).
+  pending
   active
   deactivated
 
@@ -353,6 +370,32 @@ model ReimbursementCategory {
 
 /// One signed-in period on one device/client, as a chain of rotating refresh tokens
 /// sharing a `familyId` — see data-model.md "Refresh Token".
+/// A single-use, time-limited invite carrying the right to set an account's first
+/// password. Only the SHA-256 hash of the token is stored, mirroring how
+/// `RefreshToken` already handles its own opaque value (010 research.md §2) — so a
+/// database dump alone can never be turned back into a working invite link.
+model InviteToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hex of the raw token. The raw value exists only inside the email.
+  tokenHash String @unique
+
+  expiresAt  DateTime
+  /// Set when the invite is redeemed, which is what makes it single-use.
+  consumedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  /// Resend inserts a new row rather than deleting the old one, so the invite
+  /// history stays auditable (FR-014). "Usable" is therefore derived — unconsumed,
+  /// unexpired, and the newest row for the user — rather than tracked in a boolean
+  /// that would be a second source of truth for the same fact.
+  @@index([userId, createdAt])
+  @@schema("shared")
+}
+
 model RefreshToken {
   id        String  @id @default(cuid())
   /// HMAC-hashed opaque token value (SecurityConfig.refreshTokenHashSecret as pepper) —
@@ -843,9 +886,9 @@ model ReimbursementClaim {
   /// category's configured threshold (FR-030).
   receiptRef String?
 
-  status      ReimbursementClaimStatus @default(submitted)
+  status           ReimbursementClaimStatus  @default(submitted)
   /// Written by feature 005 once a claim is approved and paid; never by this one.
-  paymentMode ReimbursementPaymentMode?
+  paymentMode      ReimbursementPaymentMode?
   paymentReference String?
 
   /// Feature 005's decision fields. Present here because the table is shared, and

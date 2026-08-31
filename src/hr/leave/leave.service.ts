@@ -336,7 +336,8 @@ export class LeaveService {
     });
 
     // Notifying the employee is FR-022a's other half. This codebase has no
-    // notification transport yet — only `MailService.sendAccountLockedEmail` — so
+    // notification transport wired here yet — `EmailService` exists (feature 010) but
+    // nothing in this module calls it — so
     // the decision is recorded and surfaced on the employee's own applications
     // list. When a notifications module lands, this is its call site.
     return decided;
