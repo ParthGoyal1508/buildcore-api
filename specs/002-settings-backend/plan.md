@@ -168,3 +168,40 @@ buildcore-api/
 ## Complexity Tracking
 
 *No entries — no constitution violations requiring justification (see Constitution Check above).*
+
+---
+
+## Amendment 2026-09-01 — Company Documents Repository
+
+Covers spec FR-028 to FR-038. Adds 2 `settings` tables; no new permission value.
+
+**Constitution re-check**: Principle I — both tables in `settings`, correct owner. Principle III —
+`alertDays` per document type, never a literal. Principle IV — `companyId` + RLS; cross-company
+reads gated by `CROSS_COMPANY_ACCESS`. Principle V — reuses `COMPANY_SETTINGS`, adds nothing.
+Principle VI — encrypted object storage, production start refused on local-filesystem blobs. PASS.
+
+### Phase A1: Schema
+
+- [ ] Add `CompanyDocumentType` and `CompanyDocument` models to `prisma/schema.prisma`; migration
+      + RLS
+- [ ] Extend `shared.AuditLogEntry.entityType` with `COMPANY_DOCUMENT`
+- [ ] Seed default statutory company document types on company creation, reusing the FR-020
+      seeding hook rather than a second mechanism (FR-029)
+
+### Phase A2: US8 — Company Document Types (P3)
+
+- [ ] `CompanyDocumentTypesService` + controller (Super-Admin CRUD, `requiresExpiry`-without-
+      `alertDays` guard → 400, delete guard → 409)
+- [ ] Unit test: required-flag validation; seeding on new company
+
+### Phase A3: US9 — Company Documents (P3)
+
+- [ ] `CompanyDocumentsService` + controller (upload with per-type required-field enforcement —
+      FR-030, encrypted object-storage reference, versioning scoped per document number where one
+      is present — FR-031, status computed on read — FR-033, soft-delete promoting the prior
+      version — FR-038)
+- [ ] Register the `company_document_expiry` reminder rule with feature 004's centralized engine
+      (FR-034, ratified 2026-09-01) — no evaluation or de-duplication logic here
+- [ ] Confirm expiry blocks no business operation (FR-035)
+- [ ] Unit test: versioning per document number; status computation across alert-window changes
+- [ ] E2e test: renewal creates v2 current with v1 still downloadable; cross-company read → 403

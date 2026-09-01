@@ -414,3 +414,44 @@ Task: "Create src/dashboard/widgets/muster-stat.provider.ts"
 2. US1 (framework) → US2 (Company KPIs) → US3 (Activity Log) → test independently → MVP
 3. US4 (Notifications) → US5 (Site Dashboard) → US6 (Group Dashboard) → each tested independently
 4. US7 (Reports + async export) → tested independently → feature complete
+
+---
+
+## Amendment 2026-09-01 — Department Dashboard & Cross-Module Reminders Engine
+
+Covers spec FR-025 to FR-037 and plan Phases A1–A3. Task IDs prefixed `TA`.
+
+**Build-order note**: the reminders engine (TA005–TA011) is a dependency for features 002, 006, and
+012, which register rules rather than implementing their own evaluation (ratified 2026-09-01).
+Schedule it early.
+
+- [ ] TA001 Add `ReminderRule` and `ReminderSnooze` models to `prisma/schema.prisma`; migration +
+      RLS
+- [ ] TA002 Build the rule-registration mechanism mirroring the existing widget registry so a
+      module contributes a rule without editing this feature (spec FR-028)
+- [ ] TA003 [US8] `DepartmentDashboardService` + controller reusing the existing self-describing
+      widget contract — no new response shape (spec FR-025)
+- [ ] TA004 [US8] Department-scoped KPIs — headcount, present, absent, on leave, pending leave
+      approvals, open positions (from 011), department payroll cost — each computed strictly over
+      that department's employees (spec FR-026)
+- [ ] TA005 [US8] Department selector honouring role-restricted scope; reject a department outside
+      the caller's company (spec FR-027); zero values, not errors, for an empty department
+- [ ] TA006 [US9] `RemindersService`: evaluate every registered rule into one unified list with
+      source module, entity, subject, due date, signed days-remaining, and severity; sort overdue
+      first then soonest-due (spec FR-029, FR-030)
+- [ ] TA007 [US9] Unavailable-module rules contribute nothing and are reported as unavailable rather
+      than failing the request (spec FR-031)
+- [ ] TA008 [US9] De-duplication: at most one notification per entity, per rule, per severity band;
+      escalation emits anew; resolution closes the open notification (spec FR-032, FR-033)
+- [ ] TA009 [US9] Snooze endpoint with audit logging; a snooze expires on its date even if severity
+      escalated (spec FR-034)
+- [ ] TA010 [US9] Company scoping except for `CROSS_COMPANY_ACCESS` holders (spec FR-035); count
+      endpoint by severity consistent with FR-011
+- [ ] TA011 [US9] `RemindersController` and `DepartmentDashboardController` with the existing
+      `DASHBOARD` guard — no new permission value (spec FR-037)
+- [ ] TA012 [P] Unit test: de-duplication across repeated evaluation; escalation; snooze expiry
+- [ ] TA013 [P] Unit test: no cross-department KPI leakage (SC-A03)
+- [ ] TA014 [P] E2e test: a rule registered by a test module appears in the list with no edit to
+      this feature (SC-A01)
+
+**Unblocks**: 002 TA009, 006 TA011, 012 T048.

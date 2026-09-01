@@ -642,3 +642,92 @@ Task: "Create src/hr/employees/dto/create-employee.dto.ts and update-employee.dt
    through payslip)
 3. US6 (Challans) → US8 (Transfer) → each tested independently → full P1/P2 scope
 4. US9 (Daily Workers) → US10 (Re-enrolment queue) → each tested independently → feature complete
+
+---
+
+## Amendment 2026-09-01 — TDS, Salary Advances, Registers, Late-Coming; Recruitment & Labour Handover
+
+Covers spec FR-048 to FR-067 and plan Phases A1–A6. Task IDs prefixed `TA`. **No new permission
+value** — reuses `PAYROLL`, `ATTENDANCE`, `REPORTS`.
+
+### Handover (do first — these remove scope)
+
+- [ ] TA001 **Remove US9 (Daily Worker Registry) and FR-023 to FR-028 from this feature's build
+      scope.** Their tables migrate to the `labour` schema in 013's T004; coordinate so the
+      migration runs exactly once (ratified 2026-09-01)
+- [ ] TA002 Assert no labour figure reaches any `PayrollRun` (spec FR-048), and that 013 reads this
+      feature's existing OT multiplier rather than defining a second (spec FR-049)
+
+### Phase A1: Schema
+
+- [ ] TA003 Add `TaxSlab` (`settings`), `TaxDeclaration`, `TaxDeclarationLine`, `SalaryAdvance`
+      (`hr`) to `prisma/schema.prisma`; migration + RLS
+- [ ] TA004 [P] Extend `shared.AuditLogEntry.entityType` with `TAX_DECLARATION`, `SALARY_ADVANCE`
+      (spec FR-067)
+
+### Phase A2: US14 — TDS (P1)
+
+- [ ] TA005 [US14] `TaxSlabService` + controller: per-FY, per-regime slab sets; contiguity and
+      non-overlap validation → 400 naming the gap or overlap (spec FR-050)
+- [ ] TA006 [US14] `TaxDeclarationService` + controller: declare, cap each line at its section's
+      configured ceiling reporting the capped figure (spec FR-052), verify with proof to encrypted
+      object storage, honour unverified declarations only until the configured cut-off month
+- [ ] TA007 [US14] `TdsCalculationService`: projected annual taxable income → annual liability under
+      the elected regime → less YTD deducted → ÷ remaining months including the current
+      (spec FR-051); floored at zero — payroll never refunds tax (spec FR-053)
+- [ ] TA008 [US14] No-PAN higher rate with the employee flagged in the run's exception list
+      (spec FR-053)
+- [ ] TA009 [US14] Wire TDS as a payroll line-item deduction in the existing payroll run
+- [ ] TA010 [US14] Quarterly TDS report and Form 16 data endpoints; XLSX/PDF export following the
+      FR-020 challan-export pattern
+- [ ] TA011 [P] [US14] Unit test: full-year simulation with a mid-year salary change self-corrects
+      (SC-A01); zero floor; no-PAN rate; slab contiguity rejection
+- [ ] TA012 [P] [US14] E2e test: a processed run carries the correct TDS deduction
+
+### Phase A3: US15 — Salary Advances (P2)
+
+- [ ] TA013 [US15] `SalaryAdvanceService` + controller: request, `exceedsLimit` flag above the
+      configured percentage of monthly net, single open advance per employee → 409 (spec FR-054),
+      approve, disburse
+- [ ] TA014 [US15] Recovery in the nominated month, with the documented capping order — statutory,
+      then loan EMI, then salary advance — so net pay is never negative, remainder carried forward
+      (spec FR-055)
+- [ ] TA015 [US15] Include outstanding advances as a recovery in the F&F computation (FR-032 /
+      spec FR-056)
+- [ ] TA016 [P] [US15] Unit test: capping order, carry-forward, F&F inclusion (SC-A02)
+- [ ] TA017 [P] [US15] E2e test: recovery closes the advance; a capped recovery leaves it open
+
+### Phase A4: US16 — Registers (P2)
+
+- [ ] TA018 [US16] `PayrollRegisterService` + controller: salary register with per-component
+      earnings and deductions and column totals, filterable by department / project / site
+      (spec FR-057, FR-060); processed-or-paid-runs-only guard
+- [ ] TA019 [US16] Reconciliation assertion — register totals must equal the run's stored totals or
+      surface an explicit error, never a silently different number (spec FR-058)
+- [ ] TA020 [US16] Deduction report by head, split statutory vs non-statutory, whose statutory
+      totals must equal the FR-019 challan figures (spec FR-059)
+- [ ] TA021 [US16] XLSX/PDF export, async above the configured row threshold
+- [ ] TA022 [P] [US16] Unit test: register / deduction report / challan three-way reconciliation
+      (SC-A03)
+
+### Phase A5: US17 — Late-Coming (P3)
+
+- [ ] TA023 [US17] `ShiftComplianceService`: `lateMinutes`, `earlyDepartureMinutes`, `shortHours`
+      against the shift **in force on that date**, each floored at zero, using 002 FR-022's existing
+      shift configuration (spec FR-061)
+- [ ] TA024 [US17] Explicit `noShiftAssigned` / `noPunchTimes` markers rather than zero, so
+      unconfigured data is never mistaken for punctuality (spec FR-062); exclude approved leave and
+      declared holidays (spec FR-063)
+- [ ] TA025 [US17] Late-coming report with `repeatLateComer` flag; recomputation after manual
+      attendance edits preserving the original in the FR-010 audit trail
+- [ ] TA026 [US17] Assert lateness never deducts pay (spec FR-064)
+- [ ] TA027 [P] [US17] Unit test: shift-in-force-on-date after a mid-month reassignment (SC-A04)
+
+### Phase A6: Handover Wiring
+
+- [ ] TA028 Change the exit flow to read 011's accepted Resignation for last-working-day and notice
+      waiver rather than re-collecting them (spec FR-065) — **blocked by 011 T051**
+- [ ] TA029 Call 011's letter service for the relieving letter; no letter generation here
+      (spec FR-065) — **blocked by 011 T045**
+- [ ] TA030 Surface outstanding asset custody at exit via 012's `getOutstandingCustody()`
+      (012 FR-036) — **blocked by 012 T021**

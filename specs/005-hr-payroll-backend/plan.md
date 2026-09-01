@@ -176,3 +176,87 @@ buildcore-api/
 ## Complexity Tracking
 
 *No entries — no constitution violations requiring justification (see Constitution Check above).*
+
+---
+
+## Amendment 2026-09-01 — TDS, Salary Advances, Registers, Late-Coming; Recruitment & Labour Handover
+
+Covers spec FR-048 to FR-067. Adds 3 `hr` tables + 1 `settings` table; **no new permission value**
+(reuses `PAYROLL`, `ATTENDANCE`, `REPORTS`).
+
+**Two handovers, both ratified 2026-09-01:**
+
+- **US9 (Daily Worker Registry) and FR-023 to FR-028 are superseded by feature 013.** Their tables
+  migrate from `hr` to `labour` in 013's Phase 1. This feature must not build them.
+- **Recruitment, onboarding, letters, and the resignation report move to feature 011.** This
+  feature's exit/F&F flow (US11) changes only in that it now sources last-working-day and notice
+  waiver from 011's Resignation record and calls 011's letter service for the relieving letter
+  (FR-065).
+
+**Constitution re-check**: Principle I — tax slabs in `settings` (reference data), declarations and
+advances in `hr`. Principle III — tax slabs, section ceilings, verification cut-off month, no-PAN
+rate, advance limit percentage, and late tolerance are all configured, never literals. Principle IV
+— `companyId` + RLS; declaration proofs encrypted. Principle V — no new permission. PASS.
+
+### Phase A1: Schema
+
+- [ ] Add `TaxSlab` (`settings`), `TaxDeclaration`, `TaxDeclarationLine`, `SalaryAdvance` (`hr`);
+      migration + RLS
+- [ ] Extend `shared.AuditLogEntry.entityType` with `TAX_DECLARATION`, `SALARY_ADVANCE`
+- [ ] **Remove** the US9 daily-worker models from this feature's scope; coordinate with 013's
+      Phase 1 data migration so the move happens exactly once
+
+### Phase A2: US14 — TDS (P1)
+
+- [ ] `TaxSlabService` + controller (per-FY, per-regime slab sets; contiguity and non-overlap
+      validation naming the gap or overlap — FR-050)
+- [ ] `TaxDeclarationService` + controller (declare, section ceiling capping — FR-052, verify with
+      proof to encrypted storage, cut-off-month rule)
+- [ ] `TdsCalculationService`: projected annual taxable income → annual liability under the elected
+      regime → less YTD deducted → divided by remaining months (FR-051); never negative; no-PAN
+      higher rate with exception-list flag (FR-053)
+- [ ] Wire TDS as a payroll line-item deduction in the existing payroll run
+- [ ] Quarterly TDS report and Form 16 data endpoints; XLSX/PDF export per FR-020's pattern
+- [ ] Unit test: full-year simulation including a mid-year salary change self-corrects (SC-A01);
+      zero-liability floor; no-PAN rate; slab contiguity rejection
+- [ ] E2e test: processed run carries the correct TDS deduction
+
+### Phase A3: US15 — Salary Advances (P2)
+
+- [ ] `SalaryAdvanceService` + controller (request, `exceedsLimit` flag requiring approval
+      authority, single open advance per employee → 409 — FR-054, disburse, recovery in the
+      nominated month)
+- [ ] Implement the documented capping order — statutory, then loan EMI, then salary advance —
+      with carry-forward so net pay is never negative (FR-055)
+- [ ] Include outstanding advances in the F&F computation (FR-056)
+- [ ] Unit test: capping order; carry-forward; F&F inclusion
+- [ ] E2e test: recovery closes the advance; a capped recovery leaves it open
+
+### Phase A4: US16 — Salary Register & Deduction Report (P2)
+
+- [ ] `PayrollRegisterService` + controller (salary register with column totals, filterable by
+      department/project/site — FR-057, FR-060; processed-runs-only guard)
+- [ ] Reconciliation assertion: register totals must equal the run's stored totals or surface an
+      explicit error (FR-058)
+- [ ] Deduction report by head, statutory vs non-statutory, tied to the FR-019 challan figures
+      (FR-059)
+- [ ] XLSX/PDF export, async above threshold
+- [ ] Unit test: register/deduction/challan three-way reconciliation (SC-A03)
+
+### Phase A5: US17 — Late-Coming (P3)
+
+- [ ] `ShiftComplianceService`: `lateMinutes`, `earlyDepartureMinutes`, `shortHours` against the
+      shift in force on each date, floored at zero (FR-061)
+- [ ] Explicit markers for no-shift-assigned and no-punch-times rather than zero (FR-062); exclude
+      approved leave and holidays (FR-063)
+- [ ] Late-coming report with `repeatLateComer` flag; recomputation after manual attendance edits
+- [ ] Assert lateness never deducts pay (FR-064)
+- [ ] Unit test: shift-in-force-on-date resolution after a mid-month reassignment (SC-A04)
+
+### Phase A6: Handover Wiring
+
+- [ ] Change the exit flow to read 011's accepted Resignation for last-working-day and notice waiver
+      (FR-065)
+- [ ] Call 011's letter service for the relieving letter — no letter generation here
+- [ ] Assert no labour figure reaches any `PayrollRun` (FR-048) and that 013 reads this feature's
+      existing OT multiplier rather than defining a second (FR-049)

@@ -53,6 +53,12 @@ the original.
   if `variancePercent > 15`, a `fuel_variance` event is emitted via `@nestjs/event-emitter` for
   the Notifications feature to surface.
 
+### Session 2026-09-01 (ratification — gap-closure clarify pass)
+
+- Q: Should this feature evaluate its own equipment reminders? → A: No — equipment document expiry
+  and service-due reminders register as rules with feature 004's centralized reminders engine, so
+  severity, de-duplication, and snooze behave identically across every module.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Manage Reference Data Masters (Priority: P1)
@@ -413,3 +419,196 @@ equipment with depreciation ₹10,000 for a project in a date range; call
   Employee Setup masters are seeded — so User Stories 2–8 are independently testable without
   requiring User Story 1's admin screens to be used first. Hire Rates are not pre-seeded (they are
   inherently company/market-specific).
+
+---
+
+## Amendment 2026-09-01 — Spare Parts Inventory & Service Bills
+
+**Reason**: A gap audit against the module/submodule matrix found that row 32 ("Maintenance:
+Scheduled Service, Service Request, **Spare Parts Inventory**, **Service Bills**") names two
+surfaces this spec does not cover. As originally written, a Maintenance Job records that work
+happened but not what it consumed or what it cost: there is no spare-parts stock, no consumption
+record against a job, and no third-party service bill — `HireBill` covers equipment *rental* only,
+not the workshop invoice for repairing an owned machine. Without these, the machinery cost that
+`getMachineryCostByProject()` reports (FR-008) systematically understates true cost by omitting
+every repair and spare part. This amendment closes both gaps. Everything already specified above is
+unchanged.
+
+**Boundary with feature 009 (Inventory)**: spare parts are deliberately tracked here, not in the
+`inventory` schema. Feature 009's items are project materials consumed against a BOQ activity and
+costed to a project; spare parts are consumed against a *machine* and costed to that machine's
+maintenance history. They have different stock locations (workshop/store, not site), different
+costing dimensions, and different consumers. A spare part that is also a general store item may be
+registered in both, with FR-024 defining which record governs.
+
+### User Story 9 - Maintain spare parts stock (Priority: P2)
+
+A workshop storekeeper maintains a spare parts catalogue with per-part stock, receives parts into
+stock against a purchase, and sees parts below their reorder level.
+
+**Why this priority**: Required before consumption can be recorded against a maintenance job.
+Depends on the existing equipment and category masters.
+
+**Independent Test**: Register a hydraulic filter as a spare part with a reorder level of 5, receive
+10 into stock, and confirm the stock balance reads 10 and the part is not flagged for reorder —
+without any maintenance job existing.
+
+**Acceptance Scenarios**:
+
+1. **Given** an admin session, **When** `POST /plant/spare-parts` is called with `partNumber`,
+   `name`, `unitOfMeasure`, `reorderLevel`, optional `compatibleCategoryIds[]`, and optional
+   `linkedInventoryItemId`, **Then** the spare part is created with zero opening stock.
+2. **Given** a `partNumber` already registered in the company, **When** creation is attempted,
+   **Then** `409 Conflict`.
+3. **Given** a spare part, **When** `POST /plant/spare-parts/:id/receipts` is called with
+   `quantity`, `rate`, `receiptDate`, optional `vendorId`, and optional `billReference`, **Then**
+   the stock balance increases and the part's weighted average rate is recalculated using the same
+   formula 009 FR-008 applies to inventory items.
+4. **Given** spare parts stock, **When** `GET /plant/spare-parts?belowReorder=true`, **Then** only
+   parts whose stock is at or below their reorder level are returned.
+5. **Given** a spare part with consumption history, **When** deletion is attempted, **Then**
+   `409 Conflict`.
+6. **Given** a spare part list, **When** `GET /plant/spare-parts?search=&categoryId=`, **Then**
+   paginated results include current stock, weighted average rate, and stock value.
+
+### User Story 10 - Consume spare parts against a maintenance job (Priority: P2)
+
+A mechanic records the parts consumed on a maintenance job. Consumption reduces spare parts stock
+and adds the parts' cost to the job, so each machine accumulates a true maintenance cost history.
+
+**Why this priority**: This is what makes spare parts stock meaningful and what corrects the
+machinery cost figure. Depends on US9 and the existing Maintenance Jobs story.
+
+**Independent Test**: Consume 2 filters on an open maintenance job, confirm spare parts stock drops
+by 2 and the job's parts cost equals 2 times the weighted average rate — without closing the job.
+
+**Acceptance Scenarios**:
+
+1. **Given** an open maintenance job, **When** `POST /plant/maintenance/:id/parts` is called with
+   `sparePartId` and `quantity`, **Then** stock decreases, the consumption is valued at the part's
+   current weighted average rate, and the job's `partsCost` increases by that amount.
+2. **Given** a consumption quantity exceeding available stock, **When** it is attempted, **Then**
+   `400 Bad Request` reporting the available quantity, enforced with the same transactional
+   guarantee 009 FR-003 applies to issues.
+3. **Given** a closed maintenance job, **When** part consumption is attempted, **Then**
+   `409 Conflict`.
+4. **Given** a spare part whose `compatibleCategoryIds[]` does not include the equipment's category,
+   **When** consumption is attempted, **Then** it is permitted but flagged
+   `incompatiblePart: true` and audit-logged, rather than blocked.
+5. **Given** consumed parts, **When** consumption is reversed by a holder of `MAINTENANCE` with a
+   reason, **Then** stock is restored, the job's `partsCost` decreases, and both actions are
+   audit-logged.
+6. **Given** an equipment, **When** `GET /plant/equipment/:id/maintenance-cost`, **Then** lifetime
+   parts cost, labour cost, service bill cost, and total maintenance cost are returned.
+
+### User Story 11 - Record service bills for third-party maintenance (Priority: P2)
+
+A third-party workshop invoices for repairing owned equipment. The service bill is recorded against
+the maintenance job, verified, and tracked to payment — distinct from `HireBill`, which covers
+rented equipment charges.
+
+**Why this priority**: The matrix names "Service Bills" explicitly, and external repair cost is
+otherwise entirely absent from the system. Depends on the existing Maintenance Jobs story.
+
+**Independent Test**: Record a service bill against a maintenance job with a TDS deduction, confirm
+the net payable is computed server-side, then mark it paid and confirm the payment status updates —
+without touching any hire bill.
+
+**Acceptance Scenarios**:
+
+1. **Given** a maintenance job, **When** `POST /plant/service-bills` is called with
+   `maintenanceJobId`, `vendorId`, `billNumber`, `billDate`, `grossAmount`, `taxAmount`, and
+   `tdsPercent`, **Then** the bill is created with `tdsAmount` and `netPayable` computed
+   server-side, matching how FR-005 computes hire bill figures.
+2. **Given** a `billNumber` already recorded for the same vendor in the company, **When** creation
+   is attempted, **Then** `409 Conflict`.
+3. **Given** a service bill, **When** `PATCH /plant/service-bills/:id/verify` is called by a holder
+   of `MAINTENANCE`, **Then** it becomes `verified` and its figures become immutable.
+4. **Given** a verified service bill, **When** `PATCH /plant/service-bills/:id/pay` is called with
+   `paidOn`, `paidAmount`, and `paymentReference`, **Then** the payment status updates to `paid` or
+   `partially_paid` accordingly.
+5. **Given** an unverified service bill, **When** payment is attempted, **Then** `409 Conflict`.
+6. **Given** a service bill against a maintenance job, **When** the job is read, **Then** its total
+   cost includes parts cost plus service bill net payable.
+7. **Given** a maintenance job that is closed, **When** a service bill is recorded against it,
+   **Then** it is permitted — bills routinely arrive after the work is finished.
+8. **Given** service bills, **When**
+   `GET /plant/service-bills?vendorId=&equipmentId=&paymentStatus=&from=&to=`, **Then** paginated,
+   filtered results are returned with a pending-payment summary.
+
+### Additional Edge Cases
+
+- A spare part is consumed at a weighted average rate, then a later receipt changes that rate → the
+  consumption keeps the rate in force at consumption time; rates are never retrospectively restated.
+- A service bill arrives for a machine that has since been disposed of → accepted; the bill attaches
+  to the historical maintenance job and still counts toward that period's machinery cost.
+- A spare part is also registered as an inventory item in feature 009 and issued from both → the two
+  stocks are independent by design; FR-024 requires the link to be declared so a reconciliation
+  report can surface the divergence rather than silently double-counting.
+- Parts are consumed on a job for hired equipment → permitted, but flagged, since spare parts for
+  hired equipment are normally the owner's responsibility; the flag surfaces it for recovery from
+  the hire vendor.
+
+### Additional Functional Requirements
+
+- **FR-015**: The system MUST provide a company-scoped Spare Parts catalogue with part number, name,
+  unit, reorder level, optional compatible equipment categories, and an optional declared link to a
+  feature 009 inventory item; `partNumber` MUST be unique per company.
+- **FR-016**: Spare parts stock MUST be maintained as a running balance updated in-transaction on
+  every receipt, consumption, and reversal, following the same running-balance approach 009 FR-002
+  uses rather than deriving it from movement history on read.
+- **FR-017**: A spare part's weighted average rate MUST be recalculated on every receipt using the
+  same formula 009 FR-008 specifies for inventory items, and a consumption MUST be valued at the
+  rate in force at consumption time, never retrospectively restated.
+- **FR-018**: Spare part consumption MUST NOT reduce stock below zero; the check MUST be enforced
+  with the same transactional guarantee 009 FR-003 applies to issue quantities.
+- **FR-019**: Part consumption MUST be rejected against a closed maintenance job (`409 Conflict`),
+  and MUST be reversible only by a holder of `MAINTENANCE` with a reason, with stock restoration
+  and the job's `partsCost` adjustment applied in the same transaction.
+- **FR-020**: Consuming a part whose `compatibleCategoryIds[]` excludes the equipment's category
+  MUST be permitted but flagged `incompatiblePart` and audit-logged, never silently blocked.
+- **FR-021**: `ServiceBill.tdsAmount` and `ServiceBill.netPayable` MUST be computed server-side from
+  `grossAmount`, `taxAmount`, and `tdsPercent`, never accepted from the client — the same rule
+  FR-005 applies to `HireBill`.
+- **FR-022**: A `ServiceBill` MUST be distinct from a `HireBill`: service bills cover third-party
+  maintenance of owned equipment, hire bills cover rental charges for hired equipment. A bill MUST
+  NOT be recordable as both.
+- **FR-023**: A service bill's figures MUST become immutable on verification, and payment MUST be
+  rejected against an unverified bill (`409 Conflict`); `billNumber` MUST be unique per vendor per
+  company.
+- **FR-024**: A spare part declaring a `linkedInventoryItemId` MUST maintain stock independently of
+  that inventory item; the system MUST expose a reconciliation view listing linked pairs with both
+  balances so divergence is visible rather than silently double-counted.
+- **FR-025**: `PlantService.getMachineryCostByProject()` (FR-008) MUST be extended to include, for
+  equipment deployed at the project's sites in the date range, spare parts consumption cost and
+  verified service bill `netPayable` — correcting the original understatement that counted only
+  depreciation and hire bills.
+- **FR-026**: The system MUST expose lifetime per-equipment maintenance cost broken into parts cost,
+  internal labour cost, and service bill cost.
+- **FR-027**: Spare part receipts, consumptions, and service bills MUST NOT be hard-deleted; removal
+  MUST be a soft-delete preserving stock and cost history.
+- **FR-028**: All spare parts and service bill write operations MUST be gated by
+  `JwtAuthGuard` + `@RequirePermission(Permission.MAINTENANCE)` — reusing the `MAINTENANCE`
+  permission this feature already introduces, adding no new permission value — and MUST be written
+  to the audit log with the new entity types `SPARE_PART`, `SPARE_PART_MOVEMENT`, and
+  `SERVICE_BILL`.
+
+### Additional Key Entities
+
+- **SparePart**: A workshop-stocked replacement part: part number, name, unit, reorder level,
+  compatible equipment categories, optional declared inventory-item link, running stock balance, and
+  weighted average rate.
+- **SparePartMovement**: A receipt, consumption, or reversal: quantity, rate at movement time,
+  date, maintenance job (for consumptions), vendor and bill reference (for receipts), and actor.
+- **ServiceBill**: A third-party maintenance invoice against a maintenance job: vendor, bill number
+  and date, gross, tax, TDS percent and computed amount, computed net payable, verification status,
+  and payment status.
+
+### Additional Success Criteria
+
+- **SC-A01**: Spare parts stock never goes negative, verified by a concurrency test issuing
+  simultaneous consumptions exceeding available stock.
+- **SC-A02**: An equipment's lifetime maintenance cost recomputed from raw part movements and
+  service bills matches the reported figure exactly.
+- **SC-A03**: Machinery cost reported for a project includes every spare part and verified service
+  bill attributable to equipment deployed there in the period — verified against a manual sum.

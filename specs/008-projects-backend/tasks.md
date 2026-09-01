@@ -374,3 +374,56 @@ the core project portfolio — everything else builds on this foundation.
 
 **Increment 3 (Phase 8–10, US6–US8)**: Revenue, P&L, Documents — the financial and
 compliance layer.
+
+---
+
+## Amendment 2026-09-01 — Project Planning & Target-vs-Actual Reporting
+
+Covers spec FR-019 to FR-035 and plan Phases A1–A4. Task IDs prefixed `TA`. **No new permission
+value** — reuses `PROJECTS` and `REPORTS`.
+
+- [ ] TA001 Add `ProjectPhase`, `ProjectActivity`, `ActivityDependency`, `ProjectTarget`,
+      `ProjectTargetLine` models to `prisma/schema.prisma`; migration + RLS
+- [ ] TA002 [P] Extend `shared.AuditLogEntry.entityType` with `PROJECT_PHASE`, `PROJECT_ACTIVITY`,
+      `PROJECT_TARGET` (spec FR-034)
+- [ ] TA003 Extend the existing project-lock guard (FR-003) to cover every schedule and target write
+      (spec FR-024)
+- [ ] TA004 [US9] `PhaseService` and `ActivityService` + controllers: CRUD, `plannedFinish` before
+      `plannedStart` → 400, milestone marking, delete guard → 409 for activities with actuals
+      (spec FR-025)
+- [ ] TA005 [US9] `DependencyService`: typed links (finish_to_start / start_to_start /
+      finish_to_finish) with cycle detection → 400 naming the cycle path (spec FR-020)
+- [ ] TA006 [US9] Flag dependency violations in planned dates rather than blocking, so a partly
+      edited plan can still be saved (spec FR-021)
+- [ ] TA007 [US9] Baseline endpoint: reject while `weightagePercent` does not sum to 100, reporting
+      the actual sum (spec FR-022); freeze planned dates and quantities as immutable baseline
+      values and increment the version (spec FR-023)
+- [ ] TA008 [US10] `TargetService` + controller: periodic (weekly|monthly) target sets per activity
+      or BOQ item; overlap guard → 409 (spec FR-026)
+- [ ] TA009 [US10] `TargetReportService`: actuals summed **only** from approved DWR measurements
+      (spec FR-027) so target reporting and BOQ progress can never disagree; unset targets reported
+      explicitly rather than as zero (spec FR-028)
+- [ ] TA010 [US10] Weightage-weighted project rollup stating whether baseline or current weightages
+      were used (spec FR-029)
+- [ ] TA011 [US10] Monthly report sourcing man-days, equipment hours, and material consumed via
+      `LabourService`, `PlantService`, and `InventoryService` — never a cross-schema query
+      (spec FR-033) — **blocked by 013 T060 for man-days**
+- [ ] TA012 [US10] Progress-trend series (planned vs actual cumulative) for the matrix's "Monthly
+      Report Chart"
+- [ ] TA013 [US11] `VarianceService`: per-activity baseline vs current vs actual, status
+      (not_started / on_track / behind_schedule / completed), percent complete from quantity where
+      available else the manual value with the source marked (spec FR-030)
+- [ ] TA014 [US11] `behind_schedule` flagging beyond the configured tolerance with slippage in days;
+      critical-path marking on the longest dependency chain (spec FR-031)
+- [ ] TA015 [US11] Explicit no-baseline response rather than comparing against unset values
+      (spec FR-032)
+- [ ] TA016 XLSX/PDF export on all three reports, async above the configured row threshold
+      (spec FR-035)
+- [ ] TA017 [P] Unit test: cycle detection within and across phases; baseline immutability under
+      later planned-date edits (SC-A02, SC-A03)
+- [ ] TA018 [P] Unit test: achievement math, unset-target handling, percent-complete source
+      selection
+- [ ] TA019 [P] E2e test: actuals reconcile exactly with approved DWR measurements (SC-A01)
+- [ ] TA020 **P&L extension**: add asset cost via 012's `getAssetCostByProject()` and labour cost
+      via 013's `getLabourCostByProject()` to the existing FR-008 P&L — **blocked by 012 T052 and
+      013 T060**

@@ -608,3 +608,40 @@ enforced in code: `src/common/prisma/rls-preflight.ts` runs at startup and, unde
 Outside production it warns and continues; an inconclusive check warns rather than blocking a
 deploy. Verified both ways against the real database: production + superuser refuses to start,
 production + `buildcore_app` logs "Row-level security is enforced" and proceeds.
+
+---
+
+## Amendment 2026-09-01 — Company Documents Repository
+
+Covers spec FR-028 to FR-038 and plan Phases A1–A3. Task IDs prefixed `TA` to avoid collision.
+
+- [ ] TA001 Add `CompanyDocumentType` and `CompanyDocument` models to `prisma/schema.prisma`;
+      migration + RLS on both
+- [ ] TA002 [P] Extend `shared.AuditLogEntry.entityType` with `COMPANY_DOCUMENT` (spec FR-037)
+- [ ] TA003 Seed the default statutory company document types on company creation — reuse the
+      FR-020 seeding hook, not a second mechanism (spec FR-029)
+- [ ] TA004 [US8] `CompanyDocumentTypesService` + controller in
+      `src/settings/company-documents/`: Super-Admin CRUD, `requiresExpiry` without `alertDays`
+      → 400, delete guard → 409, list returning `documentCount`
+- [ ] TA005 [US9] `CompanyDocumentsService`: upload enforcing each type's required fields → 400
+      (spec FR-030); `expiryDate` < `issueDate` → 400
+- [ ] TA006 [US9] Versioning — a new upload of a type becomes the next version and demotes the
+      prior, **scoped per `documentNumber` when one is present** so multiple concurrent
+      registrations of one type coexist (spec FR-031)
+- [ ] TA007 [US9] Store files as encrypted object-storage references; refuse production start on
+      local-filesystem blobs (spec FR-032)
+- [ ] TA008 [US9] Compute status on read as valid / expiring_soon / expired so an `alertDays`
+      change takes effect immediately with no backfill (spec FR-033)
+- [ ] TA009 [US9] Register the `company_document_expiry` reminder rule with feature 004's
+      centralized engine (spec FR-034; ratified 2026-09-01) — **no evaluation or de-duplication
+      logic here**
+- [ ] TA010 [US9] `CompanyDocumentsController`: `COMPANY_SETTINGS` guard, company scoping except
+      for `CROSS_COMPANY_ACCESS` holders (spec FR-036), download streaming with the access
+      audit-logged
+- [ ] TA011 [US9] Soft-delete promoting the prior version to current (spec FR-038); assert expiry
+      blocks no business operation (spec FR-035)
+- [ ] TA012 [P] Unit test: versioning per document number; status across alert-window changes
+- [ ] TA013 [P] E2e test: renewal creates v2 current with v1 still downloadable; cross-company read
+      → 403
+
+**Blocked by**: TA009 depends on 004's reminders engine (TA-004 series below).

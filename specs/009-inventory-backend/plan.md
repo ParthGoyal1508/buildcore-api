@@ -212,3 +212,40 @@ test/
 
 - `TODO(008)`: Implement real `ProjectsService.getSitesByProject(projectId)` returning actual
   site IDs for a project — required for `getMaterialCostByProject()` to return real values.
+
+---
+
+## Amendment 2026-09-01 — Material Request / Indent Workflow
+
+Covers spec FR-021 to FR-030. Adds 2 `inventory` tables; adds 1 permission value
+(`INVENTORY_APPROVE`).
+
+**Constitution re-check**: Principle I — both tables in `inventory`; activity/BOQ references
+resolved via `ProjectsService` as FR-019 already does. Principle III — no thresholds hardcoded.
+Principle IV — `companyId` + RLS. Principle V — adds exactly one value. PASS.
+
+**Key invariant**: indent approval must not reserve stock (FR-025). The existing transactional
+quantity validation at issue time (FR-003) stays the single point of stock enforcement, so this
+amendment cannot introduce a path to a negative balance.
+
+### Phase A1: Schema
+
+- [ ] Add `MaterialIndent` and `MaterialIndentLine` models; migration + RLS
+- [ ] Extend `settings.Permission` enum with `INVENTORY_APPROVE` (FR-029)
+- [ ] Extend `shared.AuditLogEntry.entityType` with `MATERIAL_INDENT`
+- [ ] Extend Settings' code-series service with an `INDENT` series type (FR-021)
+
+### Phase A2: US9 — Indents (P1)
+
+- [ ] `IndentService` + `IndentController` (raise with lines, inactive-item guard → 400, approve
+      with per-line quantity reduction requiring `INVENTORY_APPROVE` and a reason — FR-022, reject
+      requiring a reason, cancel guard once any fulfilment exists → 409 — FR-026)
+- [ ] Wire optional `indentLineId` onto the existing issue and purchase flows, updating
+      `fulfilledQuantity` and the indent status in the same transaction (FR-023) and rejecting
+      over-fulfilment (FR-024)
+- [ ] `mark-procurement-needed` endpoint and the procurement-needed report combining indent demand
+      with reorder-level shortfall, reported separately so the two are not double-counted (FR-027)
+- [ ] Overdue flagging against `requiredByDate`
+- [ ] Unit test: outstanding = approved − fulfilled at every step; over-fulfilment rejection;
+      procurement report keeps the two demand sources distinct
+- [ ] E2e test: approving an indent leaves every stock balance byte-identical (SC-A02)

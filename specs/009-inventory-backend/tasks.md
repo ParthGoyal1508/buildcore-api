@@ -346,3 +346,41 @@ view. Delivers functional real-time stock tracking.
 **Increment 2 (Phase 7, US5)**: Transfers — inter-site material movement.
 
 **Increment 3 (Phase 8–9, US7–US8)**: Payments + getMaterialCostByProject.
+
+---
+
+## Amendment 2026-09-01 — Material Request / Indent Workflow
+
+Covers spec FR-021 to FR-030 and plan Phases A1–A2. Task IDs prefixed `TA`.
+
+**Key invariant**: indent approval must not reserve stock (spec FR-025). The existing transactional
+quantity validation at issue time (FR-003) stays the single point of stock enforcement, so this
+amendment cannot introduce a path to a negative balance.
+
+- [ ] TA001 Add `MaterialIndent` and `MaterialIndentLine` models to `prisma/schema.prisma`;
+      migration + RLS
+- [ ] TA002 [P] Extend `src/settings/permission.enum.ts` with `INVENTORY_APPROVE` (spec FR-029) —
+      every other indent endpoint reuses the existing `INVENTORY` value
+- [ ] TA003 [P] Extend `shared.AuditLogEntry.entityType` with `MATERIAL_INDENT` (spec FR-030)
+- [ ] TA004 [P] Extend Settings' code-series service with an `INDENT` series type (spec FR-021)
+- [ ] TA005 [US9] `IndentService` + `IndentController` in `src/inventory/indents/`: raise with
+      header and lines, inactive-item guard → 400, optional `activityId` / `boqItemId` resolved via
+      `ProjectsService` as FR-019 already does
+- [ ] TA006 [US9] Approve requiring `INVENTORY_APPROVE`, permitting per-line quantity reduction with
+      a reason and recording both `requestedQuantity` and `approvedQuantity` (spec FR-022); reject
+      requiring a reason → 400
+- [ ] TA007 [US9] Wire an optional `indentLineId` onto the existing issue and purchase flows,
+      updating `fulfilledQuantity` and advancing the indent to partially_fulfilled / fulfilled in
+      the **same transaction** (spec FR-023)
+- [ ] TA008 [US9] Reject an issue exceeding the line's outstanding (approved − fulfilled) quantity,
+      reporting the outstanding figure (spec FR-024)
+- [ ] TA009 [US9] `mark-procurement-needed` endpoint plus the procurement-needed report combining
+      indent demand with reorder-level shortfall, **reported separately so the two are never
+      double-counted into one purchase** (spec FR-027)
+- [ ] TA010 [US9] `overdue` flagging against `requiredByDate`; cancel blocked once any fulfilment
+      exists → 409, otherwise requiring a reason (spec FR-026)
+- [ ] TA011 [US9] Soft-delete on indents, matching FR-004's treatment of purchases, issues, and
+      transfers (spec FR-028)
+- [ ] TA012 [P] Unit test: outstanding = approved − fulfilled at every step; over-fulfilment
+      rejection; the procurement report keeps its two demand sources distinct
+- [ ] TA013 [P] E2e test: approving an indent leaves every stock balance byte-identical (SC-A02)

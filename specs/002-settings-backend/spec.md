@@ -28,6 +28,11 @@ management, role-based access control (RBAC) enforced server-side, and reference
   permissions are chosen from a system-defined list of module/action identifiers, stored as
   structured data, and server-side RBAC checks only recognize known values.
 
+### Session 2026-09-01 (ratification — gap-closure clarify pass)
+
+- Q: Should company document expiry alerts be evaluated here? → A: No — they register as rules with
+  feature 004's centralized reminders engine, consistent with features 006 and 012.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Configure a company and its statutory/payroll settings (Priority: P1)
@@ -456,3 +461,168 @@ collision, even in concurrent requests.
 - Logo Upload (Company Basic Info tab) is assumed to reuse whatever file-storage mechanism the
   broader system adopts for document/file uploads generally; this feature does not define a new
   storage mechanism, only the field that references an uploaded file.
+
+---
+
+## Amendment 2026-09-01 — Company Documents Repository
+
+**Reason**: A gap audit against the module/submodule matrix found that row 42 ("Settings:
+**Companies Documents**") names a surface this spec does not cover. As originally written, this
+feature manages Document *Types* (FR-019) and feature 005 stores documents against *employees*
+(005 FR-004) — but there is nowhere to keep the company's own statutory and legal documents: GST
+registration certificate, PAN card, incorporation certificate, labour licence, PF and ESIC
+registration certificates, contractor licences, ISO certificates, bank mandates, and insurance
+policies. These are exactly the documents whose expiry stops a construction company from being able
+to bill or operate, and today the system has no record of them and no expiry warning. This
+amendment adds the company-level document repository. Everything already specified above is
+unchanged.
+
+**Distinction from the existing Document Types master**: `DocumentType` (FR-019) describes the
+*kinds* of document an employee must supply. This amendment adds a separate `CompanyDocumentType`
+master describing the kinds of document the *company itself* holds, plus the documents themselves.
+The two are deliberately not merged: an Aadhaar card is a person-level document type with a
+mandatory flag that gates attendance, while a GST certificate is a company-level document whose
+expiry gates nothing automatically but must be visible well in advance.
+
+### User Story 8 - Maintain company document types (Priority: P3)
+
+A Super Admin configures the kinds of document a company holds — name, whether the document is
+statutory, whether a document number and issuing authority are required, whether an expiry date is
+required, and how many days before expiry a warning should appear.
+
+**Why this priority**: Required before any company document can be uploaded, but it is reference
+data with no dependency on any other story.
+
+**Independent Test**: Create a "GST Registration Certificate" type marked statutory with a required
+expiry and a 60-day alert window, and confirm it becomes selectable on company document upload —
+without uploading anything.
+
+**Acceptance Scenarios**:
+
+1. **Given** a Super Admin session, **When** `POST /settings/company-document-types` is called with
+   `name`, `isStatutory`, `requiresNumber`, `requiresIssuingAuthority`, `requiresExpiry`, and
+   `alertDays`, **Then** the type is created.
+2. **Given** a type with `requiresExpiry: true` and no `alertDays`, **When** creation is attempted,
+   **Then** `400 Bad Request`.
+3. **Given** a type with uploaded documents, **When** deletion is attempted, **Then**
+   `409 Conflict`.
+4. **Given** a newly created company, **When** it is seeded, **Then** the documented set of default
+   statutory company document types is created for it, following the same seeding approach FR-020
+   applies to employee document types.
+5. **Given** the type list, **When** `GET /settings/company-document-types`, **Then** every type is
+   returned with its `documentCount`.
+
+### User Story 9 - Maintain company documents with versioning and expiry alerts (Priority: P3)
+
+An admin uploads the company's documents against their types, recording the document number,
+issuing authority, issue and expiry dates, and the file itself. Renewing a document creates a new
+version rather than overwriting the old one, and documents approaching or past expiry are surfaced.
+
+**Why this priority**: The substance of the matrix's "Companies Documents" item. Depends on US8.
+
+**Independent Test**: Upload a GST certificate expiring in 30 days against a type with a 60-day
+alert window, confirm it appears in the expiring-documents list with 30 days remaining, then upload
+a renewal and confirm version 2 becomes current while version 1 remains retrievable.
+
+**Acceptance Scenarios**:
+
+1. **Given** a company document type, **When** `POST /settings/company-documents` is called with
+   `companyId`, `documentTypeId`, a file, and — where the type requires them — `documentNumber`,
+   `issuingAuthority`, `issueDate`, and `expiryDate`, **Then** the document is stored as an
+   encrypted object-storage reference with `version: 1` and `isCurrent: true`.
+2. **Given** a type requiring an expiry date, **When** upload is attempted without one, **Then**
+   `400 Bad Request`.
+3. **Given** an `expiryDate` earlier than the `issueDate`, **When** upload is attempted, **Then**
+   `400 Bad Request`.
+4. **Given** an existing current document of a type, **When** a new document of the same type is
+   uploaded for the same company, **Then** it is stored as the next version with `isCurrent: true`
+   and the prior version becomes `isCurrent: false` while remaining retrievable.
+5. **Given** a company's documents, **When** `GET /settings/company-documents?companyId=&typeId=&includeHistory=`,
+   **Then** current versions are returned by default with document number, issuing authority, issue
+   and expiry dates, days to expiry, and status (`valid`, `expiring_soon`, `expired`), and prior
+   versions only when history is requested.
+6. **Given** a document within its type's `alertDays` of expiry or already past it, **When**
+   `GET /settings/company-documents/expiring`, **Then** it is returned with days remaining
+   (negative when expired), sorted with expired documents first.
+7. **Given** a document becoming due for renewal, **When** it first crosses its alert threshold,
+   **Then** an event is emitted for the existing notification mechanism, without duplicating the
+   notification while the same document remains in the same alert state.
+8. **Given** a document, **When** `GET /settings/company-documents/:id/download` is called by a
+   holder of `COMPANY_SETTINGS`, **Then** the file is streamed and the access is audit-logged.
+9. **Given** a Super Admin operating across companies, **When** company documents are listed without
+   a `companyId` filter, **Then** only companies within their `CROSS_COMPANY_ACCESS` scope are
+   included.
+10. **Given** a non-Super-Admin caller, **When** a company document for another company is
+    requested, **Then** `403 Forbidden`, enforced by the same company-scoping rule FR-027 applies to
+    every company-scoped table.
+11. **Given** a current document, **When** deletion is attempted, **Then** it is soft-deleted with a
+    reason and the previous version is promoted to current if one exists.
+
+### Additional Edge Cases
+
+- A statutory document expires and nothing renews it → the document is reported `expired`
+  indefinitely and continues to appear at the top of the expiring list; this feature raises
+  visibility but deliberately blocks no operation, since halting billing on a stale record would be
+  more damaging than the stale record itself.
+- A document is uploaded with an expiry date already in the past → accepted, since backfilling
+  historical records is legitimate, and it immediately reports as `expired`.
+- A company is deactivated while holding documents → documents remain retrievable for the audit
+  trail; they are excluded from the active expiring-documents list.
+- The same statutory document exists per-state (multiple GST registrations) → handled by uploading
+  multiple documents of the same type with distinct document numbers; the versioning rule applies
+  per document number rather than per type when a number is present.
+- A document type's `alertDays` is shortened after documents were uploaded → alert status is
+  computed on read, so the change takes effect immediately for all documents of that type.
+
+### Additional Functional Requirements
+
+- **FR-028**: The system MUST provide Super-Admin-only CRUD for Company Document Types (name,
+  statutory flag, number/issuing-authority/expiry requirement flags, and alert days), stored in the
+  `settings` schema and kept distinct from the employee-facing `DocumentType` master (FR-019).
+- **FR-029**: The system MUST seed every newly created company with the documented set of default
+  statutory company document types, following the same seeding approach FR-020 applies to employee
+  document types.
+- **FR-030**: The system MUST reject a company document upload that omits any field its document
+  type marks required (`documentNumber`, `issuingAuthority`, `expiryDate`), and MUST reject an
+  `expiryDate` earlier than the `issueDate`.
+- **FR-031**: Uploading a document of a type that already has a current document for the same
+  company MUST create a new version, mark it current, and demote the prior version to non-current
+  while keeping it retrievable — documents MUST NOT be overwritten in place. Where a
+  `documentNumber` is present, versioning MUST be scoped per document number so multiple concurrent
+  registrations of the same type coexist.
+- **FR-032**: Company documents MUST be stored as encrypted object-storage references using the same
+  mechanism as employee documents, and the system MUST refuse to start in production when
+  configured to store these blobs on the local filesystem.
+- **FR-033**: The system MUST compute a document's status on read as `valid`, `expiring_soon` (within
+  its type's `alertDays`), or `expired`, so a change to `alertDays` takes effect immediately without
+  a backfill.
+- **FR-034**: The system MUST emit an event for the existing notification mechanism when a document
+  first crosses its alert threshold, and MUST NOT duplicate the notification while the document
+  remains in the same alert state.
+- **FR-035**: Company document expiry MUST NOT automatically block any business operation; the
+  repository provides visibility only. Any future gating MUST be specified explicitly rather than
+  inferred from this record.
+- **FR-036**: Every company-document endpoint MUST be gated by `JwtAuthGuard` +
+  `@RequirePermission(Permission.COMPANY_SETTINGS)`, MUST be scoped to the caller's company except
+  for holders of `CROSS_COMPANY_ACCESS`, and MUST add no new permission value.
+- **FR-037**: Every company document upload, version change, deletion, and download MUST be written
+  to the audit log with the new entity type `COMPANY_DOCUMENT`.
+- **FR-038**: Company documents MUST NOT be hard-deleted; deletion MUST be a soft-delete with a
+  reason that promotes the prior version to current when one exists.
+
+### Additional Key Entities
+
+- **CompanyDocumentType**: A kind of document the company itself holds: name, statutory flag,
+  required-field flags, and alert window. Distinct from the employee-facing `DocumentType`.
+- **CompanyDocument**: One version of one company document: type, document number, issuing
+  authority, issue and expiry dates, encrypted file reference, version number, current flag, and
+  uploading actor.
+
+### Additional Success Criteria
+
+- **SC-A01**: Every statutory document a company holds has a retrievable current version and a
+  complete version history, with no version ever overwritten.
+- **SC-A02**: Every company document within its configured alert window or past expiry appears in
+  the expiring-documents list, with no duplicate notification while its alert state is unchanged.
+- **SC-A03**: No company document is visible to a caller outside its company unless that caller
+  holds `CROSS_COMPANY_ACCESS`.

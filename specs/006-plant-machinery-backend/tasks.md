@@ -184,3 +184,46 @@ Phase 1 → US1 (Reference Data Masters — Categories/Doc Types/Hire Rates, set
 **MVP (Phase 1–3, US1–US3)**: Categories, Asset Register, Logbook. Delivers daily operational tracking.
 **Increment 2 (Phase 4–5, US4–US6)**: Fuel, Maintenance, Service Schedules.
 **Increment 3 (Phase 6–7, US7–US8)**: Hire Bills, P&L integration.
+
+---
+
+## Amendment 2026-09-01 — Spare Parts Inventory & Service Bills
+
+Covers spec FR-015 to FR-028 and plan Phases A1–A5. Task IDs prefixed `TA`. **No new permission
+value** — reuses the `MAINTENANCE` value this feature already introduces.
+
+- [ ] TA001 Add `SparePart`, `SparePartMovement`, `ServiceBill` models to `prisma/schema.prisma`;
+      migration + RLS on all three; unique index on `SparePart.partNumber` per company
+- [ ] TA002 [P] Extend `shared.AuditLogEntry.entityType` with `SPARE_PART`, `SPARE_PART_MOVEMENT`,
+      `SERVICE_BILL` (spec FR-028)
+- [ ] TA003 [US9] `SparePartService` + controller in `src/plant/spare-parts/`: catalogue CRUD,
+      part-number uniqueness → 409, delete guard → 409 when consumption history exists,
+      below-reorder filter
+- [ ] TA004 [US9] Receipts updating the running stock balance and recomputing the weighted average
+      rate with the same formula 009 FR-008 uses (spec FR-016, FR-017)
+- [ ] TA005 [US10] Consumption against an open maintenance job: transactional non-negative guard
+      (spec FR-018), valuation at the rate in force at consumption time (never retrospectively
+      restated), `partsCost` accrual on the job
+- [ ] TA006 [US10] Reject consumption against a closed job → 409; reversal requiring `MAINTENANCE`
+      and a reason, restoring stock and adjusting `partsCost` in one transaction (spec FR-019)
+- [ ] TA007 [US10] Consuming a part incompatible with the equipment's category is **permitted but
+      flagged** `incompatiblePart` and audit-logged, never blocked (spec FR-020)
+- [ ] TA008 [US10] Reconciliation view for parts declaring a `linkedInventoryItemId`, showing both
+      balances so divergence is visible rather than double-counted (spec FR-024)
+- [ ] TA009 [US11] `ServiceBillService` + controller: server-side `tdsAmount` / `netPayable`
+      (spec FR-021), bill-number uniqueness per vendor → 409, verify freezing figures, payment
+      blocked while unverified → 409 (spec FR-023), recordable against a closed job
+- [ ] TA010 [US11] Per-equipment lifetime maintenance cost split into parts / internal labour /
+      service bills (spec FR-026)
+- [ ] TA011 Replace this feature's own equipment document-expiry and service-due reminder
+      evaluation with rule registrations against feature 004's centralized engine (ratified
+      2026-09-01) — **blocked by 004 TA002/TA006**
+- [ ] TA012 **P&L correction**: extend `getMachineryCostByProject()` to add spare parts consumption
+      and verified service bill `netPayable` for equipment deployed at the project's sites
+      (spec FR-025) — corrects an existing understatement
+- [ ] TA013 [P] Unit test: WAR recomputation; rate frozen at consumption; incompatible-part flag
+- [ ] TA014 [P] Unit test: TDS and net payable; verification and payment guards
+- [ ] TA015 [P] Unit test: corrected machinery cost matches a manual sum including parts and service
+      bills (SC-A03)
+- [ ] TA016 [P] E2e test: concurrent consumptions exceeding stock — no negative balance (SC-A01)
+- [ ] TA017 [P] Verify soft-delete on receipts, consumptions, and service bills (spec FR-027)
