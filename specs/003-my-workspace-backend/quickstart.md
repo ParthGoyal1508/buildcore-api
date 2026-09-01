@@ -26,7 +26,7 @@
 1. Re-enrol (Scenario 1). `POST /my/punch` with `type: 'in'`, the matching photo, in-geofence
    coordinates, `capturedAt: now`. **Expected**: 201, `faceMatchResult: 'matched'`,
    `geofenceResult: 'in_range'`.
-2. `POST /my/punch` again with `type: 'in'`. **Expected**: 400 (open punch-in already exists).
+2. `POST /my/punch` again with `type: 'in'`. **Expected**: 409 (already punched in today, FR-008).
 3. `POST /my/punch` with `type: 'out'`, matching photo, in-geofence coordinates. **Expected**: 201;
    `GET /my/punch/history?month=&year=` for today shows worked hours and `status: 'present'`.
 4. Repeat step 1–3 using the out-of-geofence coordinates. **Expected**: punch still recorded (201),

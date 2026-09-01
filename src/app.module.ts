@@ -3,7 +3,9 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { AppController } from './app.controller';
+import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AppService } from './app.service';
+import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
 import { AuthModule } from './auth/auth.module';
 import { HrModule } from './hr/hr.module';
@@ -52,6 +54,17 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PayrollModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      // Global so a route that never considers the forced-change rule is refused
+      // rather than silently exempt (010 FR-017a). An interceptor rather than a
+      // guard because global guards run *before* controller-level ones, and
+      // JwtAuthGuard is per-controller here — a global guard would see no
+      // `request.user` and allow everything.
+      provide: APP_INTERCEPTOR,
+      useClass: PasswordChangeInterceptor,
+    },
+  ],
 })
 export class AppModule {}

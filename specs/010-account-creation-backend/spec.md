@@ -18,6 +18,50 @@ activate the account, and an admin can resend an expired/unused invite.
 
 ## Clarifications
 
+### Session 2026-09-01
+
+- Q: Which requests stay allowed while an account is waiting for its forced password change? → A:
+  Exactly four — change-password, the caller's own profile read, token refresh, and logout.
+  Everything else is refused. That is the smallest set that lets the user finish the change and
+  leave: reads are not exempted, because browsing payroll, attendance and biometric status on a
+  password the admin chose is most of what this rule exists to prevent.
+- Q: Does the new refusal also apply to accounts already carrying the flag from an admin password
+  reset? → A: No — only accounts created through the direct path. Existing reset accounts keep
+  behaving as they do now, so deploying this cannot lock anyone mid-reset out of the app.
+  Consequence, accepted: `mustChangePassword` can no longer decide on its own, since the same flag
+  now means "enforced" on one account and "advisory" on another — the account must also record how
+  its credential was set. And the equivalent hole on the admin-reset path stays open until that
+  path is given the same treatment.
+- Q: What does the API return when it refuses a request pending the forced password change? → A:
+  `403` carrying a machine-readable code (`PASSWORD_CHANGE_REQUIRED`) in the body. The client
+  branches on the code, never on message text; `428 Precondition Required` fits the semantics more
+  exactly but the client has no handling for it, and `409` already means "conflicts with recorded
+  state" in this system.
+- Q: What does the refusal do when an account's credential origin is absent or unrecognised? → A:
+  It does not refuse. Only an explicit `admin_direct` triggers it, so an unknown value fails open
+  *for this rule* — the account still needs a valid session and its permissions, so the blast
+  radius is one rule rather than authentication. An account whose provenance cannot be established
+  is far more likely a legacy row than a directly-created one, and refusing it would lock a real
+  user out over missing metadata.
+- Q: When a directly-created account changes its password, do sessions issued before the change
+  keep working? → A: Yes, for now — existing sessions are left alone, on the grounds that there are
+  no production users today, so no admin is holding a live token for someone else's account. This
+  is a deferral, not a judgement that revocation is unnecessary: see FR-017d.
+- Q: Should an admin-set password have to be changed at first login? → A: Yes. The account is
+  created `active` with `mustChangePassword: true`, so the user must replace it before doing
+  anything else. An admin who knows a working credential can sign in as that person, and these
+  accounts reach payroll and biometric data — the flag already exists for the admin-reset path and
+  carries the same reasoning here.
+- Q: Separate endpoint, or one endpoint with an optional password? → A: One. `POST
+  /account-creation/users` takes an optional `password`; present means direct creation, absent
+  means today's invite flow, unchanged. A second endpoint would duplicate creation logic — the
+  employee linking, the role and company resolution, the uniqueness check — to vary one field.
+- Q: Should anything be emailed when an account is created this way? → A: Nothing. The admin
+  passes the credentials on out of band. Sending them would write a live password into an inbox
+  and the mail provider's logs, which is the exposure `ALLOW_CONSOLE_EMAIL`'s warning exists to
+  prevent; a password-free notification was considered and judged not worth a new template for a
+  path whose whole point is that no email is involved.
+
 ### Session 2026-08-28 (self-resolved during the alignment audit — see research.md for rationale)
 
 - Q: Does this feature create a bare User account, or does it require linking to an existing
@@ -133,6 +177,39 @@ set-password endpoint with a valid password, and confirming a subsequent login (
 6. **Given** an account activated via this flow, **When** it subsequently logs in via 001's
    `POST /auth/login`, **Then** it succeeds exactly as any other active account would — this
    feature does not duplicate or bypass 001's login logic.
+
+---
+
+### User Story 4 - Admin creates an account with a password directly (Priority: P2)
+
+An admin creates an account and sets its first password themselves, handing the credentials to the
+person directly, without an invite email.
+
+**Why this priority**: The invite flow (User Stories 1 and 2) is the norm and depends on
+deliverable email. This path covers the cases it cannot serve — a site worker with no working
+email address, a test or demo account, or an invite that has to be bypassed because mail delivery
+is failing — none of which block the P1 flow.
+
+**Independent Test**: Can be fully tested by creating an account with a password, confirming no
+invite token is generated and no email is dispatched, signing in with those credentials, and
+confirming the session demands a password change before anything else.
+
+**Acceptance Scenarios**:
+
+1. **Given** an admin supplying `email`, `roleId`, the usual company/employee fields **and** a
+   `password`, **When** the account is created, **Then** it is `active` immediately with the
+   password stored argon2-hashed, `mustChangePassword` set, and **no** invite token generated and
+   **no** email dispatched.
+2. **Given** the same request without a `password`, **When** the account is created, **Then** the
+   existing invite flow runs unchanged — `pending` status, token generated, invite emailed.
+3. **Given** a supplied password that fails the complexity rule, **When** creation is attempted,
+   **Then** it is rejected before any account exists, by the same rule the invitee's own
+   set-password call is held to.
+4. **Given** an account created this way, **When** the user signs in with the admin-set password,
+   **Then** they are required to set a new password before the session is useful — the admin's
+   value never remains in force.
+5. **Given** an account created this way, **When** an admin attempts to resend an invite for it,
+   **Then** it is rejected: the account is `active` and there is no invite to resend (FR-007).
 
 ---
 
@@ -254,9 +331,61 @@ replaces the old one.
   — the invitee has no session) MUST be gated by `JwtAuthGuard` plus
   `@RequirePermission(Permission.USER_MANAGEMENT)` — reusing 002's existing `USER_MANAGEMENT`
   permission value (already in its enum), not inventing a new one.
+- **FR-015**: System MUST accept an optional `password` on account creation. When supplied, the
+  account is created with `status: 'active'`, the password argon2-hashed via 001's
+  `PasswordService`, and `mustChangePassword: true` — and MUST NOT generate an invite token or
+  dispatch any email. When absent, FR-001 through FR-003's invite flow applies unchanged.
+- **FR-016**: A supplied password MUST be held to the same complexity rule as the invitee's own
+  (FR-005: min 8 characters, 1 uppercase, 1 number), and MUST be rejected before any account row
+  is created, so a failed attempt leaves nothing behind.
+- **FR-017**: An account created with a password MUST require a password change at first login.
+  The admin necessarily knows the value they set, and these accounts reach payroll and biometric
+  data; leaving it in force would leave a credential that signs in as someone else.
+- **FR-017a**: The system MUST refuse requests from a session whose account was created through
+  the direct path (FR-015) and has not yet changed its password — as `403` with a
+  machine-readable `PASSWORD_CHANGE_REQUIRED` code in the body, so the client can route to the
+  change screen without parsing message text — allowing exactly four: the change-password endpoint, the caller's own profile
+  read, token refresh, and logout. Reads are not otherwise exempt — browsing payroll, attendance
+  or biometric status on a password the admin chose is most of what this rule exists to prevent. Today the flag is reported to the
+  client and enforced nowhere, so an account remains fully usable on a password its admin chose;
+  a client-side redirect cannot fix that, since the token is already issued and any other route
+  bypasses it.
+- **FR-017a-i**: Because the refusal is scoped to directly-created accounts and not to every
+  account carrying `mustChangePassword`, the account MUST record how its first credential was set.
+  The refusal MUST trigger only on an explicit `admin_direct` value: an absent or unrecognised
+  origin MUST NOT be refused, so missing metadata can never lock a real user out of the whole
+  application. Failing open is confined to this one rule — session validity and permission checks
+  are unaffected by it.
+  The flag alone cannot carry the distinction: an account reset by an admin keeps today's advisory
+  behaviour, and a directly-created one is refused, and nothing else separates them.
+- **FR-017a-ii**: Accounts whose password was set by an admin *reset* remain unenforced. This is a
+  deliberate limitation, not an oversight — such an account is still fully usable on a password its
+  admin knows. Closing it means applying FR-017a to that path too, which is out of scope here
+  because it would lock out anyone mid-reset the moment this deploys.
+- **FR-017d**: Sessions issued before the forced password change are NOT revoked. Deferred
+  deliberately while the system has no production users — with none, no admin is holding a live
+  token for an account they created. It does mean the forced change currently removes the admin's
+  *knowledge* of the password but not any access they already hold, so this MUST be revisited
+  before real users exist; 001's refresh-token family revocation is the mechanism when it is.
+- **FR-017b-i**: A password change MUST reject a new password identical to the current one. Without
+  this the forced change is defeatable in one step: re-entering the admin's value clears the flag
+  and leaves in force precisely the credential FR-017 exists to retire, while the screen reports
+  success.
+- **FR-017b**: Changing a password MUST clear the flag in the same write. Left set, it would
+  redirect the user on every subsequent login with no way out, turning a one-time step into a
+  permanent trap.
+- **FR-017c**: The system MUST provide a working password-change screen for an account in this
+  state. `/change-password` is a placeholder today, so a user redirected there has nowhere to go —
+  which is why FR-017a's server-side refusal cannot ship without it.
+- **FR-018**: The direct path MUST NOT weaken FR-008. That rule forbids transitioning a
+  *currently-pending* account to `active` outside the invite flow, and remains in force —
+  direct creation never produces a pending account to transition, so an account still has exactly
+  one way to leave `pending`.
 - **FR-014**: System MUST write audit log entries for: user creation, invite resend, and successful
   set-password (activation) — reusing `shared.AuditLogEntry` per Constitution Principle IV, with
-  entityType `USER_ACCOUNT`. (Deactivation/reactivation audit logging is
+  entityType `USER_ACCOUNT`. A direct creation (FR-015) MUST be distinguishable in the audit log
+  from an invited one, since the two differ in who chose the credential. (Deactivation/reactivation
+  audit logging is
   `002-settings-backend`'s own responsibility, using the same `USER_ACCOUNT` entityType so both
   features' writes to an account appear together in the Activity Log.)
 

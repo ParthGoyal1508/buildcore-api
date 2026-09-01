@@ -11,9 +11,11 @@ import {
   AuditEntityType,
   Permission,
   Prisma,
+  CredentialOrigin,
   UserStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { PasswordService } from '../../auth/password.service';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type { EmailConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
@@ -69,6 +71,7 @@ export class UsersService {
     private readonly email: EmailService,
     private readonly employees: EmployeesService,
     private readonly auditLog: AuditLogService,
+    private readonly passwordService: PasswordService,
     configService: ConfigService,
   ) {
     this.appBaseUrl = configService.get<EmailConfig>('email').appBaseUrl;
@@ -89,6 +92,16 @@ export class UsersService {
    * account whose invite needs resending.
    */
   async create(caller: AdminCaller, dto: CreateUserDto): Promise<CreatedUser> {
+    // A supplied password switches the whole creation mode (FR-015): the account
+    // opens immediately and no invite is generated or sent.
+    const isDirect = dto.password !== undefined;
+    // Hashed up front, before anything is written, so a password that fails the
+    // complexity rule leaves no account, no employee link and no token behind
+    // (FR-016). The DTO enforces the rule; this is the ordering guarantee.
+    const hashedPassword = isDirect
+      ? await this.passwordService.hashPassword(dto.password as string)
+      : null;
+
     const role = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.role.findUnique({ where: { id: dto.roleId } }),
     );
@@ -125,29 +138,43 @@ export class UsersService {
 
     await this.assertEmailAvailable(caller.rls, dto.email);
 
-    const expiresAt = new Date(Date.now() + INVITE_TOKEN_TTL_HOURS * 3_600_000);
-    const token = this.tokens.generate();
+    // No token on the direct path: there is nothing to set, because the password
+    // already exists (FR-015). Generating one anyway would leave a live
+    // credential-setting link for an account that never needed it.
+    const expiresAt = isDirect
+      ? null
+      : new Date(Date.now() + INVITE_TOKEN_TTL_HOURS * 3_600_000);
+    const token = isDirect ? null : this.tokens.generate();
 
-    const created = await this.insertUser(caller, dto, token.hash, expiresAt);
+    const created = await this.insertUser(
+      caller,
+      dto,
+      hashedPassword,
+      isDirect,
+      token?.hash ?? null,
+      expiresAt,
+    );
 
     // After commit — see the note above.
     let emailDispatchFailed = false;
-    try {
-      await this.email.sendInviteEmail({
-        to: dto.email,
-        setPasswordUrl: this.setPasswordUrl(token.raw),
-        isResend: false,
-        expiresAt,
-      });
-    } catch (error) {
-      emailDispatchFailed = true;
-      this.logger.error(
-        `Invite email failed for ${
-          dto.email
-        }; the account exists and can be re-invited. ${
-          (error as Error).message
-        }`,
-      );
+    if (!isDirect && token && expiresAt) {
+      try {
+        await this.email.sendInviteEmail({
+          to: dto.email,
+          setPasswordUrl: this.setPasswordUrl(token.raw),
+          isResend: false,
+          expiresAt,
+        });
+      } catch (error) {
+        emailDispatchFailed = true;
+        this.logger.error(
+          `Invite email failed for ${
+            dto.email
+          }; the account exists and can be re-invited. ${
+            (error as Error).message
+          }`,
+        );
+      }
     }
 
     await this.auditLog.record({
@@ -156,11 +183,18 @@ export class UsersService {
       entityId: created.id,
       // The raw token is deliberately absent: an audit row must never become a
       // second copy of a live credential-setting link.
+      // The password is deliberately absent in every form — not the value, not a
+      // hash, not its length. `credentialOrigin` is what distinguishes a direct
+      // creation from an invited one (FR-014), which is the fact an auditor needs:
+      // who chose the credential, not what it was.
       changes: {
         email: dto.email,
         roleId: dto.roleId,
         companyId: dto.companyId ?? null,
         employeeLinked: Boolean(dto.employeeId),
+        credentialOrigin: isDirect
+          ? CredentialOrigin.admin_direct
+          : CredentialOrigin.invite,
         emailDispatchFailed,
       } as Prisma.InputJsonValue,
       accountId: caller.userId,
@@ -217,8 +251,10 @@ export class UsersService {
   private async insertUser(
     caller: AdminCaller,
     dto: CreateUserDto,
-    tokenHash: string,
-    expiresAt: Date,
+    hashedPassword: string | null,
+    isDirect: boolean,
+    tokenHash: string | null,
+    expiresAt: Date | null,
     retry = 0,
   ): Promise<{ id: string; email: string; status: UserStatus }> {
     try {
@@ -228,12 +264,21 @@ export class UsersService {
           data: {
             email: dto.email,
             username,
-            // No password: that is what `pending` means. The column is nullable
-            // precisely so this row can exist before one is chosen.
-            password: null,
+            // Direct creation (FR-015) stores the admin's password and opens the
+            // account immediately; without one, no password exists yet — that is
+            // what `pending` means, and the column is nullable precisely so this
+            // row can exist before one is chosen.
+            password: hashedPassword,
             displayName: dto.displayName ?? null,
             companyId: dto.companyId ?? null,
-            status: UserStatus.pending,
+            status: isDirect ? UserStatus.active : UserStatus.pending,
+            // The admin necessarily knows what they set, and these accounts reach
+            // payroll and biometric data, so the value must not stay in force
+            // (FR-017).
+            mustChangePassword: isDirect,
+            credentialOrigin: isDirect
+              ? CredentialOrigin.admin_direct
+              : CredentialOrigin.invite,
           },
           select: { id: true, email: true, status: true },
         });
@@ -257,9 +302,13 @@ export class UsersService {
           );
         }
 
-        await tx.inviteToken.create({
-          data: { userId: user.id, tokenHash, expiresAt },
-        });
+        // Only the invite path has a token to store; a directly-created account
+        // has its password already (FR-015).
+        if (tokenHash && expiresAt) {
+          await tx.inviteToken.create({
+            data: { userId: user.id, tokenHash, expiresAt },
+          });
+        }
 
         return user;
       });
@@ -268,7 +317,15 @@ export class UsersService {
       // invites to similar addresses can both see the same candidate as free. The
       // unique index settles it, and a single retry picks the next suffix.
       if (isUsernameConflict(error) && retry < 3) {
-        return this.insertUser(caller, dto, tokenHash, expiresAt, retry + 1);
+        return this.insertUser(
+          caller,
+          dto,
+          hashedPassword,
+          isDirect,
+          tokenHash,
+          expiresAt,
+          retry + 1,
+        );
       }
       throw error;
     }

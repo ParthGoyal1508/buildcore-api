@@ -76,6 +76,18 @@ the prior encrypted values are overwritten/purged, not retained as history.
 | `geofenceResult` | enum: `in_range` \| `exception` | |
 | `exceptionResolution` | enum: `pending` \| `confirmed` \| `rejected` \| null | Set by FR-011a's admin action when either result above is `exception` |
 | `resolvedByUserId` / `resolvedAt` | string \| timestamp \| null | |
+| `punchDate` | date | The calendar day this punch counts for, in the configured zone (FR-018a). Stamped at insert, not derived on read — `AT TIME ZONE` with a named zone is STABLE, not IMMUTABLE, so a computed expression cannot be indexed. A later change to `APP_TIMEZONE` therefore does not reclassify punches already recorded, which is the price of a stable index and is the safer direction for payroll data |
+| `source` | enum: `employee` \| `admin_correction` \| `legacy` | Who wrote it. `employee` is the self-service punch this feature creates; `admin_correction` is reserved for feature 005's fix-ups; `legacy` marks rows predating FR-008, which are exempt from its constraint (FR-008c) |
+
+**Uniqueness (FR-008c)**: `(employeeId, type, punchDate)` unique **where `source = 'employee'`** —
+one punch-in and one punch-out per employee per day, binding only self-service punches so a future
+administrative correction is not forbidden by the schema.
+
+This **replaces** the `one open punch-in per employee` partial unique index. The two cannot
+coexist: FR-008a requires that a stale open punch-in from an earlier day not block today's, and
+that means two rows with `type = 'in'` and `closedByPunchId IS NULL` must be allowed to exist at
+once — exactly what the old index forbids. The rule it enforced is subsumed anyway, since a day
+now admits at most one punch-in.
 
 A punch-in/punch-out pair (same employee, `out.capturedAt > in.capturedAt`, no other pair between
 them) forms one worked-hours computation; hours beyond `shiftId`'s duration become OT hours

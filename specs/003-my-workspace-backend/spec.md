@@ -19,6 +19,28 @@ them from scratch."
 
 ## Clarifications
 
+### Session 2026-09-01
+
+- Q: When a punch queued offline finally syncs, and its capture day already has a punch of that
+  type recorded, what happens? → A: The queued punch is rejected and the failure is surfaced to the
+  employee once, on the existing sync-failure path — the recorded punch stands. Silently replacing
+  it would rewrite attendance the employee has already seen, and admitting it as a second punch
+  would defeat FR-008.
+
+- Q: Should the database constraint enforce one pair per day for every writer, or only for
+  employee-originated punches? → A: Scoped to employee-originated punches. The guarantee against
+  concurrent and out-of-band writes is the same, but a blanket index would pre-emptively forbid the
+  corrections feature 005 will legitimately need to make — and relaxing a constraint later is far
+  harder than scoping it correctly now. Requires a discriminator on the punch record; today's
+  exception handling annotates the punch row rather than inserting a correction, so nothing
+  currently relies on the excluded path.
+
+- Q: What HTTP status should a punch refused by the one-per-day rule return? → A: `409 Conflict`,
+  for every FR-008 refusal including the existing unmatched-punch-out case. The request is
+  well-formed and conflicts with existing state, which is what 409 means, and it lets a client
+  distinguish "already punched today" from a malformed punch without parsing message text. This
+  changes the status the current open-punch rejection returns from 400.
+
 ### Session 2026-08-27
 
 - Q: Since no HR & Payroll admin module exists yet, should this feature define minimal versions of
@@ -94,6 +116,12 @@ exception instead of silently accepted or silently rejected.
 2. **Given** the same employee later in the day, **When** they submit a matching punch-out,
    **Then** worked hours are computed from the in/out pair and any hours beyond the assigned
    shift's duration are recorded as OT hours.
+2a. **Given** an employee who has already punched in and out today, **When** they attempt either a
+   further punch-in or a further punch-out, **Then** it is rejected — one pair per day is the whole
+   allowance, and the day's record is already complete.
+2b. **Given** an employee whose punch-in from an earlier day was never closed, **When** they punch
+   in today, **Then** it succeeds: the stale punch-in is an anomaly for the exception path, not a
+   reason to refuse a new day's attendance.
 3. **Given** a punch submitted from outside the assigned site's geofence radius, **When** it's
    processed, **Then** it is still recorded but flagged as a geofence exception routed for
    supervisor/admin review, rather than silently accepted or rejected outright.
@@ -320,6 +348,11 @@ with one, then confirming it appears correctly in the employee's own claim histo
   pending request is closed automatically and the employee's status reverts to "Not enrolled";
   face-verification punch failures then always route to exception/manual-approval since no
   template exists to compare against.
+- What happens when a punch queued offline syncs onto a day that already has a punch of that type?
+  It is rejected under FR-008 like any other duplicate, and the employee is told once that the
+  queued punch did not count — the already-recorded punch stands, and the discrepancy is theirs to
+  raise as an attendance exception. Silently replacing the recorded punch would rewrite attendance
+  they have already seen.
 - What happens to an employee's open (unmatched) punch-in if the day rolls over before they punch
   out? It remains open and is not auto-closed by this feature; it continues to affect the "one open
   punch-in at a time" rule (Edge Case above) until resolved (matched or corrected elsewhere).
@@ -355,8 +388,25 @@ with one, then confirming it appears correctly in the employee's own claim histo
   exception, and a punch whose face match falls below the configured confidence threshold MUST be
   recorded and flagged as a face-verification exception requiring supervisor override or manual
   approval.
-- **FR-008**: The system MUST reject a punch-in when the employee already has an open (unmatched)
-  punch-in, and MUST reject a punch-out when the employee has no open punch-in to match.
+- **FR-008b**: The system MUST expose the caller's punch state for today — whether the day's
+  punch-in has been made, whether it has been closed, and the times — so a client can offer the
+  one action still available, or none, without inferring it.
+- **FR-008**: The system MUST record at most one punch-in and one punch-out per employee per
+  calendar day, reckoned in the configured timezone (FR-018a). Specifically it MUST reject: a
+  second punch-in on a day that already has one, whether or not that first punch-in has been
+  closed; a punch-out when the day has no punch-in to match; and a second punch-out on a day whose
+  punch is already closed. A day's punch-out MUST match that same day's punch-in — this system
+  covers day shifts only, so a shift is never expected to span midnight.
+- **FR-008c**: The one-pair-per-day rule MUST be enforced both in the punch transaction and by a
+  database constraint, so it cannot be defeated by concurrency or by a write that bypasses the
+  service. The constraint MUST apply only to employee-originated punches, leaving room for the
+  administrative corrections feature 005 owns; punches MUST therefore record which of the two they
+  are.
+- **FR-008a**: An open punch-in left over from an earlier day MUST NOT block today's punch-in.
+  Under FR-008 nothing can ever close it — a punch-out only matches the same day — so treating it
+  as blocking would lock the employee out of punching indefinitely for a mistake made once. It
+  stays open as an attendance anomaly for the exception/manual-approval path to resolve, exactly
+  as an unmatched punch already does.
 - **FR-009**: The system MUST compute worked hours from a matched punch-in/punch-out pair and MUST
   compute OT hours as time worked beyond the employee's assigned shift duration.
 - **FR-010**: The system MUST reject any punch or leave-application create/edit whose date falls
@@ -392,6 +442,12 @@ with one, then confirming it appears correctly in the employee's own claim histo
 - **FR-018**: The system MUST provide an employee's leave balances by type (Earned, Casual, Sick,
   Leave Without Pay) for a given financial year, each with Opening, Accrued, Used, and Balance
   figures.
+- **FR-018a**: Every calendar day this feature reckons — the day a punch is attributed to, the
+  dates a leave range covers, the current financial year, and the month a payroll lock closes —
+  MUST be derived in a single configured timezone (default `Asia/Kolkata`), never from the
+  server's UTC clock. An instant and a calendar date are different things: read in UTC, every
+  punch made before 05:30 local is filed under the previous day, moving that shift's attendance
+  and overtime onto a day the employee did not work.
 - **FR-019**: The system MUST compute a leave application's day count by excluding weekends and the
   assigned site's configured holiday dates from the requested date range.
 - **FR-020**: The system MUST reject a leave application (for any type except Leave Without Pay)
@@ -419,6 +475,12 @@ with one, then confirming it appears correctly in the employee's own claim histo
   every access to them, and apply the same regulated-data protection tier this repo's constitution
   requires for Aadhaar/PAN/bank-account fields (Principle IV), even though biometric data is not
   itself named in that list.
+- **FR-026a**: The system MUST refuse to start in production when configured to store blobs on the
+  local filesystem, rather than warning and continuing. The deployed host's filesystem is
+  ephemeral, so that configuration serves every request correctly and then destroys every stored
+  photo on the next deploy or idle spin-down — making FR-026's retention and deletion obligations
+  unmeetable with nothing but a log line to show for it. A deployment that serves no real users
+  may opt out explicitly; the opt-out MUST never be inferred.
 - **FR-027**: The system MUST log every enrolment, punch (including exceptions), leave application/
   cancellation, re-enrolment request/approval/rejection/completion, and consent-withdrawal-triggered
   deletion to the audit log, capturing the acting party, timestamp, and company.
@@ -432,6 +494,14 @@ with one, then confirming it appears correctly in the employee's own claim histo
 - **FR-029**: The system MUST allow an employee to create a reimbursement claim (category from
   Settings' Reimbursement Categories master, amount, expense date, description, optional receipt
   upload) scoped to their own employee record.
+- **FR-029a**: The system MUST expose the caller's company's active reimbursement categories,
+  each with the amount above which a receipt becomes mandatory, so a claim form can offer real
+  categories and state the rule before the employee fills anything in.
+- **FR-029b**: The system MUST accept a receipt image in the same request that creates or edits a
+  claim, store it, and record the resulting reference. Receipts MUST be normalised on the way in —
+  stripping camera metadata, GPS coordinates included — on the same grounds as FR-026's biometric
+  photos: this feature already records validated location in its own audited columns, and an EXIF
+  copy would persist location PII outside that path.
 - **FR-030**: The system MUST require a receipt upload when the claim amount exceeds the
   category's configured mandatory-receipt threshold, and MUST reject submission without one above
   that threshold.
@@ -462,6 +532,8 @@ with one, then confirming it appears correctly in the employee's own claim histo
   (matched/exception), GPS coordinates, geofence result (in/exception), declared capture time,
   server-receipt time, and an offline-sync flag when applicable. A punch-in/punch-out pair forms one
   attendance day's worked/OT hours.
+  Also records whether it was made by the employee or created as an administrative
+  correction, which is what lets FR-008c's constraint bind only the former.
 - **Leave Type / Leave Balance**: A named leave category (Earned, Casual, Sick, Leave Without Pay)
   and, per employee per financial year, its Opening/Accrued/Used/Balance figures.
 - **Leave Application**: One employee's request for a date range under one leave type — computed

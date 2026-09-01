@@ -73,6 +73,18 @@ export class ImageProcessingService {
     return this.compress(photo, maxDimension, jpegQuality);
   }
 
+  /**
+   * Compresses a reimbursement receipt.
+   *
+   * Reuses the punch profile deliberately: like a punch photo, a receipt only has
+   * to stay legible to a human reviewing it, and the same pass is what strips the
+   * EXIF a phone camera embeds — including the GPS coordinates of wherever the
+   * receipt was photographed, which this feature has no business persisting.
+   */
+  async compressReceipt(photo: Buffer): Promise<Buffer> {
+    return this.compressPunchPhoto(photo);
+  }
+
   private async compress(
     photo: Buffer,
     maxDimension: number,

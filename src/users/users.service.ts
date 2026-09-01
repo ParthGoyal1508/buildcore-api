@@ -59,6 +59,24 @@ export class UsersService {
       throw new BadRequestException('Invalid password');
     }
 
+    // Reusing the current password is not a change. It matters most for an account
+    // created with an admin-set password (010 FR-017): re-entering that value would
+    // clear `mustChangePassword` below and leave in force precisely the credential
+    // the forced change exists to retire, with the account's own screen having
+    // reported success.
+    //
+    // Compared against the stored hash rather than the submitted `oldPassword`, so
+    // it also holds for any other path that reaches here.
+    const unchanged = await this.passwordService.validatePassword(
+      changePassword.newPassword,
+      caller.password,
+    );
+    if (unchanged) {
+      throw new BadRequestException(
+        'Your new password must be different from your current one.',
+      );
+    }
+
     const hashedPassword = await this.passwordService.hashPassword(
       changePassword.newPassword,
     );
@@ -70,6 +88,11 @@ export class UsersService {
         tx.user.update({
           data: {
             password: hashedPassword,
+            // Cleared in the same write as the hash (010 FR-017b). Two writes
+            // could leave an account that has changed its password and is still
+            // refused everything; left set entirely, the user is redirected on
+            // every login with no way out.
+            mustChangePassword: false,
           },
           where: { id: caller.id },
         }),

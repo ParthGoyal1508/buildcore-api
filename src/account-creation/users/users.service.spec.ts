@@ -76,15 +76,19 @@ describe('UsersService', () => {
       company: { findMany: jest.fn().mockResolvedValue([]) },
     });
 
+    const auditLog = { record: jest.fn().mockResolvedValue(undefined) };
     const service = new UsersService(
       prisma as never,
       new TokenService(),
       email as never,
       employees as never,
-      { record: jest.fn().mockResolvedValue(undefined) } as never,
+      auditLog as never,
+      // Hashing is argon2's job and is covered by its own tests; here the identity
+      // transform keeps the assertion about *what* is stored, not how.
+      { hashPassword: jest.fn(async (p: string) => `hashed:${p}`) } as never,
       { get: () => ({ appBaseUrl: 'http://localhost:3001' }) } as never,
     );
-    return { service, prisma };
+    return { service, prisma, auditLog };
   };
 
   const dto = (over: Record<string, unknown> = {}) =>
@@ -250,6 +254,62 @@ describe('UsersService', () => {
       await expect(service.resendInvite(caller, 'u1')).rejects.toBeInstanceOf(
         ConflictException,
       );
+    });
+  });
+
+  describe('direct creation with an admin-set password (FR-015)', () => {
+    it('opens the account immediately, flagged for a forced change', async () => {
+      const { service, prisma } = build();
+      await service.create(caller, dto({ password: 'Str0ngPass' }));
+
+      expect(prisma.tx.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'active',
+            password: 'hashed:Str0ngPass',
+            mustChangePassword: true,
+            credentialOrigin: 'admin_direct',
+          }),
+        }),
+      );
+    });
+
+    it('generates no invite token and sends no email', async () => {
+      // The whole point of the path: an account that needs no invite must not
+      // leave a live credential-setting link behind.
+      const { service, prisma } = build();
+      await service.create(caller, dto({ password: 'Str0ngPass' }));
+
+      expect(prisma.tx.inviteToken.create).not.toHaveBeenCalled();
+      expect(email.sendInviteEmail).not.toHaveBeenCalled();
+    });
+
+    it('leaves the invite flow untouched when no password is given', async () => {
+      const { service, prisma } = build();
+      await service.create(caller, dto());
+
+      expect(prisma.tx.user.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'pending',
+            password: null,
+            mustChangePassword: false,
+            credentialOrigin: 'invite',
+          }),
+        }),
+      );
+      expect(prisma.tx.inviteToken.create).toHaveBeenCalled();
+      expect(email.sendInviteEmail).toHaveBeenCalled();
+    });
+
+    it('never records the password in the audit entry', async () => {
+      const { service, auditLog } = build();
+      await service.create(caller, dto({ password: 'Str0ngPass' }));
+
+      const serialised = JSON.stringify(auditLog.record.mock.calls);
+      expect(serialised).not.toContain('Str0ngPass');
+      expect(serialised).not.toContain('hashed:Str0ngPass');
+      expect(serialised).toContain('admin_direct');
     });
   });
 });

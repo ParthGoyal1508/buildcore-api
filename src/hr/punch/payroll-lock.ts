@@ -1,3 +1,5 @@
+import { parseDateOnly, zonedDateOnly } from '../leave/leave-days';
+
 /**
  * Whether a punch or leave date falls in a period already locked for payroll.
  *
@@ -13,12 +15,20 @@
 export function isPayrollLocked(
   capturedAt: Date,
   payrollLockDay: number,
-  now: Date = new Date(),
+  now: Date,
+  timeZone: string,
 ): boolean {
-  const capturedYear = capturedAt.getUTCFullYear();
-  const capturedMonth = capturedAt.getUTCMonth();
-  const currentYear = now.getUTCFullYear();
-  const currentMonth = now.getUTCMonth();
+  // Both instants are reduced to the calendar dates they fall on *for the
+  // employee*, because the rule is stated in calendar months and a lock day. Read
+  // in UTC, a punch made just after local midnight on the 1st belongs to the
+  // previous month, and the lock closes a day early on it.
+  const captured = parseDateOnly(zonedDateOnly(capturedAt, timeZone));
+  const today = parseDateOnly(zonedDateOnly(now, timeZone));
+
+  const capturedYear = captured.getUTCFullYear();
+  const capturedMonth = captured.getUTCMonth();
+  const currentYear = today.getUTCFullYear();
+  const currentMonth = today.getUTCMonth();
 
   const monthsElapsed =
     (currentYear - capturedYear) * 12 + (currentMonth - capturedMonth);
@@ -33,5 +43,5 @@ export function isPayrollLocked(
     return true;
   }
   // Exactly last month: locked once this month has reached the lock day.
-  return now.getUTCDate() >= payrollLockDay;
+  return today.getUTCDate() >= payrollLockDay;
 }

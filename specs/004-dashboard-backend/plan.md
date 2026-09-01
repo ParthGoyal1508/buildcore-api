@@ -160,3 +160,48 @@ addition beyond the module itself is a Redis service in local/deploy infrastruct
 
 *No entries — no constitution violations requiring justification; both new dependencies are
 pre-approved (see Constitution Check above).*
+
+---
+
+## Amendment 2026-09-01 — Department Dashboard & Cross-Module Reminders Engine
+
+Covers spec FR-025 to FR-037. Adds 2 tables; no new permission value.
+
+**Note**: the reminders engine is centralized here by ratified decision (2026-09-01). Features 002,
+006, and 012 register rules rather than implementing their own evaluation — so this amendment
+becomes a build-order dependency for all three.
+
+**Constitution re-check**: Principle I — the engine holds no other module's data; rules are
+registered by their owning module and evaluated through that module's exported service. Principle
+III — lead windows and severity ladders are per-rule configuration. Principle IV — reminders scoped
+to the caller's company except `CROSS_COMPANY_ACCESS`. Principle V — reuses `DASHBOARD`, adds
+nothing. PASS.
+
+### Phase A1: Schema & Registry
+
+- [ ] Add `ReminderRule` and `ReminderSnooze` models; migration + RLS
+- [ ] Build the rule-registration mechanism mirroring the existing widget registry (FR-028) so a
+      module contributes a rule without editing this feature — the same extensibility guarantee
+      FR-002 gives widgets
+
+### Phase A2: US8 — Department Dashboard (P2)
+
+- [ ] `DepartmentDashboardService` + controller reusing the existing widget contract (FR-025) — no
+      new response shape
+- [ ] Department-scoped KPIs (headcount, present, absent, on leave, pending approvals, open
+      positions from 011, department cost from payroll line items) — FR-026
+- [ ] Department selector honouring role-restricted scope (FR-027)
+- [ ] Unit test: no cross-department leakage; empty department returns zeros not errors
+- [ ] E2e test: unbuilt-module widgets return the FR-003 unavailable state
+
+### Phase A3: US9 — Reminders Engine (P2)
+
+- [ ] `RemindersService`: evaluate all registered rules, unified list with severity, days
+      remaining, sorting (FR-029, FR-030); unavailable-module rules contribute nothing (FR-031)
+- [ ] De-duplication: at most one notification per entity, per rule, per severity band; escalation
+      emits anew; resolution closes the open notification (FR-032, FR-033)
+- [ ] Snooze endpoint with audit logging and expiry-despite-escalation semantics (FR-034)
+- [ ] Count endpoint by severity, consistent with FR-011
+- [ ] Unit test: de-duplication across repeated evaluation; escalation; snooze expiry
+- [ ] E2e test: a rule registered by a test module appears in the list without editing this
+      feature (SC-A01)

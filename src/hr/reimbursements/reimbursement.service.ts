@@ -14,11 +14,14 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { StorageService } from '../../common/storage/storage.service';
 import {
   ReimbursementCategoriesService,
   ReimbursementCategoryView,
 } from '../../settings/reimbursement-categories/reimbursement-categories.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
+import { ImageProcessingService } from '../biometrics/image-processing.service';
+import { decodePhotoPayload } from '../biometrics/photo-payload';
 import { EmployeesService } from '../employees/employees.service';
 import { parseDateOnly } from '../leave/leave-days';
 import { CreateClaimDto, UpdateClaimDto } from './dto/claim.dto';
@@ -26,6 +29,9 @@ import { CreateClaimDto, UpdateClaimDto } from './dto/claim.dto';
 /** Statuses this feature is allowed to change a claim out of. Everything past
  * `submitted` belongs to feature 005's review layer (research.md §10). */
 const EMPLOYEE_EDITABLE = [ReimbursementClaimStatus.draft] as const;
+
+/** Storage namespace for receipt blobs, kept beside the claim it belongs to. */
+const RECEIPT_NAMESPACE = 'reimbursement-receipts';
 
 /**
  * Employee-originated reimbursement claims (US8).
@@ -42,7 +48,46 @@ export class ReimbursementService {
     private readonly employees: EmployeesService,
     private readonly categories: ReimbursementCategoriesService,
     private readonly auditLog: AuditLogService,
+    private readonly storage: StorageService,
+    private readonly images: ImageProcessingService,
   ) {}
+
+  /**
+   * The categories a claim may be filed against, for the employee's own claim form.
+   *
+   * `settings` owns this master and feature 005 owns its CRUD; this is a read-only
+   * projection scoped to the caller's company, exposed because the claim form
+   * cannot render a category picker — or tell the employee when a receipt becomes
+   * mandatory — without it (US8 AC1).
+   */
+  async listCategories(caller: Caller): Promise<ReimbursementCategoryView[]> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    return this.categories.getReimbursementCategories(
+      caller.rls,
+      employee.companyId,
+    );
+  }
+
+  /**
+   * Stores an uploaded receipt and returns the reference to persist.
+   *
+   * Taken in the same request as the claim rather than through a separate upload
+   * endpoint: a two-step upload orphans every blob whose claim is then abandoned,
+   * and nothing here would ever collect them. Mirrors how enrolment posts its
+   * photos (research.md §3).
+   */
+  private async storeReceipt(receipt: string): Promise<string> {
+    const bytes = decodePhotoPayload(receipt, 'The receipt');
+    // Normalised before storage rather than stored as uploaded. Two reasons, both
+    // load-bearing: it strips the EXIF a phone camera embeds — GPS coordinates
+    // included — and it makes `image/jpeg` an honest content type, where storing
+    // the raw bytes would mislabel every PNG and WebP the decoder accepts.
+    const normalised = await this.images.compressReceipt(bytes);
+    return this.storage.put(RECEIPT_NAMESPACE, normalised, 'image/jpeg');
+  }
 
   /** The caller's own claims, newest expense first (FR-033). */
   async listOwnClaims(
@@ -84,7 +129,12 @@ export class ReimbursementService {
         'That reimbursement category is not available for your company.',
       );
     }
-    this.assertReceiptRule(category, dto.amount, dto.receiptRef);
+    // Resolved before the rule check so an uploaded receipt satisfies the
+    // threshold — the rule cares that a receipt exists, not how it arrived.
+    const receiptRef = dto.receipt
+      ? await this.storeReceipt(dto.receipt)
+      : dto.receiptRef;
+    this.assertReceiptRule(category, dto.amount, receiptRef);
 
     const created = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.reimbursementClaim.create({
@@ -95,7 +145,7 @@ export class ReimbursementService {
           amount: new Prisma.Decimal(dto.amount),
           expenseDate: parseDateOnly(dto.expenseDate),
           description: dto.description,
-          receiptRef: dto.receiptRef ?? null,
+          receiptRef: receiptRef ?? null,
           status:
             dto.status === 'draft'
               ? ReimbursementClaimStatus.draft
@@ -137,8 +187,11 @@ export class ReimbursementService {
     // not need.
     const categoryId = dto.categoryId ?? existing.categoryId;
     const amount = dto.amount ?? existing.amount.toNumber();
-    const receiptRef =
-      dto.receiptRef !== undefined ? dto.receiptRef : existing.receiptRef;
+    const receiptRef = dto.receipt
+      ? await this.storeReceipt(dto.receipt)
+      : dto.receiptRef !== undefined
+        ? dto.receiptRef
+        : existing.receiptRef;
     const category = await this.categories.requireCategory(
       caller.rls,
       employee.companyId,

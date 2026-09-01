@@ -30,6 +30,13 @@ account can still meaningfully belong to one home company.']
 (FR-013) via the exported UsersService, never by a direct cross-schema query.']
   status UserStatus [not null, default: 'active']
   mustChangePassword Boolean [not null, default: false]
+  credentialOrigin CredentialOrigin [not null, default: 'invite', note: 'How this account\'s first password came to exist (010 FR-017a-i).
+
+`mustChangePassword` alone cannot carry this: the forced-change refusal applies
+to `admin_direct` accounts only, so the same flag means *enforced* on one
+account and *advisory* on an admin-reset one, and nothing else separates them.
+Only an explicit `admin_direct` is ever refused — an absent or unrecognised
+value must not lock a real user out over missing metadata.']
   consecutiveFailures Int [not null, default: 0, note: 'Resets to 0 on next successful login (FR-013).']
   lockedUntil DateTime [note: 'Set when consecutiveFailures reaches the configured threshold (FR-012).']
   refreshTokens RefreshToken [not null]
@@ -424,11 +431,22 @@ threshold can be retuned against real data instead of guesswork.']
   geofenceResult GeofenceResult [not null]
   geofenceDistanceMeters Decimal [note: 'Measured metres from the site centre, retained for the same reason as
 `faceMatchDistance`.']
-  closedByPunchId String [unique, note: 'On a punch-in, the id of the punch-out that closed it; null while the punch-in
+  punchDate DateTime [not null, note: 'On a punch-in, the id of the punch-out that closed it; null while the punch-in
 is still open. This is what makes "at most one open punch-in per employee"
 (FR-008) enforceable as a partial unique index in the database, instead of
 resting solely on an application-level check that two concurrent requests can
-both pass. Always null on a punch-out record.']
+both pass. Always null on a punch-out record.
+The calendar day this punch counts for, in the configured timezone (FR-018a).
+
+Stamped at insert rather than derived on read: `AT TIME ZONE` with a named zone
+is STABLE, not IMMUTABLE, so Postgres will not build a unique index over the
+expression — and FR-008c needs exactly that index. The cost is that changing
+APP_TIMEZONE later does not reclassify punches already recorded, which for
+payroll data is the safer direction.']
+  source PunchSource [not null, default: 'employee', note: 'Who wrote this punch. The FR-008c uniqueness constraint binds only `employee`
+rows, so feature 005\'s future corrections are not forbidden by the schema, and
+rows predating FR-008 (`legacy`) keep their multiple pairs per day.']
+  closedByPunchId String [unique]
   exceptionResolution ExceptionResolution [note: 'Null unless either result above is `exception`; then `pending` until an admin
 acts (FR-011a).']
   resolvedByUserId String
@@ -587,6 +605,12 @@ Every figure is `Decimal`, never `Float` — these are money, and binary roundin
 drift in a payslip is a wage dispute.'
 }
 
+Enum CredentialOrigin {
+  invite
+  admin_direct
+  admin_reset
+}
+
 Enum UserStatus {
   pending
   active
@@ -685,6 +709,12 @@ Enum ReEnrolmentRequestStatus {
 Enum PunchType {
   in
   out
+}
+
+Enum PunchSource {
+  employee
+  admin_correction
+  legacy
 }
 
 Enum FaceMatchResult {

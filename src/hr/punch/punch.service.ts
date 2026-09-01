@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -13,18 +14,23 @@ import {
   GeofenceResult,
   Prisma,
   PunchRecord,
+  PunchSource,
   PunchType,
 } from '@prisma/client';
 import { HttpException } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
-import type { WorkspaceConfig } from '../../common/configs/config.interface';
+import type {
+  SettingsConfig,
+  WorkspaceConfig,
+} from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import { SitesService } from '../../projects/sites/sites.service';
 import { BiometricsService } from '../biometrics/biometrics.service';
 import { ImageProcessingService } from '../biometrics/image-processing.service';
+import { parseDateOnly, zonedDateOnly } from '../leave/leave-days';
 import { decodePhotoPayload } from '../biometrics/photo-payload';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -59,9 +65,19 @@ export interface PunchResult {
  * closed payroll period — are rejected. Someone who is physically at work must not
  * end up absent from payroll because of a camera angle or a GPS drift.
  */
+/** Today's punch state for one employee (FR-008b). */
+export interface TodayPunchState {
+  punchedInAt: Date | null;
+  punchedOutAt: Date | null;
+  /** Both punches recorded — nothing further is accepted today (FR-008). */
+  isComplete: boolean;
+}
+
 @Injectable()
 export class PunchService {
   private readonly workspace: WorkspaceConfig;
+  /** The zone every calendar-day decision here is reckoned against. */
+  private readonly settingsTimeZone: string;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -75,6 +91,49 @@ export class PunchService {
     configService: ConfigService,
   ) {
     this.workspace = configService.get<WorkspaceConfig>('workspace');
+    this.settingsTimeZone =
+      configService.get<SettingsConfig>('settings').timezone;
+  }
+
+  /**
+   * What the caller has already punched today, and whether the day is finished.
+   *
+   * A screen needs the same fact FR-008 is enforced against, not an approximation
+   * of it: inferred from the attendance row alone it would offer actions the server
+   * then refuses. `isComplete` is the whole answer to "is there anything left to
+   * do today" — with one pair allowed, both punches recorded means no action at all
+   * rather than a control that can only be rejected.
+   *
+   * A punch-in left open on an earlier day is deliberately absent. Nothing can
+   * close it (FR-008a) and it does not constrain today, so reporting it would only
+   * invite a client to act on it.
+   */
+  async getTodayPunchState(caller: Caller): Promise<TodayPunchState> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    const punchDate = parseDateOnly(
+      zonedDateOnly(new Date(), this.settingsTimeZone),
+    );
+
+    const punches = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.punchRecord.findMany({
+        where: { employeeId: employee.id, punchDate },
+        select: { type: true, capturedAt: true },
+      }),
+    );
+
+    const punchedInAt =
+      punches.find((p) => p.type === PunchType.in)?.capturedAt ?? null;
+    const punchedOutAt =
+      punches.find((p) => p.type === PunchType.out)?.capturedAt ?? null;
+
+    return {
+      punchedInAt,
+      punchedOutAt,
+      isComplete: punchedInAt !== null && punchedOutAt !== null,
+    };
   }
 
   async submitPunch(caller: Caller, dto: SubmitPunchDto): Promise<PunchResult> {
@@ -123,7 +182,14 @@ export class PunchService {
     const payrollLockDay = await this.companies.getPayrollLockDay(
       employee.companyId,
     );
-    if (isPayrollLocked(capturedAt, payrollLockDay, receivedAt)) {
+    if (
+      isPayrollLocked(
+        capturedAt,
+        payrollLockDay,
+        receivedAt,
+        this.settingsTimeZone,
+      )
+    ) {
       throw new HttpException(
         'That date falls in a payroll period that is already locked.',
         HTTP_STATUS_LOCKED,
@@ -187,37 +253,64 @@ export class PunchService {
       'image/jpeg',
     );
 
-    // --- Gate 4 + write: the in/out sequence, inside one transaction. ---
+    // The calendar day this punch counts for — the employee's, not the server's
+    // (FR-018a). Stamped here rather than derived on read so the FR-008c index has
+    // an immutable column to constrain.
+    const punchDate = parseDateOnly(
+      zonedDateOnly(capturedAt, this.settingsTimeZone),
+    );
+
+    // --- Gate 4 + write: one punch-in and one punch-out that day (FR-008). ---
     const record = await withRlsContext(this.prisma, caller.rls, async (tx) => {
-      // `FOR UPDATE` locks the employee's open punch-in row for the rest of this
-      // transaction, so two concurrent punch-ins serialise here instead of both
-      // reading "no open punch-in" and both inserting (research.md §5). The partial
-      // unique index in the migration is the backstop if this is ever bypassed.
-      const open = await tx.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "hr"."PunchRecord"
+      // `FOR UPDATE` locks that day's punches for the rest of this transaction, so
+      // two concurrent punches serialise here instead of both reading an empty day
+      // and both inserting (research.md §5). The partial unique index in the
+      // migration is the backstop if this is ever bypassed.
+      //
+      // Scoped to the day, and to every source: the rule is about what the day's
+      // record already contains, not about who wrote it — an employee should not
+      // earn a second punch-in because the first was entered by HR. An open
+      // punch-in from an *earlier* day is deliberately outside this window; nothing
+      // can close it now, so treating it as blocking would lock the employee out
+      // indefinitely (FR-008a).
+      const sameDay = await tx.$queryRaw<{ id: string; type: PunchType }[]>`
+        SELECT "id", "type" FROM "hr"."PunchRecord"
         WHERE "employeeId" = ${employee.id}
-          AND "type" = 'in'::"hr"."PunchType"
-          AND "closedByPunchId" IS NULL
+          AND "punchDate" = ${punchDate}
         FOR UPDATE
       `;
-      const openPunchIn = open[0] ?? null;
+      const punchedIn = sameDay.find((p) => p.type === PunchType.in) ?? null;
+      const punchedOut = sameDay.find((p) => p.type === PunchType.out) ?? null;
 
-      if (dto.type === PunchType.in && openPunchIn) {
-        throw new BadRequestException(
-          'You already have an open punch-in. Punch out before punching in again.',
+      // 409 rather than 400 throughout: each of these requests is well-formed, and
+      // it is the day's recorded state that forbids it — a distinction the client
+      // needs to make without reading the message.
+      if (dto.type === PunchType.in && punchedIn) {
+        throw new ConflictException(
+          'You have already punched in today. Only one punch-in and one punch-out are recorded per day.',
         );
       }
-      if (dto.type === PunchType.out && !openPunchIn) {
-        throw new BadRequestException(
-          'You have no open punch-in to punch out from.',
+      if (dto.type === PunchType.out && !punchedIn) {
+        throw new ConflictException(
+          'You have not punched in today, so there is nothing to punch out from.',
         );
       }
+      if (dto.type === PunchType.out && punchedOut) {
+        throw new ConflictException(
+          'You have already punched out today. Only one punch-in and one punch-out are recorded per day.',
+        );
+      }
+      const openPunchIn = dto.type === PunchType.out ? punchedIn : null;
 
       const created = await tx.punchRecord.create({
         data: {
           employeeId: employee.id,
           type: dto.type,
           capturedAt,
+          punchDate,
+          // Self-service. The FR-008c index binds only this source, leaving room
+          // for feature 005's corrections.
+          source: PunchSource.employee,
           receivedAt,
           isOfflineSync,
           photoRef,

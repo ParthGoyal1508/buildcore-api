@@ -62,6 +62,17 @@ export class PunchController {
     return this.punch.submitPunch(callerFrom(user, request), dto);
   }
 
+  @Get('open')
+  @ApiOperation({
+    summary: "The caller's punch state for today, and whether it is complete",
+  })
+  async open(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.punch.getTodayPunchState(callerFrom(user, request));
+  }
+
   @Get('history')
   @ApiOperation({ summary: "The caller's own attendance for one month" })
   @ApiResponse({

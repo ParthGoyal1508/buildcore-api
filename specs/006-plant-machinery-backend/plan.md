@@ -121,3 +121,58 @@ E2e in `test/plant.e2e-spec.ts` for equipment lifecycle, maintenance job auto-st
 
 - [ ] Swagger `@ApiTags('Plant')` + `@ApiOperation` on all controllers
 - [ ] `npm run lint` + `npm run build` clean
+
+---
+
+## Amendment 2026-09-01 — Spare Parts Inventory & Service Bills
+
+Covers spec FR-015 to FR-028. Adds 3 `plant` tables; **no new permission value** (reuses the
+`MAINTENANCE` value this feature already introduces).
+
+**Corrects an existing defect**: `getMachineryCostByProject()` (FR-008) counted only depreciation
+and hire bills, systematically understating machinery cost by every repair and spare part. FR-025
+extends it.
+
+**Constitution re-check**: Principle I — all 3 tables in `plant`; the declared inventory-item link
+(FR-024) is a reference plus a reconciliation view, never a cross-schema write. Principle III —
+reorder levels per part. Principle IV — `companyId` + RLS on all 3. Principle V — reuses
+`MAINTENANCE`. PASS.
+
+### Phase A1: Schema
+
+- [ ] Add `SparePart`, `SparePartMovement`, `ServiceBill` models; migration + RLS
+- [ ] Extend `shared.AuditLogEntry.entityType` with `SPARE_PART`, `SPARE_PART_MOVEMENT`,
+      `SERVICE_BILL`
+
+### Phase A2: US9 & US10 — Spare Parts Stock & Consumption (P2)
+
+- [ ] `SparePartService` + controller (catalogue CRUD, part-number uniqueness → 409, receipts
+      updating the running balance and weighted average rate — FR-016, FR-017, below-reorder
+      filter)
+- [ ] Consumption against a maintenance job (transactional non-negative guard — FR-018,
+      valuation at the rate in force at consumption time, `partsCost` accrual, closed-job
+      rejection and reversal — FR-019, incompatible-part flag rather than block — FR-020)
+- [ ] Reconciliation view for parts declaring a `linkedInventoryItemId` (FR-024)
+- [ ] Unit test: WAR recomputation; rate frozen at consumption; incompatible-part flagging
+- [ ] E2e test: concurrent consumptions exceeding stock — no negative balance (SC-A01)
+
+### Phase A3: US11 — Service Bills (P2)
+
+- [ ] `ServiceBillService` + controller (server-side `tdsAmount`/`netPayable` — FR-021, bill-number
+      uniqueness per vendor → 409, verify freezing figures, payment blocked while unverified —
+      FR-023, recordable against a closed job)
+- [ ] Per-equipment lifetime maintenance cost split by parts / internal labour / service bills
+      (FR-026)
+- [ ] Unit test: TDS and net payable; verification and payment guards
+
+### Phase A4: P&L Correction
+
+- [ ] Extend `getMachineryCostByProject()` to add spare parts consumption and verified service bill
+      `netPayable` for equipment deployed at the project's sites (FR-025)
+- [ ] Unit test: corrected figure matches a manual sum including parts and service bills (SC-A03)
+
+### Phase A5: Reminders Handover
+
+- [ ] Replace this feature's own equipment document-expiry and service-due reminder evaluation with
+      rule registrations against feature 004's centralized engine (ratified 2026-09-01) — build-order
+      dependency on 004's Phase A3

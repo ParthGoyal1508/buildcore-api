@@ -524,3 +524,223 @@ one and confirming it no longer appears.
   established in 005 (EmployeeDocument) — no new storage infrastructure.
 - BOQ import is synchronous for files up to 1,000 rows; larger files are out of scope for this
   version.
+
+---
+
+## Amendment 2026-09-01 — Project Planning & Target-vs-Actual Reporting
+
+**Reason**: A gap audit against the module/submodule matrix found two uncovered items. Row 25
+("Projects Portfolio: ... **Project Planning** ...") names a planning surface this spec does not
+have: a project currently has a start and end date and a BOQ, but no decomposition into phases,
+activities, or milestones, no baseline schedule, and therefore no notion of whether it is running
+late. Row 26 ("Daily Progress Report: ... **Monthly Report Chart and Target report** ...") names a
+target-versus-actual comparison this spec cannot produce, because there is no target to compare
+actuals against — DWR (US5) records what was done, and BOQ (US4) records what is contracted, but
+nothing records what was *planned* for a given period. This amendment adds the plan and the
+comparison. Everything already specified above is unchanged.
+
+### User Story 9 - Build a project schedule of activities and milestones (Priority: P2)
+
+A planning engineer decomposes a project into phases and activities, each with a planned start and
+finish, a planned quantity drawn from the BOQ, a dependency on preceding activities, and an assigned
+responsible party. Key dates are marked as milestones. The saved schedule becomes the project's
+baseline.
+
+**Why this priority**: The plan is the reference every subsequent comparison needs. It depends on
+the project and BOQ existing (US3, US4) but nothing depends on it except the reporting stories.
+
+**Independent Test**: Create a two-phase schedule with four activities and one milestone, baseline
+it, and confirm the computed project finish date matches the latest activity finish — without any
+DWR existing.
+
+**Acceptance Scenarios**:
+
+1. **Given** a project, **When** `POST /projects/:id/phases` is called with `name`, `sequence`, and
+   optional `description`, **Then** the phase is created.
+2. **Given** a phase, **When** `POST /projects/phases/:id/activities` is called with `name`,
+   `plannedStart`, `plannedFinish`, optional `boqItemId`, optional `plannedQuantity`,
+   `weightagePercent`, and optional `responsibleEmployeeId`, **Then** the activity is created.
+3. **Given** an activity with `plannedFinish` before `plannedStart`, **When** creation is attempted,
+   **Then** `400 Bad Request`.
+4. **Given** activities in a project, **When** their `weightagePercent` values sum to something
+   other than 100, **Then** the schedule may be saved but MUST NOT be baselined, and the attempt to
+   baseline reports the actual sum.
+5. **Given** two activities, **When** `POST /projects/activities/:id/dependencies` is called with a
+   `predecessorActivityId` and a `dependencyType` (finish_to_start|start_to_start|finish_to_finish),
+   **Then** the dependency is created.
+6. **Given** a dependency that would create a cycle, **When** it is created, **Then**
+   `400 Bad Request` naming the cycle path.
+7. **Given** an activity whose `plannedStart` precedes a finish-to-start predecessor's
+   `plannedFinish`, **When** it is saved, **Then** it is flagged `dependencyViolation` rather than
+   blocked, so a plan may be saved mid-edit.
+8. **Given** an activity, **When** `PATCH /projects/activities/:id` sets `isMilestone: true` with a
+   `milestoneName`, **Then** it appears in the project's milestone list.
+9. **Given** a complete schedule, **When** `POST /projects/:id/schedule/baseline` is called by a
+   holder of `PROJECTS`, **Then** the current planned dates and quantities are frozen as
+   `baselineStart`, `baselineFinish`, and `baselineQuantity` on every activity, and the baseline
+   version increments.
+10. **Given** a baselined schedule, **When** planned dates are edited, **Then** the edit is
+    permitted and the variance against the baseline is recomputed — the baseline itself is
+    immutable and only a new baseline supersedes it.
+11. **Given** a project whose `isLocked` flag is set, **When** any schedule write is attempted,
+    **Then** it is rejected by the existing lock rule (FR-003), which this amendment extends to
+    cover schedule entities.
+
+### User Story 10 - Set and track periodic targets (Priority: P2)
+
+A project manager sets monthly (or weekly) targets per activity or BOQ item — a quantity to be
+achieved in the period — and the system compares them against the actual quantities the DWRs
+recorded, producing the achievement percentage the matrix's "Target report" calls for.
+
+**Why this priority**: This is the direct answer to the matrix's target report. It depends on the
+schedule (US9) for activities and on the existing DWR flow (US5) for actuals.
+
+**Independent Test**: Set a monthly target of 500 cum for an activity, record DWRs totalling 400 cum
+in that month, and confirm the target report shows 80% achievement and a 100 cum shortfall.
+
+**Acceptance Scenarios**:
+
+1. **Given** a project activity or BOQ item, **When** `POST /projects/targets` is called with
+   `projectId`, `periodType` (weekly|monthly), `periodStart`, `periodEnd`, and `lines[]` (each with
+   an `activityId` or `boqItemId` and a `targetQuantity`), **Then** the target set is created.
+2. **Given** an overlapping target set for the same project, period type, and activity, **When**
+   creation is attempted, **Then** `409 Conflict`.
+3. **Given** a target set, **When** `GET /projects/:id/reports/target-vs-actual?from=&to=&periodType=`,
+   **Then** each line returns target quantity, actual quantity summed from approved DWR
+   measurements in the period, achievement percentage, and variance, with a project-level rollup
+   weighted by each activity's `weightagePercent`.
+4. **Given** a period with no target set, **When** the report is read, **Then** actuals are still
+   reported with the target shown as unset rather than zero, so achievement is not misreported as
+   infinite or zero.
+5. **Given** the monthly report request, **When**
+   `GET /projects/:id/reports/monthly?year=&month=`, **Then** a period summary returns opening and
+   closing cumulative progress, quantity achieved, target, achievement percentage, man-days,
+   equipment hours, and material consumed, sourced through the existing cross-module service
+   methods rather than direct cross-schema queries.
+6. **Given** a series of months, **When**
+   `GET /projects/:id/reports/progress-trend?from=&to=`, **Then** a per-period series of planned
+   cumulative progress and actual cumulative progress is returned — the data behind the matrix's
+   "Monthly Report Chart".
+7. **Given** any of these reports, **When** `?format=xlsx` or `?format=pdf` is requested, **Then** a
+   real file is produced using the project's existing export libraries, generated asynchronously
+   above the configured row threshold.
+
+### User Story 11 - Schedule variance and delay analysis (Priority: P3)
+
+A project manager sees, per activity, whether it is ahead of, on, or behind its baseline, and sees
+the project's overall planned-versus-actual progress with the critical delayed activities called
+out.
+
+**Why this priority**: The analytical layer over US9 and US10. Valuable but strictly derivative, so
+it is delivered last.
+
+**Independent Test**: With a baselined schedule where one activity's actual progress trails its
+planned progress, read the variance report and confirm that activity is flagged `behind_schedule`
+with the correct slippage in days.
+
+**Acceptance Scenarios**:
+
+1. **Given** a baselined schedule with recorded actuals, **When**
+   `GET /projects/:id/reports/schedule-variance`, **Then** each activity returns baseline dates,
+   current planned dates, actual start and finish (derived from the first and last DWR measurement
+   against it), percent complete, and a status of `not_started`, `on_track`, `behind_schedule`, or
+   `completed`.
+2. **Given** an activity whose percent complete trails its time-elapsed percentage by more than a
+   configurable tolerance, **When** the report is read, **Then** it is flagged `behind_schedule`
+   with the slippage expressed in days.
+3. **Given** the project, **When** the variance report is read, **Then** overall planned progress
+   (weightage-weighted, time-elapsed) and actual progress (weightage-weighted, quantity-based) are
+   returned along with the resulting schedule variance percentage.
+4. **Given** activities on the longest dependency chain, **When** the variance report is read,
+   **Then** those activities are marked `isCritical` and a delay on any of them is reported as
+   affecting the project finish date.
+5. **Given** a project with no baseline, **When** the variance report is requested, **Then** the
+   response reports that no baseline exists rather than comparing against unset values.
+6. **Given** an activity with no linked BOQ item and no recorded quantity, **When** percent complete
+   is computed, **Then** it falls back to the manually entered `percentComplete` on the activity,
+   and the report marks the source so the two are not conflated.
+
+### Additional Edge Cases
+
+- A BOQ item's quantity is revised after targets referencing it were set → the targets keep their
+  original quantities; the report shows both so the revision is visible rather than silently
+  restating history.
+- An activity is deleted after DWRs recorded actuals against it → deletion is rejected with `409`;
+  activities with actuals may only be marked cancelled.
+- A dependency cycle is introduced across phases → rejected with the cycle path named, the same as
+  within a phase.
+- A target is set for a period that has already fully elapsed → permitted; a target may legitimately
+  be recorded retrospectively, and the report immediately shows the achieved percentage.
+- The project's `isLocked` flag is set mid-period → schedule and target writes are rejected by the
+  existing lock rule, while the reports remain readable.
+- An activity's weightages are edited after baselining → permitted, but the project-level rollup
+  reports both baseline and current weightage sums so the comparison basis is explicit.
+
+### Additional Functional Requirements
+
+- **FR-019**: The system MUST support decomposing a project into ordered Phases, each containing
+  Activities with planned start/finish, optional BOQ item linkage, optional planned quantity, a
+  weightage percent, an optional responsible employee, and an optional milestone marker.
+- **FR-020**: Activity dependencies MUST support finish-to-start, start-to-start, and
+  finish-to-finish types, and the system MUST reject any dependency that would create a cycle with
+  `400 Bad Request` naming the cycle path.
+- **FR-021**: A dependency violation in the planned dates (an activity starting before its
+  finish-to-start predecessor finishes) MUST be flagged rather than blocked, so a partially edited
+  plan can be saved.
+- **FR-022**: A schedule MUST NOT be baselinable while its activities' `weightagePercent` values do
+  not sum to 100; the rejection MUST report the actual sum.
+- **FR-023**: Baselining MUST freeze each activity's current planned dates and quantities as
+  immutable baseline values and increment a baseline version; subsequent planned-date edits MUST be
+  permitted and MUST recompute variance against the frozen baseline rather than altering it.
+- **FR-024**: The existing project-lock rule (FR-003) MUST extend to all schedule, activity,
+  dependency, and target write operations.
+- **FR-025**: An activity with recorded actuals MUST NOT be deletable (`409 Conflict`); it may only
+  be marked cancelled.
+- **FR-026**: The system MUST support periodic (weekly or monthly) Target sets per project, with
+  lines targeting an activity or a BOQ item; overlapping target sets for the same project, period
+  type, and target entity MUST be rejected with `409 Conflict`.
+- **FR-027**: Actual quantity for target comparison MUST be summed from approved DWR measurements
+  in the period (US5, FR-005), never from a separately maintained figure, so target reporting and
+  BOQ progress can never disagree.
+- **FR-028**: A period with no target set MUST report actuals with the target explicitly unset;
+  achievement percentage MUST NOT be computed against a zero or absent target.
+- **FR-029**: Project-level achievement and progress rollups MUST be weighted by each activity's
+  `weightagePercent`, and the report MUST state whether baseline or current weightages were used.
+- **FR-030**: Activity percent complete MUST be derived from recorded quantity against planned
+  quantity where a BOQ item or planned quantity exists, and MUST otherwise fall back to a manually
+  entered value, with the report marking which source was used.
+- **FR-031**: The schedule variance report MUST flag an activity `behind_schedule` when its percent
+  complete trails its time-elapsed percentage by more than a configurable tolerance, expressing the
+  slippage in days, and MUST mark activities on the longest dependency chain as `isCritical`.
+- **FR-032**: The variance report MUST report the absence of a baseline explicitly rather than
+  comparing against unset values.
+- **FR-033**: The monthly report MUST source man-days, equipment hours, and material consumed
+  through the existing cross-module service methods (`LabourService`, `PlantService`,
+  `InventoryService`), never by direct cross-schema query — consistent with FR-008's rule for P&L.
+- **FR-034**: All schedule and target write operations MUST be gated by `JwtAuthGuard` +
+  `@RequirePermission(Permission.PROJECTS)` and reporting endpoints by the existing `REPORTS`
+  permission, adding no new permission value; writes MUST be audit-logged with the new entity types
+  `PROJECT_PHASE`, `PROJECT_ACTIVITY`, and `PROJECT_TARGET`.
+- **FR-035**: Report exports MUST produce real XLSX/PDF files using the project's existing export
+  libraries, generated asynchronously as a background job above the configured row threshold,
+  matching 004 FR-021.
+
+### Additional Key Entities
+
+- **ProjectPhase**: An ordered grouping of activities within a project.
+- **ProjectActivity**: A planned unit of work: planned and baseline start/finish, optional BOQ item
+  link, planned and baseline quantity, weightage percent, responsible employee, milestone marker,
+  criticality flag, and status.
+- **ActivityDependency**: A typed precedence link between two activities.
+- **ProjectTarget / ProjectTargetLine**: A periodic set of quantity targets per activity or BOQ
+  item, against which approved DWR measurements are compared.
+
+### Additional Success Criteria
+
+- **SC-A01**: For any project period, target, actual, achievement percentage, and variance are
+  reported consistently, and the actual figure always reconciles exactly with the sum of approved
+  DWR measurements for that period.
+- **SC-A02**: A baselined schedule's baseline values never change, verified by a test asserting they
+  are unchanged after arbitrary planned-date edits.
+- **SC-A03**: No dependency cycle can be persisted, verified by a test attempting cycles within and
+  across phases.

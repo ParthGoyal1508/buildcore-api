@@ -48,6 +48,15 @@ export class CreateClaimDto {
   receiptRef?: string;
 
   @ApiPropertyOptional({
+    description:
+      'A base64-encoded receipt image (optionally a data URL), stored server-side in the same request and turned into `receiptRef`. Supply this or `receiptRef`, not both — this wins if both are sent.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  receipt?: string;
+
+  @ApiPropertyOptional({
     enum: ['draft', 'submitted'],
     default: 'submitted',
     description:

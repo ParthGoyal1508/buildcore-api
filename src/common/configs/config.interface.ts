@@ -117,6 +117,20 @@ export interface SettingsConfig {
   };
   /** Day-of-month after which attendance edits lock for payroll processing. */
   defaultPayrollLockDay: number;
+  /**
+   * The IANA zone every calendar day in this system is reckoned against.
+   *
+   * A punch, a leave day and a payroll lock are all *calendar* facts, but the
+   * values they are derived from are *instants*. Without a zone, `toISOString()`
+   * decides, which means UTC — and in IST every punch before 05:30 local is filed
+   * under the previous day, taking its attendance and OT with it.
+   *
+   * Configured rather than hardcoded (Principle III), single rather than
+   * per-company: this ERP is India-specific throughout — GSTIN, PAN, PF/ESIC,
+   * BOCW, April–March financial years — so one zone is an honest assumption, and
+   * an explicit one beats the accidental UTC it replaces.
+   */
+  timezone: string;
 }
 
 /**
@@ -197,6 +211,17 @@ export interface StorageConfig {
    * never holds decryptable biometric data.
    */
   encryptionKey: string;
+  /**
+   * Escape hatch for a deployment that sets `NODE_ENV=production` but serves nobody
+   * real — a preview or staging host — where losing blobs on redeploy costs nothing
+   * and demanding R2 credentials would block unrelated work.
+   *
+   * Never inferred. A real production environment that simply forgets to configure
+   * S3 still refuses to boot, which is the behaviour that matters: an app that
+   * silently destroys biometric photos on every restart is worse than one that does
+   * not start.
+   */
+  allowLocalInProduction: boolean;
   local: {
     /** Directory the local adapter writes under. Git- and Docker-ignored. */
     path: string;

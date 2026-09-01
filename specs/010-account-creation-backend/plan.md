@@ -205,3 +205,91 @@ for the rest of the account lifecycle.
   `updateRoleOrStatus`/`deleteAccount`/`countActiveSuperAdmins`) — 002's own tasks.md (T041, T050)
   has been updated to point here rather than at its original "AuthModule" assumption
   (research.md §8).
+
+---
+
+## Amendment 2026-09-01 — direct account creation with an admin-set password (FR-015–FR-018)
+
+**Scope**: adds a second creation path to an already-shipped feature, and makes
+`mustChangePassword` mean something for the first time. Amends `plan.md`, `spec.md`, `data-model.md`
+and the contract in place; adds one migration. `research.md` is unaffected — no new technology
+decision was taken.
+
+### 1. One endpoint, two paths (FR-015)
+
+`POST /account-creation/users` takes an optional `password`. Present: the account is created
+`active`, argon2-hashed via 001's `PasswordService`, with **no** invite token and **no** email.
+Absent: today's flow is untouched. A second endpoint was rejected — it would duplicate employee
+linking, role/company resolution and the uniqueness check to vary one field.
+
+Validation runs before any row exists (FR-016), so a rejected password leaves nothing behind. The
+complexity rule is the invitee's own, reused rather than restated.
+
+### 2. `mustChangePassword` currently means nothing — that is the bulk of this work
+
+The flag is set by the admin-reset path and by nothing else, and it is enforced **nowhere**:
+
+- `auth.service.ts` reports it in the login response and as a JWT claim; no guard consults it.
+- The frontend redirects to `/change-password`, which is a placeholder page with no form — and the
+  redirect is client-side only, so any other route bypasses it while the token is already valid.
+- `UsersService.changePassword()` updates `password` alone, so the flag would never clear.
+
+Setting the flag on a directly-created account therefore achieves nothing without all three being
+addressed. That is why FR-017a–c exist, and why this amendment is larger than the endpoint change
+that motivated it.
+
+### 3. Enforcement reads live state, not the token (FR-017a)
+
+`jwt.strategy.validate()` already re-reads the account on every request (001 FR-009) and
+`AuthenticatedUser extends User`, so the row — including the flag — is fresh on `request.user`. A
+guard therefore consults current state rather than the JWT claim, which would otherwise go stale the
+moment the password changes and force a re-login to escape the very screen the user just completed.
+
+The guard is global with an opt-out decorator, following `permissions.decorator.ts`'s
+`SetMetadata` + `Reflector` pattern already in the codebase. Exempting is a deliberate act on four
+routes (change-password, own-profile read, refresh, logout) rather than something every new
+controller must remember to add — a rule that fails open on forgetfulness is not a rule.
+
+Refusal is `403` with a `PASSWORD_CHANGE_REQUIRED` code in the body, so the client branches on the
+code and never on message text.
+
+### 4. Why a new column is needed (FR-017a-i)
+
+The refusal is scoped to directly-created accounts, not to every account carrying the flag — so the
+flag alone cannot decide. `User` gains a `credentialOrigin` (`invite` | `admin_direct` |
+`admin_reset`), backfilled to `invite` for existing rows, which is what they are.
+
+This is the direct cost of scoping the rule narrowly (the user's decision, taken to avoid locking
+out anyone mid-reset on deploy). The wider rule would have needed no column.
+
+### 5. Clearing the flag (FR-017b)
+
+`UsersService.changePassword()` sets `mustChangePassword: false` in the same update as the new hash.
+One write, so a crash between them cannot leave an account that has changed its password yet is
+still refused everything.
+
+### 6. Audit (FR-014, amended)
+
+A direct creation is distinguishable from an invited one in the audit entry. The password itself is
+never recorded, in any form — not the value, not its hash, not its length.
+
+### 7. Frontend (FR-017c)
+
+`app/change-password/page.tsx` is a placeholder today; it becomes a real form posting to the
+existing `POST /users/change-password`, then routes onward. This is not optional polish: with §3's
+server-side refusal in place and no form, a directly-created account can sign in and do nothing at
+all.
+
+**Constitution check (re-evaluated)**: no new violations. Principle IV is strengthened — an
+admin-chosen credential stops being indefinitely usable. Principle V holds: the guard is
+authentication-adjacent and lives with the other auth guards; no secret is logged. Principles I,
+II, III, VI unaffected.
+
+**Known limitation, recorded rather than hidden**: accounts flagged by an admin *reset* stay
+unenforced (FR-017a-ii). Such an account remains fully usable on a password its admin knows. This
+was a deliberate scoping choice to avoid locking out anyone mid-reset at deploy time; closing it is
+a follow-up, not an oversight.
+
+**Risk**: the global guard sits in the request path of every authenticated endpoint. A mistake in
+its exemption list locks every user out of everything, which is why the four exemptions get explicit
+tests rather than being assumed from the decorator's presence.

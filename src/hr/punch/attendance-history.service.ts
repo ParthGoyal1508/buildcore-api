@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PunchRecord, PunchType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { SitesService } from '../../projects/sites/sites.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
@@ -11,6 +13,8 @@ import {
   eachDateInRange,
   parseDateOnly,
   toDateOnly,
+  zonedDateOnly,
+  zonedDayBounds,
 } from '../leave/leave-days';
 import { computeWorkedHours } from './worked-hours';
 
@@ -81,13 +85,18 @@ export function statusForDay(facts: DayFacts): AttendanceStatus {
  */
 @Injectable()
 export class AttendanceHistoryService {
+  private readonly timeZone: string;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly sites: SitesService,
     private readonly leave: LeaveService,
     private readonly referenceData: ReferenceDataService,
-  ) {}
+    configService: ConfigService,
+  ) {
+    this.timeZone = configService.get<SettingsConfig>('settings').timezone;
+  }
 
   async getMonthHistory(
     caller: Caller,
@@ -119,7 +128,7 @@ export class AttendanceHistoryService {
       ]);
 
     const holidaySet = new Set(holidays);
-    const punchesByDate = groupByCapturedDate(punches);
+    const punchesByDate = groupByCapturedDate(punches, this.timeZone);
 
     const days = eachDateInRange(firstDate, lastDate).map((date) => {
       const dayPunches = punchesByDate.get(date) ?? [];
@@ -167,11 +176,14 @@ export class AttendanceHistoryService {
         where: {
           employeeId,
           capturedAt: {
-            gte: parseDateOnly(firstDate),
-            // Exclusive upper bound at the next day's midnight, so a punch at
-            // 23:59 on the last day is included — `lte: lastDate` would compare
-            // against that day's *midnight* and silently drop it.
-            lt: new Date(parseDateOnly(lastDate).getTime() + 86_400_000),
+            // Local midnights, not UTC ones: the rows are instants, and the month
+            // being asked for is the employee's, so its edges have to be measured
+            // in their zone or the first and last days lose punches to the
+            // neighbouring months.
+            gte: zonedDayBounds(firstDate, this.timeZone).start,
+            // Exclusive upper bound at the next day's local midnight, so a punch
+            // at 23:59 on the last day is included.
+            lt: zonedDayBounds(lastDate, this.timeZone).end,
           },
         },
         orderBy: { capturedAt: 'asc' },
@@ -182,10 +194,13 @@ export class AttendanceHistoryService {
 
 function groupByCapturedDate(
   punches: PunchRecord[],
+  timeZone: string,
 ): Map<string, PunchRecord[]> {
   const byDate = new Map<string, PunchRecord[]>();
   for (const punch of punches) {
-    const date = toDateOnly(punch.capturedAt);
+    // The employee's calendar day, not the server's. `capturedAt` is an instant;
+    // which date it belongs to depends on the zone (see `zonedDateOnly`).
+    const date = zonedDateOnly(punch.capturedAt, timeZone);
     const existing = byDate.get(date);
     if (existing) {
       existing.push(punch);

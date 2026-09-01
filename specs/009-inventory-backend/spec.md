@@ -454,3 +454,119 @@ verify return = ₹1,50,000.
   PRD §7.6.6 implies per-item; §7.8.6 separately says "per item per site," an internal
   inconsistency in the source document. Per-item was chosen as the simpler default; a future
   amendment can add per-site overrides if the business need materializes.
+
+---
+
+## Amendment 2026-09-01 — Material Request / Indent Workflow
+
+**Reason**: A gap audit against the module/submodule matrix found that rows 26 ("Material request"
+under Daily Progress Report) and 37 ("Material Management: Transfers, Issues, **New Request**,
+Purchases") name a material *request* surface that this spec does not cover. As originally written,
+this feature jumps straight from a purchase to an issue: a site has no way to ask for material, no
+approval trail for that ask, and no link from a site's demand to the purchase that satisfies it.
+This amendment adds the indent workflow that sits in front of the existing purchase and issue
+flows. Everything already specified above is unchanged.
+
+### User Story 9 - Raise and approve material indents (Priority: P1)
+
+A site engineer raises an indent for material needed at a site — item, quantity, required-by date,
+and the work activity or BOQ item it is for. The indent is approved by the project manager, then
+fulfilled either from existing stock (becoming an issue) or by procurement (becoming a purchase),
+so every issue and purchase is traceable back to the demand that caused it.
+
+**Why this priority**: Without it, purchases and issues have no demand trail, and the matrix's
+"New Request" surface does not exist. It sits in front of the already-specified issue and purchase
+flows and does not change them.
+
+**Independent Test**: Raise an indent for 50 bags of cement at a site, approve it, and confirm it
+appears in the approved-indent queue with its pending quantity — without fulfilling it.
+
+**Acceptance Scenarios**:
+
+1. **Given** a site session, **When** `POST /inventory/indents` is called with `siteId`, `projectId`,
+   `requiredByDate`, `lines[]` (each with `itemId`, `quantity`, optional `activityId` or
+   `boqItemId`, and optional `remarks`), and a `justification`, **Then** the indent is created with
+   `status: 'pending'` and an auto-generated indent number.
+2. **Given** an indent line whose `itemId` is inactive, **When** creation is attempted, **Then**
+   `400 Bad Request`.
+3. **Given** a pending indent, **When** `PATCH /inventory/indents/:id/approve` is called by a holder
+   of `INVENTORY_APPROVE`, **Then** the status becomes `approved` and it enters the fulfilment
+   queue; per-line quantity reductions with a reason are permitted at approval and are recorded as
+   `approvedQuantity` alongside the original `requestedQuantity`.
+4. **Given** a pending indent, **When** rejection is attempted without a `reason`, **Then**
+   `400 Bad Request`.
+5. **Given** an approved indent line, **When** an issue is created against it, **Then** the issue
+   records the `indentLineId`, the line's `fulfilledQuantity` increases, and the indent's status
+   advances to `partially_fulfilled` or `fulfilled` accordingly.
+6. **Given** an approved indent line with insufficient stock at the site, **When**
+   `PATCH /inventory/indents/lines/:id/mark-procurement-needed` is called, **Then** the line becomes
+   `procurement_pending` and appears in the procurement-needed report.
+7. **Given** a purchase created against an indent line, **When** it is saved, **Then** the purchase
+   records the `indentLineId` so the demand-to-purchase trail is complete.
+8. **Given** an issue attempted for a quantity exceeding the approved indent line's outstanding
+   quantity, **When** it is attempted, **Then** `400 Bad Request` reporting the outstanding
+   quantity.
+9. **Given** an approved indent whose `requiredByDate` has passed with outstanding quantity, **When**
+   the indent list is read, **Then** it is flagged `overdue` with the day count.
+10. **Given** an indent list request, **When**
+    `GET /inventory/indents?status=&siteId=&projectId=&itemId=`, **Then** paginated, filtered results
+    are returned with requested, approved, fulfilled, and outstanding quantities per line.
+11. **Given** an indent with any fulfilled quantity, **When** cancellation is attempted, **Then**
+    `409 Conflict`; an indent with no fulfilment may be cancelled with a reason.
+
+### Additional Edge Cases
+
+- An item's reorder level is breached by an approved indent's demand → the item appears in the
+  procurement-needed report with both its reorder shortfall and its outstanding indent demand, so
+  the two are not double-counted into a single purchase.
+- Two sites indent the same item concurrently against the same limited stock → indent approval does
+  not reserve stock; the existing issue-time quantity validation (FR-003) remains the single point
+  of truth, and the second issue fails there rather than at approval.
+- An indent is approved and then the underlying work activity is cancelled in feature 008 → the
+  indent remains and must be explicitly cancelled; no automatic cascade.
+
+### Additional Functional Requirements
+
+- **FR-021**: The system MUST provide a material indent with header (site, project, required-by
+  date, justification, status) and lines (item, requested quantity, approved quantity, fulfilled
+  quantity, optional activity or BOQ item reference), with the indent number auto-generated via
+  Settings' existing code-series service.
+- **FR-022**: Indent approval MUST require the `INVENTORY_APPROVE` permission and MUST permit
+  per-line quantity reduction with a reason, recording both `requestedQuantity` and
+  `approvedQuantity` so the reduction is auditable.
+- **FR-023**: An issue or purchase MAY reference an approved indent line; when it does, the line's
+  `fulfilledQuantity` MUST be updated in the same transaction and the indent's status MUST advance
+  to `partially_fulfilled` or `fulfilled` accordingly.
+- **FR-024**: The system MUST reject an issue against an indent line for a quantity exceeding that
+  line's outstanding (approved minus fulfilled) quantity, reporting the outstanding figure.
+- **FR-025**: Indent approval MUST NOT reserve or allocate stock; the existing transactional
+  quantity validation at issue time (FR-003) remains the single point of stock enforcement, so
+  approving an indent can never cause a negative balance.
+- **FR-026**: An indent with any fulfilled quantity MUST NOT be cancellable (`409 Conflict`); an
+  unfulfilled indent MUST be cancellable only with a reason.
+- **FR-027**: The system MUST expose a procurement-needed report combining indent lines marked
+  `procurement_pending` with items below their reorder level (FR-017), reporting the two demand
+  sources separately so they are not double-counted.
+- **FR-028**: Indents MUST NOT be hard-deleted; removal MUST be a soft-delete, matching FR-004's
+  treatment of purchases, issues, and transfers.
+- **FR-029**: The `Permission` enum MUST be extended with one new value, `INVENTORY_APPROVE`, for
+  indent approval and quantity reduction; all other indent endpoints MUST reuse the existing
+  `INVENTORY` permission.
+- **FR-030**: Indent write operations MUST be written to the audit log with the new entity type
+  `MATERIAL_INDENT`.
+
+### Additional Key Entities
+
+- **MaterialIndent**: A site's request for material. Header carries site, project, required-by date,
+  justification, requesting actor, approving actor, and status.
+- **MaterialIndentLine**: One requested item: requested, approved, and fulfilled quantities, optional
+  work activity or BOQ item reference, per-line status, and links to the issues and purchases that
+  fulfilled it.
+
+### Additional Success Criteria
+
+- **SC-A01**: Every issue and purchase created from a site's demand is traceable back to the indent
+  line that caused it, and every approved indent line's outstanding quantity always equals approved
+  minus fulfilled.
+- **SC-A02**: Approving an indent never changes any stock balance, verified by a test asserting
+  balances are identical before and after approval.

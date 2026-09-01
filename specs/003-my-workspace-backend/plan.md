@@ -163,3 +163,158 @@ schemas are the structural database addition, via the same Prisma multi-schema m
 
 *No entries — the two new dependencies are pre-approved via constitution amendment (v1.1.0), not
 undocumented violations; no other constitution deviation exists (see Constitution Check above).*
+
+---
+
+## Amendment 2026-09-01 — calendar days, open-punch state, reimbursement wiring
+
+**Scope**: changes to an already-shipped feature, recorded in place. No new artifacts;
+`research.md` and `data-model.md` are unaffected — no entity changed shape and the timezone
+decision is recorded here rather than as a fresh research question.
+
+### 1. Calendar days are reckoned in a configured zone (FR-018a)
+
+**The defect.** A calendar day was derived from an instant with `toISOString()`, which means UTC.
+At UTC+5:30 that files every punch before 05:30 local under the previous date, taking that shift's
+attendance and overtime with it. Found from a real punch at 00:07 IST appearing under the previous
+day and the day itself reading "Absent".
+
+**Decision**: one configured application-wide zone (`APP_TIMEZONE`, default `Asia/Kolkata`), not a
+per-company or per-site column. Everything statutory in this system is already India-specific —
+GSTIN, PAN, PF/ESIC, BOCW, April–March financial years — so a single zone is an honest assumption,
+and an explicit one is strictly better than the accidental UTC it replaces. A per-company column
+remains the migration path if BuildCore ever serves companies outside India.
+
+**Design**: the fix is at the boundary, not in the calendar-string helpers. `toDateOnly` and
+`parseDateOnly` keep operating on `YYYY-MM-DD` and `@db.Date` values that genuinely are UTC
+midnight, which is correct and DST-free — the existing design was right. Two helpers sit beside
+them for the conversions that were wrong: `zonedDateOnly()` (which day an instant belongs to) and
+`zonedDayBounds()` (the instants bounding a local day, for range queries). The offset is measured
+per date rather than assumed, so a DST zone yields 23- or 25-hour days.
+
+**Known gap**: the frontend keeps its own `financialYearOf` and uses browser-local time for
+"today". That agrees with IST for the current userbase, so nothing is wrong today — but it is a
+second, independent definition of the day boundary that nothing keeps in sync with `APP_TIMEZONE`.
+
+### 2. Open-punch state is readable (FR-008b)
+
+`GET /my/punch/open`. The "one open punch-in at a time" rule spans days, so a client inferring it
+from today's attendance row offers a punch-in the server refuses, with an error naming a punch the
+employee cannot see. The endpoint answers from the same `closedByPunchId IS NULL` condition the
+rule is enforced against, so the two cannot drift.
+
+### 3. Reimbursements became wireable (FR-029a, FR-029b)
+
+US8's backend was complete but unreachable from a UI: nothing exposed the category list, and
+`receiptRef` was a storage reference the backend never produced for receipts, making every claim
+above a threshold unfileable. Added the categories read and in-request receipt upload.
+
+Receipt upload is deliberately part of the create/edit request rather than a separate endpoint: a
+two-step upload orphans a blob for every claim the employee abandons, and nothing here would ever
+collect them. Receipts are normalised through the same `sharp` pass as enrolment photos, which
+strips EXIF — a receipt photographed on site otherwise carries GPS coordinates into storage,
+outside the audited location path FR-026 exists to protect.
+
+### 4. Local blob storage is fatal in production (FR-026a)
+
+Was a warning that let the app boot and silently lose every photo on the next deploy. Now refuses
+to start, with an explicit `ALLOW_LOCAL_STORAGE` opt-out for preview deployments — following the
+same shape `EmailModule` already uses for its console-transport refusal.
+
+**Constitution check (re-evaluated)**: no new violations. Principle III is better served than
+before — the timezone was previously an accidental constant inside `toISOString()` and is now
+named configuration. Principle IV is strengthened by the receipt EXIF strip and the storage
+refusal. Principles I, II, V, VI unaffected.
+
+---
+
+## Amendment 2026-09-01 (b) — one punch-in and one punch-out per day (FR-008)
+
+**Scope**: tightens an already-shipped rule. Amends `plan.md`, `spec.md`, `data-model.md` and the
+API contract in place; adds one migration. `research.md` is unaffected — no new technology decision
+was taken.
+
+### 1. The rule, and where it is enforced
+
+FR-008 changes from "one *open* punch-in at a time" to "one punch-in and one punch-out per calendar
+day". The day is the employee's, in the configured zone (FR-018a), so this is stamped with
+`zonedDateOnly()` rather than derived from UTC.
+
+Enforced in two places, deliberately asymmetric:
+
+- **The service check considers every punch on that day, whatever its source.** The rule is about
+  the day's record, not about who wrote it — an employee should not get a second punch-in because
+  the first was entered by HR.
+- **The database index binds only `source = 'employee'`** (the user's decision). It exists to close
+  the check-then-insert race and out-of-band writes, not to legislate what feature 005 may do.
+
+### 2. Why a stored `punchDate` rather than an expression index
+
+`capturedAt AT TIME ZONE '<named zone>'` is STABLE, not IMMUTABLE — Postgres will not build a
+unique index on it, because the tz database can change underneath. So the calendar day is stamped
+into a `date` column at insert, by the same helper the rest of the feature uses.
+
+The consequence, accepted: a later change to `APP_TIMEZONE` does not reclassify punches already
+recorded. For payroll data that is the safer direction — a historical attendance record silently
+moving to a different day when a config value changes would be worse than it staying put.
+
+### 3. The old index must be dropped, not kept alongside
+
+`PunchRecord_one_open_punch_in_per_employee` (unique on `employeeId` where `type = 'in' AND
+closedByPunchId IS NULL`) **contradicts FR-008a**. FR-008a requires a stale open punch-in from an
+earlier day to stop blocking today, which means two open punch-in rows must be allowed to coexist —
+precisely what that index forbids. Keeping both would make FR-008a unimplementable, and the failure
+would surface as a raw unique-violation on a legitimate punch.
+
+Its rule is subsumed: a day admits at most one punch-in, so within a day nothing changes.
+
+### 4. Migration shape
+
+One migration, in this order:
+
+1. Add the `PunchSource` enum and a `source` column defaulting to `employee`.
+2. Add `punchDate`, backfilled for existing rows from `capturedAt` at the default zone.
+3. Set every pre-existing row's `source` to `legacy`. This is what makes step 5 possible: the
+   current data already contains multiple pairs on a day, and the user's decision is to leave it
+   and enforce going forward. Marking it `legacy` excludes it from the new index without deleting
+   anything.
+4. Drop `PunchRecord_one_open_punch_in_per_employee` (§3).
+5. Create the partial unique index on `(employeeId, type, punchDate) WHERE source = 'employee'`.
+
+Step 5 must be verified against real data before shipping — if any row is still `employee` and
+duplicated, index creation fails and the deploy stops. That is the correct failure, but it should
+be discovered locally, not on Render.
+
+### 5. Status code: 400 → 409
+
+Every FR-008 refusal becomes `409 Conflict`, including the existing unmatched-punch-out case which
+returns 400 today. The request is well-formed; the recorded state forbids it. This changes existing
+e2e assertions, and the frontend gains a 409 branch alongside its existing 423 (payroll lock).
+
+### 6. `GET /my/punch/open` becomes today's state
+
+`{ punchedInAt, punchedOutAt, isComplete }` rather than an open-punch record. The screen's question
+is no longer "is a punch open" but "what, if anything, can I do today" — and a stale open punch-in
+from an earlier day must not appear, since it is neither actionable nor closable.
+
+### 7. Offline sync collision
+
+A queued punch that drains onto a day already holding a punch of that type is refused like any
+other duplicate and surfaced once through the existing sync-failure path. The recorded punch wins;
+the employee is told the queued one did not count and can raise an exception. Silently replacing a
+punch they have already seen would be worse than telling them.
+
+### 8. Frontend
+
+Once `isComplete`, the Punch screen shows the day's in time, out time and worked hours with **no**
+control (FR-019c) — not a disabled button, which advertises an action that can never happen. While
+a shift is open it says when it started (FR-019d).
+
+**Constitution check (re-evaluated)**: no new violations. Principle III holds — the zone stays
+configuration, and the migration's one hardcoded zone is a one-off backfill of historical rows, not
+a runtime value. Principle IV unaffected. The migration is additive and reversible except for the
+dropped index, which is recreated by nothing else and is documented above as deliberate.
+
+**Risk**: the dropped index is the only rollback hazard. Reverting this migration restores it, and
+if by then two open punch-ins exist (which FR-008a now permits), that restore fails. Anyone rolling
+back must close or delete the surplus open punch-in first.

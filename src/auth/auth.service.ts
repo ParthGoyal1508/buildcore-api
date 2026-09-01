@@ -1,5 +1,10 @@
 import { PrismaService } from 'nestjs-prisma';
-import { AuditEntityType, Permission, User } from '@prisma/client';
+import {
+  AuditEntityType,
+  CredentialOrigin,
+  Permission,
+  User,
+} from '@prisma/client';
 import {
   ForbiddenException,
   HttpException,
@@ -310,6 +315,10 @@ export class AuthService {
         data: {
           password: hashed,
           mustChangePassword: true,
+          // Recorded so the forced-change refusal can tell this apart from an
+          // admin-*created* account: reset accounts are deliberately left
+          // unenforced for now (010 FR-017a-ii).
+          credentialOrigin: CredentialOrigin.admin_reset,
           // An admin resetting a locked-out account's password is the
           // account's way back in — leaving the lockout in place would make
           // the reset useless for its most common real case.

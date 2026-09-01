@@ -28,6 +28,13 @@ registered in the same framework but returning an explicit 'module not available
 (2) Excel export via exceljs, PDF export reuses pdfkit. This feature also builds the read/query
 side of the Activity Log, deferred by every prior feature."
 
+### Session 2026-09-01 (ratification — gap-closure clarify pass)
+
+- Q: Should the reminders engine be centralized here, owned per module, or split into its own feature?
+  → A: Centralized here. Features 002, 006, and 012 register reminder rules with this engine rather
+  than each implementing its own evaluation, de-duplication, and snooze logic. Those features now
+  depend on this one being built.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Extensible widget aggregation framework (Priority: P1)
@@ -446,3 +453,172 @@ unavailable state when run.
   feature — polling is the mechanism, consistent with no real-time/push infrastructure existing
   anywhere else in this repo's stack; a push mechanism can be added later as a transport-level
   enhancement without changing this feature's notification-computation contract.
+
+---
+
+## Amendment 2026-09-01 — Department Dashboard & Cross-Module Reminders Engine
+
+**Reason**: A gap audit against the module/submodule matrix found two uncovered items in row 3
+("General → Dashboards: Company Dashboard, **Project Dashboard**, **Department Dashboard**,
+**Reminders** and Notification"). This spec covers the Company Dashboard (US2), the Site Dashboard
+(US5), and the Group Dashboard (US6), and its Notifications Center (US4) surfaces notifications —
+but there is no Department Dashboard at all, and nothing that *generates* reminders. The
+distinction matters: US4 displays notifications that other modules push, whereas the matrix's
+"Reminders" (repeated at rows 30 and 36 for machinery and assets) are due-date conditions that must
+be *evaluated* — a document expiring, a service falling due, a return overdue, a compliance filing
+approaching. Today each module would have to invent its own evaluation and de-duplication. This
+amendment adds the Department Dashboard and a single cross-module reminders engine that every
+module registers rules with. Everything already specified above is unchanged.
+
+### User Story 8 - Department Dashboard (Priority: P2)
+
+A department head selects their department and sees KPIs and tables scoped to it — headcount,
+attendance, pending approvals, open positions, and the department's cost for the period — using the
+same widget framework the Company and Site dashboards already use.
+
+**Why this priority**: The third dashboard scope the matrix names, and the only one entirely absent.
+It depends on the widget framework (US1) already specified.
+
+**Independent Test**: With employees in two departments, request the Department Dashboard for one
+and confirm every KPI counts only that department's employees, with no leakage from the other.
+
+**Acceptance Scenarios**:
+
+1. **Given** a caller with dashboard access, **When** `GET /dashboard/departments`, **Then** the
+   caller's company's departments are listed as selectable scopes with their headcount.
+2. **Given** a department, **When** `GET /dashboard/department/:departmentId/widgets`, **Then** the
+   department-scoped widget set is returned through the same self-describing widget contract
+   FR-001 defines, with no new response shape.
+3. **Given** a department, **When** its KPI widgets are computed, **Then** Headcount, Present Today,
+   Absent Today, On Leave Today, Pending Leave Approvals, and Open Positions are each computed over
+   that department's employees only.
+4. **Given** a department, **When** the department cost widget is computed, **Then** it returns that
+   department's payroll cost for the current period, derived from payroll line items attributed to
+   employees in the department.
+5. **Given** a department with no employees, **When** its dashboard is requested, **Then** zero
+   values are returned rather than an error or an unavailable state.
+6. **Given** a widget whose underlying module is not yet implemented, **When** the department
+   dashboard is requested, **Then** it returns the unavailable state defined by FR-003, exactly as
+   the company dashboard does.
+7. **Given** a department outside the caller's company, **When** its dashboard is requested, **Then**
+   the request is rejected, matching the site-scoping rule FR-013 already establishes.
+8. **Given** a caller whose role restricts them to their own department, **When** the department
+   list is requested, **Then** only their department is returned.
+
+### User Story 9 - Cross-module reminders engine (Priority: P2)
+
+Every module registers reminder rules — a due-date condition over its own records — with a single
+engine. The engine evaluates all registered rules, produces a unified reminders list filterable by
+type, severity, and scope, and feeds the existing Notifications Center rather than adding a delivery
+channel.
+
+**Why this priority**: The matrix names Reminders at three separate places (rows 3, 30, 36) and both
+features 006 and 012 specify reminder families that would otherwise each need their own evaluation
+and de-duplication logic. Centralising it here is what keeps them consistent. It depends on the
+Notifications Center (US4).
+
+**Independent Test**: Register a rule for a document type expiring within 30 days, create a matching
+record, and confirm exactly one reminder is produced with the correct severity and days-remaining —
+and that re-evaluating produces no duplicate.
+
+**Acceptance Scenarios**:
+
+1. **Given** a module, **When** it registers a reminder rule with a `ruleKey`, a source module, a
+   reminder `type`, a lead window, and a severity ladder, **Then** the rule is registered without
+   any change to this feature's own code — the same extensibility guarantee FR-002 gives widgets.
+2. **Given** registered rules, **When** `GET /dashboard/reminders?type=&severity=&module=&scope=`,
+   **Then** all currently-due reminders are returned with the source module, entity type and id, a
+   human-readable subject, the due date, days remaining (negative when overdue), and a severity of
+   `info`, `warning`, or `overdue`.
+3. **Given** reminders exist, **When** the list is read, **Then** results are sorted overdue first,
+   then by soonest due date.
+4. **Given** a reminder rule whose source module is not yet implemented, **When** reminders are
+   evaluated, **Then** that rule contributes nothing and the response reports it as unavailable
+   rather than failing the whole request — matching FR-003's treatment of unbuilt modules.
+5. **Given** a reminder condition that persists across evaluations, **When** notifications are
+   emitted, **Then** exactly one notification exists for that entity, rule, and severity level; a
+   duplicate MUST NOT be emitted while the reminder remains in the same severity band.
+6. **Given** a reminder that escalates from `warning` to `overdue`, **When** it is re-evaluated,
+   **Then** a new notification is emitted at the higher severity.
+7. **Given** a reminder whose underlying condition is resolved (the document renewed, the service
+   done, the asset returned), **When** it is re-evaluated, **Then** the reminder disappears from the
+   list and its open notification is closed.
+8. **Given** a caller, **When** reminders are requested, **Then** only reminders for entities within
+   the caller's company are returned, except for holders of `CROSS_COMPANY_ACCESS`.
+9. **Given** a reminder, **When** `PATCH /dashboard/reminders/:id/snooze` is called with a
+   `snoozeUntil` date and a reason, **Then** it is suppressed from the list and from notification
+   until that date, and the snooze is audit-logged.
+10. **Given** the reminders list, **When** `GET /dashboard/reminders/count`, **Then** counts by
+    severity are returned for badge display, consistent with the notification count endpoint
+    FR-011 already defines.
+
+### Additional Edge Cases
+
+- Two modules register rules that fire on the same entity for the same reason → both reminders are
+  returned; de-duplication is per rule, not per entity, so a genuinely different concern is never
+  suppressed.
+- A reminder rule's lead window is widened after notifications were emitted → newly-qualifying
+  records produce new reminders; already-open ones are unaffected.
+- A record is soft-deleted while it has an open reminder → the reminder disappears on the next
+  evaluation and its notification is closed.
+- A snoozed reminder's severity escalates past its snooze date → the snooze expires and the
+  escalated reminder appears, since a snooze suppresses only until its date, never permanently.
+- The reminders list is requested when no module has registered any rule → an empty list is
+  returned, never an error.
+
+### Additional Functional Requirements
+
+- **FR-025**: The system MUST provide a Department Dashboard scope exposing its widgets through the
+  same self-describing widget contract FR-001 defines, adding no new response shape and requiring no
+  change to the widget framework.
+- **FR-026**: Every Department Dashboard KPI MUST be computed strictly over employees belonging to
+  the selected department, and MUST return zero values rather than an error for a department with
+  no employees.
+- **FR-027**: A department-scoped request for a department outside the caller's company MUST be
+  rejected, matching the site-scoping rule FR-013 establishes; a caller whose role restricts them to
+  their own department MUST see only that department in the selector.
+- **FR-028**: The system MUST provide a reminder-rule registration mechanism such that a module can
+  contribute a new reminder type without modifying this feature's code — the same extensibility
+  guarantee FR-002 provides for widgets.
+- **FR-029**: A registered reminder rule MUST declare a `ruleKey`, source module, reminder type, lead
+  window, and severity ladder, and the engine MUST evaluate every registered rule to produce a
+  single unified reminders list.
+- **FR-030**: Each reminder MUST carry its source module, entity type and id, subject, due date, days
+  remaining (negative when overdue), and a severity of `info`, `warning`, or `overdue`; the list
+  MUST be sorted overdue first, then by soonest due date.
+- **FR-031**: A rule whose source module is not yet implemented MUST contribute nothing and MUST be
+  reported as unavailable rather than failing the request, matching FR-003.
+- **FR-032**: The engine MUST emit at most one notification per entity, per rule, per severity band;
+  a duplicate MUST NOT be emitted while the reminder remains in the same band, and an escalation to
+  a higher severity MUST emit a new notification.
+- **FR-033**: When a reminder's underlying condition is resolved, the reminder MUST disappear from
+  the list on the next evaluation and its open notification MUST be closed.
+- **FR-034**: A reminder MUST be snoozable until a specified date with a reason, suppressing it from
+  both the list and notification until then; the snooze MUST be audit-logged and MUST expire on its
+  date even if the severity has escalated.
+- **FR-035**: Reminders MUST be scoped to the caller's company except for holders of
+  `CROSS_COMPANY_ACCESS`, matching the scoping rule FR-008 applies to the Activity Log.
+- **FR-036**: Features 006 and 012 MUST register their reminder families with this engine rather
+  than implementing independent evaluation and de-duplication — 006's equipment document expiry and
+  service-due reminders, and 012's asset document expiry, inspection-due, and overdue-return
+  reminders. 002's company document expiry alerts MUST likewise register here.
+- **FR-037**: Every reminders and Department Dashboard endpoint MUST be gated by `JwtAuthGuard` plus
+  the existing `DASHBOARD` permission, adding no new permission value, and MUST accept and return
+  validated, typed request/response DTOs.
+
+### Additional Key Entities
+
+- **ReminderRule**: A module-registered due-date condition: rule key, source module, reminder type,
+  lead window, severity ladder, and the entity type it evaluates over.
+- **Reminder** *(computed, not stored)*: One currently-due instance of a rule against one entity,
+  carrying subject, due date, days remaining, and severity.
+- **ReminderSnooze**: A suppression of one reminder until a date, with its reason and actor.
+
+### Additional Success Criteria
+
+- **SC-A01**: A new reminder type can be contributed by a module without editing any file in this
+  feature, verified by adding a rule in a test module and observing it in the reminders list.
+- **SC-A02**: No duplicate notification is ever emitted for a reminder whose severity band is
+  unchanged, verified by repeated evaluation over an unchanged dataset.
+- **SC-A03**: Every Department Dashboard KPI recomputed manually over that department's employees
+  matches the widget's returned value exactly, with no cross-department leakage.

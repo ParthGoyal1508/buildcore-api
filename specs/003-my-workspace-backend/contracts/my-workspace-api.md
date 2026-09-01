@@ -55,9 +55,13 @@ research.md §4).
 'exception', geofenceResult: 'in_range' | 'exception' }` — always 201 even when either result is
 `exception`; the punch is recorded either way (spec FR-007).
 
-**Response — 400**: no enrolled face template (FR-005); `type: 'in'` while an open punch-in
-already exists, or `type: 'out'` with no open punch-in (FR-008); `capturedAt` older than the
-configured max offline-queue age (FR-012).
+**Response — 400**: no enrolled face template (FR-005); `capturedAt` older than the configured
+max offline-queue age (FR-012).
+
+**Response — 409**: the day's punch allowance is already used (FR-008) — a second `type: 'in'` on
+a day that already has one (closed or not), a `type: 'out'` with no punch-in that day, or a second
+`type: 'out'`. The day is the caller's calendar day in the configured timezone (FR-018a). A punch
+queued offline that syncs onto such a day is refused the same way; the recorded punch stands.
 
 **Response — 423 Locked**: `capturedAt`'s date falls within an already payroll-locked period
 (FR-010).
@@ -127,16 +131,55 @@ the covered dates show `on_leave` in that employee's `GET /my/punch/history`.
 **Response — 200**: `application/pdf`, generated via `pdfkit` (research.md §7), identical figures
 to the JSON response.
 
+### `GET /my/punch/open`
+The caller's punch state for **today**, in the configured timezone (FR-008b).
+
+**Response — 200**:
+`{ punchedInAt: string | null, punchedOutAt: string | null, isComplete: boolean }`.
+
+- `punchedInAt` null → the day's punch-in has not been made; punch-in is the available action.
+- `punchedInAt` set, `punchedOutAt` null → the shift is open; punch-out is the available action.
+- `isComplete` true → both are done and no further punch is accepted today (FR-008).
+
+An open punch-in carried over from an earlier day is deliberately **not** reported here: it can
+never be closed (FR-008a) and does not affect what the employee can do today.
+
 ## Reimbursements — `/my/reimbursements`
 
-### `POST /my/reimbursements`
-**Request**: `{ categoryId, amount, expenseDate, description, receiptRef? }` — `receiptRef`
-required when `amount` exceeds the category's configured mandatory-receipt threshold (FR-030).
+### `GET /my/reimbursements/categories`
+The active categories the caller's company allows claims against (FR-029a).
 
-**Response — 201**: the created claim, status `submitted`.
+**Response — 200**: `[{ id, code, name, receiptRequiredAbove: number | null }]`. `null` means a
+receipt is never required for that category — distinct from `0`, which requires one on every claim.
+
+Read-only here; feature 005 owns creating and editing these. Declared ahead of any parameterised
+`GET` on this controller so a future `/:id` route cannot swallow it.
+
+### `POST /my/reimbursements`
+**Request**: `{ categoryId, amount, expenseDate, description, receiptRef?, receipt?, status? }`.
+A receipt is required when `amount` exceeds the category's configured mandatory-receipt threshold
+(FR-030), satisfied by either field.
+
+`receipt` is base64 image data (optionally a data URL), stored server-side **in this same request**
+and turned into `receiptRef` (FR-029b) — deliberately not a separate upload endpoint, which would
+orphan a blob for every claim the employee then abandons. It is normalised on the way in, which
+strips EXIF including GPS. `receiptRef` remains for a caller that already holds a stored reference;
+`receipt` wins if both are sent.
+
+`status` is `draft` or `submitted` (default `submitted`); a draft stays editable and skips the
+receipt rule until it is submitted.
+
+**Response — 201**: the created claim.
 
 ### `PATCH /my/reimbursements/:id`
-**Request**: same shape as create. **Response — 200** while `status: 'draft'`; **403** otherwise.
+**Request**: same shape as create, all fields optional. Sending `status: 'submitted'` is how a
+draft is submitted without otherwise editing it.
+
+The receipt rule is re-checked against the values the claim will *end up* with, not the ones this
+request happened to carry — so a draft saved under the threshold and later submitted above it is
+still refused (FR-030).
+
+**Response — 200** while `status: 'draft'`; **409** otherwise.
 
 ### `POST /my/reimbursements/:id/withdraw`
 **Response — 200** while `status: 'submitted'` (still Pending review); **403** otherwise.

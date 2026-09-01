@@ -32,6 +32,13 @@ built, and reuses Settings' Company/Department/Designation/DocumentType/Shift/Co
   editable by an admin, not a value this spec hardcodes as authoritative. A shipped default (2x,
   matching common Indian statutory practice) seeds new companies, exactly as PF's 12% default does.
 
+### Session 2026-09-01 (ratification — gap-closure clarify pass)
+
+- Q: Should feature 013 take over this feature's Daily Worker registry (US9), or should it stay here?
+  → A: 013 supersedes it. The `DailyWorker` entity and its attendance and payout surfaces move to the
+  `labour` schema and are extended there; US9 and FR-023 through FR-028 are superseded, and any code
+  already built against them migrates. Ratified by the user, not inferred.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Maintain full employee records (Priority: P1)
@@ -793,3 +800,315 @@ Attendance Records.
 - "Site Supervisor" continues to mean any user whose role holds the Daily Worker Registry
   permission (Settings' existing fixed permission enum, 002), consistent with how this repo has
   resolved that PRD phrase in every prior feature.
+
+---
+
+## Amendment 2026-09-01 — TDS, Salary Advances, Payroll Registers & Late-Coming; Recruitment and Labour Supersession
+
+**Reason**: A gap audit against the module/submodule matrix found several uncovered items across
+rows 15 to 23, plus two areas that belong to newly created features rather than here.
+
+Uncovered and added by this amendment:
+
+- **TDS** (rows 18 and 20 name both "TDS reports" and TDS as a statutory deduction). This spec
+  computes PF, ESIC, and PT (US6, FR-019) but never income-tax deduction at source. Feature 007
+  covers vendor TDS, which is an entirely different deduction on an entirely different party. As
+  written, every employee's payroll is computed without the single largest statutory deduction for
+  mid- and high-salary staff.
+- **Salary Advances** (rows 10, 19, 20 all name "Advance" separately from "Loan"). US7 covers Loans
+  with an EMI schedule; an advance is not a loan — it is a part-salary payment recovered in full
+  from the next payroll, with no interest and no amortisation schedule. Feature 003 FR-029 to FR-033
+  covers reimbursement claims, which is a third, unrelated thing.
+- **Salary Register and Deduction Report** (row 18). This spec produces payroll runs, salary slips
+  (FR-016), and a bank salary sheet (FR-017), but neither of the two consolidated registers the
+  matrix names.
+- **Late Coming** (row 16). Feature 002 FR-022 configures shifts with a grace period, and this spec
+  records attendance, but nothing computes or reports lateness against the shift.
+
+Reassigned to other features (no requirements added here):
+
+- **Recruitment, onboarding, letter generation, and the resignation report** (rows 22 and 23) are
+  specified by the new feature **011-recruitment-onboarding-backend**. This feature's exit/F&F flow
+  (US11) is unchanged in substance but now sources its last-working-day and notice-waiver values
+  from 011's Resignation record, and calls 011's letter service to produce the relieving letter.
+- **Daily Worker registry and labour attendance** (rows 11, 12, 15, 18) are superseded by the new
+  feature **013-labour-management-backend**. See the supersession note below.
+
+Everything else already specified above is unchanged.
+
+### Supersession of User Story 9 (Daily Worker Registry)
+
+User Story 9 and **FR-023 through FR-028** are **superseded by feature 013**. The `DailyWorker`
+entity, its face-template derivation, its attendance marking, and its wage payout summary move to
+the `labour` schema, where they are extended with per-project effective-dated wage rates, a
+supervisor mobile capture flow with GPS and geofence validation, contractor and gang structure,
+attendance types and overtime, muster approval, and cash payment sheets with denomination breakup
+and acknowledgement. They are not reproduced here.
+
+The reason for moving rather than extending: labour surfaces span this feature, feature 003's mobile
+capture discipline, and feature 008's project structure, and they introduce their own entities. There
+must be exactly one owner. Feature 013 FR-002 records the reciprocal obligation.
+
+Two consequences for this feature:
+
+- **FR-048**: Labour cost MUST NOT appear in any `PayrollRun` — labour workers are not on the salary
+  register. Labour cost reaches the rest of the system only through feature 013's exported Project
+  P&L service method. This makes explicit what FR-026's "tagged distinctly" left ambiguous.
+- **FR-049**: The company-level OT multiplier this feature defines (FR-014a) MUST remain the single
+  definition; feature 013 reads it rather than introducing a second setting.
+
+### User Story 14 - Compute and report TDS (Priority: P1)
+
+Payroll computes each employee's income-tax deduction at source from their projected annual taxable
+income, their declared investments, and their chosen tax regime, spreading the liability across the
+remaining months of the financial year. Quarterly TDS returns and per-employee Form 16 data are
+reported from the computed figures.
+
+**Why this priority**: Without it every payroll run is materially wrong for any employee above the
+exemption threshold, and the company is non-compliant.
+
+**Independent Test**: For an employee with an annual taxable income above the threshold and no
+declared investments, run payroll for a month and confirm the TDS deduction equals the computed
+annual liability divided by the remaining months of the financial year.
+
+**Acceptance Scenarios**:
+
+1. **Given** an admin session, **When** `POST /settings/tax-slabs` is called with `financialYear`,
+   `regime` (old|new), and ordered `slabs[]` (each with a lower bound, upper bound, and rate),
+   **Then** the slab set is created; slabs MUST be contiguous and non-overlapping or the request is
+   rejected with `400 Bad Request` naming the gap or overlap.
+2. **Given** an employee, **When** `POST /hr/employees/:id/tax-declarations` is called with a
+   `financialYear`, `regime`, and `declarations[]` (each with a section code, declared amount, and
+   optional proof document), **Then** the declaration is recorded with `status: 'declared'`.
+3. **Given** a declaration whose amount exceeds its section's configured statutory ceiling, **When**
+   it is saved, **Then** it is accepted but the deductible amount is capped at the ceiling and the
+   capped figure is reported.
+4. **Given** a declaration, **When** `PATCH /hr/tax-declarations/:id/verify` is called with proof
+   attached, **Then** its status becomes `verified`; unverified declarations MUST still be honoured
+   until a configurable cut-off month, after which only verified declarations are considered.
+5. **Given** an employee on payroll, **When** a payroll run is processed, **Then** TDS is computed as
+   the annual tax liability on projected annual taxable income under the employee's chosen regime,
+   less tax already deducted in the financial year, divided by the remaining months including the
+   current one — and is included as a payroll line item deduction.
+6. **Given** an employee whose salary changes mid-year, **When** the next payroll runs, **Then** the
+   projection is recomputed from actual year-to-date earnings plus the new projected remainder, so
+   the annual liability self-corrects without a manual adjustment.
+7. **Given** an employee whose computed annual liability is zero or negative, **When** payroll runs,
+   **Then** the TDS deduction is zero and never negative — payroll does not refund tax.
+8. **Given** a processed payroll run, **When** `GET /payroll/tds/quarterly?financialYear=&quarter=`,
+   **Then** per-employee deducted amounts, PAN, and taxable income for the quarter are returned, with
+   employees missing a PAN flagged, since a missing PAN attracts a higher statutory rate.
+9. **Given** an employee missing a PAN, **When** TDS is computed, **Then** the configured
+   higher no-PAN rate is applied and the employee is flagged in the payroll run's exception list.
+10. **Given** a financial year, **When** `GET /payroll/tds/form16-data?employeeId=&financialYear=`,
+    **Then** the gross salary, exemptions, deductions by section, taxable income, and tax deducted
+    are returned for that employee.
+11. **Given** any TDS report, **When** `?format=xlsx` or `?format=pdf` is requested, **Then** a real
+    file is produced using the existing export libraries, following the same approach FR-020 uses
+    for challan exports.
+
+### User Story 15 - Salary advances (Priority: P2)
+
+An employee requests an advance against their upcoming salary. It is approved, disbursed, and
+recovered in full from the next payroll run — distinct from a loan, which carries an EMI schedule
+over many months.
+
+**Why this priority**: The matrix names Advance separately from Loan at three places, and an advance
+recovered as a single deduction cannot be represented by the existing loan EMI schedule. Depends on
+the existing payroll flow.
+
+**Independent Test**: Approve a ₹10,000 advance for an employee, run the next payroll, and confirm a
+₹10,000 deduction appears and the advance closes — without touching any loan record.
+
+**Acceptance Scenarios**:
+
+1. **Given** an active employee, **When** `POST /hr/salary-advances` is called with `employeeId`,
+   `amount`, `reason`, and `recoveryMonth`, **Then** the advance is created with `status: 'pending'`.
+2. **Given** an advance whose amount exceeds a configurable percentage of the employee's monthly
+   net salary, **When** it is created, **Then** it is flagged `exceedsLimit` and requires
+   `PAYROLL` approval authority to be approved.
+3. **Given** an employee with an outstanding advance, **When** a second advance is requested,
+   **Then** `409 Conflict` — at most one open advance per employee at a time.
+4. **Given** a pending advance, **When** it is approved and then disbursed with a `paidOn` date and
+   payment mode, **Then** its `outstandingBalance` equals the full amount.
+5. **Given** an employee with an outstanding advance, **When** the payroll run for its
+   `recoveryMonth` is processed, **Then** the full outstanding amount is deducted as a payroll line
+   item and the advance closes.
+6. **Given** a recovery that would drive the employee's net pay below zero, **When** payroll is
+   processed, **Then** the deduction is capped so net pay is not negative, and the uncovered
+   remainder carries to the next month with the advance remaining open.
+7. **Given** an employee with an outstanding advance who exits, **When** F&F is computed (FR-032),
+   **Then** the outstanding advance is included as a recovery in the settlement.
+8. **Given** an advance list request, **When** `GET /hr/salary-advances?status=&employeeId=&month=`,
+   **Then** paginated results are returned with outstanding balances and a company total.
+
+### User Story 16 - Salary register and deduction report (Priority: P2)
+
+Payroll produces two consolidated views over a processed run: a salary register listing every
+employee with their full earnings and deductions breakup and net pay, and a deduction report
+summarising each deduction head across the company with statutory totals.
+
+**Why this priority**: These are the two views payroll is actually reviewed and signed off from,
+named in row 18. They are read surfaces over the existing payroll run, so they carry no new
+computation risk.
+
+**Independent Test**: Process a payroll run for three employees and confirm the salary register's
+column totals equal the run's totals and the deduction report's per-head totals equal the register's
+corresponding columns.
+
+**Acceptance Scenarios**:
+
+1. **Given** a processed payroll run, **When**
+   `GET /payroll/runs/:id/salary-register?departmentId=&projectId=&siteId=`, **Then** every employee
+   is returned with employee code, name, designation, department, days paid, LOP days, each earning
+   component, gross, each deduction component, total deductions, and net pay, with column totals.
+2. **Given** the salary register, **When** it is read, **Then** its gross, deduction, and net totals
+   equal the payroll run's stored totals exactly; any divergence MUST surface as an explicit
+   reconciliation error rather than a silently different number.
+3. **Given** a processed payroll run, **When** `GET /payroll/runs/:id/deduction-report`, **Then**
+   each deduction head (PF employee, PF employer, ESIC employee, ESIC employer, PT, TDS, loan EMI,
+   salary advance, LWP, other) is returned with its employee count and total, split into statutory
+   and non-statutory.
+4. **Given** the deduction report, **When** it is read, **Then** the statutory head totals equal the
+   corresponding challan figures FR-019 derives, so the report and the challans can never disagree.
+5. **Given** a payroll run that is not yet processed, **When** either register is requested, **Then**
+   the request is rejected — registers are produced only from processed or paid runs.
+6. **Given** a multi-project company, **When** the salary register is requested with a `projectId`
+   filter, **Then** only line items carrying that `projectId` (FR-046) are included, giving the
+   project-wise manpower cost the matrix names in row 18.
+7. **Given** either register, **When** `?format=xlsx` or `?format=pdf` is requested, **Then** a real
+   file is produced using the existing export libraries, generated asynchronously above the
+   configured row threshold.
+
+### User Story 17 - Late-coming and shift-compliance reporting (Priority: P3)
+
+Attendance is evaluated against each employee's assigned shift, so late arrivals, early departures,
+and short hours are computed and reported, with repeat lateness surfaced for action.
+
+**Why this priority**: Row 16 names "Late coming" explicitly, and feature 002 already configures
+shift in-time, out-time, and grace period (FR-022) — the configuration exists but nothing consumes
+it. Depends on existing attendance records.
+
+**Independent Test**: With a shift starting at 09:00 with a 15-minute grace, record a punch-in at
+09:20 and confirm the day is marked late with 5 late minutes beyond grace.
+
+**Acceptance Scenarios**:
+
+1. **Given** an employee with an assigned shift and a punch-in, **When** attendance is evaluated,
+   **Then** `lateMinutes` is computed as the punch-in time minus the shift in-time minus the shift's
+   grace period, floored at zero.
+2. **Given** an employee with an assigned shift and a punch-out, **When** attendance is evaluated,
+   **Then** `earlyDepartureMinutes` and `shortHours` are computed against the shift's out-time and
+   duration, each floored at zero.
+3. **Given** an employee with no assigned shift, **When** attendance is evaluated, **Then** lateness
+   is not computed and the day is reported with an explicit `noShiftAssigned` marker rather than
+   zero, so an unconfigured shift is never mistaken for punctuality.
+4. **Given** a period, **When** `GET /hr/reports/late-coming?from=&to=&departmentId=&siteId=`,
+   **Then** each employee is returned with late days, total late minutes, early departure days, and
+   short-hours days, sorted by late days descending.
+5. **Given** an employee exceeding a configurable late-day threshold in a month, **When** the report
+   is read, **Then** they are flagged `repeatLateComer`.
+6. **Given** an employee on approved leave or a declared holiday, **When** the report is computed,
+   **Then** that day is excluded from lateness entirely.
+7. **Given** a manual attendance edit (FR-009), **When** lateness is recomputed, **Then** it is
+   derived from the edited times and the original computation remains in the audit trail (FR-010).
+8. **Given** lateness figures, **When** payroll is processed, **Then** lateness MUST NOT
+   automatically deduct pay — the report is informational, and any deduction policy must be
+   specified explicitly rather than inferred.
+
+### Additional Edge Cases
+
+- An employee joins mid-financial-year with prior-employer income declared → the projection includes
+  the declared prior income so the annual liability is correct; without a declaration only current
+  employment is projected and the shortfall surfaces at year end.
+- Tax slabs for a financial year are edited after payroll runs were processed under them → processed
+  runs remain frozen (FR-015); the corrected slabs affect only subsequent runs, and the difference
+  self-corrects through the projection in FR-051.
+- An employee switches tax regime mid-year → permitted only at the configured switch point; the
+  projection recomputes from year-to-date actuals so no month is double-taxed.
+- A salary advance and a loan EMI both fall due in a month where net pay cannot cover both → the
+  capping in FR-054 applies in a documented order: statutory deductions first, then loan EMI, then
+  salary advance, with the uncovered remainder carried forward.
+- An employee is marked present with no punch times at all (a manual full-day entry) → lateness is
+  not computed and the day carries the `noShiftAssigned`-equivalent `noPunchTimes` marker.
+- A shift is reassigned mid-month → lateness is computed against the shift in force on each date,
+  never the current one.
+
+### Additional Functional Requirements
+
+- **FR-050**: The system MUST provide per-financial-year, per-regime income tax slab configuration
+  in the `settings` schema, rejecting slab sets that are not contiguous and non-overlapping with a
+  message naming the gap or overlap.
+- **FR-051**: TDS MUST be computed on payroll processing as the annual tax liability on projected
+  annual taxable income under the employee's elected regime, less tax already deducted in the
+  financial year, divided by the remaining months including the current one — so a mid-year salary
+  or declaration change self-corrects without manual adjustment.
+- **FR-052**: A declared investment MUST be capped at its section's configured statutory ceiling,
+  with the capped figure reported; unverified declarations MUST be honoured only until a
+  configurable cut-off month, after which only verified declarations count.
+- **FR-053**: A computed TDS deduction MUST never be negative — payroll does not refund tax — and an
+  employee without a PAN MUST have the configured higher no-PAN rate applied and be flagged in the
+  run's exception list.
+- **FR-054**: The system MUST provide Salary Advances as a distinct entity from Loans (US7): no
+  interest, no amortisation schedule, recovered in full in a single nominated month. At most one
+  open advance per employee is permitted (`409 Conflict` otherwise).
+- **FR-055**: Advance recovery, loan EMI, and statutory deductions MUST be capped so an employee's
+  net pay is never negative, applied in the documented order — statutory, then loan EMI, then salary
+  advance — with any uncovered remainder carried forward and the advance or loan remaining open.
+- **FR-056**: An outstanding salary advance MUST be included as a recovery in the F&F settlement
+  computation (FR-032).
+- **FR-057**: The system MUST produce a Salary Register over a processed or paid payroll run
+  listing every employee's full earnings and deductions breakup with column totals, filterable by
+  department, project, and site; a register MUST NOT be produced from an unprocessed run.
+- **FR-058**: The Salary Register's gross, deduction, and net totals MUST equal the payroll run's
+  stored totals exactly; any divergence MUST surface as an explicit reconciliation error rather than
+  a silently different figure.
+- **FR-059**: The system MUST produce a Deduction Report over a processed run summarising every
+  deduction head with employee count and total, split into statutory and non-statutory, whose
+  statutory head totals MUST equal the corresponding challan figures FR-019 derives.
+- **FR-060**: The Salary Register filtered by `projectId` MUST use `PayrollLineItem.projectId`
+  (FR-046) to produce the project-wise manpower cost view.
+- **FR-061**: The system MUST compute `lateMinutes`, `earlyDepartureMinutes`, and `shortHours` for
+  each attendance day against the shift in force on that date, each floored at zero, using the shift
+  in-time, out-time, and grace period Settings already configures (002 FR-022).
+- **FR-062**: An employee with no assigned shift, or a day with no punch times, MUST be reported with
+  an explicit marker rather than zero lateness, so unconfigured data is never mistaken for
+  punctuality.
+- **FR-063**: Approved leave days and declared holidays MUST be excluded from lateness computation
+  entirely.
+- **FR-064**: Lateness MUST NOT automatically deduct pay; the late-coming report is informational,
+  and any deduction policy must be specified explicitly rather than inferred from it.
+- **FR-065**: This feature's exit flow (US11) MUST source `lastWorkingDay` and notice-waiver days
+  from feature 011's accepted Resignation record when one exists, rather than re-collecting them,
+  and MUST call feature 011's letter service to produce the relieving letter rather than
+  implementing letter generation here.
+- **FR-066**: All new endpoints in this amendment MUST be gated by `JwtAuthGuard` plus the existing
+  `PAYROLL`, `ATTENDANCE`, or `REPORTS` permissions as appropriate, adding no new permission value,
+  and MUST accept and return validated, typed request/response DTOs.
+- **FR-067**: Tax declarations, salary advances, and their approvals MUST be written to the audit
+  log with the new entity types `TAX_DECLARATION` and `SALARY_ADVANCE`, and tax declaration proof
+  documents MUST use encrypted object-storage references.
+
+### Additional Key Entities
+
+- **TaxSlab** *(settings schema)*: A per-financial-year, per-regime contiguous band set of income
+  ranges and rates.
+- **TaxDeclaration / TaxDeclarationLine**: An employee's per-financial-year regime election and
+  declared investments by section, with capped deductible amounts, verification status, and proof
+  references.
+- **SalaryAdvance**: A single-recovery advance against salary: amount, reason, nominated recovery
+  month, approval, disbursement, outstanding balance, and status.
+- **AttendanceShiftCompliance** *(computed)*: Per-employee-per-day late minutes, early departure
+  minutes, and short hours against the shift in force that date.
+
+### Additional Success Criteria
+
+- **SC-A01**: An employee's total TDS deducted across a financial year equals their computed annual
+  liability within one month's rounding, verified by simulating a full year including a mid-year
+  salary change.
+- **SC-A02**: No employee's net pay is ever negative, and no advance or loan balance is ever reduced
+  by a deduction that was capped away.
+- **SC-A03**: The salary register, the deduction report, and the statutory challans all reconcile
+  exactly against the same processed payroll run.
+- **SC-A04**: Every late arrival is computed against the shift actually in force on that date, and
+  no employee without a configured shift is reported as punctual.

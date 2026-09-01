@@ -112,7 +112,10 @@ Consumers today: biometric enrolment photos and punch photos (003). Later: expen
 
 > **`STORAGE_DRIVER=local` in production silently destroys data.** Render's filesystem is ephemeral
 > and free instances cannot attach a persistent disk, so every stored photo is lost on the next
-> deploy or idle spin-down. The app logs a warning but still starts. Treat setting `s3` as mandatory.
+> deploy or idle spin-down. **The app refuses to boot** in that configuration — it used to log a
+> warning and start, which meant the misconfiguration stayed invisible until the data was already
+> gone. A preview or staging host that serves no real users can set `ALLOW_LOCAL_STORAGE=true` to
+> opt out; it then boots and warns loudly on every start. Never set it where real users exist.
 
 ### 3a. Create the R2 bucket
 

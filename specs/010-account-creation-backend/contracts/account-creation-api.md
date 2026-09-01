@@ -13,14 +13,45 @@ here would duplicate that surface under a different URL.
 
 ## Users — `/account-creation/users` (permission: `USER_MANAGEMENT`)
 
-- `POST /account-creation/users` — `{ email, roleId, companyId?, employeeId?, displayName? }` →
-  `201` with `{ id, email, status: 'pending', emailDispatchFailed: boolean }`. `400` if
+- `POST /account-creation/users` — `{ email, roleId, companyId?, employeeId?, displayName?,
+  password? }` → `201` with `{ id, email, status, emailDispatchFailed: boolean }`. `400` if
   `companyId` missing for a non-Super-Admin role, or provided for the Super Admin role, or neither
   `employeeId` nor `displayName` given. `409` if email already active, email already
   deactivated-but-exists (distinct message), or `employeeId` already linked to another User.
+
+  **`password` (FR-015)** switches the creation mode:
+
+  | `password` | Result |
+  |---|---|
+  | absent | Today's flow: `status: 'pending'`, invite token generated, invite emailed, `credentialOrigin: 'invite'` |
+  | present | `status: 'active'`, password argon2-hashed, `mustChangePassword: true`, `credentialOrigin: 'admin_direct'`. **No token generated, no email sent** — `emailDispatchFailed` is always `false` |
+
+  A supplied password is held to the same complexity rule as the invitee's own (min 8 chars, 1
+  uppercase, 1 number) and rejected with `400` **before any account row is created** (FR-016), so a
+  failed attempt leaves nothing behind. The password is never echoed in the response and never
+  written to the audit log in any form.
 - `POST /account-creation/users/:id/resend-invite` — no body. `200` with
   `{ emailDispatchFailed: boolean }` if the account is `pending`; `409` if `active` or
   `deactivated`. Invalidates the previous invite token (inserts a new `InviteToken` row).
+
+## Cross-cutting: pending password change (FR-017a)
+
+An account created with `credentialOrigin: 'admin_direct'` that has not yet changed its password is
+refused on **every** authenticated endpoint in the system except four, with:
+
+```
+403 { "code": "PASSWORD_CHANGE_REQUIRED", "message": "..." }
+```
+
+Clients branch on `code`, never on the message. The four that stay reachable are the ones needed to
+complete the change or leave: `POST /users/change-password`, `GET /users/me`, `POST
+/auth/refresh-token`, and `POST /auth/logout`.
+
+The check reads the account's current state (re-read per request by the JWT strategy), not the JWT
+claim — so the refusal stops the instant the password is changed, with no re-login needed.
+
+Accounts flagged by an admin *reset* are **not** subject to this (FR-017a-ii) — a recorded
+limitation, not an omission.
 
 ## Employee picker — `GET /account-creation/employees/unlinked?companyId=&search=`
 (permission: `USER_MANAGEMENT`)

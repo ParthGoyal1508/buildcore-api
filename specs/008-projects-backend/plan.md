@@ -249,3 +249,55 @@ are real, not stub, as of this feature's master-PRD alignment audit:
 - ~~`HrPayrollService.getLabourCostByProject()`~~ → real, added directly to 005's own spec/
   data-model/tasks as part of this feature's build-out (`PayrollLineItem.projectId`, FR-046,
   005's research.md §16) — wire directly, no stub needed
+
+---
+
+## Amendment 2026-09-01 — Project Planning & Target-vs-Actual Reporting
+
+Covers spec FR-019 to FR-035. Adds 4 `projects` tables; **no new permission value** (reuses
+`PROJECTS` and `REPORTS`).
+
+**Constitution re-check**: Principle I — all 4 tables in `projects`; man-days, equipment hours, and
+material consumed for the monthly report come through `LabourService`, `PlantService`, and
+`InventoryService`, never a cross-schema query (FR-033), consistent with FR-008's existing P&L rule.
+Principle III — behind-schedule tolerance is configured, not a literal. Principle IV — `companyId` +
+RLS. Principle V — no new permission. PASS.
+
+### Phase A1: Schema
+
+- [ ] Add `ProjectPhase`, `ProjectActivity`, `ActivityDependency`, `ProjectTarget` /
+      `ProjectTargetLine` models; migration + RLS
+- [ ] Extend `shared.AuditLogEntry.entityType` with `PROJECT_PHASE`, `PROJECT_ACTIVITY`,
+      `PROJECT_TARGET`
+- [ ] Extend the existing project-lock guard (FR-003) to cover all schedule and target writes
+      (FR-024)
+
+### Phase A2: US9 — Schedule (P2)
+
+- [ ] `PhaseService`, `ActivityService` + controllers (CRUD, date-order validation, milestone
+      marking, delete guard for activities with actuals → 409 — FR-025)
+- [ ] `DependencyService`: typed links with cycle detection naming the cycle path (FR-020);
+      dependency violations flagged, not blocked (FR-021)
+- [ ] Baseline endpoint: weightage-sums-to-100 gate (FR-022), freeze planned values as immutable
+      baseline, increment version (FR-023)
+- [ ] Unit test: cycle detection within and across phases; baseline immutability under later edits
+      (SC-A02)
+- [ ] E2e test: baseline gate rejects a 97% weightage sum reporting the actual total
+
+### Phase A3: US10 — Targets & Reporting (P2)
+
+- [ ] `TargetService` + controller (periodic target sets, overlap guard → 409 — FR-026)
+- [ ] `TargetReportService`: actuals summed from approved DWR measurements only (FR-027), unset
+      targets reported explicitly rather than as zero (FR-028), weightage-weighted rollup stating
+      its basis (FR-029)
+- [ ] Monthly report pulling man-days / equipment hours / material via the cross-module services
+      (FR-033); progress-trend series for the chart
+- [ ] XLSX/PDF export, async above threshold (FR-035)
+- [ ] Unit test: achievement math; unset-target handling; actuals reconcile with DWR (SC-A01)
+
+### Phase A4: US11 — Schedule Variance (P3)
+
+- [ ] `VarianceService`: per-activity status, percent complete from quantity where available else
+      the manual value with the source marked (FR-030), behind-schedule flagging with day slippage
+      and critical-path marking (FR-031), explicit no-baseline response (FR-032)
+- [ ] Unit test: percent-complete source selection; slippage computation; no-baseline path

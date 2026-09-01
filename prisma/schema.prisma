@@ -63,16 +63,38 @@ model User {
   /// (FR-013) via the exported UsersService, never by a direct cross-schema query.
   lastLoginAt DateTime?
 
-  status              UserStatus @default(active)
-  mustChangePassword  Boolean    @default(false)
+  status              UserStatus       @default(active)
+  mustChangePassword  Boolean          @default(false)
+  /// How this account's first password came to exist (010 FR-017a-i).
+  ///
+  /// `mustChangePassword` alone cannot carry this: the forced-change refusal applies
+  /// to `admin_direct` accounts only, so the same flag means *enforced* on one
+  /// account and *advisory* on an admin-reset one, and nothing else separates them.
+  /// Only an explicit `admin_direct` is ever refused — an absent or unrecognised
+  /// value must not lock a real user out over missing metadata.
+  credentialOrigin    CredentialOrigin @default(invite)
   /// Resets to 0 on next successful login (FR-013).
-  consecutiveFailures Int        @default(0)
+  consecutiveFailures Int              @default(0)
   /// Set when consecutiveFailures reaches the configured threshold (FR-012).
   lockedUntil         DateTime?
 
   refreshTokens   RefreshToken[]
   inviteTokens    InviteToken[]
   auditLogEntries AuditLogEntry[]
+
+  @@schema("shared")
+}
+
+enum CredentialOrigin {
+  /// Chosen by the account holder, via an invite token. The default, and what every
+  /// account created before feature 010's 2026-09-01 amendment is.
+  invite
+  /// Set by an admin at creation time (FR-015). The only origin the forced-change
+  /// refusal applies to.
+  admin_direct
+  /// Set by an admin resetting an existing account's password. Deliberately left
+  /// unenforced for now (FR-017a-ii).
+  admin_reset
 
   @@schema("shared")
 }
@@ -736,6 +758,20 @@ model PunchRecord {
   /// (FR-008) enforceable as a partial unique index in the database, instead of
   /// resting solely on an application-level check that two concurrent requests can
   /// both pass. Always null on a punch-out record.
+  /// The calendar day this punch counts for, in the configured timezone (FR-018a).
+  ///
+  /// Stamped at insert rather than derived on read: `AT TIME ZONE` with a named zone
+  /// is STABLE, not IMMUTABLE, so Postgres will not build a unique index over the
+  /// expression — and FR-008c needs exactly that index. The cost is that changing
+  /// APP_TIMEZONE later does not reclassify punches already recorded, which for
+  /// payroll data is the safer direction.
+  punchDate DateTime @db.Date
+
+  /// Who wrote this punch. The FR-008c uniqueness constraint binds only `employee`
+  /// rows, so feature 005's future corrections are not forbidden by the schema, and
+  /// rows predating FR-008 (`legacy`) keep their multiple pairs per day.
+  source PunchSource @default(employee)
+
   closedByPunchId String? @unique
 
   /// Null unless either result above is `exception`; then `pending` until an admin
@@ -749,6 +785,7 @@ model PunchRecord {
   /// Serves both the open-punch-in lookup on the write path and the month-range
   /// history query on the read path.
   @@index([employeeId, capturedAt])
+  @@index([employeeId, punchDate])
   @@index([exceptionResolution])
   @@schema("hr")
 }
@@ -756,6 +793,17 @@ model PunchRecord {
 enum PunchType {
   in
   out
+
+  @@schema("hr")
+}
+
+enum PunchSource {
+  /// Self-service, made through `/my/punch`. The only kind FR-008 constrains.
+  employee
+  /// Reserved for feature 005's administrative fix-ups.
+  admin_correction
+  /// Recorded before FR-008 existed, when a day could hold several pairs.
+  legacy
 
   @@schema("hr")
 }
