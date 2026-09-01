@@ -16,6 +16,7 @@ import {
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { Permission } from '@prisma/client';
+import { PasswordChangeExempt } from '../common/decorators/password-change-exempt.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { TokenDto } from './dto/token.dto';
@@ -92,6 +93,9 @@ export class AuthController {
   }
 
   @Post('refresh-token')
+  // Exempt: refusing this would end the session mid-change rather than protect
+  // anything (010 FR-017a).
+  @PasswordChangeExempt()
   @ApiOkResponse({ type: TokenDto })
   async refreshToken(
     @Req() req: Request,
@@ -104,6 +108,8 @@ export class AuthController {
   }
 
   @Post('logout')
+  // Exempt: leaving must always be possible (010 FR-017a).
+  @PasswordChangeExempt()
   @ApiOkResponse()
   async logout(
     @Req() req: Request,

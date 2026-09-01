@@ -254,3 +254,117 @@ found, and the first one is a regression this feature introduced into feature 00
       missing from the Activity Log. Use entityType `USER_ACCOUNT` with the activating
       account as `accountId`, and do not record the raw token
       per FR-014 (missing)
+
+---
+
+## Phase 8: Amendment 2026-09-01 — direct account creation with an admin-set password
+
+**Goal**: An admin can create an account with a password instead of an invite, and that password
+must be replaced before the account can do anything.
+
+**Independent Test**: Create an account with a password; confirm no invite token exists and no email
+was dispatched; sign in with it; confirm every endpoint but the four exemptions is refused with
+`403 PASSWORD_CHANGE_REQUIRED`; change the password; confirm the refusal stops without re-login.
+
+### Foundational — schema (blocks everything below)
+
+- [X] T033 Add a `CredentialOrigin` enum (`invite` | `admin_direct` | `admin_reset`) and a
+      `credentialOrigin` column on `shared.User` in `prisma/schema.prisma`, backfilled to `invite`
+      for existing rows — which is what every account created before this amendment is
+      per FR-017a-i, data-model.md
+
+- [X] T034 Set `credentialOrigin` on the paths that already create or reset credentials: `invite`
+      in `src/account-creation/users/users.service.ts`, `admin_reset` in
+      `src/auth/auth.service.ts`'s admin-reset path. Without this the column is accurate only for
+      new direct creations
+      per FR-017a-i
+
+### User Story 4 — direct creation (P2)
+
+- [X] T035 [US4] Add an optional `password` to `CreateUserDto` in
+      `src/account-creation/users/dto/create-user.dto.ts`, validated against the same complexity
+      rule as the invitee's own (min 8, 1 uppercase, 1 number)
+      per FR-015, FR-016
+
+- [X] T036 [US4] Branch `UsersService.create()` in
+      `src/account-creation/users/users.service.ts`: with a password, create `status: 'active'`,
+      argon2-hashed via 001's `PasswordService`, `mustChangePassword: true`,
+      `credentialOrigin: 'admin_direct'`, and skip token generation and email entirely; without
+      one, leave today's invite flow untouched
+      per FR-015, FR-018
+
+- [X] T037 [US4] Validate the password before any row is written, so a rejected attempt leaves no
+      account, no employee link and no token behind
+      per FR-016
+
+- [X] T038 [US4] Record the creation in the audit log distinguishably from an invited one, and
+      ensure the password appears nowhere in it — not the value, not a hash, not a length
+      per FR-014
+
+### Forced password change (the enforcement FR-017a–d depends on)
+
+- [X] T039 Clear `mustChangePassword` in the same update as the new hash in
+      `UsersService.changePassword()` (`src/users/users.service.ts`). Left set, the user is
+      redirected on every login with no way out
+      per FR-017b
+
+- [X] T040 Add a global guard refusing requests from an account with
+      `credentialOrigin: 'admin_direct'` and `mustChangePassword` still set, returning `403` with a
+      `PASSWORD_CHANGE_REQUIRED` code in the body. It MUST read the account state re-read per
+      request by `jwt.strategy.ts`, never the JWT claim, or the refusal would outlive the change
+      until re-login
+      per FR-017a
+
+- [X] T041 Add the opt-out decorator following `src/common/decorators/permissions.decorator.ts`'s
+      `SetMetadata` + `Reflector` pattern, and apply it to exactly four routes:
+      `POST /users/change-password`, `GET /users/me`, `POST /auth/refresh-token`,
+      `POST /auth/logout`. Exempting must be deliberate; a rule that fails open on forgetfulness is
+      not a rule
+      per FR-017a
+
+- [X] T042 Ensure an absent or unrecognised `credentialOrigin` is never refused — only an explicit
+      `admin_direct` triggers the guard, so missing metadata cannot lock a real user out
+      per FR-017a-i
+
+### Tests
+
+- [X] T043 [P] [US4] Unit-test `UsersService.create()` both ways in
+      `src/account-creation/users/users.service.spec.ts`: with a password (active, hashed, flagged,
+      no token, no email) and without (unchanged invite flow)
+      per FR-015
+
+- [X] T044 [P] Unit-test the guard in `src/auth/`: refuses `admin_direct` + flag set; allows the
+      same account once the flag clears; allows `invite` and `admin_reset` accounts throughout;
+      allows an account with no origin recorded
+      per FR-017a, FR-017a-i, FR-017a-ii
+
+- [ ] T045 (PARTIAL) Test each of the four exemptions explicitly rather than assuming them from the
+      decorator's presence — this guard sits in the request path of every authenticated endpoint,
+      and a mistake in its list locks every user out of everything
+      — `GET /users/me` and `PATCH /users/me/password` verified live against a running
+      server; `refresh-token` and `logout` are covered only by the generic exempt-path
+      unit test, not per-route
+      per FR-017a, plan risk note
+
+- [ ] T046 (NOT RUN — needs the e2e suite) E2e: create an account with a password, sign in, confirm a non-exempt endpoint is
+      refused with the code, change the password, confirm the same endpoint then succeeds **on the
+      same session** — no re-login
+      per FR-017a, FR-017b
+
+### Not in scope, recorded
+
+- [ ] T047 (DEFERRED — FR-017d) Revoke sessions issued before a forced password change. Left undone
+      while there are no production users; must be revisited before there are, since the forced
+      change currently removes the admin's knowledge of the password but not access they already
+      hold. 001's refresh-token family revocation is the mechanism
+      per FR-017d
+
+- [ ] T048 (DEFERRED — FR-017a-ii) Apply the same enforcement to admin-reset accounts. Excluded
+      deliberately so deploying this cannot lock out anyone mid-reset
+      per FR-017a-ii
+
+- [X] T049 Reject a password change whose new value matches the current one, comparing against the
+      stored hash rather than the submitted `oldPassword` so it holds for every path that reaches
+      `changePassword()`. Found in manual testing after Phase 8: without it the forced change was
+      defeatable in one step
+      per FR-017b-i

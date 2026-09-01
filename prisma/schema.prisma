@@ -63,16 +63,38 @@ model User {
   /// (FR-013) via the exported UsersService, never by a direct cross-schema query.
   lastLoginAt DateTime?
 
-  status              UserStatus @default(active)
-  mustChangePassword  Boolean    @default(false)
+  status              UserStatus       @default(active)
+  mustChangePassword  Boolean          @default(false)
+  /// How this account's first password came to exist (010 FR-017a-i).
+  ///
+  /// `mustChangePassword` alone cannot carry this: the forced-change refusal applies
+  /// to `admin_direct` accounts only, so the same flag means *enforced* on one
+  /// account and *advisory* on an admin-reset one, and nothing else separates them.
+  /// Only an explicit `admin_direct` is ever refused — an absent or unrecognised
+  /// value must not lock a real user out over missing metadata.
+  credentialOrigin    CredentialOrigin @default(invite)
   /// Resets to 0 on next successful login (FR-013).
-  consecutiveFailures Int        @default(0)
+  consecutiveFailures Int              @default(0)
   /// Set when consecutiveFailures reaches the configured threshold (FR-012).
   lockedUntil         DateTime?
 
   refreshTokens   RefreshToken[]
   inviteTokens    InviteToken[]
   auditLogEntries AuditLogEntry[]
+
+  @@schema("shared")
+}
+
+enum CredentialOrigin {
+  /// Chosen by the account holder, via an invite token. The default, and what every
+  /// account created before feature 010's 2026-09-01 amendment is.
+  invite
+  /// Set by an admin at creation time (FR-015). The only origin the forced-change
+  /// refusal applies to.
+  admin_direct
+  /// Set by an admin resetting an existing account's password. Deliberately left
+  /// unenforced for now (FR-017a-ii).
+  admin_reset
 
   @@schema("shared")
 }

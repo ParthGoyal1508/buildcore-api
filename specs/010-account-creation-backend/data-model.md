@@ -10,8 +10,18 @@ schema placement rationale.
   lockedUntil, mustChangePassword,
   status: 'pending' | 'active' | 'deactivated',   // MODIFIED — gains 'pending' (was active|deactivated)
   displayName: string?,                            // NEW — used only when no Employee is linked
+  credentialOrigin: 'invite' | 'admin_direct' | 'admin_reset',  // NEW (FR-017a-i)
   createdAt, updatedAt }
 ```
+
+`credentialOrigin` records how the account's first password came to exist, and exists because the
+password-change refusal (FR-017a) applies only to `admin_direct` accounts. `mustChangePassword`
+alone cannot carry that: the same flag now means *enforced* on a directly-created account and
+*advisory* on an admin-reset one, and nothing else distinguishes them.
+
+Backfilled to `invite` for existing rows, which is what every account created before this
+amendment is. Set to `admin_direct` by FR-015's path; the admin-reset path sets `admin_reset` but
+is deliberately left unenforced (FR-017a-ii).
 
 `password` is nullable at the Prisma level for a `pending` row (no password exists until
 set-password succeeds) — 001's column was implicitly non-null in practice since only fully-created

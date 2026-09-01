@@ -3,17 +3,25 @@ import {
   IsEmail,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import {
+  PASSWORD_COMPLEXITY,
+  PASSWORD_COMPLEXITY_MESSAGE,
+} from '../../constants/account-creation.constants';
 
 /**
  * The invite form's payload.
  *
- * Deliberately has no `username` and no `password`. The username is generated
- * server-side from the email (data-model.md, resolved 2026-08-30), and the password
- * is chosen by the invitee — the whole point of an invite flow is that the admin
- * never handles either.
+ * Deliberately has no `username`: it is generated server-side from the email
+ * (data-model.md, resolved 2026-08-30).
+ *
+ * `password` is optional and switches the creation mode (FR-015). Absent — the
+ * invite flow, where the invitee chooses their own and the admin never handles it.
+ * Present — the admin sets it directly, the account opens immediately, and it must
+ * be changed at first login (FR-017), because the admin necessarily knows it.
  *
  * Two rules cannot be expressed with decorators and are enforced in `UsersService`:
  * `companyId` is required unless the chosen role carries cross-company access, and
@@ -55,4 +63,15 @@ export class CreateUserDto {
   @MinLength(1)
   @MaxLength(120)
   displayName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Sets the account up directly with this password instead of sending an invite (FR-015). The account is created active and must change it at first login. Omit for the normal invite flow.',
+  })
+  @IsOptional()
+  @IsString()
+  // The invitee's own rule, reused rather than restated — the two paths must not
+  // be able to drift apart on what counts as an acceptable password (FR-016).
+  @Matches(PASSWORD_COMPLEXITY, { message: PASSWORD_COMPLEXITY_MESSAGE })
+  password?: string;
 }

@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiTags } from '@nestjs/swagger';
+import { PasswordChangeExempt } from '../common/decorators/password-change-exempt.decorator';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserEntity } from '../common/decorators/user.decorator';
@@ -16,6 +17,9 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
+  // Exempt: the shell must be able to render who is signed in while they complete
+  // the change (010 FR-017a).
+  @PasswordChangeExempt()
   @ApiOkResponse({ type: UserResponseDto })
   me(@UserEntity() user: AuthenticatedUser): UserResponseDto {
     return UserResponseDto.fromEntity(user);
@@ -32,6 +36,8 @@ export class UsersController {
   }
 
   @Patch('me/password')
+  // Exempt: this is the way out of the forced change (010 FR-017a).
+  @PasswordChangeExempt()
   @ApiOkResponse({ type: UserResponseDto })
   async changePassword(
     @UserEntity() user: AuthenticatedUser,

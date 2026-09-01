@@ -30,6 +30,13 @@ account can still meaningfully belong to one home company.']
 (FR-013) via the exported UsersService, never by a direct cross-schema query.']
   status UserStatus [not null, default: 'active']
   mustChangePassword Boolean [not null, default: false]
+  credentialOrigin CredentialOrigin [not null, default: 'invite', note: 'How this account\'s first password came to exist (010 FR-017a-i).
+
+`mustChangePassword` alone cannot carry this: the forced-change refusal applies
+to `admin_direct` accounts only, so the same flag means *enforced* on one
+account and *advisory* on an admin-reset one, and nothing else separates them.
+Only an explicit `admin_direct` is ever refused — an absent or unrecognised
+value must not lock a real user out over missing metadata.']
   consecutiveFailures Int [not null, default: 0, note: 'Resets to 0 on next successful login (FR-013).']
   lockedUntil DateTime [note: 'Set when consecutiveFailures reaches the configured threshold (FR-012).']
   refreshTokens RefreshToken [not null]
@@ -596,6 +603,12 @@ served (FR-024).
 
 Every figure is `Decimal`, never `Float` — these are money, and binary rounding
 drift in a payslip is a wage dispute.'
+}
+
+Enum CredentialOrigin {
+  invite
+  admin_direct
+  admin_reset
 }
 
 Enum UserStatus {
