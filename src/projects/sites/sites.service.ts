@@ -22,6 +22,29 @@ export interface SiteGeofence {
 export class SitesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Every site in a company, as `{ id, name }`.
+   *
+   * Added for 005's frontend, which must offer a site picker when creating an
+   * employee — `Employee.siteId` is mandatory, and without a way to list sites the
+   * form is unfillable. Deliberately the narrowest possible read: no geofence, no
+   * coordinates, nothing a caller does not need to render a dropdown. The Projects
+   * feature (008) will own the full Site CRUD and should replace the controller
+   * over this, not extend it.
+   */
+  async listForCompany(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.site.findMany({
+        where: { companyId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
+  }
+
   /** The geofence a punch at this site is validated against. */
   async getGeofence(ctx: RlsContext, siteId: string): Promise<SiteGeofence> {
     const site = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -44,23 +67,6 @@ export class SitesService {
       longitude: site.longitude.toNumber(),
       geofenceRadiusMeters: site.geofenceRadiusMeters,
     };
-  }
-
-  /**
-   * The site's non-working days, as `YYYY-MM-DD` strings.
-   *
-   * Strings rather than `Date`s on purpose: a holiday is a calendar date, not an
-   * instant, and handing back a `Date` invites a caller to compare it against a
-   * timestamp in another timezone and land a day off.
-   */
-  async getHolidayCalendar(ctx: RlsContext, siteId: string): Promise<string[]> {
-    const site = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.site.findFirst({ where: { id: siteId }, select: { holidays: true } }),
-    );
-    if (!site) {
-      throw new NotFoundException('Site not found');
-    }
-    return site.holidays.map((d) => d.toISOString().slice(0, 10));
   }
 
   /** Day-of-week this site treats as Weekly Off, 0 = Sunday (research.md §6). */

@@ -235,6 +235,11 @@ model Company {
   gratuityRate     Decimal @db.Decimal(5, 2)
   bonusRate        Decimal @db.Decimal(5, 2)
 
+  /// Overtime pay multiplier applied to the derived hourly rate when computing OT
+  /// wages (FR-014a). Company-configurable rather than a hardcoded 2× literal —
+  /// Constitution Principle III. Read by the payroll engine via SettingsService.
+  otMultiplier     Decimal @db.Decimal(5, 2) @default(2.00)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -259,6 +264,40 @@ enum CompanyStatus {
 enum PayCycle {
   monthly
 
+  @@schema("settings")
+}
+
+enum TaxRegime {
+  old
+  new
+
+  @@schema("settings")
+}
+
+/// One band of an income-tax slab set (005 amendment US14, FR-050).
+///
+/// Company-scoped rather than global: a slab set is a statutory fact, but which
+/// financial years a company has configured is not, and a multi-company install
+/// should not have one company's incomplete configuration break another's payroll.
+model TaxSlab {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// e.g. "2026-27".
+  financialYear String
+  regime        TaxRegime
+
+  /// Inclusive lower bound of the band.
+  lowerBound Decimal  @db.Decimal(14, 2)
+  /// Exclusive upper bound; null marks the final open-ended band.
+  upperBound Decimal? @db.Decimal(14, 2)
+  ratePercent Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, financialYear, regime, lowerBound])
+  @@index([companyId, financialYear, regime])
   @@schema("settings")
 }
 
@@ -516,6 +555,18 @@ enum AuditEntityType {
   /// over the same claims this feature's employees create (research.md §10).
   REIMBURSEMENT_CLAIM
 
+  // HR & Payroll entities audited by feature 005 (FR-030).
+  EMPLOYEE
+  EMPLOYEE_DOCUMENT
+  EMPLOYEE_TRANSFER
+  ATTENDANCE
+  HOLIDAY
+  PAYROLL_RUN
+  LOAN
+  EXIT_RECORD
+  TAX_DECLARATION
+  SALARY_ADVANCE
+
   @@schema("shared")
 }
 
@@ -571,10 +622,6 @@ model Site {
 
   /// Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).
   weeklyOffDay Int
-  /// Site-specific non-working days. A scalar date list rather than its own table:
-  /// this is read as a whole calendar for one site at a time and never queried
-  /// across sites, so a join table would buy nothing (data-model.md "Site").
-  holidays     DateTime[] @db.Date
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -611,6 +658,92 @@ model Employee {
   /// Allocated by `settings`' employee-code sequence (feature 002).
   employeeCode String
 
+  // ── Identity (005 US1) ────────────────────────────────────────────────────
+  firstName     String?
+  lastName      String?
+  title         String?
+  dob           DateTime?      @db.Date
+  gender        Gender?
+  maritalStatus MaritalStatus?
+  photoRef      String?
+
+  // ── Employment ────────────────────────────────────────────────────────────
+  /// `settings.Department.id` / `settings.Designation.id` — bare ids, resolved via
+  /// SettingsService. No cross-schema Prisma relation (Constitution Principle I).
+  departmentId          String?
+  designationId         String?
+  employmentType        EmploymentType?  @default(full_time)
+  dateOfJoining         DateTime?        @db.Date
+  probationEndDate      DateTime?        @db.Date
+  confirmationDate      DateTime?        @db.Date
+  reportingToEmployeeId String?
+  musterCategory        String?
+  hoursPerDay           Decimal?         @db.Decimal(4, 2)
+  dailyRate             Decimal?         @db.Decimal(12, 2)
+  payMode               String?
+  calculationMode       CalculationMode? @default(monthly)
+  workmanId             String?
+  isActive              Boolean          @default(true)
+
+  // ── Statutory ─────────────────────────────────────────────────────────────
+  pfApplicable   Boolean @default(false)
+  pfUpperLimit   Boolean @default(false)
+  esicApplicable Boolean @default(false)
+  esicUpperLimit Boolean @default(false)
+  uan            String?
+  pfNumber       String?
+  esicNumber     String?
+  /// Regulated PII (Constitution Principle IV). Stored encrypted at rest, masked to
+  /// last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.
+  aadhaarEncrypted String?
+  panEncrypted     String?
+
+  // ── Pay & Bank ────────────────────────────────────────────────────────────
+  basic                 Decimal? @db.Decimal(12, 2)
+  hra                   Decimal? @db.Decimal(12, 2)
+  conveyanceAllowance   Decimal? @db.Decimal(12, 2)
+  siteAllowance         Decimal? @db.Decimal(12, 2)
+  specialAllowance      Decimal? @db.Decimal(12, 2)
+  paymentMode           String?
+  bankName              String?
+  bankBranch            String?
+  /// Regulated PII — see aadhaarEncrypted.
+  bankAccountNumberEncrypted String?
+  ifscCode                   String?
+
+  // ── Contact ───────────────────────────────────────────────────────────────
+  mobile                   String?
+  alternateMobile          String?
+  email                    String?
+  presentAddress           String?
+  presentCity              String?
+  presentState             String?
+  presentPinCode           String?
+  permanentAddress         String?
+  permanentCity            String?
+  permanentState           String?
+  permanentPinCode         String?
+  emergencyContactName     String?
+  emergencyContactRelation String?
+  emergencyContactPhone    String?
+
+  // ── Letters ───────────────────────────────────────────────────────────────
+  offerLetterIssued           Boolean   @default(false)
+  offerLetterIssuedDate       DateTime? @db.Date
+  appointmentLetterIssued     Boolean   @default(false)
+  appointmentLetterIssuedDate DateTime? @db.Date
+  ndaSigned                   Boolean   @default(false)
+  ndaSignedDate               DateTime? @db.Date
+
+  // ── Onboarding checklist ──────────────────────────────────────────────────
+  idCardIssued              Boolean @default(false)
+  uniformProvided           Boolean @default(false)
+  safetyInductionCompleted  Boolean @default(false)
+  toolsIssued               Boolean @default(false)
+  bankVerificationDone      Boolean @default(false)
+  biometricEnrolled         Boolean @default(false)
+  siteAccessGranted         Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -621,6 +754,14 @@ model Employee {
   leaveApplications   LeaveApplication[]
   reimbursementClaims ReimbursementClaim[]
   salarySlips         SalarySlip[]
+  documents               EmployeeDocument[]
+  transfers               EmployeeTransfer[]
+  attendanceModifications AttendanceModification[]
+  exitRecords             ExitRecord[]
+  payrollLineItems        PayrollLineItem[]
+  loans                   Loan[]
+  taxDeclarations         TaxDeclaration[]
+  salaryAdvances          SalaryAdvance[]
 
   @@unique([companyId, employeeCode])
   @@index([companyId])
@@ -738,17 +879,19 @@ model PunchRecord {
   isOfflineSync Boolean  @default(false)
 
   /// Encrypted object-storage reference to the captured selfie.
-  photoRef String
+  /// Null only for `admin_correction` rows, which have no capture. A CHECK
+  /// constraint keeps this mandatory for employee-sourced punches.
+  photoRef String?
 
-  faceMatchResult   FaceMatchResult
+  faceMatchResult   FaceMatchResult?
   /// The measured descriptor distance behind `faceMatchResult`. Kept so an admin
   /// resolving an exception can see how near the miss was, and so the configured
   /// threshold can be retuned against real data instead of guesswork.
   faceMatchDistance Decimal?        @db.Decimal(6, 4)
 
-  latitude               Decimal        @db.Decimal(10, 7)
-  longitude              Decimal        @db.Decimal(10, 7)
-  geofenceResult         GeofenceResult
+  latitude               Decimal?       @db.Decimal(10, 7)
+  longitude              Decimal?       @db.Decimal(10, 7)
+  geofenceResult         GeofenceResult?
   /// Measured metres from the site centre, retained for the same reason as
   /// `faceMatchDistance`.
   geofenceDistanceMeters Decimal?       @db.Decimal(10, 2)
@@ -779,6 +922,18 @@ model PunchRecord {
   exceptionResolution ExceptionResolution?
   resolvedByUserId    String?
   resolvedAt          DateTime?
+
+  // ── Admin edit surface (005 US3, research.md §7) ──────────────────────────
+  /// Set when an admin created or corrected this record through the HR admin
+  /// Mark/Edit action rather than the employee's own punch flow. Every such edit
+  /// also writes an append-only AttendanceModification row carrying before/after.
+  adminEdited     Boolean            @default(false)
+  editedByUserId  String?
+  editedAt        DateTime?
+  /// Forces the derived day status instead of letting statusForDay() compute it —
+  /// used when an admin marks a day present/absent against what the punches imply.
+  statusOverride  AttendanceStatusOverride?
+  remarks         String?
 
   createdAt DateTime @default(now())
 
@@ -818,6 +973,19 @@ enum FaceMatchResult {
 enum GeofenceResult {
   in_range
   exception
+
+  @@schema("hr")
+}
+
+/// Mirrors the `AttendanceStatus` union in
+/// src/hr/punch/attendance-history.service.ts. Kept in sync by hand — the union is
+/// the source of truth for computation, this enum only stores an admin's override.
+enum AttendanceStatusOverride {
+  present
+  absent
+  on_leave
+  weekly_off
+  holiday
 
   @@schema("hr")
 }
@@ -978,6 +1146,268 @@ enum ReimbursementPaymentMode {
 // payroll schema — feature 003 reads these; it does not compute payroll.
 // ============================================================================
 
+enum Gender {
+  male
+  female
+  other
+
+  @@schema("hr")
+}
+
+enum MaritalStatus {
+  single
+  married
+  divorced
+  widowed
+
+  @@schema("hr")
+}
+
+enum EmploymentType {
+  full_time
+  contract
+  daily_wage
+
+  @@schema("hr")
+}
+
+enum CalculationMode {
+  monthly
+  daily
+
+  @@schema("hr")
+}
+
+/// Per-employee uploaded document, keyed to a `settings.DocumentType` (002). A
+/// re-upload replaces the reference for that type — historical versions are not
+/// retained (data-model.md §Employee Document).
+model EmployeeDocument {
+  id         String @id @default(cuid())
+  employeeId String
+
+  /// `settings.DocumentType.id`; resolved via SettingsService, not a relation.
+  documentTypeId String
+  /// Encrypted object-storage reference, same mechanism as 003's biometric blobs.
+  fileRef        String
+  documentNumber String?
+  expiresAt      DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, documentTypeId])
+  @@index([expiresAt])
+  @@schema("hr")
+}
+
+/// Append-only record of an employee moving between companies (US8).
+model EmployeeTransfer {
+  id         String @id @default(cuid())
+  employeeId String
+
+  fromCompanyId String
+  toCompanyId   String
+  transferDate  DateTime @db.Date
+  reason        String
+
+  /// When false, a fresh code is allocated in the destination company.
+  codeRetained    Boolean @default(false)
+  newEmployeeCode String?
+
+  transferredByUserId String
+  createdAt           DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@schema("hr")
+}
+
+enum HolidayType {
+  national
+  regional
+  company
+
+  @@schema("hr")
+}
+
+/// Supersedes `projects.Site.holidays` (research.md §6) — a first-class, typed,
+/// company-scoped holiday calendar that attendance status computation reads.
+model Holiday {
+  id        String @id @default(cuid())
+  /// Company-level calendar, not employee-owned — keeps its own tenant key.
+  companyId String
+
+  name String
+  date DateTime    @db.Date
+  type HolidayType @default(company)
+
+  /// When false, applicability is restricted to the sites in `sites`.
+  appliesToAllSites Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sites HolidaySite[]
+
+  @@unique([companyId, date, name])
+  @@index([companyId, date])
+  @@schema("hr")
+}
+
+model HolidaySite {
+  holidayId String
+  /// `projects.Site.id` — bare id, resolved via SitesService.
+  siteId    String
+
+  holiday Holiday @relation(fields: [holidayId], references: [id], onDelete: Cascade)
+
+  @@id([holidayId, siteId])
+  @@index([siteId])
+  @@schema("hr")
+}
+
+/// Append-only audit of every manual attendance edit (FR-010). Never updated.
+model AttendanceModification {
+  id         String @id @default(cuid())
+  employeeId String
+
+  date         DateTime @db.Date
+  actorUserId  String
+  before       Json
+  after        Json
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, date])
+  @@schema("hr")
+}
+
+enum ExitReason {
+  resignation
+  termination
+  contract_end
+
+  @@schema("hr")
+}
+
+/// Employee offboarding record (US11). The F&F settlement itself is a normal
+/// PayrollRun flagged `isFnf`, linked here.
+model ExitRecord {
+  id         String @id @default(cuid())
+  employeeId String
+
+  lastWorkingDay DateTime   @db.Date
+  reason         ExitReason
+  remarks        String?
+
+  /// `payroll.PayrollRun.id` of the F&F run — bare id, cross-schema by service.
+  fnfPayrollRunId String?
+
+  initiatedByUserId String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
+  @@schema("hr")
+}
+
+enum TaxDeclarationStatus {
+  declared
+  verified
+
+  @@schema("hr")
+}
+
+/// An employee's investment declaration for a financial year (US14, FR-052).
+model TaxDeclaration {
+  id         String @id @default(cuid())
+  employeeId String
+
+  financialYear String
+  regime        TaxRegime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  employee Employee             @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  lines    TaxDeclarationLine[]
+
+  @@unique([employeeId, financialYear])
+  @@index([employeeId])
+  @@schema("hr")
+}
+
+/// One declared deduction, e.g. 80C. `cappedAmount` is what actually reduces
+/// taxable income — the declared figure is retained so an employee can see that
+/// their claim was capped rather than silently reduced.
+model TaxDeclarationLine {
+  id            String @id @default(cuid())
+  declarationId String
+
+  sectionCode    String
+  declaredAmount Decimal @db.Decimal(14, 2)
+  cappedAmount   Decimal @db.Decimal(14, 2)
+
+  status   TaxDeclarationStatus @default(declared)
+  proofRef String?
+  verifiedByUserId String?
+  verifiedAt       DateTime?
+
+  declaration TaxDeclaration @relation(fields: [declarationId], references: [id], onDelete: Cascade)
+
+  @@unique([declarationId, sectionCode])
+  @@schema("hr")
+}
+
+enum SalaryAdvanceStatus {
+  pending
+  approved
+  disbursed
+  closed
+
+  @@schema("hr")
+}
+
+/// A salary advance (US15, FR-054).
+///
+/// Deliberately NOT a `payroll.Loan`: an advance carries no interest and no
+/// amortisation schedule, and is recovered in full in one nominated month. Modelling
+/// it as a one-instalment loan would put two different things behind one screen and
+/// one set of rules.
+model SalaryAdvance {
+  id         String @id @default(cuid())
+  employeeId String
+
+  amount Decimal @db.Decimal(12, 2)
+  reason String
+
+  /// Period key, `YYYY-MM`, the recovery is attempted in.
+  recoveryMonth      String
+  outstandingBalance Decimal @db.Decimal(12, 2)
+  /// Above the configured multiple of monthly net; needs explicit approval.
+  exceedsLimit Boolean @default(false)
+
+  status SalaryAdvanceStatus @default(pending)
+
+  approvedByUserId String?
+  disbursedOn      DateTime? @db.Date
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId, status])
+  @@index([recoveryMonth])
+  @@schema("hr")
+}
+
 /// Status only. This feature reads it for two things: whether a period is locked to
 /// further attendance writes (FR-010), and whether a salary slip may be served at
 /// all (a `draft` run has no publishable figures).
@@ -990,11 +1420,25 @@ model PayrollRun {
   period String
   status PayrollRunStatus @default(draft)
 
+  /// An F&F settlement run covers exactly one exiting employee and is flagged for
+  /// reporting/audit (research.md §12, US11).
+  isFnf Boolean @default(false)
+
+  generatedAt        DateTime?
+  generatedByUserId  String?
+  processedAt        DateTime?
+  paidAt             DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([companyId, period])
-  @@index([companyId])
+  lineItems PayrollLineItem[]
+
+  /// NOTE: uniqueness is a *partial* index applied in the migration —
+  /// one non-F&F run per (companyId, period), but many F&F runs per period
+  /// (one per exiting employee). Prisma cannot express a partial unique index,
+  /// so it is created as raw SQL in the migration instead.
+  @@index([companyId, period])
   @@schema("payroll")
 }
 
@@ -1003,6 +1447,136 @@ enum PayrollRunStatus {
   processed
   paid
 
+  @@schema("payroll")
+}
+
+/// The per-employee, per-period computed payroll figures — the single source of
+/// truth that `/hr/challans/*`, 003's `/my/salary`, and 008's Project P&L labour
+/// cost line all read from (data-model.md §Payroll Line Item). Immutable once its
+/// run reaches `processed` (FR-015), enforced at the write path.
+model PayrollLineItem {
+  id           String @id @default(cuid())
+  payrollRunId String
+  employeeId   String
+
+  /// `projects.Project.id` — nullable; null for HO/overhead staff. Resolved via
+  /// ProjectsService, never a cross-schema Prisma relation (FR-046).
+  projectId String?
+
+  // ── Attendance basis ──────────────────────────────────────────────────────
+  monthDays   Int
+  payableDays Decimal @db.Decimal(6, 2)
+  lopDays     Decimal @db.Decimal(6, 2) @default(0)
+  otHours     Decimal @db.Decimal(8, 2) @default(0)
+  otWages     Decimal @db.Decimal(12, 2) @default(0)
+
+  // ── Earnings ──────────────────────────────────────────────────────────────
+  basic               Decimal @db.Decimal(12, 2) @default(0)
+  hra                 Decimal @db.Decimal(12, 2) @default(0)
+  conveyanceAllowance Decimal @db.Decimal(12, 2) @default(0)
+  siteAllowance       Decimal @db.Decimal(12, 2) @default(0)
+  specialAllowance    Decimal @db.Decimal(12, 2) @default(0)
+
+  // ── Employee deductions ───────────────────────────────────────────────────
+  employeePf       Decimal @db.Decimal(12, 2) @default(0)
+  employeeEsic     Decimal @db.Decimal(12, 2) @default(0)
+  professionalTax  Decimal @db.Decimal(12, 2) @default(0)
+  /// Manual entry, default 0 (spec clarification — TDS computation arrives with
+  /// the 2026-09-01 amendment, US14).
+  tds              Decimal @db.Decimal(12, 2) @default(0)
+  loanEmiDeduction Decimal @db.Decimal(12, 2) @default(0)
+
+  netPay Decimal @db.Decimal(12, 2) @default(0)
+
+  // ── Employer contributions ────────────────────────────────────────────────
+  employerPf   Decimal @db.Decimal(12, 2) @default(0)
+  employerEps  Decimal @db.Decimal(12, 2) @default(0)
+  employerEdli Decimal @db.Decimal(12, 2) @default(0)
+  adminCharges Decimal @db.Decimal(12, 2) @default(0)
+  employerEsic Decimal @db.Decimal(12, 2) @default(0)
+  gratuity     Decimal @db.Decimal(12, 2) @default(0)
+  bonus        Decimal @db.Decimal(12, 2) @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@unique([payrollRunId, employeeId])
+  @@index([employeeId])
+  @@index([projectId])
+  @@schema("payroll")
+}
+
+enum LoanStatus {
+  pending
+  active
+  closed
+
+  @@schema("payroll")
+}
+
+/// An employee advance/loan with an auto-generated EMI schedule that feeds payroll
+/// deductions (US7).
+model Loan {
+  id String @id @default(cuid())
+
+  /// DELIBERATE deviation from the "scope through Employee" pattern the 003 RLS
+  /// migration establishes. A loan is a financial obligation issued *by a company*,
+  /// so US8's transfer-between-companies must not silently hand visibility of an
+  /// outstanding debt to the destination tenant. Kept as its own tenant key, and
+  /// the transfer flow deliberately does not rewrite it.
+  companyId  String
+  employeeId String
+
+  amount            Decimal  @db.Decimal(12, 2)
+  emiAmount         Decimal  @db.Decimal(12, 2)
+  disbursementDate  DateTime @db.Date
+  reason            String
+  remarks           String?
+  status            LoanStatus @default(pending)
+
+  approvedByUserId String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  employee Employee            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  schedule LoanScheduleEntry[]
+
+  @@index([companyId])
+  @@index([employeeId, status])
+  @@schema("payroll")
+}
+
+enum LoanScheduleStatus {
+  upcoming
+  paid
+  overdue
+
+  @@schema("payroll")
+}
+
+/// One month of a loan's amortisation schedule. Generated on approval; the payroll
+/// engine marks an entry `paid` and stamps `paidInPayrollRunId` when it deducts.
+model LoanScheduleEntry {
+  id     String @id @default(cuid())
+  loanId String
+
+  /// Period key, e.g. "2026-07".
+  month            String
+  emiAmount        Decimal @db.Decimal(12, 2)
+  principal        Decimal @db.Decimal(12, 2)
+  interest         Decimal @db.Decimal(12, 2) @default(0)
+  remainingBalance Decimal @db.Decimal(12, 2)
+
+  status             LoanScheduleStatus @default(upcoming)
+  paidInPayrollRunId String?
+
+  loan Loan @relation(fields: [loanId], references: [id], onDelete: Cascade)
+
+  @@unique([loanId, month])
+  @@index([status])
   @@schema("payroll")
 }
 

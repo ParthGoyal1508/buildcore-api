@@ -7,6 +7,7 @@ export interface Config {
   workspace: WorkspaceConfig;
   storage: StorageConfig;
   email: EmailConfig;
+  hrPayroll: HrPayrollConfig;
 }
 
 export interface NestConfig {
@@ -114,6 +115,12 @@ export interface SettingsConfig {
     gratuity: number;
     /** Statutory bonus, percent. */
     bonus: number;
+    /**
+     * Overtime pay multiplier applied to the derived hourly rate (005 FR-014a).
+     * A multiplier, not a percent. Seeded onto each new Company, editable
+     * per-company thereafter — Principle III keeps the 2x out of the engine.
+     */
+    otMultiplier: number;
   };
   /** Day-of-month after which attendance edits lock for payroll processing. */
   defaultPayrollLockDay: number;
@@ -139,6 +146,96 @@ export interface SettingsConfig {
  * change without a code review: a biometric threshold that turns out too strict in
  * the field, a queue window that has to widen for a site with worse connectivity.
  */
+/**
+ * HR & Payroll (feature 005) tunables. Principle III: every one of these is a policy
+ * value someone will want to change without a code review.
+ */
+export interface HrPayrollConfig {
+  /**
+   * How many days before an employee document's expiry it starts reporting as
+   * expiring-soon (005 FR-006). 30 by default.
+   */
+  documentExpiryWarningDays: number;
+
+  /**
+   * Standard hours in a working day, used to derive an hourly rate for overtime
+   * when the employee record does not set its own `hoursPerDay`.
+   */
+  standardHoursPerDay: number;
+
+  /**
+   * Statutory rates the payroll engine applies (Principle III — none of these may
+   * be a literal in the engine).
+   *
+   * Employer-side PF/ESIC percentages are deliberately absent: those are
+   * per-company columns on `settings.Company` (002 FR-002), because a company can
+   * be registered under a different contribution scheme. What lives here is the
+   * statutory framework itself — employee-side rates, wage ceilings, and the
+   * split of the employer's PF share — which is set by law rather than by company.
+   */
+  statutory: {
+    pf: {
+      /** Employee contribution, percent of PF wage. */
+      employeeRatePercent: number;
+      /** Monthly PF wage ceiling; contributions are computed on the lesser. */
+      wageCeiling: number;
+      /** Pension share of the employer contribution, percent of PF wage. */
+      epsRatePercent: number;
+      /** Employee deposit-linked insurance, percent of PF wage. */
+      edliRatePercent: number;
+      /** EPFO administrative charges, percent of PF wage. */
+      adminChargesPercent: number;
+    };
+    esic: {
+      /** Employee contribution, percent of gross. */
+      employeeRatePercent: number;
+      /** Gross above which ESIC does not apply. */
+      wageCeiling: number;
+    };
+    /**
+     * Professional tax slabs, ascending. `upToMonthlyGross: null` marks the final
+     * open-ended band. State-specific, so configured rather than assumed.
+     */
+    professionalTaxSlabs: {
+      upToMonthlyGross: number | null;
+      monthlyAmount: number;
+    }[];
+
+    /** Income tax (005 amendment US14). */
+    tds: {
+      /**
+       * Rate applied when an employee has no PAN on file (FR-053). Higher than
+       * any slab on purpose — filing without a PAN attracts a penal rate.
+       */
+      noPanRatePercent: number;
+      /**
+       * Month (1-12) after which only *verified* declarations count (FR-052).
+       * Before it, an employee's word is enough; after it, proof is required.
+       */
+      proofCutOffMonth: number;
+      /** Statutory ceilings per section code, e.g. `{ "80C": 150000 }`. */
+      sectionCeilings: Record<string, number>;
+      /** Standard deduction applied to salary income before slabs. */
+      standardDeduction: number;
+    };
+  };
+
+  /** Salary advances (005 amendment US15). */
+  salaryAdvance: {
+    /**
+     * An advance above this multiple of monthly net pay is flagged and needs
+     * explicit approval (FR-054).
+     */
+    limitMultipleOfMonthlyNet: number;
+  };
+
+  /** Shift compliance / late-coming reporting (005 amendment US17). */
+  shiftCompliance: {
+    /** Late days in a month beyond which an employee is flagged a repeat offender. */
+    repeatLateComerThreshold: number;
+  };
+}
+
 export interface WorkspaceConfig {
   faceMatch: {
     /**

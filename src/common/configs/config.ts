@@ -1,6 +1,39 @@
 import type { Config } from './config.interface';
 
 /** Parses a numeric env override, falling back when unset or non-numeric. */
+/**
+ * Parses professional-tax slabs from a compact env string.
+ *
+ * Format: `upTo:amount` pairs, comma-separated, ascending, with `-` marking the
+ * final open-ended band — e.g. `7500:0,10000:175,-:200`.
+ *
+ * Returns undefined on anything malformed rather than a partial list, so a typo
+ * falls back to the documented defaults instead of silently taxing everyone at
+ * whichever bands happened to parse.
+ */
+function parsePtSlabs(
+  raw: string | undefined,
+): { upToMonthlyGross: number | null; monthlyAmount: number }[] | undefined {
+  if (!raw?.trim()) return undefined;
+  const slabs: { upToMonthlyGross: number | null; monthlyAmount: number }[] = [];
+  for (const part of raw.split(',')) {
+    const [upTo, amount] = part.split(':').map((x) => x.trim());
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount)) return undefined;
+    if (upTo === '-') {
+      slabs.push({ upToMonthlyGross: null, monthlyAmount: parsedAmount });
+      continue;
+    }
+    const parsedUpTo = Number(upTo);
+    if (!Number.isFinite(parsedUpTo)) return undefined;
+    slabs.push({ upToMonthlyGross: parsedUpTo, monthlyAmount: parsedAmount });
+  }
+  // The list must end in an open band, or a high earner would fall through it.
+  if (slabs.length === 0) return undefined;
+  if (slabs[slabs.length - 1].upToMonthlyGross !== null) return undefined;
+  return slabs;
+}
+
 function numberFromEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
     return fallback;
@@ -95,6 +128,9 @@ const config: Config = {
       ),
       gratuity: numberFromEnv(process.env.SETTINGS_DEFAULT_GRATUITY_RATE, 4.81),
       bonus: numberFromEnv(process.env.SETTINGS_DEFAULT_BONUS_RATE, 8.33),
+      // 005 FR-014a. A multiplier, not a percent — 2x the derived hourly rate is
+      // the statutory default for overtime.
+      otMultiplier: numberFromEnv(process.env.SETTINGS_DEFAULT_OT_MULTIPLIER, 2.0),
     },
     defaultPayrollLockDay: numberFromEnv(
       process.env.SETTINGS_DEFAULT_PAYROLL_LOCK_DAY,
@@ -174,6 +210,61 @@ const config: Config = {
       },
     },
   },
+  hrPayroll: {
+    // 005 FR-006 — how far ahead an employee document starts reporting as
+    // expiring-soon.
+    documentExpiryWarningDays: numberFromEnv(
+      process.env.HR_DOCUMENT_EXPIRY_WARNING_DAYS,
+      30,
+    ),
+    standardHoursPerDay: numberFromEnv(process.env.HR_STANDARD_HOURS_PER_DAY, 8),
+    statutory: {
+      pf: {
+        employeeRatePercent: numberFromEnv(process.env.PF_EMPLOYEE_RATE, 12),
+        wageCeiling: numberFromEnv(process.env.PF_WAGE_CEILING, 15000),
+        epsRatePercent: numberFromEnv(process.env.PF_EPS_RATE, 8.33),
+        edliRatePercent: numberFromEnv(process.env.PF_EDLI_RATE, 0.5),
+        adminChargesPercent: numberFromEnv(process.env.PF_ADMIN_CHARGES_RATE, 0.5),
+      },
+      esic: {
+        employeeRatePercent: numberFromEnv(process.env.ESIC_EMPLOYEE_RATE, 0.75),
+        wageCeiling: numberFromEnv(process.env.ESIC_WAGE_CEILING, 21000),
+      },
+      // Maharashtra's slabs as the shipped default. A company in another state
+      // overrides these through the environment rather than a code change.
+      professionalTaxSlabs: parsePtSlabs(process.env.PROFESSIONAL_TAX_SLABS) ?? [
+        { upToMonthlyGross: 7500, monthlyAmount: 0 },
+        { upToMonthlyGross: 10000, monthlyAmount: 175 },
+        { upToMonthlyGross: null, monthlyAmount: 200 },
+      ],
+      tds: {
+        noPanRatePercent: numberFromEnv(process.env.TDS_NO_PAN_RATE, 20),
+        proofCutOffMonth: numberFromEnv(process.env.TDS_PROOF_CUTOFF_MONTH, 1),
+        sectionCeilings: {
+          '80C': numberFromEnv(process.env.TDS_CEILING_80C, 150000),
+          '80D': numberFromEnv(process.env.TDS_CEILING_80D, 25000),
+          '80CCD1B': numberFromEnv(process.env.TDS_CEILING_80CCD1B, 50000),
+          HRA: numberFromEnv(process.env.TDS_CEILING_HRA, 0),
+        },
+        standardDeduction: numberFromEnv(process.env.TDS_STANDARD_DEDUCTION, 50000),
+      },
+    },
+
+    salaryAdvance: {
+      limitMultipleOfMonthlyNet: numberFromEnv(
+        process.env.SALARY_ADVANCE_LIMIT_MULTIPLE,
+        1,
+      ),
+    },
+
+    shiftCompliance: {
+      repeatLateComerThreshold: numberFromEnv(
+        process.env.REPEAT_LATE_COMER_THRESHOLD,
+        3,
+      ),
+    },
+  },
+
   email: {
     // Console by default so a fresh clone can run the whole invite flow offline.
     // Production must set 'resend'; the adapter validates its own required values at

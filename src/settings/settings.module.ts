@@ -10,6 +10,7 @@ import { DocumentTypesController } from './reference-data/document-types.control
 import { DocumentTypesService } from './reference-data/document-types.service';
 import { ReferenceDataService } from './reference-data/reference-data.service';
 import { ShiftsController } from './reference-data/shifts.controller';
+import { ReimbursementCategoriesController } from './reimbursement-categories/reimbursement-categories.controller';
 import { ReimbursementCategoriesService } from './reimbursement-categories/reimbursement-categories.service';
 import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
@@ -30,6 +31,7 @@ import { UsersAdminService } from './users-admin/users-admin.service';
 @Module({
   imports: [UsersModule],
   controllers: [
+    ReimbursementCategoriesController,
     CompaniesController,
     RolesController,
     UsersAdminController,

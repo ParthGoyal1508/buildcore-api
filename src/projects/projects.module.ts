@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
 
 /**
@@ -11,6 +12,7 @@ import { SitesService } from './sites/sites.service';
  * a cross-schema query.
  */
 @Module({
+  controllers: [SitesController],
   providers: [SitesService],
   exports: [SitesService],
 })

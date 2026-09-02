@@ -157,4 +157,15 @@ export class CreateCompanyDto {
   @Min(0)
   @Max(100)
   bonusRate?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Overtime pay multiplier applied to the derived hourly rate (FR-014a). ' +
+      'Defaults to 2.00 when omitted. Not a percent — a multiplier.',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(10)
+  otMultiplier?: number;
 }

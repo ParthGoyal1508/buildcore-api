@@ -27,6 +27,8 @@ export class CompanyResponseDto {
   @ApiProperty() esicEmployerRate: number;
   @ApiProperty() gratuityRate: number;
   @ApiProperty() bonusRate: number;
+  /** Overtime pay multiplier (005 FR-014a) — a multiplier, not a percent. */
+  @ApiProperty() otMultiplier: number;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
 
@@ -37,6 +39,7 @@ export class CompanyResponseDto {
       esicEmployerRate: company.esicEmployerRate.toNumber(),
       gratuityRate: company.gratuityRate.toNumber(),
       bonusRate: company.bonusRate.toNumber(),
+      otMultiplier: company.otMultiplier.toNumber(),
     };
   }
 }

@@ -5,6 +5,7 @@ import { PrismaService } from 'nestjs-prisma';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { SitesService } from '../../projects/sites/sites.service';
+import { HolidaysService } from '../holidays/holidays.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -91,6 +92,7 @@ export class AttendanceHistoryService {
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly sites: SitesService,
+    private readonly holidays: HolidaysService,
     private readonly leave: LeaveService,
     private readonly referenceData: ReferenceDataService,
     configService: ConfigService,
@@ -107,6 +109,32 @@ export class AttendanceHistoryService {
       caller.rls,
       caller.userId,
     );
+    return this.monthFor(caller, employee, month, year);
+  }
+
+  /**
+   * The same month computation for an employee named by an admin or by payroll
+   * (005 US3/US5).
+   *
+   * Shares `monthFor` with the self-service path rather than reimplementing day
+   * status. Payroll deciding "present" differently from the employee's own
+   * attendance screen is precisely the drift research.md §6 warns about.
+   */
+  async getMonthForEmployee(
+    caller: Caller,
+    employee: { id: string; siteId: string; shiftId: string; companyId: string },
+    month: number,
+    year: number,
+  ): Promise<AttendanceMonth> {
+    return this.monthFor(caller, employee, month, year);
+  }
+
+  private async monthFor(
+    caller: Caller,
+    employee: { id: string; siteId: string; shiftId: string; companyId: string },
+    month: number,
+    year: number,
+  ): Promise<AttendanceMonth> {
 
     // Day 0 of the following month is the last day of this one — the standard way
     // to get a month's length without a table of month lengths and a leap-year rule.
@@ -116,7 +144,11 @@ export class AttendanceHistoryService {
     const [weeklyOffDay, holidays, leaveDates, punches, shiftDurationHours] =
       await Promise.all([
         this.sites.getWeeklyOffDay(caller.rls, employee.siteId),
-        this.sites.getHolidayCalendar(caller.rls, employee.siteId),
+        this.holidays.getHolidayCalendar(
+          caller.rls,
+          employee.companyId,
+          employee.siteId,
+        ),
         this.leave.getApprovedLeaveDates(
           caller.rls,
           employee.id,

@@ -20,6 +20,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { SitesService } from '../../projects/sites/sites.service';
+import { HolidaysService } from '../holidays/holidays.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeesService } from '../employees/employees.service';
@@ -67,6 +68,7 @@ export class LeaveService {
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly sites: SitesService,
+    private readonly holidays: HolidaysService,
     private readonly companies: CompaniesService,
     private readonly auditLog: AuditLogService,
     configService: ConfigService,
@@ -89,6 +91,34 @@ export class LeaveService {
       caller.rls,
       caller.userId,
     );
+    return this.balanceFor(caller, employee.id, financialYear);
+  }
+
+  /**
+   * The same balance projection for an employee named by an admin (005 US4).
+   *
+   * Shares `balanceFor` with the self-service path rather than reimplementing the
+   * zero-fill and rounding — two copies of "what is this employee's balance" is
+   * exactly how an admin screen and an employee screen end up disagreeing.
+   */
+  async getBalanceForEmployee(
+    caller: Caller,
+    employeeId: string,
+    financialYear?: string,
+  ): Promise<LeaveBalanceView[]> {
+    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({ where: { id: employeeId }, select: { id: true } }),
+    );
+    if (!employee) throw new NotFoundException('Employee not found');
+    return this.balanceFor(caller, employee.id, financialYear);
+  }
+
+  private async balanceFor(
+    caller: Caller,
+    employeeId: string,
+    financialYear?: string,
+  ): Promise<LeaveBalanceView[]> {
+    const employee = { id: employeeId };
     // The financial year it is *here*, not at UTC: on 1 April the two disagree
     // for the first five and a half hours, and an employee opening the app that
     // morning would be shown last year's entitlement.
@@ -411,7 +441,11 @@ export class LeaveService {
   ): Promise<number> {
     const [weeklyOffDay, holidays] = await Promise.all([
       this.sites.getWeeklyOffDay(ctx, employee.siteId),
-      this.sites.getHolidayCalendar(ctx, employee.siteId),
+      this.holidays.getHolidayCalendar(
+        ctx,
+        employee.companyId,
+        employee.siteId,
+      ),
     ]);
     return countLeaveDays(fromDate, toDate, weeklyOffDay, holidays);
   }
