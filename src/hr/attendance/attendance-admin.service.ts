@@ -234,6 +234,38 @@ export class AttendanceAdminService {
   }
 
   /** The Modifications audit trail, newest first. */
+  /**
+   * One employee's attendance month, for the admin Employee Detail calendar.
+   *
+   * The same `AttendanceHistoryService` call `/my/punch/history` serves, but keyed
+   * on an employee named by the caller rather than derived from their own token.
+   * That difference is the whole reason it needs its own route: `/my/*` deliberately
+   * accepts no employee parameter (FR-028), so an admin looking at somebody else's
+   * calendar cannot go through it. RLS still scopes the lookup to the caller's
+   * company, and the route is guarded by ATTENDANCE like every other admin route
+   * here.
+   */
+  async employeeMonth(
+    caller: Caller,
+    companyId: string,
+    employeeId: string,
+    month: number,
+    year: number,
+  ) {
+    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({ where: { id: employeeId, companyId } }),
+    );
+    if (!employee) {
+      throw new NotFoundException('Employee not found');
+    }
+    return this.attendanceHistory.getMonthForEmployee(
+      caller,
+      employee,
+      month,
+      year,
+    );
+  }
+
   async modifications(
     caller: Caller,
     companyId: string,

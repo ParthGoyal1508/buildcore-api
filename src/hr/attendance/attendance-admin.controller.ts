@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Param,
   Post,
   Query,
   Req,
@@ -132,6 +133,39 @@ export class AttendanceAdminController {
       m,
       y,
       { departmentId, siteId },
+    );
+  }
+
+  @Get('employee/:employeeId')
+  @ApiOperation({
+    summary: "One employee's attendance month, as a calendar",
+    description:
+      'The admin counterpart to `/my/punch/history`. That route derives the ' +
+      'employee from the caller’s own token and accepts no employee parameter, so ' +
+      'it cannot serve an admin looking at somebody else’s calendar.',
+  })
+  async employeeMonth(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('employeeId') employeeId: string,
+    @Query('month') month: string,
+    @Query('year') year: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    const m = Number(month);
+    const y = Number(year);
+    if (!Number.isInteger(m) || m < 1 || m > 12) {
+      throw new BadRequestException('month must be 1-12.');
+    }
+    if (!Number.isInteger(y)) {
+      throw new BadRequestException('year is required.');
+    }
+    return this.attendance.employeeMonth(
+      callerFrom(user, request),
+      this.companyOf(user, companyId),
+      employeeId,
+      m,
+      y,
     );
   }
 

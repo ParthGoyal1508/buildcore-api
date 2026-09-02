@@ -22,6 +22,29 @@ export interface SiteGeofence {
 export class SitesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * Every site in a company, as `{ id, name }`.
+   *
+   * Added for 005's frontend, which must offer a site picker when creating an
+   * employee — `Employee.siteId` is mandatory, and without a way to list sites the
+   * form is unfillable. Deliberately the narrowest possible read: no geofence, no
+   * coordinates, nothing a caller does not need to render a dropdown. The Projects
+   * feature (008) will own the full Site CRUD and should replace the controller
+   * over this, not extend it.
+   */
+  async listForCompany(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.site.findMany({
+        where: { companyId },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
+  }
+
   /** The geofence a punch at this site is validated against. */
   async getGeofence(ctx: RlsContext, siteId: string): Promise<SiteGeofence> {
     const site = await withRlsContext(this.prisma, ctx, (tx) =>
