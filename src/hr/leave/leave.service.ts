@@ -292,7 +292,15 @@ export class LeaveService {
   /** The approver's queue (FR-022a). RLS confines it to their own company. */
   async listForReview(
     caller: Caller,
-    status: LeaveApplicationStatus = LeaveApplicationStatus.pending,
+    /**
+     * Omit to list every status.
+     *
+     * Deliberately no default: the two callers want different things — the
+     * approver queue wants pending, the HR admin list wants everything — and a
+     * default here silently gave the second one the first one's answer. Each
+     * controller now states its own intent.
+     */
+    status?: LeaveApplicationStatus,
   ): Promise<LeaveApplication[]> {
     return withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.leaveApplication.findMany({

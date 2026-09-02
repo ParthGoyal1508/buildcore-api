@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { LeaveApplicationStatus, Permission } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import type { Request } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -9,6 +9,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../caller-context';
+import { ListLeaveApplicationsQueryDto } from './dto/list-leave-applications.dto';
 import { LeaveService } from './leave.service';
 
 /**
@@ -34,12 +35,12 @@ export class LeaveHrAdminController {
   async applications(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
-    @Query('status') status?: LeaveApplicationStatus,
+    @Query() query: ListLeaveApplicationsQueryDto,
   ) {
-    return this.leave.listForReview(
-      callerFrom(user, request),
-      status ?? LeaveApplicationStatus.pending,
-    );
+    // Passed through as-is: an omitted status means "every status", which is what
+    // the screen's default filter asks for. Defaulting to `pending` here would
+    // make "All statuses" quietly show only the pending ones.
+    return this.leave.listForReview(callerFrom(user, request), query.status);
   }
 
   @Get('balances')

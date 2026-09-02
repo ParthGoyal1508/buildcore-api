@@ -14,7 +14,16 @@ export interface ShiftWindow {
 }
 
 export interface DayPunchTimes {
-  /** `HH:mm`, or null when the employee never punched in. */
+  /**
+   * A punch time, or null when the employee never punched.
+   *
+   * Accepts either `HH:mm` or a full ISO timestamp, because the two producers in
+   * this codebase disagree: `AttendanceAdminService.daily()` emits `HH:mm`, while
+   * `AttendanceHistoryService` emits `firstIn.toISOString()`. The late-coming
+   * report reads the second one, and parsing it as the first is what produced
+   * `NaN` minutes — which JSON then serialised as `null`, so a report column
+   * silently became "no value" rather than failing loudly.
+   */
   inTime: string | null;
   outTime: string | null;
 }
@@ -32,10 +41,45 @@ export interface DayCompliance {
   shortHours: number;
 }
 
-/** `HH:mm` → minutes since midnight. */
+/**
+ * `HH:mm` → minutes since midnight.
+ *
+ * Retained with its original contract for callers that genuinely hold `HH:mm`
+ * (the shift window). Use `punchMinutes` for a punch time, whose format depends
+ * on which service produced it.
+ */
 export function minutesOf(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
+}
+
+/**
+ * A punch time → minutes since midnight, or null if it cannot be read.
+ *
+ * Returning null rather than NaN is the whole point. NaN propagates silently:
+ * it survives arithmetic, it survives `Math.max`, and `JSON.stringify` turns it
+ * into `null` — so a malformed time became an empty cell in the late-coming
+ * report instead of an error anyone would notice. A time this cannot parse is
+ * "unmeasurable", which the report already has an honest way to say.
+ *
+ * ISO timestamps are read in UTC, matching `AttendanceAdminService.daily()`,
+ * which derives its own `HH:mm` from the same instant the same way.
+ */
+export function punchMinutes(value: string | null): number | null {
+  if (!value) return null;
+
+  // `HH:mm` or `HH:mm:ss`, with no date part.
+  const short = /^(\d{1,2}):(\d{2})/.exec(value);
+  if (short && !value.includes('T')) {
+    const h = Number(short[1]);
+    const m = Number(short[2]);
+    if (h > 23 || m > 59) return null;
+    return h * 60 + m;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.getUTCHours() * 60 + parsed.getUTCMinutes();
 }
 
 const NOTHING: Omit<DayCompliance, 'marker'> = {
@@ -62,7 +106,14 @@ export function dayCompliance(
   // expected.
   if (options.excluded) return { marker: 'excluded', ...NOTHING };
   if (!shift) return { marker: 'no_shift_assigned', ...NOTHING };
-  if (!punches.inTime && !punches.outTime) {
+
+  // Parsed up front so an unreadable time is reported as "we don't know" rather
+  // than measured as zero. A punch that cannot be read is exactly as
+  // unmeasurable as a punch that never happened, and this report already
+  // distinguishes that from punctuality (FR-062).
+  const inMinutes = punchMinutes(punches.inTime);
+  const outMinutes = punchMinutes(punches.outTime);
+  if (inMinutes === null && outMinutes === null) {
     return { marker: 'no_punch_times', ...NOTHING };
   }
 
@@ -72,27 +123,28 @@ export function dayCompliance(
   const shiftMinutes =
     shiftOut > shiftIn ? shiftOut - shiftIn : shiftOut + 24 * 60 - shiftIn;
 
-  const lateMinutes = punches.inTime
-    ? Math.max(minutesOf(punches.inTime) - shiftIn - shift.graceMinutes, 0)
-    : 0;
+  const lateMinutes =
+    inMinutes === null
+      ? 0
+      : Math.max(inMinutes - shiftIn - shift.graceMinutes, 0);
 
-  const earlyDepartureMinutes = punches.outTime
-    ? Math.max(shiftOut - minutesOf(punches.outTime), 0)
-    : 0;
+  const earlyDepartureMinutes =
+    outMinutes === null ? 0 : Math.max(shiftOut - outMinutes, 0);
 
   // Short hours is measured against the whole shift, and is not simply late plus
   // early: an employee can arrive on time, leave on time, and still fall short if
   // the punches say so.
   let workedMinutes = 0;
-  if (punches.inTime && punches.outTime) {
-    const start = minutesOf(punches.inTime);
-    const end = minutesOf(punches.outTime);
-    workedMinutes = end > start ? end - start : end + 24 * 60 - start;
+  const bothKnown = inMinutes !== null && outMinutes !== null;
+  if (bothKnown) {
+    workedMinutes =
+      outMinutes > inMinutes
+        ? outMinutes - inMinutes
+        : outMinutes + 24 * 60 - inMinutes;
   }
-  const shortMinutes =
-    punches.inTime && punches.outTime
-      ? Math.max(shiftMinutes - workedMinutes, 0)
-      : 0;
+  const shortMinutes = bothKnown
+    ? Math.max(shiftMinutes - workedMinutes, 0)
+    : 0;
 
   return {
     marker: 'ok',
