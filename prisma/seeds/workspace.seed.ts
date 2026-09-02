@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { DEFAULT_VENDOR_CATEGORIES } from '../../src/settings/vendor-categories/vendor-categories.service';
 
 /**
  * Local development fixtures for the My Workspace feature (003).
@@ -132,7 +133,6 @@ export async function seedWorkspaceFixtures(
           geofenceRadiusMeters,
           // Sunday.
           weeklyOffDay: 0,
-          holidays: [],
         },
       });
 
@@ -148,6 +148,19 @@ export async function seedWorkspaceFixtures(
       update: {},
     });
   }
+
+  // The six vendor categories a company starts with (007 US1). Seeded here for the
+  // demo company because CompaniesService.create() — which does this for real
+  // companies — is not on the path a local seed takes.
+  await prisma.vendorCategory.createMany({
+    data: DEFAULT_VENDOR_CATEGORIES.map((category) => ({
+      companyId: company.id,
+      name: category.name,
+      description: category.description,
+      isDefault: true,
+    })),
+    skipDuplicates: true,
+  });
 
   const existingEmployee = await prisma.employee.findFirst({
     where: { userId },

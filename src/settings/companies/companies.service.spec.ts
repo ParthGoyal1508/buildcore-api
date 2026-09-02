@@ -19,6 +19,9 @@ const SETTINGS_CONFIG = {
 const configService = { get: () => SETTINGS_CONFIG };
 const auditLog = { record: jest.fn() };
 const documentTypes = { seedDefaultsForCompany: jest.fn() };
+// 007 seeds the six default vendor categories alongside document types when a
+// company is created; these tests assert on company creation, not on that seeding.
+const vendorCategories = { seedDefaultsForCompany: jest.fn() };
 
 const decimal = (n: number) => new Prisma.Decimal(n);
 const companyRow = (over: Record<string, unknown> = {}) => ({
@@ -47,6 +50,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await expect(
@@ -77,6 +81,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await service.create(
@@ -108,6 +113,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await service.create(
@@ -142,6 +148,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await service.create(
@@ -174,6 +181,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await expect(
@@ -196,6 +204,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
       await expect(
         service.update(
@@ -217,6 +226,7 @@ describe('CompaniesService', () => {
         configService as never,
         auditLog as never,
         documentTypes as never,
+        vendorCategories as never,
       );
 
       await service.listActiveForOtherModules();

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
 import { UsersModule } from '../users/users.module';
+import { CodeSeriesService } from './code-series/code-series.service';
 import { CompaniesController } from './companies/companies.controller';
 import { CompaniesService } from './companies/companies.service';
 import { EmployeeCodeService } from './employee-code/employee-code.service';
@@ -16,6 +17,7 @@ import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
 import { UsersAdminController } from './users-admin/users-admin.controller';
 import { UsersAdminService } from './users-admin/users-admin.service';
+import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 
 /**
  * The `settings` module: companies, roles, user administration, and the four
@@ -48,6 +50,8 @@ import { UsersAdminService } from './users-admin/users-admin.service';
     DocumentTypesService,
     EmployeeCodeService,
     ReimbursementCategoriesService,
+    CodeSeriesService,
+    VendorCategoriesService,
     AuditLogService,
   ],
   exports: [
@@ -61,6 +65,11 @@ import { UsersAdminService } from './users-admin/users-admin.service';
     // Exported for `hr`'s reimbursement claims, which validate their
     // mandatory-receipt rule against this master (research.md §10).
     ReimbursementCategoriesService,
+    // Exported for `partners`: the vendor category master lives here because it is a
+    // company master edited under Settings, and code-series allocation is the
+    // generalised form of the employee-code allocator beside it (007 research.md §1).
+    VendorCategoriesService,
+    CodeSeriesService,
   ],
 })
 export class SettingsModule {}
