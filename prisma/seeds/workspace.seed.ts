@@ -132,7 +132,6 @@ export async function seedWorkspaceFixtures(
           geofenceRadiusMeters,
           // Sunday.
           weeklyOffDay: 0,
-          holidays: [],
         },
       });
 
