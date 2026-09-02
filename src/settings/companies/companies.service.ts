@@ -55,6 +55,48 @@ export class CompaniesService {
     return company.payrollLockDay;
   }
 
+  /**
+   * The per-company payroll rates the engine applies (005 FR-014/FR-014a).
+   *
+   * Exported for `payroll` for the same reason `getPayrollLockDay` is exported for
+   * `hr` — Principle I forbids either module from reading `settings.Company`
+   * directly. Returned as numbers rather than Decimals so the engine's pure
+   * computation stays free of Prisma types.
+   */
+  async getPayrollRates(companyId: string): Promise<{
+    pfEmployerRate: number;
+    esicEmployerRate: number;
+    gratuityRate: number;
+    bonusRate: number;
+    otMultiplier: number;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            pfEmployerRate: true,
+            esicEmployerRate: true,
+            gratuityRate: true,
+            bonusRate: true,
+            otMultiplier: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return {
+      pfEmployerRate: company.pfEmployerRate.toNumber(),
+      esicEmployerRate: company.esicEmployerRate.toNumber(),
+      gratuityRate: company.gratuityRate.toNumber(),
+      bonusRate: company.bonusRate.toNumber(),
+      otMultiplier: company.otMultiplier.toNumber(),
+    };
+  }
+
   /** Every company, whatever its status — the Settings UI's own admin list. Not the
    * source other modules' dropdowns read (see `listActiveForOtherModules`). */
   async findAll(): Promise<Company[]> {
@@ -140,6 +182,7 @@ export class CompaniesService {
             esicEmployerRate: dto.esicEmployerRate ?? defaultRates.esicEmployer,
             gratuityRate: dto.gratuityRate ?? defaultRates.gratuity,
             bonusRate: dto.bonusRate ?? defaultRates.bonus,
+            otMultiplier: dto.otMultiplier ?? defaultRates.otMultiplier,
           },
         });
 
@@ -230,6 +273,7 @@ export class CompaniesService {
       esicEmployerRate: company.esicEmployerRate.toNumber(),
       gratuityRate: company.gratuityRate.toNumber(),
       bonusRate: company.bonusRate.toNumber(),
+      otMultiplier: company.otMultiplier.toNumber(),
     };
   }
 }

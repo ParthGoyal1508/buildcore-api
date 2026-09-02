@@ -46,23 +46,6 @@ export class SitesService {
     };
   }
 
-  /**
-   * The site's non-working days, as `YYYY-MM-DD` strings.
-   *
-   * Strings rather than `Date`s on purpose: a holiday is a calendar date, not an
-   * instant, and handing back a `Date` invites a caller to compare it against a
-   * timestamp in another timezone and land a day off.
-   */
-  async getHolidayCalendar(ctx: RlsContext, siteId: string): Promise<string[]> {
-    const site = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.site.findFirst({ where: { id: siteId }, select: { holidays: true } }),
-    );
-    if (!site) {
-      throw new NotFoundException('Site not found');
-    }
-    return site.holidays.map((d) => d.toISOString().slice(0, 10));
-  }
-
   /** Day-of-week this site treats as Weekly Off, 0 = Sunday (research.md §6). */
   async getWeeklyOffDay(ctx: RlsContext, siteId: string): Promise<number> {
     const site = await withRlsContext(this.prisma, ctx, (tx) =>

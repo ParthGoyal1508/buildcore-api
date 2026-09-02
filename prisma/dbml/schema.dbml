@@ -115,6 +115,9 @@ compatibility rather than a bare constant.']
   esicEmployerRate Decimal [not null]
   gratuityRate Decimal [not null]
   bonusRate Decimal [not null]
+  otMultiplier Decimal [not null, default: 2, note: 'Overtime pay multiplier applied to the derived hourly rate when computing OT
+wages (FR-014a). Company-configurable rather than a hardcoded 2× literal —
+Constitution Principle III. Read by the payroll engine via SettingsService.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   departments Department [not null]
@@ -127,6 +130,28 @@ compatibility rather than a bare constant.']
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
 COMPANY_SETTINGS permission instead (research.md §8, FR-001).'
+}
+
+Table TaxSlab {
+  id String [pk]
+  companyId String [not null]
+  financialYear String [not null, note: 'e.g. "2026-27".']
+  regime TaxRegime [not null]
+  lowerBound Decimal [not null, note: 'Inclusive lower bound of the band.']
+  upperBound Decimal [note: 'Exclusive upper bound; null marks the final open-ended band.']
+  ratePercent Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, financialYear, regime, lowerBound) [unique]
+  }
+
+  Note: 'One band of an income-tax slab set (005 amendment US14, FR-050).
+
+Company-scoped rather than global: a slab set is a statutory fact, but which
+financial years a company has configured is not, and a multi-company install
+should not have one company\'s incomplete configuration break another\'s payroll.'
 }
 
 Table Department {
@@ -315,9 +340,6 @@ representation error rather than on where the worker actually stood.']
   longitude Decimal [not null]
   geofenceRadiusMeters Int [not null]
   weeklyOffDay Int [not null, note: 'Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).']
-  holidays DateTime[] [not null, note: 'Site-specific non-working days. A scalar date list rather than its own table:
-this is read as a whole calendar for one site at a time and never queried
-across sites, so a join table would buy nothing (data-model.md "Site").']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -345,6 +367,75 @@ accept an employeeId parameter (FR-028).']
   shiftId String [not null, note: '`settings.Shift.id`; the shift duration OT is computed against, read through
 `SettingsModule`\'s exported service (research.md §9).']
   employeeCode String [not null, note: 'Allocated by `settings`\' employee-code sequence (feature 002).']
+  firstName String
+  lastName String
+  title String
+  dob DateTime
+  gender Gender
+  maritalStatus MaritalStatus
+  photoRef String
+  departmentId String [note: '`settings.Department.id` / `settings.Designation.id` — bare ids, resolved via
+SettingsService. No cross-schema Prisma relation (Constitution Principle I).']
+  designationId String
+  employmentType EmploymentType [default: 'full_time']
+  dateOfJoining DateTime
+  probationEndDate DateTime
+  confirmationDate DateTime
+  reportingToEmployeeId String
+  musterCategory String
+  hoursPerDay Decimal
+  dailyRate Decimal
+  payMode String
+  calculationMode CalculationMode [default: 'monthly']
+  workmanId String
+  isActive Boolean [not null, default: true]
+  pfApplicable Boolean [not null, default: false]
+  pfUpperLimit Boolean [not null, default: false]
+  esicApplicable Boolean [not null, default: false]
+  esicUpperLimit Boolean [not null, default: false]
+  uan String
+  pfNumber String
+  esicNumber String
+  aadhaarEncrypted String [note: 'Regulated PII (Constitution Principle IV). Stored encrypted at rest, masked to
+last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.']
+  panEncrypted String
+  basic Decimal
+  hra Decimal
+  conveyanceAllowance Decimal
+  siteAllowance Decimal
+  specialAllowance Decimal
+  paymentMode String
+  bankName String
+  bankBranch String
+  bankAccountNumberEncrypted String [note: 'Regulated PII — see aadhaarEncrypted.']
+  ifscCode String
+  mobile String
+  alternateMobile String
+  email String
+  presentAddress String
+  presentCity String
+  presentState String
+  presentPinCode String
+  permanentAddress String
+  permanentCity String
+  permanentState String
+  permanentPinCode String
+  emergencyContactName String
+  emergencyContactRelation String
+  emergencyContactPhone String
+  offerLetterIssued Boolean [not null, default: false]
+  offerLetterIssuedDate DateTime
+  appointmentLetterIssued Boolean [not null, default: false]
+  appointmentLetterIssuedDate DateTime
+  ndaSigned Boolean [not null, default: false]
+  ndaSignedDate DateTime
+  idCardIssued Boolean [not null, default: false]
+  uniformProvided Boolean [not null, default: false]
+  safetyInductionCompleted Boolean [not null, default: false]
+  toolsIssued Boolean [not null, default: false]
+  bankVerificationDone Boolean [not null, default: false]
+  biometricEnrolled Boolean [not null, default: false]
+  siteAccessGranted Boolean [not null, default: false]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   faceEnrolment FaceEnrolment
@@ -354,6 +445,14 @@ accept an employeeId parameter (FR-028).']
   leaveApplications LeaveApplication [not null]
   reimbursementClaims ReimbursementClaim [not null]
   salarySlips SalarySlip [not null]
+  documents EmployeeDocument [not null]
+  transfers EmployeeTransfer [not null]
+  attendanceModifications AttendanceModification [not null]
+  exitRecords ExitRecord [not null]
+  payrollLineItems PayrollLineItem [not null]
+  loans Loan [not null]
+  taxDeclarations TaxDeclaration [not null]
+  salaryAdvances SalaryAdvance [not null]
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -421,14 +520,16 @@ to stay visible in audit rather than being flattened into one timestamp.']
   isOfflineSync Boolean [not null, default: false, note: 'Derived: `capturedAt` trails `receivedAt` by more than the configured clock-skew
 tolerance. The tolerance is what stops ordinary clock drift from labelling every
 normal punch an offline sync.']
-  photoRef String [not null, note: 'Encrypted object-storage reference to the captured selfie.']
-  faceMatchResult FaceMatchResult [not null]
+  photoRef String [note: 'Encrypted object-storage reference to the captured selfie.
+Null only for `admin_correction` rows, which have no capture. A CHECK
+constraint keeps this mandatory for employee-sourced punches.']
+  faceMatchResult FaceMatchResult
   faceMatchDistance Decimal [note: 'The measured descriptor distance behind `faceMatchResult`. Kept so an admin
 resolving an exception can see how near the miss was, and so the configured
 threshold can be retuned against real data instead of guesswork.']
-  latitude Decimal [not null]
-  longitude Decimal [not null]
-  geofenceResult GeofenceResult [not null]
+  latitude Decimal
+  longitude Decimal
+  geofenceResult GeofenceResult
   geofenceDistanceMeters Decimal [note: 'Measured metres from the site centre, retained for the same reason as
 `faceMatchDistance`.']
   punchDate DateTime [not null, note: 'On a punch-in, the id of the punch-out that closed it; null while the punch-in
@@ -451,6 +552,14 @@ rows predating FR-008 (`legacy`) keep their multiple pairs per day.']
 acts (FR-011a).']
   resolvedByUserId String
   resolvedAt DateTime
+  adminEdited Boolean [not null, default: false, note: 'Set when an admin created or corrected this record through the HR admin
+Mark/Edit action rather than the employee\'s own punch flow. Every such edit
+also writes an append-only AttendanceModification row carrying before/after.']
+  editedByUserId String
+  editedAt DateTime
+  statusOverride AttendanceStatusOverride [note: 'Forces the derived day status instead of letting statusForDay() compute it —
+used when an admin marks a day present/absent against what the punches imply.']
+  remarks String
   createdAt DateTime [default: `now()`, not null]
 
   Note: 'One punch event. Recorded whether or not verification succeeded: a failed face
@@ -536,21 +645,269 @@ it does not get a second one. This feature writes only `draft` → `submitted` �
 `withdrawn`; the approval and payment fields below are read-only here.'
 }
 
+Table EmployeeDocument {
+  id String [pk]
+  employeeId String [not null]
+  documentTypeId String [not null, note: '`settings.DocumentType.id`; resolved via SettingsService, not a relation.']
+  fileRef String [not null, note: 'Encrypted object-storage reference, same mechanism as 003\'s biometric blobs.']
+  documentNumber String
+  expiresAt DateTime
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+  employee Employee [not null]
+
+  indexes {
+    (employeeId, documentTypeId) [unique]
+  }
+
+  Note: 'Per-employee uploaded document, keyed to a `settings.DocumentType` (002). A
+re-upload replaces the reference for that type — historical versions are not
+retained (data-model.md §Employee Document).'
+}
+
+Table EmployeeTransfer {
+  id String [pk]
+  employeeId String [not null]
+  fromCompanyId String [not null]
+  toCompanyId String [not null]
+  transferDate DateTime [not null]
+  reason String [not null]
+  codeRetained Boolean [not null, default: false, note: 'When false, a fresh code is allocated in the destination company.']
+  newEmployeeCode String
+  transferredByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  employee Employee [not null]
+
+  Note: 'Append-only record of an employee moving between companies (US8).'
+}
+
+Table Holiday {
+  id String [pk]
+  companyId String [not null, note: 'Company-level calendar, not employee-owned — keeps its own tenant key.']
+  name String [not null]
+  date DateTime [not null]
+  type HolidayType [not null, default: 'company']
+  appliesToAllSites Boolean [not null, default: true, note: 'When false, applicability is restricted to the sites in `sites`.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  sites HolidaySite [not null]
+
+  indexes {
+    (companyId, date, name) [unique]
+  }
+
+  Note: 'Supersedes `projects.Site.holidays` (research.md §6) — a first-class, typed,
+company-scoped holiday calendar that attendance status computation reads.'
+}
+
+Table HolidaySite {
+  holidayId String [not null]
+  siteId String [not null, note: '`projects.Site.id` — bare id, resolved via SitesService.']
+  holiday Holiday [not null]
+
+  indexes {
+    (holidayId, siteId) [pk]
+  }
+}
+
+Table AttendanceModification {
+  id String [pk]
+  employeeId String [not null]
+  date DateTime [not null]
+  actorUserId String [not null]
+  before Json [not null]
+  after Json [not null]
+  reason String
+  createdAt DateTime [default: `now()`, not null]
+  employee Employee [not null]
+
+  Note: 'Append-only audit of every manual attendance edit (FR-010). Never updated.'
+}
+
+Table ExitRecord {
+  id String [pk]
+  employeeId String [not null]
+  lastWorkingDay DateTime [not null]
+  reason ExitReason [not null]
+  remarks String
+  fnfPayrollRunId String [note: '`payroll.PayrollRun.id` of the F&F run — bare id, cross-schema by service.']
+  initiatedByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  employee Employee [not null]
+
+  Note: 'Employee offboarding record (US11). The F&F settlement itself is a normal
+PayrollRun flagged `isFnf`, linked here.'
+}
+
+Table TaxDeclaration {
+  id String [pk]
+  employeeId String [not null]
+  financialYear String [not null]
+  regime TaxRegime [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  employee Employee [not null]
+  lines TaxDeclarationLine [not null]
+
+  indexes {
+    (employeeId, financialYear) [unique]
+  }
+
+  Note: 'An employee\'s investment declaration for a financial year (US14, FR-052).'
+}
+
+Table TaxDeclarationLine {
+  id String [pk]
+  declarationId String [not null]
+  sectionCode String [not null]
+  declaredAmount Decimal [not null]
+  cappedAmount Decimal [not null]
+  status TaxDeclarationStatus [not null, default: 'declared']
+  proofRef String
+  verifiedByUserId String
+  verifiedAt DateTime
+  declaration TaxDeclaration [not null]
+
+  indexes {
+    (declarationId, sectionCode) [unique]
+  }
+
+  Note: 'One declared deduction, e.g. 80C. `cappedAmount` is what actually reduces
+taxable income — the declared figure is retained so an employee can see that
+their claim was capped rather than silently reduced.'
+}
+
+Table SalaryAdvance {
+  id String [pk]
+  employeeId String [not null]
+  amount Decimal [not null]
+  reason String [not null]
+  recoveryMonth String [not null, note: 'Period key, `YYYY-MM`, the recovery is attempted in.']
+  outstandingBalance Decimal [not null]
+  exceedsLimit Boolean [not null, default: false, note: 'Above the configured multiple of monthly net; needs explicit approval.']
+  status SalaryAdvanceStatus [not null, default: 'pending']
+  approvedByUserId String
+  disbursedOn DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  employee Employee [not null]
+
+  Note: 'A salary advance (US15, FR-054).
+
+Deliberately NOT a `payroll.Loan`: an advance carries no interest and no
+amortisation schedule, and is recovered in full in one nominated month. Modelling
+it as a one-instalment loan would put two different things behind one screen and
+one set of rules.'
+}
+
 Table PayrollRun {
   id String [pk]
   companyId String [not null, note: 'RLS-protected. Bare id — see the note on `Site.companyId`.']
   period String [not null, note: 'Period key, e.g. "2026-07".']
   status PayrollRunStatus [not null, default: 'draft']
+  isFnf Boolean [not null, default: false, note: 'An F&F settlement run covers exactly one exiting employee and is flagged for
+reporting/audit (research.md §12, US11).']
+  generatedAt DateTime
+  generatedByUserId String
+  processedAt DateTime
+  paidAt DateTime
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
-
-  indexes {
-    (companyId, period) [unique]
-  }
+  lineItems PayrollLineItem [not null]
 
   Note: 'Status only. This feature reads it for two things: whether a period is locked to
 further attendance writes (FR-010), and whether a salary slip may be served at
 all (a `draft` run has no publishable figures).'
+}
+
+Table PayrollLineItem {
+  id String [pk]
+  payrollRunId String [not null]
+  employeeId String [not null]
+  projectId String [note: '`projects.Project.id` — nullable; null for HO/overhead staff. Resolved via
+ProjectsService, never a cross-schema Prisma relation (FR-046).']
+  monthDays Int [not null]
+  payableDays Decimal [not null]
+  lopDays Decimal [not null, default: 0]
+  otHours Decimal [not null, default: 0]
+  otWages Decimal [not null, default: 0]
+  basic Decimal [not null, default: 0]
+  hra Decimal [not null, default: 0]
+  conveyanceAllowance Decimal [not null, default: 0]
+  siteAllowance Decimal [not null, default: 0]
+  specialAllowance Decimal [not null, default: 0]
+  employeePf Decimal [not null, default: 0]
+  employeeEsic Decimal [not null, default: 0]
+  professionalTax Decimal [not null, default: 0]
+  tds Decimal [not null, default: 0, note: 'Manual entry, default 0 (spec clarification — TDS computation arrives with
+the 2026-09-01 amendment, US14).']
+  loanEmiDeduction Decimal [not null, default: 0]
+  netPay Decimal [not null, default: 0]
+  employerPf Decimal [not null, default: 0]
+  employerEps Decimal [not null, default: 0]
+  employerEdli Decimal [not null, default: 0]
+  adminCharges Decimal [not null, default: 0]
+  employerEsic Decimal [not null, default: 0]
+  gratuity Decimal [not null, default: 0]
+  bonus Decimal [not null, default: 0]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  payrollRun PayrollRun [not null]
+  employee Employee [not null]
+
+  indexes {
+    (payrollRunId, employeeId) [unique]
+  }
+
+  Note: 'The per-employee, per-period computed payroll figures — the single source of
+truth that `/hr/challans/*`, 003\'s `/my/salary`, and 008\'s Project P&L labour
+cost line all read from (data-model.md §Payroll Line Item). Immutable once its
+run reaches `processed` (FR-015), enforced at the write path.'
+}
+
+Table Loan {
+  id String [pk]
+  companyId String [not null, note: 'DELIBERATE deviation from the "scope through Employee" pattern the 003 RLS
+migration establishes. A loan is a financial obligation issued *by a company*,
+so US8\'s transfer-between-companies must not silently hand visibility of an
+outstanding debt to the destination tenant. Kept as its own tenant key, and
+the transfer flow deliberately does not rewrite it.']
+  employeeId String [not null]
+  amount Decimal [not null]
+  emiAmount Decimal [not null]
+  disbursementDate DateTime [not null]
+  reason String [not null]
+  remarks String
+  status LoanStatus [not null, default: 'pending']
+  approvedByUserId String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  employee Employee [not null]
+  schedule LoanScheduleEntry [not null]
+
+  Note: 'An employee advance/loan with an auto-generated EMI schedule that feeds payroll
+deductions (US7).'
+}
+
+Table LoanScheduleEntry {
+  id String [pk]
+  loanId String [not null]
+  month String [not null, note: 'Period key, e.g. "2026-07".']
+  emiAmount Decimal [not null]
+  principal Decimal [not null]
+  interest Decimal [not null, default: 0]
+  remainingBalance Decimal [not null]
+  status LoanScheduleStatus [not null, default: 'upcoming']
+  paidInPayrollRunId String
+  loan Loan [not null]
+
+  indexes {
+    (loanId, month) [unique]
+  }
+
+  Note: 'One month of a loan\'s amortisation schedule. Generated on approval; the payroll
+engine marks an entry `paid` and stamps `paidInPayrollRunId` when it deducts.'
 }
 
 Table SalarySlip {
@@ -652,6 +1009,11 @@ Enum PayCycle {
   monthly
 }
 
+Enum TaxRegime {
+  old
+  new
+}
+
 Enum AuditEntityType {
   LOGIN_SUCCESS
   LOGIN_FAILURE
@@ -671,6 +1033,16 @@ Enum AuditEntityType {
   FACE_ENROLMENT
   RE_ENROLMENT_REQUEST
   REIMBURSEMENT_CLAIM
+  EMPLOYEE
+  EMPLOYEE_DOCUMENT
+  EMPLOYEE_TRANSFER
+  ATTENDANCE
+  HOLIDAY
+  PAYROLL_RUN
+  LOAN
+  EXIT_RECORD
+  TAX_DECLARATION
+  SALARY_ADVANCE
 }
 
 Enum AuditAction {
@@ -727,6 +1099,14 @@ Enum GeofenceResult {
   exception
 }
 
+Enum AttendanceStatusOverride {
+  present
+  absent
+  on_leave
+  weekly_off
+  holiday
+}
+
 Enum ExceptionResolution {
   pending
   confirmed
@@ -761,10 +1141,70 @@ Enum ReimbursementPaymentMode {
   direct
 }
 
+Enum Gender {
+  male
+  female
+  other
+}
+
+Enum MaritalStatus {
+  single
+  married
+  divorced
+  widowed
+}
+
+Enum EmploymentType {
+  full_time
+  contract
+  daily_wage
+}
+
+Enum CalculationMode {
+  monthly
+  daily
+}
+
+Enum HolidayType {
+  national
+  regional
+  company
+}
+
+Enum ExitReason {
+  resignation
+  termination
+  contract_end
+}
+
+Enum TaxDeclarationStatus {
+  declared
+  verified
+}
+
+Enum SalaryAdvanceStatus {
+  pending
+  approved
+  disbursed
+  closed
+}
+
 Enum PayrollRunStatus {
   draft
   processed
   paid
+}
+
+Enum LoanStatus {
+  pending
+  active
+  closed
+}
+
+Enum LoanScheduleStatus {
+  upcoming
+  paid
+  overdue
 }
 
 Ref: UserRole.userId > User.id
@@ -800,5 +1240,29 @@ Ref: LeaveBalance.employeeId > Employee.id [delete: Cascade]
 Ref: LeaveApplication.employeeId > Employee.id [delete: Cascade]
 
 Ref: ReimbursementClaim.employeeId > Employee.id [delete: Cascade]
+
+Ref: EmployeeDocument.employeeId > Employee.id [delete: Cascade]
+
+Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
+
+Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
+
+Ref: AttendanceModification.employeeId > Employee.id [delete: Cascade]
+
+Ref: ExitRecord.employeeId > Employee.id [delete: Cascade]
+
+Ref: TaxDeclaration.employeeId > Employee.id [delete: Cascade]
+
+Ref: TaxDeclarationLine.declarationId > TaxDeclaration.id [delete: Cascade]
+
+Ref: SalaryAdvance.employeeId > Employee.id [delete: Cascade]
+
+Ref: PayrollLineItem.payrollRunId > PayrollRun.id [delete: Cascade]
+
+Ref: PayrollLineItem.employeeId > Employee.id [delete: Cascade]
+
+Ref: Loan.employeeId > Employee.id [delete: Cascade]
+
+Ref: LoanScheduleEntry.loanId > Loan.id [delete: Cascade]
 
 Ref: SalarySlip.employeeId > Employee.id [delete: Cascade]

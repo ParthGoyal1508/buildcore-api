@@ -205,6 +205,24 @@ export class DocumentTypesService {
    * Employees/Attendance module to call before marking attendance — this feature
    * owns the *check*, not attendance marking or document storage.
    */
+  /**
+   * A company's document types by company id, for callers outside `settings`.
+   *
+   * `findAll` takes an `AuthenticatedUser` because it backs the Settings UI, where
+   * the caller's own scope decides what they see. Cross-module callers (005's
+   * employee documents) have already resolved and authorised the company, so they
+   * need the master by id — the same shape `hasMissingMandatoryDocs` below takes.
+   * Exposing this keeps `hr` out of the `settings` schema (Principle I).
+   */
+  async listForCompany(companyId: string): Promise<DocumentType[]> {
+    return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.documentType.findMany({
+        where: { companyId },
+        orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
+      }),
+    );
+  }
+
   async hasMissingMandatoryDocs(
     companyId: string,
     employeeDocumentTypeIds: string[],

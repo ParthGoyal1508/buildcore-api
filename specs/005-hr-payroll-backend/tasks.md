@@ -25,11 +25,11 @@ implementation and testing of each story.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 [P] Add `otMultiplier` (decimal, default 2.00) to `settings.Company` in
+- [X] T001 [P] Add `otMultiplier` (decimal, default 2.00) to `settings.Company` in
       `prisma/schema.prisma` + migration — spec FR-014a
-- [ ] T002 [P] Update `src/settings/companies/dto/create-company.dto.ts` and
+- [X] T002 [P] Update `src/settings/companies/dto/create-company.dto.ts` and
       `update-company.dto.ts` with `otMultiplier`
-- [ ] T003 [P] Extend `src/common/configs/config.interface.ts`/`config.ts` with
+- [X] T003 [P] Extend `src/common/configs/config.interface.ts`/`config.ts` with
       `HrPayrollConfig` (document-expiry warning window default 30 days)
 
 **Checkpoint**: Company payroll config and shared config ready.
@@ -40,32 +40,33 @@ implementation and testing of each story.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T004 Add the ~40 new Employee fields (Identity/Employment/Statutory/Pay & Bank/Contact/
+- [X] T004 Add the ~40 new Employee fields (Identity/Employment/Statutory/Pay & Bank/Contact/
       Letters/Onboarding) to `hr.Employee` in `prisma/schema.prisma` — data-model.md §Employee,
       research.md §2 (additive only — `userId`/`companyId`/`siteId`/`shiftId`/`employeeCode`
       untouched)
-- [ ] T005 [P] Add `EmployeeDocument`, `EmployeeTransfer` models to `hr` schema —
+- [X] T005 [P] Add `EmployeeDocument`, `EmployeeTransfer` models to `hr` schema —
       data-model.md
-- [ ] T006 [P] Add `Holiday` (+ `HolidaySite` join) model to `hr` schema, superseding
+- [X] T006 [P] Add `Holiday` (+ `HolidaySite` join) model to `hr` schema, superseding
       `Site.holidays` — data-model.md §Holiday, research.md §6
-- [ ] T007 [P] Add `adminEdited`/`editedByUserId`/`editedAt`/`statusOverride`/`remarks` to the
+- [X] T007 [P] Add `adminEdited`/`editedByUserId`/`editedAt`/`statusOverride`/`remarks` to the
       existing attendance representation, and the `AttendanceModification` model, in `hr` schema —
       data-model.md, research.md §7
-- [ ] T008 [P] Add `DailyWorker`, `DailyWorkerAttendance` models to `hr` schema — data-model.md
+- [~] T008 [P] Add `DailyWorker`, `DailyWorkerAttendance` models to `hr` schema — data-model.md
+      **SKIPPED 2026-09-02** — US9/Phase 11 is superseded by feature 013 (labour). `DailyWorker` was never implemented, so 013 owns these tables from scratch and its migration task T004 is unnecessary.
       §Daily Worker
-- [ ] T009 Generate and apply the migration for T004–T008 via `migrate:dev:create`/`migrate:dev`
+- [X] T009 Generate and apply the migration for T004–T008 via `migrate:dev:create`/`migrate:dev`
       (grouped per Constitution Check VI)
-- [ ] T010 [P] Add `PayrollLineItem` model to `payroll` schema (including nullable `projectId` —
+- [X] T010 [P] Add `PayrollLineItem` model to `payroll` schema (including nullable `projectId` —
       FR-046), extend `PayrollRun` with `generatedAt`/`generatedByUserId`/`processedAt`/`paidAt` —
       data-model.md
-- [ ] T011 [P] Add `Loan`, `LoanScheduleEntry` models to `payroll` schema — data-model.md
-- [ ] T012 Generate and apply the migration for T010–T011
-- [ ] T013 Add RLS policies for every new `companyId`-scoped table from T004–T011
-- [ ] T014 [P] Create `src/hr/employees/pii-masking.interceptor.ts`: truncates Aadhaar/PAN/
+- [X] T011 [P] Add `Loan`, `LoanScheduleEntry` models to `payroll` schema — data-model.md
+- [X] T012 Generate and apply the migration for T010–T011
+- [X] T013 Add RLS policies for every new `companyId`-scoped table from T004–T011
+- [X] T014 [P] Create `src/hr/employees/pii-masking.interceptor.ts`: truncates Aadhaar/PAN/
       bank-account/UAN to last 4 digits by default — research.md §3, Constitution Principle IV
-- [ ] T015 [P] Migrate attendance-status computation (003) to read `Holiday`/`HolidaySite`
+- [X] T015 [P] Migrate attendance-status computation (003) to read `Holiday`/`HolidaySite`
       instead of `Site.holidays`, and drop the now-unused column — research.md §6
-- [ ] T016 Extend `shared.AuditLogEntry.entityType` with `EMPLOYEE`, `EMPLOYEE_DOCUMENT`,
+- [X] T016 Extend `shared.AuditLogEntry.entityType` with `EMPLOYEE`, `EMPLOYEE_DOCUMENT`,
       `EMPLOYEE_TRANSFER`, `ATTENDANCE`, `HOLIDAY`, `PAYROLL_RUN`, `LOAN`, `DAILY_WORKER`,
       `DAILY_WORKER_ATTENDANCE` — contracts/hr-payroll-api.md "Audit logging"
 
@@ -90,24 +91,25 @@ and PII is masked by default.
 - [ ] T019 [P] [US1] E2e test: Employee Detail composes Overview/Personal/Employment/Salary
       Structure/Attendance Calendar (via 003's `getMonthHistory`)/Leave Summary/Documents/Loan
       History in `test/hr-payroll.e2e-spec.ts`
-- [ ] T020 [P] [US1] Unit test for statutory-tab conditional validation (PF/ESIC applicable → number
+- [X] T020 [P] [US1] Unit test for statutory-tab conditional validation (PF/ESIC applicable → number
       fields required) in `src/hr/employees/employees.service.spec.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T021 [P] [US1] Create `src/hr/employees/dto/create-employee.dto.ts`/`update-employee.dto.ts`
+- [X] T021 [P] [US1] Create `src/hr/employees/dto/create-employee.dto.ts`/`update-employee.dto.ts`
       covering all eight tabs, with conditional validation (T020)
-- [ ] T022 [US1] Extend `src/hr/employees/employees.service.ts` (003 scaffold): full CRUD, list
+- [X] T022 [US1] Extend `src/hr/employees/employees.service.ts` (003 scaffold): full CRUD, list
       with filters/pagination, detail composition (depends on T004, T021)
-- [ ] T023 [US1] Implement `reveal-pii` action in `employees.service.ts`: audit-logs which field
+- [X] T023 [US1] Implement `reveal-pii` action in `employees.service.ts`: audit-logs which field
       was revealed and by whom — research.md §3 (depends on T014)
-- [ ] T024 [US1] Extend `src/hr/employees/employees.controller.ts`:
+- [X] T024 [US1] Extend `src/hr/employees/employees.controller.ts`:
       `GET/POST/PATCH /hr/employees`, `GET /hr/employees/:id`,
       `POST /hr/employees/:id/reveal-pii`, guarded with `@RequirePermission(Permission.EMPLOYEES)`
       (depends on T022, T023)
-- [ ] T025 [US1] Apply `PiiMaskingInterceptor` (T014) to `employees.controller.ts`
-- [ ] T026 [US1] Wire audit logging (entityType `EMPLOYEE`) into create/update paths — FR-030
-- [ ] T026a [US1] Implement exported `HrService.getUnlinkedEmployees(companyId, search?)` and
+- [X] T025 [US1] Apply `PiiMaskingInterceptor` (T014) to `employees.controller.ts`
+- [X] T026 [US1] Wire audit logging (entityType `EMPLOYEE`) into create/update paths — FR-030
+- [X] T026a [US1] Implement exported `HrService.getUnlinkedEmployees(companyId, search?)` and
+      **Already satisfied** — both methods were built by feature 010 and are exported from `HrModule`.
       `.linkEmployeeToUser(employeeId, userId)` (throws if `Employee.userId` already set) in
       `employees.service.ts`, exported from `HrModule` for `010-account-creation-backend` to
       inject — FR-047, research.md §17
@@ -131,22 +133,22 @@ confirm punch succeeds.
 - [ ] T028 [P] [US2] E2e test: attendance marking (self-service 003 punch AND admin mark, US3)
       rejected while mandatory docs are missing, succeeds once complete in
       `test/hr-payroll.e2e-spec.ts`
-- [ ] T029 [P] [US2] Unit test for the expiry-window flagging function (default 30 days) in
+- [X] T029 [P] [US2] Unit test for the expiry-window flagging function (default 30 days) in
       `src/hr/employees/documents/employee-documents.service.spec.ts`
 
 ### Implementation for User Story 2
 
-- [ ] T030 [P] [US2] Create `src/hr/employees/documents/dto/upload-document.dto.ts`
-- [ ] T031 [US2] Implement `src/hr/employees/documents/employee-documents.service.ts`: upload
+- [X] T030 [P] [US2] Create `src/hr/employees/documents/dto/upload-document.dto.ts`
+- [X] T031 [US2] Implement `src/hr/employees/documents/employee-documents.service.ts`: upload
       (encrypted storage, `// TODO(VIRUS_SCAN)` per research.md §10), list with derived flags
       (reusing 002's flag derivation), expiry-window flagging (depends on T005, T003)
-- [ ] T032 [US2] Implement `src/hr/employees/documents/employee-documents.controller.ts`:
+- [X] T032 [US2] Implement `src/hr/employees/documents/employee-documents.controller.ts`:
       `POST/GET /hr/employees/:id/documents`, guarded with
       `@RequirePermission(Permission.EMPLOYEES)` (depends on T031)
-- [ ] T033 [US2] Wire `hasMissingMandatoryDocs()` (002) against real `EmployeeDocument` rows into
+- [X] T033 [US2] Wire `hasMissingMandatoryDocs()` (002) against real `EmployeeDocument` rows into
       003's self-service punch path AND this feature's admin Mark Attendance path (US3) — spec
       FR-005 (depends on T031)
-- [ ] T034 [US2] Wire audit logging (entityType `EMPLOYEE_DOCUMENT`) into upload path — FR-030
+- [X] T034 [US2] Wire audit logging (entityType `EMPLOYEE_DOCUMENT`) into upload path — FR-030
 
 **Checkpoint**: User Stories 1 AND 2 both independently functional.
 
@@ -172,20 +174,20 @@ declare a holiday and confirm it reflects in status computation.
 
 ### Implementation for User Story 3
 
-- [ ] T039 [P] [US3] Create `src/hr/attendance/dto/mark-attendance.dto.ts`,
+- [X] T039 [P] [US3] Create `src/hr/attendance/dto/mark-attendance.dto.ts`,
       `dto/holiday.dto.ts`
-- [ ] T040 [US3] Implement `src/hr/attendance/attendance-admin.service.ts`: daily view, mark/edit
+- [X] T040 [US3] Implement `src/hr/attendance/attendance-admin.service.ts`: daily view, mark/edit
       (payroll-lock check reused from 003, mandatory-doc check from US2's T033, writes
       `AttendanceModification` on every edit — research.md §7), exceptions view (depends on T007,
       T033)
-- [ ] T041 [US3] Implement `src/hr/attendance/attendance-admin.controller.ts`:
+- [X] T041 [US3] Implement `src/hr/attendance/attendance-admin.controller.ts`:
       `GET/POST/PATCH /hr/attendance`, `GET /hr/attendance/exceptions`,
       `GET /hr/attendance/modifications`, guarded with
       `@RequirePermission(Permission.ATTENDANCE)` (depends on T040)
-- [ ] T042 [US3] Implement `src/hr/attendance/holidays.controller.ts` +
+- [X] T042 [US3] Implement `src/hr/attendance/holidays.controller.ts` +
       `holidays.service.ts`: `GET/POST /hr/holidays`, guarded with
       `@RequirePermission(Permission.ATTENDANCE)` (depends on T006)
-- [ ] T043 [US3] Wire audit logging (entityType `ATTENDANCE`, `HOLIDAY`) into edit/holiday-create
+- [X] T043 [US3] Wire audit logging (entityType `ATTENDANCE`, `HOLIDAY`) into edit/holiday-create
       paths — FR-030
 
 **Checkpoint**: User Stories 1–3 independently functional.
@@ -207,7 +209,7 @@ computation.
 
 ### Implementation for User Story 4
 
-- [ ] T045 [US4] Implement `src/hr/leave/leave-admin.controller.ts`:
+- [X] T045 [US4] Implement `src/hr/leave/leave-admin.controller.ts`:
       `GET /hr/leave/applications?status=`, `GET /hr/leave/balances?employeeId=` — thin layer over
       003's existing `LeaveService`, guarded with `@RequirePermission(Permission.ATTENDANCE)`
       (no new decision logic — spec FR-012/FR-013)
@@ -235,33 +237,33 @@ progress through Processed/Paid; confirm 003's `/my/salary` now returns real dat
       export produces correct `.xlsx` rows in `test/hr-payroll.e2e-spec.ts`
 - [ ] T049 [P] [US5] E2e test: an inactive-as-of-period employee is excluded from generation in
       `test/hr-payroll.e2e-spec.ts`
-- [ ] T050 [P] [US5] Unit test suite for `PayrollEngineService`: each earnings/deduction component
+- [X] T050 [P] [US5] Unit test suite for `PayrollEngineService`: each earnings/deduction component
       computed in isolation (Payable Days, LOP, OT at configurable multiplier, PF/ESIC applicability
       branches, PT slabs, loan EMI summation across multiple active loans) in
       `src/payroll/engine/payroll-engine.service.spec.ts`
 
 ### Implementation for User Story 5
 
-- [ ] T051 [US5] Implement `src/payroll/engine/payroll-engine.service.ts`: single-transaction
+- [X] T051 [US5] Implement `src/payroll/engine/payroll-engine.service.ts`: single-transaction
       `generate(companyId, period)` reading attendance (via 003's computation), salary structure
       (US1), active Loans (US7), Settings' rates + `otMultiplier`, and each employee's current
       site/project assignment to set `PayrollLineItem.projectId` (FR-046, research.md §16) —
       research.md §4 (depends on T010, T022, T040)
-- [ ] T052 [US5] Implement `src/payroll/runs/payroll-runs.controller.ts`:
+- [X] T052 [US5] Implement `src/payroll/runs/payroll-runs.controller.ts`:
       `POST /hr/payroll/generate`, `GET /hr/payroll/runs`,
       `POST /hr/payroll/runs/:id/process`, `.../pay`, guarded with
       `@RequirePermission(Permission.PAYROLL)` (depends on T051)
-- [ ] T053 [US5] Wire the immutability check (Processed/Paid run rejects further line-item writes,
+- [X] T053 [US5] Wire the immutability check (Processed/Paid run rejects further line-item writes,
       and — extending 003's existing lock rule — rejects attendance/leave edits for that period,
       already partially wired in T040) into `process` action — spec FR-015
-- [ ] T054 [US5] Implement `src/payroll/runs/salary-slip.service.ts`: real slip (supersedes 003's
+- [X] T054 [US5] Implement `src/payroll/runs/salary-slip.service.ts`: real slip (supersedes 003's
       placeholder), `pdfkit` rendering (reused from 003) — spec FR-016 (depends on T051)
-- [ ] T055 [US5] Add `GET /hr/payroll/runs/:id/employees/:employeeId/slip[.pdf]` to
+- [X] T055 [US5] Add `GET /hr/payroll/runs/:id/employees/:employeeId/slip[.pdf]` to
       `payroll-runs.controller.ts` (depends on T054); confirm 003's `/my/salary` endpoints now
       resolve real data for Processed/Paid periods with no contract change on that side
-- [ ] T056 [US5] Implement bank-sheet export (`exceljs`, reused from 004) in
+- [X] T056 [US5] Implement bank-sheet export (`exceljs`, reused from 004) in
       `payroll-runs.controller.ts`: `GET /hr/payroll/runs/:id/bank-sheet` — spec FR-017
-- [ ] T057 [US5] Wire audit logging (entityType `PAYROLL_RUN`) into generate/process/pay paths —
+- [X] T057 [US5] Wire audit logging (entityType `PAYROLL_RUN`) into generate/process/pay paths —
       FR-030
 - [ ] T057a [US5] Implement `HrPayrollService.getLabourCostByProject(projectId, dateRange)` in
       `src/payroll/runs/payroll-runs.service.ts` (or a dedicated exported service), summing
@@ -289,10 +291,10 @@ that run's line items.
 
 ### Implementation for User Story 6
 
-- [ ] T060 [US6] Implement `src/payroll/challans/challans.controller.ts` +
+- [X] T060 [US6] Implement `src/payroll/challans/challans.controller.ts` +
       `challans.service.ts`: `GET /hr/challans/pf|esic|pt`, derived read (no stored table),
       guarded with `@RequirePermission(Permission.CHALLANS)` — research.md §5 (depends on T010)
-- [ ] T061 [US6] Implement `GET /hr/challans/{pf,esic,pt}/export` (`exceljs`/`pdfkit`) — spec
+- [X] T061 [US6] Implement `GET /hr/challans/{pf,esic,pt}/export` (`exceljs`/`pdfkit`) — spec
       FR-020 (depends on T060)
 
 **Checkpoint**: User Stories 1–6 independently functional.
@@ -316,13 +318,13 @@ confirm the EMI deduction and schedule-entry status update.
 
 ### Implementation for User Story 7
 
-- [ ] T064 [P] [US7] Create `src/payroll/loans/dto/create-loan.dto.ts`
-- [ ] T065 [US7] Implement `src/payroll/loans/loans.service.ts`: schedule auto-generation, Total
+- [X] T064 [P] [US7] Create `src/payroll/loans/dto/create-loan.dto.ts`
+- [X] T065 [US7] Implement `src/payroll/loans/loans.service.ts`: schedule auto-generation, Total
       Paid/Outstanding Balance computed from schedule (depends on T011)
-- [ ] T066 [US7] Implement `src/payroll/loans/loans.controller.ts`:
+- [X] T066 [US7] Implement `src/payroll/loans/loans.controller.ts`:
       `GET/POST /hr/loans`, `GET /hr/loans/:id/schedule`, `POST /hr/loans/:id/close`, guarded with
       `@RequirePermission(Permission.LOANS)` (depends on T065)
-- [ ] T067 [US7] Wire audit logging (entityType `LOAN`) into create/close paths — FR-030
+- [X] T067 [US7] Wire audit logging (entityType `LOAN`) into create/close paths — FR-030
 
 **Checkpoint**: User Stories 1–7 independently functional.
 
@@ -343,12 +345,12 @@ records remain attributed to the original company.
 
 ### Implementation for User Story 8
 
-- [ ] T069 [US8] Implement transfer logic in `employees.service.ts` (US1): updates `companyId`,
+- [X] T069 [US8] Implement transfer logic in `employees.service.ts` (US1): updates `companyId`,
       generates a new code via Settings' code-series service unless retained, creates an
       `EmployeeTransfer` row (depends on T005, T022)
-- [ ] T070 [US8] Add `POST /hr/employees/:id/transfer` to `employees.controller.ts` (depends on
+- [X] T070 [US8] Add `POST /hr/employees/:id/transfer` to `employees.controller.ts` (depends on
       T069)
-- [ ] T071 [US8] Wire audit logging (entityType `EMPLOYEE_TRANSFER`) — FR-030
+- [X] T071 [US8] Wire audit logging (entityType `EMPLOYEE_TRANSFER`) — FR-030
 
 **Checkpoint**: User Stories 1–8 independently functional.
 
@@ -426,7 +428,7 @@ unchanged endpoint.
 
 ### Implementation for User Story 10
 
-- [ ] T089 [US10] Implement `src/hr/re-enrolment-requests/re-enrolment-requests-admin.controller.ts`:
+- [X] T089 [US10] Implement `src/hr/re-enrolment-requests/re-enrolment-requests-admin.controller.ts`:
       `GET /hr/re-enrolment-requests?status=`, guarded with
       `@RequirePermission(Permission.EMPLOYEES)` — thin list over 003's existing service, no new
       decision logic (spec FR-029)
@@ -455,16 +457,16 @@ process as an F&F payroll run, confirm status → Inactive and login revoked.
 
 ### Implementation for User Story 11
 
-- [ ] T100 [P] [US11] Create `src/hr/offboarding/dto/exit.dto.ts`
-- [ ] T101 [US11] Implement `src/hr/offboarding/exit.service.ts` — `initiateExit()` creates an
+- [X] T100 [P] [US11] Create `src/hr/offboarding/dto/exit.dto.ts`
+- [X] T101 [US11] Implement `src/hr/offboarding/exit.service.ts` — `initiateExit()` creates an
       `ExitRecord` (FR-031); implement `src/payroll/offboarding/fnf.service.ts` —
       `computeFnf()` (FR-032), `processFnf()` (creates an F&F-flagged `PayrollRun`, reuses the
       standard payroll lock lifecycle, FR-033) (depends on T100, existing PayrollEngine from US5)
-- [ ] T102 [US11] Implement `src/hr/employees/employees.controller.ts` additions: `POST
+- [X] T102 [US11] Implement `src/hr/employees/employees.controller.ts` additions: `POST
       /hr/employees/:id/exit`, `GET /hr/employees/:id/fnf`, `POST
       /hr/employees/:id/fnf/process` — guarded with `@RequirePermission(Permission.EMPLOYEES)`
       (depends on T101)
-- [ ] T103 [US11] Wire the on-processed employee-deactivation hook (`status → Inactive`,
+- [X] T103 [US11] Wire the on-processed employee-deactivation hook (`status → Inactive`,
       `User.active = false`, Redis refresh-token revocation, FR-034) and the Inactive-employee
       action-rejection guard (FR-035) into `employees.service.ts`
 
@@ -493,20 +495,20 @@ second claim can be rejected with mandatory remarks.
 
 ### Implementation for User Story 12
 
-- [ ] T107 [P] [US12] Create `src/payroll/reimbursements-admin/dto/decide-claim.dto.ts` and
+- [X] T107 [P] [US12] Create `src/payroll/reimbursements-admin/dto/decide-claim.dto.ts` and
       `dto/pay-claim.dto.ts`
-- [ ] T108 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.service.ts` —
+- [X] T108 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.service.ts` —
       `listClaims()`, `approveClaim()`, `rejectClaim()` (FR-037), `payClaim()` (direct or
       payroll-earnings-line, FR-038), `getRegister()` (FR-039) — operating on feature 003's
       `ReimbursementClaim` table (`hr` schema), never a duplicate table (research.md §10 there)
-- [ ] T109 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.controller.ts`
+- [X] T109 [US12] Implement `src/payroll/reimbursements-admin/reimbursements-admin.controller.ts`
       — `GET /hr/reimbursements`, `PATCH /hr/reimbursements/:id/approve`, `.../reject`,
       `.../pay`, `GET /hr/reimbursements/register` — guarded with
       `@RequirePermission(Permission.EMPLOYEES)` (depends on T108)
-- [ ] T110 [US12] Wire the payroll-earnings-line inclusion path into the payroll engine (US5) so an
+- [X] T110 [US12] Wire the payroll-earnings-line inclusion path into the payroll engine (US5) so an
       Approved, `paymentMode: 'payroll'` claim's amount appears in the employee's next run
       (depends on T108, existing PayrollEngine)
-- [ ] T110a [US12] Implement `ReimbursementCategoriesService` + `ReimbursementCategoriesController`
+- [X] T110a [US12] Implement `ReimbursementCategoriesService` + `ReimbursementCategoriesController`
       in `src/settings/reimbursement-categories/` — same CRUD shape as 002's Department/
       Designation/Document Type/Shift masters, guarded with `@RequirePermission(Permission.
       EMPLOYEES)` (FR-045, research.md §15 — found missing on a second alignment-audit pass;
@@ -536,17 +538,17 @@ zero records created, then commit only the valid rows.
 
 ### Implementation for User Story 13
 
-- [ ] T114 [P] [US13] Create `src/hr/attendance/dto/import-row.dto.ts`
-- [ ] T115 [US13] Implement `src/hr/attendance/attendance-import.service.ts` — `getTemplate()`
+- [X] T114 [P] [US13] Create `src/hr/attendance/dto/import-row.dto.ts`
+- [X] T115 [US13] Implement `src/hr/attendance/attendance-import.service.ts` — `getTemplate()`
       (FR-041), `validate()` (row-level parsing/lookup errors, no writes, FR-042), `commit()`
       (creates Attendance Records via the existing Mark/Edit path — US3's `attendance-admin.
       service.ts` — reusing its Total-Hours/status computation and payroll-lock rejection,
       FR-043/FR-044) (depends on US3's `attendance-admin.service.ts`)
-- [ ] T116 [US13] Implement `src/hr/attendance/attendance-import.controller.ts` — `GET
+- [X] T116 [US13] Implement `src/hr/attendance/attendance-import.controller.ts` — `GET
       /hr/attendance/import/template`, `POST /hr/attendance/import/validate`, `POST
       /hr/attendance/import/commit` — guarded with `@RequirePermission(Permission.ATTENDANCE)`
       (depends on T115)
-- [ ] T117 [US13] Wire the import-sourced audit-log tag into committed rows (FR-043)
+- [X] T117 [US13] Wire the import-sourced audit-log tag into committed rows (FR-043)
 
 **Checkpoint**: All thirteen user stories independently functional.
 
@@ -652,82 +654,85 @@ value** — reuses `PAYROLL`, `ATTENDANCE`, `REPORTS`.
 
 ### Handover (do first — these remove scope)
 
-- [ ] TA001 **Remove US9 (Daily Worker Registry) and FR-023 to FR-028 from this feature's build
+- [X] TA001 **Remove US9 (Daily Worker Registry) and FR-023 to FR-028 from this feature's build
       scope.** Their tables migrate to the `labour` schema in 013's T004; coordinate so the
       migration runs exactly once (ratified 2026-09-01)
-- [ ] TA002 Assert no labour figure reaches any `PayrollRun` (spec FR-048), and that 013 reads this
+- [X] TA002 Assert no labour figure reaches any `PayrollRun` (spec FR-048), and that 013 reads this
       feature's existing OT multiplier rather than defining a second (spec FR-049)
 
 ### Phase A1: Schema
 
-- [ ] TA003 Add `TaxSlab` (`settings`), `TaxDeclaration`, `TaxDeclarationLine`, `SalaryAdvance`
+- [X] TA003 Add `TaxSlab` (`settings`), `TaxDeclaration`, `TaxDeclarationLine`, `SalaryAdvance`
       (`hr`) to `prisma/schema.prisma`; migration + RLS
-- [ ] TA004 [P] Extend `shared.AuditLogEntry.entityType` with `TAX_DECLARATION`, `SALARY_ADVANCE`
+- [X] TA004 [P] Extend `shared.AuditLogEntry.entityType` with `TAX_DECLARATION`, `SALARY_ADVANCE`
       (spec FR-067)
 
 ### Phase A2: US14 — TDS (P1)
 
-- [ ] TA005 [US14] `TaxSlabService` + controller: per-FY, per-regime slab sets; contiguity and
+- [X] TA005 [US14] `TaxSlabService` + controller: per-FY, per-regime slab sets; contiguity and
       non-overlap validation → 400 naming the gap or overlap (spec FR-050)
-- [ ] TA006 [US14] `TaxDeclarationService` + controller: declare, cap each line at its section's
+- [X] TA006 [US14] `TaxDeclarationService` + controller: declare, cap each line at its section's
       configured ceiling reporting the capped figure (spec FR-052), verify with proof to encrypted
       object storage, honour unverified declarations only until the configured cut-off month
-- [ ] TA007 [US14] `TdsCalculationService`: projected annual taxable income → annual liability under
+- [X] TA007 [US14] `TdsCalculationService`: projected annual taxable income → annual liability under
       the elected regime → less YTD deducted → ÷ remaining months including the current
       (spec FR-051); floored at zero — payroll never refunds tax (spec FR-053)
-- [ ] TA008 [US14] No-PAN higher rate with the employee flagged in the run's exception list
+- [X] TA008 [US14] No-PAN higher rate with the employee flagged in the run's exception list
       (spec FR-053)
-- [ ] TA009 [US14] Wire TDS as a payroll line-item deduction in the existing payroll run
-- [ ] TA010 [US14] Quarterly TDS report and Form 16 data endpoints; XLSX/PDF export following the
+- [X] TA009 [US14] Wire TDS as a payroll line-item deduction in the existing payroll run
+- [X] TA010 [US14] Quarterly TDS report and Form 16 data endpoints; XLSX/PDF export following the
       FR-020 challan-export pattern
-- [ ] TA011 [P] [US14] Unit test: full-year simulation with a mid-year salary change self-corrects
+- [X] TA011 [P] [US14] Unit test: full-year simulation with a mid-year salary change self-corrects
       (SC-A01); zero floor; no-PAN rate; slab contiguity rejection
 - [ ] TA012 [P] [US14] E2e test: a processed run carries the correct TDS deduction
 
 ### Phase A3: US15 — Salary Advances (P2)
 
-- [ ] TA013 [US15] `SalaryAdvanceService` + controller: request, `exceedsLimit` flag above the
+- [X] TA013 [US15] `SalaryAdvanceService` + controller: request, `exceedsLimit` flag above the
       configured percentage of monthly net, single open advance per employee → 409 (spec FR-054),
       approve, disburse
-- [ ] TA014 [US15] Recovery in the nominated month, with the documented capping order — statutory,
+- [X] TA014 [US15] Recovery in the nominated month, with the documented capping order — statutory,
       then loan EMI, then salary advance — so net pay is never negative, remainder carried forward
       (spec FR-055)
-- [ ] TA015 [US15] Include outstanding advances as a recovery in the F&F computation (FR-032 /
+- [X] TA015 [US15] Include outstanding advances as a recovery in the F&F computation (FR-032 /
       spec FR-056)
 - [ ] TA016 [P] [US15] Unit test: capping order, carry-forward, F&F inclusion (SC-A02)
 - [ ] TA017 [P] [US15] E2e test: recovery closes the advance; a capped recovery leaves it open
 
 ### Phase A4: US16 — Registers (P2)
 
-- [ ] TA018 [US16] `PayrollRegisterService` + controller: salary register with per-component
+- [X] TA018 [US16] `PayrollRegisterService` + controller: salary register with per-component
       earnings and deductions and column totals, filterable by department / project / site
       (spec FR-057, FR-060); processed-or-paid-runs-only guard
-- [ ] TA019 [US16] Reconciliation assertion — register totals must equal the run's stored totals or
+- [X] TA019 [US16] Reconciliation assertion — register totals must equal the run's stored totals or
       surface an explicit error, never a silently different number (spec FR-058)
-- [ ] TA020 [US16] Deduction report by head, split statutory vs non-statutory, whose statutory
+- [X] TA020 [US16] Deduction report by head, split statutory vs non-statutory, whose statutory
       totals must equal the FR-019 challan figures (spec FR-059)
-- [ ] TA021 [US16] XLSX/PDF export, async above the configured row threshold
+- [X] TA021 [US16] XLSX/PDF export, async above the configured row threshold
 - [ ] TA022 [P] [US16] Unit test: register / deduction report / challan three-way reconciliation
       (SC-A03)
 
 ### Phase A5: US17 — Late-Coming (P3)
 
-- [ ] TA023 [US17] `ShiftComplianceService`: `lateMinutes`, `earlyDepartureMinutes`, `shortHours`
+- [X] TA023 [US17] `ShiftComplianceService`: `lateMinutes`, `earlyDepartureMinutes`, `shortHours`
       against the shift **in force on that date**, each floored at zero, using 002 FR-022's existing
       shift configuration (spec FR-061)
-- [ ] TA024 [US17] Explicit `noShiftAssigned` / `noPunchTimes` markers rather than zero, so
+- [X] TA024 [US17] Explicit `noShiftAssigned` / `noPunchTimes` markers rather than zero, so
       unconfigured data is never mistaken for punctuality (spec FR-062); exclude approved leave and
       declared holidays (spec FR-063)
-- [ ] TA025 [US17] Late-coming report with `repeatLateComer` flag; recomputation after manual
+- [X] TA025 [US17] Late-coming report with `repeatLateComer` flag; recomputation after manual
       attendance edits preserving the original in the FR-010 audit trail
-- [ ] TA026 [US17] Assert lateness never deducts pay (spec FR-064)
-- [ ] TA027 [P] [US17] Unit test: shift-in-force-on-date after a mid-month reassignment (SC-A04)
+- [X] TA026 [US17] Assert lateness never deducts pay (spec FR-064)
+- [X] TA027 [P] [US17] Unit test: shift-in-force-on-date after a mid-month reassignment (SC-A04)
 
 ### Phase A6: Handover Wiring
 
-- [ ] TA028 Change the exit flow to read 011's accepted Resignation for last-working-day and notice
+- [~] TA028 Change the exit flow to read 011's accepted Resignation for last-working-day and notice
+      **BLOCKED** — depends on 011's Resignation record, which is specced but not built.
       waiver rather than re-collecting them (spec FR-065) — **blocked by 011 T051**
-- [ ] TA029 Call 011's letter service for the relieving letter; no letter generation here
+- [~] TA029 Call 011's letter service for the relieving letter; no letter generation here
+      **BLOCKED** — depends on 011's letter service, which is specced but not built.
       (spec FR-065) — **blocked by 011 T045**
-- [ ] TA030 Surface outstanding asset custody at exit via 012's `getOutstandingCustody()`
+- [~] TA030 Surface outstanding asset custody at exit via 012's `getOutstandingCustody()`
+      **BLOCKED** — depends on 012's getOutstandingCustody(), which is specced but not built.
       (012 FR-036) — **blocked by 012 T021**

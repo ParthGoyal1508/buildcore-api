@@ -118,6 +118,12 @@ describe('PunchService', () => {
     const service = new PunchService(
       prisma as never,
       { requireByUserId: jest.fn().mockResolvedValue(employee) } as never,
+      // Mandatory-document gate (005 US2): satisfied by default here so these
+      // tests keep exercising the biometric/geofence paths they were written for.
+      // The gate itself is covered in employee-documents.service.spec.ts.
+      {
+        assertMandatoryDocsComplete: jest.fn().mockResolvedValue(undefined),
+      } as never,
       { getGeofence: jest.fn().mockResolvedValue(SITE) } as never,
       { getPayrollLockDay: jest.fn().mockResolvedValue(7) } as never,
       biometrics,

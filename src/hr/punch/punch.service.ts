@@ -33,6 +33,7 @@ import { ImageProcessingService } from '../biometrics/image-processing.service';
 import { parseDateOnly, zonedDateOnly } from '../leave/leave-days';
 import { decodePhotoPayload } from '../biometrics/photo-payload';
 import type { Caller } from '../biometrics/face-enrolment.service';
+import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
 import { EmployeesService } from '../employees/employees.service';
 import { SubmitPunchDto } from './dto/punch.dto';
 import { checkGeofence } from './geofence.util';
@@ -82,6 +83,7 @@ export class PunchService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
+    private readonly employeeDocuments: EmployeeDocumentsService,
     private readonly sites: SitesService,
     private readonly companies: CompaniesService,
     private readonly biometrics: BiometricsService,
@@ -144,6 +146,17 @@ export class PunchService {
 
     const capturedAt = new Date(dto.capturedAt);
     const receivedAt = new Date();
+
+    // --- Gate 0: mandatory documents must be on file (005 FR-005, 002 FR-021). ---
+    //
+    // Checked before the biometric work rather than after, so an employee blocked by
+    // paperwork is told that immediately instead of after a face match that was
+    // never going to be accepted. The identical check guards the admin Mark
+    // Attendance path (005 US3) — one gate, two callers.
+    await this.employeeDocuments.assertMandatoryDocsComplete(
+      employee.id,
+      employee.companyId,
+    );
 
     // --- Gate 1: the punch must be attributable to a real template. ---
     const enrolment = await withRlsContext(this.prisma, caller.rls, (tx) =>

@@ -307,6 +307,34 @@ export class ReferenceDataService {
    * and returned as a duration rather than as the raw in/out times so the caller
    * never has to re-derive the overnight-shift arithmetic below.
    */
+  /**
+   * A shift's in/out window and grace period, for callers outside `settings`.
+   *
+   * `getShiftDurationHours` below already exports the duration for overtime; the
+   * late-coming report (005 US17) needs the window itself, which is what 002 has
+   * been storing all along with nothing reading it.
+   */
+  async getShift(
+    shiftId: string,
+  ): Promise<{ inTime: string; outTime: string; graceMinutes: number } | null> {
+    const shift = await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.shift.findUnique({
+        where: { id: shiftId },
+        select: { inTime: true, outTime: true, graceMinutes: true },
+      }),
+    );
+    if (!shift) return null;
+    return {
+      // Postgres `time` values surface as Dates on an arbitrary epoch day, so only
+      // the time-of-day component is meaningful — the same caveat
+      // `shiftDurationHours` documents below. Rendered as `HH:mm` in UTC, which is
+      // how the value was stored.
+      inTime: hhmm(shift.inTime),
+      outTime: hhmm(shift.outTime),
+      graceMinutes: shift.graceMinutes,
+    };
+  }
+
   async getShiftDurationHours(shiftId: string): Promise<number> {
     const shift = await withRlsContext(
       this.prisma,
@@ -322,6 +350,13 @@ export class ReferenceDataService {
     }
     return shiftDurationHours(shift.inTime, shift.outTime);
   }
+}
+
+/** A Postgres `time` value as `HH:mm`. */
+function hhmm(t: Date): string {
+  return `${String(t.getUTCHours()).padStart(2, '0')}:${String(
+    t.getUTCMinutes(),
+  ).padStart(2, '0')}`;
 }
 
 /**
