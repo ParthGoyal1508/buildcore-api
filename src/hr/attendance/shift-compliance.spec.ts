@@ -1,6 +1,7 @@
 import {
   dayCompliance,
   minutesOf,
+  punchMinutes,
   summarise,
   type ShiftWindow,
 } from './shift-compliance';
@@ -17,6 +18,32 @@ describe('minutesOf', () => {
     expect(minutesOf('00:00')).toBe(0);
     expect(minutesOf('09:30')).toBe(570);
     expect(minutesOf('23:59')).toBe(1439);
+  });
+});
+
+describe('punchMinutes', () => {
+  it('reads HH:mm', () => {
+    expect(punchMinutes('09:30')).toBe(570);
+    expect(punchMinutes('00:00')).toBe(0);
+    expect(punchMinutes('23:59')).toBe(1439);
+  });
+
+  it('reads a full ISO timestamp, in UTC', () => {
+    // AttendanceHistoryService emits `firstIn.toISOString()`, not HH:mm — the two
+    // producers of a punch time in this codebase disagree, and this is the one
+    // that feeds the late-coming report.
+    expect(punchMinutes('2026-09-02T03:49:41.002Z')).toBe(3 * 60 + 49);
+  });
+
+  it('returns null rather than NaN for anything unreadable', () => {
+    // The regression this exists for: `'2026-09-02T03:49:41.002Z'.split(':')`
+    // parsed as HH:mm yields NaN, which survives arithmetic and Math.max, and
+    // which JSON.stringify writes as `null` — so a malformed time became a blank
+    // cell in a report instead of an error anyone would notice.
+    for (const bad of ['', 'not a time', '99:99', 'T::']) {
+      expect(punchMinutes(bad)).toBeNull();
+    }
+    expect(punchMinutes(null)).toBeNull();
   });
 });
 
@@ -63,6 +90,41 @@ describe('dayCompliance — lateness', () => {
     expect(
       dayCompliance(SHIFT, { inTime: '08:30', outTime: '18:00' }).lateMinutes,
     ).toBe(0);
+  });
+});
+
+describe('dayCompliance — never emits NaN', () => {
+  it('measures an ISO punch time correctly rather than producing NaN', () => {
+    const r = dayCompliance(SHIFT, {
+      inTime: '2026-09-02T09:30:00.000Z',
+      outTime: null,
+    });
+    expect(r.marker).toBe('ok');
+    // 09:30 against a 09:00 shift with 15 minutes' grace.
+    expect(r.lateMinutes).toBe(15);
+    expect(Number.isNaN(r.lateMinutes)).toBe(false);
+  });
+
+  it('treats an unreadable punch time as unmeasurable, not as on time', () => {
+    const r = dayCompliance(SHIFT, { inTime: 'garbage', outTime: null });
+    expect(r.marker).toBe('no_punch_times');
+    expect(r.lateMinutes).toBe(0);
+  });
+
+  it('keeps every figure finite for every combination of inputs', () => {
+    const times = [null, '09:20', '2026-09-02T09:20:00.000Z', 'garbage', ''];
+    for (const inTime of times) {
+      for (const outTime of times) {
+        const r = dayCompliance(SHIFT, { inTime, outTime });
+        for (const value of [
+          r.lateMinutes,
+          r.earlyDepartureMinutes,
+          r.shortHours,
+        ]) {
+          expect(Number.isFinite(value)).toBe(true);
+        }
+      }
+    }
   });
 });
 

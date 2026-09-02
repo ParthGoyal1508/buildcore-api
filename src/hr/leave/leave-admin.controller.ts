@@ -14,7 +14,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { LeaveApplicationStatus, Permission } from '@prisma/client';
 import type { Request } from 'express';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -51,7 +51,12 @@ export class LeaveAdminController {
     @Req() request: Request,
     @Query() query: LeaveApplicationQueryDto,
   ) {
-    return this.leave.listForReview(callerFrom(user, request), query.status);
+    // Explicitly pending-by-default: this is the approver's queue, and an
+    // unfiltered request here should not surface already-decided applications.
+    return this.leave.listForReview(
+      callerFrom(user, request),
+      query.status ?? LeaveApplicationStatus.pending,
+    );
   }
 
   @Post(':id/decide')

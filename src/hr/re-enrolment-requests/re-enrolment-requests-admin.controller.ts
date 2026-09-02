@@ -1,6 +1,6 @@
 import { Controller, Get, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Permission, ReEnrolmentRequestStatus } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import type { Request } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -9,6 +9,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { FaceEnrolmentService } from '../biometrics/face-enrolment.service';
+import { ListReEnrolmentRequestsQueryDto } from './dto/list-re-enrolment-requests.dto';
 import { callerFrom } from '../caller-context';
 
 /**
@@ -37,11 +38,11 @@ export class ReEnrolmentRequestsAdminController {
   async list(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
-    @Query('status') status?: ReEnrolmentRequestStatus,
+    @Query() query: ListReEnrolmentRequestsQueryDto,
   ) {
     return this.enrolment.listReEnrolmentRequests(
       callerFrom(user, request),
-      status,
+      query.status,
     );
   }
 }
