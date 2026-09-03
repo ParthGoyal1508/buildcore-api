@@ -65,6 +65,13 @@ describe('PunchService', () => {
 
   let biometrics: FakeBiometrics;
 
+  // Several tests below pin the clock so a fixture stays on the side of a gate it
+  // is not testing. Restoring here rather than at each call site means a failing
+  // expectation cannot leave the next test frozen in 2026.
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   const build = (
     opts: {
       /** Punches already recorded on the punch's own calendar day (FR-008). */
@@ -210,13 +217,20 @@ describe('PunchService', () => {
 
     it('stamps the calendar day and marks the punch employee-sourced', async () => {
       const { service, created } = build({ dayPunches: [] });
+      // The clock is pinned two minutes after the capture. A fixed `capturedAt`
+      // against the real clock is a time bomb: the offline-age gate (FR-012)
+      // rejects anything over 72 hours old, so this test passed for three days
+      // after the date was written and then failed for good.
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-31T18:39:00.000Z'));
       await service.submitPunch(
         caller,
         // 00:07 IST on 1 September — 31 August in UTC. The stamped day must be the
         // employee's, not the server's (FR-018a).
         punchDto({ capturedAt: '2026-08-31T18:37:00.000Z' }),
       );
-      expect(created[0].punchDate).toEqual(new Date('2026-09-01T00:00:00.000Z'));
+      expect(created[0].punchDate).toEqual(
+        new Date('2026-09-01T00:00:00.000Z'),
+      );
       expect(created[0].source).toBe('employee');
     });
 
@@ -321,7 +335,6 @@ describe('PunchService', () => {
       await expect(
         service.submitPunch(caller, punchDto({ capturedAt })),
       ).rejects.toThrow(/offline sync window/);
-      jest.useRealTimers();
     });
 
     it('returns 423 for a punch inside a locked payroll period', async () => {
