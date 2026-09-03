@@ -269,6 +269,41 @@ describe('Dashboard reminders (e2e)', () => {
     });
   });
 
+  describe('operator-disabled rules', () => {
+    it('stops evaluating a rule switched off in the catalogue, with no restart', async () => {
+      E2EDocumentExpiryRule.candidates = [
+        candidate('disable-me', 5, callerCompanyId),
+      ];
+
+      const before = await http()
+        .get('/dashboard/reminders?module=e2e_testing')
+        .set(auth())
+        .expect(200);
+      expect(before.body.reminders).toHaveLength(1);
+
+      // Exactly what an operator would do at 3am: one UPDATE, no deploy.
+      await sys.reminderRule.update({
+        where: { ruleKey: RULE_KEY },
+        data: { enabled: false },
+      });
+
+      const after = await http()
+        .get('/dashboard/reminders?module=e2e_testing')
+        .set(auth())
+        .expect(200);
+      expect(after.body.reminders).toHaveLength(0);
+      // Not reported as pending either — nothing is missing, it was switched off.
+      expect(
+        after.body.unavailable.map((u: { ruleKey: string }) => u.ruleKey),
+      ).not.toContain(RULE_KEY);
+
+      await sys.reminderRule.update({
+        where: { ruleKey: RULE_KEY },
+        data: { enabled: true },
+      });
+    });
+  });
+
   describe('unbuilt modules (FR-031)', () => {
     it('reports the pending rule sources rather than failing the request', async () => {
       const res = await http()

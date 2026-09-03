@@ -156,8 +156,15 @@ export class RemindersService {
     const today = this.today();
     const unavailable: UnavailableRuleSource[] = [];
     const available: ReminderRuleProvider[] = [];
+    const disabled = await this.disabledRuleKeys(ctx);
 
     for (const provider of this.registry.rules()) {
+      // An operator switched this rule off. It contributes nothing and is NOT
+      // reported as unavailable: `module_pending` means "cannot be computed yet",
+      // and saying that about a rule someone deliberately silenced would send the
+      // reader looking for a missing module instead of at the flag they set.
+      if (disabled.has(provider.ruleKey)) continue;
+
       if (provider.isAvailable()) {
         available.push(provider);
       } else {
@@ -219,6 +226,25 @@ export class RemindersService {
         reminders.map((r) => ledgerKey(r.companyId, r.ruleKey, r.entityId)),
       ),
     };
+  }
+
+  /**
+   * Rules an operator has switched off in the catalogue.
+   *
+   * `ReminderRuleRegistry` writes `enabled` and never overwrites it on redeploy,
+   * precisely so it can be used this way — a rule producing noise at 3am can be
+   * silenced with one UPDATE instead of a release. Read on every evaluation rather
+   * than cached at boot, because the whole point is that it takes effect without a
+   * restart.
+   */
+  private async disabledRuleKeys(ctx: RlsContext): Promise<Set<string>> {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.reminderRule.findMany({
+        where: { enabled: false },
+        select: { ruleKey: true },
+      }),
+    );
+    return new Set(rows.map((row) => row.ruleKey));
   }
 
   /** Every (company, rule, entity) currently suppressed by a live snooze. */

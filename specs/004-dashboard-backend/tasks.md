@@ -554,7 +554,7 @@ Appended 2026-09-03 after the reminders-engine slice. Scoped to that slice only 
 widget, notification, activity-log and report tasks above are unbuilt by decision, not
 by oversight, and are not restated here.
 
-- [ ] T072 Honour `ReminderRule.enabled` when evaluating: `reminder-rule.registry.ts`
+- [X] T072 Honour `ReminderRule.enabled` when evaluating: `reminder-rule.registry.ts`
       writes the column and documents it as the way to "silence a misbehaving rule
       without a deploy", but `RemindersService.collect()` iterates the discovered code
       providers and never reads it, so a rule disabled in the database still produces
@@ -572,3 +572,14 @@ by oversight, and are not restated here.
       more than 500 live reminders gets a badge count that is wrong in the one
       situation where the number matters most — AC10 requires it to be consistent with
       the list, per US9 AC10 (partial)
+
+**T072 closed 2026-09-03.** `RemindersService.disabledRuleKeys()` reads the catalogue on
+every evaluation and skips those rules — so an `UPDATE ... SET enabled = false` takes
+effect on the next request, not the next restart, which is what makes it useful during
+an incident. A disabled rule is skipped silently rather than reported as
+`module_pending`: that reason means "cannot be computed yet", and saying it about a rule
+someone deliberately switched off would send the reader hunting for a missing module
+instead of at the flag they set. Covered by three unit tests and one e2e that flips the
+column against a real database and confirms the reminder disappears without a restart.
+
+T073 and T074 remain open.

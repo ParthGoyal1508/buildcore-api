@@ -16,7 +16,9 @@ import { ReminderRuleProvider } from './reminder-rule.types';
  *
  * The rules themselves are code. The table is their mirror, and it earns its place by
  * giving an operator one queryable list of what the engine will evaluate, plus an
- * `enabled` flag that silences a misbehaving rule without a deploy.
+ * `enabled` flag that silences a misbehaving rule without a deploy —
+ * `RemindersService.disabledRuleKeys()` reads it on every evaluation, so an UPDATE
+ * takes effect on the next request rather than the next restart.
  *
  * Sync, not seed: it runs on every boot and upserts, so a changed lead window in code
  * reaches the table without a migration. It deliberately does NOT overwrite

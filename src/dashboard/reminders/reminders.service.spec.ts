@@ -76,6 +76,8 @@ class FakeLedger {
   rows: LedgerRow[] = [];
   private nextId = 1;
   snoozes: { companyId: string; ruleKey: string; entityId: string }[] = [];
+  /** Rule keys an operator has switched off in the catalogue. */
+  disabled: string[] = [];
 
   get open(): LedgerRow[] {
     return this.rows.filter((r) => r.closedAt === null);
@@ -144,6 +146,11 @@ class FakeLedger {
       reminderSnooze: {
         findMany: jest.fn(() => Promise.resolve(this.snoozes)),
         create: jest.fn(() => Promise.resolve({})),
+      },
+      reminderRule: {
+        findMany: jest.fn(() =>
+          Promise.resolve(this.disabled.map((ruleKey) => ({ ruleKey }))),
+        ),
       },
     };
   }
@@ -263,6 +270,41 @@ describe('RemindersService', () => {
 
       expect(reminders.map((r) => r.entityId)).toEqual(['a']);
       expect(unavailable.map((u) => u.ruleKey)).toEqual(['testing-broken']);
+    });
+  });
+
+  describe('operator-disabled rules', () => {
+    it('stops evaluating a rule switched off in the catalogue', async () => {
+      const ledger = new FakeLedger();
+      const rule = new FakeRule('testing-document-expiry', [candidate('a', 3)]);
+      const { service } = serviceWith([rule], ledger);
+
+      expect((await service.list(caller, {})).reminders).toHaveLength(1);
+
+      ledger.disabled = ['testing-document-expiry'];
+
+      expect((await service.list(caller, {})).reminders).toHaveLength(0);
+    });
+
+    it('does not report a disabled rule as unavailable', async () => {
+      const ledger = new FakeLedger();
+      ledger.disabled = ['testing-document-expiry'];
+      const rule = new FakeRule('testing-document-expiry', [candidate('a', 3)]);
+      const { service } = serviceWith([rule], ledger);
+
+      // 'module_pending' would send the reader looking for a missing module rather
+      // than at the flag someone set.
+      expect((await service.list(caller, {})).unavailable).toEqual([]);
+    });
+
+    it('emits nothing for a disabled rule during the sweep', async () => {
+      const ledger = new FakeLedger();
+      ledger.disabled = ['testing-document-expiry'];
+      const rule = new FakeRule('testing-document-expiry', [candidate('a', 3)]);
+      const { service } = serviceWith([rule], ledger);
+
+      expect((await service.evaluateAndEmit()).emitted).toBe(0);
+      expect(ledger.open).toHaveLength(0);
     });
   });
 
