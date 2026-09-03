@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
 import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
@@ -46,7 +46,10 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
  * inference against real photographs.
  */
 @Module({
-  imports: [SettingsModule, ProjectsModule],
+  // `forwardRef` because 008 made this edge bidirectional: `projects` now needs
+  // `EmployeesService` for its site-delete guard and project roster, while `hr`
+  // still needs `SitesService` for punch geofencing. See projects.module.ts.
+  imports: [SettingsModule, forwardRef(() => ProjectsModule)],
   controllers: [
     EmployeesController,
     AttendanceAdminController,

@@ -396,15 +396,52 @@ describe('Partners module (e2e)', () => {
   });
 
   describe('BOCW cess (T037)', () => {
-    it('reports projects as unavailable rather than pretending there are none', async () => {
+    it('no longer reports projects as unavailable, now that the portfolio exists', async () => {
       const res = await http()
         .get(`/partners/bocw?companyId=${companyId}`)
         .set(auth())
         .expect(200);
-      // TODO(008): once the Project Portfolio ships, this expectation flips to an
-      // empty array and the rows below become real.
-      expect(res.body.unavailableModules).toContain('projects');
+      // The flip this test was written to expect. 007 shipped against
+      // `ProjectsService.isPortfolioAvailable()` returning false and left a
+      // TODO(008) here; 008 US3 made it true, so the cess screen now reads real
+      // contract values instead of explaining that it cannot.
+      expect(res.body.unavailableModules).not.toContain('projects');
       expect(res.body.cessRate).toBeGreaterThan(0);
+    });
+
+    it('lists a real project once the portfolio has one', async () => {
+      // The other half of the same flip: 007's screen showed an empty list with an
+      // explanation. It now sources contract values through the seam rather than
+      // around it, and this is the first test that could prove the seam carries
+      // anything.
+      const client = await http()
+        .post(`/projects/clients?companyId=${companyId}`)
+        .set(auth())
+        .send({ name: unique('CessClient') })
+        .expect(201);
+      const project = await http()
+        .post(`/projects?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: unique('CessProject'),
+          clientId: client.body.id,
+          contractValue: 10000000,
+          startDate: '2026-01-01',
+        })
+        .expect(201);
+
+      const res = await http()
+        .get(`/partners/bocw?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      expect(
+        res.body.rows.some(
+          (r: { projectId: string }) => r.projectId === project.body.id,
+        ),
+      ).toBe(true);
+
+      await sys.project.deleteMany({ where: { id: project.body.id } });
+      await sys.client.deleteMany({ where: { id: client.body.id } });
     });
 
     it('records a payment and lists it back', async () => {

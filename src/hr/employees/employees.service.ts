@@ -264,7 +264,8 @@ export class EmployeesService {
       encrypted.aadhaarEncrypted = this.pii.encrypt(aadhaar);
     if (pan !== undefined) encrypted.panEncrypted = this.pii.encrypt(pan);
     if (bankAccountNumber !== undefined)
-      encrypted.bankAccountNumberEncrypted = this.pii.encrypt(bankAccountNumber);
+      encrypted.bankAccountNumberEncrypted =
+        this.pii.encrypt(bankAccountNumber);
 
     // Date-only strings arrive as ISO strings; Prisma wants Date for @db.Date.
     const dateFields = [
@@ -371,6 +372,78 @@ export class EmployeesService {
     return this.toMasked(updated);
   }
 
+  /**
+   * How many employees are still posted to a site.
+   *
+   * Exported for 008, whose site delete must refuse while anyone is still assigned
+   * (`DELETE /projects/sites/:id` → 409). `hr.Employee.siteId` is a bare id with no
+   * cross-schema foreign key — Principle I — so nothing in the database stops that
+   * delete, and the `projects` module may not go looking in `hr` itself.
+   *
+   * Deliberately narrow: a count, not a list. The caller needs to know whether the
+   * site is in use and by how many, and has no business receiving employee PII to
+   * answer that. Counts only the active, since a leaver's historical posting is not
+   * a reason to keep a site alive.
+   */
+  async countActiveBySite(ctx: RlsContext, siteId: string): Promise<number> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.count({ where: { siteId, isActive: true } }),
+    );
+  }
+
+  /**
+   * Active employees posted to any of a set of sites — the "Employees" tab on 008's
+   * project detail (`GET /projects/:id`).
+   *
+   * A project has no employees of its own: people are posted to sites, and a project
+   * has sites. So the caller resolves its site ids in its own schema and asks here,
+   * which keeps the join inside `hr` where the employee rows live.
+   *
+   * Returns four fields and no more. This backs a read-only roster on a project
+   * page, so none of the regulated PII this service otherwise masks and audits has
+   * any business being in the response — `designationId` is returned raw rather than
+   * resolved to a label, because `settings` owns that lookup and the caller is
+   * already talking to it.
+   */
+  async listActiveBySiteIds(
+    ctx: RlsContext,
+    siteIds: string[],
+  ): Promise<
+    {
+      id: string;
+      employeeCode: string;
+      name: string;
+      designationId: string | null;
+    }[]
+  > {
+    if (siteIds.length === 0) {
+      return [];
+    }
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.findMany({
+        where: { siteId: { in: siteIds }, isActive: true },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+          designationId: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+      }),
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      employeeCode: row.employeeCode,
+      // Both name parts are nullable, so an employee with neither falls back to the
+      // code rather than rendering as an empty string in the roster.
+      name:
+        [row.firstName, row.lastName].filter(Boolean).join(' ') ||
+        row.employeeCode,
+      designationId: row.designationId,
+    }));
+  }
+
   /** Paginated, filterable employee list. Masked PII throughout. */
   async list(
     caller: Caller,
@@ -396,7 +469,9 @@ export class EmployeesService {
       ...(term
         ? {
             OR: [
-              { employeeCode: { contains: term, mode: 'insensitive' as const } },
+              {
+                employeeCode: { contains: term, mode: 'insensitive' as const },
+              },
               { firstName: { contains: term, mode: 'insensitive' as const } },
               { lastName: { contains: term, mode: 'insensitive' as const } },
             ],
@@ -423,10 +498,7 @@ export class EmployeesService {
   }
 
   /** Single employee, masked. Composition of the detail tabs is US1 T019. */
-  async getMasked(
-    caller: Caller,
-    employeeId: string,
-  ): Promise<MaskedEmployee> {
+  async getMasked(caller: Caller, employeeId: string): Promise<MaskedEmployee> {
     const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findFirst({ where: { id: employeeId } }),
     );
@@ -487,7 +559,10 @@ export class EmployeesService {
     // serialise every concurrent transfer behind this one.
     const newCode = retain
       ? employee.employeeCode
-      : await this.employeeCode.getNextEmployeeCode(dto.toCompanyId, caller.rls);
+      : await this.employeeCode.getNextEmployeeCode(
+          dto.toCompanyId,
+          caller.rls,
+        );
 
     const fromCompanyId = employee.companyId;
 
@@ -572,8 +647,7 @@ export class EmployeesService {
 
     const column = PII_COLUMNS[dto.field];
     const stored = employee[column] as string | null;
-    const value =
-      column === 'uan' ? (stored ?? null) : this.pii.decrypt(stored);
+    const value = column === 'uan' ? stored ?? null : this.pii.decrypt(stored);
 
     return { field: dto.field, value };
   }

@@ -129,6 +129,8 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
 
   let companyId: string;
   let siteId: string;
+  /** The site holiday fixture, removed in afterAll along with its site link. */
+  let holidayId: string | undefined;
   let shiftId: string;
   let employeeUserId: string;
   let employeeToken: string;
@@ -251,7 +253,6 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         longitude: SITE_LNG,
         geofenceRadiusMeters: 200,
         weeklyOffDay: 0,
-        holidays: [],
       },
     });
     siteId = site.id;
@@ -312,6 +313,10 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Cascades to its HolidaySite link, so one delete is enough.
+    if (holidayId) {
+      await sys.holiday.deleteMany({ where: { id: holidayId } });
+    }
     if (companyId) {
       const employees = await sys.employee.findMany({
         where: { companyId },
@@ -900,10 +905,23 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
           opening: 12,
         },
       });
-      await sys.site.update({
-        where: { id: siteId },
-        data: { holidays: [new Date(`${HOLIDAY}T00:00:00.000Z`)] },
-      });
+      // `projects.Site.holidays` was dropped by migration
+      // 20260901194500_drop_site_holidays_column and superseded by the first-class
+      // `hr.Holiday` calendar (see the comment above the model). This spec still
+      // wrote to the old column, so the whole suite failed to set up long before
+      // 008 touched it; the calendar row below is the same fixture expressed the
+      // way the schema now models it.
+      holidayId = (
+        await sys.holiday.create({
+          data: {
+            companyId,
+            name: 'E2EMW Holiday',
+            date: new Date(`${HOLIDAY}T00:00:00.000Z`),
+            appliesToAllSites: false,
+            sites: { create: [{ siteId }] },
+          },
+        })
+      ).id;
     });
 
     it('returns every leave type, including ones with no entitlement', async () => {

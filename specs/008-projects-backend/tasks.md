@@ -25,20 +25,20 @@ implementation and testing of each story.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 [P] Extend `src/settings/permission.enum.ts` with two new values: `DWR`,
+- [X] T001 [P] Extend `src/settings/permission.enum.ts` with two new values: `DWR`,
       `PROJECT_FINANCIALS` (`PROJECTS` already exists — reused, not re-added; also add `DWR`/
       `PROJECT_FINANCIALS` to 002's own `permission.enum.ts` addition task if not already applied
       there) — spec FR-016, research.md §8, §14
-- [ ] T002 [P] Scaffold `src/projects/` directory and `ProjectsModule` in
+- [X] T002 [P] Scaffold `src/projects/` directory and `ProjectsModule` in
       `src/projects/projects.module.ts` with the sub-module structure from plan.md
-- [ ] T003 Create `src/projects/guards/project-lock.guard.ts`: reads `projectId` from route
+- [X] T003 Create `src/projects/guards/project-lock.guard.ts`: reads `projectId` from route
       params, queries `Project.isLocked`, returns `423` if true — research.md §6
-- [ ] T004 [P] Create `src/projects/interfaces/pnl-sources.interface.ts` defining the four
+- [X] T004 [P] Create `src/projects/interfaces/pnl-sources.interface.ts` defining the four
       cross-module service interfaces (`PlantService`, `InventoryService`, `PartnersService`,
       `HrPayrollService`). Only `InventoryService`/`PartnersService` get stub implementations
       returning 0 — `PlantService` (006) and `HrPayrollService` (005, amended by this feature) are
       real and injected directly — research.md §10
-- [ ] T005 [P] Create `src/projects/constants/projects.constants.ts` with `COST_OVERRUN_THRESHOLD
+- [X] T005 [P] Create `src/projects/constants/projects.constants.ts` with `COST_OVERRUN_THRESHOLD
       = 0.10` and `MAX_BOQ_IMPORT_ROWS = 1000` — Constitution Principle III (no hardcoded values)
 
 **Checkpoint**: Module scaffold, lock guard, P&L stubs, and permission enum ready.
@@ -49,23 +49,23 @@ implementation and testing of each story.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T006 Add new columns to the existing `Site` model (already in the `projects` schema block
+- [X] T006 Add new columns to the existing `Site` model (already in the `projects` schema block
       from 003 — do not move it) in `prisma/schema.prisma`: `address String?`,
       `status SiteStatus`, `projectId String?` FK→Project (nullable for backward compat). Do
       **not** touch the existing `latitude`/`longitude`/`geofenceRadiusMeters`/`weeklyOffDay`/
       `holidays` columns — those already exist from 003 — data-model.md §Site, research.md §2
-- [ ] T007 Add all 11 new `projects` schema models to `prisma/schema.prisma`: `Client`,
+- [X] T007 Add all 11 new `projects` schema models to `prisma/schema.prisma`: `Client`,
       `Project`, `BOQTaskGroup`, `BOQTaskItem`, `DailyWorkReport`, `DWRTask`, `Revenue`,
       `RABill`, `WorkOrder`, `ProjectBudget`, `ProjectDocument` — data-model.md
-- [ ] T008 Generate and apply the Site extension migration first (`npm run migrate:dev:create`
+- [X] T008 Generate and apply the Site extension migration first (`npm run migrate:dev:create`
       for the three new additive `Site` columns only), then generate and apply the `projects`
       schema migration for all 11 new models — Constitution Principle VI (schema-per-module, safe
       migrations)
-- [ ] T009 Add RLS policies for the 11 new `projects` schema tables (Client, Project, BOQTaskGroup,
+- [X] T009 Add RLS policies for the 11 new `projects` schema tables (Client, Project, BOQTaskGroup,
       BOQTaskItem, DailyWorkReport, DWRTask, Revenue, RABill, WorkOrder, ProjectBudget,
       ProjectDocument) — `Site`'s RLS policy already exists from 003, no change needed —
       Constitution Principle IV
-- [ ] T010 [P] Extend `shared.AuditLogEntry.entityType` enum with: `PROJECT`, `CLIENT`, `SITE`,
+- [X] T010 [P] Extend `shared.AuditLogEntry.entityType` enum with: `PROJECT`, `CLIENT`, `SITE`,
       `BOQ_GROUP`, `BOQ_ITEM`, `DWR`, `REVENUE`, `RA_BILL`, `WORK_ORDER`, `PROJECT_BUDGET`,
       `PROJECT_DOCUMENT` — contracts/projects-api.md "Audit logging"
 
@@ -84,17 +84,17 @@ verify listed correctly — without any project data.
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Create `src/projects/clients/dto/create-client.dto.ts` and
+- [X] T012 [P] [US1] Create `src/projects/clients/dto/create-client.dto.ts` and
       `update-client.dto.ts` with class-validator decorators for all client fields
-- [ ] T013 [P] [US1] Implement `ClientsService` in `src/projects/clients/clients.service.ts`:
+- [X] T013 [P] [US1] Implement `ClientsService` in `src/projects/clients/clients.service.ts`:
       `create`, `findAll` (paginated, filtered), `update`, `softDelete` (set inactive), GSTIN
       uniqueness check (→ 409), linked-project guard on delete (→ 409)
-- [ ] T014 [US1] Implement `ClientsController` in `src/projects/clients/clients.controller.ts`:
+- [X] T014 [US1] Implement `ClientsController` in `src/projects/clients/clients.controller.ts`:
       `GET /projects/clients`, `POST /projects/clients`, `PATCH /projects/clients/:id`,
       `DELETE /projects/clients/:id` — all with `@RequirePermission(Permission.PROJECTS)`
-- [ ] T015 [P] [US1] Unit test `ClientsService`: duplicate GSTIN path, delete with linked
+- [X] T015 [P] [US1] Unit test `ClientsService`: duplicate GSTIN path, delete with linked
       projects path — `src/projects/clients/clients.service.spec.ts`
-- [ ] T016 [US1] E2e test: `POST /projects/clients` → 201, duplicate GSTIN → 409, `GET` list
+- [X] T016 [US1] E2e test: `POST /projects/clients` → 201, duplicate GSTIN → 409, `GET` list
       with search/status filter — `test/projects.e2e-spec.ts` (create the file)
 
 **Checkpoint**: Client CRUD fully functional and independently tested.
@@ -114,15 +114,15 @@ any change to HR's own call sites.
 
 ### Implementation for User Story 2
 
-- [ ] T017 [P] [US2] Create `src/projects/sites/dto/create-site.dto.ts` and
+- [X] T017 [P] [US2] Create `src/projects/sites/dto/create-site.dto.ts` and
       `update-site.dto.ts` for the new fields (`projectId`, `address`, `status`) — no lat/lng/
       radius validation needed here, those fields and their validation already exist from 003
-- [ ] T018 [P] [US2] Extend the existing `src/projects/sites/sites.service.ts` (003's file — do
+- [X] T018 [P] [US2] Extend the existing `src/projects/sites/sites.service.ts` (003's file — do
       not create a new one) with: `create`, `findAll` (filtered by projectId/status), `update`,
       `delete` (→ 409 if active employees or DWRs reference site), plus a new `getSiteById(id)`
       exported method (full row) for this feature's own consumers. 003's existing `getGeofence()`/
       `getHolidayCalendar()`/`getWeeklyOffDay()` methods are unchanged
-- [ ] T019 [US2] Implement `SitesController` in `src/projects/sites/sites.controller.ts`:
+- [X] T019 [US2] Implement `SitesController` in `src/projects/sites/sites.controller.ts`:
       `GET /projects/sites`, `POST /projects/sites`, `GET /projects/sites/:id`,
       `PATCH /projects/sites/:id`, `DELETE /projects/sites/:id` — `Permission.PROJECTS`
 
@@ -142,19 +142,19 @@ lock it (DWR write → 423), unlock (DWR write succeeds).
 
 ### Implementation for User Story 3
 
-- [ ] T021 [P] [US3] Create `src/projects/portfolio/dto/create-project.dto.ts` and
+- [X] T021 [P] [US3] Create `src/projects/portfolio/dto/create-project.dto.ts` and
       `update-project.dto.ts` covering all project fields from data-model.md
-- [ ] T022 [P] [US3] Implement `ProjectsService` in
+- [X] T022 [P] [US3] Implement `ProjectsService` in
       `src/projects/portfolio/projects.service.ts`: `create` (calls CodeSeriesService for
       auto-code), `findAll` (paginated, search/status/client filtered), `findOne` (with
       aggregated tabs via cross-module stub calls), `update` (audit-log `isLocked` changes),
       `delete` (→ 409 if DWRs/revenue/RA bills/BOQ items exist)
-- [ ] T023 [US3] Implement `ProjectsController` in
+- [X] T023 [US3] Implement `ProjectsController` in
       `src/projects/portfolio/projects.controller.ts`: all 5 CRUD endpoints, `Permission.PROJECTS`
-- [ ] T024 [P] [US3] Unit test `ProjectsService.findOne()`: verify Inventory/Partners stub calls
+- [X] T024 [P] [US3] Unit test `ProjectsService.findOne()`: verify Inventory/Partners stub calls
       return empty arrays without error; Machinery (006) and Labour (005) calls are real, not
       stubbed — `src/projects/portfolio/projects.service.spec.ts`
-- [ ] T025 [US3] E2e test: `POST /projects` (auto-code), lock toggle → `POST /projects/dwr` 423,
+- [X] T025 [US3] E2e test: `POST /projects` (auto-code), lock toggle → `POST /projects/dwr` 423,
       unlock → DWR succeeds, delete with DWRs → 409 — `test/projects.e2e-spec.ts`
 
 **Checkpoint**: Portfolio CRUD and lock enforcement functional and e2e tested.
@@ -427,3 +427,55 @@ value** — reuses `PROJECTS` and `REPORTS`.
 - [ ] TA020 **P&L extension**: add asset cost via 012's `getAssetCostByProject()` and labour cost
       via 013's `getLabourCostByProject()` to the existing FR-008 P&L — **blocked by 012 T052 and
       013 T060**
+
+---
+
+## Implementation note — 2026-09-03, User Stories 1-3
+
+Phases 1-5 are complete (T001-T025). Phases 6-11 (US4-US8) and every `TA*` amendment
+task are untouched, by scope decision.
+
+Deviations from the task text, and why:
+
+- **T001** needed no code. `PROJECTS`, `DWR` and `PROJECT_FINANCIALS` were already in
+  the `Permission` enum, which lives in `prisma/schema.prisma`, not at the task's
+  stated path `src/settings/permission.enum.ts` — that file does not exist.
+- **T004** declares the four P&L source interfaces but injects none of them. The task
+  says Plant (006) and HR/Payroll (005) are "real and injected directly": `src/plant`
+  does not exist, and no labour-cost-by-project method exists on 005. Both are
+  declarations. P&L is US7 and out of scope either way.
+- **T006** added `projectId`, `address` and `status` only. `data-model.md` still lists
+  a `holidays` column on Site; migration `20260901194500_drop_site_holidays_column`
+  removed it and `hr.Holiday` supersedes it.
+- **T008** is two migrations, as asked, but `Site.projectId`'s FOREIGN KEY is declared
+  in the second rather than the first — `projects.Project` does not exist until then.
+- **T019** keeps `GET /projects/sites` as 003's bare-array picker and puts the
+  paginated administrative list on `GET /projects/sites/list`. HR's Add Employee form
+  reads the picker's response directly and would break on a page envelope. Both reads
+  admit `EMPLOYEES` as well as `PROJECTS`, because an HR administrator is not required
+  to hold `PROJECTS` and the form is unfillable without a site list. Writes stay
+  `PROJECTS`-only.
+- **T025** asks for the 423 path as `lock -> POST /projects/dwr -> 423`. The DWR
+  endpoints are US5 and do not exist, so `ProjectLockGuard` is covered by
+  `src/projects/guards/project-lock.guard.spec.ts` instead; the e2e asserts the
+  `isLocked` flag the guard reads, and its audit trail.
+- `SitesService` and `ProjectsService` now need `EmployeesService`, while `hr` still
+  needs `SitesService` for punch geofencing. That edge is bidirectional and resolved
+  with `forwardRef()` on both modules, exactly as `partners.module.ts` predicted. The
+  alternative was a cross-schema query, which Principle I forbids.
+
+Pre-existing failures found while verifying, and what was done:
+
+- `test/settings.e2e-spec.ts` teardown violated two foreign keys — vendor categories
+  (seeded per company since 007) and `UserRole` rows deleted after their `Role`. All
+  40 tests passed; the teardown aborted, leaving orphan companies that broke the next
+  run. **Fixed here**, because it blocked verification. Six orphan companies from
+  earlier runs were also cleared from the local database.
+- `test/my-workspace.e2e-spec.ts` still wrote to the dropped `Site.holidays` column,
+  so the whole suite failed to set up. **Fixed here** by using the `hr.Holiday`
+  calendar that superseded it.
+- Nine punch tests in `test/my-workspace.e2e-spec.ts` fail: a duplicate punch-in
+  returns 500 rather than 409, because the same-day guard in `punch.service.ts:290`
+  does not match and the database unique constraint catches it instead. **Not fixed**
+  — out of scope, and confirmed identical on `main` (84 passed / 9 failed, same test
+  names) in an isolated worktree. Feature 003/005 territory.

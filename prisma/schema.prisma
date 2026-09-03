@@ -584,6 +584,23 @@ enum AuditEntityType {
   MONTHLY_COMPLIANCE
   BOCW_PAYMENT
 
+  // Projects entities audited by feature 008 (contracts/projects-api.md "Audit
+  // logging"). PROJECT covers create/edit and the lock/unlock transition — the
+  // transition is an ordinary UPDATE whose before/after payload carries `isLocked`,
+  // rather than a distinct action, so a reader sees who froze a project in the same
+  // place they see who changed its contract value.
+  PROJECT
+  CLIENT
+  SITE
+  BOQ_GROUP
+  BOQ_ITEM
+  DWR
+  REVENUE
+  RA_BILL
+  WORK_ORDER
+  PROJECT_BUDGET
+  PROJECT_DOCUMENT
+
   @@schema("shared")
 }
 
@@ -640,11 +657,503 @@ model Site {
   /// Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).
   weeklyOffDay Int
 
+  /// ── Added by feature 008. Every column below is nullable or defaulted, so the
+  /// migration is additive and the rows 003 already created stay valid. The four
+  /// columns above are deliberately untouched: HR reads them through
+  /// `SitesService.getGeofence()`/`.getWeeklyOffDay()` on every punch, and widening
+  /// them to nullable would push a null check into that hot path for no gain.
+
+  /// The project this site belongs to. Nullable because sites created by 003 predate
+  /// the Project table entirely, and a site can legitimately outlive its project.
+  /// `SetNull` rather than `Cascade`: deleting a project must not silently delete the
+  /// attendance geofence its workers are still punching against.
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  /// Postal address, distinct from the geofence centre — the coordinates say where a
+  /// punch counts, this says where to send a delivery.
+  address String?
+
+  status SiteStatus @default(active)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([companyId, name])
   @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+// ============================================================================
+// projects schema — feature 008 (Projects: portfolio, clients, sites, BOQ, DWR,
+// revenue, P&L). Site above is 003's, extended in place rather than replaced.
+//
+// Cross-schema references (`projectManagerEmployeeId`, `supervisorEmployeeId`,
+// `partnerId`, `approvedByUserId`) are stored as bare ids with no Prisma relation,
+// the same rule `Site.companyId` follows: Principle I routes every cross-module read
+// through the owning module's exported service, and a declared relation is precisely
+// what would make an accidental cross-schema join possible.
+// ============================================================================
+
+enum SiteStatus {
+  active
+  inactive
+
+  @@schema("projects")
+}
+
+enum ClientStatus {
+  active
+  inactive
+
+  @@schema("projects")
+}
+
+enum ProjectStatus {
+  planning
+  ongoing
+  on_hold
+  completed
+
+  @@schema("projects")
+}
+
+enum ProjectDivision {
+  contract
+  own
+
+  @@schema("projects")
+}
+
+enum ProjectSiteType {
+  site
+  toll
+  plant
+
+  @@schema("projects")
+}
+
+enum DwrWeather {
+  clear
+  rainy
+  overcast
+
+  @@schema("projects")
+}
+
+enum DwrStatus {
+  draft
+  submitted
+  approved
+
+  @@schema("projects")
+}
+
+enum DwrPaymentMode {
+  work_basis
+  day_basis
+
+  @@schema("projects")
+}
+
+enum RevenueStatus {
+  received
+  pending
+
+  @@schema("projects")
+}
+
+enum RaBillStatus {
+  draft
+  submitted
+  approved
+
+  @@schema("projects")
+}
+
+enum WorkOrderStatus {
+  draft
+  active
+  completed
+
+  @@schema("projects")
+}
+
+enum ProjectBudgetCategory {
+  labour
+  materials
+  machinery
+  fuel
+  subcontractors
+  overheads
+
+  @@schema("projects")
+}
+
+/// The party a project is executed for.
+model Client {
+  id        String @id @default(cuid())
+  /// RLS-protected. Bare id, not a relation — see the note on `Site.companyId`.
+  companyId String
+
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  /// Unique per company *when present*. Enforced by a partial unique index rather
+  /// than `@@unique`, which in Postgres treats every NULL as distinct and would
+  /// therefore admit unlimited GSTIN-less clients — correct here, but only by
+  /// accident. The partial index in the migration states the rule explicitly.
+  gstin         String?
+
+  status ClientStatus @default(active)
+
+  projects Project[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, status])
+  @@schema("projects")
+}
+
+/// A construction project: the root every BOQ item, work report, bill and cost row
+/// in this schema ultimately hangs off.
+model Project {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Allocated from the company's PROJECTS series by `CodeSeriesService` when the
+  /// caller omits it, so two concurrent creates can never collide.
+  code String
+  name String
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  location      String?
+  /// Decimal, not Float: this is money, and it is the denominator of every margin
+  /// percentage the P&L reports.
+  contractValue Decimal @db.Decimal(18, 2)
+
+  startDate       DateTime
+  expectedEndDate DateTime?
+
+  status ProjectStatus @default(planning)
+
+  /// `hr.Employee.id`, resolved through `EmployeesService` on the reads that need a
+  /// name. Bare id — see the schema-level note above.
+  projectManagerEmployeeId String?
+
+  division       ProjectDivision @default(contract)
+  departmentType String?
+  projectType    String?
+  siteType       ProjectSiteType @default(site)
+  isHO           Boolean         @default(false)
+
+  /// The freeze switch. Every write endpoint in this module passes through
+  /// `ProjectLockGuard`, which refuses with 423 while this is true (research.md §6).
+  isLocked Boolean @default(false)
+
+  siteStartDate  DateTime?
+  purchaseLimit  Decimal?  @db.Decimal(18, 2)
+  orderNumber    String?
+  cgstApplicable Boolean   @default(false)
+  description    String?
+
+  sites          Site[]
+  boqTaskGroups  BOQTaskGroup[]
+  dailyWorkReports DailyWorkReport[]
+  revenues       Revenue[]
+  raBills        RABill[]
+  workOrders     WorkOrder[]
+  budgets        ProjectBudget[]
+  documents      ProjectDocument[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([clientId])
+  @@schema("projects")
+}
+
+/// A billable section of a project's Bill of Quantities.
+model BOQTaskGroup {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  boqNo      String
+  name       String
+  startDate  DateTime
+  finishDate DateTime
+  scopeQty   Decimal  @db.Decimal(18, 3)
+  isEstimate Boolean  @default(false)
+
+  items BOQTaskItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// One measurable line of work. `doneQty` is a running total that moves **only** when
+/// a DWR is approved, never when it is submitted (research.md §13) — the two are
+/// different claims, and counting a submission as progress is what makes a BOQ
+/// disagree with the site.
+model BOQTaskItem {
+  id        String @id @default(cuid())
+  companyId String
+
+  groupId String
+  group   BOQTaskGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  boqNo      String
+  taskName   String
+  unit       String
+  scopeQty   Decimal  @db.Decimal(18, 3)
+  startDate  DateTime
+  finishDate DateTime
+  /// Planned working days, used to derive the per-day target.
+  duration   Int
+  perDayQty  Decimal  @db.Decimal(18, 3)
+  doneQty    Decimal  @default(0) @db.Decimal(18, 3)
+  isEstimate Boolean  @default(false)
+
+  dwrTasks DWRTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([groupId])
+  @@schema("projects")
+}
+
+/// A day's site record. `draft → submitted → approved`; only the last transition
+/// moves BOQ progress.
+model DailyWorkReport {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  workDate  DateTime
+  dprNumber String
+
+  /// `hr.Employee.id`. Bare id — see the schema-level note above.
+  supervisorEmployeeId String?
+
+  weather DwrWeather @default(clear)
+  status  DwrStatus  @default(draft)
+
+  workerCount    Int    @default(0)
+  machineryCount Int    @default(0)
+  /// Supervisor's own 0–100 assessment, distinct from the quantity-derived progress
+  /// the BOQ computes — the two are reported separately rather than reconciled.
+  progress       Int    @default(0)
+  location       String?
+  description    String?
+
+  contractFor    String  @default("self")
+  contractNumber String?
+  rfiNo          String?
+  layer          String?
+
+  /// `shared.User.id`. Bare id — see the schema-level note above.
+  approvedByUserId String?
+  approvedAt       DateTime?
+
+  /// Object-storage references, same pattern as `hr.EmployeeDocument`.
+  fileRefs String[]
+
+  tasks DWRTask[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, dprNumber])
+  @@index([companyId])
+  @@index([projectId, workDate])
+  @@schema("projects")
+}
+
+/// One measurement line within a work report. `actualQty` is computed server-side
+/// from the six factors so the arithmetic cannot differ between clients.
+model DWRTask {
+  id String @id @default(cuid())
+
+  dwrId String
+  dwr   DailyWorkReport @relation(fields: [dwrId], references: [id], onDelete: Cascade)
+
+  /// Nullable: a task can be freeform work that no BOQ line covers.
+  boqItemId String?
+  boqItem   BOQTaskItem? @relation(fields: [boqItemId], references: [id])
+
+  layer        String?
+  chainageFrom Decimal? @db.Decimal(18, 3)
+  chainageTo   Decimal? @db.Decimal(18, 3)
+  roadSide     String?
+
+  paymentMode DwrPaymentMode @default(work_basis)
+
+  /// The six measurement factors. All default to 1 so an unused dimension is
+  /// multiplicatively neutral rather than zeroing the result.
+  nos1    Decimal @default(1) @db.Decimal(18, 3)
+  nos2    Decimal @default(1) @db.Decimal(18, 3)
+  length  Decimal @default(1) @db.Decimal(18, 3)
+  breadth Decimal @default(1) @db.Decimal(18, 3)
+  depth   Decimal @default(1) @db.Decimal(18, 3)
+  density Decimal @default(1) @db.Decimal(18, 3)
+
+  /// nos1 × nos2 × length × breadth × depth × density, computed by the server.
+  actualQty Decimal @db.Decimal(18, 3)
+
+  /// Flagged, not refused: the site did the work, and a BOQ line that turns out to
+  /// have been under-scoped is a commercial question, not a data-entry error.
+  exceedsScope Boolean @default(false)
+
+  engineerName String?
+  remark       String?
+  layerNo      String?
+  section      String?
+
+  @@index([dwrId])
+  @@index([boqItemId])
+  @@schema("projects")
+}
+
+/// Money received or expected against a project, outside the RA bill process.
+model Revenue {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  description String
+  amount      Decimal       @db.Decimal(18, 2)
+  date        DateTime
+  status      RevenueStatus @default(pending)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// A running account bill. `draft → submitted → approved`, with `submitted → draft`
+/// via reject; approved bills are immutable (research.md §7).
+model RABill {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  billNumber  String
+  description String?
+  amount      Decimal      @db.Decimal(18, 2)
+  billingDate DateTime
+  status      RaBillStatus @default(draft)
+
+  submittedAt      DateTime?
+  /// `shared.User.id`. Bare id — see the schema-level note above.
+  approvedByUserId String?
+  approvedAt       DateTime?
+  rejectionRemark  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// Work subcontracted on a project.
+model WorkOrder {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// `partners.Vendor.id`, read through `PartnersService`. Bare id — see the
+  /// schema-level note above.
+  partnerId String?
+
+  workDetail   String
+  terms        String?
+  requirements String?
+  hireContract String?
+
+  labourAmount   Decimal @default(0) @db.Decimal(18, 2)
+  materialAmount Decimal @default(0) @db.Decimal(18, 2)
+
+  status WorkOrderStatus @default(draft)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// Budgeted spend per cost category, one row per category per project. Compared
+/// against actuals sourced live from the owning modules — never stored here.
+model ProjectBudget {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  category ProjectBudgetCategory
+  amount   Decimal               @db.Decimal(18, 2)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, category])
+  @@index([companyId])
+  @@schema("projects")
+}
+
+/// A file attached to a project, stored as an object-storage reference rather than
+/// bytes — same pattern as `hr.EmployeeDocument`.
+model ProjectDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  documentType String
+  fileRef      String
+  filePath     String?
+  remark       String?
+
+  /// `shared.User.id`. Bare id — see the schema-level note above.
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([projectId])
   @@schema("projects")
 }
 
@@ -1675,6 +2184,10 @@ model SalarySlip {
 /// predates this table and carries its own 1:1 relation to Company.
 enum CodeSeriesType {
   VENDORS
+  /// Added by 008. `CodeSeriesService` was written anticipating this ("vendors
+  /// today, project codes when 008 lands") — the series is per company, so two
+  /// companies' projects number independently.
+  PROJECTS
 
   @@schema("settings")
 }
