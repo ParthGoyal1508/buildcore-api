@@ -269,9 +269,8 @@ export class PunchService {
     // The calendar day this punch counts for — the employee's, not the server's
     // (FR-018a). Stamped here rather than derived on read so the FR-008c index has
     // an immutable column to constrain.
-    const punchDate = parseDateOnly(
-      zonedDateOnly(capturedAt, this.settingsTimeZone),
-    );
+    const punchDay = zonedDateOnly(capturedAt, this.settingsTimeZone);
+    const punchDate = parseDateOnly(punchDay);
 
     // --- Gate 4 + write: one punch-in and one punch-out that day (FR-008). ---
     const record = await withRlsContext(this.prisma, caller.rls, async (tx) => {
@@ -286,10 +285,22 @@ export class PunchService {
       // punch-in from an *earlier* day is deliberately outside this window; nothing
       // can close it now, so treating it as blocking would lock the employee out
       // indefinitely (FR-008a).
+      //
+      // The day is bound as a `YYYY-MM-DD` string cast to `date`, not as the JS
+      // `Date` the write below uses. Prisma sends a `Date` parameter as
+      // `timestamptz`, and Postgres resolves `date = timestamptz` by widening the
+      // column to a timestamp *at the session timezone* — which is `Asia/Kolkata`
+      // here. A row stored as 2026-09-04 then compares as 2026-09-03T18:30:00Z and
+      // never equals the 2026-09-04T00:00:00Z parameter, so this query matched
+      // nothing at all and the two guards below were dead code: a duplicate
+      // punch-in reached the insert and surfaced the unique index as a 500, and
+      // every punch-out was refused as "not punched in today". Casting the
+      // parameter makes the comparison date-to-date and session-timezone
+      // independent.
       const sameDay = await tx.$queryRaw<{ id: string; type: PunchType }[]>`
         SELECT "id", "type" FROM "hr"."PunchRecord"
         WHERE "employeeId" = ${employee.id}
-          AND "punchDate" = ${punchDate}
+          AND "punchDate" = ${punchDay}::date
         FOR UPDATE
       `;
       const punchedIn = sameDay.find((p) => p.type === PunchType.in) ?? null;

@@ -56,6 +56,22 @@ const daysInMonth = (year: number, month: number) =>
 const dayOf = (day: number) =>
   new Date(Date.UTC(YEAR, MONTH - 1, day)).toISOString().slice(0, 10);
 
+/**
+ * Today as the *employee* sees it, which is the day a punch is stamped with
+ * (FR-018a) — not the UTC day the constants above are built from.
+ *
+ * The two diverge for five and a half hours every evening: at 23:00 on the 4th in
+ * Kolkata it is still the 3rd in UTC. Anything asserting on a punch this suite
+ * just created has to ask in the business timezone or it looks up an empty day.
+ */
+const BUSINESS_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
+const BUSINESS_TODAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: BUSINESS_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+}).format(NOW);
+
 /** The Indian financial year containing today, matching `financialYearOf`. */
 const FINANCIAL_YEAR = (() => {
   const startYear = NOW.getUTCMonth() >= 3 ? YEAR : YEAR - 1;
@@ -610,11 +626,19 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         .expect(201);
       expect(res.body.isOfflineSync).toBe(true);
 
-      // And the day's punch-out still closes it.
+      // And the day's punch-out still closes it. Dated a minute after the
+      // punch-in rather than at `now`: FR-008 pairs punches by calendar day, and
+      // a run started just after midnight IST would otherwise put the two on
+      // different days and get a 409 for the wrong reason.
       await http()
         .post('/my/punch')
         .set(auth(worker.token))
-        .send(punchBody({ type: 'out' }))
+        .send(
+          punchBody({
+            type: 'out',
+            capturedAt: new Date(Date.parse(queued) + 60_000).toISOString(),
+          }),
+        )
         .expect(201);
     });
 
@@ -667,17 +691,20 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     });
 
     it('never exposes another employee id in the caller-facing punch result', async () => {
+      // Its own employee: the shared one's single punch-in and punch-out for the
+      // day were spent by the US2 describe, and FR-008 allows no more.
+      const worker = await enrolledWorker('leakcheck');
       biometrics.nextValue = 0.5;
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody())
         .expect(201);
       expect(JSON.stringify(res.body)).not.toContain(otherEmployeeId);
 
       await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ type: 'out' }))
         .expect(201);
     });
@@ -829,14 +856,17 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     });
 
     it('marks a day with a punch pair as present, with in/out times', async () => {
+      // Asked for in the business timezone, because that is the day the US2
+      // punches below were stamped with — see `BUSINESS_TODAY`.
+      const [year, month] = BUSINESS_TODAY.split('-').map(Number);
       const res = await http()
-        .get(`/my/punch/history?month=${MONTH}&year=${YEAR}`)
+        .get(`/my/punch/history?month=${month}&year=${year}`)
         .set(auth(employeeToken))
         .expect(200);
 
       // The US2 tests above punched today.
       const today = res.body.days.find(
-        (d: { date: string }) => d.date === dayOf(new Date().getUTCDate()),
+        (d: { date: string }) => d.date === BUSINESS_TODAY,
       );
       expect(today.status).toBe('present');
       expect(today.inTime).not.toBeNull();
@@ -1264,12 +1294,24 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
 
   // ------------------------------------------------------------- User Story 6
   describe('Offline punch sync (US6, T061–T062)', () => {
+    // Its own employee, and its own `queued` instant shared by the pair below.
+    // FR-008 gives each employee one punch-in and one punch-out per calendar day,
+    // all of which the shared employee spent in the US2 describe; and pinning the
+    // punch-out to the punch-in's day keeps the pair together for a run that
+    // starts just after midnight IST.
+    let offlineWorker: Awaited<ReturnType<typeof enrolledWorker>>;
+    let queued: Date;
+
+    beforeAll(async () => {
+      offlineWorker = await enrolledWorker('offlinesync');
+      queued = new Date(Date.now() - 4 * 3_600_000);
+    });
+
     it('preserves the declared capture time and tags the punch (T061)', async () => {
-      const queued = new Date(Date.now() - 4 * 3_600_000);
       biometrics.nextValue = 0.5;
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(offlineWorker.token))
         .send(punchBody({ type: 'in', capturedAt: queued.toISOString() }))
         .expect(201);
 
@@ -1290,7 +1332,7 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       const ancient = new Date(Date.now() - 200 * 3_600_000);
       await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(offlineWorker.token))
         .send(punchBody({ type: 'out', capturedAt: ancient.toISOString() }))
         .expect(400);
     });
@@ -1298,11 +1340,11 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     it('closes the offline pair so the next punch-in is possible', async () => {
       await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(offlineWorker.token))
         .send(
           punchBody({
             type: 'out',
-            capturedAt: new Date(Date.now() - 3_600_000).toISOString(),
+            capturedAt: new Date(queued.getTime() + 60_000).toISOString(),
           }),
         )
         .expect(201);
@@ -1690,9 +1732,12 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     });
 
     it('accepts a punch carrying a real photograph', async () => {
+      // Its own employee: what this guards is the punch payload size, and the
+      // shared employee's one punch-in for the day belongs to the US2 describe.
+      const worker = await enrolledWorker('bigphoto');
       const res = await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ photo: realPhoto() }));
 
       expect(res.status).not.toBe(413);
@@ -1700,7 +1745,7 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
 
       await http()
         .post('/my/punch')
-        .set(auth(employeeToken))
+        .set(auth(worker.token))
         .send(punchBody({ type: 'out', photo: realPhoto() }))
         .expect(201);
     });
