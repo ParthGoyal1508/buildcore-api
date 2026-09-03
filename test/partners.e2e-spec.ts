@@ -29,6 +29,8 @@ describe('Partners module (e2e)', () => {
   let http: () => request.SuperTest<request.Test>;
   let token: string;
   let companyId: string;
+  /** The signed-in admin's OWN company, which is not `companyId` above. */
+  let callerCompanyId: string;
 
   const auth = () => ({ Authorization: `Bearer ${token}` });
   const createdVendorIds: string[] = [];
@@ -73,8 +75,16 @@ describe('Partners module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({ orderBy: { createdAt: 'asc' } });
+    const company = await sys.company.findFirst({
+      orderBy: { createdAt: 'asc' },
+    });
     companyId = company.id;
+
+    const caller = await sys.user.findFirst({
+      where: { email: 'admin@buildcore.dev' },
+      select: { companyId: true },
+    });
+    callerCompanyId = caller.companyId;
   });
 
   afterAll(async () => {
@@ -144,6 +154,35 @@ describe('Partners module (e2e)', () => {
       expect(after.body.contacts[0].phone).toBe('9999999999');
     });
 
+    /**
+     * Every other create in this file passes `?companyId=`, which is what let a real
+     * bug through: `admin@buildcore.dev` holds CROSS_COMPANY_ACCESS, `companyScope()`
+     * returns no company for such a caller, and both create paths refused outright
+     * instead of falling back to the caller's own company the way ReferenceData,
+     * Sites and ReimbursementCategories all do. The web client sends no companyId, so
+     * neither screen could create anything as an admin while every test passed.
+     *
+     * This calls the endpoints exactly as the browser does — no query param — and
+     * pins where the row lands.
+     */
+    it("scopes a create with no companyId to the caller's own company", async () => {
+      const category = await http()
+        .post('/partners/vendor-categories')
+        .set(auth())
+        .send({ name: unique('NoScope') })
+        .expect(201);
+      createdCategoryIds.push(category.body.id);
+      expect(category.body.companyId).toBe(callerCompanyId);
+
+      const vendor = await http()
+        .post('/partners/vendors')
+        .set(auth())
+        .send({ name: unique('NoScope'), type: 'material' })
+        .expect(201);
+      createdVendorIds.push(vendor.body.id);
+      expect(vendor.body.companyId).toBe(callerCompanyId);
+    });
+
     it('returns only the TDS terms from the TDS endpoint', async () => {
       const vendor = await createVendor({
         name: unique('Tds'),
@@ -189,7 +228,10 @@ describe('Partners module (e2e)', () => {
 
   describe('Contractor vault (T023)', () => {
     it('refuses a contractor profile for a vendor that does not supply labour', async () => {
-      const vendor = await createVendor({ name: unique('Material'), type: 'material' });
+      const vendor = await createVendor({
+        name: unique('Material'),
+        type: 'material',
+      });
       await http()
         .post('/partners/contractors')
         .set(auth())
@@ -330,8 +372,13 @@ describe('Partners module (e2e)', () => {
     it('returns twelve months and grays the ones not yet due', async () => {
       const now = new Date();
       const startYear =
-        now.getUTCMonth() + 1 >= 4 ? now.getUTCFullYear() : now.getUTCFullYear() - 1;
-      const fy = `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+        now.getUTCMonth() + 1 >= 4
+          ? now.getUTCFullYear()
+          : now.getUTCFullYear() - 1;
+      const fy = `${startYear}-${String((startYear + 1) % 100).padStart(
+        2,
+        '0',
+      )}`;
 
       const res = await http()
         .get(`/partners/rag?fy=${fy}&companyId=${companyId}`)
@@ -382,7 +429,9 @@ describe('Partners module (e2e)', () => {
 
     it('rejects a non-positive payment', async () => {
       await http()
-        .post(`/partners/bocw/${unique('proj')}/payments?companyId=${companyId}`)
+        .post(
+          `/partners/bocw/${unique('proj')}/payments?companyId=${companyId}`,
+        )
         .set(auth())
         .send({
           amountPaid: 0,

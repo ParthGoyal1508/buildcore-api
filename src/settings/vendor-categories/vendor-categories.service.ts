@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -142,10 +143,17 @@ export class VendorCategoriesService {
     ipAddress: string,
     companyId?: string,
   ): Promise<VendorCategoryView> {
+    // `companyScope` returns no company at all for a cross-company caller, which is
+    // right for a list (they see every company) but not for a create, which has to
+    // name one. Fall back to their own company before giving up — the same order
+    // ReferenceDataService.companyIdFor(), SitesController.list() and
+    // ReimbursementCategoriesController.companyOf() use. Only a cross-company caller
+    // with no company of their own reaches the throw, and 400 rather than 409
+    // because nothing conflicts: the request is simply missing a value.
     const scope = companyScope(caller, companyId);
-    const targetCompanyId = scope.companyId;
+    const targetCompanyId = scope.companyId ?? caller.companyId;
     if (!targetCompanyId) {
-      throw new ConflictException(
+      throw new BadRequestException(
         'companyId is required for a cross-company caller.',
       );
     }

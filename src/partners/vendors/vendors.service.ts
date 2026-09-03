@@ -129,8 +129,10 @@ export class VendorsService {
     ipAddress: string,
     companyId?: string,
   ): Promise<Record<string, unknown>> {
+    // See VendorCategoriesService.create() for why the caller's own company is the
+    // fallback rather than an immediate refusal.
     const scope = companyScope(caller, companyId);
-    const targetCompanyId = scope.companyId;
+    const targetCompanyId = scope.companyId ?? caller.companyId;
     if (!targetCompanyId) {
       throw new BadRequestException(
         'companyId is required for a cross-company caller.',
