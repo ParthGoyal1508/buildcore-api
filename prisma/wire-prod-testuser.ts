@@ -126,7 +126,6 @@ async function main() {
         geofenceRadiusMeters: 500,
         // Sunday.
         weeklyOffDay: 0,
-        holidays: [],
       },
     }));
   console.log(

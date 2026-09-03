@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { DocumentTypesService } from '../reference-data/document-types.service';
+import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 
@@ -29,6 +30,7 @@ export class CompaniesService {
     private readonly configService: ConfigService,
     private readonly auditLog: AuditLogService,
     private readonly documentTypes: DocumentTypesService,
+    private readonly vendorCategories: VendorCategoriesService,
   ) {}
 
   /**
@@ -53,6 +55,33 @@ export class CompaniesService {
       throw new NotFoundException('Company not found');
     }
     return company.payrollLockDay;
+  }
+
+  /**
+   * The BOCW cess rate as a fraction — 0.01 is 1% (007 FR-012).
+   *
+   * Exported for `partners`, whose cess liability is `contractValue × rate`. A
+   * statutory percentage is exactly the kind of value Principle III keeps out of the
+   * calculation that uses it: the rate is revisable by law, and a literal in
+   * `BOCWService` would have to be found and changed under time pressure when it is.
+   *
+   * Returned as a number rather than a Decimal for the same reason the payroll rates
+   * are — the consuming computation stays free of Prisma types.
+   */
+  async getBocwCessRate(companyId: string): Promise<number> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { bocwCessRate: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return Number(company.bocwCessRate);
   }
 
   /**
@@ -187,6 +216,10 @@ export class CompaniesService {
         });
 
         await this.documentTypes.seedDefaultsForCompany(company.id, tx);
+        // Same treatment document types get: a new company starts with the six
+        // common vendor categories rather than an empty master that blocks the
+        // first vendor anyone tries to create (007 US1).
+        await this.vendorCategories.seedDefaultsForCompany(company.id, tx);
         await tx.employeeCodeSequence.create({
           data: { companyId: company.id, lastNumber: 0 },
         });

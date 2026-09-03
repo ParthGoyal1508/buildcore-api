@@ -118,6 +118,11 @@ compatibility rather than a bare constant.']
   otMultiplier Decimal [not null, default: 2, note: 'Overtime pay multiplier applied to the derived hourly rate when computing OT
 wages (FR-014a). Company-configurable rather than a hardcoded 2× literal —
 Constitution Principle III. Read by the payroll engine via SettingsService.']
+  bocwCessRate Decimal [not null, default: 0.01, note: 'BOCW cess levied on a project\'s contract value, as a fraction (0.01 = 1%).
+Statutory and revisable, so it is company configuration rather than a literal
+in the cess calculation — Constitution Principle III. Read by 007\'s BOCWService
+via `SettingsService.getBocwCessRate()`. Four decimal places because the rate is
+a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   departments Department [not null]
@@ -126,6 +131,8 @@ Constitution Principle III. Read by the payroll engine via SettingsService.']
   shifts Shift [not null]
   employeeCodeSeq EmployeeCodeSequence
   reimbursementCategories ReimbursementCategory [not null]
+  vendorCategories VendorCategory [not null]
+  codeSequences CodeSequence [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -962,6 +969,219 @@ Every figure is `Decimal`, never `Float` — these are money, and binary roundin
 drift in a payslip is a wage dispute.'
 }
 
+Table CodeSequence {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  seriesType CodeSeriesType [not null]
+  lastNumber Int [not null, default: 0, note: 'Advanced by an atomic `UPDATE ... RETURNING`, the same way employee codes are
+allocated, so concurrent callers can never observe the same number twice.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, seriesType) [unique]
+  }
+}
+
+Table VendorCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  description String
+  isDefault Boolean [not null, default: false, note: 'True for the six rows seeded with a new company. Advisory — it does not block
+deletion; the `VendorDealsIn` guard does that (FR-014).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'What a vendor deals in. A company master, not a fixed enum: the PRD\'s six
+defaults are seeded but a company may add its own (FR-002a).'
+}
+
+Table Vendor {
+  id String [pk]
+  companyId String [not null, note: 'Plain column, not a cross-schema relation — the same treatment `hr.Employee`
+gives its company reference. RLS is what scopes it.']
+  code String [not null, note: 'Allocated from the company\'s VENDORS series: `{shortCode}-VEN-0001`.']
+  name String [not null]
+  type VendorType [not null]
+  gstin String [note: 'Format-validated at the DTO boundary (FR-002b). Nullable because an unregistered
+local supplier legitimately has neither.']
+  pan String
+  tdsSection String [note: 'Open-ended by design: the Income Tax Act\'s section list changes, and the master
+PRD specifies a free-text section rather than a closed enum.']
+  tdsRate Decimal
+  active Boolean [not null, default: true]
+  address String
+  city String
+  state String
+  pinCode String
+  vendorCurrency String [not null, default: 'INR', note: 'Almost always INR. Carried per-vendor because import suppliers are invoiced in
+their own currency and the rate at which that was converted must be recorded
+with the vendor rather than inferred later.']
+  exchangeRate Decimal [not null, default: 1]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  contacts VendorContact [not null]
+  dealsIn VendorDealsIn [not null]
+  hireDetail VendorHireDetail
+  contractor ContractorProfile
+
+  indexes {
+    (companyId, code) [unique]
+  }
+}
+
+Table VendorContact {
+  id String [pk]
+  vendorId String [not null]
+  vendor Vendor [not null]
+  name String [not null]
+  phone String
+  email String
+  createdAt DateTime [default: `now()`, not null, note: 'No `updatedAt`: contacts are replaced wholesale on vendor update rather than
+edited row by row (research.md §10), so a per-row modification time would
+always equal the row\'s creation time and mislead.']
+}
+
+Table VendorDealsIn {
+  vendorId String [not null]
+  vendor Vendor [not null]
+  categoryId String [not null]
+
+  indexes {
+    (vendorId, categoryId) [pk]
+  }
+
+  Note: 'Vendor ↔ VendorCategory. `categoryId` crosses into `settings` as a plain UUID and
+is validated on write via the exported settings service rather than by a database
+FK — Principle I keeps cross-module integrity in the service layer.'
+}
+
+Table VendorHireDetail {
+  id String [pk]
+  vendorId String [unique, not null]
+  vendor Vendor [not null]
+  hireType HireType [not null]
+  contractCode String
+  periodFrom DateTime
+  periodTo DateTime
+  machineCategory String
+  machineName String
+  requiredAvg Decimal
+  chargesBase ChargesBase [not null, default: 'monthly']
+  rate Decimal
+  minWorkingDays Int
+  allowBdDays Boolean [not null, default: false]
+  allowIdleDays Boolean [not null, default: false]
+  operatorCharges Decimal
+  helperCharges Decimal
+  maintenanceCharges Decimal
+  fuelCharges Decimal
+  termsAndConditions String
+  requirements String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Hire terms, for `hire` and `subcontractor` vendors. Split from Vendor rather than
+widening it: fourteen columns that are null for every material supplier belong in
+their own optional row.'
+}
+
+Table ContractorProfile {
+  id String [pk]
+  companyId String [not null]
+  vendorId String [unique, not null]
+  vendor Vendor [not null]
+  licenceNumber String
+  pfRegistration String
+  esicRegistration String
+  bocwRegistration String
+  insurancePolicyNumber String
+  complianceStatus ContractorComplianceStatus [not null, default: 'non_compliant', note: 'Derived, never set directly by a caller. Recomputed from the most recently
+concluded month\'s MonthlyCompliance row on every compliance change (FR-005),
+and persisted so the contractor list can filter on it without recomputing per
+row. Defaults to non_compliant: a contractor with no filing history has not
+demonstrated compliance, and defaulting the other way would read as a clean
+record.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  documents ContractorDocument [not null]
+  compliance MonthlyCompliance [not null]
+
+  indexes {
+    (companyId, vendorId) [unique]
+  }
+
+  Note: 'The compliance extension of a vendor that supplies labour. 1:1 with Vendor and
+only for `subcontractor` / `labour_contractor` types — enforced in the service,
+since the constraint is on a column of the related row.'
+}
+
+Table ContractorDocument {
+  id String [pk]
+  contractorProfileId String [not null]
+  contractorProfile ContractorProfile [not null]
+  documentType ContractorDocumentType [not null]
+  fileRef String [not null, note: 'Object-storage key, never a public URL — resolved to a short-lived signed URL at
+read time, the same treatment employee documents get.']
+  fileName String
+  expiresAt DateTime [note: 'Statutory registrations expire. `expiryWarning` is derived at read time rather
+than stored, because a stored flag is wrong the day after it is written.']
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+}
+
+Table MonthlyCompliance {
+  id String [pk]
+  companyId String [not null]
+  contractorProfileId String [not null]
+  contractorProfile ContractorProfile [not null]
+  month String [not null, note: '`YYYY-MM`. A string rather than a date because the row is about a month, and a
+date would invite a spurious day component that every consumer must then ignore.']
+  pfChallanNumber String
+  pfAmount Decimal
+  pfDate DateTime
+  esicChallanNumber String
+  esicAmount Decimal
+  esicDate DateTime
+  status MonthlyComplianceStatus [not null, default: 'missing', note: 'Auto-derived from which challans are present (FR-006), except `verified`, which
+only the explicit verify endpoint sets.']
+  verifiedByUserId String
+  verifiedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (contractorProfileId, month) [unique]
+  }
+
+  Note: 'One contractor\'s PF/ESIC filing for one month.'
+}
+
+Table BOCWPayment {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null, note: 'Cross-schema reference to `projects.Project`, stored as a plain UUID and
+resolved through ProjectsService. Feature 008 owns that table and has not been
+built, so today this is validated only for presence.']
+  amountPaid Decimal [not null]
+  paymentDate DateTime [not null]
+  referenceNumber String [not null]
+  remarks String
+  recordedByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A cess payment against a project. Liability, total paid and balance are computed
+on demand rather than stored (research.md §5) — a stored balance is a second
+source of truth that drifts the moment a payment is corrected.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -1043,6 +1263,12 @@ Enum AuditEntityType {
   EXIT_RECORD
   TAX_DECLARATION
   SALARY_ADVANCE
+  VENDOR
+  VENDOR_CATEGORY
+  CONTRACTOR_PROFILE
+  CONTRACTOR_DOCUMENT
+  MONTHLY_COMPLIANCE
+  BOCW_PAYMENT
 }
 
 Enum AuditAction {
@@ -1207,6 +1433,50 @@ Enum LoanScheduleStatus {
   overdue
 }
 
+Enum CodeSeriesType {
+  VENDORS
+}
+
+Enum VendorType {
+  material
+  fuel
+  hire
+  service
+  subcontractor
+  labour_contractor
+}
+
+Enum HireType {
+  taken
+  given
+}
+
+Enum ChargesBase {
+  monthly
+  daily
+}
+
+Enum ContractorComplianceStatus {
+  compliant
+  partially_compliant
+  non_compliant
+}
+
+Enum ContractorDocumentType {
+  labour_license
+  pf_registration
+  esic_registration
+  insurance
+  bocw_registration
+}
+
+Enum MonthlyComplianceStatus {
+  missing
+  partial
+  submitted
+  verified
+}
+
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
@@ -1266,3 +1536,19 @@ Ref: Loan.employeeId > Employee.id [delete: Cascade]
 Ref: LoanScheduleEntry.loanId > Loan.id [delete: Cascade]
 
 Ref: SalarySlip.employeeId > Employee.id [delete: Cascade]
+
+Ref: CodeSequence.companyId > Company.id
+
+Ref: VendorCategory.companyId > Company.id
+
+Ref: VendorContact.vendorId > Vendor.id [delete: Cascade]
+
+Ref: VendorDealsIn.vendorId > Vendor.id [delete: Cascade]
+
+Ref: VendorHireDetail.vendorId - Vendor.id [delete: Cascade]
+
+Ref: ContractorProfile.vendorId - Vendor.id [delete: Cascade]
+
+Ref: ContractorDocument.contractorProfileId > ContractorProfile.id [delete: Cascade]
+
+Ref: MonthlyCompliance.contractorProfileId > ContractorProfile.id [delete: Cascade]

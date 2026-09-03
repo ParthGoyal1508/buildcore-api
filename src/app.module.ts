@@ -1,5 +1,7 @@
 import { Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { AppController } from './app.controller';
@@ -9,6 +11,7 @@ import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
 import { AuthModule } from './auth/auth.module';
 import { HrModule } from './hr/hr.module';
+import { PartnersModule } from './partners/partners.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SettingsModule } from './settings/settings.module';
@@ -42,6 +45,13 @@ import type { SecurityConfig } from './common/configs/config.interface';
       },
     }),
 
+    // Both first used by 007. The scheduler drives the monthly compliance check; the
+    // event bus carries its `compliance.missing` events, which feature 004's reminders
+    // engine will subscribe to. Nothing subscribes today — see the cron for why that
+    // is deliberate rather than an omission.
+    ScheduleModule.forRoot(),
+    EventEmitterModule.forRoot(),
+
     StorageModule,
     EmailModule,
 
@@ -52,6 +62,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     HrModule,
     AccountCreationModule,
     PayrollModule,
+    PartnersModule,
   ],
   controllers: [AppController],
   providers: [

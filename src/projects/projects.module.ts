@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
 
@@ -13,7 +14,10 @@ import { SitesService } from './sites/sites.service';
  */
 @Module({
   controllers: [SitesController],
-  providers: [SitesService],
-  exports: [SitesService],
+  providers: [SitesService, ProjectsService],
+  // `ProjectsService` is exported for 007's BOCW cess and subcontractor cost, both of
+  // which need Project data this module does not hold yet. Exporting the stub now is
+  // what lets 007 be written against the real seam instead of around it.
+  exports: [SitesService, ProjectsService],
 })
 export class ProjectsModule {}
