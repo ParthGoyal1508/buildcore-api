@@ -183,7 +183,16 @@ export class RemindersService {
           return candidates
             .filter((c) => companyId === null || c.companyId === companyId)
             .map((candidate): Reminder => {
-              const dueDate = candidate.dueDate.toISOString().slice(0, 10);
+              // Truncated in the business timezone, the same calendar `today()`
+              // above is read in. `toISOString().slice(0, 10)` takes the UTC day,
+              // and comparing a UTC day against an IST day counts one day short
+              // for the five and a half hours after 18:30 UTC — every evening.
+              //
+              // Harmless for a provider handing over a date-only column, which
+              // Prisma yields as UTC midnight; wrong for any provider that passes
+              // a real instant, which is exactly what a "due 5 days from now"
+              // computation produces.
+              const dueDate = zonedDateOnly(candidate.dueDate, this.timeZone);
               const daysRemaining = daysBetween(today, dueDate);
               return {
                 id: reminderIdFor(provider.ruleKey, candidate.entityId),
