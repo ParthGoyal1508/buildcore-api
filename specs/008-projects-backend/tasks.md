@@ -479,3 +479,34 @@ Pre-existing failures found while verifying, and what was done:
   does not match and the database unique constraint catches it instead. **Not fixed**
   — out of scope, and confirmed identical on `main` (84 passed / 9 failed, same test
   names) in an isolated worktree. Feature 003/005 territory.
+
+---
+
+## Phase 12: Convergence
+
+Appended 2026-09-03 by `/speckit-converge`, assessing the shipped US1–US3 code against
+spec.md, plan.md and contracts/projects-api.md. Scoped to those three stories — US4–US8
+and the `TA*` amendment are correctly unbuilt and are not reported here.
+
+- [ ] T057 Reject a punch at an inactive site per US2/AC4 (missing) — `SiteStatus.inactive`
+      is stored and editable but nothing reads it: `SitesService.getGeofence()` does not
+      select `status`, and `src/hr/punch/punch.service.ts` has no site-status check, so a
+      decommissioned site still accepts attendance. Add `status` to the `getGeofence()`
+      projection (or a narrow `isSiteActive()` export) and refuse the punch in
+      `punch.service.ts` with the same 409-style rejection the other same-day guards use.
+      Cover it in `test/my-workspace.e2e-spec.ts` alongside the geofence cases. Note this
+      is the one acceptance criterion of a P1 story that shipped unmet, and it has a real
+      consequence: taking a site out of service does not stop attendance being recorded
+      against it.
+- [ ] T058 Reconcile the project-detail "costing breakdown" per US3/AC3 (partial) —
+      the acceptance scenario lists a costing breakdown among the aggregated tabs, but
+      `contracts/projects-api.md`'s `GET /projects/:id` response shape does not, and
+      `ProjectDetail` follows the contract with six tabs. Costing is the P&L (FR-008,
+      US7). Decide which document is right and say so in one of them: either add costing
+      to the contract as a US7 deliverable, or amend AC3 to stop naming it.
+- [ ] T059 Correct FR-012's reference to `SitesService.getHolidayCalendar()` (contradicts)
+      — that method does not exist and cannot, since migration
+      `20260901194500_drop_site_holidays_column` removed `Site.holidays` and the
+      first-class `hr.Holiday` calendar superseded it. FR-012 and data-model.md's Site
+      section both still describe it as a live export HR depends on. Documentation only;
+      no code change.
