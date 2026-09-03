@@ -347,6 +347,14 @@ representation error rather than on where the worker actually stood.']
   longitude Decimal [not null]
   geofenceRadiusMeters Int [not null]
   weeklyOffDay Int [not null, note: 'Day-of-week treated as Weekly Off, 0 = Sunday (research.md §6).']
+  projectId String [note: 'The project this site belongs to. Nullable because sites created by 003 predate
+the Project table entirely, and a site can legitimately outlive its project.
+`SetNull` rather than `Cascade`: deleting a project must not silently delete the
+attendance geofence its workers are still punching against.']
+  project Project
+  address String [note: 'Postal address, distinct from the geofence centre — the coordinates say where a
+punch counts, this says where to send a delivery.']
+  status SiteStatus [not null, default: 'active']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -361,6 +369,270 @@ Lives in `projects`, not `hr`, even though this feature is its only current
 consumer — a site is a projects-module concept per the constitution\'s module
 list, and putting it in `hr` would misplace a concept that already has a home
 (research.md §1). `hr` reaches it only through `SitesService`.'
+}
+
+Table Client {
+  id String [pk]
+  companyId String [not null, note: 'RLS-protected. Bare id, not a relation — see the note on `Site.companyId`.']
+  name String [not null]
+  contactPerson String
+  phone String
+  email String
+  address String
+  gstin String [note: 'Unique per company *when present*. Enforced by a partial unique index rather
+than `@@unique`, which in Postgres treats every NULL as distinct and would
+therefore admit unlimited GSTIN-less clients — correct here, but only by
+accident. The partial index in the migration states the rule explicitly.']
+  status ClientStatus [not null, default: 'active']
+  projects Project [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'The party a project is executed for.'
+}
+
+Table Project {
+  id String [pk]
+  companyId String [not null]
+  code String [not null, note: 'Allocated from the company\'s PROJECTS series by `CodeSeriesService` when the
+caller omits it, so two concurrent creates can never collide.']
+  name String [not null]
+  clientId String [not null]
+  client Client [not null]
+  location String
+  contractValue Decimal [not null, note: 'Decimal, not Float: this is money, and it is the denominator of every margin
+percentage the P&L reports.']
+  startDate DateTime [not null]
+  expectedEndDate DateTime
+  status ProjectStatus [not null, default: 'planning']
+  projectManagerEmployeeId String [note: '`hr.Employee.id`, resolved through `EmployeesService` on the reads that need a
+name. Bare id — see the schema-level note above.']
+  division ProjectDivision [not null, default: 'contract']
+  departmentType String
+  projectType String
+  siteType ProjectSiteType [not null, default: 'site']
+  isHO Boolean [not null, default: false]
+  isLocked Boolean [not null, default: false, note: 'The freeze switch. Every write endpoint in this module passes through
+`ProjectLockGuard`, which refuses with 423 while this is true (research.md §6).']
+  siteStartDate DateTime
+  purchaseLimit Decimal
+  orderNumber String
+  cgstApplicable Boolean [not null, default: false]
+  description String
+  sites Site [not null]
+  boqTaskGroups BOQTaskGroup [not null]
+  dailyWorkReports DailyWorkReport [not null]
+  revenues Revenue [not null]
+  raBills RABill [not null]
+  workOrders WorkOrder [not null]
+  budgets ProjectBudget [not null]
+  documents ProjectDocument [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
+
+  Note: 'A construction project: the root every BOQ item, work report, bill and cost row
+in this schema ultimately hangs off.'
+}
+
+Table BOQTaskGroup {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  boqNo String [not null]
+  name String [not null]
+  startDate DateTime [not null]
+  finishDate DateTime [not null]
+  scopeQty Decimal [not null]
+  isEstimate Boolean [not null, default: false]
+  items BOQTaskItem [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A billable section of a project\'s Bill of Quantities.'
+}
+
+Table BOQTaskItem {
+  id String [pk]
+  companyId String [not null]
+  groupId String [not null]
+  group BOQTaskGroup [not null]
+  boqNo String [not null]
+  taskName String [not null]
+  unit String [not null]
+  scopeQty Decimal [not null]
+  startDate DateTime [not null]
+  finishDate DateTime [not null]
+  duration Int [not null, note: 'Planned working days, used to derive the per-day target.']
+  perDayQty Decimal [not null]
+  doneQty Decimal [not null, default: 0]
+  isEstimate Boolean [not null, default: false]
+  dwrTasks DWRTask [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One measurable line of work. `doneQty` is a running total that moves **only** when
+a DWR is approved, never when it is submitted (research.md §13) — the two are
+different claims, and counting a submission as progress is what makes a BOQ
+disagree with the site.'
+}
+
+Table DailyWorkReport {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  workDate DateTime [not null]
+  dprNumber String [not null]
+  supervisorEmployeeId String [note: '`hr.Employee.id`. Bare id — see the schema-level note above.']
+  weather DwrWeather [not null, default: 'clear']
+  status DwrStatus [not null, default: 'draft']
+  workerCount Int [not null, default: 0]
+  machineryCount Int [not null, default: 0]
+  progress Int [not null, default: 0, note: 'Supervisor\'s own 0–100 assessment, distinct from the quantity-derived progress
+the BOQ computes — the two are reported separately rather than reconciled.']
+  location String
+  description String
+  contractFor String [not null, default: 'self']
+  contractNumber String
+  rfiNo String
+  layer String
+  approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
+  approvedAt DateTime
+  fileRefs String[] [not null, note: 'Object-storage references, same pattern as `hr.EmployeeDocument`.']
+  tasks DWRTask [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, dprNumber) [unique]
+  }
+
+  Note: 'A day\'s site record. `draft → submitted → approved`; only the last transition
+moves BOQ progress.'
+}
+
+Table DWRTask {
+  id String [pk]
+  dwrId String [not null]
+  dwr DailyWorkReport [not null]
+  boqItemId String [note: 'Nullable: a task can be freeform work that no BOQ line covers.']
+  boqItem BOQTaskItem
+  layer String
+  chainageFrom Decimal
+  chainageTo Decimal
+  roadSide String
+  paymentMode DwrPaymentMode [not null, default: 'work_basis']
+  nos1 Decimal [not null, default: 1, note: 'The six measurement factors. All default to 1 so an unused dimension is
+multiplicatively neutral rather than zeroing the result.']
+  nos2 Decimal [not null, default: 1]
+  length Decimal [not null, default: 1]
+  breadth Decimal [not null, default: 1]
+  depth Decimal [not null, default: 1]
+  density Decimal [not null, default: 1]
+  actualQty Decimal [not null, note: 'nos1 × nos2 × length × breadth × depth × density, computed by the server.']
+  exceedsScope Boolean [not null, default: false, note: 'Flagged, not refused: the site did the work, and a BOQ line that turns out to
+have been under-scoped is a commercial question, not a data-entry error.']
+  engineerName String
+  remark String
+  layerNo String
+  section String
+
+  Note: 'One measurement line within a work report. `actualQty` is computed server-side
+from the six factors so the arithmetic cannot differ between clients.'
+}
+
+Table Revenue {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  description String [not null]
+  amount Decimal [not null]
+  date DateTime [not null]
+  status RevenueStatus [not null, default: 'pending']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Money received or expected against a project, outside the RA bill process.'
+}
+
+Table RABill {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  billNumber String [not null]
+  description String
+  amount Decimal [not null]
+  billingDate DateTime [not null]
+  status RaBillStatus [not null, default: 'draft']
+  submittedAt DateTime
+  approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
+  approvedAt DateTime
+  rejectionRemark String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A running account bill. `draft → submitted → approved`, with `submitted → draft`
+via reject; approved bills are immutable (research.md §7).'
+}
+
+Table WorkOrder {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  partnerId String [note: '`partners.Vendor.id`, read through `PartnersService`. Bare id — see the
+schema-level note above.']
+  workDetail String [not null]
+  terms String
+  requirements String
+  hireContract String
+  labourAmount Decimal [not null, default: 0]
+  materialAmount Decimal [not null, default: 0]
+  status WorkOrderStatus [not null, default: 'draft']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Work subcontracted on a project.'
+}
+
+Table ProjectBudget {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  category ProjectBudgetCategory [not null]
+  amount Decimal [not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (projectId, category) [unique]
+  }
+
+  Note: 'Budgeted spend per cost category, one row per category per project. Compared
+against actuals sourced live from the owning modules — never stored here.'
+}
+
+Table ProjectDocument {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  documentType String [not null]
+  fileRef String [not null]
+  filePath String
+  remark String
+  uploadedByUserId String [not null, note: '`shared.User.id`. Bare id — see the schema-level note above.']
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'A file attached to a project, stored as an object-storage reference rather than
+bytes — same pattern as `hr.EmployeeDocument`.'
 }
 
 Table Employee {
@@ -1269,6 +1541,17 @@ Enum AuditEntityType {
   CONTRACTOR_DOCUMENT
   MONTHLY_COMPLIANCE
   BOCW_PAYMENT
+  PROJECT
+  CLIENT
+  SITE
+  BOQ_GROUP
+  BOQ_ITEM
+  DWR
+  REVENUE
+  RA_BILL
+  WORK_ORDER
+  PROJECT_BUDGET
+  PROJECT_DOCUMENT
 }
 
 Enum AuditAction {
@@ -1282,6 +1565,77 @@ Enum AuditAction {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+}
+
+Enum SiteStatus {
+  active
+  inactive
+}
+
+Enum ClientStatus {
+  active
+  inactive
+}
+
+Enum ProjectStatus {
+  planning
+  ongoing
+  on_hold
+  completed
+}
+
+Enum ProjectDivision {
+  contract
+  own
+}
+
+Enum ProjectSiteType {
+  site
+  toll
+  plant
+}
+
+Enum DwrWeather {
+  clear
+  rainy
+  overcast
+}
+
+Enum DwrStatus {
+  draft
+  submitted
+  approved
+}
+
+Enum DwrPaymentMode {
+  work_basis
+  day_basis
+}
+
+Enum RevenueStatus {
+  received
+  pending
+}
+
+Enum RaBillStatus {
+  draft
+  submitted
+  approved
+}
+
+Enum WorkOrderStatus {
+  draft
+  active
+  completed
+}
+
+Enum ProjectBudgetCategory {
+  labour
+  materials
+  machinery
+  fuel
+  subcontractors
+  overheads
 }
 
 Enum FaceEnrolmentStatus {
@@ -1435,6 +1789,7 @@ Enum LoanScheduleStatus {
 
 Enum CodeSeriesType {
   VENDORS
+  PROJECTS
 }
 
 Enum VendorType {
@@ -1498,6 +1853,30 @@ Ref: InviteToken.userId > User.id [delete: Cascade]
 Ref: RefreshToken.accountId > User.id
 
 Ref: AuditLogEntry.accountId > User.id
+
+Ref: Site.projectId > Project.id [delete: Set Null]
+
+Ref: Project.clientId > Client.id
+
+Ref: BOQTaskGroup.projectId > Project.id [delete: Cascade]
+
+Ref: BOQTaskItem.groupId > BOQTaskGroup.id [delete: Cascade]
+
+Ref: DailyWorkReport.projectId > Project.id [delete: Cascade]
+
+Ref: DWRTask.dwrId > DailyWorkReport.id [delete: Cascade]
+
+Ref: DWRTask.boqItemId > BOQTaskItem.id
+
+Ref: Revenue.projectId > Project.id [delete: Cascade]
+
+Ref: RABill.projectId > Project.id [delete: Cascade]
+
+Ref: WorkOrder.projectId > Project.id [delete: Cascade]
+
+Ref: ProjectBudget.projectId > Project.id [delete: Cascade]
+
+Ref: ProjectDocument.projectId > Project.id [delete: Cascade]
 
 Ref: FaceEnrolment.employeeId - Employee.id [delete: Cascade]
 

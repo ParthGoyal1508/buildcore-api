@@ -138,9 +138,33 @@ describe('Settings module (e2e)', () => {
         where: { companyId: { in: ids } },
       });
       await sys.shift.deleteMany({ where: { companyId: { in: ids } } });
+      // Both are seeded or allocated by company creation and neither cascades, so
+      // the company delete below is a foreign-key violation without them. Added
+      // when feature 007 gave `CompaniesService.create()` six default vendor
+      // categories and 008 gave `CodeSeriesService` a PROJECTS series — the
+      // teardown predates both. Left unfixed, the failure is quietly compounding:
+      // it aborts `afterAll`, so every run leaves its companies behind for the next
+      // one to trip over.
+      await sys.vendorCategory.deleteMany({
+        where: { companyId: { in: ids } },
+      });
+      await sys.codeSequence.deleteMany({ where: { companyId: { in: ids } } });
       await sys.company.deleteMany({ where: { id: { in: ids } } });
     }
-    await sys.role.deleteMany({ where: { name: { startsWith: PREFIX } } });
+    // Assignments first, then the roles they point at. The loop below already
+    // clears assignments, but only for the two users this suite creates by hand —
+    // a role assigned to anyone else (or to a user a failed run left behind) still
+    // holds a UserRole row, and `Role` has no cascade, so deleting roles first is a
+    // foreign-key violation that aborts the whole teardown.
+    const e2eRoles = await sys.role.findMany({
+      where: { name: { startsWith: PREFIX } },
+      select: { id: true },
+    });
+    if (e2eRoles.length) {
+      const roleIds = e2eRoles.map((r: { id: string }) => r.id);
+      await sys.userRole.deleteMany({ where: { roleId: { in: roleIds } } });
+      await sys.role.deleteMany({ where: { id: { in: roleIds } } });
+    }
     for (const id of [limitedUserId, scopedUserId].filter(Boolean)) {
       await sys.userRole.deleteMany({ where: { userId: id } });
       await sys.refreshToken.deleteMany({ where: { accountId: id } });
