@@ -18,7 +18,11 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
-import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../../common/prisma/rls-context';
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -27,6 +31,7 @@ import {
   MAX_PAGE_SIZE,
   PROJECT_CODE_INFIX,
 } from '../constants/projects.constants';
+import { ProjectWorkReference } from '../interfaces/pnl-sources.interface';
 import {
   CreateProjectDto,
   ListProjectsDto,
@@ -572,5 +577,90 @@ export class ProjectsService {
     _range?: { from?: Date; to?: Date },
   ): Promise<number> {
     return 0;
+  }
+
+  /**
+   * The site ids belonging to a project (009 FR-012).
+   *
+   * 009's tasks specify this as a stub returning `[]` with a `TODO(008)`, written
+   * when 008 had not shipped. It has: `Site.projectId` is a real column with a real
+   * index, so this is the actual query rather than a placeholder, and
+   * `InventoryService.getMaterialCostByProject()` returns measured figures from the
+   * day it lands instead of a zero nobody would notice was fake.
+   *
+   * Returns `[]` for a project with no sites, which is a legitimate state and not an
+   * error: material cost against it is genuinely zero.
+   */
+  async getSitesByProject(
+    projectId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<string[]> {
+    const sites = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.site.findMany({
+        where: { projectId },
+        select: { id: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
+    return sites.map((site) => site.id);
+  }
+
+  /**
+   * A BOQ task group — what the master PRD calls an "Activity" — for another
+   * module validating a reference to one (009 FR-019, research.md §13).
+   *
+   * Returns `null` rather than throwing for an unknown id, the contract
+   * `PartnersService.getVendorById()` set: the caller is validating an optional
+   * field and wants to report it as invalid, not fail the request outright.
+   *
+   * The table exists; nothing writes to it until 008's User Story 4 ships the BOQ
+   * endpoints. So this returns `null` for every id today, which is the correct
+   * answer — an activity that has not been created cannot be issued against.
+   */
+  async getActivityById(
+    activityId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<ProjectWorkReference | null> {
+    const group = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.bOQTaskGroup.findUnique({
+        where: { id: activityId },
+        select: { id: true, name: true, boqNo: true, projectId: true },
+      }),
+    );
+    return group
+      ? {
+          id: group.id,
+          name: group.name,
+          reference: group.boqNo,
+          projectId: group.projectId,
+        }
+      : null;
+  }
+
+  /** A BOQ task item, with the same null-for-unknown contract as
+   * `getActivityById()` above (009 FR-019). */
+  async getBoqItemById(
+    boqItemId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<ProjectWorkReference | null> {
+    const item = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.bOQTaskItem.findUnique({
+        where: { id: boqItemId },
+        select: {
+          id: true,
+          taskName: true,
+          boqNo: true,
+          group: { select: { projectId: true } },
+        },
+      }),
+    );
+    return item
+      ? {
+          id: item.id,
+          name: item.taskName,
+          reference: item.boqNo,
+          projectId: item.group.projectId,
+        }
+      : null;
   }
 }

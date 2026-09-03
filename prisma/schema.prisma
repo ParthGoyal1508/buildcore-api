@@ -1,7 +1,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners"]
+  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory"]
 }
 
 generator client {
@@ -185,6 +185,12 @@ enum Permission {
   /// exception (research.md §5 update, FR-020a).
   CROSS_COMPANY_ACCESS
 
+  /// Added by 009 (FR-029). Approving a material indent — and reducing a line's
+  /// quantity while approving it — is a spending decision, so it is separable from
+  /// the `INVENTORY` value every other indent endpoint reuses. Deliberately the
+  /// only value this feature adds.
+  INVENTORY_APPROVE
+
   @@schema("settings")
 }
 
@@ -263,6 +269,9 @@ model Company {
   // Feature 004's reminders engine. Company-scoped so a deleted company takes its
   // reminder state with it rather than leaving orphan rows the engine would keep
   // evaluating.
+  itemCategories ItemCategory[]
+  items          Item[]
+
   reminderRuleOverrides ReminderRule[]
   reminderSnoozes       ReminderSnooze[]
   reminderNotifications ReminderNotification[]
@@ -571,6 +580,19 @@ enum AuditEntityType {
   /// over the same claims this feature's employees create (research.md §10).
   REIMBURSEMENT_CLAIM
 
+  // Inventory entities audited by feature 009 (FR-010) and its indent amendment
+  // (FR-030). Item and category sit here rather than under the Settings block above
+  // because 009 is what creates and audits them, even though the tables are
+  // `settings`-schema masters (research.md §1).
+  ITEM_CATEGORY
+  ITEM
+  PURCHASE
+  GOODS_RECEIPT_NOTE
+  ISSUE
+  STOCK_TRANSFER
+  PAYMENT
+  MATERIAL_INDENT
+
   // HR & Payroll entities audited by feature 005 (FR-030).
   EMPLOYEE
   EMPLOYEE_DOCUMENT
@@ -876,14 +898,14 @@ model Project {
   cgstApplicable Boolean   @default(false)
   description    String?
 
-  sites          Site[]
-  boqTaskGroups  BOQTaskGroup[]
+  sites            Site[]
+  boqTaskGroups    BOQTaskGroup[]
   dailyWorkReports DailyWorkReport[]
-  revenues       Revenue[]
-  raBills        RABill[]
-  workOrders     WorkOrder[]
-  budgets        ProjectBudget[]
-  documents      ProjectDocument[]
+  revenues         Revenue[]
+  raBills          RABill[]
+  workOrders       WorkOrder[]
+  budgets          ProjectBudget[]
+  documents        ProjectDocument[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -971,11 +993,11 @@ model DailyWorkReport {
   weather DwrWeather @default(clear)
   status  DwrStatus  @default(draft)
 
-  workerCount    Int    @default(0)
-  machineryCount Int    @default(0)
+  workerCount    Int     @default(0)
+  machineryCount Int     @default(0)
   /// Supervisor's own 0–100 assessment, distinct from the quantity-derived progress
   /// the BOQ computes — the two are reported separately rather than reconciled.
-  progress       Int    @default(0)
+  progress       Int     @default(0)
   location       String?
   description    String?
 
@@ -2200,6 +2222,14 @@ enum CodeSeriesType {
   /// today, project codes when 008 lands") — the series is per company, so two
   /// companies' projects number independently.
   PROJECTS
+  /// Added by 009. Item codes (`{shortCode}-ITM-0001`) and material indent numbers
+  /// (`{shortCode}-IND-0001`) — both per company, both allocated the same way
+  /// vendor and project codes are.
+  ITEMS
+  INDENT
+  /// Goods receipt notes, numbered per company like everything else here. A GRN is
+  /// 1:1 with a purchase, but purchases carry no code of their own to derive from.
+  GRN
 
   @@schema("settings")
 }
@@ -2580,11 +2610,11 @@ model ReminderRule {
   entityType   String
 
   /// How far ahead of the due date the rule starts producing reminders (FR-029).
-  leadDays        Int
+  leadDays       Int
   /// The severity ladder (FR-029), stored as `{ warnWithinDays: number }`. JSON
   /// rather than a column so a future ladder with more bands does not need a
   /// migration in this feature.
-  severityLadder  Json
+  severityLadder Json
 
   /// Set false to stop evaluating the rule without removing its provider.
   enabled Boolean @default(true)
@@ -2665,10 +2695,10 @@ model ReminderNotification {
 
   severity ReminderSeverity
 
-  emittedAt DateTime  @default(now())
+  emittedAt   DateTime  @default(now())
   /// Null while open. Set when the condition is resolved (FR-033), when the reminder
   /// escalates out of this band (FR-032), or when it is snoozed (FR-034).
-  closedAt  DateTime?
+  closedAt    DateTime?
   /// Why it closed, for the audit trail a bare timestamp cannot give: `resolved`,
   /// `escalated`, `snoozed`.
   closeReason String?
@@ -2676,4 +2706,515 @@ model ReminderNotification {
   @@index([companyId, ruleKey, entityId])
   @@index([companyId, closedAt])
   @@schema("shared")
+}
+
+// ============================================================================
+// settings schema — feature 009's two reference-data masters.
+//
+// Items and their categories are `settings`-schema masters, not `inventory`-owned
+// tables (research.md §1): they are company reference data of the same kind as
+// vendor categories and document types, edited under the SETTINGS permission, and
+// read by more than one module. `InventoryModule` reaches them through
+// `ItemsService`/`ItemCategoriesService` rather than querying across the schema
+// boundary, which is what Principle I actually forbids.
+// ============================================================================
+
+/// The eight units the master PRD names (FR-018). A closed enum rather than free
+/// text because stock arithmetic sums quantities: "20 BAG" and "20 bags" have to be
+/// the same thing or the balance is a fiction.
+enum ItemUnit {
+  BAG
+  CUM
+  KG
+  NOS
+  MT
+  LTR
+  RMT
+  SQM
+
+  @@schema("settings")
+}
+
+model ItemCategory {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Stored uppercase (FR-016's spec text) so "Cement" and "CEMENT" cannot coexist
+  /// as two categories with the same meaning.
+  name String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items Item[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+model Item {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Allocated from the company's ITEMS series: `{shortCode}-ITM-0001`.
+  code String
+  name String
+
+  categoryId String
+  category   ItemCategory @relation(fields: [categoryId], references: [id])
+
+  unit ItemUnit
+
+  /// The per-item stock floor (FR-017). Nullable because most items never need one,
+  /// and a default of 0 would claim every item is exactly at its threshold. Compared
+  /// against computed `inStock` at read time — `belowReorderLevel` is never stored
+  /// (research.md §12).
+  reorderLevel Decimal? @db.Decimal(18, 3)
+  /// HS code for GST returns (FR-017). Free text: the schedule changes, and an enum
+  /// would make every rate revision a migration.
+  hsnCode      String?
+
+  description String?
+
+  /// Soft-retired rather than deleted once stock history exists, so a purchase from
+  /// two years ago still resolves its item name.
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@index([companyId, categoryId])
+  @@schema("settings")
+}
+
+// ============================================================================
+// inventory schema — feature 009 (stock, purchases, issues, transfers, payments,
+// material indents).
+//
+// `companyId` is a plain column on every table here with no relation to
+// `settings.Company`, and `itemId`/`siteId`/`vendorId` are plain columns too — the
+// same rule `partners.Vendor` follows. Principle I routes every cross-module read
+// through the owning module's exported service, and a declared relation is exactly
+// what would make an accidental cross-schema join possible. RLS is what scopes
+// these rows; the relations that do exist below are all within this schema.
+// ============================================================================
+
+/// Every movement that can change a balance, including the reversals soft-deletion
+/// appends (FR-004). The ledger is append-only: a mistake is corrected by writing
+/// its opposite, never by editing or removing the original.
+enum StockLedgerType {
+  purchase
+  purchase_reversal
+  issue
+  issue_reversal
+  transfer_in
+  transfer_out
+  transfer_in_reversal
+  transfer_out_reversal
+
+  @@schema("inventory")
+}
+
+enum PurchaseBillStatus {
+  unpaid
+  part_paid
+  paid
+
+  @@schema("inventory")
+}
+
+enum PaymentMode {
+  upi
+  bank_transfer
+  cash
+  cheque
+
+  @@schema("inventory")
+}
+
+enum TransferStatus {
+  pending
+  in_transit
+  received
+
+  @@schema("inventory")
+}
+
+enum IndentStatus {
+  draft
+  submitted
+  approved
+  rejected
+  partially_fulfilled
+  fulfilled
+  cancelled
+
+  @@schema("inventory")
+}
+
+/// Running totals per item per site, updated inside the same transaction as the
+/// ledger write (FR-002). The ledger is the record of truth; this is the O(1) read
+/// of it, and `StockService.recomputeWAR()` can rebuild `avgRate` from the ledger
+/// whenever a purchase is reversed.
+model StockBalance {
+  id String @id @default(cuid())
+
+  companyId String
+  itemId    String
+  siteId    String
+
+  received    Decimal @default(0) @db.Decimal(18, 3)
+  issued      Decimal @default(0) @db.Decimal(18, 3)
+  transferIn  Decimal @default(0) @db.Decimal(18, 3)
+  transferOut Decimal @default(0) @db.Decimal(18, 3)
+
+  /// Weighted average rate. Six decimal places rather than the two money elsewhere
+  /// carries: this is a computed average, not a transacted amount, and rounding it
+  /// to paise on every purchase would drift the stock valuation of a
+  /// frequently-received item measurably over a year.
+  avgRate Decimal @default(0) @db.Decimal(18, 6)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// `inStock` and `stockValue` are deliberately absent — both are derived on read
+  /// (FR-014, research.md §11). A stored total is a second place for the truth to
+  /// live, and the one that goes stale.
+  @@unique([itemId, siteId])
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@schema("inventory")
+}
+
+/// Append-only. No update or delete path exists in the service layer, and the
+/// absence of an `updatedAt` here is deliberate — a row that can be amended is not
+/// a ledger.
+model StockLedgerEntry {
+  id String @id @default(cuid())
+
+  companyId String
+  itemId    String
+  siteId    String
+
+  type     StockLedgerType
+  quantity Decimal         @db.Decimal(18, 3)
+  /// Populated for `purchase`/`purchase_reversal` only: an issue consumes at the
+  /// running average, so recording a rate against it would invent a number.
+  rate     Decimal?        @db.Decimal(18, 2)
+
+  /// The Purchase, Issue or StockTransfer this entry came from. A plain column: the
+  /// three possible parents make a Prisma relation impossible to declare, and the
+  /// reversal pairs are found by this id.
+  referenceId String
+  date        DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, itemId, siteId])
+  @@index([referenceId])
+  @@schema("inventory")
+}
+
+model Purchase {
+  id String @id @default(cuid())
+
+  companyId String
+  siteId    String
+  itemId    String
+  vendorId  String
+
+  date     DateTime @db.Date
+  quantity Decimal  @db.Decimal(18, 3)
+  rate     Decimal  @db.Decimal(18, 2)
+  /// Stored rather than derived: `quantity × rate` rounded once at write time is
+  /// what the vendor billed, and recomputing it on every read would let a rounding
+  /// change silently restate historical spend.
+  amount   Decimal  @db.Decimal(18, 2)
+
+  /// Object-storage reference for the uploaded bill, same encrypted-reference
+  /// pattern as `EmployeeDocument`/`ProjectDocument`.
+  billFileRef String?
+  remarks     String?
+
+  /// The indent line this purchase fulfils, if it came from one (FR-023).
+  indentLineId String?
+  indentLine   MaterialIndentLine? @relation(fields: [indentLineId], references: [id])
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bill PurchaseBill?
+  grn  GoodsReceiptNote?
+
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@index([companyId, vendorId])
+  @@index([companyId, itemId, siteId])
+  @@index([indentLineId])
+  @@schema("inventory")
+}
+
+/// Auto-created 1:1 with every purchase (FR-020). Separate from `PurchaseBill`
+/// because they answer different questions: a GRN records that material physically
+/// arrived, a bill records that money is owed for it.
+model GoodsReceiptNote {
+  id String @id @default(cuid())
+
+  companyId String
+
+  purchaseId String   @unique
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  /// `{shortCode}-GRN-0001`, allocated from the purchase's own sequence at creation.
+  grnNumber String
+  siteId    String
+
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, grnNumber])
+  @@index([companyId])
+  @@schema("inventory")
+}
+
+model PurchaseBill {
+  id String @id @default(cuid())
+
+  companyId String
+
+  purchaseId String   @unique
+  purchase   Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  vendorId String
+
+  totalAmount   Decimal            @db.Decimal(18, 2)
+  paidAmount    Decimal            @default(0) @db.Decimal(18, 2)
+  /// Derived from the two amounts above and rewritten in the same transaction that
+  /// moves `paidAmount` — stored so the FIFO query can filter on it without
+  /// recomputing every bill's status to find the unpaid ones.
+  paymentStatus PurchaseBillStatus @default(unpaid)
+
+  /// The bill's own date drives FIFO order (FR-005), copied from the purchase so
+  /// allocation never has to join back to it.
+  billDate DateTime @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations PaymentAllocation[]
+
+  @@index([companyId])
+  @@index([companyId, vendorId, paymentStatus, billDate])
+  @@schema("inventory")
+}
+
+model Issue {
+  id String @id @default(cuid())
+
+  companyId String
+  siteId    String
+  itemId    String
+
+  date     DateTime @db.Date
+  quantity Decimal  @db.Decimal(18, 3)
+  issuedTo String
+
+  /// What the material was consumed for (FR-019). Both optional: the link is
+  /// recorded when the site's project has BOQ or activity data to point at, and
+  /// requiring one would make material un-issuable at a project whose BOQ has not
+  /// been loaded yet. Validated against `ProjectsService` when supplied.
+  activityId String?
+  boqItemId  String?
+
+  remarks String?
+
+  /// The indent line this issue fulfils, if it came from one (FR-023).
+  indentLineId String?
+  indentLine   MaterialIndentLine? @relation(fields: [indentLineId], references: [id])
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@index([companyId, itemId, siteId])
+  @@index([indentLineId])
+  @@schema("inventory")
+}
+
+model StockTransfer {
+  id String @id @default(cuid())
+
+  companyId  String
+  fromSiteId String
+  toSiteId   String
+  itemId     String
+
+  date     DateTime @db.Date
+  quantity Decimal  @db.Decimal(18, 3)
+  remarks  String?
+
+  /// Physical-movement tracking only. Both balances move at creation regardless of
+  /// this value: the material has left the source store the moment the transfer is
+  /// recorded, and holding the decrement until "received" would let the same units
+  /// be issued twice.
+  status TransferStatus @default(pending)
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, fromSiteId])
+  @@index([companyId, toSiteId])
+  @@schema("inventory")
+}
+
+model Payment {
+  id String @id @default(cuid())
+
+  companyId String
+  vendorId  String
+
+  amount Decimal  @db.Decimal(18, 2)
+  date   DateTime @db.Date
+
+  paymentMode     PaymentMode
+  referenceNumber String
+
+  /// How much of `amount` reached bills. Stored because FIFO allocation writes it in
+  /// the same transaction as the `PaymentAllocation` rows; `unallocatedBalance` is
+  /// `amount − allocatedAmount`, derived on read.
+  allocatedAmount Decimal @default(0) @db.Decimal(18, 2)
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  allocations PaymentAllocation[]
+
+  @@index([companyId])
+  @@index([companyId, vendorId])
+  @@schema("inventory")
+}
+
+/// Which bill received how much from which payment (FR-006). The join row is what
+/// makes a payment reversible: deleting a payment walks these and gives each bill
+/// its amount back.
+model PaymentAllocation {
+  id String @id @default(cuid())
+
+  companyId String
+
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  billId String
+  bill   PurchaseBill @relation(fields: [billId], references: [id], onDelete: Cascade)
+
+  allocatedAmount Decimal @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+
+  @@unique([paymentId, billId])
+  @@index([companyId])
+  @@index([billId])
+  @@schema("inventory")
+}
+
+/// A site's request for material (FR-021). Approving one records intent; it does
+/// not touch any balance (FR-025) — issue-time validation stays the single point of
+/// stock enforcement, which is what keeps this amendment unable to produce a
+/// negative balance.
+model MaterialIndent {
+  id String @id @default(cuid())
+
+  companyId String
+  siteId    String
+  /// Denormalised from the site so the indent list can filter by project without
+  /// asking ProjectsService per row. Nullable: a site need not belong to a project.
+  projectId String?
+
+  /// `{shortCode}-IND-0001`.
+  indentNumber String
+
+  requiredByDate DateTime @db.Date
+  justification  String
+
+  status IndentStatus @default(submitted)
+
+  requestedByUserId String
+  approvedByUserId  String?
+  approvedAt        DateTime?
+  /// Set when an approver rejects or cancels; both require a reason (FR-026).
+  decisionReason    String?
+
+  deleted   Boolean   @default(false)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines MaterialIndentLine[]
+
+  @@unique([companyId, indentNumber])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([companyId, siteId])
+  @@schema("inventory")
+}
+
+model MaterialIndentLine {
+  id String @id @default(cuid())
+
+  companyId String
+
+  indentId String
+  indent   MaterialIndent @relation(fields: [indentId], references: [id], onDelete: Cascade)
+
+  itemId String
+
+  /// All three quantities are kept, never collapsed (FR-022): the reduction an
+  /// approver made is only auditable while the requested figure survives beside the
+  /// approved one. Outstanding is `approved − fulfilled`, derived on read.
+  requestedQuantity Decimal  @db.Decimal(18, 3)
+  approvedQuantity  Decimal? @db.Decimal(18, 3)
+  fulfilledQuantity Decimal  @default(0) @db.Decimal(18, 3)
+  /// Why the approved quantity is below the requested one (FR-022).
+  reductionReason   String?
+
+  activityId String?
+  boqItemId  String?
+
+  /// Set by `mark-procurement-needed`: this line cannot be met from stock and needs
+  /// buying (FR-027).
+  procurementPending Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  issues    Issue[]
+  purchases Purchase[]
+
+  @@index([companyId])
+  @@index([indentId])
+  @@index([companyId, itemId])
+  @@schema("inventory")
 }

@@ -17,6 +17,8 @@ import { RolesController } from './roles/roles.controller';
 import { RolesService } from './roles/roles.service';
 import { UsersAdminController } from './users-admin/users-admin.controller';
 import { UsersAdminService } from './users-admin/users-admin.service';
+import { ItemCategoriesService } from './item-masters/item-categories.service';
+import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 
 /**
@@ -52,6 +54,8 @@ import { VendorCategoriesService } from './vendor-categories/vendor-categories.s
     ReimbursementCategoriesService,
     CodeSeriesService,
     VendorCategoriesService,
+    ItemCategoriesService,
+    ItemsService,
     AuditLogService,
   ],
   exports: [
@@ -69,6 +73,11 @@ import { VendorCategoriesService } from './vendor-categories/vendor-categories.s
     // company master edited under Settings, and code-series allocation is the
     // generalised form of the employee-code allocator beside it (007 research.md §1).
     VendorCategoriesService,
+    // Exported for `inventory`, whose category and item masters are settings-schema
+    // tables for the reason 009 research.md §1 gives — the same arrangement vendor
+    // categories already have.
+    ItemCategoriesService,
+    ItemsService,
     CodeSeriesService,
   ],
 })

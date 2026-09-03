@@ -79,3 +79,20 @@ export const UNAVAILABLE_PLANT_SOURCE: PnlPlantSource = {
     return 0;
   },
 };
+
+/**
+ * A reference to a unit of planned work — a BOQ task group ("Activity") or a BOQ
+ * task item — as another module needs it to validate and label a link to one
+ * (009 FR-019).
+ *
+ * Deliberately the same shape for both: the consumer stores an id and renders a
+ * name, and giving the two kinds different shapes would push a discriminated union
+ * into every caller for no gain.
+ */
+export interface ProjectWorkReference {
+  id: string;
+  name: string;
+  /** The BOQ number, for display beside the name. */
+  reference: string;
+  projectId: string;
+}
