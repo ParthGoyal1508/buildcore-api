@@ -425,9 +425,9 @@ Covers spec FR-025 to FR-037 and plan Phases A1–A3. Task IDs prefixed `TA`.
 012, which register rules rather than implementing their own evaluation (ratified 2026-09-01).
 Schedule it early.
 
-- [ ] TA001 Add `ReminderRule` and `ReminderSnooze` models to `prisma/schema.prisma`; migration +
+- [X] TA001 Add `ReminderRule` and `ReminderSnooze` models to `prisma/schema.prisma`; migration +
       RLS
-- [ ] TA002 Build the rule-registration mechanism mirroring the existing widget registry so a
+- [X] TA002 Build the rule-registration mechanism mirroring the existing widget registry so a
       module contributes a rule without editing this feature (spec FR-028)
 - [ ] TA003 [US8] `DepartmentDashboardService` + controller reusing the existing self-describing
       widget contract — no new response shape (spec FR-025)
@@ -436,22 +436,112 @@ Schedule it early.
       that department's employees (spec FR-026)
 - [ ] TA005 [US8] Department selector honouring role-restricted scope; reject a department outside
       the caller's company (spec FR-027); zero values, not errors, for an empty department
-- [ ] TA006 [US9] `RemindersService`: evaluate every registered rule into one unified list with
+- [X] TA006 [US9] `RemindersService`: evaluate every registered rule into one unified list with
       source module, entity, subject, due date, signed days-remaining, and severity; sort overdue
       first then soonest-due (spec FR-029, FR-030)
-- [ ] TA007 [US9] Unavailable-module rules contribute nothing and are reported as unavailable rather
+- [X] TA007 [US9] Unavailable-module rules contribute nothing and are reported as unavailable rather
       than failing the request (spec FR-031)
-- [ ] TA008 [US9] De-duplication: at most one notification per entity, per rule, per severity band;
+- [X] TA008 [US9] De-duplication: at most one notification per entity, per rule, per severity band;
       escalation emits anew; resolution closes the open notification (spec FR-032, FR-033)
-- [ ] TA009 [US9] Snooze endpoint with audit logging; a snooze expires on its date even if severity
+- [X] TA009 [US9] Snooze endpoint with audit logging; a snooze expires on its date even if severity
       escalated (spec FR-034)
-- [ ] TA010 [US9] Company scoping except for `CROSS_COMPANY_ACCESS` holders (spec FR-035); count
+- [X] TA010 [US9] Company scoping except for `CROSS_COMPANY_ACCESS` holders (spec FR-035); count
       endpoint by severity consistent with FR-011
-- [ ] TA011 [US9] `RemindersController` and `DepartmentDashboardController` with the existing
+- [X] TA011 [US9] `RemindersController` and `DepartmentDashboardController` with the existing
       `DASHBOARD` guard — no new permission value (spec FR-037)
-- [ ] TA012 [P] Unit test: de-duplication across repeated evaluation; escalation; snooze expiry
+- [X] TA012 [P] Unit test: de-duplication across repeated evaluation; escalation; snooze expiry
 - [ ] TA013 [P] Unit test: no cross-department KPI leakage (SC-A03)
-- [ ] TA014 [P] E2e test: a rule registered by a test module appears in the list with no edit to
+- [X] TA014 [P] E2e test: a rule registered by a test module appears in the list with no edit to
       this feature (SC-A01)
 
 **Unblocks**: 002 TA009, 006 TA011, 012 T048.
+
+---
+
+## Implementation note — 2026-09-03 (reminders engine slice)
+
+The reminders engine (TA001, TA002, TA006–TA012, TA014) was built as **wave 1** of feature
+004, ahead of everything else in this spec. It has no data dependency on any module —
+it is a rule registry plus an evaluator — while features 002 (company documents), 006
+(spare parts) and 012 (asset reminders) each register rules with it rather than
+implementing their own evaluation, de-duplication and snooze logic (spec FR-036,
+ratified 2026-09-01). The widget slice wants data from modules that do not exist yet
+and is deliberately scheduled last.
+
+**Still open and correctly unchecked**: T001–T059 (widgets, activity log, notifications
+centre, site/group dashboards, reports, export) and TA003–TA005, TA013 (Department
+Dashboard, US8).
+
+### Deviations from the task text
+
+- **TA002 could not be satisfied as written.** The task says to mirror "the existing
+  widget registry"; that registry is T008–T011, which is not built. More importantly,
+  the multi-provider token research.md §1 specifies **cannot deliver FR-028's
+  guarantee**: Nest resolves multi-providers per-injector, so `DashboardModule` would
+  have to import every contributing module for their rules to be visible — precisely
+  the edit to this feature FR-028 forbids, and it would invert the dependency graph so
+  the dashboard depended on every module in the system. The registry uses
+  `DiscoveryService` instead: a module decorates a provider with `@ReminderRule()` in
+  its own `@Module` and the engine finds it, importing nothing. **When the widget
+  registry is built it should use this same mechanism**, and research.md §1 should be
+  read with this correction in mind.
+- **A third model was added beyond the spec's Key Entities list.**
+  `ReminderNotification` — the emitted-notification ledger. FR-032 ("at most one
+  notification per entity, per rule, per severity band", escalation emits anew) and
+  FR-033 ("its open notification MUST be closed") are both statements about what was
+  emitted before, and nothing stateless can answer them: recomputing the list tells you
+  a reminder exists, never whether it has already been announced. Without the ledger,
+  TA008 is a no-op. The "at most one open" rule is enforced by a hand-authored partial
+  unique index, not only in application code.
+- **`AuditEntityType.REMINDER` was added.** FR-034 requires the snooze to be
+  audit-logged and the enum had no value that fitted. Additive.
+- **TA011 is done for `RemindersController` only.** The `DepartmentDashboardController`
+  half belongs to US8, whose own tasks (TA003–TA005) are out of scope and remain
+  unchecked.
+- **`ReminderRule.companyId` is nullable**, so the RLS policy on that table admits
+  `companyId IS NULL` — a code-declared rule applies to every tenant, and a policy
+  demanding a company match would make the engine evaluate nothing at all. The other
+  two tables take the standard equality policy.
+- **`scope` was given a concrete meaning.** US9 AC2 lists `?scope=` without defining it.
+  It is `company` (default) or `all`; `all` is **refused with 403** for a caller without
+  `CROSS_COMPANY_ACCESS` rather than silently downgraded, so a caller who asks for
+  something they may not have is told.
+- **Placeholder rules were registered for the three future registrants** FR-036 names
+  (002 company documents, 006 equipment documents + service due, 012 asset documents +
+  inspection due + overdue return), each `isAvailable(): false`. Without them FR-031
+  would be untestable and an empty reminders list would be indistinguishable from "no
+  rules exist". They are the direct analogue of T016's unbuilt-module widget
+  placeholders. **Each must be deleted when its owning module registers the real rule.**
+- **Redis/BullMQ and `exceljs` (T001, T002) were deliberately not installed.** Nothing
+  in the engine touches a queue; they belong to US7's async export, and adding a Redis
+  service to `docker-compose.yml` now would make every developer run a container to
+  boot an API that never uses it.
+- **`zonedDateOnly` is imported from `src/hr/leave/leave-days.ts`.** "Today" must be a
+  calendar date in the configured business timezone — a UTC-truncated `new Date()`
+  would treat a certificate expiring today in Kolkata as expiring tomorrow for five and
+  a half hours every evening. The helper is pure, but its home in `hr/leave/` is wrong
+  for something three modules now need; moving it to `src/common/` is a candidate for a
+  later pass.
+
+### Verification performed
+
+- 447/447 unit tests pass (428 before this slice, 19 new in
+  `src/dashboard/reminders/reminders.service.spec.ts`).
+- 198/207 e2e pass (185 before, 13 new in `test/dashboard.e2e-spec.ts`). The 9 failures
+  are the pre-existing punch tests in `test/my-workspace.e2e-spec.ts` — a duplicate
+  punch-in returns 500 rather than 409 because the same-day guard in
+  `punch.service.ts` around line 290 does not match and the DB unique constraint
+  catches it. Confirmed identical on `main` via an isolated worktree during the 008
+  pass; feature 003/005 territory, not this one.
+- `npx nest build` clean; `npx eslint src/dashboard` reports 0 errors and 0 warnings.
+- The engine's extensibility claim (SC-A01) is tested the only way it can honestly be:
+  `test/dashboard.e2e-spec.ts` declares a rule in a module under `test/`, which nothing
+  in `src/` imports, and asserts it appears in the list.
+
+### Not verified
+
+- `quickstart.md`'s manual passes. Nothing in this slice has been opened in a browser —
+  the frontend is a separate pass.
+- The nightly `@Cron` sweep has never fired on a schedule. `evaluateAndEmit()` is
+  covered directly by unit tests; only the wiring in `ReminderEvaluationCron` is
+  untested, and it is four lines.

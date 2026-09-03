@@ -260,6 +260,13 @@ model Company {
   vendorCategories        VendorCategory[]
   codeSequences           CodeSequence[]
 
+  // Feature 004's reminders engine. Company-scoped so a deleted company takes its
+  // reminder state with it rather than leaving orphan rows the engine would keep
+  // evaluating.
+  reminderRuleOverrides ReminderRule[]
+  reminderSnoozes       ReminderSnooze[]
+  reminderNotifications ReminderNotification[]
+
   @@schema("settings")
 }
 
@@ -600,6 +607,11 @@ enum AuditEntityType {
   WORK_ORDER
   PROJECT_BUDGET
   PROJECT_DOCUMENT
+
+  /// Feature 004's reminders engine. Only the snooze is audited (FR-034): evaluation
+  /// itself is a read, and emitting a notification is already recorded by the
+  /// `ReminderNotification` ledger, which carries more than an audit row could.
+  REMINDER
 
   @@schema("shared")
 }
@@ -2516,4 +2528,152 @@ model BOCWPayment {
 
   @@index([companyId, projectId])
   @@schema("partners")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Feature 004 — cross-module reminders engine (spec FR-028 to FR-035).
+//
+// These live in `shared` for the same reason `AuditLogEntry` does: a reminder is not
+// a machinery record or an asset record, it is the cross-cutting statement "something
+// owned by *some* module falls due on this date". The rows below therefore reference
+// their subject by (`sourceModule`, `entityType`, `entityId`) rather than by a foreign
+// key — a real FK would have to point at a different schema per rule, which is exactly
+// the cross-schema coupling Principle I exists to prevent. The owning module resolves
+// its own ids through its own exported service.
+//
+// `sourceModule` and `entityType` are plain strings, not enums, deliberately: FR-028
+// requires a module to contribute a new reminder type *without editing this feature*,
+// and an enum would make every new rule a migration in a file this feature owns.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// The severity band a reminder currently sits in (spec FR-030). A band, not a score:
+/// de-duplication (FR-032) keys off it, so it has to be a small closed set.
+enum ReminderSeverity {
+  info
+  warning
+  overdue
+
+  @@schema("shared")
+}
+
+/// The persisted catalogue of registered reminder rules.
+///
+/// The rule's *logic* lives in code — a `ReminderRuleProvider` in the owning module
+/// (src/dashboard/reminders/reminder-rule.types.ts), which is what makes FR-028's
+/// "no edit to this feature" guarantee possible. This table is the mirror of those
+/// declarations, synced on boot by `ReminderRuleRegistry`, and it earns its place by
+/// giving an operator one queryable list of what the engine will evaluate and an
+/// `enabled` flag that silences a misbehaving rule without a deploy.
+model ReminderRule {
+  id String @id @default(cuid())
+
+  /// Stable identity, chosen by the registering module: `machinery-service-due`.
+  /// Unique across the installation — it is half of a reminder's composite id.
+  ruleKey String @unique
+
+  /// Which module owns the rule and resolves its entities: `machinery`, `settings`.
+  sourceModule String
+  /// The reminder family, for the list's type filter: `document_expiry`.
+  type         String
+  /// What the rule evaluates over, e.g. `EQUIPMENT_DOCUMENT`. Free text for the
+  /// reason given above the enum block.
+  entityType   String
+
+  /// How far ahead of the due date the rule starts producing reminders (FR-029).
+  leadDays        Int
+  /// The severity ladder (FR-029), stored as `{ warnWithinDays: number }`. JSON
+  /// rather than a column so a future ladder with more bands does not need a
+  /// migration in this feature.
+  severityLadder  Json
+
+  /// Set false to stop evaluating the rule without removing its provider.
+  enabled Boolean @default(true)
+
+  /// NULL means the declaration applies to every company — which is the normal case,
+  /// since rules are declared in code. A non-null value scopes an override to one
+  /// company; the RLS policy admits both.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  snoozes       ReminderSnooze[]
+  notifications ReminderNotification[]
+
+  @@index([sourceModule])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// A suppression of one reminder until a date (spec FR-034).
+///
+/// Keyed by (rule, entity) rather than by a reminder id, because a reminder is
+/// computed and has no stored row — the pair is what actually persists between
+/// evaluations.
+model ReminderSnooze {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  ruleKey String
+  rule    ReminderRule @relation(fields: [ruleKey], references: [ruleKey], onDelete: Cascade)
+
+  entityType String
+  entityId   String
+
+  /// Inclusive: the reminder reappears the day *after* this date. Stored as a date,
+  /// not a timestamp — "snoozed until the 14th" is a calendar statement, and a
+  /// timestamp would make it mean something different in every timezone.
+  snoozeUntil DateTime @db.Date
+  reason      String
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  @@index([companyId, ruleKey, entityId])
+  @@index([snoozeUntil])
+  @@schema("shared")
+}
+
+/// The emitted-notification ledger — what makes FR-032/FR-033 possible.
+///
+/// DELIBERATE ADDITION beyond the spec's Key Entities list, which names only
+/// ReminderRule, Reminder (computed) and ReminderSnooze. FR-032 requires "at most one
+/// notification per entity, per rule, per severity band" with escalation emitting
+/// anew, and FR-033 requires a resolved reminder's open notification to be *closed*.
+/// Both are statements about what was emitted before, and nothing stateless can
+/// answer them: recomputing the list from scratch can tell you a reminder exists, but
+/// never whether it has already been announced. See specs/004-dashboard-backend/
+/// tasks.md, the 2026-09-03 implementation note.
+model ReminderNotification {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  ruleKey String
+  rule    ReminderRule @relation(fields: [ruleKey], references: [ruleKey], onDelete: Cascade)
+
+  entityType String
+  entityId   String
+  /// Copied at emission time so a closed notification still reads sensibly after the
+  /// underlying record is renamed or deleted.
+  subject    String
+  dueDate    DateTime @db.Date
+
+  severity ReminderSeverity
+
+  emittedAt DateTime  @default(now())
+  /// Null while open. Set when the condition is resolved (FR-033), when the reminder
+  /// escalates out of this band (FR-032), or when it is snoozed (FR-034).
+  closedAt  DateTime?
+  /// Why it closed, for the audit trail a bare timestamp cannot give: `resolved`,
+  /// `escalated`, `snoozed`.
+  closeReason String?
+
+  @@index([companyId, ruleKey, entityId])
+  @@index([companyId, closedAt])
+  @@schema("shared")
 }

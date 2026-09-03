@@ -133,6 +133,9 @@ a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
   reimbursementCategories ReimbursementCategory [not null]
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
+  reminderRuleOverrides ReminderRule [not null]
+  reminderSnoozes ReminderSnooze [not null]
+  reminderNotifications ReminderNotification [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -1454,6 +1457,90 @@ on demand rather than stored (research.md §5) — a stored balance is a second
 source of truth that drifts the moment a payment is corrected.'
 }
 
+Table ReminderRule {
+  id String [pk]
+  ruleKey String [unique, not null, note: 'Stable identity, chosen by the registering module: `machinery-service-due`.
+Unique across the installation — it is half of a reminder\'s composite id.']
+  sourceModule String [not null, note: 'Which module owns the rule and resolves its entities: `machinery`, `settings`.']
+  type String [not null, note: 'The reminder family, for the list\'s type filter: `document_expiry`.']
+  entityType String [not null, note: 'What the rule evaluates over, e.g. `EQUIPMENT_DOCUMENT`. Free text for the
+reason given above the enum block.']
+  leadDays Int [not null, note: 'How far ahead of the due date the rule starts producing reminders (FR-029).']
+  severityLadder Json [not null, note: 'The severity ladder (FR-029), stored as `{ warnWithinDays: number }`. JSON
+rather than a column so a future ladder with more bands does not need a
+migration in this feature.']
+  enabled Boolean [not null, default: true, note: 'Set false to stop evaluating the rule without removing its provider.']
+  companyId String [note: 'NULL means the declaration applies to every company — which is the normal case,
+since rules are declared in code. A non-null value scopes an override to one
+company; the RLS policy admits both.']
+  company Company
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  snoozes ReminderSnooze [not null]
+  notifications ReminderNotification [not null]
+
+  Note: 'The persisted catalogue of registered reminder rules.
+
+The rule\'s *logic* lives in code — a `ReminderRuleProvider` in the owning module
+(src/dashboard/reminders/reminder-rule.types.ts), which is what makes FR-028\'s
+"no edit to this feature" guarantee possible. This table is the mirror of those
+declarations, synced on boot by `ReminderRuleRegistry`, and it earns its place by
+giving an operator one queryable list of what the engine will evaluate and an
+`enabled` flag that silences a misbehaving rule without a deploy.'
+}
+
+Table ReminderSnooze {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  ruleKey String [not null]
+  rule ReminderRule [not null]
+  entityType String [not null]
+  entityId String [not null]
+  snoozeUntil DateTime [not null, note: 'Inclusive: the reminder reappears the day *after* this date. Stored as a date,
+not a timestamp — "snoozed until the 14th" is a calendar statement, and a
+timestamp would make it mean something different in every timezone.']
+  reason String [not null]
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A suppression of one reminder until a date (spec FR-034).
+
+Keyed by (rule, entity) rather than by a reminder id, because a reminder is
+computed and has no stored row — the pair is what actually persists between
+evaluations.'
+}
+
+Table ReminderNotification {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  ruleKey String [not null]
+  rule ReminderRule [not null]
+  entityType String [not null]
+  entityId String [not null]
+  subject String [not null, note: 'Copied at emission time so a closed notification still reads sensibly after the
+underlying record is renamed or deleted.']
+  dueDate DateTime [not null]
+  severity ReminderSeverity [not null]
+  emittedAt DateTime [default: `now()`, not null]
+  closedAt DateTime [note: 'Null while open. Set when the condition is resolved (FR-033), when the reminder
+escalates out of this band (FR-032), or when it is snoozed (FR-034).']
+  closeReason String [note: 'Why it closed, for the audit trail a bare timestamp cannot give: `resolved`,
+`escalated`, `snoozed`.']
+
+  Note: 'The emitted-notification ledger — what makes FR-032/FR-033 possible.
+
+DELIBERATE ADDITION beyond the spec\'s Key Entities list, which names only
+ReminderRule, Reminder (computed) and ReminderSnooze. FR-032 requires "at most one
+notification per entity, per rule, per severity band" with escalation emitting
+anew, and FR-033 requires a resolved reminder\'s open notification to be *closed*.
+Both are statements about what was emitted before, and nothing stateless can
+answer them: recomputing the list from scratch can tell you a reminder exists, but
+never whether it has already been announced. See specs/004-dashboard-backend/
+tasks.md, the 2026-09-03 implementation note.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -1552,6 +1639,7 @@ Enum AuditEntityType {
   WORK_ORDER
   PROJECT_BUDGET
   PROJECT_DOCUMENT
+  REMINDER
 }
 
 Enum AuditAction {
@@ -1832,6 +1920,12 @@ Enum MonthlyComplianceStatus {
   verified
 }
 
+Enum ReminderSeverity {
+  info
+  warning
+  overdue
+}
+
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
@@ -1931,3 +2025,13 @@ Ref: ContractorProfile.vendorId - Vendor.id [delete: Cascade]
 Ref: ContractorDocument.contractorProfileId > ContractorProfile.id [delete: Cascade]
 
 Ref: MonthlyCompliance.contractorProfileId > ContractorProfile.id [delete: Cascade]
+
+Ref: ReminderRule.companyId > Company.id [delete: Cascade]
+
+Ref: ReminderSnooze.companyId > Company.id [delete: Cascade]
+
+Ref: ReminderSnooze.ruleKey > ReminderRule.ruleKey [delete: Cascade]
+
+Ref: ReminderNotification.companyId > Company.id [delete: Cascade]
+
+Ref: ReminderNotification.ruleKey > ReminderRule.ruleKey [delete: Cascade]
