@@ -233,6 +233,20 @@ export class PurchasesService {
       ipAddress,
     });
 
+    // The GRN gets its own entry rather than being folded into the purchase's.
+    // It is a receipt acknowledgement with its own number that other modules cite,
+    // and an activity log filtered to `GOODS_RECEIPT_NOTE` should find it — which
+    // is what the entity type exists for.
+    await this.auditLog.record({
+      entityType: AuditEntityType.GOODS_RECEIPT_NOTE,
+      action: AuditAction.CREATE,
+      entityId: created.purchase.id,
+      changes: { after: { grnNumber: created.grnNumber } },
+      accountId: caller.id,
+      companyId: targetCompanyId,
+      ipAddress,
+    });
+
     return {
       id: created.purchase.id,
       companyId: targetCompanyId,

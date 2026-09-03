@@ -479,3 +479,45 @@ dead guard. `test/my-workspace.e2e-spec.ts` went from 9 failures to 93/93.
 ### Not done
 
 - `quickstart.md`'s manual passes. Nothing here has been exercised through a browser.
+
+---
+
+## Phase 11: Convergence — 2026-09-04
+
+Gaps found by reading the shipped code back against spec.md, plan.md and
+contracts/inventory-api.md. The first three were fixed in the same pass; the rest
+are recorded rather than done.
+
+- [X] T044 Apply the `belowReorderLevel` filter before paginating, not after, per
+      FR-017 (contradicts). It was filtering the fetched page, so page 1 could come
+      back with two rows while page 2 held ten more matches and `total` counted rows
+      that would never be shown. The flag compares a computed `inStock` against a
+      threshold in another schema, so it cannot be pushed into SQL — the rows are now
+      fetched whole, filtered, then paged in memory, bounded by one company's
+      item-site pairs.
+- [X] T045 Write an audit entry when a `GoodsReceiptNote` is created, per the
+      contract's audit section (missing). `AuditEntityType.GOODS_RECEIPT_NOTE` was
+      added to the enum and then never used, so an activity log filtered to it found
+      nothing.
+- [X] T046 Serve the stored bill to the frontend (missing). `GET
+      /inventory/purchases/:id/bill` was implemented and unreachable — the web had no
+      client function for it, so uploads worked and downloads did not exist.
+- [ ] T047 Stop hard-deleting `PurchaseBill` and `GoodsReceiptNote` rows when a
+      purchase is soft-deleted (contradicts FR-004). FR-004 names purchases, issues
+      and transfers, so this is within the letter of it — but a GRN is a receipt
+      acknowledgement with a number other records cite, and erasing it leaves those
+      citations pointing at nothing. Both should carry `deleted` flags like every
+      other record here.
+- [ ] T048 Refuse a category change on an item that already has stock movements, per
+      contracts/inventory-api.md's `PATCH /inventory/items/:id` (partial). Currently
+      any category change is accepted, which silently re-files historical purchases
+      under a category they were never bought as.
+- [ ] T049 Return `409` rather than `404` for a `PATCH` against a soft-deleted
+      purchase, per the contract (partial). The row exists and the request is refused
+      because of its state, which is what 409 means; 404 says it was never there.
+- [ ] T050 Wire `InventoryService.getMaterialCostByProject()` into 008's Project P&L
+      (missing). The method is implemented, exported and tested, and nothing calls
+      it: 008's US4–US8 have not shipped. This task belongs to whoever builds them,
+      and is recorded here so the export is not mistaken for dead code.
+- [ ] T051 Run `quickstart.md`'s manual scenarios. Nothing in this feature has been
+      exercised through a browser.

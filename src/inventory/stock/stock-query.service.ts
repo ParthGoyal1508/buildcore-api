@@ -74,10 +74,28 @@ export class StockQueryService {
       ...(itemIdFilter ? { itemId: { in: itemIdFilter } } : {}),
     };
 
+    // `belowReorderLevel` cannot be pushed into SQL: it compares a computed
+    // `inStock` against a threshold held in another schema's table, and Principle I
+    // forbids the join that would let the database decide. So when it is asked for,
+    // the rows are fetched whole, filtered, and paged in memory.
+    //
+    // Filtering the page instead would be wrong, not merely slower: page 1 would
+    // come back with two rows while page 2 held ten more matches, and `total` would
+    // count rows that were never going to be shown. The set is bounded by the
+    // item-site pairs one company has, which is the same set this screen renders.
+    const filterInMemory = query.belowReorderLevel === true;
+
     const { balances, total } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        if (filterInMemory) {
+          const balances = await tx.stockBalance.findMany({
+            where,
+            orderBy: [{ itemId: 'asc' }, { siteId: 'asc' }],
+          });
+          return { balances, total: balances.length };
+        }
         const [balances, total] = await Promise.all([
           tx.stockBalance.findMany({
             where,
@@ -117,11 +135,16 @@ export class StockQueryService {
       );
     });
 
+    if (!filterInMemory) {
+      return { rows, total, page, pageSize };
+    }
+
+    const matching = rows.filter((row) => row.belowReorderLevel);
     return {
-      rows: query.belowReorderLevel
-        ? rows.filter((row) => row.belowReorderLevel)
-        : rows,
-      total,
+      rows: matching.slice((page - 1) * pageSize, page * pageSize),
+      // The count of rows that actually match, so the caller's page arithmetic is
+      // about what it can reach rather than about what was scanned.
+      total: matching.length,
       page,
       pageSize,
     };
