@@ -545,3 +545,30 @@ Dashboard, US8).
 - The nightly `@Cron` sweep has never fired on a schedule. `evaluateAndEmit()` is
   covered directly by unit tests; only the wiring in `ReminderEvaluationCron` is
   untested, and it is four lines.
+
+---
+
+## Phase 11: Convergence
+
+Appended 2026-09-03 after the reminders-engine slice. Scoped to that slice only — the
+widget, notification, activity-log and report tasks above are unbuilt by decision, not
+by oversight, and are not restated here.
+
+- [ ] T072 Honour `ReminderRule.enabled` when evaluating: `reminder-rule.registry.ts`
+      writes the column and documents it as the way to "silence a misbehaving rule
+      without a deploy", but `RemindersService.collect()` iterates the discovered code
+      providers and never reads it, so a rule disabled in the database still produces
+      reminders. Either load the catalogue and filter on it, or delete the claim from
+      the comment and the column — a control that looks like it works is worse than one
+      that is absent, per plan Phase A1 / FR-029 (contradicts)
+- [ ] T073 Apply each rule's declared `leadDays` window in the engine, or document
+      explicitly that the provider owns its own windowing and the stored value is
+      advisory. Today FR-029 requires a rule to declare a lead window and every rule
+      does, but nothing enforces it: a provider returning a due date 500 days out has
+      that reminder listed as `info` rather than filtered out, and two rules can
+      disagree about what their own declared window means, per FR-029 (partial)
+- [ ] T074 Count reminders before `MAX_REMINDERS_PER_RESPONSE` clips them.
+      `RemindersService.count()` derives from `list()`, which slices, so a company with
+      more than 500 live reminders gets a badge count that is wrong in the one
+      situation where the number matters most — AC10 requires it to be consistent with
+      the list, per US9 AC10 (partial)
