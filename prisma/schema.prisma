@@ -1,7 +1,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant"]
+  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour"]
 }
 
 generator client {
@@ -191,6 +191,14 @@ enum Permission {
   /// only value this feature adds.
   INVENTORY_APPROVE
 
+  /// Added by 013 (FR-038). Approving a muster roll, freezing/reopening a payment
+  /// sheet, reversing a disbursement, and approving an above-limit labour advance
+  /// are all money-adjacent decisions, so they are separable from the
+  /// `DAILY_WORKER_REGISTRY` value every other labour endpoint reuses. Deliberately
+  /// the only value this feature adds — it reuses the existing
+  /// `DAILY_WORKER_REGISTRY` and `REPORTS` values verbatim.
+  LABOUR_APPROVE
+
   /// Added by 006. Maintenance jobs, service schedules, spare parts and service
   /// bills. `MACHINERY`, `LOGBOOK` and `FUEL` already existed — 002 reserved them by
   /// name for exactly this module — so only the two below are genuinely new
@@ -262,6 +270,18 @@ model Company {
   /// a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.
   bocwCessRate Decimal @default(0.0100) @db.Decimal(6, 4)
 
+  /// The labour wage cycle a payment sheet's period defaults to (013 FR-041) —
+  /// independent of the monthly salary `payCycle` above, because daily-wage labour
+  /// is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
+  /// default. Company-configurable rather than a literal — Constitution Principle III.
+  labourWageCycle LabourWageCycle @default(weekly)
+
+  /// Currency note denominations used to compute a cash payment sheet's breakup
+  /// (013 FR-027), descending. Company-configurable because the notes in circulation
+  /// change by legislation (the ₹2000 note's withdrawal being the recent example),
+  /// so this is not a literal inside the denomination service — Principle III.
+  labourCashDenominations Int[] @default([500, 200, 100, 50, 20, 10, 5, 1])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -270,6 +290,7 @@ model Company {
   documentTypes   DocumentType[]
   shifts          Shift[]
   employeeCodeSeq EmployeeCodeSequence?
+  skillCategories SkillCategory[]
 
   reimbursementCategories ReimbursementCategory[]
   vendorCategories        VendorCategory[]
@@ -300,6 +321,17 @@ enum CompanyStatus {
 }
 
 enum PayCycle {
+  monthly
+
+  @@schema("settings")
+}
+
+/// The cadence a labour payment sheet's wage period defaults to (013 FR-041).
+/// Distinct from `PayCycle` (which is the monthly salary run): daily-wage labour is
+/// settled on its own, usually shorter, cycle.
+enum LabourWageCycle {
+  weekly
+  fortnightly
   monthly
 
   @@schema("settings")
@@ -368,6 +400,31 @@ model Designation {
   updatedAt DateTime @updatedAt
 
   @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// Labour skill category (Mason, Carpenter, Bar Bender, Helper, Fitter, Operator) —
+/// the master a per-project wage rate is set against (013 FR-003, US1). A
+/// `settings`-schema reference master like Department/Designation, but owned and
+/// audited by feature 013 (SKILL_CATEGORY). `code` supports lookup/import; the
+/// optional `defaultDailyRate` seeds a new project rate. Deletion is blocked while
+/// any labour worker still references it (→ 409).
+model SkillCategory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name            String
+  code            String
+  defaultDailyRate Decimal? @db.Decimal(12, 2)
+  isActive        Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@unique([companyId, code])
   @@index([companyId])
   @@schema("settings")
 }
@@ -647,6 +704,17 @@ enum AuditEntityType {
   /// itself is a read, and emitting a notification is already recorded by the
   /// `ReminderNotification` ledger, which carries more than an audit row could.
   REMINDER
+
+  // Labour entities audited by feature 013 (FR-039). Skill Category is a
+  // `settings`-schema master but 013 is what creates and audits it, mirroring how
+  // 009's ITEM/ITEM_CATEGORY sit outside the Settings block above.
+  SKILL_CATEGORY
+  WAGE_RATE
+  LABOUR_WORKER
+  LABOUR_GANG
+  MUSTER_ROLL
+  LABOUR_PAYMENT_SHEET
+  LABOUR_ADVANCE
 
   // Plant & Machinery entities audited by feature 006 (FR-012) and its spare-parts
   // amendment (FR-028). The three masters sit here rather than under the Settings
@@ -3874,4 +3942,449 @@ model ServiceBill {
   @@index([companyId, vendorId])
   @@index([companyId, paymentStatus])
   @@schema("plant")
+}
+
+// ============================================================================
+// labour schema — feature 013 (Labour Management: per-project wage rates, workers
+// and gangs, supervisor muster capture, muster approval, cash payment sheets with
+// denomination breakup and disbursement, and labour advances).
+//
+// Supersedes feature 005's Daily Worker registry (US9, FR-023 to FR-028), which was
+// never implemented — so there is no migration of existing rows, only fresh tables.
+//
+// Every cross-schema reference (projectId, siteId, contractorId, skillCategoryId,
+// faceEnrolmentId, supervisorId, approver ids) is stored as a bare id with no Prisma
+// relation, the same rule the projects and inventory schemas follow: Principle I
+// routes every cross-module read through the owning module's exported service, and a
+// declared relation is precisely what would make an accidental cross-schema join
+// possible. Same-schema parent/child links (muster→lines, sheet→lines, gang→members)
+// are real relations.
+// ============================================================================
+
+enum EngagementType {
+  direct
+  contractor
+
+  @@schema("labour")
+}
+
+enum WorkerStatus {
+  active
+  inactive
+
+  @@schema("labour")
+}
+
+enum MusterSource {
+  mobile
+  admin_entry
+
+  @@schema("labour")
+}
+
+enum MusterStatus {
+  draft
+  submitted
+  approved
+
+  @@schema("labour")
+}
+
+enum AttendanceType {
+  full_day
+  half_day
+  absent
+  overtime_only
+
+  @@schema("labour")
+}
+
+enum RateSource {
+  override
+  project_rate
+
+  @@schema("labour")
+}
+
+enum PaymentSheetStatus {
+  draft
+  approved
+  partially_disbursed
+  closed
+
+  @@schema("labour")
+}
+
+enum LabourPaymentMode {
+  cash
+  bank
+
+  @@schema("labour")
+}
+
+enum PaymentSheetLineStatus {
+  pending
+  disbursed
+  reversed
+
+  @@schema("labour")
+}
+
+enum AdvanceStatus {
+  pending
+  approved
+  disbursed
+  closed
+
+  @@schema("labour")
+}
+
+/// A per-project, per-skill-category daily wage rate with a non-overlapping
+/// effective-dated history (013 FR-004 to FR-007) — the same pattern 006 FR-014 uses
+/// for equipment hire rates. `effectiveTo` is null for the current rate and is
+/// auto-closed to the day before a newer rate's `effectiveFrom` on append.
+model WageRate {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// → projects, resolved via ProjectsService (FR-034).
+  projectId String
+  /// → settings.SkillCategory.
+  skillCategoryId String
+
+  dailyRate     Decimal  @db.Decimal(12, 2)
+  effectiveFrom DateTime @db.Date
+  /// Null = the current open-ended rate. Set to the day before a newer rate's
+  /// `effectiveFrom` when one is appended.
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, projectId, skillCategoryId, effectiveFrom])
+  @@schema("labour")
+}
+
+/// A labour worker — direct (company-engaged, paid from the cash sheet) or
+/// contractor-engaged (paid through a contractor from 007's vault). Supersedes 005's
+/// Daily Worker. PII (`aadhaarNumber`, `bankAccount`) is masked in list responses
+/// (FR-009) and unique among active workers for Aadhaar (FR-010).
+model LabourWorker {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Auto-generated, unique per company (e.g. LAB-0001).
+  labourCode String
+
+  fullName    String
+  phone       String
+  gender      String
+  dateOfBirth DateTime @db.Date
+
+  aadhaarNumber String?
+  bankAccount   String?
+
+  /// → settings.SkillCategory.
+  skillCategoryId String
+
+  engagementType EngagementType
+  /// Required when `engagementType` is contractor (FR-008); → partners vendor
+  /// resolved via PartnersService (FR-034).
+  contractorId String?
+
+  /// → projects.Site.
+  siteId String
+
+  /// Optional per-worker rate that takes precedence over the project rate (FR-006).
+  rateOverride Decimal? @db.Decimal(12, 2)
+
+  /// → feature 003's face enrolment, reused not reimplemented (FR-011).
+  faceEnrolmentId String?
+
+  status              WorkerStatus @default(active)
+  lastWorkingDate     DateTime?    @db.Date
+  deactivationReason  String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  gangMemberships GangMember[]
+
+  @@unique([companyId, labourCode])
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@index([companyId, skillCategoryId])
+  @@index([companyId, status])
+  @@schema("labour")
+}
+
+/// A gang: a group of workers under a gang leader, selectable as a batch during
+/// muster capture (FR-012).
+model LabourGang {
+  id        String @id @default(cuid())
+  companyId String
+
+  name               String
+  gangLeaderWorkerId String
+  siteId             String
+  isActive           Boolean @default(true)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  members GangMember[]
+
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@schema("labour")
+}
+
+/// Gang membership join. A worker belongs to at most one active gang at a time
+/// (FR-012) — enforced by a partial unique index on `workerId` where `isActive`,
+/// added in the migration (Prisma cannot express a partial unique index).
+model GangMember {
+  id        String @id @default(cuid())
+  companyId String
+
+  gangId String
+  gang   LabourGang @relation(fields: [gangId], references: [id], onDelete: Cascade)
+
+  workerId String
+  worker   LabourWorker @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the gang so the partial unique index (single active
+  /// membership) can be evaluated without a join.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@unique([gangId, workerId])
+  @@index([companyId])
+  @@index([workerId])
+  @@schema("labour")
+}
+
+/// A muster roll: one supervisor capture session for a site and date, validated
+/// against the site geofence by a single GPS reading (FR-013, FR-016). Geofence and
+/// low-accuracy violations are recorded and flagged, never rejected (FR-013).
+model MusterRoll {
+  id        String @id @default(cuid())
+  companyId String
+
+  siteId String
+  /// Company-timezone calendar day (003 FR-018a basis, FR-021).
+  date   DateTime @db.Date
+
+  /// The account (supervisor) that opened the session.
+  supervisorId String
+
+  latitude       Decimal @db.Decimal(10, 7)
+  longitude      Decimal @db.Decimal(10, 7)
+  accuracyMetres Decimal @db.Decimal(8, 2)
+
+  geofenceViolation       Boolean  @default(false)
+  lowGpsAccuracy          Boolean  @default(false)
+  distanceFromFenceMetres Decimal? @db.Decimal(10, 2)
+
+  source MusterSource @default(mobile)
+
+  /// Both retained for offline sync (FR-018); `capturedAt` is the client's,
+  /// `receivedAt` the server's.
+  capturedAt     DateTime
+  receivedAt     DateTime @default(now())
+  isOfflineSynced Boolean @default(false)
+
+  status       MusterStatus @default(draft)
+  approvedBy   String?
+  approvedAt   DateTime?
+  returnReason String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  lines MusterLine[]
+
+  @@index([companyId])
+  @@index([companyId, siteId, date])
+  @@index([companyId, status])
+  @@schema("labour")
+}
+
+/// One worker's line on a muster roll: attendance type, optional overtime, the
+/// captured photo (encrypted object storage — FR-015), and an advisory face-match
+/// result (FR-014 — flagged, never blocking). `skillCategoryIdOnDay` snapshots the
+/// worker's skill so a mid-period change still prices correctly.
+model MusterLine {
+  id        String @id @default(cuid())
+  companyId String
+
+  musterId String
+  muster   MusterRoll @relation(fields: [musterId], references: [id], onDelete: Cascade)
+
+  workerId String
+
+  attendanceType AttendanceType
+  overtimeHours  Decimal? @db.Decimal(5, 2)
+
+  /// Encrypted object-storage ref (FR-015). Nullable so a gang bulk-add can create a
+  /// line before its photo is captured; submission requires every line to have one
+  /// (FR-010).
+  photoRef String?
+
+  faceMatchScore Decimal? @db.Decimal(6, 4)
+  faceMatchLow   Boolean  @default(false)
+
+  /// Snapshot of the worker's skill category at capture time so a mid-period skill
+  /// change prices historical days correctly.
+  skillCategoryIdOnDay String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([musterId, workerId])
+  @@index([companyId])
+  @@index([workerId])
+  @@schema("labour")
+}
+
+/// A cash payment sheet: one per project, per wage period, per engagement type
+/// (FR-023, FR-026 to FR-028). Frozen on approval; direct sheets carry a jsonb
+/// denomination breakup, contractor sheets do not.
+model LabourPaymentSheet {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+
+  periodFrom DateTime @db.Date
+  periodTo   DateTime @db.Date
+
+  engagementType EngagementType
+
+  status PaymentSheetStatus @default(draft)
+
+  grossTotal     Decimal @default(0) @db.Decimal(14, 2)
+  deductionTotal Decimal @default(0) @db.Decimal(14, 2)
+  netTotal       Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Minimal note-count breakup with per-worker residual (FR-027) — direct sheets
+  /// only. Null for contractor sheets (FR-028).
+  denominationBreakup Json?
+
+  approvedBy   String?
+  approvedAt   DateTime?
+  reopenReason String?
+  closedAt     DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  lines PaymentSheetLine[]
+
+  @@index([companyId])
+  @@index([companyId, projectId, engagementType])
+  @@index([companyId, status])
+  @@schema("labour")
+}
+
+/// One worker's aggregated line on a payment sheet, then the disbursement record
+/// against it. `deductions` is a jsonb list (advance instalments, fines).
+model PaymentSheetLine {
+  id        String @id @default(cuid())
+  companyId String
+
+  sheetId String
+  sheet   LabourPaymentSheet @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+
+  workerId String
+
+  /// Full days = 1, half days = 0.5 (FR-022).
+  daysWorked    Decimal @db.Decimal(6, 2)
+  overtimeHours Decimal @default(0) @db.Decimal(6, 2)
+
+  resolvedRate Decimal    @db.Decimal(12, 2)
+  rateSource   RateSource
+
+  grossWage  Decimal @db.Decimal(14, 2)
+  /// Advance instalments and fines applied this period (jsonb list).
+  deductions Json
+  netPayable Decimal @db.Decimal(14, 2)
+
+  paymentMode        LabourPaymentMode?
+  paidOn             DateTime?    @db.Date
+  paidAmount         Decimal?     @db.Decimal(14, 2)
+  shortPaymentReason String?
+  /// Encrypted object-storage ref, required for a cash disbursement (FR-029).
+  acknowledgementRef String?
+  /// Unpaid remainder (short payment) carried to the next period (FR-030).
+  carriedForwardBalance Decimal @default(0) @db.Decimal(14, 2)
+
+  status PaymentSheetLineStatus @default(pending)
+
+  reversalReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([sheetId])
+  @@index([workerId])
+  @@schema("labour")
+}
+
+/// A labour advance against future wages, recovered in instalments through payment
+/// sheets (FR-024, FR-025). `outstandingBalance` is reduced only on disbursement of
+/// the recovering sheet line, never on sheet generation.
+model LabourAdvance {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId String
+
+  amount Decimal @db.Decimal(14, 2)
+  reason String
+
+  recoveryInstalments Int
+  /// `amount / recoveryInstalments`, rounded — the per-period deduction.
+  instalmentAmount    Decimal @db.Decimal(14, 2)
+  /// The wage period (its `periodFrom` date) recovery starts from.
+  recoveryStartPeriod DateTime @db.Date
+
+  outstandingBalance Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Amount exceeds the configured multiple of the worker's daily rate (FR-024/US7);
+  /// requires LABOUR_APPROVE to be approved.
+  exceedsLimit Boolean @default(false)
+
+  status      AdvanceStatus @default(pending)
+  approvedBy  String?
+  approvedAt  DateTime?
+  disbursedOn DateTime?     @db.Date
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, workerId])
+  @@index([companyId, status])
+  @@schema("labour")
 }

@@ -15,7 +15,8 @@ function parsePtSlabs(
   raw: string | undefined,
 ): { upToMonthlyGross: number | null; monthlyAmount: number }[] | undefined {
   if (!raw?.trim()) return undefined;
-  const slabs: { upToMonthlyGross: number | null; monthlyAmount: number }[] = [];
+  const slabs: { upToMonthlyGross: number | null; monthlyAmount: number }[] =
+    [];
   for (const part of raw.split(',')) {
     const [upTo, amount] = part.split(':').map((x) => x.trim());
     const parsedAmount = Number(amount);
@@ -130,7 +131,10 @@ const config: Config = {
       bonus: numberFromEnv(process.env.SETTINGS_DEFAULT_BONUS_RATE, 8.33),
       // 005 FR-014a. A multiplier, not a percent — 2x the derived hourly rate is
       // the statutory default for overtime.
-      otMultiplier: numberFromEnv(process.env.SETTINGS_DEFAULT_OT_MULTIPLIER, 2.0),
+      otMultiplier: numberFromEnv(
+        process.env.SETTINGS_DEFAULT_OT_MULTIPLIER,
+        2.0,
+      ),
     },
     defaultPayrollLockDay: numberFromEnv(
       process.env.SETTINGS_DEFAULT_PAYROLL_LOCK_DAY,
@@ -209,6 +213,21 @@ const config: Config = {
         ),
       },
     },
+    labour: {
+      // 013 FR-013. A muster fix worse than this many metres is flagged for review
+      // rather than rejected — 50 m is a generous default for a phone GPS on an
+      // open site, loosenable where reception is poor.
+      gpsAccuracyMaxMetres: numberFromEnv(
+        process.env.WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES,
+        50,
+      ),
+      // 013 US7. An advance above 15x the worker's daily rate needs approval — a
+      // fortnight's wages, past which a site clerk should not grant it unilaterally.
+      advanceLimitMultiple: numberFromEnv(
+        process.env.WORKSPACE_LABOUR_ADVANCE_LIMIT_MULTIPLE,
+        15,
+      ),
+    },
   },
   hrPayroll: {
     // 005 FR-006 — how far ahead an employee document starts reporting as
@@ -217,22 +236,33 @@ const config: Config = {
       process.env.HR_DOCUMENT_EXPIRY_WARNING_DAYS,
       30,
     ),
-    standardHoursPerDay: numberFromEnv(process.env.HR_STANDARD_HOURS_PER_DAY, 8),
+    standardHoursPerDay: numberFromEnv(
+      process.env.HR_STANDARD_HOURS_PER_DAY,
+      8,
+    ),
     statutory: {
       pf: {
         employeeRatePercent: numberFromEnv(process.env.PF_EMPLOYEE_RATE, 12),
         wageCeiling: numberFromEnv(process.env.PF_WAGE_CEILING, 15000),
         epsRatePercent: numberFromEnv(process.env.PF_EPS_RATE, 8.33),
         edliRatePercent: numberFromEnv(process.env.PF_EDLI_RATE, 0.5),
-        adminChargesPercent: numberFromEnv(process.env.PF_ADMIN_CHARGES_RATE, 0.5),
+        adminChargesPercent: numberFromEnv(
+          process.env.PF_ADMIN_CHARGES_RATE,
+          0.5,
+        ),
       },
       esic: {
-        employeeRatePercent: numberFromEnv(process.env.ESIC_EMPLOYEE_RATE, 0.75),
+        employeeRatePercent: numberFromEnv(
+          process.env.ESIC_EMPLOYEE_RATE,
+          0.75,
+        ),
         wageCeiling: numberFromEnv(process.env.ESIC_WAGE_CEILING, 21000),
       },
       // Maharashtra's slabs as the shipped default. A company in another state
       // overrides these through the environment rather than a code change.
-      professionalTaxSlabs: parsePtSlabs(process.env.PROFESSIONAL_TAX_SLABS) ?? [
+      professionalTaxSlabs: parsePtSlabs(
+        process.env.PROFESSIONAL_TAX_SLABS,
+      ) ?? [
         { upToMonthlyGross: 7500, monthlyAmount: 0 },
         { upToMonthlyGross: 10000, monthlyAmount: 175 },
         { upToMonthlyGross: null, monthlyAmount: 200 },
@@ -246,7 +276,10 @@ const config: Config = {
           '80CCD1B': numberFromEnv(process.env.TDS_CEILING_80CCD1B, 50000),
           HRA: numberFromEnv(process.env.TDS_CEILING_HRA, 0),
         },
-        standardDeduction: numberFromEnv(process.env.TDS_STANDARD_DEDUCTION, 50000),
+        standardDeduction: numberFromEnv(
+          process.env.TDS_STANDARD_DEDUCTION,
+          50000,
+        ),
       },
     },
 

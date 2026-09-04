@@ -20,6 +20,7 @@ import { UsersAdminService } from './users-admin/users-admin.service';
 import { ItemCategoriesService } from './item-masters/item-categories.service';
 import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
+import { SkillCategoriesService } from './skill-categories/skill-categories.service';
 
 /**
  * The `settings` module: companies, roles, user administration, and the four
@@ -57,6 +58,7 @@ import { VendorCategoriesService } from './vendor-categories/vendor-categories.s
     ItemCategoriesService,
     ItemsService,
     AuditLogService,
+    SkillCategoriesService,
   ],
   exports: [
     RolesService,
@@ -79,6 +81,10 @@ import { VendorCategoriesService } from './vendor-categories/vendor-categories.s
     ItemCategoriesService,
     ItemsService,
     CodeSeriesService,
+    // Exported for `labour`, which owns the skill-category endpoints and the
+    // deletion-in-use guard while the table itself is a `settings` master (013
+    // research/data-model), mirroring the item-master arrangement above.
+    SkillCategoriesService,
   ],
 })
 export class SettingsModule {}

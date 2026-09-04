@@ -154,3 +154,42 @@ never enters a `PayrollRun` (FR-032, 005 FR-048).
 - [ ] Verify soft-delete on workers, musters, sheets, advances (FR-036)
 - [ ] Confirm no labour figure reaches any `PayrollRun` (FR-032 / 005 FR-048)
 - [ ] `npm run lint` + `npm run build` clean
+
+## Implementation deviations (2026-09-04)
+
+These deltas from the plan above were made during implementation and are recorded
+here per the constitution's "update the spec when you change it" rule:
+
+- **No 005 data migration (T004).** Feature 005's Daily Worker registry was never
+  implemented — no `DailyWorker` model exists in the schema — so there is nothing to
+  migrate or drop. The `labour` schema is created fresh. T004 is therefore a no-op and
+  was removed rather than shipped as an empty migration.
+- **Synchronous export only.** The codebase has no BullMQ/Redis infrastructure (a
+  prior feature explicitly deferred it), so payment-sheet and report export are
+  synchronous. The async-above-threshold behaviour (FR-042 / T061) is deferred to when
+  queue infrastructure lands; the endpoints and export libraries are wired so it is an
+  additive change.
+- **Field-policy tunables live in `WorkspaceConfig.labour`, not on `Company`.** The GPS
+  accuracy limit (FR-013) and advance limit multiple (US7) are config values
+  (`workspace.labour.gpsAccuracyMaxMetres`, `advanceLimitMultiple`), consistent with how
+  003's punch tunables are configured. The wage cycle (FR-041) and cash denominations
+  (FR-027) are per-company and live on `Company` (`labourWageCycle`,
+  `labourCashDenominations`). The OT multiplier is read from 005's existing
+  `Company.otMultiplier` (FR-049), never duplicated.
+- **Face enrolment reuses 003's machinery, not its table.** 003's `FaceEnrolment` row is
+  account/employee-bound and cannot key to a non-account labour worker, so worker
+  enrolment reuses the same `BiometricsService`, `ImageProcessingService`, and encrypted
+  `StorageService` (the machinery FR-011 requires), storing the serialized descriptor as
+  an encrypted blob referenced by `LabourWorker.faceEnrolmentId`. No second biometric
+  implementation is introduced.
+- **`SkillCategory` endpoints are hosted by the labour module** (route
+  `/settings/skill-categories`) while the table and CRUD service live in `settings` and
+  are exported — the same split 009 uses for item masters. The deletion-in-use guard is
+  enforced by the labour module because only it may count `labour.LabourWorker` rows
+  (Principle I).
+- **Muster line photo is nullable** so a gang bulk-add (T027) can create lines before
+  photos are captured; submission enforces every line has one (FR-010). A composite
+  `POST /labour/musters/capture` endpoint opens+marks+submits atomically for the
+  frontend's offline-drain replay (FR-018), alongside the incremental
+  open/add-line/submit endpoints.
+
