@@ -139,6 +139,8 @@ so this is not a literal inside the denomination service — Principle III.']
   shifts Shift [not null]
   employeeCodeSeq EmployeeCodeSequence
   skillCategories SkillCategory [not null]
+  kitItems KitItem [not null]
+  letterTemplates LetterTemplate [not null]
   reimbursementCategories ReimbursementCategory [not null]
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
@@ -231,6 +233,46 @@ the master a per-project wage rate is set against (013 FR-003, US1). A
 audited by feature 013 (SKILL_CATEGORY). `code` supports lookup/import; the
 optional `defaultDailyRate` seeds a new project rate. Deletion is blocked while
 any labour worker still references it (→ 409).'
+}
+
+Table KitItem {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  linkedInventoryItemId String
+  defaultQuantity Int [not null, default: 1]
+  issuedByDefault Boolean [not null, default: true]
+  isRecoverableAtExit Boolean [not null, default: false]
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'A kit item issued during onboarding (helmet, safety shoes, ID card, laptop) —
+a `settings`-schema master owned and audited by feature 011 (011 FR-037). When
+`linkedInventoryItemId` names an inventory item, issuing it records a real stock
+issue; otherwise it is a non-stock issuance.'
+}
+
+Table LetterTemplate {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  letterType LetterType [not null]
+  name String [not null]
+  bodyTemplate String [not null]
+  letterheadAssetId String
+  isActive Boolean [not null, default: false]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A per-company letter template with `{{token}}` substitution (011 FR-020, FR-021).
+At most one active template per (companyId, letterType) — enforced by a partial
+unique index in the migration.'
 }
 
 Table DocumentType {
@@ -2429,6 +2471,258 @@ sheets (FR-024, FR-025). `outstandingBalance` is reduced only on disbursement of
 the recovering sheet line, never on sheet generation.'
 }
 
+Table Requisition {
+  id String [pk]
+  companyId String [not null]
+  requisitionCode String [not null]
+  departmentId String [not null]
+  designationId String [not null]
+  positionCount Int [not null]
+  filledPositions Int [not null, default: 0]
+  employmentType RequisitionEmploymentType [not null]
+  projectId String
+  siteId String
+  targetJoiningDate DateTime [not null]
+  budgetedCtcMin Decimal [not null]
+  budgetedCtcMax Decimal [not null]
+  justification String [not null]
+  status RequisitionStatus [not null, default: 'draft']
+  approvedBy String
+  approvedAt DateTime
+  rejectionReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  candidates Candidate [not null]
+
+  indexes {
+    (companyId, requisitionCode) [unique]
+  }
+
+  Note: 'A manpower requisition — the "Open Positions" record every candidate is scoped to
+(011 US1). Auto-closes when `filledPositions == positionCount` (FR-014).'
+}
+
+Table Candidate {
+  id String [pk]
+  companyId String [not null]
+  requisitionId String [not null]
+  requisition Requisition [not null]
+  fullName String [not null]
+  phone String [not null]
+  email String [not null]
+  totalExperienceYears Decimal [not null]
+  currentEmployer String
+  currentCtc Decimal
+  expectedCtc Decimal
+  source CandidateSource [not null]
+  referredByEmployeeId String
+  resumeRef String
+  stage CandidateStage [not null, default: 'applied']
+  employeeId String
+  previousCandidateId String
+  rejectionReason String
+  noShowReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  stageHistory CandidateStageHistory [not null]
+  interviews Interview [not null]
+  offers Offer [not null]
+
+  Note: 'A candidate against one requisition (011 US2). PII (`phone`, `email`,
+`currentCtc`, `expectedCtc`) is masked in list responses (FR-006). Retained and
+linked to the created `hr.Employee` via `employeeId` on joining (FR-013).'
+}
+
+Table CandidateStageHistory {
+  id String [pk]
+  companyId String [not null]
+  candidateId String [not null]
+  candidate Candidate [not null]
+  fromStage CandidateStage
+  toStage CandidateStage [not null]
+  actorId String
+  occurredAt DateTime [default: `now()`, not null]
+  remarks String
+
+  Note: 'Immutable stage-transition log — the source of truth for time-to-hire (FR-005,
+FR-028).'
+}
+
+Table Interview {
+  id String [pk]
+  companyId String [not null]
+  candidateId String [not null]
+  candidate Candidate [not null]
+  roundNumber Int [not null]
+  roundType InterviewRoundType [not null]
+  scheduledAt DateTime [not null]
+  mode InterviewMode [not null]
+  location String
+  status InterviewStatus [not null, default: 'scheduled']
+  rescheduleCount Int [not null, default: 0]
+  rescheduleHistory Json
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  interviewers InterviewInterviewer [not null]
+  feedback InterviewFeedback [not null]
+
+  indexes {
+    (candidateId, roundNumber) [unique]
+  }
+
+  Note: 'One interview round for a candidate (011 US3). Round number is unique per
+candidate; `rescheduleHistory` retains prior times as jsonb.'
+}
+
+Table InterviewInterviewer {
+  id String [pk]
+  companyId String [not null]
+  interviewId String [not null]
+  interview Interview [not null]
+  employeeId String [not null]
+
+  indexes {
+    (interviewId, employeeId) [unique]
+  }
+
+  Note: 'Join table: which employees are assigned to an interview (gates who may submit
+feedback — FR-009).'
+}
+
+Table InterviewFeedback {
+  id String [pk]
+  companyId String [not null]
+  interviewId String [not null]
+  interview Interview [not null]
+  interviewerEmployeeId String [not null]
+  outcome InterviewOutcome [not null]
+  score Int [not null]
+  comments String [not null]
+  submittedAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (interviewId, interviewerEmployeeId) [unique]
+  }
+
+  Note: 'One interviewer\'s feedback on one interview (FR-009).'
+}
+
+Table Offer {
+  id String [pk]
+  companyId String [not null]
+  candidateId String [not null]
+  candidate Candidate [not null]
+  designationId String [not null]
+  departmentId String [not null]
+  offeredCtc Decimal [not null]
+  salaryBreakup Json [not null]
+  proposedJoiningDate DateTime [not null]
+  confirmedJoiningDate DateTime
+  probationMonths Int [not null]
+  noticePeriodDays Int [not null]
+  reportingManagerEmployeeId String [not null]
+  outsideBudget Boolean [not null, default: false]
+  status OfferStatus [not null, default: 'draft']
+  letterId String
+  acceptedOn DateTime
+  declineReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'An offer to a selected candidate (011 US4). Immutable once `accepted` (FR-012);
+at most one non-superseded offer per candidate. `salaryBreakup` is a jsonb list of
+{ name, monthlyAmount } that must reconcile to `offeredCtc / 12` (FR-010).'
+}
+
+Table OnboardingChecklist {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  candidateId String [not null]
+  openedAt DateTime [default: `now()`, not null]
+  completedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  items OnboardingItem [not null]
+
+  indexes {
+    (companyId, employeeId) [unique]
+  }
+
+  Note: 'The onboarding checklist opened when a candidate joins (011 US6).'
+}
+
+Table OnboardingItem {
+  id String [pk]
+  companyId String [not null]
+  checklistId String [not null]
+  checklist OnboardingChecklist [not null]
+  itemType OnboardingItemType [not null]
+  documentTypeId String
+  kitItemId String
+  label String [not null]
+  status OnboardingItemStatus [not null, default: 'pending']
+  completedBy String
+  completedAt DateTime
+  waiverReason String
+  linkedIssueId String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One checklist item: a document to verify, a kit item to issue, or an induction
+task (011 FR-015 to FR-019).'
+}
+
+Table GeneratedLetter {
+  id String [pk]
+  companyId String [not null]
+  letterType LetterType [not null]
+  employeeId String
+  candidateId String
+  templateId String [not null]
+  renderedRef String [not null]
+  version Int [not null, default: 1]
+  isSuperseded Boolean [not null, default: false]
+  issuedAt DateTime [default: `now()`, not null]
+  issuedBy String
+
+  Note: 'A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
+prior version; both remain downloadable.'
+}
+
+Table Resignation {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  resignationDate DateTime [not null]
+  reasonCategory ResignationReasonCategory [not null]
+  reasonDetail String [not null]
+  noticePeriodDays Int [not null]
+  expectedLastWorkingDay DateTime [not null]
+  agreedLastWorkingDay DateTime
+  noticeWaiverDays Int
+  waiverReason String
+  status ResignationStatus [not null, default: 'submitted']
+  withdrawReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'An employee\'s resignation record (011 US8) — the trigger 005\'s exit flow consumes.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -2469,6 +2763,8 @@ Enum Permission {
   LABOUR_APPROVE
   MAINTENANCE
   HIRE_BILLS
+  RECRUITMENT
+  RECRUITMENT_APPROVE
 }
 
 Enum CompanyStatus {
@@ -2489,6 +2785,14 @@ Enum LabourWageCycle {
 Enum TaxRegime {
   old
   new
+}
+
+Enum LetterType {
+  offer
+  appointment
+  confirmation
+  relieving
+  experience
 }
 
 Enum AuditEntityType {
@@ -2566,6 +2870,13 @@ Enum AuditEntityType {
   SPARE_PART
   SPARE_PART_MOVEMENT
   SERVICE_BILL
+  REQUISITION
+  CANDIDATE
+  INTERVIEW
+  OFFER
+  ONBOARDING_ITEM
+  LETTER
+  RESIGNATION
 }
 
 Enum AuditAction {
@@ -2808,6 +3119,7 @@ Enum CodeSeriesType {
   INDENT
   GRN
   EQUIPMENT
+  REQUISITION
 }
 
 Enum VendorType {
@@ -3021,6 +3333,102 @@ Enum AdvanceStatus {
   closed
 }
 
+Enum RequisitionEmploymentType {
+  permanent
+  contract
+  walk_in
+}
+
+Enum RequisitionStatus {
+  draft
+  pending_approval
+  open
+  rejected
+  closed
+}
+
+Enum CandidateSource {
+  referral
+  agency
+  walk_in
+  portal
+  internal
+}
+
+Enum CandidateStage {
+  applied
+  shortlisted
+  interviewing
+  selected
+  offer_issued
+  offer_accepted
+  joined
+  rejected
+  no_show
+}
+
+Enum InterviewRoundType {
+  telephonic
+  technical
+  hr
+  managerial
+  final
+}
+
+Enum InterviewMode {
+  in_person
+  phone
+  video
+}
+
+Enum InterviewStatus {
+  scheduled
+  completed
+  cancelled
+}
+
+Enum InterviewOutcome {
+  recommend
+  hold
+  reject
+}
+
+Enum OfferStatus {
+  draft
+  issued
+  accepted
+  declined
+  superseded
+}
+
+Enum OnboardingItemType {
+  document
+  kit
+  induction
+}
+
+Enum OnboardingItemStatus {
+  pending
+  completed
+  waived
+}
+
+Enum ResignationReasonCategory {
+  better_opportunity
+  personal
+  relocation
+  health
+  compensation
+  work_environment
+  other
+}
+
+Enum ResignationStatus {
+  submitted
+  accepted
+  withdrawn
+}
+
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
@@ -3030,6 +3438,10 @@ Ref: Department.companyId > Company.id [delete: Cascade]
 Ref: Designation.companyId > Company.id [delete: Cascade]
 
 Ref: SkillCategory.companyId > Company.id [delete: Cascade]
+
+Ref: KitItem.companyId > Company.id [delete: Cascade]
+
+Ref: LetterTemplate.companyId > Company.id [delete: Cascade]
 
 Ref: DocumentType.companyId > Company.id [delete: Cascade]
 
@@ -3190,3 +3602,17 @@ Ref: GangMember.workerId > LabourWorker.id [delete: Cascade]
 Ref: MusterLine.musterId > MusterRoll.id [delete: Cascade]
 
 Ref: PaymentSheetLine.sheetId > LabourPaymentSheet.id [delete: Cascade]
+
+Ref: Candidate.requisitionId > Requisition.id [delete: Cascade]
+
+Ref: CandidateStageHistory.candidateId > Candidate.id [delete: Cascade]
+
+Ref: Interview.candidateId > Candidate.id [delete: Cascade]
+
+Ref: InterviewInterviewer.interviewId > Interview.id [delete: Cascade]
+
+Ref: InterviewFeedback.interviewId > Interview.id [delete: Cascade]
+
+Ref: Offer.candidateId > Candidate.id [delete: Cascade]
+
+Ref: OnboardingItem.checklistId > OnboardingChecklist.id [delete: Cascade]

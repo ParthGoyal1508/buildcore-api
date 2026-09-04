@@ -18,6 +18,7 @@ import { PartnersModule } from './partners/partners.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { PlantModule } from './plant/plant.module';
 import { ProjectsModule } from './projects/projects.module';
+import { RecruitmentModule } from './recruitment/recruitment.module';
 import { SettingsModule } from './settings/settings.module';
 import { EmailModule } from './shared/email/email.module';
 import { StorageModule } from './common/storage/storage.module';
@@ -71,6 +72,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     InventoryModule,
     LabourModule,
     PlantModule,
+    RecruitmentModule,
   ],
   controllers: [AppController],
   providers: [
