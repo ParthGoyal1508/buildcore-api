@@ -254,6 +254,26 @@ describe('PunchService', () => {
       const sql = prisma.tx.$queryRaw.mock.calls[0][0].join('?');
       expect(sql).toMatch(/FOR UPDATE/);
     });
+
+    it('binds the day as a cast date string, not a timestamp', async () => {
+      // The regression this exists for: bound as a JS `Date`, Prisma sends
+      // `timestamptz` and Postgres widens the `date` column at the session
+      // timezone (`Asia/Kolkata` on this deployment) to compare. The row never
+      // matched, so the FR-008 guards above were unreachable — a duplicate
+      // punch-in surfaced the unique index as a 500 and every punch-out was
+      // refused. Only an integration test against a real database can see the
+      // mismatch itself, so what is asserted here is the shape that avoids it.
+      const { service, prisma } = build({ dayPunches: [] });
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-31T18:39:00.000Z'));
+      await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: '2026-08-31T18:37:00.000Z' }),
+      );
+      const [strings, , day] = prisma.tx.$queryRaw.mock.calls[0];
+      expect(strings.join('?')).toMatch(/"punchDate" = \?::date/);
+      // 00:07 IST on 1 September: the employee's day, not the server's UTC one.
+      expect(day).toBe('2026-09-01');
+    });
   });
 
   describe('verification outcomes', () => {

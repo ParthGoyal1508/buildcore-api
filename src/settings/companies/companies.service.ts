@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { DocumentTypesService } from '../reference-data/document-types.service';
+import { ItemCategoriesService } from '../item-masters/item-categories.service';
 import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -31,6 +32,7 @@ export class CompaniesService {
     private readonly auditLog: AuditLogService,
     private readonly documentTypes: DocumentTypesService,
     private readonly vendorCategories: VendorCategoriesService,
+    private readonly itemCategories: ItemCategoriesService,
   ) {}
 
   /**
@@ -220,6 +222,10 @@ export class CompaniesService {
         // common vendor categories rather than an empty master that blocks the
         // first vendor anyone tries to create (007 US1).
         await this.vendorCategories.seedDefaultsForCompany(company.id, tx);
+        // And the ten material categories, for the same reason: an empty item
+        // master blocks the first purchase anyone tries to record (009 FR-016,
+        // research.md §15).
+        await this.itemCategories.seedDefaultsForCompany(company.id, tx);
         await tx.employeeCodeSequence.create({
           data: { companyId: company.id, lastNumber: 0 },
         });

@@ -133,6 +133,8 @@ a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
   reimbursementCategories ReimbursementCategory [not null]
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
+  itemCategories ItemCategory [not null]
+  items Item [not null]
   reminderRuleOverrides ReminderRule [not null]
   reminderSnoozes ReminderSnooze [not null]
   reminderNotifications ReminderNotification [not null]
@@ -1541,6 +1543,285 @@ never whether it has already been announced. See specs/004-dashboard-backend/
 tasks.md, the 2026-09-03 implementation note.'
 }
 
+Table ItemCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null, note: 'Stored uppercase (FR-016\'s spec text) so "Cement" and "CEMENT" cannot coexist
+as two categories with the same meaning.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  items Item [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+}
+
+Table Item {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  code String [not null, note: 'Allocated from the company\'s ITEMS series: `{shortCode}-ITM-0001`.']
+  name String [not null]
+  categoryId String [not null]
+  category ItemCategory [not null]
+  unit ItemUnit [not null]
+  reorderLevel Decimal [note: 'The per-item stock floor (FR-017). Nullable because most items never need one,
+and a default of 0 would claim every item is exactly at its threshold. Compared
+against computed `inStock` at read time — `belowReorderLevel` is never stored
+(research.md §12).']
+  hsnCode String [note: 'HS code for GST returns (FR-017). Free text: the schedule changes, and an enum
+would make every rate revision a migration.']
+  description String
+  active Boolean [not null, default: true, note: 'Soft-retired rather than deleted once stock history exists, so a purchase from
+two years ago still resolves its item name.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+    (companyId, code) [unique]
+  }
+}
+
+Table StockBalance {
+  id String [pk]
+  companyId String [not null]
+  itemId String [not null]
+  siteId String [not null]
+  received Decimal [not null, default: 0]
+  issued Decimal [not null, default: 0]
+  transferIn Decimal [not null, default: 0]
+  transferOut Decimal [not null, default: 0]
+  avgRate Decimal [not null, default: 0, note: 'Weighted average rate. Six decimal places rather than the two money elsewhere
+carries: this is a computed average, not a transacted amount, and rounding it
+to paise on every purchase would drift the stock valuation of a
+frequently-received item measurably over a year.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (itemId, siteId) [unique]
+  }
+
+  Note: 'Running totals per item per site, updated inside the same transaction as the
+ledger write (FR-002). The ledger is the record of truth; this is the O(1) read
+of it, and `StockService.recomputeWAR()` can rebuild `avgRate` from the ledger
+whenever a purchase is reversed.'
+}
+
+Table StockLedgerEntry {
+  id String [pk]
+  companyId String [not null]
+  itemId String [not null]
+  siteId String [not null]
+  type StockLedgerType [not null]
+  quantity Decimal [not null]
+  rate Decimal [note: 'Populated for `purchase`/`purchase_reversal` only: an issue consumes at the
+running average, so recording a rate against it would invent a number.']
+  referenceId String [not null, note: 'The Purchase, Issue or StockTransfer this entry came from. A plain column: the
+three possible parents make a Prisma relation impossible to declare, and the
+reversal pairs are found by this id.']
+  date DateTime [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'Append-only. No update or delete path exists in the service layer, and the
+absence of an `updatedAt` here is deliberate — a row that can be amended is not
+a ledger.'
+}
+
+Table Purchase {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  itemId String [not null]
+  vendorId String [not null]
+  date DateTime [not null]
+  quantity Decimal [not null]
+  rate Decimal [not null]
+  amount Decimal [not null, note: 'Stored rather than derived: `quantity × rate` rounded once at write time is
+what the vendor billed, and recomputing it on every read would let a rounding
+change silently restate historical spend.']
+  billFileRef String [note: 'Object-storage reference for the uploaded bill, same encrypted-reference
+pattern as `EmployeeDocument`/`ProjectDocument`.']
+  remarks String
+  indentLineId String [note: 'The indent line this purchase fulfils, if it came from one (FR-023).']
+  indentLine MaterialIndentLine
+  deleted Boolean [not null, default: false]
+  deletedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  bill PurchaseBill
+  grn GoodsReceiptNote
+}
+
+Table GoodsReceiptNote {
+  id String [pk]
+  companyId String [not null]
+  purchaseId String [unique, not null]
+  purchase Purchase [not null]
+  grnNumber String [not null, note: '`{shortCode}-GRN-0001`, allocated from the purchase\'s own sequence at creation.']
+  siteId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (companyId, grnNumber) [unique]
+  }
+
+  Note: 'Auto-created 1:1 with every purchase (FR-020). Separate from `PurchaseBill`
+because they answer different questions: a GRN records that material physically
+arrived, a bill records that money is owed for it.'
+}
+
+Table PurchaseBill {
+  id String [pk]
+  companyId String [not null]
+  purchaseId String [unique, not null]
+  purchase Purchase [not null]
+  vendorId String [not null]
+  totalAmount Decimal [not null]
+  paidAmount Decimal [not null, default: 0]
+  paymentStatus PurchaseBillStatus [not null, default: 'unpaid', note: 'Derived from the two amounts above and rewritten in the same transaction that
+moves `paidAmount` — stored so the FIFO query can filter on it without
+recomputing every bill\'s status to find the unpaid ones.']
+  billDate DateTime [not null, note: 'The bill\'s own date drives FIFO order (FR-005), copied from the purchase so
+allocation never has to join back to it.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  allocations PaymentAllocation [not null]
+}
+
+Table Issue {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  itemId String [not null]
+  date DateTime [not null]
+  quantity Decimal [not null]
+  issuedTo String [not null]
+  activityId String [note: 'What the material was consumed for (FR-019). Both optional: the link is
+recorded when the site\'s project has BOQ or activity data to point at, and
+requiring one would make material un-issuable at a project whose BOQ has not
+been loaded yet. Validated against `ProjectsService` when supplied.']
+  boqItemId String
+  remarks String
+  indentLineId String [note: 'The indent line this issue fulfils, if it came from one (FR-023).']
+  indentLine MaterialIndentLine
+  deleted Boolean [not null, default: false]
+  deletedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
+Table StockTransfer {
+  id String [pk]
+  companyId String [not null]
+  fromSiteId String [not null]
+  toSiteId String [not null]
+  itemId String [not null]
+  date DateTime [not null]
+  quantity Decimal [not null]
+  remarks String
+  status TransferStatus [not null, default: 'pending', note: 'Physical-movement tracking only. Both balances move at creation regardless of
+this value: the material has left the source store the moment the transfer is
+recorded, and holding the decrement until "received" would let the same units
+be issued twice.']
+  deleted Boolean [not null, default: false]
+  deletedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
+Table Payment {
+  id String [pk]
+  companyId String [not null]
+  vendorId String [not null]
+  amount Decimal [not null]
+  date DateTime [not null]
+  paymentMode PaymentMode [not null]
+  referenceNumber String [not null]
+  allocatedAmount Decimal [not null, default: 0, note: 'How much of `amount` reached bills. Stored because FIFO allocation writes it in
+the same transaction as the `PaymentAllocation` rows; `unallocatedBalance` is
+`amount − allocatedAmount`, derived on read.']
+  deleted Boolean [not null, default: false]
+  deletedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  allocations PaymentAllocation [not null]
+}
+
+Table PaymentAllocation {
+  id String [pk]
+  companyId String [not null]
+  paymentId String [not null]
+  payment Payment [not null]
+  billId String [not null]
+  bill PurchaseBill [not null]
+  allocatedAmount Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (paymentId, billId) [unique]
+  }
+
+  Note: 'Which bill received how much from which payment (FR-006). The join row is what
+makes a payment reversible: deleting a payment walks these and gives each bill
+its amount back.'
+}
+
+Table MaterialIndent {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  projectId String [note: 'Denormalised from the site so the indent list can filter by project without
+asking ProjectsService per row. Nullable: a site need not belong to a project.']
+  indentNumber String [not null, note: '`{shortCode}-IND-0001`.']
+  requiredByDate DateTime [not null]
+  justification String [not null]
+  status IndentStatus [not null, default: 'submitted']
+  requestedByUserId String [not null]
+  approvedByUserId String
+  approvedAt DateTime
+  decisionReason String [note: 'Set when an approver rejects or cancels; both require a reason (FR-026).']
+  deleted Boolean [not null, default: false]
+  deletedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  lines MaterialIndentLine [not null]
+
+  indexes {
+    (companyId, indentNumber) [unique]
+  }
+
+  Note: 'A site\'s request for material (FR-021). Approving one records intent; it does
+not touch any balance (FR-025) — issue-time validation stays the single point of
+stock enforcement, which is what keeps this amendment unable to produce a
+negative balance.'
+}
+
+Table MaterialIndentLine {
+  id String [pk]
+  companyId String [not null]
+  indentId String [not null]
+  indent MaterialIndent [not null]
+  itemId String [not null]
+  requestedQuantity Decimal [not null, note: 'All three quantities are kept, never collapsed (FR-022): the reduction an
+approver made is only auditable while the requested figure survives beside the
+approved one. Outstanding is `approved − fulfilled`, derived on read.']
+  approvedQuantity Decimal
+  fulfilledQuantity Decimal [not null, default: 0]
+  reductionReason String [note: 'Why the approved quantity is below the requested one (FR-022).']
+  activityId String
+  boqItemId String
+  procurementPending Boolean [not null, default: false, note: 'Set by `mark-procurement-needed`: this line cannot be met from stock and needs
+buying (FR-027).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  issues Issue [not null]
+  purchases Purchase [not null]
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -1577,6 +1858,7 @@ Enum Permission {
   DATA_EXPORT
   DATA_DELETE
   CROSS_COMPANY_ACCESS
+  INVENTORY_APPROVE
 }
 
 Enum CompanyStatus {
@@ -1612,6 +1894,14 @@ Enum AuditEntityType {
   FACE_ENROLMENT
   RE_ENROLMENT_REQUEST
   REIMBURSEMENT_CLAIM
+  ITEM_CATEGORY
+  ITEM
+  PURCHASE
+  GOODS_RECEIPT_NOTE
+  ISSUE
+  STOCK_TRANSFER
+  PAYMENT
+  MATERIAL_INDENT
   EMPLOYEE
   EMPLOYEE_DOCUMENT
   EMPLOYEE_TRANSFER
@@ -1878,6 +2168,9 @@ Enum LoanScheduleStatus {
 Enum CodeSeriesType {
   VENDORS
   PROJECTS
+  ITEMS
+  INDENT
+  GRN
 }
 
 Enum VendorType {
@@ -1924,6 +2217,57 @@ Enum ReminderSeverity {
   info
   warning
   overdue
+}
+
+Enum ItemUnit {
+  BAG
+  CUM
+  KG
+  NOS
+  MT
+  LTR
+  RMT
+  SQM
+}
+
+Enum StockLedgerType {
+  purchase
+  purchase_reversal
+  issue
+  issue_reversal
+  transfer_in
+  transfer_out
+  transfer_in_reversal
+  transfer_out_reversal
+}
+
+Enum PurchaseBillStatus {
+  unpaid
+  part_paid
+  paid
+}
+
+Enum PaymentMode {
+  upi
+  bank_transfer
+  cash
+  cheque
+}
+
+Enum TransferStatus {
+  pending
+  in_transit
+  received
+}
+
+Enum IndentStatus {
+  draft
+  submitted
+  approved
+  rejected
+  partially_fulfilled
+  fulfilled
+  cancelled
 }
 
 Ref: UserRole.userId > User.id
@@ -2035,3 +2379,23 @@ Ref: ReminderSnooze.ruleKey > ReminderRule.ruleKey [delete: Cascade]
 Ref: ReminderNotification.companyId > Company.id [delete: Cascade]
 
 Ref: ReminderNotification.ruleKey > ReminderRule.ruleKey [delete: Cascade]
+
+Ref: ItemCategory.companyId > Company.id [delete: Cascade]
+
+Ref: Item.companyId > Company.id [delete: Cascade]
+
+Ref: Item.categoryId > ItemCategory.id
+
+Ref: Purchase.indentLineId > MaterialIndentLine.id
+
+Ref: GoodsReceiptNote.purchaseId - Purchase.id [delete: Cascade]
+
+Ref: PurchaseBill.purchaseId - Purchase.id [delete: Cascade]
+
+Ref: Issue.indentLineId > MaterialIndentLine.id
+
+Ref: PaymentAllocation.paymentId > Payment.id [delete: Cascade]
+
+Ref: PaymentAllocation.billId > PurchaseBill.id [delete: Cascade]
+
+Ref: MaterialIndentLine.indentId > MaterialIndent.id [delete: Cascade]

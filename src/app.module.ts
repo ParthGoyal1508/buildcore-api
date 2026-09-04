@@ -11,6 +11,7 @@ import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { InventoryModule } from './inventory/inventory.module';
 import { HrModule } from './hr/hr.module';
 import { PartnersModule } from './partners/partners.module';
 import { PayrollModule } from './payroll/payroll.module';
@@ -65,6 +66,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PayrollModule,
     PartnersModule,
     DashboardModule,
+    InventoryModule,
   ],
   controllers: [AppController],
   providers: [
