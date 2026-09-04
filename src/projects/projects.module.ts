@@ -7,6 +7,7 @@ import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { ProjectsController } from './portfolio/projects.controller';
+import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
@@ -34,6 +35,7 @@ import { SitesService } from './sites/sites.service';
     ClientsService,
     SitesService,
     ProjectsService,
+    ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
@@ -43,6 +45,14 @@ import { SitesService } from './sites/sites.service';
   // a punch. `ProjectsService` is exported for 007's BOCW cess and subcontractor
   // cost. `ProjectLockGuard` is exported so US4–US8's controllers can mount it
   // without each re-declaring the provider.
-  exports: [SitesService, ProjectsService, ProjectLockGuard],
+  // `ProjectSourcesRegistry` is exported so 006 and 009 can register the machinery
+  // and materials they contribute to a project page — the inversion that keeps the
+  // dependency between those modules and this one pointing one way.
+  exports: [
+    SitesService,
+    ProjectsService,
+    ProjectLockGuard,
+    ProjectSourcesRegistry,
+  ],
 })
 export class ProjectsModule {}

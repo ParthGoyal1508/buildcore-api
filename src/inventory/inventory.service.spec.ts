@@ -13,7 +13,13 @@ describe('InventoryService.getMaterialCostByProject (FR-009)', () => {
     const projects = {
       getSitesByProject: jest.fn().mockResolvedValue(['site-1', 'site-2']),
     };
-    const service = new InventoryService(projects as never, purchases as never);
+    const service = new InventoryService(
+      undefined as never,
+      projects as never,
+      purchases as never,
+      undefined as never,
+      undefined as never,
+    );
 
     await expect(
       service.getMaterialCostByProject('project-1', 'co-1', range),
@@ -28,7 +34,13 @@ describe('InventoryService.getMaterialCostByProject (FR-009)', () => {
   it('returns 0 for a project with no sites, without querying purchases', async () => {
     const purchases = { materialCostForSites: jest.fn() };
     const projects = { getSitesByProject: jest.fn().mockResolvedValue([]) };
-    const service = new InventoryService(projects as never, purchases as never);
+    const service = new InventoryService(
+      undefined as never,
+      projects as never,
+      purchases as never,
+      undefined as never,
+      undefined as never,
+    );
 
     await expect(
       service.getMaterialCostByProject('project-1', 'co-1', range),
@@ -43,7 +55,13 @@ describe('InventoryService.getMaterialCostByProject (FR-009)', () => {
         .fn()
         .mockRejectedValue(new Error('projects down')),
     };
-    const service = new InventoryService(projects as never, purchases as never);
+    const service = new InventoryService(
+      undefined as never,
+      projects as never,
+      purchases as never,
+      undefined as never,
+      undefined as never,
+    );
 
     await expect(
       service.getMaterialCostByProject('project-1', 'co-1', range),
@@ -57,7 +75,13 @@ describe('InventoryService.getMaterialCostByProject (FR-009)', () => {
     const projects = {
       getSitesByProject: jest.fn().mockResolvedValue(['site-1']),
     };
-    const service = new InventoryService(projects as never, purchases as never);
+    const service = new InventoryService(
+      undefined as never,
+      projects as never,
+      purchases as never,
+      undefined as never,
+      undefined as never,
+    );
 
     await service.getMaterialCostByProject('project-1', 'co-1', range);
     expect(projects.getSitesByProject).toHaveBeenCalledWith('project-1', {
@@ -67,7 +91,13 @@ describe('InventoryService.getMaterialCostByProject (FR-009)', () => {
   });
 
   it('reports itself available, so a P&L can tell zero cost from a missing module', () => {
-    const service = new InventoryService({} as never, {} as never);
+    const service = new InventoryService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
     expect(service.isAvailable()).toBe(true);
   });
 });

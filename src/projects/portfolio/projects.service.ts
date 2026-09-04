@@ -32,6 +32,7 @@ import {
   PROJECT_CODE_INFIX,
 } from '../constants/projects.constants';
 import { ProjectWorkReference } from '../interfaces/pnl-sources.interface';
+import { ProjectSourcesRegistry } from './project-sources.registry';
 import {
   CreateProjectDto,
   ListProjectsDto,
@@ -73,6 +74,10 @@ export interface ProjectListPage {
  * this list means "we could not ask"; an empty array without it means "we asked and
  * there is none". Collapsing the two would let a project page assert, in the same
  * shape, both that no machinery is deployed and that nobody knows.
+ *
+ * As of feature 006 both `plant` and `inventory` are real and the list is normally
+ * empty. It is still computed rather than deleted: a module can be absent from a
+ * given deployment, and the distinction it draws is the same one it always was.
  */
 export interface ProjectDetail {
   project: Project;
@@ -83,8 +88,21 @@ export interface ProjectDetail {
       name: string;
       designationId: string | null;
     }[];
-    machinery: unknown[];
-    materials: unknown[];
+    machinery: {
+      id: string;
+      code: string;
+      name: string;
+      status: string;
+      deployedSiteId: string | null;
+      utilizationPercent: number;
+    }[];
+    materials: {
+      itemId: string;
+      itemName: string;
+      itemCode: string;
+      unit: string;
+      issuedQuantity: number;
+    }[];
     dwrSummary: { count: number; latestDate: Date | null };
     billSummary: { totalBills: number; totalExpenses: number };
     revenueSummary: { totalReceived: number; totalPending: number };
@@ -110,6 +128,11 @@ export class ProjectsService {
     // See SitesService for why this edge needs forwardRef.
     @Inject(forwardRef(() => EmployeesService))
     private readonly employees: EmployeesService,
+    // Plant (006) and Inventory (009) announce themselves here rather than being
+    // imported: both already import this module to resolve their sites, so a direct
+    // import back would make the dependency a five-module cycle. See
+    // `ProjectSourcesRegistry` for the whole argument.
+    private readonly sources: ProjectSourcesRegistry,
   ) {}
 
   /** See `ClientsService.targetCompanyOf()` for why the caller's own company is the
@@ -266,13 +289,14 @@ export class ProjectsService {
    * One project with every tab the detail page shows.
    *
    * The three summaries are computed in this schema. The three lists are not:
-   * employees come from HR (real — 005 has shipped), machinery from Plant and
-   * materials from Inventory (neither module exists, so both come back empty and the
-   * module is named in `unavailableModules`).
+   * employees come from HR, machinery from Plant (006) and materials from Inventory
+   * (009). All three are real now; a source that is absent from a deployment comes
+   * back empty and is named in `unavailableModules` rather than reported as a
+   * measured nothing.
    *
-   * The cross-module read is a real service call rather than a join. Principle I
-   * forbids this module from touching `hr`, and it is also what lets the two summary
-   * shapes below be computed without waiting on it.
+   * Every cross-module read is a service call rather than a join. Principle I forbids
+   * this module from touching `hr`, `plant` or `inventory`, and it is also what lets
+   * the three summary shapes below be computed without waiting on any of them.
    */
   async findOne(caller: AuthenticatedUser, id: string): Promise<ProjectDetail> {
     const ctx = rlsContextFor(caller);
@@ -316,6 +340,14 @@ export class ProjectsService {
       ownData.siteIds.map((site) => site.id),
     );
 
+    const companyId = project.companyId;
+    const plant = this.sources.machinerySource();
+    const inventory = this.sources.materialsSource();
+    const [machinery, materials] = await Promise.all([
+      plant ? plant.getMachineryByProject(id, companyId) : null,
+      inventory ? inventory.getMaterialsByProject(caller, id, companyId) : null,
+    ]);
+
     const totalReceived = ownData.revenues
       .filter((row) => row.status === 'received')
       .reduce((sum, row) => sum + Number(row.amount), 0);
@@ -327,8 +359,8 @@ export class ProjectsService {
       project,
       tabs: {
         employees,
-        machinery: [],
-        materials: [],
+        machinery: machinery ?? [],
+        materials: materials ?? [],
         dwrSummary: {
           count: ownData.dwrCount,
           latestDate: ownData.latestDwr?.workDate ?? null,
@@ -342,8 +374,13 @@ export class ProjectsService {
         },
         revenueSummary: { totalReceived, totalPending },
       },
-      // Named, not silently empty — see the note on ProjectDetail.
-      unavailableModules: ['plant', 'inventory'],
+      // Named, not silently empty — see the note on ProjectDetail. Both are
+      // normally present now; the list stays computed so an absent module still
+      // reads as "could not ask" rather than as "there is none".
+      unavailableModules: [
+        ...(machinery === null ? ['plant'] : []),
+        ...(materials === null ? ['inventory'] : []),
+      ],
     };
   }
 

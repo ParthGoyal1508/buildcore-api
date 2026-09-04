@@ -314,14 +314,18 @@ describe('Dashboard reminders (e2e)', () => {
       const pending = res.body.unavailable.map(
         (u: { ruleKey: string }) => u.ruleKey,
       );
-      // The three modules FR-036 names as future registrants, none of them built.
+      // The modules FR-036 names as future registrants that are still unbuilt.
+      // `machinery-*` used to be on this list and is deliberately not any more:
+      // feature 006 shipped and registers both rules for real, which is the
+      // handover FR-028 exists to make possible.
       expect(pending).toEqual(
         expect.arrayContaining([
           'settings-company-document-expiry',
-          'machinery-service-due',
           'project-assets-overdue-return',
         ]),
       );
+      expect(pending).not.toContain('machinery-service-due');
+      expect(pending).not.toContain('machinery-document-expiry');
       expect(res.body.unavailable[0].reason).toBe('module_pending');
     });
 

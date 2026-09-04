@@ -15,6 +15,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { HrModule } from './hr/hr.module';
 import { PartnersModule } from './partners/partners.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { PlantModule } from './plant/plant.module';
 import { ProjectsModule } from './projects/projects.module';
 import { SettingsModule } from './settings/settings.module';
 import { EmailModule } from './shared/email/email.module';
@@ -67,6 +68,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PartnersModule,
     DashboardModule,
     InventoryModule,
+    PlantModule,
   ],
   controllers: [AppController],
   providers: [
