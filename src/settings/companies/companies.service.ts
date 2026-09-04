@@ -128,6 +128,47 @@ export class CompaniesService {
     };
   }
 
+  /**
+   * The labour-settlement configuration feature 013 reads (013 FR-041, FR-027,
+   * FR-049).
+   *
+   * Exported for `labour` for the same Principle I reason the payroll rates are
+   * exported for `payroll`: the labour module may not query `settings.Company`
+   * itself. The OT multiplier is deliberately the same column 005 defined — 013
+   * reads it, never adds a second (FR-049). Denominations come back descending so
+   * the greedy breakup can iterate them directly; numbers, not Decimals, keep the
+   * consuming computation free of Prisma types.
+   */
+  async getLabourSettings(companyId: string): Promise<{
+    wageCycle: 'weekly' | 'fortnightly' | 'monthly';
+    cashDenominations: number[];
+    otMultiplier: number;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            labourWageCycle: true,
+            labourCashDenominations: true,
+            otMultiplier: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return {
+      wageCycle: company.labourWageCycle,
+      cashDenominations: [...company.labourCashDenominations].sort(
+        (a, b) => b - a,
+      ),
+      otMultiplier: company.otMultiplier.toNumber(),
+    };
+  }
+
   /** Every company, whatever its status — the Settings UI's own admin list. Not the
    * source other modules' dropdowns read (see `listActiveForOtherModules`). */
   async findAll(): Promise<Company[]> {

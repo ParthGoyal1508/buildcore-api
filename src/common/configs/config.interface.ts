@@ -292,6 +292,27 @@ export interface WorkspaceConfig {
     enrolment: { maxDimension: number; jpegQuality: number };
     punch: { maxDimension: number; jpegQuality: number };
   };
+  /**
+   * Labour (feature 013) tunables. Principle III keeps each of these out of the
+   * services that read them: the GPS-accuracy gate that decides whether a muster is
+   * flagged for review, and the advance limit above which a labour advance needs
+   * approval, are both field-policy values someone will want to change without a
+   * code review.
+   */
+  labour: {
+    /**
+     * A muster GPS reading whose `accuracyMetres` exceeds this is flagged
+     * `lowGpsAccuracy` and treated like a geofence violation for approval
+     * purposes (013 FR-013) — recorded, never rejected.
+     */
+    gpsAccuracyMaxMetres: number;
+    /**
+     * A labour advance whose amount exceeds this multiple of the worker's
+     * applicable daily rate is flagged `exceedsLimit` and requires `LABOUR_APPROVE`
+     * to be approved (013 US7).
+     */
+    advanceLimitMultiple: number;
+  };
 }
 
 /** Which `StorageService` adapter backs blob persistence, and its settings. */

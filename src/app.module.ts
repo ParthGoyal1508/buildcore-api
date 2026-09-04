@@ -13,6 +13,7 @@ import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { HrModule } from './hr/hr.module';
+import { LabourModule } from './labour/labour.module';
 import { PartnersModule } from './partners/partners.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { ProjectsModule } from './projects/projects.module';
@@ -67,6 +68,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PartnersModule,
     DashboardModule,
     InventoryModule,
+    LabourModule,
   ],
   controllers: [AppController],
   providers: [

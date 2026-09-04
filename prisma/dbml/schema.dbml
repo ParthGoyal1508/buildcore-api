@@ -123,6 +123,14 @@ Statutory and revisable, so it is company configuration rather than a literal
 in the cess calculation — Constitution Principle III. Read by 007\'s BOCWService
 via `SettingsService.getBocwCessRate()`. Four decimal places because the rate is
 a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
+  labourWageCycle LabourWageCycle [not null, default: 'weekly', note: 'The labour wage cycle a payment sheet\'s period defaults to (013 FR-041) —
+independent of the monthly salary `payCycle` above, because daily-wage labour
+is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
+default. Company-configurable rather than a literal — Constitution Principle III.']
+  labourCashDenominations Int[] [not null, note: 'Currency note denominations used to compute a cash payment sheet\'s breakup
+(013 FR-027), descending. Company-configurable because the notes in circulation
+change by legislation (the ₹2000 note\'s withdrawal being the recent example),
+so this is not a literal inside the denomination service — Principle III.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   departments Department [not null]
@@ -130,6 +138,7 @@ a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
   documentTypes DocumentType [not null]
   shifts Shift [not null]
   employeeCodeSeq EmployeeCodeSequence
+  skillCategories SkillCategory [not null]
   reimbursementCategories ReimbursementCategory [not null]
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
@@ -195,6 +204,30 @@ Table Designation {
   }
 
   Note: 'Same shape and deletion-guard behavior as Department (data-model.md).'
+}
+
+Table SkillCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  code String [not null]
+  defaultDailyRate Decimal
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+    (companyId, code) [unique]
+  }
+
+  Note: 'Labour skill category (Mason, Carpenter, Bar Bender, Helper, Fitter, Operator) —
+the master a per-project wage rate is set against (013 FR-003, US1). A
+`settings`-schema reference master like Department/Designation, but owned and
+audited by feature 013 (SKILL_CATEGORY). `code` supports lookup/import; the
+optional `defaultDailyRate` seeds a new project rate. Deletion is blocked while
+any labour worker still references it (→ 409).'
 }
 
 Table DocumentType {
@@ -1822,6 +1855,247 @@ buying (FR-027).']
   purchases Purchase [not null]
 }
 
+Table WageRate {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null, note: '→ projects, resolved via ProjectsService (FR-034).']
+  skillCategoryId String [not null, note: '→ settings.SkillCategory.']
+  dailyRate Decimal [not null]
+  effectiveFrom DateTime [not null]
+  effectiveTo DateTime [note: 'Null = the current open-ended rate. Set to the day before a newer rate\'s
+`effectiveFrom` when one is appended.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'A per-project, per-skill-category daily wage rate with a non-overlapping
+effective-dated history (013 FR-004 to FR-007) — the same pattern 006 FR-014 uses
+for equipment hire rates. `effectiveTo` is null for the current rate and is
+auto-closed to the day before a newer rate\'s `effectiveFrom` on append.'
+}
+
+Table LabourWorker {
+  id String [pk]
+  companyId String [not null]
+  labourCode String [not null, note: 'Auto-generated, unique per company (e.g. LAB-0001).']
+  fullName String [not null]
+  phone String [not null]
+  gender String [not null]
+  dateOfBirth DateTime [not null]
+  aadhaarNumber String
+  bankAccount String
+  skillCategoryId String [not null, note: '→ settings.SkillCategory.']
+  engagementType EngagementType [not null]
+  contractorId String [note: 'Required when `engagementType` is contractor (FR-008); → partners vendor
+resolved via PartnersService (FR-034).']
+  siteId String [not null, note: '→ projects.Site.']
+  rateOverride Decimal [note: 'Optional per-worker rate that takes precedence over the project rate (FR-006).']
+  faceEnrolmentId String [note: '→ feature 003\'s face enrolment, reused not reimplemented (FR-011).']
+  status WorkerStatus [not null, default: 'active']
+  lastWorkingDate DateTime
+  deactivationReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  gangMemberships GangMember [not null]
+
+  indexes {
+    (companyId, labourCode) [unique]
+  }
+
+  Note: 'A labour worker — direct (company-engaged, paid from the cash sheet) or
+contractor-engaged (paid through a contractor from 007\'s vault). Supersedes 005\'s
+Daily Worker. PII (`aadhaarNumber`, `bankAccount`) is masked in list responses
+(FR-009) and unique among active workers for Aadhaar (FR-010).'
+}
+
+Table LabourGang {
+  id String [pk]
+  companyId String [not null]
+  name String [not null]
+  gangLeaderWorkerId String [not null]
+  siteId String [not null]
+  isActive Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  members GangMember [not null]
+
+  Note: 'A gang: a group of workers under a gang leader, selectable as a batch during
+muster capture (FR-012).'
+}
+
+Table GangMember {
+  id String [pk]
+  companyId String [not null]
+  gangId String [not null]
+  gang LabourGang [not null]
+  workerId String [not null]
+  worker LabourWorker [not null]
+  isActive Boolean [not null, default: true, note: 'Denormalised from the gang so the partial unique index (single active
+membership) can be evaluated without a join.']
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (gangId, workerId) [unique]
+  }
+
+  Note: 'Gang membership join. A worker belongs to at most one active gang at a time
+(FR-012) — enforced by a partial unique index on `workerId` where `isActive`,
+added in the migration (Prisma cannot express a partial unique index).'
+}
+
+Table MusterRoll {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  date DateTime [not null, note: 'Company-timezone calendar day (003 FR-018a basis, FR-021).']
+  supervisorId String [not null, note: 'The account (supervisor) that opened the session.']
+  latitude Decimal [not null]
+  longitude Decimal [not null]
+  accuracyMetres Decimal [not null]
+  geofenceViolation Boolean [not null, default: false]
+  lowGpsAccuracy Boolean [not null, default: false]
+  distanceFromFenceMetres Decimal
+  source MusterSource [not null, default: 'mobile']
+  capturedAt DateTime [not null, note: 'Both retained for offline sync (FR-018); `capturedAt` is the client\'s,
+`receivedAt` the server\'s.']
+  receivedAt DateTime [default: `now()`, not null]
+  isOfflineSynced Boolean [not null, default: false]
+  status MusterStatus [not null, default: 'draft']
+  approvedBy String
+  approvedAt DateTime
+  returnReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  lines MusterLine [not null]
+
+  Note: 'A muster roll: one supervisor capture session for a site and date, validated
+against the site geofence by a single GPS reading (FR-013, FR-016). Geofence and
+low-accuracy violations are recorded and flagged, never rejected (FR-013).'
+}
+
+Table MusterLine {
+  id String [pk]
+  companyId String [not null]
+  musterId String [not null]
+  muster MusterRoll [not null]
+  workerId String [not null]
+  attendanceType AttendanceType [not null]
+  overtimeHours Decimal
+  photoRef String [note: 'Encrypted object-storage ref (FR-015). Nullable so a gang bulk-add can create a
+line before its photo is captured; submission requires every line to have one
+(FR-010).']
+  faceMatchScore Decimal
+  faceMatchLow Boolean [not null, default: false]
+  skillCategoryIdOnDay String [not null, note: 'Snapshot of the worker\'s skill category at capture time so a mid-period skill
+change prices historical days correctly.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (musterId, workerId) [unique]
+  }
+
+  Note: 'One worker\'s line on a muster roll: attendance type, optional overtime, the
+captured photo (encrypted object storage — FR-015), and an advisory face-match
+result (FR-014 — flagged, never blocking). `skillCategoryIdOnDay` snapshots the
+worker\'s skill so a mid-period change still prices correctly.'
+}
+
+Table LabourPaymentSheet {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  periodFrom DateTime [not null]
+  periodTo DateTime [not null]
+  engagementType EngagementType [not null]
+  status PaymentSheetStatus [not null, default: 'draft']
+  grossTotal Decimal [not null, default: 0]
+  deductionTotal Decimal [not null, default: 0]
+  netTotal Decimal [not null, default: 0]
+  denominationBreakup Json [note: 'Minimal note-count breakup with per-worker residual (FR-027) — direct sheets
+only. Null for contractor sheets (FR-028).']
+  approvedBy String
+  approvedAt DateTime
+  reopenReason String
+  closedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+  lines PaymentSheetLine [not null]
+
+  Note: 'A cash payment sheet: one per project, per wage period, per engagement type
+(FR-023, FR-026 to FR-028). Frozen on approval; direct sheets carry a jsonb
+denomination breakup, contractor sheets do not.'
+}
+
+Table PaymentSheetLine {
+  id String [pk]
+  companyId String [not null]
+  sheetId String [not null]
+  sheet LabourPaymentSheet [not null]
+  workerId String [not null]
+  daysWorked Decimal [not null, note: 'Full days = 1, half days = 0.5 (FR-022).']
+  overtimeHours Decimal [not null, default: 0]
+  resolvedRate Decimal [not null]
+  rateSource RateSource [not null]
+  grossWage Decimal [not null]
+  deductions Json [not null, note: 'Advance instalments and fines applied this period (jsonb list).']
+  netPayable Decimal [not null]
+  paymentMode LabourPaymentMode
+  paidOn DateTime
+  paidAmount Decimal
+  shortPaymentReason String
+  acknowledgementRef String [note: 'Encrypted object-storage ref, required for a cash disbursement (FR-029).']
+  carriedForwardBalance Decimal [not null, default: 0, note: 'Unpaid remainder (short payment) carried to the next period (FR-030).']
+  status PaymentSheetLineStatus [not null, default: 'pending']
+  reversalReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One worker\'s aggregated line on a payment sheet, then the disbursement record
+against it. `deductions` is a jsonb list (advance instalments, fines).'
+}
+
+Table LabourAdvance {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  amount Decimal [not null]
+  reason String [not null]
+  recoveryInstalments Int [not null]
+  instalmentAmount Decimal [not null, note: '`amount / recoveryInstalments`, rounded — the per-period deduction.']
+  recoveryStartPeriod DateTime [not null, note: 'The wage period (its `periodFrom` date) recovery starts from.']
+  outstandingBalance Decimal [not null, default: 0]
+  exceedsLimit Boolean [not null, default: false, note: 'Amount exceeds the configured multiple of the worker\'s daily rate (FR-024/US7);
+requires LABOUR_APPROVE to be approved.']
+  status AdvanceStatus [not null, default: 'pending']
+  approvedBy String
+  approvedAt DateTime
+  disbursedOn DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'A labour advance against future wages, recovered in instalments through payment
+sheets (FR-024, FR-025). `outstandingBalance` is reduced only on disbursement of
+the recovering sheet line, never on sheet generation.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -1859,6 +2133,7 @@ Enum Permission {
   DATA_DELETE
   CROSS_COMPANY_ACCESS
   INVENTORY_APPROVE
+  LABOUR_APPROVE
 }
 
 Enum CompanyStatus {
@@ -1867,6 +2142,12 @@ Enum CompanyStatus {
 }
 
 Enum PayCycle {
+  monthly
+}
+
+Enum LabourWageCycle {
+  weekly
+  fortnightly
   monthly
 }
 
@@ -1930,6 +2211,13 @@ Enum AuditEntityType {
   PROJECT_BUDGET
   PROJECT_DOCUMENT
   REMINDER
+  SKILL_CATEGORY
+  WAGE_RATE
+  LABOUR_WORKER
+  LABOUR_GANG
+  MUSTER_ROLL
+  LABOUR_PAYMENT_SHEET
+  LABOUR_ADVANCE
 }
 
 Enum AuditAction {
@@ -2270,6 +2558,64 @@ Enum IndentStatus {
   cancelled
 }
 
+Enum EngagementType {
+  direct
+  contractor
+}
+
+Enum WorkerStatus {
+  active
+  inactive
+}
+
+Enum MusterSource {
+  mobile
+  admin_entry
+}
+
+Enum MusterStatus {
+  draft
+  submitted
+  approved
+}
+
+Enum AttendanceType {
+  full_day
+  half_day
+  absent
+  overtime_only
+}
+
+Enum RateSource {
+  override
+  project_rate
+}
+
+Enum PaymentSheetStatus {
+  draft
+  approved
+  partially_disbursed
+  closed
+}
+
+Enum LabourPaymentMode {
+  cash
+  bank
+}
+
+Enum PaymentSheetLineStatus {
+  pending
+  disbursed
+  reversed
+}
+
+Enum AdvanceStatus {
+  pending
+  approved
+  disbursed
+  closed
+}
+
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
@@ -2277,6 +2623,8 @@ Ref: UserRole.roleId > Role.id
 Ref: Department.companyId > Company.id [delete: Cascade]
 
 Ref: Designation.companyId > Company.id [delete: Cascade]
+
+Ref: SkillCategory.companyId > Company.id [delete: Cascade]
 
 Ref: DocumentType.companyId > Company.id [delete: Cascade]
 
@@ -2399,3 +2747,11 @@ Ref: PaymentAllocation.paymentId > Payment.id [delete: Cascade]
 Ref: PaymentAllocation.billId > PurchaseBill.id [delete: Cascade]
 
 Ref: MaterialIndentLine.indentId > MaterialIndent.id [delete: Cascade]
+
+Ref: GangMember.gangId > LabourGang.id [delete: Cascade]
+
+Ref: GangMember.workerId > LabourWorker.id [delete: Cascade]
+
+Ref: MusterLine.musterId > MusterRoll.id [delete: Cascade]
+
+Ref: PaymentSheetLine.sheetId > LabourPaymentSheet.id [delete: Cascade]
