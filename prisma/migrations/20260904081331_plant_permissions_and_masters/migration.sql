@@ -2,6 +2,27 @@
 -- that should hold its new permissions, and the machinery masters an equipment
 -- record cannot be created without.
 
+-- ── 0. Claim the super-admin escape hatch for this transaction ──────────────
+--
+-- The masters seeded in section 2 land in `settings.EquipmentCategory` and
+-- `settings.EquipmentDocType`, which 20260904081330 put behind `tenant_isolation`
+-- with FORCE ROW LEVEL SECURITY. That policy admits a row only when
+-- `app.current_company_id` matches it, or `app.is_super_admin` is 'true'. A
+-- migration has neither set, so a cross-company backfill is refused outright:
+--   ERROR: new row violates row-level security policy for table "EquipmentCategory"
+--
+-- This is the first migration in this repo to INSERT into a company-scoped table
+-- that FORCEs RLS, which is why no earlier one needed this line. It did not surface
+-- in local development because the local database role is a SUPERUSER and so
+-- bypasses RLS entirely — the condition `assertRlsEnforceable` warns about on every
+-- boot. Production connects as a NOSUPERUSER role, where the policy actually fires.
+--
+-- The third argument makes this transaction-local (`SET LOCAL` semantics), so it is
+-- gone when the migration commits and cannot leak into a later session. It is the
+-- same escape hatch the application itself uses for system work that legitimately
+-- spans tenants — see `withRlsContext(prisma, { isSuperAdmin: true })`.
+SELECT set_config('app.is_super_admin', 'true', true);
+
 -- ── 1. Grant the new permission values to the default roles ─────────────────
 --
 -- 20260830090000_seed_default_roles wrote each role's permission set wholesale.
