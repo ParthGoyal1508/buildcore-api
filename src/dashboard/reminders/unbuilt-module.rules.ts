@@ -6,8 +6,8 @@ import {
 } from './reminder-rule.types';
 
 /**
- * Placeholder rules for the three modules spec FR-036 names as registrants, none of
- * which is built yet.
+ * Placeholder rules for the modules spec FR-036 names as registrants that are not
+ * built yet.
  *
  * These exist so FR-031 is a live, observable behaviour rather than a promise: a
  * caller reading the reminders list today gets an explicit "these rule sources exist
@@ -69,28 +69,11 @@ export class CompanyDocumentExpiryRule extends PendingModuleRule {
   readonly severityLadder: ReminderSeverityLadder = { warnWithinDays: 14 };
 }
 
-/** Feature 006's equipment document expiry (FR-036). */
-@ReminderRule()
-export class EquipmentDocumentExpiryRule extends PendingModuleRule {
-  readonly ruleKey = 'machinery-document-expiry';
-  readonly sourceModule = 'machinery';
-  readonly type = 'document_expiry';
-  readonly entityType = 'EQUIPMENT_DOCUMENT';
-  readonly leadDays = 60;
-  readonly severityLadder: ReminderSeverityLadder = { warnWithinDays: 14 };
-}
-
-/** Feature 006's service-due reminders (FR-036). */
-@ReminderRule()
-export class EquipmentServiceDueRule extends PendingModuleRule {
-  readonly ruleKey = 'machinery-service-due';
-  readonly sourceModule = 'machinery';
-  readonly type = 'service_due';
-  readonly entityType = 'EQUIPMENT';
-  /** A service is scheduled, not applied for — a fortnight's notice is enough. */
-  readonly leadDays = 14;
-  readonly severityLadder: ReminderSeverityLadder = { warnWithinDays: 3 };
-}
+// Feature 006's two rules — `machinery-document-expiry` and `machinery-service-due`
+// — used to be declared here as placeholders. They are gone because the module is
+// built: the real providers live in `src/plant/reminders/plant-reminder.rules.ts`
+// and are discovered from `PlantModule`'s own providers array. Leaving the
+// placeholders behind would double-report each rule as both available and pending.
 
 /** Feature 012's asset document expiry (FR-036). */
 @ReminderRule()
@@ -132,8 +115,6 @@ export class AssetOverdueReturnRule extends PendingModuleRule {
 /** Every placeholder, for the module's provider list. */
 export const UNBUILT_MODULE_RULES = [
   CompanyDocumentExpiryRule,
-  EquipmentDocumentExpiryRule,
-  EquipmentServiceDueRule,
   AssetDocumentExpiryRule,
   AssetInspectionDueRule,
   AssetOverdueReturnRule,

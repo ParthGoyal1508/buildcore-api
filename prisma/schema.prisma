@@ -1,7 +1,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "labour"]
+  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour"]
 }
 
 generator client {
@@ -199,6 +199,15 @@ enum Permission {
   /// `DAILY_WORKER_REGISTRY` and `REPORTS` values verbatim.
   LABOUR_APPROVE
 
+  /// Added by 006. Maintenance jobs, service schedules, spare parts and service
+  /// bills. `MACHINERY`, `LOGBOOK` and `FUEL` already existed — 002 reserved them by
+  /// name for exactly this module — so only the two below are genuinely new
+  /// (006 FR-011, research.md §7).
+  MAINTENANCE
+  /// Hire bill verification and payment. Separate from `MAINTENANCE` because
+  /// approving a rental invoice is an accounts decision, not a workshop one.
+  HIRE_BILLS
+
   @@schema("settings")
 }
 
@@ -292,6 +301,10 @@ model Company {
   // evaluating.
   itemCategories ItemCategory[]
   items          Item[]
+
+  equipmentCategories EquipmentCategory[]
+  equipmentDocTypes   EquipmentDocType[]
+  hireRates           HireRate[]
 
   reminderRuleOverrides ReminderRule[]
   reminderSnoozes       ReminderSnooze[]
@@ -702,6 +715,24 @@ enum AuditEntityType {
   MUSTER_ROLL
   LABOUR_PAYMENT_SHEET
   LABOUR_ADVANCE
+
+  // Plant & Machinery entities audited by feature 006 (FR-012) and its spare-parts
+  // amendment (FR-028). The three masters sit here rather than under the Settings
+  // block because 006 is what creates and audits them, even though the tables are
+  // `settings`-schema masters — the same arrangement `ITEM_CATEGORY` has.
+  EQUIPMENT
+  EQUIPMENT_DOCUMENT
+  LOGBOOK_ENTRY
+  FUEL_ENTRY
+  SERVICE_SCHEDULE
+  MAINTENANCE_JOB
+  HIRE_BILL
+  EQUIPMENT_CATEGORY
+  EQUIPMENT_DOC_TYPE
+  HIRE_RATE
+  SPARE_PART
+  SPARE_PART_MOVEMENT
+  SERVICE_BILL
 
   @@schema("shared")
 }
@@ -2298,6 +2329,9 @@ enum CodeSeriesType {
   /// Goods receipt notes, numbered per company like everything else here. A GRN is
   /// 1:1 with a purchase, but purchases carry no code of their own to derive from.
   GRN
+  /// Added by 006. Equipment codes (`{shortCode}-EQP-0001`) for machines registered
+  /// without a manufacturer plate number of their own.
+  EQUIPMENT
 
   @@schema("settings")
 }
@@ -3285,6 +3319,629 @@ model MaterialIndentLine {
   @@index([indentId])
   @@index([companyId, itemId])
   @@schema("inventory")
+}
+
+// ============================================================================
+// Machinery masters — feature 006, `settings` schema (research.md §1, §10).
+//
+// These three are reference data of the same kind as vendor and item categories:
+// per-company, edited under `SETTINGS`, and consumed by `plant` through
+// `SettingsModule`'s exported services rather than a cross-schema join. Master PRD
+// §7.8.5 lists them as a Settings subsection, which is what settled the placement.
+// ============================================================================
+
+/// What an equipment's meter counts. Declared once, in `settings`, and referenced by
+/// `plant.Equipment` too — the alternative is two identically-named enums, which
+/// Prisma forbids, or a free-text column, which would let a category and its own
+/// machines disagree about what their readings mean.
+enum MeterType {
+  hours
+  km
+
+  @@schema("settings")
+}
+
+model EquipmentCategory {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Stored uppercase, like `ItemCategory.name`, so "Excavator" and "EXCAVATOR"
+  /// cannot coexist as two categories meaning the same thing.
+  name String
+
+  meterType MeterType
+
+  /// Expected consumption per meter unit (litres/hour or litres/km). Nullable
+  /// because an electric or manual category has none, and 0 would read as a
+  /// benchmark of zero rather than as its absence.
+  fuelBenchmark                Decimal? @db.Decimal(18, 3)
+  /// How far past the benchmark a fuel entry may sit before it is flagged (FR-004).
+  /// Per category and stored, never the hardcoded `> 15` the original spec carried:
+  /// a tower crane and a tipper do not deserve the same tolerance.
+  fuelVarianceThresholdPercent Decimal  @default(15) @db.Decimal(6, 2)
+  /// Denominator for utilisation % (FR-007). 176 = 22 working days × 8 hours.
+  targetHoursPerMonth          Int      @default(176)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  hireRates HireRate[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+model EquipmentDocType {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name String
+
+  /// How many days before expiry a document of this type starts flagging
+  /// `expiryAlert` (FR-010). Per type and stored, never the hardcoded 30-day literal
+  /// the original spec carried: an insurance policy and a pollution certificate are
+  /// not renewed on the same notice.
+  alertDays Int @default(30)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// An effective-dated hire rate per category (FR-014).
+///
+/// Non-overlapping by construction: creating a new open-ended rate closes the prior
+/// current one's `effectiveTo` to the day before. That invariant is what lets a hire
+/// bill raised last March still resolve last March's rate after this year's revision
+/// lands (SC-006) — a single mutable "current rate" column could not.
+model HireRate {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  categoryId String
+  category   EquipmentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  ratePerUnit Decimal @db.Decimal(18, 2)
+
+  effectiveFrom DateTime  @db.Date
+  /// Null means "current" — the open end of the history.
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, categoryId, effectiveFrom])
+  @@schema("settings")
+}
+
+// ============================================================================
+// plant schema — feature 006 (asset register, logbook, fuel, service schedules,
+// maintenance jobs, hire bills, spare parts and service bills).
+//
+// `companyId` is a plain column with no relation to `settings.Company`, and
+// `categoryId`, `docTypeId`, `vendorId`, `deployedSiteId`, `operatorId`, `projectId`
+// and `linkedInventoryItemId` are plain columns too — the same rule `inventory` and
+// `partners` follow. Principle I routes every cross-module read through the owning
+// module's exported service, and a declared relation is exactly what would make an
+// accidental cross-schema join possible. RLS is what scopes these rows; every
+// relation below stays inside this schema.
+// ============================================================================
+
+enum EquipmentOwnership {
+  owned
+  hired
+
+  @@schema("plant")
+}
+
+enum PowerSource {
+  diesel
+  petrol
+  electric
+  manual
+
+  @@schema("plant")
+}
+
+/// `under_maintenance` is set and cleared only by the maintenance job lifecycle
+/// (FR-002) — never accepted from a PATCH. `inactive` is the manual one:
+/// decommissioning is a decision, not a consequence.
+enum EquipmentStatus {
+  active
+  under_maintenance
+  inactive
+
+  @@schema("plant")
+}
+
+enum MaintenanceType {
+  breakdown
+  scheduled
+
+  @@schema("plant")
+}
+
+enum MaintenanceStatus {
+  open
+  closed
+
+  @@schema("plant")
+}
+
+enum HireBillStatus {
+  pending_verification
+  verified
+  paid
+
+  @@schema("plant")
+}
+
+/// A spare part movement is a receipt, a consumption, or the reversal of one
+/// (FR-016). Like 009's stock ledger, corrections are written as opposites rather
+/// than by editing history.
+enum SparePartMovementType {
+  receipt
+  consumption
+  reversal
+
+  @@schema("plant")
+}
+
+enum ServiceBillStatus {
+  pending_verification
+  verified
+
+  @@schema("plant")
+}
+
+enum ServiceBillPaymentStatus {
+  unpaid
+  partially_paid
+  paid
+
+  @@schema("plant")
+}
+
+model Equipment {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// Allocated from the company's EQUIPMENT series (`{shortCode}-EQP-0001`) when the
+  /// caller does not supply one — most machines already carry a plate or asset
+  /// number the yard knows them by, and overwriting it would be unhelpful.
+  code String
+  name String
+
+  /// → `settings.EquipmentCategory`. Resolved via `EquipmentCategoriesService`.
+  categoryId String
+
+  ownership EquipmentOwnership
+  /// → `partners.Vendor`, for hired equipment. Resolved via `PartnersService`.
+  vendorId  String?
+
+  powerSource PowerSource
+
+  purchaseDate     DateTime? @db.Date
+  purchaseCost     Decimal?  @db.Decimal(18, 2)
+  /// Straight-line, % per annum. Feeds the owned half of `getMachineryCostByProject`.
+  depreciationRate Decimal?  @db.Decimal(6, 2)
+
+  /// Mirrors the category's at creation time. Copied rather than joined because a
+  /// category's meter type must not silently reinterpret readings already recorded
+  /// against machines under it.
+  meterType      MeterType
+  currentReading Decimal   @default(0) @db.Decimal(18, 3)
+
+  /// → `projects.Site`. Resolved via `SitesService`; this is what ties a machine to
+  /// a project for the P&L.
+  deployedSiteId String?
+
+  status EquipmentStatus @default(active)
+
+  /// Stored, recomputed on every logbook write for the current month (FR-007), so a
+  /// register listing 500 machines does not run 500 aggregates.
+  utilizationPercent Decimal @default(0) @db.Decimal(6, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  documents        EquipmentDocument[]
+  logbookEntries   LogbookEntry[]
+  fuelEntries      FuelEntry[]
+  serviceSchedules ServiceSchedule[]
+  maintenanceJobs  MaintenanceJob[]
+  hireBills        HireBill[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@index([companyId, categoryId])
+  @@index([companyId, deployedSiteId])
+  @@index([companyId, status])
+  @@schema("plant")
+}
+
+model EquipmentDocument {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  /// → `settings.EquipmentDocType`, whose `alertDays` is the alert window.
+  docTypeId String
+
+  /// Object-storage key, never a public URL — resolved to a short-lived signed URL
+  /// at read time, the same treatment contractor and employee documents get.
+  fileRef  String
+  fileName String?
+  mimeType String?
+
+  expiresAt DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([equipmentId])
+  @@schema("plant")
+}
+
+model LogbookEntry {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+
+  openingReading Decimal @db.Decimal(18, 3)
+  closingReading Decimal @db.Decimal(18, 3)
+  /// Stored: `closingReading − openingReading`. Zero is legitimate (a machine that
+  /// stood idle all day still gets an entry).
+  totalHours     Decimal @db.Decimal(18, 3)
+
+  fuelConsumed Decimal? @db.Decimal(18, 3)
+
+  /// → `hr.Employee`. Resolved via `EmployeesService`.
+  operatorId String?
+  /// → `projects.Project`. A machine can work a project that is not its deployed
+  /// site's, so this is recorded per entry rather than inferred.
+  projectId  String?
+
+  remarks String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([equipmentId, date])
+  @@index([companyId, date])
+  @@index([companyId, equipmentId, date])
+  @@index([companyId, projectId])
+  @@schema("plant")
+}
+
+model FuelEntry {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+
+  quantity Decimal @db.Decimal(18, 3)
+  rate     Decimal @db.Decimal(18, 2)
+  amount   Decimal @db.Decimal(18, 2)
+
+  /// → `partners.Vendor` (the filling station or diesel supplier).
+  vendorId String?
+
+  /// Computed against the category's threshold at save time and stored (research.md
+  /// §3): a later edit to the category's benchmark must not retroactively rewrite
+  /// what was flagged, or unflag, months of history.
+  variancePercent Decimal? @db.Decimal(8, 2)
+  varianceAlert   Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, date])
+  @@index([companyId, equipmentId, date])
+  @@schema("plant")
+}
+
+model ServiceSchedule {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  serviceType String
+
+  intervalHours Decimal? @db.Decimal(18, 3)
+  intervalKm    Decimal? @db.Decimal(18, 3)
+
+  lastDoneReading Decimal @db.Decimal(18, 3)
+  /// Stored: `lastDoneReading + interval`. `status` is *not* stored — it is derived
+  /// on read from the equipment's current reading (FR-006, research.md §4), because
+  /// storing it would mean touching every schedule on every logbook entry.
+  nextDueReading  Decimal @db.Decimal(18, 3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  maintenanceJobs MaintenanceJob[]
+
+  @@index([companyId])
+  @@index([companyId, equipmentId])
+  @@schema("plant")
+}
+
+model MaintenanceJob {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  type        MaintenanceType
+  description String
+
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
+
+  closingReading   Decimal? @db.Decimal(18, 3)
+  partsDescription String?
+
+  /// The workshop's own labour. Distinct from `partsCost`, which accrues from spare
+  /// part consumption, and from service bills, which are a third party's invoice —
+  /// FR-026 requires all three to be separable.
+  labourCost Decimal? @db.Decimal(18, 2)
+  /// Accrued by `SparePartMovement` consumptions and reversals (FR-018), never set
+  /// by a client.
+  partsCost  Decimal  @default(0) @db.Decimal(18, 2)
+  totalCost  Decimal? @db.Decimal(18, 2)
+
+  linkedServiceScheduleId String?
+  linkedServiceSchedule   ServiceSchedule? @relation(fields: [linkedServiceScheduleId], references: [id])
+
+  status MaintenanceStatus @default(open)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  partMovements SparePartMovement[]
+  serviceBills  ServiceBill[]
+
+  @@index([companyId, status])
+  @@index([companyId, equipmentId, status])
+  @@schema("plant")
+}
+
+model HireBill {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  /// → `partners.Vendor`, the hire vendor. Required: a hire bill without an owner to
+  /// pay is not a hire bill.
+  vendorId String
+
+  billedHours Decimal @db.Decimal(18, 3)
+  /// Defaults from the effective `settings.HireRate` for the equipment's category on
+  /// `billingPeriodFrom` (FR-014), overridable per bill.
+  rate        Decimal @db.Decimal(18, 2)
+  grossAmount Decimal @db.Decimal(18, 2)
+
+  billingPeriodFrom DateTime @db.Date
+  billingPeriodTo   DateTime @db.Date
+
+  /// Snapshot taken at creation, not a live join (research.md §8): the bill must
+  /// stay verifiable against what the logbook said when it was raised, even if a
+  /// logbook entry is corrected afterwards.
+  logbookHours Decimal @db.Decimal(18, 3)
+  variance     Decimal @db.Decimal(18, 3)
+
+  /// From `PartnersService.getVendorTds()` at creation. Never client-supplied
+  /// (FR-005).
+  tdsRate    Decimal? @db.Decimal(6, 2)
+  tdsAmount  Decimal  @default(0) @db.Decimal(18, 2)
+  netPayable Decimal  @db.Decimal(18, 2)
+
+  status HireBillStatus @default(pending_verification)
+
+  verifiedByUserId String?
+  verifiedAt       DateTime?
+
+  paymentDate      DateTime? @db.Date
+  paymentReference String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, status])
+  @@index([companyId, equipmentId])
+  @@index([companyId, vendorId])
+  @@schema("plant")
+}
+
+/// A workshop-stocked replacement part (FR-015).
+///
+/// Deliberately not a `settings.Item` (009's material master): a spare part is
+/// consumed against a *machine* and costed to that machine's maintenance history,
+/// where an inventory item is consumed against a BOQ activity and costed to a
+/// project. Different stock location, different costing dimension, different
+/// consumer. `linkedInventoryItemId` declares the overlap where one physical thing
+/// is registered in both, so FR-024's reconciliation can show the divergence rather
+/// than the two silently double-counting.
+model SparePart {
+  id String @id @default(cuid())
+
+  companyId String
+
+  partNumber String
+  name       String
+  /// Free text rather than 009's `ItemUnit` enum: workshop parts come in units that
+  /// master does not carry (sets, pairs, metres of hose), and widening a settings
+  /// enum for plant's benefit would couple the two masters.
+  unitOfMeasure String
+
+  reorderLevel Decimal? @db.Decimal(18, 3)
+
+  /// `settings.EquipmentCategory` ids this part fits. Empty means "unrestricted" —
+  /// consumption against any category is fine and unflagged. A populated list that
+  /// excludes the machine's category flags but never blocks (FR-020).
+  compatibleCategoryIds String[]
+
+  /// → `settings.Item` (009). Declared, never joined: the two stocks stay
+  /// independent by design (FR-024).
+  linkedInventoryItemId String?
+
+  /// Running balance, updated in-transaction on every movement (FR-016) rather than
+  /// summed from history on read — the same trade 009 FR-002 makes.
+  stockQuantity Decimal @default(0) @db.Decimal(18, 3)
+  /// Weighted average, recomputed on every receipt by 009 FR-008's formula (FR-017).
+  /// Six decimal places for the same reason `StockBalance.avgRate` has them: a rate
+  /// rounded to paise drifts once it is multiplied back out by a quantity.
+  avgRate       Decimal @default(0) @db.Decimal(18, 6)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  movements SparePartMovement[]
+
+  @@unique([companyId, partNumber])
+  @@index([companyId])
+  @@schema("plant")
+}
+
+model SparePartMovement {
+  id String @id @default(cuid())
+
+  companyId String
+
+  sparePartId String
+  sparePart   SparePart @relation(fields: [sparePartId], references: [id], onDelete: Cascade)
+
+  type SparePartMovementType
+
+  quantity Decimal @db.Decimal(18, 3)
+  /// The rate in force when the movement happened. Frozen (FR-017): a later receipt
+  /// moves the part's weighted average, never what an earlier consumption cost.
+  rate     Decimal @db.Decimal(18, 6)
+  amount   Decimal @db.Decimal(18, 2)
+
+  movementDate DateTime @db.Date
+
+  /// Set on consumptions and their reversals; null on receipts.
+  maintenanceJobId String?
+  maintenanceJob   MaintenanceJob? @relation(fields: [maintenanceJobId], references: [id])
+
+  /// Receipt provenance.
+  vendorId      String?
+  billReference String?
+
+  /// True when the part's `compatibleCategoryIds` excluded the machine's category
+  /// (FR-020) or when parts were consumed on hired equipment — recorded so the cost
+  /// can be recovered from the hire vendor, never enforced.
+  incompatiblePart Boolean @default(false)
+
+  /// A reversal points at the consumption it undoes.
+  reversalOfId String?             @unique
+  reversalOf   SparePartMovement?  @relation("MovementReversal", fields: [reversalOfId], references: [id])
+  reversedBy   SparePartMovement?  @relation("MovementReversal")
+  /// Required on a reversal (FR-019).
+  reason       String?
+
+  createdByUserId String
+
+  /// Soft-delete only (FR-027) — stock and cost history is never hard-deleted.
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, sparePartId])
+  @@index([companyId, maintenanceJobId])
+  @@schema("plant")
+}
+
+/// A third-party workshop's invoice for repairing owned equipment (FR-021, FR-022).
+///
+/// Distinct from `HireBill`, which is a rental charge for hired equipment. The two
+/// are never the same document: one is what you pay to use a machine, the other is
+/// what you pay to fix one you own.
+model ServiceBill {
+  id String @id @default(cuid())
+
+  companyId String
+
+  maintenanceJobId String
+  maintenanceJob   MaintenanceJob @relation(fields: [maintenanceJobId], references: [id], onDelete: Cascade)
+
+  /// → `partners.Vendor`, the workshop.
+  vendorId String
+
+  billNumber String
+  billDate   DateTime @db.Date
+
+  grossAmount Decimal @db.Decimal(18, 2)
+  taxAmount   Decimal @default(0) @db.Decimal(18, 2)
+
+  /// Computed server-side from gross, tax and percent (FR-021); never accepted from
+  /// the client, the same rule `HireBill` follows.
+  tdsPercent Decimal @default(0) @db.Decimal(6, 2)
+  tdsAmount  Decimal @db.Decimal(18, 2)
+  netPayable Decimal @db.Decimal(18, 2)
+
+  status ServiceBillStatus @default(pending_verification)
+
+  verifiedByUserId String?
+  verifiedAt       DateTime?
+
+  paymentStatus    ServiceBillPaymentStatus @default(unpaid)
+  paidAmount       Decimal                  @default(0) @db.Decimal(18, 2)
+  paidOn           DateTime?                @db.Date
+  paymentReference String?
+
+  /// Soft-delete only (FR-027).
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, vendorId, billNumber])
+  @@index([companyId, maintenanceJobId])
+  @@index([companyId, vendorId])
+  @@index([companyId, paymentStatus])
+  @@schema("plant")
 }
 
 // ============================================================================

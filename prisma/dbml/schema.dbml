@@ -144,6 +144,9 @@ so this is not a literal inside the denomination service — Principle III.']
   codeSequences CodeSequence [not null]
   itemCategories ItemCategory [not null]
   items Item [not null]
+  equipmentCategories EquipmentCategory [not null]
+  equipmentDocTypes EquipmentDocType [not null]
+  hireRates HireRate [not null]
   reminderRuleOverrides ReminderRule [not null]
   reminderSnoozes ReminderSnooze [not null]
   reminderNotifications ReminderNotification [not null]
@@ -1855,6 +1858,336 @@ buying (FR-027).']
   purchases Purchase [not null]
 }
 
+Table EquipmentCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null, note: 'Stored uppercase, like `ItemCategory.name`, so "Excavator" and "EXCAVATOR"
+cannot coexist as two categories meaning the same thing.']
+  meterType MeterType [not null]
+  fuelBenchmark Decimal [note: 'Expected consumption per meter unit (litres/hour or litres/km). Nullable
+because an electric or manual category has none, and 0 would read as a
+benchmark of zero rather than as its absence.']
+  fuelVarianceThresholdPercent Decimal [not null, default: 15, note: 'How far past the benchmark a fuel entry may sit before it is flagged (FR-004).
+Per category and stored, never the hardcoded `> 15` the original spec carried:
+a tower crane and a tipper do not deserve the same tolerance.']
+  targetHoursPerMonth Int [not null, default: 176, note: 'Denominator for utilisation % (FR-007). 176 = 22 working days × 8 hours.']
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  hireRates HireRate [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+}
+
+Table EquipmentDocType {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  alertDays Int [not null, default: 30, note: 'How many days before expiry a document of this type starts flagging
+`expiryAlert` (FR-010). Per type and stored, never the hardcoded 30-day literal
+the original spec carried: an insurance policy and a pollution certificate are
+not renewed on the same notice.']
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+}
+
+Table HireRate {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  categoryId String [not null]
+  category EquipmentCategory [not null]
+  ratePerUnit Decimal [not null]
+  effectiveFrom DateTime [not null]
+  effectiveTo DateTime [note: 'Null means "current" — the open end of the history.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'An effective-dated hire rate per category (FR-014).
+
+Non-overlapping by construction: creating a new open-ended rate closes the prior
+current one\'s `effectiveTo` to the day before. That invariant is what lets a hire
+bill raised last March still resolve last March\'s rate after this year\'s revision
+lands (SC-006) — a single mutable "current rate" column could not.'
+}
+
+Table Equipment {
+  id String [pk]
+  companyId String [not null]
+  code String [not null, note: 'Allocated from the company\'s EQUIPMENT series (`{shortCode}-EQP-0001`) when the
+caller does not supply one — most machines already carry a plate or asset
+number the yard knows them by, and overwriting it would be unhelpful.']
+  name String [not null]
+  categoryId String [not null, note: '→ `settings.EquipmentCategory`. Resolved via `EquipmentCategoriesService`.']
+  ownership EquipmentOwnership [not null]
+  vendorId String [note: '→ `partners.Vendor`, for hired equipment. Resolved via `PartnersService`.']
+  powerSource PowerSource [not null]
+  purchaseDate DateTime
+  purchaseCost Decimal
+  depreciationRate Decimal [note: 'Straight-line, % per annum. Feeds the owned half of `getMachineryCostByProject`.']
+  meterType MeterType [not null, note: 'Mirrors the category\'s at creation time. Copied rather than joined because a
+category\'s meter type must not silently reinterpret readings already recorded
+against machines under it.']
+  currentReading Decimal [not null, default: 0]
+  deployedSiteId String [note: '→ `projects.Site`. Resolved via `SitesService`; this is what ties a machine to
+a project for the P&L.']
+  status EquipmentStatus [not null, default: 'active']
+  utilizationPercent Decimal [not null, default: 0, note: 'Stored, recomputed on every logbook write for the current month (FR-007), so a
+register listing 500 machines does not run 500 aggregates.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  documents EquipmentDocument [not null]
+  logbookEntries LogbookEntry [not null]
+  fuelEntries FuelEntry [not null]
+  serviceSchedules ServiceSchedule [not null]
+  maintenanceJobs MaintenanceJob [not null]
+  hireBills HireBill [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
+}
+
+Table EquipmentDocument {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  docTypeId String [not null, note: '→ `settings.EquipmentDocType`, whose `alertDays` is the alert window.']
+  fileRef String [not null, note: 'Object-storage key, never a public URL — resolved to a short-lived signed URL
+at read time, the same treatment contractor and employee documents get.']
+  fileName String
+  mimeType String
+  expiresAt DateTime
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+}
+
+Table LogbookEntry {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  date DateTime [not null]
+  openingReading Decimal [not null]
+  closingReading Decimal [not null]
+  totalHours Decimal [not null, note: 'Stored: `closingReading − openingReading`. Zero is legitimate (a machine that
+stood idle all day still gets an entry).']
+  fuelConsumed Decimal
+  operatorId String [note: '→ `hr.Employee`. Resolved via `EmployeesService`.']
+  projectId String [note: '→ `projects.Project`. A machine can work a project that is not its deployed
+site\'s, so this is recorded per entry rather than inferred.']
+  remarks String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (equipmentId, date) [unique]
+  }
+}
+
+Table FuelEntry {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  date DateTime [not null]
+  quantity Decimal [not null]
+  rate Decimal [not null]
+  amount Decimal [not null]
+  vendorId String [note: '→ `partners.Vendor` (the filling station or diesel supplier).']
+  variancePercent Decimal [note: 'Computed against the category\'s threshold at save time and stored (research.md
+§3): a later edit to the category\'s benchmark must not retroactively rewrite
+what was flagged, or unflag, months of history.']
+  varianceAlert Boolean [not null, default: false]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
+Table ServiceSchedule {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  serviceType String [not null]
+  intervalHours Decimal
+  intervalKm Decimal
+  lastDoneReading Decimal [not null]
+  nextDueReading Decimal [not null, note: 'Stored: `lastDoneReading + interval`. `status` is *not* stored — it is derived
+on read from the equipment\'s current reading (FR-006, research.md §4), because
+storing it would mean touching every schedule on every logbook entry.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  maintenanceJobs MaintenanceJob [not null]
+}
+
+Table MaintenanceJob {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  type MaintenanceType [not null]
+  description String [not null]
+  openedAt DateTime [default: `now()`, not null]
+  closedAt DateTime
+  closingReading Decimal
+  partsDescription String
+  labourCost Decimal [note: 'The workshop\'s own labour. Distinct from `partsCost`, which accrues from spare
+part consumption, and from service bills, which are a third party\'s invoice —
+FR-026 requires all three to be separable.']
+  partsCost Decimal [not null, default: 0, note: 'Accrued by `SparePartMovement` consumptions and reversals (FR-018), never set
+by a client.']
+  totalCost Decimal
+  linkedServiceScheduleId String
+  linkedServiceSchedule ServiceSchedule
+  status MaintenanceStatus [not null, default: 'open']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  partMovements SparePartMovement [not null]
+  serviceBills ServiceBill [not null]
+}
+
+Table HireBill {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  vendorId String [not null, note: '→ `partners.Vendor`, the hire vendor. Required: a hire bill without an owner to
+pay is not a hire bill.']
+  billedHours Decimal [not null]
+  rate Decimal [not null, note: 'Defaults from the effective `settings.HireRate` for the equipment\'s category on
+`billingPeriodFrom` (FR-014), overridable per bill.']
+  grossAmount Decimal [not null]
+  billingPeriodFrom DateTime [not null]
+  billingPeriodTo DateTime [not null]
+  logbookHours Decimal [not null, note: 'Snapshot taken at creation, not a live join (research.md §8): the bill must
+stay verifiable against what the logbook said when it was raised, even if a
+logbook entry is corrected afterwards.']
+  variance Decimal [not null]
+  tdsRate Decimal [note: 'From `PartnersService.getVendorTds()` at creation. Never client-supplied
+(FR-005).']
+  tdsAmount Decimal [not null, default: 0]
+  netPayable Decimal [not null]
+  status HireBillStatus [not null, default: 'pending_verification']
+  verifiedByUserId String
+  verifiedAt DateTime
+  paymentDate DateTime
+  paymentReference String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+}
+
+Table SparePart {
+  id String [pk]
+  companyId String [not null]
+  partNumber String [not null]
+  name String [not null]
+  unitOfMeasure String [not null, note: 'Free text rather than 009\'s `ItemUnit` enum: workshop parts come in units that
+master does not carry (sets, pairs, metres of hose), and widening a settings
+enum for plant\'s benefit would couple the two masters.']
+  reorderLevel Decimal
+  compatibleCategoryIds String[] [not null, note: '`settings.EquipmentCategory` ids this part fits. Empty means "unrestricted" —
+consumption against any category is fine and unflagged. A populated list that
+excludes the machine\'s category flags but never blocks (FR-020).']
+  linkedInventoryItemId String [note: '→ `settings.Item` (009). Declared, never joined: the two stocks stay
+independent by design (FR-024).']
+  stockQuantity Decimal [not null, default: 0, note: 'Running balance, updated in-transaction on every movement (FR-016) rather than
+summed from history on read — the same trade 009 FR-002 makes.']
+  avgRate Decimal [not null, default: 0, note: 'Weighted average, recomputed on every receipt by 009 FR-008\'s formula (FR-017).
+Six decimal places for the same reason `StockBalance.avgRate` has them: a rate
+rounded to paise drifts once it is multiplied back out by a quantity.']
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  movements SparePartMovement [not null]
+
+  indexes {
+    (companyId, partNumber) [unique]
+  }
+
+  Note: 'A workshop-stocked replacement part (FR-015).
+
+Deliberately not a `settings.Item` (009\'s material master): a spare part is
+consumed against a *machine* and costed to that machine\'s maintenance history,
+where an inventory item is consumed against a BOQ activity and costed to a
+project. Different stock location, different costing dimension, different
+consumer. `linkedInventoryItemId` declares the overlap where one physical thing
+is registered in both, so FR-024\'s reconciliation can show the divergence rather
+than the two silently double-counting.'
+}
+
+Table SparePartMovement {
+  id String [pk]
+  companyId String [not null]
+  sparePartId String [not null]
+  sparePart SparePart [not null]
+  type SparePartMovementType [not null]
+  quantity Decimal [not null]
+  rate Decimal [not null, note: 'The rate in force when the movement happened. Frozen (FR-017): a later receipt
+moves the part\'s weighted average, never what an earlier consumption cost.']
+  amount Decimal [not null]
+  movementDate DateTime [not null]
+  maintenanceJobId String [note: 'Set on consumptions and their reversals; null on receipts.']
+  maintenanceJob MaintenanceJob
+  vendorId String [note: 'Receipt provenance.']
+  billReference String
+  incompatiblePart Boolean [not null, default: false, note: 'True when the part\'s `compatibleCategoryIds` excluded the machine\'s category
+(FR-020) or when parts were consumed on hired equipment — recorded so the cost
+can be recovered from the hire vendor, never enforced.']
+  reversalOfId String [unique, note: 'A reversal points at the consumption it undoes.']
+  reversalOf SparePartMovement
+  reversedBy SparePartMovement
+  reason String [note: 'Required on a reversal (FR-019).']
+  createdByUserId String [not null]
+  deletedAt DateTime [note: 'Soft-delete only (FR-027) — stock and cost history is never hard-deleted.']
+  createdAt DateTime [default: `now()`, not null]
+}
+
+Table ServiceBill {
+  id String [pk]
+  companyId String [not null]
+  maintenanceJobId String [not null]
+  maintenanceJob MaintenanceJob [not null]
+  vendorId String [not null, note: '→ `partners.Vendor`, the workshop.']
+  billNumber String [not null]
+  billDate DateTime [not null]
+  grossAmount Decimal [not null]
+  taxAmount Decimal [not null, default: 0]
+  tdsPercent Decimal [not null, default: 0, note: 'Computed server-side from gross, tax and percent (FR-021); never accepted from
+the client, the same rule `HireBill` follows.']
+  tdsAmount Decimal [not null]
+  netPayable Decimal [not null]
+  status ServiceBillStatus [not null, default: 'pending_verification']
+  verifiedByUserId String
+  verifiedAt DateTime
+  paymentStatus ServiceBillPaymentStatus [not null, default: 'unpaid']
+  paidAmount Decimal [not null, default: 0]
+  paidOn DateTime
+  paymentReference String
+  deletedAt DateTime [note: 'Soft-delete only (FR-027).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, vendorId, billNumber) [unique]
+  }
+
+  Note: 'A third-party workshop\'s invoice for repairing owned equipment (FR-021, FR-022).
+
+Distinct from `HireBill`, which is a rental charge for hired equipment. The two
+are never the same document: one is what you pay to use a machine, the other is
+what you pay to fix one you own.'
+}
+
 Table WageRate {
   id String [pk]
   companyId String [not null]
@@ -2134,6 +2467,8 @@ Enum Permission {
   CROSS_COMPANY_ACCESS
   INVENTORY_APPROVE
   LABOUR_APPROVE
+  MAINTENANCE
+  HIRE_BILLS
 }
 
 Enum CompanyStatus {
@@ -2218,6 +2553,19 @@ Enum AuditEntityType {
   MUSTER_ROLL
   LABOUR_PAYMENT_SHEET
   LABOUR_ADVANCE
+  EQUIPMENT
+  EQUIPMENT_DOCUMENT
+  LOGBOOK_ENTRY
+  FUEL_ENTRY
+  SERVICE_SCHEDULE
+  MAINTENANCE_JOB
+  HIRE_BILL
+  EQUIPMENT_CATEGORY
+  EQUIPMENT_DOC_TYPE
+  HIRE_RATE
+  SPARE_PART
+  SPARE_PART_MOVEMENT
+  SERVICE_BILL
 }
 
 Enum AuditAction {
@@ -2459,6 +2807,7 @@ Enum CodeSeriesType {
   ITEMS
   INDENT
   GRN
+  EQUIPMENT
 }
 
 Enum VendorType {
@@ -2556,6 +2905,62 @@ Enum IndentStatus {
   partially_fulfilled
   fulfilled
   cancelled
+}
+
+Enum MeterType {
+  hours
+  km
+}
+
+Enum EquipmentOwnership {
+  owned
+  hired
+}
+
+Enum PowerSource {
+  diesel
+  petrol
+  electric
+  manual
+}
+
+Enum EquipmentStatus {
+  active
+  under_maintenance
+  inactive
+}
+
+Enum MaintenanceType {
+  breakdown
+  scheduled
+}
+
+Enum MaintenanceStatus {
+  open
+  closed
+}
+
+Enum HireBillStatus {
+  pending_verification
+  verified
+  paid
+}
+
+Enum SparePartMovementType {
+  receipt
+  consumption
+  reversal
+}
+
+Enum ServiceBillStatus {
+  pending_verification
+  verified
+}
+
+Enum ServiceBillPaymentStatus {
+  unpaid
+  partially_paid
+  paid
 }
 
 Enum EngagementType {
@@ -2747,6 +3152,36 @@ Ref: PaymentAllocation.paymentId > Payment.id [delete: Cascade]
 Ref: PaymentAllocation.billId > PurchaseBill.id [delete: Cascade]
 
 Ref: MaterialIndentLine.indentId > MaterialIndent.id [delete: Cascade]
+
+Ref: EquipmentCategory.companyId > Company.id [delete: Cascade]
+
+Ref: EquipmentDocType.companyId > Company.id [delete: Cascade]
+
+Ref: HireRate.companyId > Company.id [delete: Cascade]
+
+Ref: HireRate.categoryId > EquipmentCategory.id [delete: Cascade]
+
+Ref: EquipmentDocument.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: LogbookEntry.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: FuelEntry.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: ServiceSchedule.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: MaintenanceJob.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: MaintenanceJob.linkedServiceScheduleId > ServiceSchedule.id
+
+Ref: HireBill.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: SparePartMovement.sparePartId > SparePart.id [delete: Cascade]
+
+Ref: SparePartMovement.maintenanceJobId > MaintenanceJob.id
+
+Ref: SparePartMovement.reversalOfId - SparePartMovement.id
+
+Ref: ServiceBill.maintenanceJobId > MaintenanceJob.id [delete: Cascade]
 
 Ref: GangMember.gangId > LabourGang.id [delete: Cascade]
 
