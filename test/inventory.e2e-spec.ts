@@ -39,8 +39,16 @@ describe('Inventory module (e2e)', () => {
   const auth = () => ({ Authorization: `Bearer ${token}` });
 
   const createdIndentIds: string[] = [];
-  /** Roles this suite granted `INVENTORY_APPROVE` to, so it can hand them back. */
-  const grantedApproveRoleIds: string[] = [];
+  /**
+   * Each role's permission array exactly as this suite found it, so whatever the
+   * tests do to `INVENTORY_APPROVE` in between is undone.
+   *
+   * A list of "roles we granted it to" was enough when 009 shipped and no seeded
+   * role held the value. Feature 006's permissions migration grants it to four of
+   * them, so the suite now both removes and adds it — and only a snapshot restores
+   * the right state either way.
+   */
+  const originalRolePermissions = new Map<string, string[]>();
   const createdItemIds: string[] = [];
   const createdCategoryIds: string[] = [];
   const createdSiteIds: string[] = [];
@@ -88,7 +96,9 @@ describe('Inventory module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({ orderBy: { createdAt: 'asc' } });
+    const company = await sys.company.findFirst({
+      orderBy: { createdAt: 'asc' },
+    });
     companyId = company.id;
 
     for (const name of ['StoreA', 'StoreB']) {
@@ -141,17 +151,28 @@ describe('Inventory module (e2e)', () => {
   /**
    * Grants the caller's roles `INVENTORY_APPROVE`.
    *
-   * 009 adds the value; no seeded role holds it, which is exactly what the
-   * preceding test asserts. A real deployment grants it the same way — through
-   * Settings > Roles — and this is the API-less equivalent.
+   * A real deployment grants it through Settings > Roles; this is the API-less
+   * equivalent. Idempotent, because feature 006's permissions migration means the
+   * caller's roles may already hold it.
    */
-  async function grantApprovePermission() {
+  async function callerRoles() {
     const me = await http().get('/users/me').set(auth()).expect(200);
     const userRoles = await sys.userRole.findMany({
       where: { userId: me.body.id },
       include: { role: true },
     });
     for (const userRole of userRoles) {
+      if (!originalRolePermissions.has(userRole.roleId)) {
+        originalRolePermissions.set(userRole.roleId, [
+          ...userRole.role.permissions,
+        ]);
+      }
+    }
+    return userRoles;
+  }
+
+  async function grantApprovePermission() {
+    for (const userRole of await callerRoles()) {
       if (userRole.role.permissions.includes('INVENTORY_APPROVE')) continue;
       await sys.role.update({
         where: { id: userRole.roleId },
@@ -159,21 +180,34 @@ describe('Inventory module (e2e)', () => {
           permissions: [...userRole.role.permissions, 'INVENTORY_APPROVE'],
         },
       });
-      grantedApproveRoleIds.push(userRole.roleId);
     }
   }
 
-  afterAll(async () => {
-    for (const roleId of grantedApproveRoleIds) {
-      const role = await sys.role.findUnique({ where: { id: roleId } });
+  /**
+   * Takes `INVENTORY_APPROVE` off the caller's roles, so the refusal above can be
+   * demonstrated at all.
+   *
+   * Every role it removes is recorded in `grantedApproveRoleIds`, which `afterAll`
+   * already walks — so a role that held the permission before this suite ran gets
+   * it back either way.
+   */
+  async function revokeApprovePermission() {
+    for (const userRole of await callerRoles()) {
+      if (!userRole.role.permissions.includes('INVENTORY_APPROVE')) continue;
       await sys.role.update({
-        where: { id: roleId },
+        where: { id: userRole.roleId },
         data: {
-          permissions: role.permissions.filter(
+          permissions: userRole.role.permissions.filter(
             (permission: string) => permission !== 'INVENTORY_APPROVE',
           ),
         },
       });
+    }
+  }
+
+  afterAll(async () => {
+    for (const [roleId, permissions] of originalRolePermissions) {
+      await sys.role.update({ where: { id: roleId }, data: { permissions } });
     }
     // Order matters, and it is the reverse of the dependency direction: allocations
     // point at payments and bills, bills and GRNs at purchases, and every movement
@@ -183,7 +217,9 @@ describe('Inventory module (e2e)', () => {
     await sys.purchaseBill.deleteMany({ where: { companyId } });
     await sys.goodsReceiptNote.deleteMany({ where: { companyId } });
     await sys.issue.deleteMany({ where: { itemId: { in: createdItemIds } } });
-    await sys.purchase.deleteMany({ where: { itemId: { in: createdItemIds } } });
+    await sys.purchase.deleteMany({
+      where: { itemId: { in: createdItemIds } },
+    });
     await sys.stockTransfer.deleteMany({
       where: { itemId: { in: createdItemIds } },
     });
@@ -653,8 +689,12 @@ describe('Inventory module (e2e)', () => {
       const byId = new Map(
         purchases.body.purchases.map((p: { id: string }) => [p.id, p]),
       );
-      expect((byId.get(oldBillPurchase) as { paymentStatus: string }).paymentStatus).toBe('paid');
-      expect((byId.get(newBillPurchase) as { paymentStatus: string }).paymentStatus).toBe('part_paid');
+      expect(
+        (byId.get(oldBillPurchase) as { paymentStatus: string }).paymentStatus,
+      ).toBe('paid');
+      expect(
+        (byId.get(newBillPurchase) as { paymentStatus: string }).paymentStatus,
+      ).toBe('part_paid');
     });
 
     it('refuses to delete a purchase whose bill has been allocated against', async () => {
@@ -773,10 +813,15 @@ describe('Inventory module (e2e)', () => {
     });
 
     it('refuses approval from a caller without INVENTORY_APPROVE (FR-029)', async () => {
-      // The permission 009 adds is not held by any seeded role, and `INVENTORY`
-      // alone is not enough: the method-level decorator *replaces* the class-level
-      // one, so an approver needs the approval value specifically. Asserted before
-      // it is granted below, because after that this can never fail again.
+      // `INVENTORY` alone is not enough: the method-level decorator *replaces* the
+      // class-level one, so an approver needs the approval value specifically.
+      //
+      // When 009 shipped, no seeded role held the value at all and this test
+      // asserted the 403 directly. Feature 006's permissions migration granted it
+      // to Super Admin, Site Admin, HO User and Accountant — so the admin this
+      // suite logs in as now legitimately holds it, and the refusal has to be
+      // demonstrated against a role that does not.
+      await revokeApprovePermission();
       await http()
         .post(`/inventory/indents/${indentId}/approve`)
         .set(auth())

@@ -45,6 +45,12 @@ describe('ProjectsService.findOne', () => {
         listActiveBySiteIds: jest.fn().mockResolvedValue([]),
         ...employees,
       } as never,
+      // No machinery or materials source registered — the state a deployment
+      // without 006 or 009 is in, and what `unavailableModules` reports.
+      {
+        machinerySource: () => null,
+        materialsSource: () => null,
+      } as never,
     );
   };
 
@@ -110,6 +116,7 @@ describe('ProjectsService outward contract', () => {
       { record: jest.fn() } as never,
       { next: jest.fn() } as never,
       {} as never,
+      { machinerySource: () => null, materialsSource: () => null } as never,
     );
 
   it('reports the portfolio as available, which 007 branches on', () => {
@@ -153,6 +160,7 @@ describe('ProjectsService.remove', () => {
       { record: jest.fn() } as never,
       { next: jest.fn() } as never,
       {} as never,
+      { machinerySource: () => null, materialsSource: () => null } as never,
     );
 
     const attempt = service.remove(caller, 'project-1', '10.0.0.1');

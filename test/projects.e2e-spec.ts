@@ -365,10 +365,14 @@ describe('Projects module (e2e)', () => {
         totalReceived: 0,
         totalPending: 0,
       });
-      // Empty because 006 and 009 do not exist — which the response says outright
-      // rather than leaving the caller to infer there is no machinery.
+      // Empty because this project has no machinery deployed and no material
+      // issued — not because nobody could ask. 006 and 009 have both shipped and
+      // register as sources, so `unavailableModules` is empty, and that is the
+      // distinction it exists to draw: "we asked and there is none" reads
+      // differently from "we could not ask".
       expect(detail.body.tabs.machinery).toEqual([]);
-      expect(detail.body.unavailableModules).toEqual(['plant', 'inventory']);
+      expect(detail.body.tabs.materials).toEqual([]);
+      expect(detail.body.unavailableModules).toEqual([]);
     });
 
     it('refuses to delete a project that has recorded data, naming what is in the way', async () => {
