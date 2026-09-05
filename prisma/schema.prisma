@@ -1,7 +1,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour", "assets"]
+  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour", "assets", "recruitment"]
 }
 
 generator client {
@@ -208,6 +208,16 @@ enum Permission {
   /// approving a rental invoice is an accounts decision, not a workshop one.
   HIRE_BILLS
 
+  /// Added by 011. Access to the recruitment funnel (requisitions, candidates,
+  /// interviews, offers, joining, onboarding, letters, resignations). Reuses the
+  /// existing `EMPLOYEES` and `REPORTS` values elsewhere.
+  RECRUITMENT
+  /// Added by 011. Approving a requisition, issuing an offer above its budgeted
+  /// maximum, waiving an onboarding item, and accepting a resignation are the
+  /// separable approval decisions in the funnel. Deliberately the only approval
+  /// value this feature adds.
+  RECRUITMENT_APPROVE
+
   /// Added by 012 (FR-033). Registering, allocating, transferring, inspecting and
   /// requesting project assets. `INVENTORY` is deliberately not reused: a storekeeper
   /// who issues cement is not thereby accountable for who is holding the total
@@ -301,6 +311,8 @@ model Company {
   shifts          Shift[]
   employeeCodeSeq EmployeeCodeSequence?
   skillCategories SkillCategory[]
+  kitItems        KitItem[]
+  letterTemplates LetterTemplate[]
 
   reimbursementCategories ReimbursementCategory[]
   vendorCategories        VendorCategory[]
@@ -440,6 +452,63 @@ model SkillCategory {
   @@unique([companyId, name])
   @@unique([companyId, code])
   @@index([companyId])
+  @@schema("settings")
+}
+
+/// Letter types feature 011 generates from per-company templates (011 FR-020).
+enum LetterType {
+  offer
+  appointment
+  confirmation
+  relieving
+  experience
+
+  @@schema("settings")
+}
+
+/// A kit item issued during onboarding (helmet, safety shoes, ID card, laptop) —
+/// a `settings`-schema master owned and audited by feature 011 (011 FR-037). When
+/// `linkedInventoryItemId` names an inventory item, issuing it records a real stock
+/// issue; otherwise it is a non-stock issuance.
+model KitItem {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name                  String
+  linkedInventoryItemId String?
+  defaultQuantity       Int     @default(1)
+  issuedByDefault       Boolean @default(true)
+  isRecoverableAtExit   Boolean @default(false)
+  isActive              Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// A per-company letter template with `{{token}}` substitution (011 FR-020, FR-021).
+/// At most one active template per (companyId, letterType) — enforced by a partial
+/// unique index in the migration.
+model LetterTemplate {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  letterType        LetterType
+  name              String
+  bodyTemplate      String
+  letterheadAssetId String?
+  isActive          Boolean    @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, letterType])
   @@schema("settings")
 }
 
@@ -747,6 +816,16 @@ enum AuditEntityType {
   SPARE_PART
   SPARE_PART_MOVEMENT
   SERVICE_BILL
+
+  // Recruitment & Onboarding entities audited by feature 011 (FR-032). LETTER
+  // generation and candidate PII reads are audited on READ as well as write.
+  REQUISITION
+  CANDIDATE
+  INTERVIEW
+  OFFER
+  ONBOARDING_ITEM
+  LETTER
+  RESIGNATION
 
   // Project Assets entities audited by feature 012 (FR-034). The three masters sit
   // here rather than under the Settings block for the same reason 006's and 009's do
@@ -2362,6 +2441,9 @@ enum CodeSeriesType {
   /// Added by 006. Equipment codes (`{shortCode}-EQP-0001`) for machines registered
   /// without a manufacturer plate number of their own.
   EQUIPMENT
+
+  /// Added by 011. Manpower requisition numbers (`{shortCode}-REQ-0001`), per company.
+  REQUISITION
 
   /// Added by 012. Asset codes (`{shortCode}-AST-0001`) and asset request numbers
   /// (`{shortCode}-ARQ-0001`) — per company, allocated the same way every series
@@ -5010,4 +5092,459 @@ model AssetDocument {
   @@index([assetId])
   @@index([companyId, expiryDate])
   @@schema("assets")
+}
+
+// ============================================================================
+// recruitment schema — feature 011 (Recruitment & Onboarding: requisitions,
+// candidates, interviews, offers, joining, onboarding, letters, resignations).
+//
+// The hiring funnel that terminates in the creation of the `hr.Employee` record
+// feature 005 administers. Every cross-schema reference (departmentId,
+// designationId, projectId, siteId, employeeId, interviewerEmployeeId, kitItemId,
+// documentTypeId, templateId, linkedIssueId) is a bare id with no Prisma relation —
+// Principle I routes every cross-module read through the owning module's service.
+// Same-schema parent/child links are real relations.
+// ============================================================================
+
+enum RequisitionEmploymentType {
+  permanent
+  contract
+  walk_in
+
+  @@schema("recruitment")
+}
+
+enum RequisitionStatus {
+  draft
+  pending_approval
+  open
+  rejected
+  closed
+
+  @@schema("recruitment")
+}
+
+enum CandidateSource {
+  referral
+  agency
+  walk_in
+  portal
+  internal
+
+  @@schema("recruitment")
+}
+
+enum CandidateStage {
+  applied
+  shortlisted
+  interviewing
+  selected
+  offer_issued
+  offer_accepted
+  joined
+  rejected
+  no_show
+
+  @@schema("recruitment")
+}
+
+enum InterviewRoundType {
+  telephonic
+  technical
+  hr
+  managerial
+  final
+
+  @@schema("recruitment")
+}
+
+enum InterviewMode {
+  in_person
+  phone
+  video
+
+  @@schema("recruitment")
+}
+
+enum InterviewStatus {
+  scheduled
+  completed
+  cancelled
+
+  @@schema("recruitment")
+}
+
+enum InterviewOutcome {
+  recommend
+  hold
+  reject
+
+  @@schema("recruitment")
+}
+
+enum OfferStatus {
+  draft
+  issued
+  accepted
+  declined
+  superseded
+
+  @@schema("recruitment")
+}
+
+enum OnboardingItemType {
+  document
+  kit
+  induction
+
+  @@schema("recruitment")
+}
+
+enum OnboardingItemStatus {
+  pending
+  completed
+  waived
+
+  @@schema("recruitment")
+}
+
+enum ResignationReasonCategory {
+  better_opportunity
+  personal
+  relocation
+  health
+  compensation
+  work_environment
+  other
+
+  @@schema("recruitment")
+}
+
+enum ResignationStatus {
+  submitted
+  accepted
+  withdrawn
+
+  @@schema("recruitment")
+}
+
+/// A manpower requisition — the "Open Positions" record every candidate is scoped to
+/// (011 US1). Auto-closes when `filledPositions == positionCount` (FR-014).
+model Requisition {
+  id        String @id @default(cuid())
+  companyId String
+
+  requisitionCode String
+
+  departmentId  String
+  designationId String
+
+  positionCount   Int
+  filledPositions Int @default(0)
+
+  employmentType RequisitionEmploymentType
+
+  projectId String?
+  siteId    String?
+
+  targetJoiningDate DateTime @db.Date
+  budgetedCtcMin    Decimal  @db.Decimal(14, 2)
+  budgetedCtcMax    Decimal  @db.Decimal(14, 2)
+  justification     String
+
+  status          RequisitionStatus @default(draft)
+  approvedBy      String?
+  approvedAt      DateTime?
+  rejectionReason String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  candidates Candidate[]
+
+  @@unique([companyId, requisitionCode])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([companyId, departmentId])
+  @@schema("recruitment")
+}
+
+/// A candidate against one requisition (011 US2). PII (`phone`, `email`,
+/// `currentCtc`, `expectedCtc`) is masked in list responses (FR-006). Retained and
+/// linked to the created `hr.Employee` via `employeeId` on joining (FR-013).
+model Candidate {
+  id        String @id @default(cuid())
+  companyId String
+
+  requisitionId String
+  requisition   Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+
+  fullName             String
+  phone                String
+  email                String
+  totalExperienceYears Decimal @db.Decimal(4, 1)
+  currentEmployer      String?
+  currentCtc           Decimal? @db.Decimal(14, 2)
+  expectedCtc          Decimal? @db.Decimal(14, 2)
+
+  source               CandidateSource
+  referredByEmployeeId String?
+  resumeRef            String?
+
+  stage      CandidateStage @default(applied)
+  employeeId String?
+  previousCandidateId String?
+  rejectionReason     String?
+  noShowReason        String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  stageHistory CandidateStageHistory[]
+  interviews   Interview[]
+  offers       Offer[]
+
+  @@index([companyId])
+  @@index([companyId, requisitionId])
+  @@index([companyId, stage])
+  @@schema("recruitment")
+}
+
+/// Immutable stage-transition log — the source of truth for time-to-hire (FR-005,
+/// FR-028).
+model CandidateStageHistory {
+  id        String @id @default(cuid())
+  companyId String
+
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  fromStage CandidateStage?
+  toStage   CandidateStage
+  actorId   String?
+  occurredAt DateTime @default(now())
+  remarks   String?
+
+  @@index([companyId])
+  @@index([candidateId])
+  @@schema("recruitment")
+}
+
+/// One interview round for a candidate (011 US3). Round number is unique per
+/// candidate; `rescheduleHistory` retains prior times as jsonb.
+model Interview {
+  id        String @id @default(cuid())
+  companyId String
+
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  roundNumber Int
+  roundType   InterviewRoundType
+  scheduledAt DateTime
+  mode        InterviewMode
+  location    String?
+
+  status          InterviewStatus @default(scheduled)
+  rescheduleCount Int             @default(0)
+  rescheduleHistory Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+
+  interviewers InterviewInterviewer[]
+  feedback     InterviewFeedback[]
+
+  @@unique([candidateId, roundNumber])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@schema("recruitment")
+}
+
+/// Join table: which employees are assigned to an interview (gates who may submit
+/// feedback — FR-009).
+model InterviewInterviewer {
+  id        String @id @default(cuid())
+  companyId String
+
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  employeeId String
+
+  @@unique([interviewId, employeeId])
+  @@index([companyId])
+  @@schema("recruitment")
+}
+
+/// One interviewer's feedback on one interview (FR-009).
+model InterviewFeedback {
+  id        String @id @default(cuid())
+  companyId String
+
+  interviewId String
+  interview   Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  interviewerEmployeeId String
+  outcome               InterviewOutcome
+  score                 Int
+  comments              String
+  submittedAt           DateTime @default(now())
+
+  @@unique([interviewId, interviewerEmployeeId])
+  @@index([companyId])
+  @@schema("recruitment")
+}
+
+/// An offer to a selected candidate (011 US4). Immutable once `accepted` (FR-012);
+/// at most one non-superseded offer per candidate. `salaryBreakup` is a jsonb list of
+/// { name, monthlyAmount } that must reconcile to `offeredCtc / 12` (FR-010).
+model Offer {
+  id        String @id @default(cuid())
+  companyId String
+
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  designationId String
+  departmentId  String
+
+  offeredCtc   Decimal @db.Decimal(14, 2)
+  salaryBreakup Json
+
+  proposedJoiningDate  DateTime  @db.Date
+  confirmedJoiningDate DateTime? @db.Date
+  probationMonths      Int
+  noticePeriodDays     Int
+
+  reportingManagerEmployeeId String
+
+  outsideBudget Boolean     @default(false)
+  status        OfferStatus @default(draft)
+  letterId      String?
+
+  acceptedOn    DateTime? @db.Date
+  declineReason String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, candidateId])
+  @@schema("recruitment")
+}
+
+/// The onboarding checklist opened when a candidate joins (011 US6).
+model OnboardingChecklist {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId  String
+  candidateId String
+
+  openedAt    DateTime  @default(now())
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items OnboardingItem[]
+
+  @@unique([companyId, employeeId])
+  @@index([companyId])
+  @@schema("recruitment")
+}
+
+/// One checklist item: a document to verify, a kit item to issue, or an induction
+/// task (011 FR-015 to FR-019).
+model OnboardingItem {
+  id        String @id @default(cuid())
+  companyId String
+
+  checklistId String
+  checklist   OnboardingChecklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+
+  itemType       OnboardingItemType
+  documentTypeId String?
+  kitItemId      String?
+  label          String
+
+  status        OnboardingItemStatus @default(pending)
+  completedBy   String?
+  completedAt   DateTime?
+  waiverReason  String?
+  linkedIssueId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([checklistId])
+  @@schema("recruitment")
+}
+
+/// A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
+/// prior version; both remain downloadable.
+model GeneratedLetter {
+  id        String @id @default(cuid())
+  companyId String
+
+  letterType  LetterType
+  employeeId  String?
+  candidateId String?
+  templateId  String
+
+  renderedRef  String
+  version      Int     @default(1)
+  isSuperseded Boolean @default(false)
+
+  issuedAt DateTime @default(now())
+  issuedBy String?
+
+  @@index([companyId])
+  @@index([companyId, letterType, employeeId])
+  @@index([companyId, letterType, candidateId])
+  @@schema("recruitment")
+}
+
+/// An employee's resignation record (011 US8) — the trigger 005's exit flow consumes.
+model Resignation {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+
+  resignationDate DateTime                  @db.Date
+  reasonCategory  ResignationReasonCategory
+  reasonDetail    String
+  noticePeriodDays Int
+
+  expectedLastWorkingDay DateTime  @db.Date
+  agreedLastWorkingDay   DateTime? @db.Date
+  noticeWaiverDays       Int?
+  waiverReason           String?
+
+  status        ResignationStatus @default(submitted)
+  withdrawReason String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, employeeId])
+  @@index([companyId, status])
+  @@schema("recruitment")
 }

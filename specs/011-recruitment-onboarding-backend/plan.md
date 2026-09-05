@@ -144,3 +144,36 @@ join → onboard) and the joining transaction's atomicity.
 - [ ] Swagger `@ApiTags('Recruitment')` + `@ApiOperation` on all controllers
 - [ ] Verify soft-delete on requisitions, candidates, offers, resignations (FR-036)
 - [ ] `npm run lint` + `npm run build` clean
+
+## Implementation deviations (2026-09-04)
+
+Deltas from the plan above, recorded per the constitution's "update the spec when you
+change it" rule:
+
+- **Joining creates the Employee only — no login account.** `Employee.userId` is
+  nullable, so joining creates the `hr.Employee` via `EmployeesService.create` and HR
+  provisions the login later through feature 010. Because `EmployeesService.create`
+  opens its own transaction, joining is a validated sequence (validate → create
+  employee → link candidate + increment requisition + open checklist) rather than one
+  atomic transaction; strict single-transaction atomicity (T035) would require
+  refactoring 005 and is deferred.
+- **Joining shift.** `Employee` mandates a `shiftId` that the spec's join payload lacks;
+  the join accepts an optional `shiftId` and otherwise defaults to the company's first
+  configured shift.
+- **Relieving-letter F&F gate.** An exported `ExitService.isFnfProcessed(ctx, employeeId)`
+  was added to `hr` (reads `ExitRecord.fnfPayrollRunId`); `LetterService` gates relieving
+  letters on it (FR-023).
+- **Kit issue is non-stock only.** `IssuesService` is not exported from `InventoryModule`,
+  so a kit issue is recorded as a non-stock issuance (actor + date); the optional
+  inventory-stock linkage (`linkedIssueId`, US6 scenario 5) is deferred until that seam
+  is exported.
+- **Company-configurable thresholds live in `RecruitmentConfig`** (`config.ts`):
+  delayed-joining threshold, no-show grace, and salary-breakup tolerance — consistent with
+  how other features keep policy values in config (Principle III).
+- **Settings masters hosted by recruitment.** `KitItem` and `LetterTemplate` CRUD services
+  live in `settings` (owning the tables); the endpoints (`/recruitment/letter-templates`,
+  and letter-template token validation) live in the recruitment module, mirroring the
+  skill-category/item-master arrangement.
+- **Synchronous letters/reports.** No BullMQ; letter and report generation are synchronous
+  (async-above-threshold, FR-029, deferred until queue infra lands).
+

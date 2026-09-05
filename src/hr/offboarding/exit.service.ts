@@ -8,7 +8,10 @@ import { AuditAction, AuditEntityType, ExitReason } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
-import { withRlsContext } from '../../common/prisma/rls-context';
+import {
+  withRlsContext,
+  type RlsContext,
+} from '../../common/prisma/rls-context';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import type { InitiateExitDto } from './dto/exit.dto';
 
@@ -95,6 +98,22 @@ export class ExitService {
       }),
     );
     return record ? this.toView(record) : null;
+  }
+
+  /**
+   * Whether the employee's Full & Final run has been processed — an exit record
+   * that carries a `fnfPayrollRunId`. Exported for feature 011, which gates
+   * relieving-letter generation on it (011 FR-023). Takes an `RlsContext` rather
+   * than a full `Caller` so a cross-module caller can pass its own scope.
+   */
+  async isFnfProcessed(ctx: RlsContext, employeeId: string): Promise<boolean> {
+    const record = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.exitRecord.findFirst({
+        where: { employeeId, fnfPayrollRunId: { not: null } },
+        select: { id: true },
+      }),
+    );
+    return record !== null;
   }
 
   /**

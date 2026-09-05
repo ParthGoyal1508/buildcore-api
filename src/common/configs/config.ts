@@ -343,6 +343,27 @@ const config: Config = {
       ),
     },
   },
+  recruitment: {
+    // 011 US5. A joining more than a week after the confirmed date is flagged (not
+    // blocked); a candidate more than three days past it with no joining is a no-show.
+    delayedJoiningThresholdDays: numberFromEnv(
+      process.env.RECRUITMENT_DELAYED_JOINING_THRESHOLD_DAYS,
+      7,
+    ),
+    noShowGraceDays: numberFromEnv(
+      process.env.RECRUITMENT_NO_SHOW_GRACE_DAYS,
+      3,
+    ),
+    // 011 FR-010. The breakup may differ from monthly CTC by up to ₹1 of rounding.
+    salaryBreakupToleranceRupees: numberFromEnv(
+      process.env.RECRUITMENT_SALARY_BREAKUP_TOLERANCE_RUPEES,
+      1,
+    ),
+    offerBudgetToleranceRupees: numberFromEnv(
+      process.env.RECRUITMENT_OFFER_BUDGET_TOLERANCE_RUPEES,
+      0,
+    ),
+  },
 };
 
 export default (): Config => config;

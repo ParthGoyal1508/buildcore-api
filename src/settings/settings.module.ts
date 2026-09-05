@@ -24,6 +24,8 @@ import { ItemCategoriesService } from './item-masters/item-categories.service';
 import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 import { SkillCategoriesService } from './skill-categories/skill-categories.service';
+import { KitItemsService } from './kit-items/kit-items.service';
+import { LetterTemplatesService } from './letter-templates/letter-templates.service';
 
 /**
  * The `settings` module: companies, roles, user administration, and the four
@@ -62,6 +64,8 @@ import { SkillCategoriesService } from './skill-categories/skill-categories.serv
     ItemsService,
     AuditLogService,
     SkillCategoriesService,
+    KitItemsService,
+    LetterTemplatesService,
     // Declared so `CompaniesService` can seed the three asset masters for a new
     // company (012 US1). Not exported: `AssetsModule` declares its own instances,
     // the same arrangement the machinery masters have with `PlantModule`.
@@ -94,6 +98,11 @@ import { SkillCategoriesService } from './skill-categories/skill-categories.serv
     // deletion-in-use guard while the table itself is a `settings` master (013
     // research/data-model), mirroring the item-master arrangement above.
     SkillCategoriesService,
+    // Exported for `recruitment` (011), which owns the kit-item and letter-template
+    // endpoints while the tables are `settings` masters, mirroring the arrangement
+    // above.
+    KitItemsService,
+    LetterTemplatesService,
   ],
 })
 export class SettingsModule {}

@@ -181,6 +181,21 @@ export class CompaniesService {
     return this.prisma.company.findMany({ orderBy: { name: 'asc' } });
   }
 
+  /** A company's display name, for feature 011's letter token substitution. */
+  async getName(companyId: string): Promise<string> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { name: true },
+        }),
+    );
+    if (!company) throw new NotFoundException('Company not found');
+    return company.name;
+  }
+
   /**
    * Active companies only — exported from `SettingsModule` for any other module's
    * company-selection dropdown (FR-005). A deactivated company keeps all its data

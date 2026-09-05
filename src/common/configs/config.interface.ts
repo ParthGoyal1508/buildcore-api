@@ -8,6 +8,26 @@ export interface Config {
   storage: StorageConfig;
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
+  recruitment: RecruitmentConfig;
+}
+
+/**
+ * Recruitment (feature 011) tunables. Principle III keeps each of these out of the
+ * services that read them — they are policy values HR will want changed without a
+ * code review.
+ */
+export interface RecruitmentConfig {
+  /** Days after the confirmed joining date beyond which a joining is flagged
+   * `delayedJoining` (011 US5 scenario 2). */
+  delayedJoiningThresholdDays: number;
+  /** Days after the confirmed joining date with no joining recorded beyond which a
+   * candidate is flagged `noShow` (011 US5 scenario 5). */
+  noShowGraceDays: number;
+  /** Rupee tolerance for the offer salary-breakup reconciliation (011 FR-010). */
+  salaryBreakupToleranceRupees: number;
+  /** Multiple of a requisition's budgeted max above which an offer needs approval —
+   * unused today (the flag is exact), reserved for a future soft band. */
+  offerBudgetToleranceRupees: number;
 }
 
 export interface NestConfig {
