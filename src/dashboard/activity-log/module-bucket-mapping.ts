@@ -10,7 +10,8 @@ export type ActivityModule =
   | 'inventory'
   | 'partners'
   | 'recruitment'
-  | 'labour';
+  | 'labour'
+  | 'assets';
 
 /**
  * Which `AuditEntityType` values roll up into each PRD module bucket (research.md §4,
@@ -114,6 +115,22 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.ONBOARDING_ITEM,
     AuditEntityType.LETTER,
     AuditEntityType.RESIGNATION,
+  ],
+  // Project Assets (012). Its own bucket rather than folded into `inventory`: the
+  // two registers answer to different people, which is the same reason 012 refused
+  // to reuse the `INVENTORY` permission. The three masters sit here with the
+  // operational types because 012 is what creates and audits them, even though the
+  // tables are `settings`-schema — the same call the `AuditEntityType` enum makes.
+  assets: [
+    AuditEntityType.ASSET,
+    AuditEntityType.ASSET_ALLOCATION,
+    AuditEntityType.ASSET_TRANSFER,
+    AuditEntityType.ASSET_REQUEST,
+    AuditEntityType.ASSET_INSPECTION,
+    AuditEntityType.ASSET_REPAIR,
+    AuditEntityType.ASSET_CATEGORY,
+    AuditEntityType.ASSET_DOC_TYPE,
+    AuditEntityType.CONDITION_GRADE,
   ],
   labour: [
     AuditEntityType.SKILL_CATEGORY,

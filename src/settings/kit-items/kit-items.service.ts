@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -91,7 +92,17 @@ export class KitItemsService {
     ipAddress: string,
   ): Promise<KitItemView> {
     const companyId = companyScope(caller, dto.companyId).companyId;
-    if (!companyId) throw new NotFoundException('Company not found');
+    if (!companyId) {
+      // A 400, not a 404: the company is not missing — the caller never named one.
+      // A cross-company Super Admin has no `companyId` of their own for
+      // `companyScope()` to fall back on, so a write from them must say which
+      // company it belongs to. Reporting "Company not found" sent people hunting
+      // for a deleted company instead of picking one. Same message every other
+      // module uses for this case.
+      throw new BadRequestException(
+        'companyId is required for a cross-company caller.',
+      );
+    }
     const name = dto.name.trim();
 
     const created = await withRlsContext(

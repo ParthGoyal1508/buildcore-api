@@ -2,7 +2,11 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
-import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../common/prisma/rls-context';
 import { ProjectSourcesRegistry } from '../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { ItemsService } from '../settings/item-masters/items.service';
@@ -244,5 +248,39 @@ export class InventoryService implements OnModuleInit {
       });
     }
     return totals;
+  }
+
+  /**
+   * One purchase, for another module validating a stored reference to it
+   * (012 FR-038 — an asset registered from a recorded purchase).
+   *
+   * `null` for an unknown or out-of-scope id rather than a throw, the contract
+   * `PartnersService.getVendorById()` set: the caller is validating an optional
+   * field and wants to report it as invalid, not fail the whole request. Soft-deleted
+   * purchases are excluded — a deleted purchase is not a purchase an asset may cite.
+   */
+  async getPurchaseById(
+    purchaseId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<{
+    id: string;
+    companyId: string;
+    date: Date;
+    amount: number;
+    vendorId: string;
+  } | null> {
+    const purchase = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.purchase.findFirst({
+        where: { id: purchaseId, deleted: false },
+        select: {
+          id: true,
+          companyId: true,
+          date: true,
+          amount: true,
+          vendorId: true,
+        },
+      }),
+    );
+    return purchase ? { ...purchase, amount: Number(purchase.amount) } : null;
   }
 }
