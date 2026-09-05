@@ -89,6 +89,19 @@ export interface AssetRow {
   nextInspectionDue: Date | null;
   /** The inspection is due today or overdue (FR-017). */
   inspectionDue: boolean;
+  /**
+   * Any document on this asset is inside its own doc type's alert window, or has
+   * already lapsed (spec FR-025).
+   *
+   * Answered in the list rather than only on the detail, for the reason
+   * `EquipmentRow.expiryAlert` documents: "is any paperwork about to lapse?" is the
+   * question the register exists to answer, and making someone open each asset to
+   * find out means nobody does.
+   */
+  expiryAlert: boolean;
+  /** Which types are alerting — "something is expiring" sends someone to open the
+   * asset to find out what. */
+  alertDocumentTypes: string[];
   disposalDate: Date | null;
   createdAt: Date;
 }
@@ -165,35 +178,57 @@ export class AssetService {
     if (rows.length === 0) return [];
     const today = todayUtc();
 
-    const [categories, siteNames, vendorNames, custodianNames, grades] =
-      await Promise.all([
-        this.refs.categoriesByIds(
-          caller,
-          rows.map((row) => row.categoryId),
+    const [
+      categories,
+      siteNames,
+      vendorNames,
+      custodianNames,
+      grades,
+      docTypes,
+    ] = await Promise.all([
+      this.refs.categoriesByIds(
+        caller,
+        rows.map((row) => row.categoryId),
+      ),
+      this.refs.siteNames(
+        caller,
+        rows.map((row) => row.currentSiteId),
+      ),
+      this.refs.vendorNames(
+        caller,
+        rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
+      ),
+      this.refs.employeeNames(
+        caller,
+        rows.flatMap((row) =>
+          row.currentCustodianId ? [row.currentCustodianId] : [],
         ),
-        this.refs.siteNames(
-          caller,
-          rows.map((row) => row.currentSiteId),
+      ),
+      this.refs.gradesByIds(
+        caller,
+        rows.flatMap((row) =>
+          row.currentConditionGradeId ? [row.currentConditionGradeId] : [],
         ),
-        this.refs.vendorNames(
-          caller,
-          rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
+      ),
+      this.refs.docTypesByIds(
+        caller,
+        rows.flatMap((row) =>
+          row.documents.map((document) => document.docTypeId),
         ),
-        this.refs.employeeNames(
-          caller,
-          rows.flatMap((row) =>
-            row.currentCustodianId ? [row.currentCustodianId] : [],
-          ),
-        ),
-        this.refs.gradesByIds(
-          caller,
-          rows.flatMap((row) =>
-            row.currentConditionGradeId ? [row.currentConditionGradeId] : [],
-          ),
-        ),
-      ]);
+      ),
+    ]);
 
     return rows.map((row) => {
+      // Each document against its *own* type's window, never a module-wide constant:
+      // an insurance policy and a calibration certificate are not renewed on the
+      // same notice, which is why `alertDays` is a column on the doc type.
+      const alerting = row.documents.filter((document) =>
+        this.isExpiring(
+          document.expiryDate,
+          docTypes.get(document.docTypeId)?.alertDays ?? 0,
+          today,
+        ),
+      );
       const depreciable = {
         purchaseCost: Number(row.purchaseCost),
         depreciationRatePercent: Number(row.depreciationRatePercent),
@@ -241,6 +276,15 @@ export class AssetService {
         nextInspectionDue: row.nextInspectionDue,
         inspectionDue:
           row.nextInspectionDue !== null && row.nextInspectionDue <= today,
+        expiryAlert: alerting.length > 0,
+        alertDocumentTypes: [
+          ...new Set(
+            alerting.map(
+              (document) =>
+                docTypes.get(document.docTypeId)?.name ?? 'Unknown type',
+            ),
+          ),
+        ],
         disposalDate: row.disposalDate,
         createdAt: row.createdAt,
       };

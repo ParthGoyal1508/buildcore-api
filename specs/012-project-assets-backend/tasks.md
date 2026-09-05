@@ -245,3 +245,8 @@ Deviations, and why:
   rather than by reading the `inventory` schema.
 - **`CompaniesService.create()` now seeds the three asset masters,** and the
   20260904200002 migration backfills them for companies that already existed.
+- **`AssetRow.expiryAlert` / `alertDocumentTypes` were added after the fact,** when
+  the web slice reached its T014: the register list had no expiry field to render, so
+  "is any paperwork about to lapse?" could only be answered by opening each asset.
+  Computed per document against its *own* doc type's `alertDays`, never a module-wide
+  constant, and covered by an e2e.

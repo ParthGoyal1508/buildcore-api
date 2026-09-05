@@ -350,6 +350,50 @@ describe('Assets module (e2e)', () => {
       expect(stock[0].siteId).toBe(siteId);
     });
 
+    it('answers the paperwork question in the list itself (FR-025)', async () => {
+      const asset = await registerAsset({
+        name: unique('Papered'),
+        categoryId: bulkCategoryId,
+        capitalisationDate: today(),
+        currentSiteId: siteId,
+      });
+      const docTypes = await http()
+        .get(`/assets/doc-types?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      const insurance = docTypes.body.find(
+        (type: { name: string }) => type.name === 'INSURANCE',
+      );
+
+      // No documents: nothing to flag.
+      const before = await http()
+        .get(`/assets?companyId=${companyId}&search=${asset.assetCode}`)
+        .set(auth())
+        .expect(200);
+      expect(before.body.items[0].expiryAlert).toBe(false);
+
+      await http()
+        .post(`/assets/${asset.id}/documents`)
+        .set(auth())
+        .send({
+          docTypeId: insurance.id,
+          file: Buffer.from('policy').toString('base64'),
+          fileName: 'policy.pdf',
+          contentType: 'application/pdf',
+          // Inside INSURANCE's own 45-day window, and not inside a 30-day one —
+          // which is the point of the window being per type.
+          expiryDate: dayOffset(40),
+        })
+        .expect(201);
+
+      const after = await http()
+        .get(`/assets?companyId=${companyId}&search=${asset.assetCode}`)
+        .set(auth())
+        .expect(200);
+      expect(after.body.items[0].expiryAlert).toBe(true);
+      expect(after.body.items[0].alertDocumentTypes).toEqual(['INSURANCE']);
+    });
+
     it('rejects a quantity above 1 on a serialised category (FR-004)', async () => {
       await http()
         .post(`/assets?companyId=${companyId}`)
