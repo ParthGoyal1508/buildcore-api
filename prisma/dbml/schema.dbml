@@ -152,6 +152,9 @@ so this is not a literal inside the denomination service — Principle III.']
   reminderRuleOverrides ReminderRule [not null]
   reminderSnoozes ReminderSnooze [not null]
   reminderNotifications ReminderNotification [not null]
+  assetCategories AssetCategory [not null]
+  assetDocTypes AssetDocType [not null]
+  conditionGrades ConditionGrade [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -2471,6 +2474,333 @@ sheets (FR-024, FR-025). `outstandingBalance` is reduced only on disbursement of
 the recovering sheet line, never on sheet generation.'
 }
 
+Table ConditionGrade {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null, note: 'Stored uppercase, like every other master\'s name in this schema.']
+  sequence Int [not null, note: 'Best-first ordering for dropdowns and for the transfer\'s condition-discrepancy
+comparison (FR/US5 scenario 5): a receipt graded at a higher sequence than its
+dispatch is a discrepancy.']
+  isDamaged Boolean [not null, default: false, note: 'A return or inspection at this grade sends the asset to `under_repair`
+(spec FR-015).']
+  isScrap Boolean [not null, default: false, note: '... and at this grade, to `scrapped`. Both false is the ordinary healthy grade.']
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'The vocabulary a return, inspection, or transfer receipt grades an asset in.
+
+A master rather than an enum because "Good / Fair / Poor / Damaged / Scrap" is
+one company\'s ladder and not another\'s — and because `isDamaged` / `isScrap`
+carry behaviour (FR-015), a company that wants a sixth rung must be able to say
+where on the ladder it sits.'
+}
+
+Table AssetCategory {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  trackingMode AssetTrackingMode [not null, note: 'Immutable once any asset exists under this category (spec FR-003).']
+  depreciationRatePercent Decimal [not null, default: 0, note: 'Straight-line, % per annum. The default a new asset inherits; the asset keeps
+its own copy so a later policy change does not silently restate the book value
+of machines already on the register.']
+  usefulLifeYears Int [not null, default: 5]
+  custodyRequired Boolean [not null, default: false, note: 'Allocation of an asset in this category requires a custodian, and that
+custodian must be posted at the allocation\'s site (spec FR-010).']
+  inspectionRequired Boolean [not null, default: false, note: 'Assets in this category carry a `nextInspectionDue` (spec FR-017).']
+  inspectionIntervalDays Int [note: 'Required when `inspectionRequired` — enforced at the DTO and service layer,
+not by the database, because the pairing is a business rule and a CHECK
+constraint here would produce a 500 rather than the 400 US1 scenario 2 asks
+for.']
+  repairCostThresholdPercent Decimal [not null, default: 50, note: 'Cumulative repair cost above this share of purchase cost flags the asset
+(US6 scenario 8). Per category, never a literal — Principle III.']
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'An asset category with its tracking mode, depreciation policy, and custody /
+inspection rules (spec US1).'
+}
+
+Table AssetDocType {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  name String [not null]
+  alertDays Int [not null, default: 30]
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: 'A kind of asset document, with its own expiry-alert window (spec FR-025).
+Per type and stored, for the reason `EquipmentDocType.alertDays` documents: an
+insurance policy and a calibration certificate are not renewed on the same
+notice.'
+}
+
+Table Asset {
+  id String [pk]
+  companyId String [not null]
+  assetCode String [not null, note: 'Allocated from the company\'s ASSETS series (`{shortCode}-AST-0001`) — spec
+FR-006, the same allocator vendor, project, item and equipment codes use.']
+  name String [not null]
+  categoryId String [not null, note: '→ `settings.AssetCategory`. Bare id, resolved via `AssetCategoriesService`:
+Principle I forbids a relation across the schema boundary.']
+  trackingMode AssetTrackingMode [not null, note: 'Copied from the category at registration, for the reason
+`Equipment.meterType` documents — a category\'s mode must never silently
+reinterpret rows already registered under it, and FR-003 makes the copy
+permanently truthful by freezing the source.']
+  manufacturer String
+  modelNumber String
+  serialNumber String [note: 'Serialised only. Unique per company when present (spec FR-008); Postgres
+treats NULLs as distinct, so every bulk asset can leave it empty.']
+  quantity Decimal [not null, default: 1, note: 'Bulk only: the total registered quantity, the sum of its `AssetStock` rows\'
+on-hand + allocated + in-transit. Serialised assets carry 1 and reject any
+other value (spec FR-004).']
+  unitOfMeasure String
+  purchaseDate DateTime
+  purchaseCost Decimal [not null, default: 0]
+  capitalisationDate DateTime [not null, note: 'Depreciation starts here, never before (spec FR-019). Must be ≥ `purchaseDate`.']
+  depreciationRatePercent Decimal [not null, default: 0, note: 'Copied from the category so a later policy change does not restate the book
+value of assets already registered.']
+  usefulLifeYears Int [not null, default: 5]
+  salvageValue Decimal [not null, default: 0, note: 'The floor book value never falls below (spec FR-019, SC-008).']
+  vendorId String [note: '→ `partners.Vendor`, via `PartnersService`.']
+  purchaseId String [note: '→ `inventory.Purchase`, via `InventoryService`. Optional and inert until the
+asset was actually acquired through a recorded purchase (spec FR-038).']
+  currentSiteId String [not null, note: '→ `projects.Site`, via `SitesService`. Where the asset is right now — for a
+bulk asset this is its home site, and `AssetStock` is the truth about where the
+units are.']
+  currentCustodianId String [note: '→ `hr.Employee`, via `EmployeesService`. Serialised, custody-required
+categories only (spec FR-010).']
+  currentConditionGradeId String [note: '→ `settings.ConditionGrade`.']
+  status AssetStatus [not null, default: 'idle']
+  nextInspectionDue DateTime [note: 'Set on registration for inspection-required categories and advanced from each
+inspection *date*, not from the prior due date, so a late inspection does not
+compound the schedule (spec FR-017).']
+  disposalDate DateTime [note: 'Set when the asset is condemned (spec FR-018).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime [note: 'Soft delete (spec FR-031): an asset\'s movement and custody history outlives the
+asset, so nothing here is ever hard-deleted.']
+  deletedBy String
+  stock AssetStock [not null]
+  allocations AssetAllocation [not null]
+  transfers AssetTransfer [not null]
+  inspections AssetInspection [not null]
+  repairs AssetRepair [not null]
+  documents AssetDocument [not null]
+
+  indexes {
+    (companyId, assetCode) [unique]
+    (companyId, serialNumber) [unique]
+  }
+
+  Note: 'A durable, returnable item on the register (spec US2).
+
+One row is one physical unit for a `serialised` category, and one row is the
+whole registered pool for a `bulk` category — with `AssetStock` holding where the
+units of that pool actually are. That asymmetry is deliberate and is why
+`trackingMode` is copied onto the asset: a reader must be able to tell which kind
+of row they are holding without a join to `settings`.'
+}
+
+Table AssetStock {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  siteId String [not null, note: '→ `projects.Site`.']
+  quantityOnHand Decimal [not null, default: 0, note: 'Physically here and free to allocate or dispatch.']
+  quantityAllocated Decimal [not null, default: 0, note: 'Physically here but committed to an open allocation.']
+  quantityInTransit Decimal [not null, default: 0, note: 'Dispatched from here and not yet acknowledged at the destination (spec FR-012).']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (assetId, siteId) [unique]
+  }
+
+  Note: 'Where a bulk asset\'s units are, as a per-site running balance (spec FR-005).
+
+Maintained in-transaction on every allocation, return, transfer and adjustment
+rather than derived from movement history on read — the same choice 009 FR-002
+made for inventory stock, and for the same reason: the stock screen is the
+module\'s most-read surface and re-aggregating a movement log on every load does
+not hold up.
+
+The three quantities are kept separate rather than netted because a user watching
+a transfer needs to see the units leave one column and arrive in another; a single
+"available" figure makes an in-flight transfer look like loss (spec FR-007).'
+}
+
+Table AssetAllocation {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  projectId String [not null, note: '→ `projects.Project` and `projects.Site`, via `ProjectsService` / `SitesService`.']
+  siteId String [not null]
+  custodianEmployeeId String [note: '→ `hr.Employee`. Required when the category sets `custodyRequired`, and the
+employee must be posted at `siteId` (spec FR-010).']
+  quantity Decimal [not null, default: 1, note: 'Bulk only: how many units this allocation holds. 1 for serialised.']
+  allocatedFrom DateTime [not null]
+  expectedReturnDate DateTime [not null, note: 'What the `overdue_return` reminder family hangs off (spec FR-025).']
+  actualReturnDate DateTime
+  conditionOnReturnId String [note: '→ `settings.ConditionGrade`. Its `isDamaged` / `isScrap` decide the status the
+asset returns to (spec FR-015).']
+  remarks String
+  status AssetAllocationStatus [not null, default: 'open']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'An asset\'s posting to a project site for a period, with optional custody
+(spec US3).'
+}
+
+Table AssetTransfer {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  fromSiteId String [not null]
+  toSiteId String [not null]
+  quantity Decimal [not null, default: 1]
+  dispatchDate DateTime [not null]
+  transportMode String
+  vehicleNumber String
+  dispatchConditionId String [note: '→ `settings.ConditionGrade` as dispatched, so the receipt has something to
+compare against.']
+  receivedDate DateTime
+  receivedQuantity Decimal
+  conditionOnReceiptId String
+  conditionDiscrepancy Boolean [not null, default: false, note: 'Received in a worse grade than dispatched (US5 scenario 5). Audit-logged.']
+  transitShortage Decimal [note: 'Dispatched minus received, when a bulk transfer arrives short (spec FR-014).']
+  status AssetTransferStatus [not null, default: 'in_transit']
+  cancelReason String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: 'A two-step move between sites: dispatch, then acknowledged receipt, with the
+asset belonging to neither site\'s available pool in between (spec FR-012).'
+}
+
+Table AssetRequest {
+  id String [pk]
+  companyId String [not null]
+  requestNumber String [not null, note: '`{shortCode}-ARQ-0001`, from the ASSET_REQUEST series.']
+  categoryId String [not null, note: '→ `settings.AssetCategory`. What kind of asset is wanted.']
+  assetId String [note: 'Optionally a specific one.']
+  quantity Decimal [not null, default: 1]
+  projectId String [not null]
+  siteId String [not null]
+  requiredByDate DateTime [not null]
+  justification String [not null]
+  status AssetRequestStatus [not null, default: 'pending']
+  approvedBy String
+  approvedAt DateTime
+  rejectionReason String
+  fulfilledAllocationId String [note: 'The allocation fulfilment created, in the same transaction (spec FR-023).']
+  fulfilledAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  indexes {
+    (companyId, requestNumber) [unique]
+  }
+
+  Note: 'A site\'s request for an asset, fulfilled by allocating one — never by buying one
+(spec US4, FR-024).'
+}
+
+Table AssetInspection {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  inspectionDate DateTime [not null]
+  conditionGradeId String [not null, note: '→ `settings.ConditionGrade`.']
+  outcome AssetInspectionOutcome [not null]
+  remarks String
+  inspectedByUserId String [not null, note: 'The user who recorded it. Not an HR employee id: the register records who in
+the system asserted the condition, which is an accountability question about
+the account, not about a payroll record.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A dated condition assessment that drives the next due date and, on a bad outcome,
+the asset\'s status (spec US6).'
+}
+
+Table AssetRepair {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  repairDate DateTime [not null]
+  description String [not null]
+  cost Decimal [not null, default: 0]
+  vendorId String [note: '→ `partners.Vendor`. Kept even if the vendor is later deactivated — the repair
+happened, and reads resolve the name with an `inactive` marker (spec Edge Cases).']
+  expectedCompletionDate DateTime
+  actualCompletionDate DateTime
+  resultingConditionGradeId String [note: '→ `settings.ConditionGrade` on close.']
+  downtimeDays Int [note: 'Computed on close: whole days between `repairDate` and completion. Stored so
+the asset\'s cumulative downtime is a sum rather than a per-row date subtraction
+on every read.']
+  status AssetRepairStatus [not null, default: 'open']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+
+  Note: 'A repair episode, with its cost and the downtime it caused (spec US6).'
+}
+
+Table AssetDocument {
+  id String [pk]
+  companyId String [not null]
+  assetId String [not null]
+  asset Asset [not null]
+  docTypeId String [not null, note: '→ `settings.AssetDocType`, whose `alertDays` is this document\'s alert window.']
+  fileRef String [not null, note: 'Object-storage key, never a public URL — resolved to a short-lived signed URL
+at read time, the same treatment equipment, contractor and employee documents
+get. Encrypted before it leaves the process (spec FR-028).']
+  fileName String
+  mimeType String
+  documentNumber String
+  issueDate DateTime
+  expiryDate DateTime
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'A document held against an asset, with the expiry that drives its reminder
+(spec FR-025, FR-028).'
+}
+
 Table Requisition {
   id String [pk]
   companyId String [not null]
@@ -2765,6 +3095,8 @@ Enum Permission {
   HIRE_BILLS
   RECRUITMENT
   RECRUITMENT_APPROVE
+  ASSETS
+  ASSETS_APPROVE
 }
 
 Enum CompanyStatus {
@@ -2877,6 +3209,15 @@ Enum AuditEntityType {
   ONBOARDING_ITEM
   LETTER
   RESIGNATION
+  ASSET
+  ASSET_ALLOCATION
+  ASSET_TRANSFER
+  ASSET_REQUEST
+  ASSET_INSPECTION
+  ASSET_REPAIR
+  ASSET_CATEGORY
+  ASSET_DOC_TYPE
+  CONDITION_GRADE
 }
 
 Enum AuditAction {
@@ -3120,6 +3461,8 @@ Enum CodeSeriesType {
   GRN
   EQUIPMENT
   REQUISITION
+  ASSETS
+  ASSET_REQUEST
 }
 
 Enum VendorType {
@@ -3330,6 +3673,52 @@ Enum AdvanceStatus {
   pending
   approved
   disbursed
+  closed
+}
+
+Enum AssetTrackingMode {
+  serialised
+  bulk
+}
+
+Enum AssetStatus {
+  not_in_service
+  idle
+  allocated
+  in_transit
+  under_repair
+  scrapped
+}
+
+Enum AssetAllocationStatus {
+  open
+  closed
+}
+
+Enum AssetTransferStatus {
+  in_transit
+  closed
+  closed_with_shortage
+  cancelled
+}
+
+Enum AssetRequestStatus {
+  pending
+  approved
+  rejected
+  fulfilled
+  procurement_pending
+  cancelled
+}
+
+Enum AssetInspectionOutcome {
+  pass
+  repair_required
+  condemn
+}
+
+Enum AssetRepairStatus {
+  open
   closed
 }
 
@@ -3602,6 +3991,24 @@ Ref: GangMember.workerId > LabourWorker.id [delete: Cascade]
 Ref: MusterLine.musterId > MusterRoll.id [delete: Cascade]
 
 Ref: PaymentSheetLine.sheetId > LabourPaymentSheet.id [delete: Cascade]
+
+Ref: ConditionGrade.companyId > Company.id [delete: Cascade]
+
+Ref: AssetCategory.companyId > Company.id [delete: Cascade]
+
+Ref: AssetDocType.companyId > Company.id [delete: Cascade]
+
+Ref: AssetStock.assetId > Asset.id [delete: Cascade]
+
+Ref: AssetAllocation.assetId > Asset.id [delete: Cascade]
+
+Ref: AssetTransfer.assetId > Asset.id [delete: Cascade]
+
+Ref: AssetInspection.assetId > Asset.id [delete: Cascade]
+
+Ref: AssetRepair.assetId > Asset.id [delete: Cascade]
+
+Ref: AssetDocument.assetId > Asset.id [delete: Cascade]
 
 Ref: Candidate.requisitionId > Requisition.id [delete: Cascade]
 

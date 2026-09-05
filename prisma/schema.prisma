@@ -1,7 +1,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour", "recruitment"]
+  schemas  = ["shared", "settings", "hr", "projects", "payroll", "partners", "inventory", "plant", "labour", "assets", "recruitment"]
 }
 
 generator client {
@@ -218,6 +218,16 @@ enum Permission {
   /// value this feature adds.
   RECRUITMENT_APPROVE
 
+  /// Added by 012 (FR-033). Registering, allocating, transferring, inspecting and
+  /// requesting project assets. `INVENTORY` is deliberately not reused: a storekeeper
+  /// who issues cement is not thereby accountable for who is holding the total
+  /// station, and the two registers answer to different people.
+  ASSETS
+  /// Approving asset requests, condemning an asset, cancelling a transfer and
+  /// changing an asset's category. Separate from `ASSETS` for the reason every
+  /// `_APPROVE` value in this enum is separate: authorising is not doing.
+  ASSETS_APPROVE
+
   @@schema("settings")
 }
 
@@ -321,6 +331,10 @@ model Company {
   reminderRuleOverrides ReminderRule[]
   reminderSnoozes       ReminderSnooze[]
   reminderNotifications ReminderNotification[]
+
+  assetCategories AssetCategory[]
+  assetDocTypes   AssetDocType[]
+  conditionGrades ConditionGrade[]
 
   @@schema("settings")
 }
@@ -427,10 +441,10 @@ model SkillCategory {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  name            String
-  code            String
+  name             String
+  code             String
   defaultDailyRate Decimal? @db.Decimal(12, 2)
-  isActive        Boolean  @default(true)
+  isActive         Boolean  @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -812,6 +826,22 @@ enum AuditEntityType {
   ONBOARDING_ITEM
   LETTER
   RESIGNATION
+
+  // Project Assets entities audited by feature 012 (FR-034). The three masters sit
+  // here rather than under the Settings block for the same reason 006's and 009's do
+  // — 012 is what creates and audits them, even though the tables are
+  // `settings`-schema masters. FR-034 names the six operational types; the three
+  // master types are added beyond it because every other module audits its own
+  // masters and omitting them would leave a category edit unaccountable.
+  ASSET
+  ASSET_ALLOCATION
+  ASSET_TRANSFER
+  ASSET_REQUEST
+  ASSET_INSPECTION
+  ASSET_REPAIR
+  ASSET_CATEGORY
+  ASSET_DOC_TYPE
+  CONDITION_GRADE
 
   @@schema("shared")
 }
@@ -2415,6 +2445,12 @@ enum CodeSeriesType {
   /// Added by 011. Manpower requisition numbers (`{shortCode}-REQ-0001`), per company.
   REQUISITION
 
+  /// Added by 012. Asset codes (`{shortCode}-AST-0001`) and asset request numbers
+  /// (`{shortCode}-ARQ-0001`) — per company, allocated the same way every series
+  /// above is.
+  ASSETS
+  ASSET_REQUEST
+
   @@schema("settings")
 }
 
@@ -3887,8 +3923,8 @@ model SparePart {
 
   companyId String
 
-  partNumber String
-  name       String
+  partNumber    String
+  name          String
   /// Free text rather than 009's `ItemUnit` enum: workshop parts come in units that
   /// master does not carry (sets, pairs, metres of hose), and widening a settings
   /// enum for plant's benefit would couple the two masters.
@@ -3957,9 +3993,9 @@ model SparePartMovement {
   incompatiblePart Boolean @default(false)
 
   /// A reversal points at the consumption it undoes.
-  reversalOfId String?             @unique
-  reversalOf   SparePartMovement?  @relation("MovementReversal", fields: [reversalOfId], references: [id])
-  reversedBy   SparePartMovement?  @relation("MovementReversal")
+  reversalOfId String?            @unique
+  reversalOf   SparePartMovement? @relation("MovementReversal", fields: [reversalOfId], references: [id])
+  reversedBy   SparePartMovement? @relation("MovementReversal")
   /// Required on a reversal (FR-019).
   reason       String?
 
@@ -4130,12 +4166,12 @@ model WageRate {
   companyId String
 
   /// → projects, resolved via ProjectsService (FR-034).
-  projectId String
+  projectId       String
   /// → settings.SkillCategory.
   skillCategoryId String
 
-  dailyRate     Decimal  @db.Decimal(12, 2)
-  effectiveFrom DateTime @db.Date
+  dailyRate     Decimal   @db.Decimal(12, 2)
+  effectiveFrom DateTime  @db.Date
   /// Null = the current open-ended rate. Set to the day before a newer rate's
   /// `effectiveFrom` when one is appended.
   effectiveTo   DateTime? @db.Date
@@ -4176,7 +4212,7 @@ model LabourWorker {
   engagementType EngagementType
   /// Required when `engagementType` is contractor (FR-008); → partners vendor
   /// resolved via PartnersService (FR-034).
-  contractorId String?
+  contractorId   String?
 
   /// → projects.Site.
   siteId String
@@ -4187,9 +4223,9 @@ model LabourWorker {
   /// → feature 003's face enrolment, reused not reimplemented (FR-011).
   faceEnrolmentId String?
 
-  status              WorkerStatus @default(active)
-  lastWorkingDate     DateTime?    @db.Date
-  deactivationReason  String?
+  status             WorkerStatus @default(active)
+  lastWorkingDate    DateTime?    @db.Date
+  deactivationReason String?
 
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
@@ -4282,9 +4318,9 @@ model MusterRoll {
 
   /// Both retained for offline sync (FR-018); `capturedAt` is the client's,
   /// `receivedAt` the server's.
-  capturedAt     DateTime
-  receivedAt     DateTime @default(now())
-  isOfflineSynced Boolean @default(false)
+  capturedAt      DateTime
+  receivedAt      DateTime @default(now())
+  isOfflineSynced Boolean  @default(false)
 
   status       MusterStatus @default(draft)
   approvedBy   String?
@@ -4319,7 +4355,7 @@ model MusterLine {
   workerId String
 
   attendanceType AttendanceType
-  overtimeHours  Decimal? @db.Decimal(5, 2)
+  overtimeHours  Decimal?       @db.Decimal(5, 2)
 
   /// Encrypted object-storage ref (FR-015). Nullable so a gang bulk-add can create a
   /// line before its photo is captured; submission requires every line to have one
@@ -4408,14 +4444,14 @@ model PaymentSheetLine {
   deductions Json
   netPayable Decimal @db.Decimal(14, 2)
 
-  paymentMode        LabourPaymentMode?
-  paidOn             DateTime?    @db.Date
-  paidAmount         Decimal?     @db.Decimal(14, 2)
-  shortPaymentReason String?
+  paymentMode           LabourPaymentMode?
+  paidOn                DateTime?          @db.Date
+  paidAmount            Decimal?           @db.Decimal(14, 2)
+  shortPaymentReason    String?
   /// Encrypted object-storage ref, required for a cash disbursement (FR-029).
-  acknowledgementRef String?
+  acknowledgementRef    String?
   /// Unpaid remainder (short payment) carried to the next period (FR-030).
-  carriedForwardBalance Decimal @default(0) @db.Decimal(14, 2)
+  carriedForwardBalance Decimal            @default(0) @db.Decimal(14, 2)
 
   status PaymentSheetLineStatus @default(pending)
 
@@ -4444,7 +4480,7 @@ model LabourAdvance {
 
   recoveryInstalments Int
   /// `amount / recoveryInstalments`, rounded — the per-period deduction.
-  instalmentAmount    Decimal @db.Decimal(14, 2)
+  instalmentAmount    Decimal  @db.Decimal(14, 2)
   /// The wage period (its `periodFrom` date) recovery starts from.
   recoveryStartPeriod DateTime @db.Date
 
@@ -4469,6 +4505,593 @@ model LabourAdvance {
   @@index([companyId, workerId])
   @@index([companyId, status])
   @@schema("labour")
+}
+
+// ============================================================================
+// PROJECT ASSETS (feature 012)
+// ============================================================================
+//
+// The gap between 009 and 006: durable, individually-identified or bulk-tracked
+// items that are *allocated and returned* rather than consumed (009) or run with a
+// logbook and fuel book (006). Scaffolding, shuttering, power tools, formwork,
+// safety gear, IT assets, site furniture.
+//
+// Three reference masters live in `settings` and eight operational tables in the new
+// `assets` schema (spec FR-002) — the same split 006 and 009 use, for the same
+// reason: a master is company configuration, and configuration belongs with the rest
+// of it.
+
+/// Whether a category's units are individually identified or fungible (spec
+/// FR-004, clarification 2026-09-01).
+///
+/// This is the single most load-bearing piece of configuration in the module: it
+/// decides whether an asset is one row with a serial number and a custodian, or a
+/// quantity tracked per site. Immutable once assets exist under the category
+/// (FR-003) because the two have structurally different allocation semantics and a
+/// flip would reinterpret every existing row.
+enum AssetTrackingMode {
+  serialised
+  bulk
+
+  @@schema("settings")
+}
+
+/// The vocabulary a return, inspection, or transfer receipt grades an asset in.
+///
+/// A master rather than an enum because "Good / Fair / Poor / Damaged / Scrap" is
+/// one company's ladder and not another's — and because `isDamaged` / `isScrap`
+/// carry behaviour (FR-015), a company that wants a sixth rung must be able to say
+/// where on the ladder it sits.
+model ConditionGrade {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Stored uppercase, like every other master's name in this schema.
+  name String
+
+  /// Best-first ordering for dropdowns and for the transfer's condition-discrepancy
+  /// comparison (FR/US5 scenario 5): a receipt graded at a higher sequence than its
+  /// dispatch is a discrepancy.
+  sequence Int
+
+  /// A return or inspection at this grade sends the asset to `under_repair`
+  /// (spec FR-015).
+  isDamaged Boolean @default(false)
+  /// ... and at this grade, to `scrapped`. Both false is the ordinary healthy grade.
+  isScrap   Boolean @default(false)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// An asset category with its tracking mode, depreciation policy, and custody /
+/// inspection rules (spec US1).
+model AssetCategory {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name String
+
+  /// Immutable once any asset exists under this category (spec FR-003).
+  trackingMode AssetTrackingMode
+
+  /// Straight-line, % per annum. The default a new asset inherits; the asset keeps
+  /// its own copy so a later policy change does not silently restate the book value
+  /// of machines already on the register.
+  depreciationRatePercent Decimal @default(0) @db.Decimal(6, 2)
+  usefulLifeYears         Int     @default(5)
+
+  /// Allocation of an asset in this category requires a custodian, and that
+  /// custodian must be posted at the allocation's site (spec FR-010).
+  custodyRequired Boolean @default(false)
+
+  /// Assets in this category carry a `nextInspectionDue` (spec FR-017).
+  inspectionRequired     Boolean @default(false)
+  /// Required when `inspectionRequired` — enforced at the DTO and service layer,
+  /// not by the database, because the pairing is a business rule and a CHECK
+  /// constraint here would produce a 500 rather than the 400 US1 scenario 2 asks
+  /// for.
+  inspectionIntervalDays Int?
+
+  /// Cumulative repair cost above this share of purchase cost flags the asset
+  /// (US6 scenario 8). Per category, never a literal — Principle III.
+  repairCostThresholdPercent Decimal @default(50) @db.Decimal(6, 2)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// A kind of asset document, with its own expiry-alert window (spec FR-025).
+/// Per type and stored, for the reason `EquipmentDocType.alertDays` documents: an
+/// insurance policy and a calibration certificate are not renewed on the same
+/// notice.
+model AssetDocType {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name String
+
+  alertDays Int @default(30)
+
+  active Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+// ── assets schema ───────────────────────────────────────────────────────────
+
+/// The asset lifecycle (spec FR-007). Every transition is checked against an
+/// explicit machine in `asset-status.ts`; nothing writes this column directly.
+///
+/// `not_in_service` is the state of an asset registered ahead of its capitalisation
+/// date — it exists on the register but is excluded from allocation and from
+/// depreciation until that date arrives (spec Edge Cases).
+enum AssetStatus {
+  not_in_service
+  idle
+  allocated
+  in_transit
+  under_repair
+  scrapped
+
+  @@schema("assets")
+}
+
+enum AssetAllocationStatus {
+  open
+  closed
+
+  @@schema("assets")
+}
+
+/// A transfer's own lifecycle, distinct from the asset's. `closed_with_shortage` is
+/// a real terminal state rather than a flag on `closed`, because a transfer that
+/// lost units in transit is not the same event as one that did not, and FR-014
+/// forbids silently balancing the difference.
+enum AssetTransferStatus {
+  in_transit
+  closed
+  closed_with_shortage
+  cancelled
+
+  @@schema("assets")
+}
+
+enum AssetRequestStatus {
+  pending
+  approved
+  rejected
+  fulfilled
+  /// Approved, but nothing idle of that category exists anywhere in the company —
+  /// the store team picks it up through 009's purchase flow (spec FR-024).
+  procurement_pending
+  cancelled
+
+  @@schema("assets")
+}
+
+enum AssetInspectionOutcome {
+  pass
+  repair_required
+  condemn
+
+  @@schema("assets")
+}
+
+enum AssetRepairStatus {
+  open
+  closed
+
+  @@schema("assets")
+}
+
+/// A durable, returnable item on the register (spec US2).
+///
+/// One row is one physical unit for a `serialised` category, and one row is the
+/// whole registered pool for a `bulk` category — with `AssetStock` holding where the
+/// units of that pool actually are. That asymmetry is deliberate and is why
+/// `trackingMode` is copied onto the asset: a reader must be able to tell which kind
+/// of row they are holding without a join to `settings`.
+model Asset {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// Allocated from the company's ASSETS series (`{shortCode}-AST-0001`) — spec
+  /// FR-006, the same allocator vendor, project, item and equipment codes use.
+  assetCode String
+  name      String
+
+  /// → `settings.AssetCategory`. Bare id, resolved via `AssetCategoriesService`:
+  /// Principle I forbids a relation across the schema boundary.
+  categoryId   String
+  /// Copied from the category at registration, for the reason
+  /// `Equipment.meterType` documents — a category's mode must never silently
+  /// reinterpret rows already registered under it, and FR-003 makes the copy
+  /// permanently truthful by freezing the source.
+  trackingMode AssetTrackingMode
+
+  manufacturer String?
+  modelNumber  String?
+  /// Serialised only. Unique per company when present (spec FR-008); Postgres
+  /// treats NULLs as distinct, so every bulk asset can leave it empty.
+  serialNumber String?
+
+  /// Bulk only: the total registered quantity, the sum of its `AssetStock` rows'
+  /// on-hand + allocated + in-transit. Serialised assets carry 1 and reject any
+  /// other value (spec FR-004).
+  quantity      Decimal @default(1) @db.Decimal(18, 3)
+  unitOfMeasure String?
+
+  purchaseDate DateTime? @db.Date
+  purchaseCost Decimal   @default(0) @db.Decimal(18, 2)
+
+  /// Depreciation starts here, never before (spec FR-019). Must be ≥ `purchaseDate`.
+  capitalisationDate      DateTime @db.Date
+  /// Copied from the category so a later policy change does not restate the book
+  /// value of assets already registered.
+  depreciationRatePercent Decimal  @default(0) @db.Decimal(6, 2)
+  usefulLifeYears         Int      @default(5)
+  /// The floor book value never falls below (spec FR-019, SC-008).
+  salvageValue            Decimal  @default(0) @db.Decimal(18, 2)
+
+  /// → `partners.Vendor`, via `PartnersService`.
+  vendorId   String?
+  /// → `inventory.Purchase`, via `InventoryService`. Optional and inert until the
+  /// asset was actually acquired through a recorded purchase (spec FR-038).
+  purchaseId String?
+
+  /// → `projects.Site`, via `SitesService`. Where the asset is right now — for a
+  /// bulk asset this is its home site, and `AssetStock` is the truth about where the
+  /// units are.
+  currentSiteId           String
+  /// → `hr.Employee`, via `EmployeesService`. Serialised, custody-required
+  /// categories only (spec FR-010).
+  currentCustodianId      String?
+  /// → `settings.ConditionGrade`.
+  currentConditionGradeId String?
+
+  status AssetStatus @default(idle)
+
+  /// Set on registration for inspection-required categories and advanced from each
+  /// inspection *date*, not from the prior due date, so a late inspection does not
+  /// compound the schedule (spec FR-017).
+  nextInspectionDue DateTime? @db.Date
+
+  /// Set when the asset is condemned (spec FR-018).
+  disposalDate DateTime? @db.Date
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  /// Soft delete (spec FR-031): an asset's movement and custody history outlives the
+  /// asset, so nothing here is ever hard-deleted.
+  deletedAt DateTime?
+  deletedBy String?
+
+  stock       AssetStock[]
+  allocations AssetAllocation[]
+  transfers   AssetTransfer[]
+  inspections AssetInspection[]
+  repairs     AssetRepair[]
+  documents   AssetDocument[]
+
+  @@unique([companyId, assetCode])
+  @@unique([companyId, serialNumber])
+  @@index([companyId])
+  @@index([companyId, categoryId])
+  @@index([companyId, currentSiteId])
+  @@index([companyId, status])
+  @@index([companyId, currentCustodianId])
+  @@index([companyId, nextInspectionDue])
+  @@schema("assets")
+}
+
+/// Where a bulk asset's units are, as a per-site running balance (spec FR-005).
+///
+/// Maintained in-transaction on every allocation, return, transfer and adjustment
+/// rather than derived from movement history on read — the same choice 009 FR-002
+/// made for inventory stock, and for the same reason: the stock screen is the
+/// module's most-read surface and re-aggregating a movement log on every load does
+/// not hold up.
+///
+/// The three quantities are kept separate rather than netted because a user watching
+/// a transfer needs to see the units leave one column and arrive in another; a single
+/// "available" figure makes an in-flight transfer look like loss (spec FR-007).
+model AssetStock {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// → `projects.Site`.
+  siteId String
+
+  /// Physically here and free to allocate or dispatch.
+  quantityOnHand    Decimal @default(0) @db.Decimal(18, 3)
+  /// Physically here but committed to an open allocation.
+  quantityAllocated Decimal @default(0) @db.Decimal(18, 3)
+  /// Dispatched from here and not yet acknowledged at the destination (spec FR-012).
+  quantityInTransit Decimal @default(0) @db.Decimal(18, 3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([assetId, siteId])
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@schema("assets")
+}
+
+/// An asset's posting to a project site for a period, with optional custody
+/// (spec US3).
+model AssetAllocation {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// → `projects.Project` and `projects.Site`, via `ProjectsService` / `SitesService`.
+  projectId String
+  siteId    String
+
+  /// → `hr.Employee`. Required when the category sets `custodyRequired`, and the
+  /// employee must be posted at `siteId` (spec FR-010).
+  custodianEmployeeId String?
+
+  /// Bulk only: how many units this allocation holds. 1 for serialised.
+  quantity Decimal @default(1) @db.Decimal(18, 3)
+
+  allocatedFrom      DateTime  @db.Date
+  /// What the `overdue_return` reminder family hangs off (spec FR-025).
+  expectedReturnDate DateTime  @db.Date
+  actualReturnDate   DateTime? @db.Date
+
+  /// → `settings.ConditionGrade`. Its `isDamaged` / `isScrap` decide the status the
+  /// asset returns to (spec FR-015).
+  conditionOnReturnId String?
+  remarks             String?
+
+  status AssetAllocationStatus @default(open)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, assetId])
+  @@index([companyId, projectId])
+  @@index([companyId, siteId])
+  @@index([companyId, status])
+  @@index([companyId, custodianEmployeeId])
+  @@index([companyId, expectedReturnDate])
+  @@schema("assets")
+}
+
+/// A two-step move between sites: dispatch, then acknowledged receipt, with the
+/// asset belonging to neither site's available pool in between (spec FR-012).
+model AssetTransfer {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  fromSiteId String
+  toSiteId   String
+
+  quantity Decimal @default(1) @db.Decimal(18, 3)
+
+  dispatchDate        DateTime @db.Date
+  transportMode       String?
+  vehicleNumber       String?
+  /// → `settings.ConditionGrade` as dispatched, so the receipt has something to
+  /// compare against.
+  dispatchConditionId String?
+
+  receivedDate         DateTime? @db.Date
+  receivedQuantity     Decimal?  @db.Decimal(18, 3)
+  conditionOnReceiptId String?
+  /// Received in a worse grade than dispatched (US5 scenario 5). Audit-logged.
+  conditionDiscrepancy Boolean   @default(false)
+  /// Dispatched minus received, when a bulk transfer arrives short (spec FR-014).
+  transitShortage      Decimal?  @db.Decimal(18, 3)
+
+  status       AssetTransferStatus @default(in_transit)
+  cancelReason String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, assetId])
+  @@index([companyId, status])
+  @@index([companyId, toSiteId])
+  @@index([companyId, dispatchDate])
+  @@schema("assets")
+}
+
+/// A site's request for an asset, fulfilled by allocating one — never by buying one
+/// (spec US4, FR-024).
+model AssetRequest {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// `{shortCode}-ARQ-0001`, from the ASSET_REQUEST series.
+  requestNumber String
+
+  /// → `settings.AssetCategory`. What kind of asset is wanted.
+  categoryId String
+  /// Optionally a specific one.
+  assetId    String?
+
+  quantity Decimal @default(1) @db.Decimal(18, 3)
+
+  projectId String
+  siteId    String
+
+  requiredByDate DateTime @db.Date
+  justification  String
+
+  status AssetRequestStatus @default(pending)
+
+  approvedBy      String?
+  approvedAt      DateTime?
+  rejectionReason String?
+
+  /// The allocation fulfilment created, in the same transaction (spec FR-023).
+  fulfilledAllocationId String?
+  fulfilledAt           DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@unique([companyId, requestNumber])
+  @@index([companyId])
+  @@index([companyId, status])
+  @@index([companyId, projectId])
+  @@index([companyId, siteId])
+  @@index([companyId, requiredByDate])
+  @@schema("assets")
+}
+
+/// A dated condition assessment that drives the next due date and, on a bad outcome,
+/// the asset's status (spec US6).
+model AssetInspection {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  inspectionDate   DateTime               @db.Date
+  /// → `settings.ConditionGrade`.
+  conditionGradeId String
+  outcome          AssetInspectionOutcome
+  remarks          String?
+
+  /// The user who recorded it. Not an HR employee id: the register records who in
+  /// the system asserted the condition, which is an accountability question about
+  /// the account, not about a payroll record.
+  inspectedByUserId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([companyId, assetId])
+  @@index([companyId, inspectionDate])
+  @@schema("assets")
+}
+
+/// A repair episode, with its cost and the downtime it caused (spec US6).
+model AssetRepair {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  repairDate  DateTime @db.Date
+  description String
+  cost        Decimal  @default(0) @db.Decimal(18, 2)
+
+  /// → `partners.Vendor`. Kept even if the vendor is later deactivated — the repair
+  /// happened, and reads resolve the name with an `inactive` marker (spec Edge Cases).
+  vendorId String?
+
+  expectedCompletionDate    DateTime? @db.Date
+  actualCompletionDate      DateTime? @db.Date
+  /// → `settings.ConditionGrade` on close.
+  resultingConditionGradeId String?
+
+  /// Computed on close: whole days between `repairDate` and completion. Stored so
+  /// the asset's cumulative downtime is a sum rather than a per-row date subtraction
+  /// on every read.
+  downtimeDays Int?
+
+  status AssetRepairStatus @default(open)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+
+  @@index([companyId])
+  @@index([companyId, assetId])
+  @@index([companyId, status])
+  @@schema("assets")
+}
+
+/// A document held against an asset, with the expiry that drives its reminder
+/// (spec FR-025, FR-028).
+model AssetDocument {
+  id String @id @default(cuid())
+
+  companyId String
+
+  assetId String
+  asset   Asset  @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// → `settings.AssetDocType`, whose `alertDays` is this document's alert window.
+  docTypeId String
+
+  /// Object-storage key, never a public URL — resolved to a short-lived signed URL
+  /// at read time, the same treatment equipment, contractor and employee documents
+  /// get. Encrypted before it leaves the process (spec FR-028).
+  fileRef  String
+  fileName String?
+  mimeType String?
+
+  documentNumber String?
+  issueDate      DateTime? @db.Date
+  expiryDate     DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([assetId])
+  @@index([companyId, expiryDate])
+  @@schema("assets")
 }
 
 // ============================================================================

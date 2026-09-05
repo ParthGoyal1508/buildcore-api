@@ -24,6 +24,10 @@ const documentTypes = { seedDefaultsForCompany: jest.fn() };
 const vendorCategories = { seedDefaultsForCompany: jest.fn() };
 // 009 seeds the ten default item categories the same way, for the same reason.
 const itemCategories = { seedDefaultsForCompany: jest.fn() };
+// 012 seeds the three asset masters likewise.
+const assetCategories = { seedDefaultsForCompany: jest.fn() };
+const assetDocTypes = { seedDefaultsForCompany: jest.fn() };
+const conditionGrades = { seedDefaultsForCompany: jest.fn() };
 
 const decimal = (n: number) => new Prisma.Decimal(n);
 const companyRow = (over: Record<string, unknown> = {}) => ({
@@ -54,6 +58,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await expect(
@@ -86,6 +93,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await service.create(
@@ -119,6 +129,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await service.create(
@@ -155,6 +168,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await service.create(
@@ -189,6 +205,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await expect(
@@ -213,6 +232,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
       await expect(
         service.update(
@@ -236,6 +258,9 @@ describe('CompaniesService', () => {
         documentTypes as never,
         vendorCategories as never,
         itemCategories as never,
+        assetCategories as never,
+        assetDocTypes as never,
+        conditionGrades as never,
       );
 
       await service.listActiveForOtherModules();

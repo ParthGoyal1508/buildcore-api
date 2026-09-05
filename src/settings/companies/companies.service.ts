@@ -10,6 +10,9 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { AssetCategoriesService } from '../asset-masters/asset-categories.service';
+import { AssetDocTypesService } from '../asset-masters/asset-doc-types.service';
+import { ConditionGradesService } from '../asset-masters/condition-grades.service';
 import { DocumentTypesService } from '../reference-data/document-types.service';
 import { ItemCategoriesService } from '../item-masters/item-categories.service';
 import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
@@ -33,6 +36,9 @@ export class CompaniesService {
     private readonly documentTypes: DocumentTypesService,
     private readonly vendorCategories: VendorCategoriesService,
     private readonly itemCategories: ItemCategoriesService,
+    private readonly assetCategories: AssetCategoriesService,
+    private readonly assetDocTypes: AssetDocTypesService,
+    private readonly conditionGrades: ConditionGradesService,
   ) {}
 
   /**
@@ -282,6 +288,13 @@ export class CompaniesService {
         // master blocks the first purchase anyone tries to record (009 FR-016,
         // research.md §15).
         await this.itemCategories.seedDefaultsForCompany(company.id, tx);
+        // And the three asset masters (012 US1). The condition grades matter most
+        // of the three: a return maps its grade to the asset's next status
+        // (FR-015), so an empty ladder does not merely inconvenience the register —
+        // it makes returning an asset impossible.
+        await this.assetCategories.seedDefaultsForCompany(company.id, tx);
+        await this.assetDocTypes.seedDefaultsForCompany(company.id, tx);
+        await this.conditionGrades.seedDefaultsForCompany(company.id, tx);
         await tx.employeeCodeSequence.create({
           data: { companyId: company.id, lastNumber: 0 },
         });
