@@ -1,4 +1,4 @@
-import { Module, type Provider, type Type } from '@nestjs/common';
+import { Module, type Provider } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 
 import { AuditLogService } from '../auth/audit-log.service';
@@ -57,22 +57,117 @@ import { WIDGET_PROVIDERS, type WidgetProvider } from './widgets/widget.types';
 import type { NotificationProvider } from './notifications/notification.types';
 import type { ReportProvider } from './reports/report.types';
 
-// This Nest version types `multi` only on FactoryProvider, so the class/value multi
-// registrations below are built through these helpers rather than inline literals.
-const widget = (useClass: Type<WidgetProvider>): Provider =>
-  ({ provide: WIDGET_PROVIDERS, useClass, multi: true } as unknown as Provider);
-const widgetValue = (useValue: WidgetProvider): Provider =>
-  ({ provide: WIDGET_PROVIDERS, useValue, multi: true } as unknown as Provider);
-const notification = (useClass: Type<NotificationProvider>): Provider =>
-  ({
-    provide: NOTIFICATION_PROVIDERS,
-    useClass,
-    multi: true,
-  } as unknown as Provider);
-const report = (useClass: Type<ReportProvider>): Provider =>
-  ({ provide: REPORT_PROVIDERS, useClass, multi: true } as unknown as Provider);
-const reportValue = (useValue: ReportProvider): Provider =>
-  ({ provide: REPORT_PROVIDERS, useValue, multi: true } as unknown as Provider);
+/**
+ * The three registries, each assembled once by a factory.
+ *
+ * They used to be registered as `{ provide: TOKEN, useClass, multi: true }`, one
+ * entry per provider. That does not work: `multi` is Angular's concept and Nest has
+ * no equivalent — it is absent from Nest 10's provider interfaces entirely, so the
+ * flag was silently ignored and each registration simply *overwrote* the previous
+ * one under the same token. Injecting the token then yielded the single last-declared
+ * provider rather than an array, and `DashboardService.companyWidgets`,
+ * `NotificationsService.count` and `ReportsService` all died on
+ * `this.providers.filter/.map is not a function` the first time they were called.
+ *
+ * A factory is the fix Nest actually supports: every provider is declared normally so
+ * Nest can construct it with its own dependencies, and one `useFactory` per token
+ * collects them into the array the consumers expect. The array literal below is also
+ * where the render order now lives, explicitly, rather than being an emergent
+ * property of declaration order — contracts/dashboard-api.md fixes that order, and
+ * the classes and the unbuilt-module placeholders interleave in it.
+ *
+ * The same shape is why `ReminderRuleRegistry` uses `DiscoveryService`: a registry
+ * that must span modules cannot be a token at all. These three are single-module
+ * registries, so a factory is enough and keeps the ordering visible.
+ */
+
+/** Widget classes, in the order the factory below injects them. */
+const WIDGET_CLASSES = [
+  TotalEmployeesWidget,
+  PresentTodayWidget,
+  AbsentTodayWidget,
+  OnLeaveWidget,
+  PendingApprovalsWidget,
+  MusterStatWidget,
+  TodayAttendanceTableWidget,
+  RecentLeavesTableWidget,
+  WorkersTodayWidget,
+  SiteAttendanceTableWidget,
+] as const;
+
+const NOTIFICATION_CLASSES = [
+  LeavePendingProvider,
+  ReenrolmentPendingProvider,
+  PayrollPendingProvider,
+  ExportReadyProvider,
+] as const;
+
+const REPORT_CLASSES = [
+  AttendanceReportProvider,
+  EmployeeReportProvider,
+] as const;
+
+const widgetRegistry: Provider = {
+  provide: WIDGET_PROVIDERS,
+  inject: [...WIDGET_CLASSES],
+  useFactory: (
+    totalEmployees: WidgetProvider,
+    presentToday: WidgetProvider,
+    absentToday: WidgetProvider,
+    onLeave: WidgetProvider,
+    pendingApprovals: WidgetProvider,
+    musterStat: WidgetProvider,
+    todayAttendanceTable: WidgetProvider,
+    recentLeavesTable: WidgetProvider,
+    workersToday: WidgetProvider,
+    siteAttendanceTable: WidgetProvider,
+  ): WidgetProvider[] => [
+    // Company dashboard — contract order.
+    totalEmployees,
+    presentToday,
+    absentToday,
+    onLeave,
+    UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses,
+    pendingApprovals,
+    UNBUILT_WIDGET_PLACEHOLDERS.activeProjects,
+    UNBUILT_WIDGET_PLACEHOLDERS.totalMachinery,
+    UNBUILT_WIDGET_PLACEHOLDERS.contractValue,
+    UNBUILT_WIDGET_PLACEHOLDERS.materialsCost,
+    UNBUILT_WIDGET_PLACEHOLDERS.fuelCost,
+    UNBUILT_WIDGET_PLACEHOLDERS.hireBills,
+    musterStat,
+    UNBUILT_WIDGET_PLACEHOLDERS.alertsReminders,
+    todayAttendanceTable,
+    recentLeavesTable,
+
+    // Site dashboard — contract order.
+    workersToday,
+    siteAttendanceTable,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryDeployed,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStockValue,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryAtSite,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumption,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStock,
+    UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses,
+  ],
+};
+
+const notificationRegistry: Provider = {
+  provide: NOTIFICATION_PROVIDERS,
+  inject: [...NOTIFICATION_CLASSES],
+  useFactory: (...providers: NotificationProvider[]): NotificationProvider[] =>
+    providers,
+};
+
+const reportRegistry: Provider = {
+  provide: REPORT_PROVIDERS,
+  inject: [...REPORT_CLASSES],
+  useFactory: (...providers: ReportProvider[]): ReportProvider[] => [
+    ...providers,
+    ...UNBUILT_REPORT_PLACEHOLDERS,
+  ],
+};
 
 /**
  * The `dashboard` module — feature 004.
@@ -135,45 +230,17 @@ const reportValue = (useValue: ReportProvider): Provider =>
     ReportsService,
     ExportJobService,
 
-    // ── Widget registry (company dashboard — contract order) ────────────────
-    widget(TotalEmployeesWidget),
-    widget(PresentTodayWidget),
-    widget(AbsentTodayWidget),
-    widget(OnLeaveWidget),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses),
-    widget(PendingApprovalsWidget),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.activeProjects),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.totalMachinery),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.contractValue),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.materialsCost),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.fuelCost),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.hireBills),
-    widget(MusterStatWidget),
-    widgetValue(UNBUILT_WIDGET_PLACEHOLDERS.alertsReminders),
-    widget(TodayAttendanceTableWidget),
-    widget(RecentLeavesTableWidget),
+    // ── Widget, notification and report providers ───────────────────────────
+    // Declared as ordinary providers so Nest constructs each with its own
+    // dependencies; the registries above collect them into the arrays the
+    // consuming services inject. Order lives in those factories, not here.
+    ...WIDGET_CLASSES,
+    ...NOTIFICATION_CLASSES,
+    ...REPORT_CLASSES,
 
-    // ── Widget registry (site dashboard — contract order) ───────────────────
-    widget(WorkersTodayWidget),
-    widget(SiteAttendanceTableWidget),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryDeployed),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStockValue),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryAtSite),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumption),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStock),
-    widgetValue(UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses),
-
-    // ── Notification registry ───────────────────────────────────────────────
-    notification(LeavePendingProvider),
-    notification(ReenrolmentPendingProvider),
-    notification(PayrollPendingProvider),
-    notification(ExportReadyProvider),
-
-    // ── Report registry (Attendance & Employee real, rest placeholder) ──────
-    report(AttendanceReportProvider),
-    report(EmployeeReportProvider),
-    ...UNBUILT_REPORT_PLACEHOLDERS.map(reportValue),
+    widgetRegistry,
+    notificationRegistry,
+    reportRegistry,
   ],
   // `RemindersService` is exported so a module owning reminder data can trigger an
   // out-of-band sweep after a bulk change, instead of waiting for the nightly run.
