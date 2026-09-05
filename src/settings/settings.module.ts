@@ -3,6 +3,9 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
 import { CompaniesController } from './companies/companies.controller';
+import { AssetCategoriesService } from './asset-masters/asset-categories.service';
+import { AssetDocTypesService } from './asset-masters/asset-doc-types.service';
+import { ConditionGradesService } from './asset-masters/condition-grades.service';
 import { CompaniesService } from './companies/companies.service';
 import { EmployeeCodeService } from './employee-code/employee-code.service';
 import { DepartmentsController } from './reference-data/departments.controller';
@@ -59,6 +62,12 @@ import { SkillCategoriesService } from './skill-categories/skill-categories.serv
     ItemsService,
     AuditLogService,
     SkillCategoriesService,
+    // Declared so `CompaniesService` can seed the three asset masters for a new
+    // company (012 US1). Not exported: `AssetsModule` declares its own instances,
+    // the same arrangement the machinery masters have with `PlantModule`.
+    AssetCategoriesService,
+    AssetDocTypesService,
+    ConditionGradesService,
   ],
   exports: [
     RolesService,
