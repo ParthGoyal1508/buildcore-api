@@ -9,6 +9,7 @@ import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AppService } from './app.service';
 import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
+import { AssetsModule } from './assets/assets.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -71,6 +72,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     InventoryModule,
     LabourModule,
     PlantModule,
+    AssetsModule,
   ],
   controllers: [AppController],
   providers: [
