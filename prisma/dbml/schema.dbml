@@ -417,6 +417,28 @@ failure and for any event with no company-scoped account.']
 clarification: reading/querying is a separate, later Activity Log feature).'
 }
 
+Table ExportJob {
+  id String [pk]
+  reportType String [not null, note: 'One of the registered report-type ids.']
+  format ExportFormat [not null]
+  filters Json [not null, note: 'The filter / date-range params the export was requested with, replayed by the
+worker to re-run the same report.']
+  status ExportJobStatus [not null, default: 'pending']
+  requestedByUserId String [not null]
+  companyId String [not null]
+  fileRef String [note: 'Encrypted object-storage reference, set once `status = ready`.']
+  failureReason String [note: 'Set once `status = failed`, so a poll reports the reason rather than silence.']
+  notifiedAt DateTime [note: 'Set once the "Export Ready" notification has surfaced (research.md §6), so the
+notification provider announces each finished job exactly once.']
+  createdAt DateTime [default: `now()`, not null]
+  completedAt DateTime
+
+  Note: 'Feature 004 (US7): tracks one asynchronous report export. A small tracking table
+in `shared` alongside `AuditLogEntry` — Dashboard aggregates other modules\' data
+and owns no business schema of its own (research.md §3). `companyId`-scoped and
+RLS-protected (Principle IV).'
+}
+
 Table Site {
   id String [pk]
   companyId String [not null, note: 'RLS-protected. No Prisma relation to `settings.Company` on purpose: Principle I
@@ -2795,6 +2817,18 @@ Enum LetterType {
   experience
 }
 
+Enum ExportFormat {
+  pdf
+  excel
+}
+
+Enum ExportJobStatus {
+  pending
+  processing
+  ready
+  failed
+}
+
 Enum AuditEntityType {
   LOGIN_SUCCESS
   LOGIN_FAILURE
@@ -2877,6 +2911,7 @@ Enum AuditEntityType {
   ONBOARDING_ITEM
   LETTER
   RESIGNATION
+  REPORT_EXPORT
 }
 
 Enum AuditAction {

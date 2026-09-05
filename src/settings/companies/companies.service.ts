@@ -9,7 +9,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
-import { withRlsContext } from '../../common/prisma/rls-context';
+import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { DocumentTypesService } from '../reference-data/document-types.service';
 import { ItemCategoriesService } from '../item-masters/item-categories.service';
 import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
@@ -57,6 +57,25 @@ export class CompaniesService {
       throw new NotFoundException('Company not found');
     }
     return company.payrollLockDay;
+  }
+
+  /**
+   * The companies the caller can see — their own one, or every active company for a
+   * Super Admin (004 US6). Backs the Group Dashboard's per-company cards and Group
+   * Total. Scope is enforced by RLS: an ordinary caller's context filters to their
+   * own `companyId`, a `CROSS_COMPANY_ACCESS` caller's spans all. Returns id, name
+   * and shortCode only — the card needs no more.
+   */
+  async listAccessible(
+    caller: AuthenticatedUser,
+  ): Promise<{ id: string; name: string; shortCode: string }[]> {
+    return withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.company.findMany({
+        where: { status: 'active' },
+        select: { id: true, name: true, shortCode: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
   }
 
   /**

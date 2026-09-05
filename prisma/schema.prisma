@@ -687,6 +687,56 @@ model AuditLogEntry {
   @@schema("shared")
 }
 
+/// Feature 004 (US7): tracks one asynchronous report export. A small tracking table
+/// in `shared` alongside `AuditLogEntry` — Dashboard aggregates other modules' data
+/// and owns no business schema of its own (research.md §3). `companyId`-scoped and
+/// RLS-protected (Principle IV).
+model ExportJob {
+  id String @id @default(cuid())
+
+  /// One of the registered report-type ids.
+  reportType String
+  format     ExportFormat
+  /// The filter / date-range params the export was requested with, replayed by the
+  /// worker to re-run the same report.
+  filters    Json
+
+  status ExportJobStatus @default(pending)
+
+  requestedByUserId String
+  companyId         String
+
+  /// Encrypted object-storage reference, set once `status = ready`.
+  fileRef       String?
+  /// Set once `status = failed`, so a poll reports the reason rather than silence.
+  failureReason String?
+  /// Set once the "Export Ready" notification has surfaced (research.md §6), so the
+  /// notification provider announces each finished job exactly once.
+  notifiedAt    DateTime?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([companyId, status])
+  @@schema("shared")
+}
+
+enum ExportFormat {
+  pdf
+  excel
+
+  @@schema("shared")
+}
+
+enum ExportJobStatus {
+  pending
+  processing
+  ready
+  failed
+
+  @@schema("shared")
+}
+
 enum AuditEntityType {
   // Login-lifecycle values carried over from feature 001 (uppercased in the 002
   // generalization so both halves of the enum read consistently).
@@ -812,6 +862,10 @@ enum AuditEntityType {
   ONBOARDING_ITEM
   LETTER
   RESIGNATION
+
+  /// Feature 004 (US7): the one write path Dashboard owns — a report export's
+  /// creation and completion (contracts/dashboard-api.md "Audit logging").
+  REPORT_EXPORT
 
   @@schema("shared")
 }

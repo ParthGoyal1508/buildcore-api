@@ -9,6 +9,27 @@ export interface Config {
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
   recruitment: RecruitmentConfig;
+  dashboard: DashboardConfig;
+}
+
+/**
+ * Dashboard & General (feature 004) tunables. Principle III keeps both of these out
+ * of the services that read them — each is a policy value someone will want changed
+ * without a code review.
+ */
+export interface DashboardConfig {
+  /**
+   * How often, in seconds, the frontend polls the widget endpoints for fresh figures
+   * (research.md §5). A display cadence, not a cache TTL — every request still
+   * computes live.
+   */
+  widgetRefreshIntervalSeconds: number;
+  /**
+   * Report-export row count above which the export is handled asynchronously — the
+   * caller receives a job id and polls / is notified rather than blocking on the
+   * render (spec FR-020/FR-021, research.md §6).
+   */
+  asyncExportRowThreshold: number;
 }
 
 /**
