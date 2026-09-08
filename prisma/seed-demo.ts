@@ -644,6 +644,183 @@ const LABOUR_NAMES = [
   'Jitendra Singh',
 ];
 
+/**
+ * Market rate and a normal purchase lot per item, in the units `ITEMS` declares.
+ *
+ * Kept beside the item list rather than inside it because these drive the movement
+ * data below, not the item master: a demo database wants a cement bag to cost what a
+ * cement bag costs, so the stock valuation on screen is a number somebody can sanity
+ * check against what they paid last week.
+ */
+const ITEM_TRADE: Record<string, { rate: number; lot: number }> = {
+  'CEM-OPC53': { rate: 395, lot: 500 },
+  'CEM-PPC': { rate: 358, lot: 400 },
+  'AGG-MSAND': { rate: 1650, lot: 60 },
+  'AGG-20MM': { rate: 1420, lot: 60 },
+  'STL-TMT12': { rate: 62500, lot: 8 },
+  'STL-TMT16': { rate: 61800, lot: 6 },
+  'ELE-WIRE25': { rate: 32, lot: 2000 },
+  'PLM-CPVC20': { rate: 145, lot: 600 },
+  'FIN-PUTTY': { rate: 28, lot: 1500 },
+  'SAF-HELMET': { rate: 260, lot: 80 },
+};
+
+/** What material gets issued for, so the Issues register reads like a site's. */
+const ISSUE_PURPOSES = [
+  'Block A — slab casting',
+  'Block A — column shuttering',
+  'Block B — brickwork',
+  'Block B — internal plaster',
+  'Basement — retaining wall',
+  'Site office — electrical rough-in',
+  'Tower 1 — plumbing riser',
+  'Common area — finishing',
+];
+
+/**
+ * Starting meter and a plausible day's work, per equipment category.
+ *
+ * A machine registered with a zero meter reads as a machine that has never run, and
+ * every utilisation and service-due figure computed from it is meaningless. These
+ * put each machine part-way through its life, which is where a real registry finds
+ * them.
+ */
+const PLANT_DUTY: Record<
+  string,
+  {
+    start: number;
+    perDay: number;
+    spread: number;
+    hireRate: number;
+    fuelPerUnit: number;
+  }
+> = {
+  Earthmoving: {
+    start: 4218,
+    perDay: 7.5,
+    spread: 3,
+    hireRate: 950,
+    fuelPerUnit: 5.4,
+  },
+  Transport: {
+    start: 68420,
+    perDay: 132,
+    spread: 60,
+    hireRate: 38,
+    fuelPerUnit: 0.28,
+  },
+  Lifting: {
+    start: 1147,
+    perDay: 6.5,
+    spread: 2.5,
+    hireRate: 1450,
+    fuelPerUnit: 0,
+  },
+  Concreting: {
+    start: 3106,
+    perDay: 5.5,
+    spread: 3,
+    hireRate: 2200,
+    fuelPerUnit: 0,
+  },
+  Power: { start: 2451, perDay: 9, spread: 4, hireRate: 650, fuelPerUnit: 3.1 },
+};
+
+/** The service each category actually gets, and how often. */
+const SERVICE_PLAN: Record<
+  string,
+  { type: string; intervalHours?: number; intervalKm?: number }
+> = {
+  Earthmoving: { type: 'Engine oil & filter change', intervalHours: 250 },
+  Transport: { type: 'Full service & oil change', intervalKm: 10000 },
+  Lifting: { type: 'Wire rope & brake inspection', intervalHours: 500 },
+  Concreting: { type: 'Mixer drum & bearing service', intervalHours: 400 },
+  Power: { type: 'DG set service & coolant top-up', intervalHours: 300 },
+};
+
+const SPARE_PARTS: {
+  no: string;
+  name: string;
+  uom: string;
+  reorder: number;
+  rate: number;
+  opening: number;
+  cats: string[];
+}[] = [
+  {
+    no: 'SP-ENGOIL-15W40',
+    name: 'Engine Oil 15W-40 (20L)',
+    uom: 'NOS',
+    reorder: 6,
+    rate: 4850,
+    opening: 14,
+    cats: ['Earthmoving', 'Transport', 'Power'],
+  },
+  {
+    no: 'SP-OILFLT-JCB',
+    name: 'Oil Filter — JCB 3DX',
+    uom: 'NOS',
+    reorder: 4,
+    rate: 780,
+    opening: 9,
+    cats: ['Earthmoving'],
+  },
+  {
+    no: 'SP-AIRFLT-TATA',
+    name: 'Air Filter — Tata LPT',
+    uom: 'NOS',
+    reorder: 4,
+    rate: 1150,
+    opening: 7,
+    cats: ['Transport'],
+  },
+  {
+    no: 'SP-HYDHOSE-1IN',
+    name: 'Hydraulic Hose 1 inch (per m)',
+    uom: 'RMT',
+    reorder: 10,
+    rate: 640,
+    opening: 24,
+    cats: ['Earthmoving', 'Lifting'],
+  },
+  {
+    no: 'SP-BRKPAD-LPT',
+    name: 'Brake Pad Set — LPT 1613',
+    uom: 'NOS',
+    reorder: 2,
+    rate: 3200,
+    opening: 4,
+    cats: ['Transport'],
+  },
+  {
+    no: 'SP-VBELT-B72',
+    name: 'V-Belt B72',
+    uom: 'NOS',
+    reorder: 6,
+    rate: 420,
+    opening: 12,
+    cats: ['Concreting', 'Power'],
+  },
+  {
+    no: 'SP-COOLANT-5L',
+    name: 'Coolant Concentrate (5L)',
+    uom: 'NOS',
+    reorder: 5,
+    rate: 1250,
+    opening: 10,
+    cats: ['Power', 'Earthmoving'],
+  },
+  {
+    no: 'SP-WIREROPE-16',
+    name: 'Wire Rope 16mm (per m)',
+    uom: 'RMT',
+    reorder: 20,
+    rate: 385,
+    opening: 60,
+    cats: ['Lifting'],
+  },
+];
+
 async function main() {
   assertLocal();
   console.log('Seeding a production-shaped demo dataset…\n');
@@ -681,7 +858,22 @@ async function main() {
   });
   console.log('  Super Admin        admin@buildcore.dev / secret42');
 
-  const totals = { employees: 0, punches: 0, workers: 0, assets: 0 };
+  const totals = {
+    employees: 0,
+    punches: 0,
+    workers: 0,
+    assets: 0,
+    purchases: 0,
+    issues: 0,
+    transfers: 0,
+    payments: 0,
+    indents: 0,
+    logbook: 0,
+    fuel: 0,
+    maintenance: 0,
+    serviceBills: 0,
+    hireBills: 0,
+  };
   let firstCompanyId: string | null = null;
 
   for (const spec of COMPANIES) {
@@ -1119,15 +1311,18 @@ async function main() {
     }
 
     // ── Partners, stores, plant, assets ──────────────────────────────────────
+    const vendors = [];
     for (const v of VENDORS) {
-      await prisma.vendor.create({
-        data: {
-          companyId: company.id,
-          code: `${spec.shortCode}-${v.code}`,
-          name: v.name,
-          type: v.type,
-        },
-      });
+      vendors.push(
+        await prisma.vendor.create({
+          data: {
+            companyId: company.id,
+            code: `${spec.shortCode}-${v.code}`,
+            name: v.name,
+            type: v.type,
+          },
+        }),
+      );
     }
 
     const itemCats = new Map<string, string>();
@@ -1137,16 +1332,19 @@ async function main() {
       });
       itemCats.set(name, row.id);
     }
+    const items = [];
     for (const it of ITEMS) {
-      await prisma.item.create({
-        data: {
-          companyId: company.id,
-          code: it.code,
-          name: it.name,
-          categoryId: itemCats.get(it.cat)!,
-          unit: it.unit,
-        },
-      });
+      items.push(
+        await prisma.item.create({
+          data: {
+            companyId: company.id,
+            code: it.code,
+            name: it.name,
+            categoryId: itemCats.get(it.cat)!,
+            unit: it.unit,
+          },
+        }),
+      );
     }
 
     const eqCats = new Map<string, string>();
@@ -1157,18 +1355,45 @@ async function main() {
       });
       eqCats.set(e.cat, row.id);
     }
-    for (const e of EQUIPMENT) {
-      await prisma.equipment.create({
-        data: {
-          companyId: company.id,
-          code: `${spec.shortCode}-${e.code}`,
-          name: e.name,
-          categoryId: eqCats.get(e.cat)!,
-          ownership: e.own,
-          powerSource: e.power,
-          meterType: e.meter,
-          deployedSiteId: sites[0].id,
-        },
+    /**
+     * The sites that actually hold material and machines.
+     *
+     * Each company's list ends with its office, and an office is not a store: a head
+     * office carrying sixty cubic metres of M-sand and a batching plant parked in
+     * Koramangala is the sort of detail that tells anyone looking at the demo that
+     * the data was generated rather than recorded. Small consumables still reach it
+     * below — PPE and stationery genuinely do sit in a central store.
+     */
+    const siteIsOffice = (name: string) => /office/i.test(name);
+    const storeSites = sites.filter((x) => !siteIsOffice(x.name));
+    const officeSites = sites.filter((x) => siteIsOffice(x.name));
+
+    const machines: {
+      row: { id: string };
+      spec: (typeof EQUIPMENT)[number];
+      reading: number;
+      lastDone: number;
+    }[] = [];
+    for (const [ei, e] of EQUIPMENT.entries()) {
+      machines.push({
+        row: await prisma.equipment.create({
+          data: {
+            companyId: company.id,
+            code: `${spec.shortCode}-${e.code}`,
+            name: e.name,
+            categoryId: eqCats.get(e.cat)!,
+            ownership: e.own,
+            vendorId: null,
+            powerSource: e.power,
+            meterType: e.meter,
+            // Spread across the sites rather than parked at the first: a registry
+            // where every machine sits at one site makes the site filter useless.
+            deployedSiteId: storeSites[ei % storeSites.length].id,
+          },
+        }),
+        spec: e,
+        reading: 0,
+        lastDone: 0,
       });
     }
 
@@ -1197,6 +1422,835 @@ async function main() {
         },
       });
       totals.assets++;
+    }
+
+    // ── Inventory: purchases, receipts, bills, payments, issues, transfers ────
+    //
+    // Written as movements, not as a stock table with numbers typed into it. The
+    // Stock screen values what is on hand at a weighted-average rate the API derives
+    // by replaying the ledger, so a balance invented independently of the ledger
+    // would disagree with the register the moment anyone opened it. Every balance row
+    // written at the end of this block is the arithmetic result of the purchases,
+    // issues and transfers above it.
+    interface Bal {
+      received: number;
+      issued: number;
+      transferIn: number;
+      transferOut: number;
+      war: number;
+      qty: number;
+    }
+    const balances = new Map<string, Bal>();
+    const bal = (itemId: string, siteId: string): Bal => {
+      const key = `${itemId}|${siteId}`;
+      let b = balances.get(key);
+      if (!b) {
+        b = {
+          received: 0,
+          issued: 0,
+          transferIn: 0,
+          transferOut: 0,
+          war: 0,
+          qty: 0,
+        };
+        balances.set(key, b);
+      }
+      return b;
+    };
+    const round3 = (n: number) => Math.round(n * 1000) / 1000;
+    const round2 = (n: number) => Math.round(n * 100) / 100;
+
+    const materialVendors = vendors.filter((v) => v.type === 'material');
+    const fuelVendor = vendors.find((v) => v.type === 'fuel')!;
+    const hireVendor = vendors.find((v) => v.type === 'hire')!;
+    const serviceVendor = vendors.find((v) => v.type === 'service')!;
+
+    const openBills: {
+      id: string;
+      vendorId: string;
+      total: number;
+      paid: number;
+    }[] = [];
+    let grnSeq = 0;
+
+    for (const [si, site] of sites.entries()) {
+      const isOffice = siteIsOffice(site.name);
+      for (const [ii, item] of items.entries()) {
+        const trade = ITEM_TRADE[ITEMS[ii].code];
+        // The bulk trades are bought again and again; the specialised ones land
+        // once or twice and mostly at the larger site.
+        const bulk = ['Cement & Binders', 'Aggregates', 'Steel'].includes(
+          ITEMS[ii].cat,
+        );
+        // Structural material goes to the pour, never to the office.
+        if (isOffice && bulk) continue;
+        const rounds = isOffice ? 1 : bulk ? 3 : si === 0 ? 2 : 1;
+
+        for (let r = 0; r < rounds; r++) {
+          const when = daysAgo(82 - r * 26 - si * 2);
+          const quantity = round3(trade.lot * (0.7 + rand() * 0.6));
+          const rate = round2(trade.rate * (0.96 + rand() * 0.09));
+          const amount = round2(quantity * rate);
+          const vendor =
+            ITEMS[ii].cat === 'Steel' ? materialVendors[1] : materialVendors[0];
+
+          const purchase = await prisma.purchase.create({
+            data: {
+              companyId: company.id,
+              siteId: site.id,
+              itemId: item.id,
+              vendorId: vendor.id,
+              date: when,
+              quantity: money(quantity),
+              rate: money(rate),
+              amount: money(amount),
+              remarks: r === 0 ? 'Opening stock for the site' : null,
+            },
+          });
+
+          grnSeq += 1;
+          await prisma.goodsReceiptNote.create({
+            data: {
+              companyId: company.id,
+              purchaseId: purchase.id,
+              grnNumber: `${spec.shortCode}/GRN/26-27/${String(grnSeq).padStart(
+                4,
+                '0',
+              )}`,
+              siteId: site.id,
+            },
+          });
+
+          const billDate = new Date(when);
+          billDate.setUTCDate(billDate.getUTCDate() + 2);
+          const bill = await prisma.purchaseBill.create({
+            data: {
+              companyId: company.id,
+              purchaseId: purchase.id,
+              vendorId: vendor.id,
+              totalAmount: money(amount),
+              billDate,
+            },
+          });
+          openBills.push({
+            id: bill.id,
+            vendorId: vendor.id,
+            total: amount,
+            paid: 0,
+          });
+
+          await prisma.stockLedgerEntry.create({
+            data: {
+              companyId: company.id,
+              itemId: item.id,
+              siteId: site.id,
+              type: 'purchase',
+              quantity: money(quantity),
+              rate: money(rate),
+              referenceId: purchase.id,
+              date: when,
+            },
+          });
+
+          // The same running weighted average `StockService.recomputeWAR` derives
+          // from the ledger: a purchase repositions the rate, nothing else does.
+          const b = bal(item.id, site.id);
+          const denominator = b.qty + quantity;
+          b.war =
+            denominator === 0
+              ? rate
+              : (b.qty * b.war + quantity * rate) / denominator;
+          b.qty += quantity;
+          b.received += quantity;
+          totals.purchases++;
+        }
+      }
+    }
+
+    // Issues, drawn only against what the site actually holds — a register showing
+    // more issued than was ever received is the one thing nobody would believe.
+    let purposeIdx = 0;
+    for (const [si, site] of sites.entries()) {
+      for (const [ii, item] of items.entries()) {
+        const b = bal(item.id, site.id);
+        if (b.qty <= 0) continue;
+        const draws = ITEMS[ii].cat === 'Safety' ? 1 : 2 + (si === 0 ? 1 : 0);
+
+        for (let k = 0; k < draws; k++) {
+          const available = b.qty;
+          if (available <= 0) break;
+          const wanted = round3(available * (0.18 + rand() * 0.22));
+          if (wanted <= 0) continue;
+          const when = daysAgo(64 - k * 19 - si);
+
+          await prisma.issue.create({
+            data: {
+              companyId: company.id,
+              siteId: site.id,
+              itemId: item.id,
+              date: when,
+              quantity: money(wanted),
+              issuedTo: ISSUE_PURPOSES[purposeIdx++ % ISSUE_PURPOSES.length],
+              remarks: null,
+            },
+          });
+          await prisma.stockLedgerEntry.create({
+            data: {
+              companyId: company.id,
+              itemId: item.id,
+              siteId: site.id,
+              type: 'issue',
+              quantity: money(wanted),
+              referenceId: `seed-issue-${site.id}-${item.id}-${k}`,
+              date: when,
+            },
+          });
+          b.issued += wanted;
+          b.qty -= wanted;
+          totals.issues++;
+        }
+      }
+    }
+
+    // Transfers, only for items both sites already carry: a transfer moves material
+    // at the destination's existing rate rather than repricing it, so sending an item
+    // somewhere it has never been priced would land it valued at zero.
+    // Between two construction sites where the company has them; otherwise back to
+    // the central store, which is the only movement a single-site company really has.
+    const [fromSite, toSite] =
+      storeSites.length > 1
+        ? [storeSites[0], storeSites[1]]
+        : [storeSites[0], officeSites[0] ?? storeSites[0]];
+    if (fromSite && toSite && fromSite.id !== toSite.id) {
+      const transferable = items.filter(
+        (item) =>
+          bal(item.id, fromSite.id).qty > 5 && bal(item.id, toSite.id).qty > 0,
+      );
+      const statuses: ('received' | 'in_transit' | 'pending')[] = [
+        'received',
+        'received',
+        'in_transit',
+        'pending',
+      ];
+      for (const [ti, item] of transferable.slice(0, 4).entries()) {
+        const from = bal(item.id, fromSite.id);
+        const to = bal(item.id, toSite.id);
+        const quantity = round3(Math.min(from.qty * 0.2, from.qty));
+        if (quantity <= 0) continue;
+        const when = daysAgo(22 - ti * 5);
+
+        await prisma.stockTransfer.create({
+          data: {
+            companyId: company.id,
+            fromSiteId: fromSite.id,
+            toSiteId: toSite.id,
+            itemId: item.id,
+            date: when,
+            quantity: money(quantity),
+            status: statuses[ti],
+            remarks: 'Surplus moved to the second site',
+          },
+        });
+        // Both legs post on creation, whatever the status — the workflow status is
+        // about who has acknowledged the material, not about where the stock is.
+        for (const leg of [
+          { siteId: fromSite.id, type: 'transfer_out' as const },
+          { siteId: toSite.id, type: 'transfer_in' as const },
+        ]) {
+          await prisma.stockLedgerEntry.create({
+            data: {
+              companyId: company.id,
+              itemId: item.id,
+              siteId: leg.siteId,
+              type: leg.type,
+              quantity: money(quantity),
+              referenceId: `seed-transfer-${item.id}-${ti}`,
+              date: when,
+            },
+          });
+        }
+        from.transferOut += quantity;
+        from.qty -= quantity;
+        to.transferIn += quantity;
+        to.qty += quantity;
+        totals.transfers++;
+      }
+    }
+
+    for (const [key, b] of balances) {
+      const [itemId, siteId] = key.split('|');
+      await prisma.stockBalance.create({
+        data: {
+          companyId: company.id,
+          itemId,
+          siteId,
+          received: money(round3(b.received)),
+          issued: money(round3(b.issued)),
+          transferIn: money(round3(b.transferIn)),
+          transferOut: money(round3(b.transferOut)),
+          avgRate: money(Math.round(b.war * 1e6) / 1e6),
+        },
+      });
+    }
+
+    // Payments, allocated oldest bill first, leaving a realistic tail of unpaid and
+    // part-paid bills rather than a ledger that is either all settled or all open.
+    const modes: ('bank_transfer' | 'upi' | 'cheque')[] = [
+      'bank_transfer',
+      'bank_transfer',
+      'upi',
+      'cheque',
+    ];
+    for (const [vi, vendor] of materialVendors.entries()) {
+      const theirs = openBills.filter((b) => b.vendorId === vendor.id);
+      if (theirs.length === 0) continue;
+      const outstanding = theirs.reduce((sum, b) => sum + b.total, 0);
+      // Roughly three quarters settled: enough that the ageing report has both
+      // cleared and overdue rows in it.
+      let budget = round2(outstanding * (0.62 + vi * 0.14));
+
+      for (let p = 0; p < 3 && budget > 0; p++) {
+        const slice = round2(p === 2 ? budget : budget / (3 - p));
+        if (slice <= 0) break;
+        const when = daysAgo(46 - p * 13 - vi * 2);
+        const payment = await prisma.payment.create({
+          data: {
+            companyId: company.id,
+            vendorId: vendor.id,
+            amount: money(slice),
+            date: when,
+            paymentMode: modes[(vi + p) % modes.length],
+            referenceNumber: `${spec.shortCode}/PAY/${String(
+              1200 + vi * 10 + p,
+            )}`,
+          },
+        });
+
+        let left = slice;
+        let allocatedTotal = 0;
+        for (const b of theirs) {
+          if (left <= 0) break;
+          const due = round2(b.total - b.paid);
+          if (due <= 0) continue;
+          const take = round2(Math.min(due, left));
+          await prisma.paymentAllocation.create({
+            data: {
+              companyId: company.id,
+              paymentId: payment.id,
+              billId: b.id,
+              allocatedAmount: money(take),
+            },
+          });
+          b.paid = round2(b.paid + take);
+          left = round2(left - take);
+          allocatedTotal = round2(allocatedTotal + take);
+
+          await prisma.purchaseBill.update({
+            where: { id: b.id },
+            data: {
+              paidAmount: money(b.paid),
+              paymentStatus:
+                b.paid >= b.total
+                  ? 'paid'
+                  : b.paid > 0
+                  ? 'part_paid'
+                  : 'unpaid',
+            },
+          });
+        }
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: { allocatedAmount: money(allocatedTotal) },
+        });
+        budget = round2(budget - slice);
+        totals.payments++;
+      }
+    }
+
+    // Material indents, one in each state the approvals queue and the procurement
+    // screen need something to show for.
+    const indentPlan: {
+      status:
+        | 'submitted'
+        | 'approved'
+        | 'partially_fulfilled'
+        | 'fulfilled'
+        | 'rejected';
+      days: number;
+      justification: string;
+      lines: {
+        item: number;
+        qty: number;
+        approved?: number;
+        done?: number;
+        pending?: boolean;
+      }[];
+      reason?: string;
+    }[] = [
+      {
+        status: 'submitted',
+        days: 3,
+        justification:
+          'Slab casting for Block A starts next week; site stock is short.',
+        lines: [
+          { item: 0, qty: 320 },
+          { item: 4, qty: 4 },
+        ],
+      },
+      {
+        status: 'approved',
+        days: 12,
+        justification: 'Brickwork and plaster on Block B, second floor.',
+        lines: [
+          { item: 1, qty: 260, approved: 220 },
+          { item: 8, qty: 900, approved: 900, pending: true },
+        ],
+      },
+      {
+        status: 'partially_fulfilled',
+        days: 26,
+        justification:
+          'Electrical rough-in for the site office and Tower 1 riser.',
+        lines: [
+          { item: 6, qty: 1400, approved: 1400, done: 900 },
+          { item: 7, qty: 500, approved: 500, done: 500 },
+        ],
+      },
+      {
+        status: 'fulfilled',
+        days: 44,
+        justification: 'Safety gear replacement for the incoming crew.',
+        lines: [{ item: 9, qty: 60, approved: 60, done: 60 }],
+      },
+      {
+        status: 'rejected',
+        days: 18,
+        justification: 'Additional 20mm jelly requested ahead of schedule.',
+        reason:
+          'Sufficient stock already at site; re-raise closer to the pour date.',
+        lines: [{ item: 3, qty: 90 }],
+      },
+    ];
+
+    for (const [ix, plan] of indentPlan.entries()) {
+      const decided = plan.status !== 'submitted';
+      const indent = await prisma.materialIndent.create({
+        data: {
+          companyId: company.id,
+          siteId: storeSites[ix % storeSites.length].id,
+          projectId: projects[ix % projects.length]?.id ?? null,
+          indentNumber: `${spec.shortCode}/IND/26-27/${String(101 + ix)}`,
+          requiredByDate: daysAgo(plan.days - 10),
+          justification: plan.justification,
+          status: plan.status,
+          requestedByUserId: employees[(ix + 2) % employees.length].userId,
+          approvedByUserId: decided ? employees[0].userId : null,
+          approvedAt: decided ? at(daysAgo(plan.days - 1), 11, 15) : null,
+          decisionReason: plan.reason ?? null,
+        },
+      });
+      for (const line of plan.lines) {
+        await prisma.materialIndentLine.create({
+          data: {
+            companyId: company.id,
+            indentId: indent.id,
+            itemId: items[line.item].id,
+            requestedQuantity: money(line.qty),
+            approvedQuantity:
+              line.approved != null ? money(line.approved) : null,
+            fulfilledQuantity: money(line.done ?? 0),
+            reductionReason:
+              line.approved != null && line.approved < line.qty
+                ? 'Trimmed to the quantity the pour actually needs'
+                : null,
+            procurementPending: line.pending ?? false,
+          },
+        });
+      }
+      totals.indents++;
+    }
+
+    // ── Plant: hire rates, logbook, fuel, servicing, spares and bills ────────
+    //
+    // The logbook is generated first and everything else is derived from it, because
+    // that is the direction the real data flows: the meter reading decides when a
+    // service falls due, the hours worked decide what a hire vendor may bill, and
+    // fuel consumed only means anything next to the hours it was burned over. Seeding
+    // them independently would produce five screens that each look plausible and
+    // contradict each other.
+    for (const [name, categoryId] of eqCats) {
+      await prisma.hireRate.create({
+        data: {
+          companyId: company.id,
+          categoryId,
+          ratePerUnit: money(PLANT_DUTY[name].hireRate),
+          effectiveFrom: daysAgo(180),
+        },
+      });
+    }
+
+    for (const [mi, m] of machines.entries()) {
+      const duty = PLANT_DUTY[m.spec.cat];
+      const plan = SERVICE_PLAN[m.spec.cat];
+      let reading = duty.start;
+      const logged: {
+        date: Date;
+        hours: number;
+        fuel: number;
+        closing: number;
+      }[] = [];
+
+      // Thirty days back, Sundays off — the same weekly off the sites keep.
+      for (let back = 30; back >= 1; back--) {
+        const day = daysAgo(back);
+        if (day.getUTCDay() === 0) continue;
+        // A machine is not on every job every day; the idle days are what make the
+        // utilisation figure mean something.
+        if (rand() < 0.12) continue;
+
+        const worked =
+          Math.round((duty.perDay + (rand() - 0.5) * duty.spread) * 100) / 100;
+        if (worked <= 0) continue;
+        const opening = reading;
+        const closing = Math.round((opening + worked) * 1000) / 1000;
+        const fuel =
+          duty.fuelPerUnit > 0
+            ? Math.round(
+                worked * duty.fuelPerUnit * (0.92 + rand() * 0.18) * 100,
+              ) / 100
+            : null;
+
+        await prisma.logbookEntry.create({
+          data: {
+            companyId: company.id,
+            equipmentId: m.row.id,
+            date: day,
+            openingReading: money(opening),
+            closingReading: money(closing),
+            totalHours: money(worked),
+            fuelConsumed: fuel != null ? money(fuel) : null,
+            operatorId: employees[(mi + back) % employees.length].id,
+            projectId: projects[mi % projects.length]?.id ?? null,
+          },
+        });
+        reading = closing;
+        logged.push({ date: day, hours: worked, fuel: fuel ?? 0, closing });
+        totals.logbook++;
+      }
+
+      // The meter on the machine is the last reading anyone wrote down, and
+      // utilisation is the share of available days it actually turned.
+      const workingDays = 26;
+      await prisma.equipment.update({
+        where: { id: m.row.id },
+        data: {
+          currentReading: money(reading),
+          utilizationPercent: money(
+            Math.min(
+              100,
+              Math.round((logged.length / workingDays) * 1000) / 10,
+            ),
+          ),
+        },
+      });
+
+      // Fuel is bought every few days, in a tankful, against the consumption the
+      // logbook recorded in between — which is what makes a variance meaningful.
+      if (duty.fuelPerUnit > 0) {
+        for (let k = 3; k < logged.length; k += 4) {
+          const window = logged.slice(k - 3, k + 1);
+          const burned = window.reduce((sum, l) => sum + l.fuel, 0);
+          // Most fills match the logbook; one machine in each company is off enough
+          // to raise the variance flag the Fuel screen exists to surface.
+          const drift = mi === 1 && k > 6 ? 1.24 : 0.97 + rand() * 0.08;
+          const quantity = Math.round(burned * drift * 100) / 100;
+          if (quantity <= 0) continue;
+          const rate = Math.round((93.4 + rand() * 3.2) * 100) / 100;
+          const variance =
+            Math.round(((quantity - burned) / burned) * 10000) / 100;
+
+          await prisma.fuelEntry.create({
+            data: {
+              companyId: company.id,
+              equipmentId: m.row.id,
+              date: window[window.length - 1].date,
+              quantity: money(quantity),
+              rate: money(rate),
+              amount: money(Math.round(quantity * rate * 100) / 100),
+              vendorId: fuelVendor.id,
+              variancePercent: money(variance),
+              varianceAlert: Math.abs(variance) > 10,
+            },
+          });
+          totals.fuel++;
+        }
+      }
+
+      // A service history that brackets the current reading: one done a while back,
+      // the next falling due near where the meter now stands, so the maintenance
+      // screen has something genuinely upcoming on it.
+      const interval = plan.intervalHours ?? plan.intervalKm!;
+      const lastDone =
+        Math.round((reading - interval * (0.55 + rand() * 0.3)) * 1000) / 1000;
+      await prisma.serviceSchedule.create({
+        data: {
+          companyId: company.id,
+          equipmentId: m.row.id,
+          serviceType: plan.type,
+          intervalHours:
+            plan.intervalHours != null ? money(plan.intervalHours) : null,
+          intervalKm: plan.intervalKm != null ? money(plan.intervalKm) : null,
+          lastDoneReading: money(lastDone),
+          nextDueReading: money(
+            Math.round((lastDone + interval) * 1000) / 1000,
+          ),
+        },
+      });
+      machines[mi].reading = reading;
+      machines[mi].lastDone = lastDone;
+    }
+
+    // Spare parts, with a movement history that adds up to the stock on hand.
+    const partRows = [];
+    for (const p of SPARE_PARTS) {
+      const compatible = p.cats
+        .map((c) => eqCats.get(c))
+        .filter((id): id is string => Boolean(id));
+      partRows.push({
+        spec: p,
+        row: await prisma.sparePart.create({
+          data: {
+            companyId: company.id,
+            partNumber: p.no,
+            name: p.name,
+            unitOfMeasure: p.uom,
+            reorderLevel: money(p.reorder),
+            compatibleCategoryIds: compatible,
+            stockQuantity: money(0),
+            avgRate: money(0),
+          },
+        }),
+      });
+    }
+
+    // Maintenance: one breakdown still open, two closed jobs with real costs behind
+    // them. The open one is what the Maintenance screen is for; the closed ones give
+    // the service bills and spare consumption something to hang off.
+    const jobPlan: {
+      machine: number;
+      type: 'breakdown' | 'scheduled';
+      status: 'open' | 'closed';
+      days: number;
+      description: string;
+      labour: number;
+      parts: { part: number; qty: number }[];
+    }[] = [
+      {
+        machine: 0,
+        type: 'breakdown',
+        status: 'open',
+        days: 2,
+        description:
+          'Hydraulic hose burst on the loader arm; boom will not hold load.',
+        labour: 3500,
+        parts: [{ part: 3, qty: 4 }],
+      },
+      {
+        machine: 1,
+        type: 'scheduled',
+        status: 'closed',
+        days: 21,
+        description:
+          'Scheduled full service — oil, filters and brake inspection.',
+        labour: 4800,
+        parts: [
+          { part: 0, qty: 2 },
+          { part: 2, qty: 1 },
+          { part: 4, qty: 1 },
+        ],
+      },
+      {
+        machine: 4,
+        type: 'breakdown',
+        status: 'closed',
+        days: 34,
+        description: 'DG set overheating under load; coolant circuit flushed.',
+        labour: 2600,
+        parts: [
+          { part: 6, qty: 2 },
+          { part: 5, qty: 1 },
+        ],
+      },
+    ];
+
+    // Opening receipts first, so nothing is ever consumed out of a part that has not
+    // been bought — a negative spare balance is not a thing a store can have.
+    const partState = partRows.map(() => ({ qty: 0, war: 0 }));
+    for (const [pi, p] of partRows.entries()) {
+      const rate = p.spec.rate;
+      await prisma.sparePartMovement.create({
+        data: {
+          companyId: company.id,
+          sparePartId: p.row.id,
+          type: 'receipt',
+          quantity: money(p.spec.opening),
+          rate: money(rate),
+          amount: money(Math.round(p.spec.opening * rate * 100) / 100),
+          movementDate: daysAgo(70),
+          vendorId: serviceVendor.id,
+          billReference: `${spec.shortCode}/SP/${String(4400 + pi)}`,
+          createdByUserId: employees[0].userId,
+        },
+      });
+      partState[pi] = { qty: p.spec.opening, war: rate };
+    }
+
+    for (const [ji, job] of jobPlan.entries()) {
+      const m = machines[job.machine];
+      const closed = job.status === 'closed';
+      const partsCost = job.parts.reduce(
+        (sum, part) => sum + part.qty * partRows[part.part].spec.rate,
+        0,
+      );
+
+      const created = await prisma.maintenanceJob.create({
+        data: {
+          companyId: company.id,
+          equipmentId: m.row.id,
+          type: job.type,
+          description: job.description,
+          openedAt: at(daysAgo(job.days), 9, 40),
+          closedAt: closed ? at(daysAgo(job.days - 2), 17, 20) : null,
+          closingReading: closed ? money(m.reading) : null,
+          partsDescription: job.parts
+            .map((part) => `${partRows[part.part].spec.name} × ${part.qty}`)
+            .join(', '),
+          labourCost: money(job.labour),
+          partsCost: money(Math.round(partsCost * 100) / 100),
+          totalCost: closed
+            ? money(Math.round((job.labour + partsCost) * 100) / 100)
+            : null,
+          status: job.status,
+        },
+      });
+      totals.maintenance++;
+
+      for (const part of job.parts) {
+        const state = partState[part.part];
+        const take = Math.min(part.qty, state.qty);
+        if (take <= 0) continue;
+        await prisma.sparePartMovement.create({
+          data: {
+            companyId: company.id,
+            sparePartId: partRows[part.part].row.id,
+            type: 'consumption',
+            quantity: money(take),
+            rate: money(state.war),
+            amount: money(Math.round(take * state.war * 100) / 100),
+            movementDate: daysAgo(job.days),
+            maintenanceJobId: created.id,
+            createdByUserId: employees[0].userId,
+          },
+        });
+        state.qty -= take;
+      }
+
+      // A closed job is a job somebody invoiced for.
+      if (closed) {
+        const gross = job.labour + partsCost;
+        const tax = Math.round(gross * 0.18 * 100) / 100;
+        const tds = Math.round(gross * 0.02 * 100) / 100;
+        await prisma.serviceBill.create({
+          data: {
+            companyId: company.id,
+            maintenanceJobId: created.id,
+            vendorId: serviceVendor.id,
+            billNumber: `${spec.shortCode}/SVC/26-27/${String(31 + ji)}`,
+            billDate: daysAgo(job.days - 3),
+            grossAmount: money(Math.round(gross * 100) / 100),
+            taxAmount: money(tax),
+            tdsPercent: money(2),
+            tdsAmount: money(tds),
+            netPayable: money(Math.round((gross + tax - tds) * 100) / 100),
+            status: 'verified',
+            verifiedByUserId: employees[0].userId,
+            verifiedAt: at(daysAgo(job.days - 4), 15, 0),
+            paymentStatus: ji === 1 ? 'paid' : 'unpaid',
+            paidAmount:
+              ji === 1
+                ? money(Math.round((gross + tax - tds) * 100) / 100)
+                : money(0),
+            paidOn: ji === 1 ? daysAgo(job.days - 9) : null,
+            paymentReference:
+              ji === 1 ? `${spec.shortCode}/PAY/${String(1290 + ji)}` : null,
+          },
+        });
+        totals.serviceBills++;
+      }
+    }
+
+    for (const [pi, p] of partRows.entries()) {
+      await prisma.sparePart.update({
+        where: { id: p.row.id },
+        data: {
+          stockQuantity: money(partState[pi].qty),
+          avgRate: money(partState[pi].war),
+        },
+      });
+    }
+
+    // Hire bills for the hired machines, billed against the logbook rather than
+    // against the vendor's word — the variance column is the whole point of the
+    // screen, so at least one bill has to disagree with the log.
+    for (const m of machines.filter((x) => x.spec.own === 'hired')) {
+      const rate = PLANT_DUTY[m.spec.cat].hireRate;
+      for (const [bi, period] of [
+        { from: 60, to: 31, status: 'paid' as const },
+        { from: 30, to: 1, status: 'pending_verification' as const },
+      ].entries()) {
+        const logbookHours =
+          Math.round(PLANT_DUTY[m.spec.cat].perDay * 25 * 100) / 100;
+        // The vendor's claim is a little over what the log shows, which is exactly
+        // the disagreement the verification step exists to catch.
+        const billedHours =
+          Math.round(logbookHours * (bi === 0 ? 1.0 : 1.06) * 100) / 100;
+        const gross = Math.round(billedHours * rate * 100) / 100;
+        const tds = Math.round(gross * 0.02 * 100) / 100;
+
+        await prisma.hireBill.create({
+          data: {
+            companyId: company.id,
+            equipmentId: m.row.id,
+            vendorId: hireVendor.id,
+            billedHours: money(billedHours),
+            rate: money(rate),
+            grossAmount: money(gross),
+            billingPeriodFrom: daysAgo(period.from),
+            billingPeriodTo: daysAgo(period.to),
+            logbookHours: money(logbookHours),
+            variance: money(
+              Math.round((billedHours - logbookHours) * 100) / 100,
+            ),
+            tdsRate: money(2),
+            tdsAmount: money(tds),
+            netPayable: money(Math.round((gross - tds) * 100) / 100),
+            status: period.status,
+            verifiedByUserId:
+              period.status === 'paid' ? employees[0].userId : null,
+            verifiedAt:
+              period.status === 'paid'
+                ? at(daysAgo(period.to - 2), 12, 0)
+                : null,
+            paymentDate:
+              period.status === 'paid' ? daysAgo(period.to - 6) : null,
+            paymentReference:
+              period.status === 'paid'
+                ? `${spec.shortCode}/PAY/${String(1310 + bi)}`
+                : null,
+          },
+        });
+        totals.hireBills++;
+      }
     }
 
     // ── Labour: skills, project rates, and a registered workforce ────────────
@@ -1248,6 +2302,12 @@ async function main() {
 
   console.log(
     `\n  Totals: ${totals.employees} employees, ${totals.punches} punches, ${totals.workers} labour workers, ${totals.assets} assets`,
+  );
+  console.log(
+    `  Inventory: ${totals.purchases} purchases, ${totals.issues} issues, ${totals.transfers} transfers, ${totals.payments} payments, ${totals.indents} indents`,
+  );
+  console.log(
+    `  Plant: ${totals.logbook} logbook entries, ${totals.fuel} fuel entries, ${totals.maintenance} maintenance jobs, ${totals.serviceBills} service bills, ${totals.hireBills} hire bills`,
   );
   console.log(
     '\n  Every login is  <first>.<last>@<company-domain>  with password  secret42',
