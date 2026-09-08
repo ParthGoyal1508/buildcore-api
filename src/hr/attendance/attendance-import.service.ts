@@ -88,7 +88,9 @@ export class AttendanceImportService {
     const missing = HEADERS.filter((h) => !header.includes(h));
     if (missing.length > 0) {
       throw new BadRequestException(
-        `Missing required column(s): ${missing.join(', ')}. Download the template.`,
+        `Missing required column(s): ${missing.join(
+          ', ',
+        )}. Download the template.`,
       );
     }
     const index = Object.fromEntries(
@@ -138,6 +140,15 @@ export class AttendanceImportService {
 
       if (!DATE_ONLY.test(row.date)) {
         row.errors.push('date must be YYYY-MM-DD');
+      } else if (this.attendance.isFutureDate(row.date)) {
+        // The same rule the manual screen enforces (FR-073), reported here as a
+        // row error rather than left to `commit`. The commit path would refuse it
+        // anyway via `mark`, but only after the file had been accepted as valid —
+        // so the person uploading would see it fail at the last step instead of in
+        // the preview that exists to tell them what is wrong.
+        row.errors.push(
+          'date is in the future; attendance can only be recorded up to today',
+        );
       }
       if (row.inTime && !TIME_ONLY.test(row.inTime)) {
         row.errors.push('inTime must be HH:mm');
@@ -155,13 +166,13 @@ export class AttendanceImportService {
         )
       ) {
         row.errors.push(
-          `status must be one of ${Object.values(AttendanceStatusOverride).join(', ')}`,
+          `status must be one of ${Object.values(AttendanceStatusOverride).join(
+            ', ',
+          )}`,
         );
       }
       if (!row.inTime && !row.outTime && !row.status) {
-        row.errors.push(
-          'Provide at least one of inTime, outTime or status',
-        );
+        row.errors.push('Provide at least one of inTime, outTime or status');
       }
 
       const key = `${row.employeeCode}|${row.date}`;

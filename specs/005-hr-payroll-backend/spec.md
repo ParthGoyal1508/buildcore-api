@@ -1112,3 +1112,77 @@ it. Depends on existing attendance records.
   exactly against the same processed payroll run.
 - **SC-A04**: Every late arrival is computed against the shift actually in force on that date, and
   no employee without a configured shift is reported as punctual.
+
+---
+
+## Amendment 2026-09-08 — Attendance Date Integrity
+
+Two defects in the US3 admin attendance surface, found from a report that the Daily Register
+displays attendance for dates that have not happened yet.
+
+**Fault 1 — absence is reported as presence.** `GET /hr/attendance` returns one row per active
+employee whether or not that employee has any punch, and the only status it carries is
+`statusOverride`, which is null unless an admin explicitly forced one. No *derived* status is sent
+at all, so the client has nothing to render and substitutes `present`. Every employee with no
+punches therefore reads **Present** — on a future date, on a past date, and on today before anyone
+has punched in. This is not a new requirement: **FR-008 already requires the view to show
+"status"**, and that half of it was never implemented.
+
+**Fault 2 — the calendar is unbounded.** Neither `DailyAttendanceQueryDto` nor the Mark/Edit
+endpoint rejects a date after today. `mark()` guards the payroll lock (FR-009) and mandatory
+documents but not the calendar, so an admin can record in/out times for a day that has not
+occurred, and the bulk import (US13) accepts future-dated rows on the same basis.
+
+The status rule this amendment requires already exists and is unit-tested: `statusForDay()` in
+`src/hr/punch/attendance-history.service.ts`, the pure function 003 research.md §6 defines and the
+employee's own attendance history and payroll both read. Requiring the admin view to reuse it —
+rather than deriving a second one — is the same anti-drift argument `getMonthForEmployee` is
+already commented with: payroll deciding "present" differently from the attendance screen is
+precisely the divergence that rule exists to prevent.
+
+### Additional Functional Requirements
+
+- **FR-069**: The admin Daily Attendance view MUST return each employee's **effective status** for
+  the requested date, derived from punches, approved leave, the site holiday calendar, and the
+  site's weekly-off day using the **same** `statusForDay` rule the employee's own attendance
+  history and payroll already read (003 research.md §6). It MUST NOT be left to the client to
+  infer a status, and MUST NOT introduce a second derivation of the rule.
+- **FR-070**: An admin `statusOverride`, where present, MUST take precedence over the derived
+  status; where absent, the derived status MUST be reported. A day with no punch, no approved
+  leave, no declared holiday, and not the site's weekly off MUST be reported as `absent` — never
+  as `present`.
+- **FR-071**: The Daily Attendance view MUST reject a requested date later than the current date
+  in the configured business timezone with `400`, rather than returning a fabricated roster for a
+  day that has not happened.
+- **FR-072**: The Mark/Edit Attendance action MUST reject a date later than today in the business
+  timezone with `400`, in addition to the existing payroll-lock (FR-009) and mandatory-document
+  rules. Attendance is a record of what occurred, not a roster of what is planned.
+- **FR-073**: Bulk attendance import (US13) MUST reject any row dated later than today with a
+  per-row validation error, using the same rule and the same message vocabulary as FR-072, so a
+  future-dated row cannot enter through the import path that the direct path refuses.
+- **FR-074**: "Today", for every rule in this amendment, MUST be computed in the configured
+  business timezone (`settings.timezone`, `Asia/Kolkata`) using the existing `zonedDateOnly`
+  helper — never by UTC truncation of an instant. At UTC+5:30 a UTC-truncated "today" is the
+  previous date for the first five and a half hours of every working day, which would refuse the
+  genuinely current date as if it were in the future.
+
+### Additional Edge Cases
+
+- A request made between 00:00 and 05:30 IST asks for the IST-current date, which is *tomorrow* in
+  UTC. FR-074 makes this accepted; a UTC comparison would refuse it.
+- An employee who punched in on a declared holiday reads `present`, not `holiday` — punch outranks
+  calendar. This is `statusForDay`'s existing documented ordering and MUST be preserved unchanged.
+- An admin who explicitly marked an employee absent on a day they later punched keeps `absent`:
+  FR-070's override precedence is what makes the Mark action meaningful.
+- Today itself is never refused, at any hour, however few employees have punched. A working day in
+  progress legitimately shows most of the roster as `absent` until they punch in.
+
+### Additional Success Criteria
+
+- **SC-A05**: For a past date on which no employee punched, every active employee reports
+  `absent`, `weekly_off`, `holiday`, or `on_leave` as the calendar dictates, and **no** employee
+  reports `present`.
+- **SC-A06**: `GET /hr/attendance?date=<tomorrow>` and `POST /hr/attendance` with tomorrow's date
+  both return `400`; the same two calls with today's date succeed.
+- **SC-A07**: The status the admin Daily Register reports for an employee-day equals the status
+  that employee's own attendance history reports for the same day, for every status value.

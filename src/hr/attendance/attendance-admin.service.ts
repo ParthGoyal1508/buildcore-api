@@ -22,8 +22,12 @@ import { withRlsContext } from '../../common/prisma/rls-context';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
+import { zonedDateOnly } from '../leave/leave-days';
 import { isPayrollLocked } from '../punch/payroll-lock';
-import { AttendanceHistoryService } from '../punch/attendance-history.service';
+import {
+  AttendanceHistoryService,
+  type AttendanceStatus,
+} from '../punch/attendance-history.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
 import {
   dayCompliance,
@@ -45,6 +49,15 @@ export interface DailyAttendanceRow {
   siteId: string;
   inTime: string | null;
   outTime: string | null;
+  /**
+   * The status to display: the admin's override where one was set, otherwise the
+   * status derived from punches, leave and the site calendar (FR-069, FR-070).
+   *
+   * Sent derived rather than left to the client. When this field did not exist the
+   * web fell back to `present` for every row without an override, which is almost
+   * every row — so an employee who had not punched at all read as Present.
+   */
+  status: AttendanceStatus;
   statusOverride: string | null;
   adminEdited: boolean;
   remarks: string | null;
@@ -79,12 +92,45 @@ export class AttendanceAdminService {
     this.hrPayroll = configService.get<HrPayrollConfig>('hrPayroll');
   }
 
+  /**
+   * Whether a date has not happened yet (FR-071, FR-072, FR-073).
+   *
+   * Attendance is a record of what occurred, not a roster of what is planned. The
+   * daily view previously answered for any date it was handed, returning a row per
+   * active employee — which, with the client's old `present` fallback, rendered a
+   * fully-staffed working day for a date in the future.
+   *
+   * Public because the bulk import (FR-073) must apply the same rule per row while
+   * reporting it as a row error rather than as a rejected request, and it must be
+   * the same rule — an import path that accepted what the direct path refuses
+   * would make the refusal decorative.
+   *
+   * "Today" is the business timezone's today, never `toISOString()`'s (FR-074). At
+   * UTC+5:30 a UTC-truncated comparison calls the genuinely current date "future"
+   * for the first five and a half hours of every working day — refusing an admin
+   * marking early-shift attendance at 07:00 IST. Both sides are `YYYY-MM-DD`, so a
+   * string comparison is the date comparison.
+   */
+  isFutureDate(date: string): boolean {
+    return date > zonedDateOnly(new Date(), this.timeZone);
+  }
+
+  /** FR-071 / FR-072 as a rejection; see `isFutureDate` for the rule itself. */
+  private assertNotFuture(date: string): void {
+    if (this.isFutureDate(date)) {
+      throw new BadRequestException(
+        'That date is in the future. Attendance can only be viewed or recorded up to today.',
+      );
+    }
+  }
+
   /** Attendance for one date, optionally narrowed to a site. */
   async daily(
     caller: Caller,
     companyId: string,
     query: DailyAttendanceQueryDto,
   ): Promise<DailyAttendanceRow[]> {
+    this.assertNotFuture(query.date);
     const date = new Date(`${query.date}T00:00:00.000Z`);
 
     const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -123,6 +169,16 @@ export class AttendanceAdminService {
       byEmployee.set(p.employeeId, list);
     }
 
+    // The same rule the employee's own history screen and payroll read, applied
+    // here rather than reimplemented (FR-069).
+    const statuses = await this.attendanceHistory.statusesForDate(
+      caller,
+      companyId,
+      employees,
+      query.date,
+      (employeeId) => (byEmployee.get(employeeId)?.length ?? 0) > 0,
+    );
+
     return employees.map((e) => {
       const rows = byEmployee.get(e.id) ?? [];
       const inPunch = rows.find((r) => r.type === PunchType.in);
@@ -134,6 +190,12 @@ export class AttendanceAdminService {
         siteId: e.siteId,
         inTime: this.timeOf(inPunch?.capturedAt),
         outTime: this.timeOf(outPunch?.capturedAt),
+        // An explicit override outranks the derivation: an admin who marked
+        // someone absent on a day a punch exists for meant it (FR-070).
+        status:
+          (inPunch?.statusOverride as AttendanceStatus | undefined) ??
+          statuses.get(e.id) ??
+          'absent',
         statusOverride: inPunch?.statusOverride ?? null,
         adminEdited: rows.some((r) => r.adminEdited),
         remarks: inPunch?.remarks ?? outPunch?.remarks ?? null,
@@ -173,6 +235,8 @@ export class AttendanceAdminService {
       }),
     );
     if (!employee) throw new NotFoundException('Employee not found');
+
+    this.assertNotFuture(dto.date);
 
     const date = new Date(`${dto.date}T00:00:00.000Z`);
     const lockDay = await this.companies.getPayrollLockDay(employee.companyId);
@@ -313,7 +377,12 @@ export class AttendanceAdminService {
     const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findMany({
         where: { companyId },
-        select: { id: true, employeeCode: true, firstName: true, lastName: true },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+        },
       }),
     );
     const byId = new Map(employees.map((e) => [e.id, e]));
@@ -373,8 +442,7 @@ export class AttendanceAdminService {
       }),
     );
 
-    const threshold =
-      this.hrPayroll.shiftCompliance.repeatLateComerThreshold;
+    const threshold = this.hrPayroll.shiftCompliance.repeatLateComerThreshold;
     const rows = [];
 
     for (const employee of employees) {
@@ -518,9 +586,17 @@ export class AttendanceAdminService {
     });
   }
 
-  private snapshot(rows: { type: PunchType; capturedAt: Date; statusOverride: string | null }[]) {
+  private snapshot(
+    rows: {
+      type: PunchType;
+      capturedAt: Date;
+      statusOverride: string | null;
+    }[],
+  ) {
     return {
-      inTime: this.timeOf(rows.find((r) => r.type === PunchType.in)?.capturedAt),
+      inTime: this.timeOf(
+        rows.find((r) => r.type === PunchType.in)?.capturedAt,
+      ),
       outTime: this.timeOf(
         rows.find((r) => r.type === PunchType.out)?.capturedAt,
       ),
