@@ -14,8 +14,19 @@
  * Deliberately NOT a replacement for `prisma/seed.ts`: that one is what CI and a
  * first-run developer get, and keeping it small keeps it fast and predictable.
  */
+import 'dotenv/config';
+import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import { dirname, resolve as resolvePath } from 'path';
+
 import { PrismaClient, Prisma } from '@prisma/client';
 import { hash } from 'argon2';
+import * as PDFDocument from 'pdfkit';
+
+import {
+  encryptBlob,
+  parseEncryptionKey,
+} from '../src/common/storage/blob-cipher';
 
 const prisma = new PrismaClient();
 
@@ -80,6 +91,41 @@ const rand = () =>
   (seedState = (seedState * 1103515245 + 12345) % 2147483648) / 2147483648;
 const pick = <T>(xs: readonly T[]) => xs[Math.floor(rand() * xs.length)];
 const money = (n: number) => new Prisma.Decimal(n);
+
+/**
+ * Renders a letter and writes it into the local blob store, returning its reference.
+ *
+ * The Letters register's only action is Download, so seeding letter rows whose blob
+ * does not exist would give every row a button that 404s — worse than no rows at all.
+ * Going through the same cipher, namespace and reference shape `LocalStorageAdapter`
+ * uses costs a dozen lines and makes the screen genuinely work.
+ */
+async function writeLetterPdf(title: string, body: string): Promise<string> {
+  const pdf: Buffer = await new Promise((done, fail) => {
+    const doc = new PDFDocument({ margin: 56 });
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    doc.on('end', () => done(Buffer.concat(chunks)));
+    doc.on('error', fail);
+    doc.fontSize(14).text(title, { align: 'center' }).moveDown(1.5);
+    doc.fontSize(11).text(body, { align: 'left' });
+    doc.end();
+  });
+
+  const ref = `recruitment-letter/${randomUUID()}`;
+  const target = resolvePath(
+    process.cwd(),
+    process.env.STORAGE_LOCAL_PATH || 'var/storage',
+    ref,
+  );
+  await fs.mkdir(dirname(target), { recursive: true });
+  await fs.writeFile(
+    target,
+    encryptBlob(pdf, parseEncryptionKey(process.env.STORAGE_ENCRYPTION_KEY)),
+    { mode: 0o600 },
+  );
+  return ref;
+}
 
 interface StaffSpec {
   first: string;
@@ -821,6 +867,160 @@ const SPARE_PARTS: {
   },
 ];
 
+/**
+ * Employee document types and joining-kit items.
+ *
+ * Every document type is seeded NON-mandatory on purpose. `assertMandatoryDocsComplete`
+ * blocks attendance marking and punching for any employee missing a mandatory
+ * document, so declaring one here without also uploading a file for all nineteen
+ * employees would lock the whole demo out of attendance — and the file would have to
+ * be fabricated, leaving a download that 404s. The rule is exercised by the code, not
+ * by the fixture.
+ */
+const DOCUMENT_TYPES: {
+  code: string;
+  name: string;
+  expiry?: boolean;
+  number?: boolean;
+}[] = [
+  { code: 'AADHAAR', name: 'Aadhaar Card', number: true },
+  { code: 'PAN', name: 'PAN Card', number: true },
+  { code: 'BANK', name: 'Cancelled Cheque / Passbook' },
+  { code: 'EDU', name: 'Educational Certificates' },
+  { code: 'EXP', name: 'Previous Experience Letter' },
+  { code: 'MED', name: 'Medical Fitness Certificate', expiry: true },
+];
+
+const KIT_ITEMS: { name: string; qty: number; recoverable: boolean }[] = [
+  { name: 'Safety Helmet', qty: 1, recoverable: false },
+  { name: 'Safety Shoes', qty: 1, recoverable: false },
+  { name: 'Photo ID Card', qty: 1, recoverable: true },
+  { name: 'Laptop', qty: 1, recoverable: true },
+  { name: 'Company SIM', qty: 1, recoverable: true },
+];
+
+/** The canonical path a candidate walks; terminal stages branch off it. */
+const HIRING_PATH = [
+  'applied',
+  'shortlisted',
+  'interviewing',
+  'selected',
+  'offer_issued',
+  'offer_accepted',
+  'joined',
+] as const;
+
+const CAND_FIRST = [
+  'Naveen',
+  'Pooja',
+  'Arjun',
+  'Divya',
+  'Manoj',
+  'Shalini',
+  'Farhan',
+  'Ritika',
+  'Karthik',
+  'Neha',
+  'Yashwant',
+  'Ipsita',
+  'Rahul',
+  'Tanvi',
+  'Sandeep',
+  'Meera',
+  'Gaurav',
+  'Swati',
+  'Imran',
+  'Lakshmi',
+];
+const CAND_LAST = [
+  'Ravindran',
+  'Bhatt',
+  'Sethi',
+  'Krishnan',
+  'Pillai',
+  'Rao',
+  'Qureshi',
+  'Jain',
+  'Subramanian',
+  'Wagh',
+  'Patil',
+  'Mohanty',
+  'Bansal',
+  'Kulkarni',
+  'Nambiar',
+];
+/** Distinct enough across sixty indices that no company repeats a name. */
+const candidateName = (i: number) =>
+  `${CAND_FIRST[i % CAND_FIRST.length]} ${
+    CAND_LAST[(i * 7 + 3) % CAND_LAST.length]
+  }`;
+
+const CAND_EMPLOYERS = [
+  'Sobha Ltd',
+  'Puravankara',
+  'Brigade Group',
+  'Godrej Properties',
+  'L&T Construction',
+  'Prestige Group',
+  'Shapoorji Pallonji',
+  'Embassy Group',
+  'Salarpuria Sattva',
+  'Century Real Estate',
+  'Mantri Developers',
+  null,
+];
+
+/**
+ * The pipeline as stage populations rather than a list of people.
+ *
+ * The funnel report divides each stage's *current* population by the one before it,
+ * so a snapshot that does not taper reports conversions above 100% — which reads as a
+ * broken report rather than as unusual data. Declaring the shape here makes the taper
+ * explicit and checkable: 7 applied, 5 shortlisted, 4 interviewing, 3 selected, 2
+ * offered, 2 accepted, 2 joined, with 3 rejections and a no-show off to the side.
+ *
+ * `via` is how far down `HIRING_PATH` a terminal candidate got before dropping out.
+ * Without it a rejection carries no history and the funnel cannot say where in the
+ * process people are being lost, which is the only question it exists to answer.
+ */
+const PIPELINE: { req: number; stage: string; via?: number; count: number }[] =
+  [
+    { req: 0, stage: 'applied', count: 3 },
+    { req: 1, stage: 'applied', count: 2 },
+    { req: 4, stage: 'applied', count: 2 },
+    { req: 0, stage: 'shortlisted', count: 3 },
+    { req: 1, stage: 'shortlisted', count: 2 },
+    { req: 0, stage: 'interviewing', count: 2 },
+    { req: 1, stage: 'interviewing', count: 2 },
+    { req: 0, stage: 'selected', count: 2 },
+    { req: 1, stage: 'selected', count: 1 },
+    { req: 0, stage: 'offer_issued', count: 1 },
+    { req: 1, stage: 'offer_issued', count: 1 },
+    { req: 0, stage: 'offer_accepted', count: 1 },
+    { req: 1, stage: 'offer_accepted', count: 1 },
+    { req: 0, stage: 'joined', count: 1 },
+    { req: 3, stage: 'joined', count: 1 },
+    { req: 0, stage: 'rejected', via: 2, count: 2 },
+    { req: 1, stage: 'rejected', via: 1, count: 1 },
+    { req: 1, stage: 'no_show', via: 5, count: 1 },
+  ];
+
+const CAND_SOURCES = [
+  'portal',
+  'referral',
+  'agency',
+  'portal',
+  'walk_in',
+  'portal',
+  'internal',
+] as const;
+
+const REJECTION_REASONS = [
+  'Expectation well outside the band budgeted for the role.',
+  'Depth on RCC detailing was not there for the level we are hiring at.',
+  'Withdrew after the second round citing a counter-offer.',
+];
+
 async function main() {
   assertLocal();
   console.log('Seeding a production-shaped demo dataset…\n');
@@ -873,6 +1073,12 @@ async function main() {
     maintenance: 0,
     serviceBills: 0,
     hireBills: 0,
+    candidates: 0,
+    interviews: 0,
+    offers: 0,
+    onboarding: 0,
+    letters: 0,
+    resignations: 0,
   };
   let firstCompanyId: string | null = null;
 
@@ -2295,6 +2501,603 @@ async function main() {
       });
       totals.workers++;
     }
+    // ── Recruitment: requisitions, pipeline, offers, onboarding, exits ───────
+    const docTypes = [];
+    for (const [di, dt] of DOCUMENT_TYPES.entries()) {
+      docTypes.push(
+        await prisma.documentType.create({
+          data: {
+            companyId: company.id,
+            code: dt.code,
+            name: dt.name,
+            isMandatory: false,
+            hasExpiry: dt.expiry ?? false,
+            needsNumber: dt.number ?? false,
+            sortOrder: di + 1,
+          },
+        }),
+      );
+    }
+
+    const kitItems = [];
+    for (const k of KIT_ITEMS) {
+      kitItems.push(
+        await prisma.kitItem.create({
+          data: {
+            companyId: company.id,
+            name: k.name,
+            defaultQuantity: k.qty,
+            issuedByDefault: true,
+            isRecoverableAtExit: k.recoverable,
+          },
+        }),
+      );
+    }
+
+    // One active template per type. Generation refuses outright without one, so a
+    // demo missing them has a Letters screen that can only produce an error.
+    const templates = new Map<string, string>();
+    for (const t of [
+      {
+        type: 'offer' as const,
+        name: 'Standard Offer Letter',
+        body:
+          'Dear {{candidateName}},\n\n' +
+          'We are pleased to offer you the position of {{designation}} in the {{department}} department at {{companyName}}.\n\n' +
+          'Your annual cost to company will be {{offeredCtc}}. Your joining date is {{joiningDate}}. ' +
+          'You will serve a probation of {{probationMonths}} months, after which your notice period will be {{noticePeriodDays}} days.\n\n' +
+          'Please sign and return a copy of this letter to confirm your acceptance.\n\n' +
+          'Issued on {{issueDate}}.',
+      },
+      {
+        type: 'appointment' as const,
+        name: 'Appointment Letter',
+        body:
+          'Dear {{employeeName}},\n\n' +
+          'Further to your acceptance of our offer, we confirm your appointment as {{designation}} in the {{department}} department at {{companyName}} with effect from {{dateOfJoining}}.\n\n' +
+          'Your employee code is {{employeeCode}} and you will report to {{reportingManager}}.\n\n' +
+          'Issued on {{issueDate}}.',
+      },
+      {
+        type: 'relieving' as const,
+        name: 'Relieving Letter',
+        body:
+          'This is to certify that {{employeeName}} ({{employeeCode}}) was employed with {{companyName}} as {{designation}} from {{dateOfJoining}} to {{lastWorkingDay}}.\n\n' +
+          'They have been relieved of their duties with effect from the close of business on {{lastWorkingDay}}. We wish them well.\n\n' +
+          'Issued on {{issueDate}}.',
+      },
+    ]) {
+      const row = await prisma.letterTemplate.create({
+        data: {
+          companyId: company.id,
+          letterType: t.type,
+          name: t.name,
+          bodyTemplate: t.body,
+          isActive: true,
+        },
+      });
+      templates.set(t.type, row.id);
+    }
+
+    const reqPlan: {
+      desig: string;
+      dept: string;
+      count: number;
+      filled: number;
+      type: 'permanent' | 'contract' | 'walk_in';
+      status: 'open' | 'pending_approval' | 'closed' | 'rejected';
+      min: number;
+      max: number;
+      days: number;
+      justification: string;
+      rejection?: string;
+    }[] = [
+      {
+        desig: 'Site Engineer',
+        dept: 'Engineering',
+        count: 2,
+        filled: 1,
+        type: 'permanent',
+        status: 'open',
+        min: 600000,
+        max: 900000,
+        days: 58,
+        justification:
+          'Two additional engineers for the Phase II structural works.',
+      },
+      {
+        desig: 'Accountant',
+        dept: 'Accounts & Finance',
+        count: 1,
+        filled: 0,
+        type: 'permanent',
+        status: 'open',
+        min: 500000,
+        max: 750000,
+        days: 41,
+        justification: 'Site billing volume has outgrown the current desk.',
+      },
+      {
+        desig: 'Store Keeper',
+        dept: 'Stores & Procurement',
+        count: 1,
+        filled: 0,
+        type: 'contract',
+        status: 'pending_approval',
+        min: 300000,
+        max: 420000,
+        days: 12,
+        justification: 'Second store to be opened at the new site.',
+      },
+      {
+        desig: 'Project Manager',
+        dept: 'Projects',
+        count: 1,
+        filled: 1,
+        type: 'permanent',
+        status: 'closed',
+        min: 1600000,
+        max: 2200000,
+        days: 96,
+        justification:
+          'Replacement for the outgoing manager on the residential project.',
+      },
+      {
+        desig: 'Safety Officer',
+        dept: 'Safety',
+        count: 2,
+        filled: 0,
+        type: 'permanent',
+        status: 'rejected',
+        min: 450000,
+        max: 620000,
+        days: 34,
+        justification: 'Two safety officers requested ahead of the audit.',
+        rejection: 'One position approved for next quarter; re-raise then.',
+      },
+    ];
+
+    const requisitions = [];
+    for (const [ri, r] of reqPlan.entries()) {
+      const decided =
+        r.status === 'open' || r.status === 'closed' || r.status === 'rejected';
+      requisitions.push(
+        await prisma.requisition.create({
+          data: {
+            companyId: company.id,
+            requisitionCode: `${spec.shortCode}/REQ/26-27/${String(11 + ri)}`,
+            departmentId: depts.get(r.dept)!,
+            designationId: desigs.get(r.desig)!,
+            positionCount: r.count,
+            filledPositions: r.filled,
+            employmentType: r.type,
+            projectId: projects[ri % projects.length]?.id ?? null,
+            siteId: storeSites[ri % storeSites.length].id,
+            targetJoiningDate: daysAgo(r.days - 45),
+            budgetedCtcMin: money(r.min),
+            budgetedCtcMax: money(r.max),
+            justification: r.justification,
+            status: r.status,
+            approvedBy: decided ? employees[0].userId : null,
+            approvedAt: decided ? at(daysAgo(r.days - 3), 10, 20) : null,
+            rejectionReason: r.rejection ?? null,
+            createdBy: employees[4 % employees.length].userId,
+          },
+        }),
+      );
+    }
+
+    // Two joined candidates become two of the people already on the payroll: a hire
+    // that produced nobody is not a hire, and inventing a separate employee for them
+    // would leave the joining report disagreeing with the employee register.
+    const hires = [
+      employees[employees.length - 1],
+      employees[employees.length - 2],
+    ];
+    let hireIdx = 0;
+    const nameOffset = firstCompanyId === company.id ? 0 : 29;
+
+    // The declared populations, flattened into people.
+    const plan = PIPELINE.flatMap((entry) =>
+      Array.from({ length: entry.count }, () => entry),
+    );
+
+    for (const [ci, c] of plan.entries()) {
+      const terminal = c.stage === 'rejected' || c.stage === 'no_show';
+      const reached = terminal
+        ? c.via!
+        : HIRING_PATH.indexOf(c.stage as (typeof HIRING_PATH)[number]);
+      const fullName = candidateName(nameOffset + ci);
+      const joined = c.stage === 'joined';
+      const employee = joined ? hires[hireIdx++] : null;
+      const band = reqPlan[c.req];
+      // Asking somewhere between the band's floor and a little over its ceiling —
+      // which is what makes the one candidate priced out of it worth noticing.
+      const expected =
+        Math.round((band.min * (0.95 + rand() * 0.45)) / 1000) * 1000;
+      const currentCtc =
+        Math.round((expected * (0.72 + rand() * 0.14)) / 1000) * 1000;
+      const employer = CAND_EMPLOYERS[(ci * 5 + c.req) % CAND_EMPLOYERS.length];
+      const source = CAND_SOURCES[ci % CAND_SOURCES.length];
+      const reason = terminal
+        ? c.stage === 'no_show'
+          ? 'Did not report on the agreed joining date and stopped responding.'
+          : REJECTION_REASONS[ci % REJECTION_REASONS.length]
+        : undefined;
+      // Later stages were entered longer ago, so the funnel has a time axis.
+      const appliedDaysAgo = Math.max(12, 74 - reached * 8 - (ci % 5));
+
+      const candidate = await prisma.candidate.create({
+        data: {
+          companyId: company.id,
+          requisitionId: requisitions[c.req].id,
+          fullName,
+          phone: `9${Math.floor(700000000 + rand() * 299999999)}`,
+          email: `${fullName
+            .toLowerCase()
+            .replace(/[^a-z]+/g, '.')}@example.com`,
+          totalExperienceYears: money(Math.round((1.5 + rand() * 9) * 10) / 10),
+          currentEmployer: employer,
+          currentCtc: employer ? money(currentCtc) : null,
+          expectedCtc: money(expected),
+          source,
+          referredByEmployeeId:
+            source === 'referral' ? employees[ci % employees.length].id : null,
+          stage: c.stage as never,
+          employeeId: employee?.id ?? null,
+          rejectionReason: c.stage === 'rejected' ? reason ?? null : null,
+          noShowReason: c.stage === 'no_show' ? reason ?? null : null,
+          createdBy: employees[4 % employees.length].userId,
+        },
+      });
+      totals.candidates++;
+
+      // Every step walked, so the funnel report can say where people were lost
+      // rather than only where they now sit.
+      let previous: string | null = null;
+      for (let step = 0; step <= reached; step++) {
+        await prisma.candidateStageHistory.create({
+          data: {
+            companyId: company.id,
+            candidateId: candidate.id,
+            fromStage: previous as never,
+            toStage: HIRING_PATH[step] as never,
+            actorId: employees[0].userId,
+            occurredAt: at(
+              daysAgo(Math.max(1, appliedDaysAgo - step * 5)),
+              12,
+              0,
+            ),
+          },
+        });
+        previous = HIRING_PATH[step];
+      }
+      if (terminal) {
+        await prisma.candidateStageHistory.create({
+          data: {
+            companyId: company.id,
+            candidateId: candidate.id,
+            fromStage: previous as never,
+            toStage: c.stage as never,
+            actorId: employees[0].userId,
+            occurredAt: at(
+              daysAgo(Math.max(1, appliedDaysAgo - (reached + 1) * 5)),
+              15,
+              30,
+            ),
+            remarks: reason ?? null,
+          },
+        });
+      }
+
+      // Interviews from the interviewing stage onward. The round still in progress is
+      // scheduled rather than fed a verdict — an interview with feedback attached that
+      // has not happened yet is the sort of thing that makes a demo unbelievable.
+      const interviewingIdx = HIRING_PATH.indexOf('interviewing');
+      if (reached >= interviewingIdx) {
+        const past = reached > interviewingIdx || terminal;
+        const rounds: {
+          type: 'technical' | 'hr' | 'managerial';
+          mode: 'in_person' | 'video' | 'phone';
+          done: boolean;
+          outcome: 'recommend' | 'hold' | 'reject';
+          score: number;
+          comments: string;
+        }[] = [
+          {
+            type: 'technical',
+            mode: 'in_person',
+            done: true,
+            outcome: c.stage === 'rejected' ? 'reject' : 'recommend',
+            score: c.stage === 'rejected' ? 4 : 8,
+            comments:
+              c.stage === 'rejected'
+                ? 'Strong on paper but the depth on RCC detailing was not there.'
+                : 'Solid on site execution and quantity take-off. Comfortable with the drawings.',
+          },
+          {
+            type: 'managerial',
+            mode: 'video',
+            done: past,
+            outcome: 'recommend',
+            score: 7,
+            comments: 'Communicates well with the site team; happy to proceed.',
+          },
+        ];
+
+        for (const [ri2, round] of rounds.entries()) {
+          if (!round.done && ri2 > 0 && terminal) continue;
+          const when = at(
+            daysAgo(Math.max(1, appliedDaysAgo - 12 - ri2 * 4)),
+            11,
+            0,
+          );
+          const interview = await prisma.interview.create({
+            data: {
+              companyId: company.id,
+              candidateId: candidate.id,
+              roundNumber: ri2 + 1,
+              roundType: round.type,
+              scheduledAt: when,
+              mode: round.mode,
+              location:
+                round.mode === 'in_person'
+                  ? `${spec.city} site office`
+                  : 'Google Meet',
+              status: round.done ? 'completed' : 'scheduled',
+              createdBy: employees[0].userId,
+            },
+          });
+          const panel = [employees[0], employees[1 % employees.length]];
+          for (const member of panel) {
+            await prisma.interviewInterviewer.create({
+              data: {
+                companyId: company.id,
+                interviewId: interview.id,
+                employeeId: member.id,
+              },
+            });
+          }
+          if (round.done) {
+            await prisma.interviewFeedback.create({
+              data: {
+                companyId: company.id,
+                interviewId: interview.id,
+                interviewerEmployeeId: panel[0].id,
+                outcome: round.outcome,
+                score: round.score,
+                comments: round.comments,
+              },
+            });
+          }
+          totals.interviews++;
+        }
+      }
+
+      // An offer exists from the moment one is issued, and its letter with it.
+      const offerIdx = HIRING_PATH.indexOf('offer_issued');
+      if (reached >= offerIdx) {
+        const req = reqPlan[c.req];
+        const ctc = Math.round((req.min + req.max) / 2 / 1000) * 1000;
+        const monthly = Math.round(ctc / 12);
+        const basic = Math.round(monthly * 0.5);
+        const joiningDate = daysAgo(joined ? 20 : -14);
+        const accepted = reached >= HIRING_PATH.indexOf('offer_accepted');
+
+        const letterRef = await writeLetterPdf(
+          'OFFER LETTER',
+          `Dear ${fullName},\n\nWe are pleased to offer you the position of ${
+            req.desig
+          } in the ${req.dept} department at ${
+            spec.name
+          }.\n\nYour annual cost to company will be Rs ${ctc.toLocaleString(
+            'en-IN',
+          )}. Your joining date is ${joiningDate
+            .toISOString()
+            .slice(
+              0,
+              10,
+            )}. You will serve a probation of 6 months, after which your notice period will be 30 days.\n\nPlease sign and return a copy of this letter to confirm your acceptance.`,
+        );
+        const letter = await prisma.generatedLetter.create({
+          data: {
+            companyId: company.id,
+            letterType: 'offer',
+            candidateId: candidate.id,
+            templateId: templates.get('offer')!,
+            renderedRef: letterRef,
+            issuedBy: employees[0].userId,
+            issuedAt: at(daysAgo(Math.max(2, appliedDaysAgo - 30)), 16, 0),
+          },
+        });
+        totals.letters++;
+
+        await prisma.offer.create({
+          data: {
+            companyId: company.id,
+            candidateId: candidate.id,
+            designationId: desigs.get(req.desig)!,
+            departmentId: depts.get(req.dept)!,
+            offeredCtc: money(ctc),
+            salaryBreakup: [
+              { name: 'Basic', monthlyAmount: basic },
+              { name: 'HRA', monthlyAmount: Math.round(basic * 0.4) },
+              { name: 'Conveyance', monthlyAmount: 1600 },
+              {
+                name: 'Special Allowance',
+                monthlyAmount: monthly - basic - Math.round(basic * 0.4) - 1600,
+              },
+            ],
+            proposedJoiningDate: joiningDate,
+            confirmedJoiningDate: joined ? joiningDate : null,
+            probationMonths: 6,
+            noticePeriodDays: 30,
+            reportingManagerEmployeeId: employees[0].id,
+            outsideBudget: false,
+            status:
+              c.stage === 'no_show'
+                ? 'accepted'
+                : accepted
+                ? 'accepted'
+                : 'issued',
+            letterId: letter.id,
+            acceptedOn:
+              accepted || c.stage === 'no_show'
+                ? daysAgo(Math.max(2, appliedDaysAgo - 34))
+                : null,
+          },
+        });
+        totals.offers++;
+      }
+
+      // Joining closes the loop: an appointment letter and a checklist that is part
+      // worked through, which is what an onboarding screen is for.
+      if (joined && employee) {
+        const req = reqPlan[c.req];
+        const appointmentRef = await writeLetterPdf(
+          'APPOINTMENT LETTER',
+          `Dear ${fullName},\n\nFurther to your acceptance of our offer, we confirm your appointment as ${
+            req.desig
+          } in the ${req.dept} department at ${
+            spec.name
+          } with effect from ${daysAgo(20)
+            .toISOString()
+            .slice(0, 10)}.\n\nYour employee code is ${
+            employee.employeeCode
+          } and you will report to the Project Manager.`,
+        );
+        await prisma.generatedLetter.create({
+          data: {
+            companyId: company.id,
+            letterType: 'appointment',
+            employeeId: employee.id,
+            candidateId: candidate.id,
+            templateId: templates.get('appointment')!,
+            renderedRef: appointmentRef,
+            issuedBy: employees[0].userId,
+            issuedAt: at(daysAgo(19), 10, 0),
+          },
+        });
+        totals.letters++;
+
+        const checklist = await prisma.onboardingChecklist.create({
+          data: {
+            companyId: company.id,
+            employeeId: employee.id,
+            candidateId: candidate.id,
+            openedAt: at(daysAgo(20), 9, 30),
+          },
+        });
+        let itemNo = 0;
+        for (const dt of docTypes) {
+          itemNo++;
+          const done = itemNo <= 4;
+          await prisma.onboardingItem.create({
+            data: {
+              companyId: company.id,
+              checklistId: checklist.id,
+              itemType: 'document',
+              documentTypeId: dt.id,
+              label: dt.name,
+              status: done ? 'completed' : 'pending',
+              completedBy: done ? employees[0].userId : null,
+              completedAt: done ? at(daysAgo(18), 14, 0) : null,
+            },
+          });
+        }
+        for (const [ki, k] of kitItems.entries()) {
+          const done = ki < 3;
+          await prisma.onboardingItem.create({
+            data: {
+              companyId: company.id,
+              checklistId: checklist.id,
+              itemType: 'kit',
+              kitItemId: k.id,
+              label: k.name,
+              status: done ? 'completed' : 'pending',
+              completedBy: done ? employees[0].userId : null,
+              completedAt: done ? at(daysAgo(17), 11, 0) : null,
+            },
+          });
+        }
+        await prisma.onboardingItem.create({
+          data: {
+            companyId: company.id,
+            checklistId: checklist.id,
+            itemType: 'induction',
+            label: 'Complete induction',
+            status: 'completed',
+            completedBy: employees[0].userId,
+            completedAt: at(daysAgo(16), 15, 45),
+          },
+        });
+        totals.onboarding++;
+      }
+    }
+
+    // Exits, so the resignation register and the attrition report are not empty and
+    // the two reports can be read against each other.
+    for (const [xi, x] of [
+      {
+        emp: 3,
+        days: 26,
+        category: 'better_opportunity' as const,
+        detail: 'Offered a lead role at a larger contractor in Hyderabad.',
+        notice: 30,
+        status: 'accepted' as const,
+        waiver: 6,
+      },
+      {
+        emp: 5,
+        days: 9,
+        category: 'relocation' as const,
+        detail:
+          'Family relocating to Coimbatore at the end of the school year.',
+        notice: 60,
+        status: 'submitted' as const,
+      },
+      {
+        emp: 7,
+        days: 47,
+        category: 'personal' as const,
+        detail:
+          'Extended family commitment; later resolved and the notice was pulled back.',
+        notice: 30,
+        status: 'withdrawn' as const,
+      },
+    ].entries()) {
+      const employee = employees[x.emp % employees.length];
+      const expected = daysAgo(x.days - x.notice);
+      await prisma.resignation.create({
+        data: {
+          companyId: company.id,
+          employeeId: employee.id,
+          resignationDate: daysAgo(x.days),
+          reasonCategory: x.category,
+          reasonDetail: x.detail,
+          noticePeriodDays: x.notice,
+          expectedLastWorkingDay: expected,
+          agreedLastWorkingDay:
+            x.status === 'accepted'
+              ? daysAgo(x.days - x.notice + (x.waiver ?? 0))
+              : null,
+          noticeWaiverDays: x.status === 'accepted' ? x.waiver ?? null : null,
+          waiverReason:
+            x.status === 'accepted'
+              ? 'Handover completed early; balance of notice waived.'
+              : null,
+          status: x.status,
+          withdrawReason:
+            x.status === 'withdrawn'
+              ? 'Personal situation resolved; employee asked to stay on.'
+              : null,
+          createdBy: employee.userId,
+        },
+      });
+      totals.resignations++;
+      void xi;
+    }
+
     console.log(
       `    ${LABOUR_NAMES.length} labour workers, ${ASSETS.length} assets, ${ITEMS.length} items, ${EQUIPMENT.length} machines`,
     );
@@ -2308,6 +3111,9 @@ async function main() {
   );
   console.log(
     `  Plant: ${totals.logbook} logbook entries, ${totals.fuel} fuel entries, ${totals.maintenance} maintenance jobs, ${totals.serviceBills} service bills, ${totals.hireBills} hire bills`,
+  );
+  console.log(
+    `  Recruitment: ${totals.candidates} candidates, ${totals.interviews} interviews, ${totals.offers} offers, ${totals.onboarding} onboarding checklists, ${totals.letters} letters, ${totals.resignations} resignations`,
   );
   console.log(
     '\n  Every login is  <first>.<last>@<company-domain>  with password  secret42',
