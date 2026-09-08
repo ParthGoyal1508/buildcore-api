@@ -103,6 +103,9 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     // Exported for `payroll`, whose F&F flow deactivates the employee once the
     // settlement run is processed (FR-034).
     ExitService,
+    // Exported for 004's Biometric Re-enrolment Requests notification, which lists
+    // pending requests through the same service that owns them (Principle I).
+    FaceEnrolmentService,
   ],
 })
 export class HrModule {}

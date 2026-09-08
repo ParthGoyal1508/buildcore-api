@@ -392,6 +392,144 @@ export class EmployeesService {
   }
 
   /**
+   * Active headcount for one company — the Dashboard's Total Employees KPI and the
+   * Group Dashboard's per-company Headcount (004 FR-005, FR-015). A count, not a
+   * list: the dashboard needs the number, not the PII.
+   */
+  async countActiveByCompany(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<number> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.count({ where: { companyId, isActive: true } }),
+    );
+  }
+
+  /**
+   * Employee code and display name for a set of employee ids, keyed by id — the
+   * Dashboard's Recent Leaves table resolves the names of the applicants it lists
+   * (004 FR-006) without receiving any of the PII this service otherwise masks.
+   */
+  async namesByIds(
+    ctx: RlsContext,
+    ids: string[],
+  ): Promise<Map<string, { employeeCode: string; name: string }>> {
+    if (ids.length === 0) return new Map();
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.findMany({
+        where: { id: { in: ids } },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+        },
+      }),
+    );
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          employeeCode: row.employeeCode,
+          name:
+            [row.firstName, row.lastName].filter(Boolean).join(' ') ||
+            row.employeeCode,
+        },
+      ]),
+    );
+  }
+
+  /**
+   * Active employees of one company with the few non-PII fields the Employee report
+   * lists (004 US7, FR-019) — code, name, department/designation ids, joining date.
+   * Ordered by code. No masked-and-revealed PII: a report is a bulk read.
+   */
+  async listForReport(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<
+    {
+      employeeCode: string;
+      name: string;
+      departmentId: string | null;
+      designationId: string | null;
+      dateOfJoining: Date | null;
+    }[]
+  > {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.findMany({
+        where: { companyId, isActive: true },
+        select: {
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+          departmentId: true,
+          designationId: true,
+          dateOfJoining: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+      }),
+    );
+    return rows.map((row) => ({
+      employeeCode: row.employeeCode,
+      name:
+        [row.firstName, row.lastName].filter(Boolean).join(' ') ||
+        row.employeeCode,
+      departmentId: row.departmentId,
+      designationId: row.designationId,
+      dateOfJoining: row.dateOfJoining,
+    }));
+  }
+
+  /**
+   * Cross-company employee search backing the Group Dashboard's search box (004
+   * FR-016). Matches the term against name and employee code across every company
+   * the caller's RLS context can see — a Super Admin's `{ isSuperAdmin: true }`
+   * spans all of them, an ordinary caller only their own.
+   *
+   * Returns name, code and companyId only — the same no-PII posture as
+   * `listActiveBySiteIds`. Aadhaar is stored encrypted, so it is not searchable by
+   * substring here; the box searches the two plaintext identifiers a user actually
+   * types (004 research-aligned).
+   */
+  async searchByTerm(
+    ctx: RlsContext,
+    term: string,
+  ): Promise<
+    { id: string; employeeCode: string; name: string; companyId: string }[]
+  > {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.findMany({
+        where: {
+          isActive: true,
+          OR: [
+            { employeeCode: { contains: term, mode: 'insensitive' } },
+            { firstName: { contains: term, mode: 'insensitive' } },
+            { lastName: { contains: term, mode: 'insensitive' } },
+          ],
+        },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+          companyId: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+        take: 50,
+      }),
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      employeeCode: row.employeeCode,
+      name:
+        [row.firstName, row.lastName].filter(Boolean).join(' ') ||
+        row.employeeCode,
+      companyId: row.companyId,
+    }));
+  }
+
+  /**
    * Active employees posted to any of a set of sites — the "Employees" tab on 008's
    * project detail (`GET /projects/:id`).
    *

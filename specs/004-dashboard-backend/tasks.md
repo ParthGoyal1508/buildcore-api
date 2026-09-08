@@ -16,6 +16,48 @@ requirement — same posture as features 001–003.
 **Organization**: Tasks are grouped by user story (from spec.md) to enable independent
 implementation and testing of each story.
 
+---
+
+## Implementation status (2026-09-04)
+
+Built on branch `004-dashboard-backend`. All seven user stories (US1–US7) are implemented in
+`src/dashboard/`: the three multi-provider registries (widgets, notifications, reports), the
+generic resolution engine, real providers for the 001–003-backed items, placeholder providers for
+every not-yet-built module, the Activity Log feed + CSV export, the notifications centre, and the
+reports + PDF/Excel export pipeline with an `ExportJob` table. Build, type-check and lint are clean;
+unit tests cover the resolution engine and the module-bucket mapping.
+
+**Deviations from the task list (agreed trade-offs, not gaps):**
+
+1. **Async export runs in-process, not on `@nestjs/bullmq` + Redis** (affects T001 bullmq, T002
+   Redis service, T062 BullMQ worker). The `ExportJob` table, the sync/async threshold decision,
+   the `202 + exportJobId` contract, the poll endpoint and the "Export Ready" notification are all
+   built as specified — only the worker's backing store differs: a large export is rendered on an
+   in-process async task rather than a queued job. This matches the synchronous-infrastructure
+   posture features 011 and 013 took and keeps every developer off a mandatory Redis container
+   (the concern the original module comment raised). `exceljs`/`pdfkit` were already installed, so
+   no dependency change was needed.
+2. **Now-built modules' widgets stay placeholders** per the frozen contract. The spec/contract
+   enumerate Active Projects, Total Machinery, Contract Value, Materials/Fuel/Hire, and the site
+   machinery/fuel/material widgets as `unavailable`. Several of those modules (006/008/009 etc.)
+   have since been built, but per research.md §2 each is to be upgraded from placeholder to real by
+   *its own* module's future task — this feature keeps the enumerated placeholders so the response
+   contract and its tests stay stable. The Pending Approvals KPI is the one exception the contract
+   already carved out (T022a): it sums pending leave + open maintenance (006) + submitted
+   reimbursements (005), which are now wired for real.
+3. **US8 (Department Dashboard, plan Amendment 2026-09-01) is deferred.** US9 (the reminders
+   engine) was already built earlier; US8's department-scoped widgets are not part of this pass.
+4. **Small exported read methods were added to source services** (Principle I): `EmployeesService`
+   gained `countActiveByCompany` / `namesByIds` / `listForReport` / `searchByTerm`;
+   `CompaniesService` gained `listAccessible`; `PlantModule` now exports `MaintenanceService`;
+   `PayrollModule` now exports `ReimbursementsAdminService`; `HrModule` now exports
+   `FaceEnrolmentService`. No source-module schema changed.
+5. **Tests are unit-level, not e2e.** `test/dashboard.e2e-spec.ts` (T013–T056) needs a live DB and
+   is not part of this pass; the resolution engine and module-bucket mapping have focused unit
+   tests instead, matching the 011/013 precedent.
+
+---
+
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies)

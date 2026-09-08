@@ -364,6 +364,19 @@ const config: Config = {
       0,
     ),
   },
+  dashboard: {
+    // 004 research.md §5. A display cadence — every poll still computes live.
+    widgetRefreshIntervalSeconds: numberFromEnv(
+      process.env.DASHBOARD_WIDGET_REFRESH_INTERVAL_SECONDS,
+      30,
+    ),
+    // 004 research.md §6. Above this row count an export is rendered off the request
+    // path; below it the file returns synchronously.
+    asyncExportRowThreshold: numberFromEnv(
+      process.env.DASHBOARD_ASYNC_EXPORT_ROW_THRESHOLD,
+      5000,
+    ),
+  },
 };
 
 export default (): Config => config;

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { CandidateStage, OfferStatus, ResignationStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -24,7 +24,29 @@ const FUNNEL_ORDER: CandidateStage[] = [
   CandidateStage.joined,
 ];
 
-const parse = (v: string) => new Date(`${v.slice(0, 10)}T00:00:00.000Z`);
+// No `.slice(0, 10)` any more: the query DTO guarantees `YYYY-MM-DD`, and slicing
+// was what turned a missing date into `undefined.slice` and a 500.
+const parse = (v: string) => new Date(`${v}T00:00:00.000Z`);
+
+/**
+ * The period a report covers, refusing a range that runs backwards.
+ *
+ * An inverted range matches no rows, so the report renders as "nobody joined in this
+ * period" — indistinguishable from a genuinely quiet quarter, and nothing on screen
+ * gives the reader a reason to re-check the dates they typed. Saying so is the only
+ * way they find out.
+ */
+function periodOf(query: { from: string; to: string }): {
+  from: Date;
+  to: Date;
+} {
+  const from = parse(query.from);
+  const to = parse(query.to);
+  if (to.getTime() < from.getTime()) {
+    throw new BadRequestException('`to` cannot be earlier than `from`.');
+  }
+  return { from, to };
+}
 
 @Injectable()
 export class RecruitmentReportsService {
@@ -42,8 +64,7 @@ export class RecruitmentReportsService {
       projectId?: string;
     },
   ) {
-    const from = parse(query.from);
-    const to = parse(query.to);
+    const { from, to } = periodOf(query);
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -185,8 +206,7 @@ export class RecruitmentReportsService {
       headcount?: number;
     },
   ) {
-    const from = parse(query.from);
-    const to = parse(query.to);
+    const { from, to } = periodOf(query);
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),

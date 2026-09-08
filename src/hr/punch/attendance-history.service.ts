@@ -122,20 +122,103 @@ export class AttendanceHistoryService {
    */
   async getMonthForEmployee(
     caller: Caller,
-    employee: { id: string; siteId: string; shiftId: string; companyId: string },
+    employee: {
+      id: string;
+      siteId: string;
+      shiftId: string;
+      companyId: string;
+    },
     month: number,
     year: number,
   ): Promise<AttendanceMonth> {
     return this.monthFor(caller, employee, month, year);
   }
 
+  /**
+   * One date's status for many employees at once (005 FR-069, FR-070).
+   *
+   * The admin Daily Register needs the same per-day verdict the employee's own
+   * history screen renders, for a whole company at once. It calls this rather
+   * than deriving its own, because a second implementation of `statusForDay`'s
+   * ordering is exactly the drift `getMonthForEmployee` above is commented
+   * against — and the register is the screen an admin trusts when the employee
+   * disputes a day.
+   *
+   * `hasPunch` is supplied by the caller rather than queried here: the register
+   * has already fetched the day's punches to render In and Out times, and asking
+   * the database for them a second time to answer a question the caller can
+   * already answer would be wasteful.
+   *
+   * Site facts are fetched per *distinct site*, not per employee — a company with
+   * two hundred employees across four sites makes four pairs of lookups, not two
+   * hundred.
+   */
+  async statusesForDate(
+    caller: Caller,
+    companyId: string,
+    employees: { id: string; siteId: string }[],
+    date: string,
+    hasPunch: (employeeId: string) => boolean,
+  ): Promise<Map<string, AttendanceStatus>> {
+    if (employees.length === 0) return new Map();
+
+    const siteIds = [...new Set(employees.map((e) => e.siteId))];
+
+    const [siteFacts, onLeave] = await Promise.all([
+      Promise.all(
+        siteIds.map(async (siteId) => {
+          const [weeklyOffDay, holidays] = await Promise.all([
+            this.sites.getWeeklyOffDay(caller.rls, siteId),
+            this.holidays.getHolidayCalendar(caller.rls, companyId, siteId),
+          ]);
+          return [
+            siteId,
+            { weeklyOffDay, isHoliday: holidays.includes(date) },
+          ] as const;
+        }),
+      ),
+      this.leave.getEmployeesOnApprovedLeave(
+        caller.rls,
+        employees.map((e) => e.id),
+        date,
+      ),
+    ]);
+
+    const bySite = new Map(siteFacts);
+    const dayOfWeek = parseDateOnly(date).getUTCDay();
+
+    return new Map(
+      employees.map((employee) => {
+        const site = bySite.get(employee.siteId);
+        return [
+          employee.id,
+          statusForDay({
+            dayOfWeek,
+            // A site whose weekly off is unreadable must not silently become
+            // Sunday for everyone posted there; -1 matches no day, so those
+            // employees fall through to the punch/leave/holiday rules instead of
+            // being reported off on a day they may have worked.
+            weeklyOffDay: site ? site.weeklyOffDay : -1,
+            isHoliday: site ? site.isHoliday : false,
+            isOnApprovedLeave: onLeave.has(employee.id),
+            hasPunch: hasPunch(employee.id),
+          }),
+        ];
+      }),
+    );
+  }
+
   private async monthFor(
     caller: Caller,
-    employee: { id: string; siteId: string; shiftId: string; companyId: string },
+    employee: {
+      id: string;
+      siteId: string;
+      shiftId: string;
+      companyId: string;
+    },
     month: number,
     year: number,
   ): Promise<AttendanceMonth> {
-
     // Day 0 of the following month is the last day of this one — the standard way
     // to get a month's length without a table of month lengths and a leap-year rule.
     const firstDate = toDateOnly(new Date(Date.UTC(year, month - 1, 1)));

@@ -107,7 +107,10 @@ export class LeaveService {
     financialYear?: string,
   ): Promise<LeaveBalanceView[]> {
     const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.findFirst({ where: { id: employeeId }, select: { id: true } }),
+      tx.employee.findFirst({
+        where: { id: employeeId },
+        select: { id: true },
+      }),
     );
     if (!employee) throw new NotFoundException('Employee not found');
     return this.balanceFor(caller, employee.id, financialYear);
@@ -438,6 +441,43 @@ export class LeaveService {
       }
     }
     return covered;
+  }
+
+  /**
+   * Which of the given employees are on approved leave on one date (005 FR-069).
+   *
+   * The batch sibling of `getApprovedLeaveDates` above, for the admin Daily
+   * Register: that one answers "which dates" for one employee, this one answers
+   * "which employees" for one date. Calling the per-employee method in a loop
+   * would issue a query per employee on every page load of a screen that renders
+   * the whole company.
+   *
+   * It lives here for the same reason its sibling does — so "what counts as on
+   * leave" has exactly one definition and the attendance screens cannot drift
+   * from the leave screen.
+   */
+  async getEmployeesOnApprovedLeave(
+    ctx: RlsContext,
+    employeeIds: string[],
+    date: string,
+  ): Promise<Set<string>> {
+    if (employeeIds.length === 0) return new Set();
+    const day = parseDateOnly(date);
+
+    const applications = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.leaveApplication.findMany({
+        where: {
+          employeeId: { in: employeeIds },
+          status: LeaveApplicationStatus.approved,
+          // The date falls inside the application's span, endpoints included.
+          fromDate: { lte: day },
+          toDate: { gte: day },
+        },
+        select: { employeeId: true },
+      }),
+    );
+
+    return new Set(applications.map((a) => a.employeeId));
   }
 
   /** Chargeable days in the range, against the employee's own site calendar. */

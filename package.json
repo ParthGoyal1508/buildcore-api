@@ -1,7 +1,7 @@
 {
   "name": "buildcore-api",
   "version": "0.1.0",
-  "description": "BuildCore ERP — REST API (NestJS + Prisma)",
+  "description": "BuildCore ERP \u2014 REST API (NestJS + Prisma)",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -36,7 +36,9 @@
     "docker": "docker-compose up -d",
     "docker:build": "docker-compose build",
     "studio": "prisma studio",
-    "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'"
+    "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'",
+    "seed:demo": "ts-node prisma/seed-demo.ts",
+    "db:demo": "prisma migrate reset --force --skip-seed && ts-node prisma/seed-demo.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

@@ -101,7 +101,9 @@ import { SparePartsService } from './spare-parts/spare-parts.service';
     EquipmentServiceDueRule,
   ],
   // Exported for 008's Project P&L, which sums machinery and fuel cost from this
-  // module (FR-008), and for its project-detail machinery tab.
-  exports: [PlantService],
+  // module (FR-008), and for its project-detail machinery tab. `MaintenanceService`
+  // is exported for 004's Pending Approvals KPI, which counts open maintenance jobs
+  // (FR-005, research.md §8).
+  exports: [PlantService, MaintenanceService],
 })
 export class PlantModule {}

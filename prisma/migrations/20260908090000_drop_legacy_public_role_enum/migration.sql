@@ -1,0 +1,22 @@
+-- Drops the legacy `public."Role"` enum, which nothing has used since 2026-08-28.
+--
+-- `20220118074231_init` created `CREATE TYPE "Role" AS ENUM ('ADMIN','USER')` back when
+-- this database had a single schema. `20260828162304_multi_schema_and_auth_extensions`
+-- replaced it with `shared."Role"`, and 002 replaced *that* with the `settings."Role"`
+-- table — but nothing ever dropped the original, so it has sat unreferenced in `public`
+-- ever since. Verified before dropping: zero columns in any schema use it.
+--
+-- It is not merely tidiness. `public` is not in the datasource's `schemas` list, so
+-- `prisma migrate reset` drops every schema *except* the one this type lives in. The
+-- replay that follows then re-runs `20220118074231_init`, which tries to create a type
+-- that its own previous run left behind, and the reset dies with
+--
+--   ERROR: type "Role" already exists
+--
+-- That made `migrate reset` a one-shot command on a fresh clone and a manual
+-- `DROP TYPE` on every clone after — which is how this was found. With the drop applied
+-- as part of the replay, `public` is left clean and the next reset succeeds.
+--
+-- `IF EXISTS` because a database provisioned after the multi-schema migration never had
+-- it, and this must be a no-op there rather than an error.
+DROP TYPE IF EXISTS "public"."Role";

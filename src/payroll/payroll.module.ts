@@ -61,7 +61,9 @@ import { SalaryService } from './salary/salary.service';
     AuditLogService,
   ],
   // Exported so 008's Project P&L can read labour cost by project without
-  // querying `payroll.PayrollLineItem` itself (FR-046).
-  exports: [SalaryService, PayrollEngineService],
+  // querying `payroll.PayrollLineItem` itself (FR-046). `ReimbursementsAdminService`
+  // is exported for 004's Pending Approvals KPI, which counts submitted reimbursement
+  // claims (FR-005, research.md §8).
+  exports: [SalaryService, PayrollEngineService, ReimbursementsAdminService],
 })
 export class PayrollModule {}

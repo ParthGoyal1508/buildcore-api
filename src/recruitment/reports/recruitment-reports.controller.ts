@@ -1,5 +1,10 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -7,6 +12,11 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import {
+  FunnelQueryDto,
+  NewJoiningsQueryDto,
+  ResignationsQueryDto,
+} from './dto/recruitment-reports.dto';
 import { RecruitmentReportsService } from './recruitment-reports.service';
 
 @ApiTags('Recruitment')
@@ -18,20 +28,16 @@ export class RecruitmentReportsController {
   constructor(private readonly reports: RecruitmentReportsService) {}
 
   @Get('new-joinings')
-  @ApiOperation({ summary: 'New-joinings report for a period' })
+  @ApiOperation({
+    summary: 'New-joinings report for a period',
+    description: 'Both `from` and `to` are required, as `YYYY-MM-DD`.',
+  })
+  @ApiResponse({ status: 400, description: 'Missing or malformed period.' })
   newJoinings(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('from') from: string,
-    @Query('to') to: string,
-    @Query('departmentId') departmentId?: string,
-    @Query('projectId') projectId?: string,
+    @Query() query: NewJoiningsQueryDto,
   ) {
-    return this.reports.newJoinings(caller, {
-      from,
-      to,
-      departmentId,
-      projectId,
-    });
+    return this.reports.newJoinings(caller, query);
   }
 
   @Get('funnel')
@@ -40,25 +46,21 @@ export class RecruitmentReportsController {
   })
   funnel(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('requisitionId') requisitionId?: string,
+    @Query() query: FunnelQueryDto,
   ) {
-    return this.reports.funnel(caller, { requisitionId });
+    return this.reports.funnel(caller, query);
   }
 
   @Get('resignations')
-  @ApiOperation({ summary: 'Resignation report: tenure, reasons, attrition' })
+  @ApiOperation({
+    summary: 'Resignation report: tenure, reasons, attrition',
+    description: 'Both `from` and `to` are required, as `YYYY-MM-DD`.',
+  })
+  @ApiResponse({ status: 400, description: 'Missing or malformed period.' })
   resignations(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('from') from: string,
-    @Query('to') to: string,
-    @Query('departmentId') departmentId?: string,
-    @Query('headcount') headcount?: string,
+    @Query() query: ResignationsQueryDto,
   ) {
-    return this.reports.resignations(caller, {
-      from,
-      to,
-      departmentId,
-      headcount: headcount ? Number(headcount) : undefined,
-    });
+    return this.reports.resignations(caller, query);
   }
 }

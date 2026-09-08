@@ -736,3 +736,24 @@ value** — reuses `PAYROLL`, `ATTENDANCE`, `REPORTS`.
 - [~] TA030 Surface outstanding asset custody at exit via 012's `getOutstandingCustody()`
       **BLOCKED** — depends on 012's getOutstandingCustody(), which is specced but not built.
       (012 FR-036) — **blocked by 012 T021**
+
+### Phase A7: Attendance Date Integrity (Amendment 2026-09-08)
+
+- [X] TA031 `LeaveService.getEmployeesOnApprovedLeave(ctx, employeeIds, date)` — single-query batch
+      sibling of `getApprovedLeaveDates`, so "on leave" keeps one definition (spec FR-069)
+- [X] TA032 `AttendanceHistoryService.statusesForDate(...)` — applies the existing `statusForDay`
+      rule to many employees for one date; site facts fetched per distinct site, not per employee
+      (spec FR-069, FR-070)
+- [X] TA033 `DailyAttendanceRow.status`: effective status = `statusOverride ?? derived`, so the
+      client never infers one (spec FR-069, FR-070); closes the unimplemented half of FR-008
+- [X] TA034 Future-date guard on `AttendanceAdminService.daily()` — 400 for a date after today in
+      the business timezone (spec FR-071, FR-074)
+- [X] TA035 Future-date guard on `AttendanceAdminService.mark()`, placed immediately before the
+      existing payroll-lock check (spec FR-072, FR-074)
+- [X] TA036 Per-row future-date rejection in `AttendanceImportService.validate()`, same rule and
+      message vocabulary, so the import path cannot bypass TA035 (spec FR-073)
+- [X] TA037 [P] Unit test: a punchless working day derives `absent`, a weekly off `weekly_off`, a
+      declared holiday `holiday`, approved leave `on_leave`, and a punch on a holiday `present`;
+      an explicit override outranks all five (SC-A05, SC-A07)
+- [X] TA038 [P] Unit test: tomorrow refused on both `daily()` and `mark()`, today accepted, and the
+      IST date accepted when the UTC date is already tomorrow (SC-A06, FR-074 edge case)

@@ -260,3 +260,41 @@ rate, advance limit percentage, and late tolerance are all configured, never lit
 - [ ] Call 011's letter service for the relieving letter — no letter generation here
 - [ ] Assert no labour figure reaches any `PayrollRun` (FR-048) and that 013 reads this feature's
       existing OT multiplier rather than defining a second (FR-049)
+
+---
+
+## Plan Delta 2026-09-08 — Attendance Date Integrity
+
+**No new models, no migration, no new dependency, no new endpoint.** Five files change.
+
+| File | Change |
+|---|---|
+| `src/hr/punch/attendance-history.service.ts` | New `statusesForDate()` — the FR-069 rule applied to many employees for one date, reusing the existing `statusForDay()` |
+| `src/hr/leave/leave.service.ts` | New `getEmployeesOnApprovedLeave()` — the batch sibling of `getApprovedLeaveDates()` |
+| `src/hr/attendance/attendance-admin.service.ts` | `DailyAttendanceRow.status`; future-date guard on `daily()` and `mark()` |
+| `src/hr/attendance/attendance-import.service.ts` | Per-row future-date rejection (FR-073) |
+| `test/…` / `*.spec.ts` | SC-A05 / SC-A06 / SC-A07 coverage |
+
+**Where the status derivation lives.** In `AttendanceHistoryService`, not in `AttendanceAdminService`.
+The admin service already injects the history service, and the history service already owns
+`statusForDay` plus the three lookups it needs (site weekly-off, holiday calendar, approved leave).
+Deriving status inside the admin service would mean giving it its own `HolidaysService`,
+`LeaveService` and `SitesService` and writing the ordering rule a second time — the exact drift
+`getMonthForEmployee` is commented against.
+
+**Why a batch method rather than reusing `getApprovedLeaveDates` per employee.** That method is
+per-employee and per-range; calling it in a loop is one query per employee per page load. The new
+`getEmployeesOnApprovedLeave` answers "which of these employees are on leave on this one date" in a
+single query, and stays in `LeaveService` so the definition of "on leave" is still in one place.
+Site facts are fetched per *distinct site* rather than per employee for the same reason.
+
+**Why the guard is in the service and not the DTO.** The rule needs the configured business
+timezone (FR-074), which a class-validator decorator cannot reach. `AttendanceAdminService` already
+holds `this.timeZone` from `ConfigService`, and already enforces the payroll lock at the same point
+in `mark()` — the new check sits immediately before it, so both calendar rules are refused in one
+place and in a predictable order.
+
+**Constitution check.** Principle I (no cross-schema queries) — every read is inside `hr` or via an
+existing service boundary (`SitesService` for `projects.Site`), unchanged from how the history
+service already works. Principle IV — company scoping is inherited from the existing `companyOf()`
+and RLS context; nothing widens it.
