@@ -96,18 +96,30 @@ const config: Config = {
       durationMinutes: 15,
     },
     refreshCookie: {
-      // Defaults to 'none' wherever CORS_ORIGINS is set, since that's precisely the
-      // split-origin deployment where 'strict' would silently drop the cookie; local
-      // dev (frontend and API both on localhost, same-site regardless of port) keeps
-      // the stronger 'strict'. REFRESH_COOKIE_SAMESITE overrides either way.
+      // `lax`, not the old `CORS_ORIGINS ? 'none' : 'strict'` inference. That inference
+      // was right about the deployment and wrong about the consequence: `SameSite=None`
+      // makes the cookie third-party data, which most browsers refuse to keep, which is
+      // why 83% of sessions could never be renewed. The frontend now proxies its own API
+      // traffic, so the browser's request is same-origin (015 FR-009).
       sameSite:
         (process.env.REFRESH_COOKIE_SAMESITE as 'strict' | 'lax' | 'none') ||
-        (process.env.CORS_ORIGINS ? 'none' : 'strict'),
+        'lax',
       secure: true,
+      // Must match the path the browser will present the cookie at. Behind the frontend's
+      // `/bff` proxy that is `/bff/auth`; the default keeps today's behaviour so this is
+      // safe to deploy before the frontend changes (015 FR-010).
+      path: process.env.REFRESH_COOKIE_PATH || '/auth',
     },
     refreshToken: {
-      rememberMeDays: 30,
-      defaultDays: 1,
+      sessionDays: numberFromEnv(process.env.SESSION_DAYS, 90),
+      reuseGraceSeconds: numberFromEnv(
+        process.env.REFRESH_REUSE_GRACE_SECONDS,
+        60,
+      ),
+      cleanupRetentionDays: numberFromEnv(
+        process.env.REFRESH_CLEANUP_RETENTION_DAYS,
+        7,
+      ),
     },
     throttle: {
       ttlSeconds: 60,

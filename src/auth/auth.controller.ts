@@ -40,26 +40,24 @@ export class AuthController {
     private readonly configService: ConfigService,
   ) {}
 
-  private setRefreshCookie(
-    res: Response,
-    rawToken: string,
-    rememberMe: boolean,
-  ): void {
+  /** The attributes the refresh cookie is set and cleared with; shared so the two
+   * cannot drift, because a mismatch leaves the credential in place after a logout
+   * (015 FR-011). */
+  private refreshCookieOptions() {
+    const { sameSite, secure, path } =
+      this.configService.get<SecurityConfig>('security').refreshCookie;
+    return { httpOnly: true, secure, sameSite, path } as const;
+  }
+
+  private setRefreshCookie(res: Response, rawToken: string): void {
     const security = this.configService.get<SecurityConfig>('security');
-    const { rememberMeDays } = security.refreshToken;
-    const { sameSite, secure } = security.refreshCookie;
+    const { sessionDays } = security.refreshToken;
     res.cookie(REFRESH_COOKIE_NAME, rawToken, {
-      httpOnly: true,
-      // Both from config: in production the frontend and API sit on different
-      // registrable domains, where a 'strict' cookie is never sent at all — see
-      // SecurityConfig.refreshCookie. `secure` stays true everywhere (FR-019);
-      // browsers exempt localhost from its HTTPS requirement.
-      secure,
-      sameSite,
-      path: '/auth',
-      // Omitting maxAge makes it a session cookie (cleared on browser close) when
-      // "remember me" wasn't checked (FR-006).
-      ...(rememberMe ? { maxAge: rememberMeDays * 24 * 60 * 60 * 1000 } : {}),
+      ...this.refreshCookieOptions(),
+      // Always set (015 FR-001). It used to be omitted unless "remember me" was
+      // ticked, which made the cookie die with the browser — and since 74 of 89
+      // sign-ins left that box unticked, most sessions did not survive a restart.
+      maxAge: sessionDays * 24 * 60 * 60 * 1000,
     });
   }
 
@@ -74,17 +72,14 @@ export class AuthController {
   @Post('login')
   @ApiOkResponse({ type: TokenDto })
   async login(
-    @Body() { identifier, password, rememberMe }: LoginDto,
+    // `rememberMe` is accepted by the DTO and deliberately not destructured here:
+    // every session lasts the same length now (015 FR-003).
+    @Body() { identifier, password }: LoginDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ): Promise<TokenDto> {
-    const result = await this.auth.login(
-      identifier,
-      password,
-      rememberMe,
-      req.ip,
-    );
-    this.setRefreshCookie(res, result.rawRefreshToken, result.rememberMe);
+    const result = await this.auth.login(identifier, password, req.ip);
+    this.setRefreshCookie(res, result.rawRefreshToken);
     return {
       accessToken: result.accessToken,
       name: result.name,
@@ -103,7 +98,7 @@ export class AuthController {
   ): Promise<Pick<TokenDto, 'accessToken'>> {
     const rawToken = this.readRefreshCookie(req);
     const result = await this.auth.refresh(rawToken, req.ip);
-    this.setRefreshCookie(res, result.rawRefreshToken, result.rememberMe);
+    this.setRefreshCookie(res, result.rawRefreshToken);
     return { accessToken: result.accessToken };
   }
 
@@ -117,17 +112,11 @@ export class AuthController {
   ): Promise<void> {
     const rawToken = this.readRefreshCookie(req);
     await this.auth.logout(rawToken);
-    // Must repeat the same sameSite/secure attributes used when setting it: a
-    // cross-site response carrying a Set-Cookie without `SameSite=None; Secure`
-    // is rejected outright, which would leave the cookie in place after logout.
-    const { sameSite, secure } =
-      this.configService.get<SecurityConfig>('security').refreshCookie;
-    res.clearCookie(REFRESH_COOKIE_NAME, {
-      path: '/auth',
-      httpOnly: true,
-      secure,
-      sameSite,
-    });
+    // Cleared through the same helper that sets it, so the two cannot drift. A
+    // browser matches a clearing Set-Cookie on name, path and domain, and the path
+    // is now configurable — hardcoding `/auth` here would silently stop clearing the
+    // cookie the moment the deployment moved it (015 FR-011).
+    res.clearCookie(REFRESH_COOKIE_NAME, this.refreshCookieOptions());
   }
 
   @Post('admin/reset-password')

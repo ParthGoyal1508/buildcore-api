@@ -648,9 +648,6 @@ model RefreshToken {
   /// account has no home company.
   companyId String?
 
-  /// Copied from the family's original login onto every rotated token — determines
-  /// each rotation's cookie Max-Age and server-side expiry (FR-006).
-  rememberMe Boolean
   /// Set true the moment this token is rotated (exchanged for a new one).
   used       Boolean   @default(false)
   /// When `used` was set — lets rotation tell a genuine replay apart from a benign

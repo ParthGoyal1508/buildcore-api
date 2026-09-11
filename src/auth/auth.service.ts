@@ -23,18 +23,17 @@ import { ConfigService } from '@nestjs/config';
 import { SecurityConfig } from '../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { AuthenticatedUser, toAuthenticatedUser } from './authenticated-user';
+import { SESSION_EXPIRED, SESSION_REVOKED } from './session-error-codes';
 
 const GENERIC_INVALID_CREDENTIALS = 'Invalid email or password';
 
 export interface LoginSuccess extends TokenDto {
   rawRefreshToken: string;
-  rememberMe: boolean;
 }
 
 export interface RefreshSuccess {
   accessToken: string;
   rawRefreshToken: string;
-  rememberMe: boolean;
 }
 
 function displayName(
@@ -95,7 +94,6 @@ export class AuthService {
   async login(
     identifier: string,
     password: string,
-    rememberMe: boolean,
     ipAddress: string,
   ): Promise<LoginSuccess> {
     const { maxAttempts, durationMinutes } =
@@ -171,7 +169,6 @@ export class AuthService {
     const { rawToken } = await this.refreshTokenService.issueFamily({
       accountId: user.id,
       companyId: user.companyId,
-      rememberMe,
     });
 
     await this.auditLogService.recordAuthEvent(AuditEntityType.LOGIN_SUCCESS, {
@@ -183,7 +180,6 @@ export class AuthService {
     return {
       accessToken: this.accessTokenFor(user),
       rawRefreshToken: rawToken,
-      rememberMe,
       name: displayName(user),
       mustChangePassword: user.mustChangePassword,
     };
@@ -226,8 +222,16 @@ export class AuthService {
   async refresh(rawToken: string, ipAddress: string): Promise<RefreshSuccess> {
     const result = await this.refreshTokenService.rotate(rawToken);
 
+    // Both refusals are 401 and carry a machine-readable code, so the client can say
+    // "your session expired" rather than showing a bare sign-in form (015 FR-008). The
+    // code, never the message — the distinction `ApiError.code` and
+    // PASSWORD_CHANGE_REQUIRED already established.
     if (result.outcome === 'invalid') {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Your session has expired. Please sign in again.',
+        code: SESSION_EXPIRED,
+      });
     }
 
     if (result.outcome === 'reuse') {
@@ -236,9 +240,26 @@ export class AuthService {
         {
           accountId: result.accountId,
           ipAddress,
+          // Recorded so a genuine theft signal can be told from another false positive
+          // afterwards (015 FR-007). The previous 5-second window destroyed five live
+          // sessions without leaving anything to distinguish them by. `lateBySeconds`
+          // is the discriminator: a few seconds past the window is a slow client, while
+          // hours past it is a credential someone kept.
+          changes: {
+            familyId: result.familyId,
+            lateBySeconds: result.lateBySeconds,
+          },
         },
       );
-      throw new ForbiddenException();
+      // 401, not the previous 403: a destroyed session means "present credentials
+      // again", which is what 401 says. 403 means "authenticated but not permitted",
+      // which this is not — and the client's 401 handler is what signs the user out.
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message:
+          'Your session was ended for security reasons. Please sign in again.',
+        code: SESSION_REVOKED,
+      });
     }
 
     const user = await this.loadUserWithPermissions(result.accountId);
@@ -249,7 +270,6 @@ export class AuthService {
     return {
       accessToken: this.accessTokenFor(user),
       rawRefreshToken: result.rawToken,
-      rememberMe: result.rememberMe,
     };
   }
 

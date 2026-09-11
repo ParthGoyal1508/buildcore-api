@@ -386,8 +386,6 @@ the raw value is never stored, mirroring password hashing practice.']
   companyId String [note: 'Copied from the owning account at issuance — every tenant-scoped table this
 feature relies on carries a company identifier (FR-020); null when the owning
 account has no home company.']
-  rememberMe Boolean [not null, note: 'Copied from the family\'s original login onto every rotated token — determines
-each rotation\'s cookie Max-Age and server-side expiry (FR-006).']
   used Boolean [not null, default: false, note: 'Set true the moment this token is rotated (exchanged for a new one).']
   usedAt DateTime [note: 'When `used` was set — lets rotation tell a genuine replay apart from a benign
 concurrent-refresh race within a short grace window (research.md §2).']

@@ -8,6 +8,7 @@ import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
 import { RefreshTokenService } from './refresh-token.service';
+import { RefreshTokenCleanupCron } from './refresh-token-cleanup.cron';
 import { AuditLogService } from './audit-log.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { SecurityConfig } from '../common/configs/config.interface';
@@ -36,6 +37,7 @@ import { SecurityConfig } from '../common/configs/config.interface';
     PermissionsGuard,
     PasswordService,
     RefreshTokenService,
+    RefreshTokenCleanupCron,
     AuditLogService,
   ],
   exports: [JwtAuthGuard, PermissionsGuard],
