@@ -186,7 +186,41 @@ export (tasks.md T001-T002). Not yet in `docker-compose.yml` or `package.json`.
   ```
 - [ ] Set `DATABASE_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `PORT` in the platform's env var / secrets UI (never commit `.env`).
 - [ ] Set `NODE_ENV=production`.
-- [ ] **Restrict CORS.** Driven by `CORS_ORIGINS` (comma-separated) in `src/common/configs/config.ts`; unset means *allow any origin*, which is fine locally and wrong in production. Set it to the deployed frontend domain(s). Note this also flips the refresh cookie to `SameSite=none`, which is required for the split-origin (Vercel + Render) deployment.
+- [ ] **Restrict CORS.** Driven by `CORS_ORIGINS` (comma-separated) in `src/common/configs/config.ts`; unset means *allow any origin*, which is fine locally and wrong in production. Set it to the deployed frontend domain(s).
+
+  > Since 015 this no longer affects the refresh cookie. `CORS_ORIGINS` used to flip `SameSite` to
+  > `none`, on the correct reasoning that Vercel and Render are different registrable domains — and
+  > that was the defect: a `SameSite=None` cookie is third-party data, which Safari refuses outright
+  > and Chrome is withdrawing. 83% of production sign-ins could never be renewed as a result. The
+  > frontend now proxies API traffic through its own origin, so the browser's request is same-origin
+  > and `SameSite` defaults to `lax` regardless of this setting.
+  >
+  > CORS is therefore no longer load-bearing for the browser at all — the proxy hop is
+  > server-to-server. Keep it set anyway unless you have confirmed nothing else calls the API
+  > directly.
+
+- [ ] **Set `REFRESH_COOKIE_PATH=/bff/auth`.** The single highest-risk variable in this deployment.
+      It must match where the frontend presents the cookie, and the frontend proxies at `/bff`. The
+      default is `/auth`, which is not a prefix of `/bff/auth`, so the browser stores the refresh
+      credential and **never sends it back** — with no error anywhere. The symptom is users being
+      signed out on their first page refresh, which is indistinguishable from an expired session
+      unless you inspect the cookie's `Path` in DevTools. This has already caused the outage once.
+
+      The boot log states the effective value, so check it after deploying:
+      ```
+      LOG [RefreshCookie] Path=/bff/auth; SameSite=lax; Secure=true; Max-Age=90d
+      ```
+      If it says `Path=/auth`, or warns that `REFRESH_COOKIE_PATH` is unset, sessions are broken.
+
+- [ ] **Remove `REFRESH_COOKIE_SAMESITE` if it is set.** A leftover `none` from the pre-proxy
+      deployment still works but is needlessly permissive; unset gives the correct `lax`.
+- [ ] **Never set `REFRESH_COOKIE_SECURE`.** It exists only so Safari can be tested over
+      `http://localhost`, which Safari treats as insecure. The API refuses to start if it is
+      disabled while `NODE_ENV=production`.
+- [ ] Optional session tuning, all sensible by default: `SESSION_DAYS` (90),
+      `REFRESH_REUSE_GRACE_SECONDS` (60), `REFRESH_CLEANUP_RETENTION_DAYS` (7).
+- [ ] Confirm `APP_BASE_URL` points at the deployed **frontend** — it builds the set-password links
+      in invite emails, and defaults to `http://localhost:3001`.
 - [ ] **Swagger is now gated** — `swagger.enabled` defaults to `NODE_ENV !== 'production'`, so `/api` and `/api-json` return 404 in production without any further action. Set `SWAGGER_ENABLED=true` only if you deliberately want docs on a staging deployment.
 - [ ] Set `MAX_REQUEST_BODY_SIZE` if your devices produce unusually large captures; the 10 MB default covers a five-photo enrolment with headroom.
 

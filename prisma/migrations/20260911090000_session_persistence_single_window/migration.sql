@@ -1,0 +1,12 @@
+-- 015 FR-001/FR-003: one session duration for everybody.
+--
+-- `rememberMe` decided whether a session lasted 30 days or 1. With a single 90-day
+-- window the column influences nothing, and a column that is still written but no
+-- longer read is worse than no column: the next person to read the schema has to
+-- work out from the service that it is inert, and the intervening guess is that
+-- sessions still differ by it.
+--
+-- Safe against FR-004 ("no live session invalidated"): expiry is carried by
+-- `expiresAt`, which this does not touch. Every live session keeps its current
+-- expiry and picks up the 90-day window at its next rotation.
+ALTER TABLE "shared"."RefreshToken" DROP COLUMN "rememberMe";

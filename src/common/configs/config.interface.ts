@@ -105,30 +105,74 @@ export interface SecurityConfig {
   };
   refreshCookie: {
     /**
-     * `strict` is only viable when the frontend and API are same-site. In production they
-     * are not (Vercel frontend, Render API — different registrable domains), and a browser
-     * silently refuses to send a `SameSite=Strict` cookie cross-site, which would break
-     * refresh and logout while leaving login looking healthy. Cross-site delivery requires
-     * `SameSite=None`, which the spec permits only alongside `Secure` (below).
+     * Defaults to `lax` (015 FR-009).
+     *
+     * It used to be inferred as `none` whenever CORS was configured, on the reasoning that
+     * the frontend and API sit on different registrable domains and a cross-site cookie has
+     * no other option. That reasoning was correct and the consequence was the defect: a
+     * `SameSite=None` cookie is third-party data, and most browsers refuse to keep it — 83%
+     * of sign-ins could never be renewed. The frontend now proxies its own API traffic, so
+     * the browser's request is same-origin and `lax` is both sufficient and correct.
+     *
+     * `lax` rather than `strict`: `strict` withholds the cookie on top-level navigations
+     * *into* the app, so following a link from an email would arrive signed-out.
      */
     sameSite: 'strict' | 'lax' | 'none';
     /**
-     * Always true: mandatory for `SameSite=None`, and required by FR-019's TLS-only rule.
-     * Browsers exempt `localhost` from the HTTPS requirement, so this still works in local
-     * dev over plain HTTP.
+     * The cookie's `Path` (015 FR-010).
+     *
+     * Configurable because it has to match where the browser will present the cookie, and
+     * that depends on the prefix the frontend proxies under. With the frontend proxying at
+     * `/bff`, renewals arrive at `/bff/auth/refresh-token`, and a cookie scoped to `/auth`
+     * would be stored and then never sent — producing a symptom indistinguishable from the
+     * defect this replaced. The API owns this rather than having the proxy rewrite
+     * `Set-Cookie`, because re-serialising cookie attributes in a proxy is a well-known
+     * source of subtle breakage.
+     */
+    path: string;
+    /**
+     * Whether the cookie is marked `Secure`. True unless `REFRESH_COOKIE_SECURE` explicitly
+     * disables it, which `config.ts` refuses outright when `NODE_ENV=production`.
+     *
+     * The escape hatch is for Safari on local dev. Chrome and Firefox exempt `localhost`
+     * from the HTTPS requirement and will store a `Secure` cookie over plain HTTP; Safari
+     * does not, so the session flow was untestable there locally — in the one browser whose
+     * cookie behaviour motivated 015 in the first place.
      */
     secure: boolean;
   };
   refreshToken: {
-    /** Refresh-token family lifetime when "remember me" was checked (FR-006). */
-    rememberMeDays: number;
     /**
-     * Server-side lifetime ceiling for a non-"remember me" token family. The refresh cookie
-     * itself carries no `Max-Age` in this case (dies with the browser session per FR-006) — this
-     * is a separate, defense-in-depth expiry on the persisted token row so a family can't outlive
-     * a reasonable bound even if a cookie somehow survives longer than the browser session.
+     * How long a session survives without being used, in days (015 FR-001, FR-002).
+     *
+     * One value for every session. It replaces a pair — 30 days if the user ticked
+     * "remember me", 1 day otherwise — under which 74 of 89 sign-ins got the one-day
+     * session, because the checkbox was unexplained and defaulted to unticked.
+     *
+     * Sliding, not absolute: every rotation re-derives the expiry from the moment of
+     * rotation, so continued use extends a session indefinitely and only real inactivity
+     * ends it.
      */
-    defaultDays: number;
+    sessionDays: number;
+    /**
+     * How long an already-rotated token may still be presented without being treated as a
+     * stolen-credential replay, in seconds (015 FR-005, FR-012).
+     *
+     * This exists to tell "one client renewing twice because several of its requests lapsed
+     * together" from "two different parties holding the same credential". It was a hardcoded
+     * 5 seconds, which a cold instance exceeds — so slowness was being classified as theft
+     * and destroying live sessions. Configurable because the right value depends on how slow
+     * the deployment actually is.
+     */
+    reuseGraceSeconds: number;
+    /**
+     * How long an expired or revoked token row is kept before deletion, in days
+     * (015 FR-013).
+     *
+     * Not zero: when replay protection destroys a family, those rows are the only evidence
+     * of what happened, and the audit entry describing it would point at nothing.
+     */
+    cleanupRetentionDays: number;
   };
   throttle: {
     /** Rate-limit window, in seconds (FR-016). */

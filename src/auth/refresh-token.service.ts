@@ -5,20 +5,20 @@ import { PrismaService } from 'nestjs-prisma';
 import { SecurityConfig } from '../common/configs/config.interface';
 import { withRlsContext } from '../common/prisma/rls-context';
 
-/** Tolerates a benign concurrent-refresh race (e.g. a duplicate in-flight request
- * from the same client) without treating it as a stolen-token replay. Deliberately a
- * narrow implementation constant, not a business-facing setting (research.md §2). */
-const REUSE_GRACE_WINDOW_MS = 5_000;
-
 export type RotateResult =
   | { outcome: 'invalid' }
-  | { outcome: 'reuse'; accountId: string }
+  | {
+      outcome: 'reuse';
+      accountId: string;
+      familyId: string;
+      /** Seconds past the grace window, or null if the token had no recorded use time. */
+      lateBySeconds: number | null;
+    }
   | {
       outcome: 'rotated';
       rawToken: string;
       accountId: string;
       companyId: string | null;
-      rememberMe: boolean;
     };
 
 @Injectable()
@@ -41,18 +41,41 @@ export class RefreshTokenService {
     return crypto.randomBytes(32).toString('hex');
   }
 
-  private expiryFor(rememberMe: boolean): Date {
-    const { rememberMeDays, defaultDays } =
+  /**
+   * When a session issued or rotated *now* would expire (015 FR-001, FR-002).
+   *
+   * Called on every rotation, not just at login, which is what makes the window slide:
+   * a session in continuous use never reaches its expiry, and only real inactivity ends
+   * it. That behaviour predates this feature — what changed is that the answer no longer
+   * depends on whether the user ticked a box.
+   */
+  private expiryFor(): Date {
+    const { sessionDays } =
       this.configService.get<SecurityConfig>('security').refreshToken;
-    const days = rememberMe ? rememberMeDays : defaultDays;
-    return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    return new Date(Date.now() + sessionDays * 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * How long an already-rotated token may still be presented before it is read as a
+   * replay (015 FR-005).
+   *
+   * The window tells one client renewing twice from two parties holding one credential.
+   * It was a hardcoded 5 seconds, which a cold instance exceeds — so a slow response was
+   * being classified as theft and destroying live sessions. A wall-clock window is kept
+   * deliberately: the obvious alternative, tolerating only the immediate predecessor of
+   * the family head, breaks above two-way concurrency, because the third of three
+   * simultaneous renewals is already two generations back (research.md §2).
+   */
+  private reuseGraceMs(): number {
+    const { reuseGraceSeconds } =
+      this.configService.get<SecurityConfig>('security').refreshToken;
+    return reuseGraceSeconds * 1000;
   }
 
   /** Issues a brand-new token family on login (spec FR-005/FR-006). */
   async issueFamily(params: {
     accountId: string;
     companyId: string | null;
-    rememberMe: boolean;
   }): Promise<{ rawToken: string }> {
     const rawToken = this.generateRawToken();
     const familyId = crypto.randomUUID();
@@ -67,8 +90,7 @@ export class RefreshTokenService {
           familyId,
           accountId: params.accountId,
           companyId: params.companyId,
-          rememberMe: params.rememberMe,
-          expiresAt: this.expiryFor(params.rememberMe),
+          expiresAt: this.expiryFor(),
         },
       }),
     );
@@ -94,16 +116,28 @@ export class RefreshTokenService {
       }
 
       if (record.used) {
-        const withinGrace =
-          !!record.usedAt &&
-          Date.now() - record.usedAt.getTime() <= REUSE_GRACE_WINDOW_MS;
+        const lateBy = record.usedAt
+          ? Date.now() - record.usedAt.getTime()
+          : Number.POSITIVE_INFINITY;
+        const withinGrace = lateBy <= this.reuseGraceMs();
 
         if (!withinGrace) {
           await tx.refreshToken.updateMany({
             where: { familyId: record.familyId, revokedAt: null },
             data: { revokedAt: new Date() },
           });
-          return { outcome: 'reuse', accountId: record.accountId };
+          // Reported upward so the destruction is audited (015 FR-007). Without the
+          // margin there is nothing afterwards to tell a genuine theft signal from
+          // another false positive, which is how the previous 5-second window went
+          // unnoticed while it destroyed five live sessions.
+          return {
+            outcome: 'reuse',
+            accountId: record.accountId,
+            familyId: record.familyId,
+            lateBySeconds: Number.isFinite(lateBy)
+              ? Math.round(lateBy / 1000)
+              : null,
+          };
         }
         // Within the grace window: fall through and rotate again, as if this were
         // a fresh valid presentation of the family.
@@ -120,8 +154,7 @@ export class RefreshTokenService {
           familyId: record.familyId,
           accountId: record.accountId,
           companyId: record.companyId,
-          rememberMe: record.rememberMe,
-          expiresAt: this.expiryFor(record.rememberMe),
+          expiresAt: this.expiryFor(),
         },
       });
 
@@ -130,7 +163,6 @@ export class RefreshTokenService {
         rawToken: newRawToken,
         accountId: record.accountId,
         companyId: record.companyId,
-        rememberMe: record.rememberMe,
       };
     });
   }

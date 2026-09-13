@@ -38,6 +38,7 @@
     "studio": "prisma studio",
     "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'",
     "seed:demo": "ts-node prisma/seed-demo.ts",
+    "seed:demo:remote": "./scripts/seed-remote-demo.sh",
     "db:demo": "prisma migrate reset --force --skip-seed && ts-node prisma/seed-demo.ts"
   },
   "dependencies": {

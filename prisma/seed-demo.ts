@@ -28,28 +28,67 @@ import {
   parseEncryptionKey,
 } from '../src/common/storage/blob-cipher';
 
+// Resolved before the client is built, because a remote target has to adjust
+// DATABASE_URL and `PrismaClient` reads it at construction.
+const TARGET = assertTarget();
+
 const prisma = new PrismaClient();
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
 // Both are refusals, not warnings. This script wipes nothing itself, but it writes
 // fabricated staff, salaries and attendance — rows that are worse in a real database
 // than deletions, because they look real.
-function assertLocal() {
+
+/**
+ * Pins a remote run to a single database connection.
+ *
+ * `main` sets `app.is_super_admin` once to get past RLS, and that is a *session*
+ * setting — it belongs to one connection. If the pool hands a later insert a
+ * different connection, the write is refused and the run dies part-way through,
+ * leaving a half-built company behind. Locally the pool happens to reuse one
+ * connection and this never shows, which is luck rather than design; over a network
+ * it is not worth relying on.
+ */
+function pinSingleConnection(): void {
+  const url = new URL(process.env.DATABASE_URL as string);
+  url.searchParams.set('connection_limit', '1');
+  process.env.DATABASE_URL = url.toString();
+}
+/**
+ * Refuses to write fabricated data anywhere it was not deliberately aimed.
+ *
+ * Local hosts are allowed outright. Any other host has to be named, exactly, by
+ * whoever runs the script — a flag that merely said "yes, remote is fine" would be
+ * one stray shell export away from pointing a demo seed at whichever DATABASE_URL
+ * happened to be loaded, which is the accident worth engineering against.
+ *
+ * The answer also decides whether letter PDFs are generated. The blob store this
+ * process can write to is the local filesystem; a deployed instance reads its blobs
+ * from object storage under an encryption key this script does not hold. Letter rows
+ * whose blob the server cannot decrypt would give every row in the register a
+ * Download button that fails.
+ */
+function assertTarget(): { host: string; isLocal: boolean } {
   const url = process.env.DATABASE_URL ?? '';
+  const host = url.match(/@([^:/?]+)/)?.[1];
+  if (!host) {
+    throw new Error('DATABASE_URL is missing or unparseable.');
+  }
   if (process.env.NODE_ENV === 'production') {
     throw new Error('seed-demo.ts must never run with NODE_ENV=production.');
   }
-  const host = url.match(/@([^:/?]+)/)?.[1];
-  if (
-    !host ||
-    !['localhost', '127.0.0.1', '::1', 'postgres', 'db'].includes(host)
-  ) {
-    throw new Error(
-      `seed-demo.ts refuses a non-local DATABASE_URL (host: ${
-        host ?? 'unparseable'
-      }). ` + 'It writes fabricated employees, salaries and attendance.',
-    );
+  if (['localhost', '127.0.0.1', '::1', 'postgres', 'db'].includes(host)) {
+    return { host, isLocal: true };
   }
+  if (process.env.SEED_DEMO_ALLOW_HOST === host) {
+    pinSingleConnection();
+    return { host, isLocal: false };
+  }
+  throw new Error(
+    `seed-demo.ts refuses a non-local DATABASE_URL (host: ${host}). It writes ` +
+      'fabricated companies, employees, salaries and attendance. To aim it at ' +
+      `this host on purpose, re-run with SEED_DEMO_ALLOW_HOST=${host}`,
+  );
 }
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
@@ -1022,7 +1061,16 @@ const REJECTION_REASONS = [
 ];
 
 async function main() {
-  assertLocal();
+  // Letters are generated only against a database whose blob store this process can
+  // also write to — see `assertTarget`.
+  const canWriteBlobs = TARGET.isLocal;
+  if (!TARGET.isLocal) {
+    console.log(`\n  REMOTE TARGET: ${TARGET.host}`);
+    console.log('  Additive — this script deletes nothing.');
+    console.log(
+      "  Letters skipped: their blobs live in the deployment's object storage.",
+    );
+  }
   console.log('Seeding a production-shaped demo dataset…\n');
 
   // The same RLS bypass `withRlsContext()` sets for system writes. Session-wide
@@ -1045,8 +1093,13 @@ async function main() {
   };
 
   // ── One cross-company Super Admin, so there is somebody who can see both ─────
-  const superAdmin = await prisma.user.create({
-    data: {
+  // Upsert, not create: this may be pointed at a database that already has a run
+  // behind it, and falling over on a duplicate email part-way would leave a
+  // half-seeded company behind.
+  const superAdmin = await prisma.user.upsert({
+    where: { email: 'admin@buildcore.dev' },
+    update: { password },
+    create: {
       email: 'admin@buildcore.dev',
       username: 'admin',
       firstname: 'Super',
@@ -1083,6 +1136,20 @@ async function main() {
   let firstCompanyId: string | null = null;
 
   for (const spec of COMPANIES) {
+    // `shortCode` is unique, so a company already present cannot be created again —
+    // and re-seeding its departments under a second id would only produce
+    // duplicates. Skipping whole companies is what keeps a re-run idempotent.
+    const already = await prisma.company.findUnique({
+      where: { shortCode: spec.shortCode },
+      select: { id: true },
+    });
+    if (already) {
+      console.log(
+        `\n  ${spec.name} (${spec.shortCode}) already present — skipped`,
+      );
+      continue;
+    }
+
     const company = await prisma.company.create({
       data: {
         name: spec.name,
@@ -1268,7 +1335,9 @@ async function main() {
           companyId: company.id,
           siteId: sites[i % sites.length].id,
           shiftId: generalShift.id,
-          employeeCode: `${spec.shortCode}-${String(1001 + i)}`,
+          // The format the app's own generator produces, so codes issued later
+          // through the UI continue this series instead of starting a second one.
+          employeeCode: `${spec.shortCode}-${String(i + 1).padStart(4, '0')}`,
           firstName: s.first,
           lastName: s.last,
           gender: s.gender,
@@ -1335,6 +1404,15 @@ async function main() {
       employees.push(employee);
       totals.employees++;
     }
+
+    // Without this row `EmployeeCodeService.getNextEmployeeCode` throws, so adding
+    // an employee to a seeded company through the UI fails outright — a company you
+    // cannot hire into does not look like a working one. Starting the counter at the
+    // number already issued means the next code continues the series above.
+    await prisma.employeeCodeSequence.create({
+      data: { companyId: company.id, lastNumber: employees.length },
+    });
+
     console.log(
       `    ${employees.length} employees, ${sites.length} sites, ${projects.length} projects`,
     );
@@ -2884,33 +2962,34 @@ async function main() {
         const joiningDate = daysAgo(joined ? 20 : -14);
         const accepted = reached >= HIRING_PATH.indexOf('offer_accepted');
 
-        const letterRef = await writeLetterPdf(
-          'OFFER LETTER',
-          `Dear ${fullName},\n\nWe are pleased to offer you the position of ${
-            req.desig
-          } in the ${req.dept} department at ${
-            spec.name
-          }.\n\nYour annual cost to company will be Rs ${ctc.toLocaleString(
-            'en-IN',
-          )}. Your joining date is ${joiningDate
-            .toISOString()
-            .slice(
-              0,
-              10,
-            )}. You will serve a probation of 6 months, after which your notice period will be 30 days.\n\nPlease sign and return a copy of this letter to confirm your acceptance.`,
-        );
-        const letter = await prisma.generatedLetter.create({
-          data: {
-            companyId: company.id,
-            letterType: 'offer',
-            candidateId: candidate.id,
-            templateId: templates.get('offer')!,
-            renderedRef: letterRef,
-            issuedBy: employees[0].userId,
-            issuedAt: at(daysAgo(Math.max(2, appliedDaysAgo - 30)), 16, 0),
-          },
-        });
-        totals.letters++;
+        const letter = canWriteBlobs
+          ? await prisma.generatedLetter.create({
+              data: {
+                companyId: company.id,
+                letterType: 'offer',
+                candidateId: candidate.id,
+                templateId: templates.get('offer')!,
+                renderedRef: await writeLetterPdf(
+                  'OFFER LETTER',
+                  `Dear ${fullName},\n\nWe are pleased to offer you the position of ${
+                    req.desig
+                  } in the ${req.dept} department at ${
+                    spec.name
+                  }.\n\nYour annual cost to company will be Rs ${ctc.toLocaleString(
+                    'en-IN',
+                  )}. Your joining date is ${joiningDate
+                    .toISOString()
+                    .slice(
+                      0,
+                      10,
+                    )}. You will serve a probation of 6 months, after which your notice period will be 30 days.\n\nPlease sign and return a copy of this letter to confirm your acceptance.`,
+                ),
+                issuedBy: employees[0].userId,
+                issuedAt: at(daysAgo(Math.max(2, appliedDaysAgo - 30)), 16, 0),
+              },
+            })
+          : null;
+        if (letter) totals.letters++;
 
         await prisma.offer.create({
           data: {
@@ -2940,7 +3019,7 @@ async function main() {
                 : accepted
                 ? 'accepted'
                 : 'issued',
-            letterId: letter.id,
+            letterId: letter?.id ?? null,
             acceptedOn:
               accepted || c.stage === 'no_show'
                 ? daysAgo(Math.max(2, appliedDaysAgo - 34))
@@ -2954,31 +3033,32 @@ async function main() {
       // worked through, which is what an onboarding screen is for.
       if (joined && employee) {
         const req = reqPlan[c.req];
-        const appointmentRef = await writeLetterPdf(
-          'APPOINTMENT LETTER',
-          `Dear ${fullName},\n\nFurther to your acceptance of our offer, we confirm your appointment as ${
-            req.desig
-          } in the ${req.dept} department at ${
-            spec.name
-          } with effect from ${daysAgo(20)
-            .toISOString()
-            .slice(0, 10)}.\n\nYour employee code is ${
-            employee.employeeCode
-          } and you will report to the Project Manager.`,
-        );
-        await prisma.generatedLetter.create({
-          data: {
-            companyId: company.id,
-            letterType: 'appointment',
-            employeeId: employee.id,
-            candidateId: candidate.id,
-            templateId: templates.get('appointment')!,
-            renderedRef: appointmentRef,
-            issuedBy: employees[0].userId,
-            issuedAt: at(daysAgo(19), 10, 0),
-          },
-        });
-        totals.letters++;
+        if (canWriteBlobs) {
+          await prisma.generatedLetter.create({
+            data: {
+              companyId: company.id,
+              letterType: 'appointment',
+              employeeId: employee.id,
+              candidateId: candidate.id,
+              templateId: templates.get('appointment')!,
+              renderedRef: await writeLetterPdf(
+                'APPOINTMENT LETTER',
+                `Dear ${fullName},\n\nFurther to your acceptance of our offer, we confirm your appointment as ${
+                  req.desig
+                } in the ${req.dept} department at ${
+                  spec.name
+                } with effect from ${daysAgo(20)
+                  .toISOString()
+                  .slice(0, 10)}.\n\nYour employee code is ${
+                  employee.employeeCode
+                } and you will report to the Project Manager.`,
+              ),
+              issuedBy: employees[0].userId,
+              issuedAt: at(daysAgo(19), 10, 0),
+            },
+          });
+          totals.letters++;
+        }
 
         const checklist = await prisma.onboardingChecklist.create({
           data: {

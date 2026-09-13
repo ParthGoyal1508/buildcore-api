@@ -1,4 +1,8 @@
-import { CallHandler, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import {
+  CallHandler,
+  ExecutionContext,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { CredentialOrigin } from '@prisma/client';
 import { of } from 'rxjs';
@@ -20,7 +24,7 @@ describe('PasswordChangeInterceptor', () => {
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
       getHandler: () => undefined,
       getClass: () => undefined,
-    }) as never;
+    } as never);
 
   /** Reaching this means the request was allowed through. */
   const next: CallHandler = { handle: () => of('allowed') };
@@ -43,9 +47,9 @@ describe('PasswordChangeInterceptor', () => {
   });
 
   it('refuses a directly-created account that has not changed its password', () => {
-    expect(() =>
-      build().intercept(contextFor(owesChange), next),
-    ).toThrow(ForbiddenException);
+    expect(() => build().intercept(contextFor(owesChange), next)).toThrow(
+      ForbiddenException,
+    );
   });
 
   it('names a machine-readable code, so clients need not read the message', () => {
