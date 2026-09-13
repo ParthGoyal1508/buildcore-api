@@ -157,3 +157,42 @@ module's turn.
 resolution. Historical resolutions are backfilled as completed single-level instances, so history
 renders through the same path as new work rather than needing a second code path in the interface
 forever.
+
+---
+
+## 8. What happens when the decision commits and the item's update does not
+
+**Raised by**: the module-boundary checklist (CHK022), which asked what is the source of truth when
+the two disagree. The plan did not answer, and implementation would otherwise have chosen by
+accident.
+
+**The problem.** A decision is written to `ApprovalInstance` and `ApprovalDecision` in `shared`. The
+governed item lives in another schema, and its own state change — an attendance exception becoming
+`approved`, a payroll run becoming payable — is a separate write in a separate module. They cannot
+share a transaction without the spine reaching into that module's schema, which is the boundary this
+whole design exists to hold. So two writes, and the second can fail.
+
+**Decision**: **`ApprovalInstance.state` is the source of truth for approval.** A module's own status
+column is a derived convenience, not an authority. Where they disagree, the spine is right.
+
+**Why this way round.** The alternative — the module's status being authoritative — would mean the
+spine's record of a unanimous chain could be contradicted by a module that failed to write, and the
+audit trail would describe a decision that did not take effect. Making the spine authoritative means
+the failure mode is a module whose local status is stale, which is visible, repairable, and does not
+make the decision record a lie.
+
+**Consequences, all of which must be built rather than assumed:**
+
+1. Modules **must not** gate behaviour on their own status column where the spine's state is what
+   matters. `isPayable` asks the spine, not `PayrollRunStatus`.
+2. The `approval.completed` event handler must be **idempotent** — it will be redelivered, and
+   applying an approval twice must be harmless.
+3. A reconciliation sweep reports items whose module status lags the spine, alongside the orphan
+   sweep from §1. Both are the same kind of drift and belong in the same job.
+4. Where a module genuinely cannot proceed (a payroll run whose figures no longer compute), it
+   records that against the item rather than silently diverging from the spine.
+
+**Rejected**: a distributed transaction, or an outbox table per module. Both are real answers to this
+problem and both are disproportionate here — the write that can fail is a status column, the drift is
+detectable by a sweep that must exist anyway for §1, and the repair is idempotent replay. An outbox
+would be the right call if the second write had side effects that could not be replayed; it does not.

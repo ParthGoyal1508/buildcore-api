@@ -132,6 +132,7 @@ nobody can review or roll back safely.
 | RLS on `ApprovalInstance` read by ordinary users. | Explicit non-super-admin policy tests. A mistake leaks another company's pending work into a user's queue. |
 | A company maps two slots to one role, stalling every item in that chain. | Refused at mapping time with the conflicting levels named (FR-021b). The failure it prevents is silent, total and discovered only when work stops. |
 | Slot mapping changes mid-chain. | Authority resolves at decision time, deliberately; the audit records who actually decided, so history stays truthful either way (research.md §2). |
+| **Two writes, one boundary.** A decision commits in `shared` and the item's own status update fails. | `ApprovalInstance.state` is authoritative; module status is derived (research.md §8, added after the module-boundary checklist asked). The `approval.completed` handler must be idempotent and a reconciliation sweep reports drift. Chosen over an outbox because the failing write is a status column with replayable effects. |
 | Attendance lock blocks legitimate corrections. | The lock is scoped to periods under review and HR retains the right; an edit invalidates approvals rather than being refused outright. |
 
 ## Verification
