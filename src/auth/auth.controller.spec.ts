@@ -57,7 +57,7 @@ const req = (cookies: Record<string, string> = {}) =>
     method: 'POST',
     originalUrl: '/auth/refresh-token',
     ip: '127.0.0.1',
-  }) as unknown as Request;
+  } as unknown as Request);
 
 describe('AuthController refresh cookie', () => {
   const proxied = { path: '/bff/auth', sameSite: 'lax' as const, secure: true };

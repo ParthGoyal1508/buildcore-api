@@ -31,7 +31,9 @@ describe('logRefreshCookieConfig', () => {
   let warn: jest.SpyInstance;
 
   beforeEach(() => {
-    log = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    log = jest
+      .spyOn(Logger.prototype, 'log')
+      .mockImplementation(() => undefined);
     warn = jest
       .spyOn(Logger.prototype, 'warn')
       .mockImplementation(() => undefined);
