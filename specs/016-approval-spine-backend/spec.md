@@ -24,6 +24,27 @@ Today the system has approval **permissions** (`INVENTORY_APPROVE`, `LABOUR_APPR
 `RECRUITMENT_APPROVE`, `ASSETS_APPROVE`) and single-step resolutions. It has no concept of a
 *sequence* of approvers, and no concept of a decision that is final.
 
+## Clarifications
+
+### Session 2026-09-13
+
+- Q: Which roles should the chain's "HR Office" and "Site Incharge" levels resolve to? → A: Neither.
+  Levels reference **configurable role slots**, and each company maps a slot to whichever of its
+  roles fills it.
+- Q: May one person record decisions at more than one level of the same chain? → A: No. Once a person
+  has decided on an item they cannot decide on it again at a later level.
+- Q: Which actions require final Super Admin ("Director") approval? → A: Payment release, payroll run
+  approval, letters that commit money (work order, LOI, purchase order), and final settlement on exit.
+- Q: Which module gains the shared Action/Review control first? → A: Attendance exceptions.
+  *(Sequencing; recorded in the web spec.)*
+
+**A consequence worth stating.** Forbidding a second decision and mapping levels to slots interact:
+if one company maps two slots to the same role, and only one person holds it, every item in that
+chain stalls at the second of those levels. Nothing in the model prevents that configuration. The
+escape is FR-019 (reassignment), which becomes load-bearing rather than a convenience — and FR-023
+below requires the configuration to be refused at definition time rather than discovered when work
+stops.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - An attendance correction survives the people who must see it (Priority: P1)
@@ -197,7 +218,13 @@ confirm it does not take effect until the director approves.
 ### Functional Requirements
 
 - **FR-001**: System MUST support an ordered sequence of approval levels per action type, where each
-  level names the role authorised to act at it.
+  level names a **role slot** rather than a role directly.
+- **FR-001a**: System MUST allow each company to map a role slot to one of its own roles, and MUST
+  resolve a level's authority through that mapping at the time a decision is attempted.
+- **FR-001b**: System MUST refuse a decision at a level whose slot is unmapped, and MUST surface the
+  unmapped slot as a configuration fault rather than an authorisation failure — the two have
+  different remedies and telling them apart is the difference between a settings change and a
+  fruitless permissions investigation.
 - **FR-002**: System MUST record for every decision: the item, the level, the actor, the action
   (approve, reject, return), the time, and any stated reason.
 - **FR-003**: System MUST refuse a decision from a user whose role does not hold the current level,
@@ -228,14 +255,31 @@ confirm it does not take effect until the director approves.
 - **FR-016**: System MUST restrict attendance edits for a period under payroll review to HR only.
 - **FR-017**: System MUST invalidate approvals already given for a payroll run when its underlying
   attendance changes, and restart its chain.
-- **FR-018**: System MUST allow an action type to be marked as requiring final approval by the
-  Super Admin role (the client's "Director"), and MUST hold such actions until it is given.
+- **FR-018**: System MUST require final approval by the Super Admin role (the client's "Director")
+  before any of the following takes effect, and MUST hold each until it is given:
+  1. **Payment release** — a bank payment sheet or a vendor payment.
+  2. **Payroll run approval** — already the last level of the payroll chain (US2), named here so the
+     two descriptions cannot drift apart.
+  3. **Letters that commit money** — work order, LOI and purchase order. The mechanism belongs here;
+     the letters themselves are feature 017, which MUST consume this rather than build its own gate.
+  4. **Final settlement on exit**, including any waived recoveries.
+- **FR-018a**: The set above MUST be configurable, so that an action type can be added to or removed
+  from it without a code change. Note 8 asks for "every final work"; four are named because applying
+  it literally to every action would halt daily work, and the client confirmed these four.
 - **FR-019**: System MUST allow a pending item to be reassigned to another holder of the same level
   when the original approver is unavailable.
 - **FR-020**: System MUST record and surface the number of times an item has been returned and
   resubmitted.
 - **FR-021**: System MUST prevent two approvers at the same level from both recording a decision on
   the same item.
+- **FR-021a**: System MUST prevent any person from recording a decision on an item they have already
+  decided on at an earlier level, whatever roles they hold. Super Admin holds every permission, so
+  without this one person could raise an item, approve it as HR and approve it again as Director —
+  and the chain would record three decisions that were all the same judgement.
+- **FR-021b**: System MUST refuse a chain configuration in which two levels resolve to the same role
+  **at definition time**, naming the conflict. Such a chain is unsatisfiable under FR-021a wherever
+  only one person holds that role, and discovering it when payroll stalls is the expensive way to
+  find out.
 - **FR-022**: System MUST NOT lose or alter any existing approval permission behaviour for modules
   that are not migrated onto the chain in this feature.
 
@@ -259,8 +303,11 @@ confirm it does not take effect until the director approves.
 
 - **Approval Chain**: The ordered list of levels an action type must pass through. Belongs to a
   company, so two companies may review the same kind of work differently.
-- **Approval Level**: One step in a chain — its position, the role authorised to act, and whether it
-  is the final authority.
+- **Approval Level**: One step in a chain — its position, the **role slot** authorised to act, and
+  whether it is the final authority.
+- **Role Slot**: A named position in a chain ("first approver", "HR", "final") that each company maps
+  to one of its own roles. It exists so a chain describes a shape of authority rather than a
+  particular org chart — the client runs two companies that may staff the same chain differently.
 - **Approval Decision**: One recorded act by one person at one level: approve, reject or return, with
   actor, time and reason. Immutable once written.
 - **Reviewable Item**: Any record that enters a chain — an attendance exception, a payroll run, and
@@ -313,28 +360,22 @@ confirm it does not take effect until the director approves.
 - The scheduled payroll run uses the business timezone already established for attendance
   (Asia/Kolkata), so "the 1st" means the 1st locally.
 - Reassignment (FR-019) is an administrative act, not something an approver can do to skip their own
-  level.
+  level. It carries more weight than originally assumed: with FR-021a forbidding a second decision by
+  the same person, reassignment is the only way an item stalled by thin staffing can move.
+- Slot mappings are company-scoped settings, so the two companies may staff the same chain shape
+  differently without either chain being redefined.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: which roles are "HR Office" and "Site Incharge"?]** Of the three names the
-  client uses, only Director is now settled (see Assumptions — it is Super Admin). The nine roles
-  that exist are Accountant, HO User, Project Manager, Site Admin, Site Engineer, Site User, Store
-  Keeper, Super Admin and Viewer. **Neither "HR Office" nor "Site Incharge" is among them.** HO User
-  and Site Admin are the plausible candidates respectively, but plausible is not good enough here:
-  FR-016 gives HR the exclusive right to edit attendance during a payroll review, so naming the
-  wrong role either locks out the people who do the work or hands the right to people who should
-  not have it.
-- **[NEEDS CLARIFICATION: which action types require final director approval?]** Note 8 says every
-  final work. The list must be enumerated before FR-018 is implementable, or the default is that only
-  payment release, letter issue and final settlement are director-final.
-- **[NEEDS CLARIFICATION: may one person satisfy more than one level of the same chain?]** This
-  became sharper once Director resolved to Super Admin: a Super Admin holds every permission, so
-  without a rule they could satisfy *every* level of a chain single-handedly — raising an attendance
-  correction, approving it as HR, and approving it again as Director. The chain would then be
-  ceremony rather than control.
+All three markers raised when this specification was written were answered on 2026-09-13 and are
+recorded under Clarifications above. Nothing blocking remains.
 
-  The options are to forbid one person from recording two decisions on the same item, to permit it
-  with each decision recorded separately and visibly, or to permit it silently. The third is what
-  happens if nobody decides. In a small company forbidding it may deadlock, so this needs the
-  client's judgement about their own staffing, not a default.
+Two items are deliberately deferred to planning rather than left as open questions, because they
+are design decisions rather than client decisions:
+
+- **How a slot is presented in settings.** Whether slots appear as a dedicated screen or as part of
+  role editing is a planning concern; the requirement (FR-001a) is only that the mapping exists and
+  is changeable without a code change.
+- **Whether a chain may be edited while items are in flight.** The safe default is that an in-flight
+  item keeps the chain it entered, so a configuration change cannot retroactively invalidate
+  approvals already given. Planning should confirm this is achievable before it is assumed.

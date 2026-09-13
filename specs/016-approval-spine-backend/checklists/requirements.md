@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — **3 open, deliberately**
+- [X] No [NEEDS CLARIFICATION] markers remain — all resolved, session 2026-09-13
 - [X] Requirements are testable and unambiguous
 - [X] Success criteria are measurable
 - [X] Success criteria are technology-agnostic (no implementation details)
@@ -31,10 +31,8 @@
 
 ## Notes
 
-The 3 open [NEEDS CLARIFICATION] markers are **not** oversights and must not be closed by
-guessing. Each one names a decision that changes what gets built and that only the client can
-make — they are listed under "Needing the client's decision" at the end of the spec. Planning
-this feature before they are answered risks building the wrong thing.
+All [NEEDS CLARIFICATION] markers were resolved on 2026-09-13 and are recorded in the spec's
+Clarifications section. This checklist now passes in full.
 
 Non-functional requirements state plainly where nothing is verified today. That wording is
 deliberate: no load test and no device testing exists for this system, and a specification that
