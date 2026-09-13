@@ -82,6 +82,13 @@ model User {
   inviteTokens    InviteToken[]
   auditLogEntries AuditLogEntry[]
 
+  // Feature 016's approval spine. Two relations to the same table because the person
+  // who raised an item and the people who decide on it are different roles in the
+  // story — and FR-021a means they must be different people.
+  approvalsRaised    ApprovalInstance[] @relation("ApprovalOriginator")
+  approvalsDelegated ApprovalInstance[] @relation("ApprovalDelegate")
+  approvalDecisions  ApprovalDecision[] @relation("ApprovalActor")
+
   @@schema("shared")
 }
 
@@ -133,6 +140,11 @@ model Role {
   updatedAt   DateTime     @updatedAt
 
   userRoles UserRole[]
+
+  /// Feature 016: the chain slots this role fills. A role cannot be deleted out from
+  /// under a chain without taking its mappings with it — which is the right outcome,
+  /// since the alternative is a level that resolves to nothing.
+  roleSlotMappings RoleSlotMapping[]
 
   @@schema("settings")
 }
@@ -335,6 +347,14 @@ model Company {
   assetCategories AssetCategory[]
   assetDocTypes   AssetDocType[]
   conditionGrades ConditionGrade[]
+
+  // Feature 016's approval spine. Chains and slot mappings are per company because the
+  // client runs two companies that may staff the same chain shape differently.
+  approvalChains    ApprovalChain[]
+  approvalLevels    ApprovalLevel[]
+  roleSlotMappings  RoleSlotMapping[]
+  approvalInstances ApprovalInstance[]
+  approvalDecisions ApprovalDecision[]
 
   @@schema("settings")
 }
@@ -893,6 +913,20 @@ enum AuditEntityType {
   ASSET_CATEGORY
   ASSET_DOC_TYPE
   CONDITION_GRADE
+
+  // Feature 016's approval spine (016 FR-002, FR-003, research.md §6).
+  //
+  // Note what is NOT here: the decisions themselves. `ApprovalDecision` is the spine's
+  // own table because "who is this waiting on" is read on every render of an item, and
+  // serving that by replaying an append-only forensic log would make the log
+  // load-bearing on the hot path.
+  //
+  // These three are the off-path, security-adjacent records: a decision worth
+  // cross-referencing from the activity log, every *refused* attempt (FR-003), and any
+  // change to who is allowed to approve what.
+  APPROVAL_DECISION
+  APPROVAL_REFUSED
+  APPROVAL_CHAIN_CONFIG
 
   @@schema("shared")
 }
@@ -2976,6 +3010,296 @@ model ReminderNotification {
 
   @@index([companyId, ruleKey, entityId])
   @@index([companyId, closedAt])
+  @@schema("shared")
+}
+
+// ============================================================================
+// shared schema — feature 016's approval spine.
+//
+// Five tables that together say: *this record moves through named people in a fixed
+// order, everyone can see who acted, and somebody has the last word.*
+//
+// They live in `shared` because an approval chain spans seven modules — hr
+// (attendance), payroll (runs), inventory (indents), labour (muster rolls, payment
+// sheets), projects (RA bills), plant (hire bills) and recruitment. A table holding a
+// real relation to any one of those would belong to that module, and seven of them
+// would be seven Principle I violations.
+//
+// THE ABSENCE OF A FOREIGN KEY TO THE GOVERNED ITEM IS THE DESIGN. `ApprovalInstance`
+// names its item as an opaque `(entityType, entityId)` pair, and the spine never
+// dereferences it — doing so would be the cross-schema query this shape exists to
+// avoid. Modules reach the spine through the exported `ApprovalService`; the spine
+// reaches nobody, and knows nothing about an item beyond what its owning module hands
+// over at submit time (research.md §1, contracts/approval-service.md).
+//
+// The cost, put here so a future reader meets it rather than discovers it: there is no
+// referential integrity. A hard-deleted item leaves an instance pointing at nothing.
+// Three things carry that — modules soft-delete already, `abandon()` closes a chain
+// explicitly when an item is cancelled, and a reconciliation sweep reports orphans.
+// ============================================================================
+
+/// Where an item has got to.
+///
+/// **Terminal** is `approved`, `rejected` and `abandoned`. `returned` is *not* terminal:
+/// the item is waiting on its originator to correct and resubmit it, and it still holds
+/// the item's one live chain slot. Treating it as closed would let a module submit a
+/// second instance for an item that is already mid-correction, which is the double-
+/// approval the "one live chain per item" index exists to prevent.
+enum ApprovalState {
+  pending
+  approved
+  rejected
+  returned
+  abandoned
+
+  @@schema("shared")
+}
+
+/// The three things a person at a level can do. `reject` stops the chain; `return`
+/// sends it back to the originator, who may resubmit into a fresh round.
+enum ApprovalDecisionAction {
+  approve
+  reject
+  return
+
+  @@schema("shared")
+}
+
+/// The ordered shape of authority for one kind of action, in one company.
+///
+/// Per company rather than global because the client runs two companies that may staff
+/// the same chain shape differently — which is also why a level names a *slot* and not
+/// a role (research.md §2).
+model ApprovalChain {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The key a module passes to `submit()` to find its chain: `attendance_exception`,
+  /// `payroll_run`. Free text rather than an enum because the set grows as modules
+  /// migrate, and an enum would put a migration in the path of every migration.
+  actionType String
+
+  /// Whether the last level is the Super Admin gate regardless of its slot (FR-018).
+  isFinalAuthorityRequired Boolean @default(false)
+
+  /// Set false to stop accepting new items into this chain. Items already in flight
+  /// continue under it — an in-flight item keeps the chain it entered, so a
+  /// configuration change cannot retroactively invalidate approvals already given.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  levels    ApprovalLevel[]
+  instances ApprovalInstance[]
+
+  /// One *active* chain per action type per company is a partial unique index
+  /// (`WHERE "isActive"`), hand-authored in the migration — Prisma cannot express a
+  /// predicate. This plain index is what the lookup in `submit()` actually rides on.
+  @@index([companyId, actionType])
+  @@schema("shared")
+}
+
+/// One step of a chain.
+model ApprovalLevel {
+  id String @id @default(cuid())
+
+  chainId String
+  chain   ApprovalChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the chain so this table carries the same
+  /// `"companyId" = current_setting(...)` RLS policy as every other company-scoped
+  /// table in the database. The alternative — a policy reaching through `chainId` with
+  /// a subquery — would be the only policy of its shape in eleven schemas, and the one
+  /// a future table would copy wrongly. Write-once, set in the same transaction as the
+  /// chain it belongs to, and no code path moves a chain between companies.
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// 1-based and contiguous. `ApprovalInstance.currentPosition` indexes into these.
+  position Int
+
+  /// The slot authorised to act — `first_approver`, `hr`, `final` — resolved to an
+  /// actual role per company through `RoleSlotMapping`. A level that named a role
+  /// would hardcode one org chart into the chain definition; a slot describes the
+  /// *shape* of authority and lets settings supply the people (research.md §2).
+  slotKey String
+
+  /// This level is the Director gate.
+  isFinalAuthority Boolean @default(false)
+
+  /// Human label for the level, shown by the interface (FR-010). Null falls back to
+  /// the canonical slot-key label in `approval-slots.ts`; the column exists so a
+  /// company defining a slot outside that set still gets a legible label instead of a
+  /// raw key.
+  label String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// `(chainId, slotKey)` is the first half of the unsatisfiable-chain guard
+  /// (FR-021b): one slot may not appear twice in a chain. The second half — two
+  /// *different* slots mapping to the same role — cannot be a constraint at all and is
+  /// checked when the mapping is written (`ChainsService.putSlotMapping`).
+  @@unique([chainId, position])
+  @@unique([chainId, slotKey])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// Binds a slot to one of a company's own roles. The table that lets two companies
+/// staff the same chain shape differently.
+model RoleSlotMapping {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  slotKey String
+
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, slotKey])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// One item travelling one chain. The opaque reference to the governed item lives here.
+model ApprovalInstance {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  chainId String
+  chain   ApprovalChain @relation(fields: [chainId], references: [id])
+
+  /// What kind of thing this is — `attendance_exception`, `payroll_run`.
+  /// **Deliberately not a foreign key, and deliberately not an enum**: the spine must
+  /// not know the set of things it governs (research.md §1).
+  entityType String
+  /// The item's id in its own module's schema. **No foreign key** — see the block
+  /// comment above this model group. This is the single most important absence in the
+  /// feature, and it is intentional.
+  entityId   String
+
+  /// Copied from the owning module at submit time, because the spine cannot read the
+  /// item to build it. This is the practical cost of the opacity above, and it is paid
+  /// here: a queue row has to say what it is about.
+  subject String
+  /// Where the interface should send a reviewer to see the item itself. Supplied by
+  /// the owning module for the same reason.
+  href    String?
+
+  /// Which level it awaits. Meaningless once `state` is terminal.
+  currentPosition Int @default(1)
+
+  state ApprovalState @default(pending)
+
+  originatorUserId String
+  originator       User   @relation("ApprovalOriginator", fields: [originatorUserId], references: [id])
+
+  /// Which round of the chain this is. Incremented when a returned item is
+  /// resubmitted, and part of both decision uniques below — without it, resubmission
+  /// would collide with the decisions of the round that was returned (FR-005, FR-020).
+  round Int @default(1)
+
+  /// Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
+  /// cannot be worn down by repetition without leaving a trace.
+  returnCount Int @default(0)
+
+  /// A one-off grant of authority at the CURRENT level to one named person (FR-019).
+  ///
+  /// Reassignment needs storage because authority in this model comes from holding a
+  /// role, not from being assigned a task — so "reassign to another holder of the same
+  /// level" would otherwise be a no-op, since every holder can already act. The case it
+  /// actually exists for is the stall FR-021a creates: the sole holder of a level's role
+  /// has already decided earlier in the chain, so *nobody* can act, and the item is
+  /// stuck with no error anywhere.
+  ///
+  /// Cleared whenever the item advances, is returned or terminates — a grant is for one
+  /// level, not for the rest of the chain. It does NOT bypass FR-021a: a delegate who has
+  /// already decided this round is still refused, by the unique index on
+  /// `ApprovalDecision`, so this cannot be used to launder a second decision.
+  delegatedToUserId String?
+  delegatedTo       User?   @relation("ApprovalDelegate", fields: [delegatedToUserId], references: [id])
+  /// Why the grant was made. Required by the service — an unexplained reassignment of an
+  /// approval is exactly the kind of act an audit trail exists to explain.
+  delegationReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  decisions ApprovalDecision[]
+
+  /// "One live chain per item" is a partial unique index on `(entityType, entityId)`
+  /// WHERE the state is non-terminal, hand-authored in the migration. It is what stops
+  /// a double-submit creating two parallel approvals of the same thing, and it has to
+  /// be partial so that a rejected item can be raised again later.
+  ///
+  /// This composite index serves the approval queue, which is the hottest read in the
+  /// feature.
+  @@index([companyId, state, currentPosition])
+  @@index([entityType, entityId])
+  @@schema("shared")
+}
+
+/// One recorded act by one person at one level. Immutable once written.
+model ApprovalDecision {
+  id String @id @default(cuid())
+
+  approvalInstanceId String
+  approvalInstance   ApprovalInstance @relation(fields: [approvalInstanceId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the instance so this table carries the same
+  /// `"companyId" = current_setting(...)` RLS policy as every other company-scoped
+  /// table in the database, instead of the one policy in the schema that needs a
+  /// subquery to evaluate. Write-once and set inside the same transaction as the row
+  /// it is copied from, so it cannot drift. (Same reasoning as
+  /// `labour.GangMember.isActive`, denormalised so an index need not join.)
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The round of the chain this decision belongs to, copied from the instance.
+  round Int @default(1)
+
+  /// The level decided at.
+  position Int
+
+  actorUserId String
+  actor       User   @relation("ApprovalActor", fields: [actorUserId], references: [id])
+
+  action ApprovalDecisionAction
+
+  /// Required for `reject` and `return` (FR-006). Enforced at the service boundary,
+  /// which returns `APPROVAL_REASON_REQUIRED` rather than letting a NOT NULL surface
+  /// as a database error.
+  reason String?
+
+  decidedAt DateTime @default(now())
+
+  /// The two constraints that make FR-021 and FR-021a true under a race rather than
+  /// only under a single-threaded test.
+  ///
+  /// `(instance, round, actorUserId)` is FR-021a: one person, one decision per round,
+  /// whatever roles they hold. Super Admin holds every permission, so this is the
+  /// common case and not an edge case.
+  ///
+  /// `(instance, round, position)` is FR-021: two approvers at the same level cannot
+  /// both record. Exactly one wins.
+  ///
+  /// Both are scoped by `round` because a returned item restarts from position 1 and
+  /// the same people must decide again — the round is what makes "again" legitimate
+  /// while keeping "twice" impossible.
+  @@unique([approvalInstanceId, round, actorUserId])
+  @@unique([approvalInstanceId, round, position])
+  @@index([companyId])
   @@schema("shared")
 }
 

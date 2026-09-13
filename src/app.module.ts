@@ -10,6 +10,7 @@ import { AppService } from './app.service';
 import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
 import { AssetsModule } from './assets/assets.module';
+import { ApprovalsModule } from './approvals/approvals.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -75,6 +76,11 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PlantModule,
     RecruitmentModule,
     AssetsModule,
+    // Feature 016's approval spine. Registered with no controllers and no consumers:
+    // Phase 1 ships the mechanism alone so it can be proven before any existing approval
+    // behaviour changes. Registering it now is what makes the DI graph resolve at boot
+    // rather than at the first module migration.
+    ApprovalsModule,
   ],
   controllers: [AppController],
   providers: [

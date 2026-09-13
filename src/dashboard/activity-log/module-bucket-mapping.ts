@@ -45,6 +45,20 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.EXIT_RECORD,
     AuditEntityType.REMINDER,
     AuditEntityType.REPORT_EXPORT,
+    // Feature 016's approval decisions and refused attempts.
+    //
+    // Folded in here for the same reason REMINDER and REPORT_EXPORT are: the approval
+    // spine is cross-module by design, and the audit row records the decision rather
+    // than the module the decided item belongs to, so there is nothing to bucket it by.
+    // `hr` is also where it genuinely belongs today — attendance exceptions are the
+    // first and only module on the chain (spec FR-012).
+    //
+    // Worth revisiting once payroll and inventory migrate: the row's `changes` JSON
+    // does carry the item's `entityType`, so a future Activity Log could bucket on that
+    // instead of on the audit type. Doing it now would mean a new module filter option
+    // appearing in the interface, which is outside this feature's Phase 1.
+    AuditEntityType.APPROVAL_DECISION,
+    AuditEntityType.APPROVAL_REFUSED,
   ],
   settings: [
     AuditEntityType.COMPANY,
@@ -54,6 +68,9 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.DOCUMENT_TYPE,
     AuditEntityType.SHIFT,
     AuditEntityType.USER_ACCOUNT,
+    // Who is allowed to approve what is a settings change, and reads as one in the feed
+    // — unlike the decisions above, which are operational.
+    AuditEntityType.APPROVAL_CHAIN_CONFIG,
   ],
   payroll: [
     AuditEntityType.PAYROLL_RUN,

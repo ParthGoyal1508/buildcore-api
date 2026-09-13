@@ -21,72 +21,72 @@ spine's. Every task below is written so that staying inside that rule is the eas
 
 **Nothing consumes it yet. This phase changes no existing behaviour.**
 
-- [ ] T001 Add `ApprovalChain`, `ApprovalLevel`, `RoleSlotMapping`, `ApprovalInstance` and
+- [X] T001 Add `ApprovalChain`, `ApprovalLevel`, `RoleSlotMapping`, `ApprovalInstance` and
       `ApprovalDecision` to `prisma/schema.prisma` in the **`shared`** schema, per
       [data-model.md](./data-model.md). No foreign key to any business-module table — that absence
       is the design (research.md §1), so add a schema comment saying so where a future reader will
       meet it (checklist CHK016)
-- [ ] T002 Add the unique and partial-unique constraints: `ApprovalInstance (entityType, entityId)`
+- [X] T002 Add the unique and partial-unique constraints: `ApprovalInstance (entityType, entityId)`
       where non-terminal; `ApprovalDecision (approvalInstanceId, actorUserId)` partial;
       `ApprovalDecision (approvalInstanceId, position)`; `ApprovalLevel (chainId, position)` and
       `(chainId, slotKey)`. The partial unique is what enforces FR-021a under a race — a
       service-layer check reads-then-writes and loses (research.md §3)
-- [ ] T003 Add index `ApprovalInstance (companyId, state, currentPosition)` — the approval queue is
+- [X] T003 Add index `ApprovalInstance (companyId, state, currentPosition)` — the approval queue is
       the hottest read in this feature
-- [ ] T004 Generate the migration and hand-author the RLS policies for all five tables, matching the
+- [X] T004 Generate the migration and hand-author the RLS policies for all five tables, matching the
       shape used by existing `shared` tables
-- [ ] T005 [P] Add `APPROVAL_DECISION`, `APPROVAL_REFUSED` and `APPROVAL_CHAIN_CONFIG` to
+- [X] T005 [P] Add `APPROVAL_DECISION`, `APPROVAL_REFUSED` and `APPROVAL_CHAIN_CONFIG` to
       `AuditEntityType`
-- [ ] T006 [P] Create `src/approvals/approval-error-codes.ts` with the five distinguishable refusal
+- [X] T006 [P] Create `src/approvals/approval-error-codes.ts` with the five distinguishable refusal
       codes from [contracts/approval-service.md](./contracts/approval-service.md). They are separate
       because they have separate remedies; a single `403` sends people to fix the wrong thing
-- [ ] T007 Create `src/approvals/approvals.module.ts` exporting `ApprovalService`
-- [ ] T008 Implement `ChainsService` (FR-001, FR-001a) in `src/approvals/chains.service.ts`: chain
+- [X] T007 Create `src/approvals/approvals.module.ts` exporting `ApprovalService`
+- [X] T008 Implement `ChainsService` (FR-001, FR-001a) in `src/approvals/chains.service.ts`: chain
       and level CRUD, slot mapping read/write
-- [ ] T009 Implement the unsatisfiable-chain guard in `ChainsService`: refuse a slot mapping under
+- [X] T009 Implement the unsatisfiable-chain guard in `ChainsService`: refuse a slot mapping under
       which two levels of any active chain resolve to the same role, naming both levels (FR-021b).
       **At mapping time, not at decision time** — the failure it prevents is silent, total, and
       discovered only when work stops
-- [ ] T010 Implement `ApprovalService.submit()` — resolve the active chain, refuse a duplicate live
+- [X] T010 Implement `ApprovalService.submit()` — resolve the active chain, refuse a duplicate live
       instance, throw a *configuration* fault (not a 403) when no chain exists (FR-001b)
-- [ ] T011 Implement `ApprovalService.decide()` (FR-002, FR-004, FR-005, FR-006, FR-020) —
+- [X] T011 Implement `ApprovalService.decide()` (FR-002, FR-004, FR-005, FR-006, FR-020) —
       authority via slot mapping, advance or terminate, require a reason for reject and return,
       increment `returnCount` on resubmission
-- [ ] T012 Implement the FR-021a refusal in `decide()`: a person who has already decided on this
+- [X] T012 Implement the FR-021a refusal in `decide()`: a person who has already decided on this
       item may not decide again, returning `APPROVAL_ALREADY_DECIDED` distinct from
       `APPROVAL_NOT_AUTHORISED`. Super Admin holds every permission, so this is the common case, not
       the edge case
-- [ ] T013 Emit `approval.completed` on the event bus at final approval, carrying only
+- [X] T013 Emit `approval.completed` on the event bus at final approval, carrying only
       `(entityType, entityId, companyId, instanceId)`. The spine must not call any module
       (checklist CHK009, CHK010)
-- [ ] T013a Include in every state the fields the interface needs but cannot compute (FR-010,
+- [X] T013a Include in every state the fields the interface needs but cannot compute (FR-010,
       FR-011): `canActNow`, `levelLabel`, `awaitingUserName`, and `inertReason` with its four
       values. `already_decided` is knowable only here — without it the interface must tell a Super
       Admin they lack permission, which is false
-- [ ] T014 [P] Implement `stateOf()` and `statesOf()` — the batch form is what every list must use
+- [X] T014 [P] Implement `stateOf()` and `statesOf()` — the batch form is what every list must use
       (contract Part 1; checklist CHK018)
-- [ ] T015 [P] Implement `abandon()` so a cancelled item closes its chain instead of waiting forever
+- [X] T015 [P] Implement `abandon()` so a cancelled item closes its chain instead of waiting forever
       (research.md §1)
-- [ ] T015a Implement `reassign(instanceId, toUserId, reason)` — move a pending item to another
+- [X] T015a Implement `reassign(instanceId, toUserId, reason)` — move a pending item to another
       holder of the same level (FR-019). **Not a convenience.** Because FR-021a forbids a second
       decision by the same person, this is the only way an item stalled by thin staffing can move,
       and the analyze pass found it had no task at all. Administrative act only; an approver may not
       use it to skip their own level
-- [ ] T015b [P] Audit every reassignment, and unit-test that an approver cannot reassign an item
+- [X] T015b [P] Audit every reassignment, and unit-test that an approver cannot reassign an item
       currently awaiting themselves
-- [ ] T016 Implement `queueFor()` — resolve the caller's roles to slots, find pending instances at a
+- [X] T016 Implement `queueFor()` — resolve the caller's roles to slots, find pending instances at a
       matching level, and **exclude items they have already decided on**. A queue listing work you
       are forbidden to action trains people to ignore the queue
-- [ ] T017 Write every refused decision to `AuditLogEntry` as `APPROVAL_REFUSED` with the attempted
+- [X] T017 Write every refused decision to `AuditLogEntry` as `APPROVAL_REFUSED` with the attempted
       action and the reason for refusal (FR-003)
-- [ ] T018 [P] Unit tests for `ChainsService`: chain resolution, slot mapping, and the unsatisfiable
+- [X] T018 [P] Unit tests for `ChainsService`: chain resolution, slot mapping, and the unsatisfiable
       guard refusing with both level names
-- [ ] T019 Unit tests for `decide()`: each of the five refusal codes, advance, terminate, return and
+- [X] T019 Unit tests for `decide()`: each of the five refusal codes, advance, terminate, return and
       resubmit, and `returnCount`
-- [ ] T020 Unit test proving one person cannot decide twice **under concurrency** — two simultaneous
+- [X] T020 Unit test proving one person cannot decide twice **under concurrency** — two simultaneous
       decisions by the same actor, exactly one recorded. This is the test that proves the index is
       doing the work rather than the service
-- [ ] T021 [P] Unit tests for `queueFor()`: excludes already-decided items, respects slot mapping,
+- [X] T021 [P] Unit tests for `queueFor()`: excludes already-decided items, respects slot mapping,
       pages
 
 **Checkpoint**: the spine is complete and tested in isolation. Nothing else in the product has
@@ -245,3 +245,137 @@ T010–T013 and T016 all touch `approvals.service.ts` in sequence: **not** paral
 **Phase 1 + Phase 2 (T001–T029)** is the minimum that delivers something real: attendance exceptions
 move through a genuine chain instead of one person's single click, and the client's first note is
 satisfied. Phase 3 is where the money is, and is not optional in practice — only separable.
+
+---
+
+## Implementation note — Phase 1, 2026-09-13
+
+Phase 1 (T001–T021) is complete and verified. Phases 2–6 are untouched. Every deviation from
+`data-model.md`, `contracts/approval-service.md` and the task text is recorded below; where a design
+document was wrong rather than merely silent, that is said plainly.
+
+### Verification actually performed
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint <touched files>` | 0 errors, 1 warning (`_userRoles` unused — **pre-existing on HEAD**) |
+| `npm test` | **753/753 passing, 76/76 suites** (707 before this phase; +46 new) |
+| `npm run build` | clean, 504 files |
+| `test/approvals.e2e-spec.ts` | **13/13 passing** against the real database |
+| `npm run test:e2e` (full) | 288 passed, 37 failed in `plant`/`dashboard`/`assets` |
+
+**The 37 e2e failures are pre-existing.** Verified by stashing this entire branch, regenerating the
+Prisma client from `HEAD`, and re-running those three suites: **37 failed there too, the same count**.
+They concern migration-seeded master data (equipment categories, asset grades) and the reminders
+engine, none of which this feature touches. Note also that the 9 punch failures the task preamble
+warned about **now pass** — fixed by `04b4e94` since that note was written.
+
+### Deviations from data-model.md
+
+1. **`round` added to `ApprovalInstance` and `ApprovalDecision`, and both decision uniques scoped by
+   it.** `data-model.md` specifies plain uniques on `(approvalInstanceId, actorUserId)` and
+   `(approvalInstanceId, position)`. **As written, those break FR-005 and FR-020**: a returned item
+   restarts from position 1, so resubmission must let the same people decide at the same levels
+   again, and a plain unique makes that impossible — the chain could be walked once and never again.
+   Scoping both by `round` keeps "again after a return" legitimate while keeping "twice in one pass"
+   impossible. A side benefit: both are now plain Prisma uniques rather than hand-authored partials.
+
+2. **`companyId` denormalised onto `ApprovalLevel` and `ApprovalDecision`**, neither of which has it
+   in `data-model.md`. Both reach their company through a parent, so the alternative was an RLS
+   policy with an `EXISTS` subquery — which would have been the only policy of that shape in eleven
+   schemas, and the one a future table copies wrongly. Both columns are write-once, set in the same
+   transaction as the row they are copied from, and no code path moves a chain or a decision between
+   companies. Precedent: `labour.GangMember.isActive`, denormalised for the same reason.
+
+3. **`returned` counts as live in the "one live instance per item" partial index.** `data-model.md`
+   says "where state is not terminal" without enumerating; the state diagram loops `returned` back to
+   `pending`, so it is not terminal. Excluding it would let a module submit a second instance for an
+   item already mid-correction. Terminal is `approved`, `rejected`, `abandoned`.
+
+4. **`ApprovalLevel.label` added** (nullable). FR-010 requires the level's label, and a company may
+   define a slot outside the canonical three; without a column such a level renders as a raw key.
+
+5. **`ApprovalInstance.delegatedToUserId` / `delegationReason` added, in a second migration**
+   (`20260913111203_approval_reassignment`). FR-019 had no data model, no plan entry and — until the
+   analyze pass — no task, so this is new design rather than a change to existing design. It is
+   needed because **authority in this model comes from holding a role, not from being assigned a
+   task**: "reassign to another holder of the same level" would otherwise be a no-op, since every
+   holder can already act. The case FR-019 actually exists for is the stall FR-021a creates — the
+   sole holder of a level's role having already decided earlier in the chain — and clearing that
+   requires granting one named person authority at one level. It does **not** bypass FR-021a: a
+   delegate who already decided this round is still refused by the unique index. Proven end-to-end in
+   `test/approvals.e2e-spec.ts` ("stalls a chain a single person cannot complete").
+
+### Deviations from contracts/approval-service.md
+
+6. **`stateOf` and `statesOf` take a `viewer`.** The contract signatures omit it, but `canActNow` and
+   `inertReason` are inherently caller-dependent — the contract is incomplete rather than different.
+   `viewer` may be null, in which case `canActNow` is false and `inertReason` is null: "may this
+   caller act" has no answer when there is no caller, and inventing `false` with a reason would have
+   the interface explain a refusal nobody received.
+
+7. **The view carries four fields beyond those T013a names** — `awaitingRoleName`,
+   `awaitingHolderCount`, `totalLevels`, `round`. `awaitingUserName` alone cannot be honest: a level
+   maps to a *role*, so naming one of five holders would be a guess presented as a fact. It is
+   therefore populated only when exactly one person holds the role (or when a reassignment names
+   somebody), and `awaitingRoleName` is always present.
+
+8. **Four refusal codes beyond the contract's five**: `APPROVAL_CHAIN_NOT_CONFIGURED` and
+   `APPROVAL_ALREADY_SUBMITTED` for `submit()`, which the contract describes in prose but leaves
+   unnamed; `APPROVAL_REASSIGN_FORBIDDEN` for FR-019; `APPROVAL_CHAIN_UNSATISFIABLE` for FR-021b.
+
+### Changes outside `src/approvals/`
+
+9. **`AuthenticatedUser.roleIds` added** (`src/auth/authenticated-user.ts`). An approval level
+   resolves to a `roleId`; checking authority by id means the spine never reads `settings.UserRole`
+   from a `shared` table, which is the cross-schema query Principle I forbids. Matching on role
+   *names* — already present — would silently unmap every chain the day somebody tidies a role name.
+
+10. **`UsersService.findActiveHoldersOfRole` added.** The one question the spine cannot answer itself:
+    who holds the role a level resolves to. `UsersModule` already owns every other user-to-role
+    question (`countByRoleId`, `clearRoleAssignment`) for exactly this reason.
+
+11. **`displayNameOf` added to `src/users/user-summary.ts`**, deliberately a *different* composition
+    from `toUserSummary`, which is left byte-identical because it is what the Users list already
+    renders. The difference is `displayName`, preferred for approval history: a Super Admin or
+    vendor-facing login has no `hr.Employee` to take a name from, and "approved by (blank)" is worse
+    than any fallback.
+
+12. **`module-bucket-mapping.ts` updated — and this was not optional.** An existing unit test asserts
+    that *every* `AuditEntityType` value maps to a module bucket, so T005's three new values failed it
+    until mapped. `APPROVAL_DECISION`/`APPROVAL_REFUSED` fold into `hr` (the precedent `REMINDER` and
+    `REPORT_EXPORT` set, and where attendance exceptions genuinely belong); `APPROVAL_CHAIN_CONFIG`
+    goes to `settings`, being literally a change to who may approve what. Revisit when payroll and
+    inventory migrate — the row's `changes` JSON carries the item's own `entityType`.
+
+13. **`ApprovalsModule` registered in `AppModule`** with no controllers and no consumers, so the DI
+    graph resolves at boot rather than at the first module migration.
+
+### Two things the task list assumed that turned out not to hold
+
+14. **T020 could not be a unit test.** The task says "Unit test proving one person cannot decide twice
+    under concurrency". A mocked Prisma client cannot prove a unique index does anything — it can only
+    prove the service *asks* the question, which is the one thing that does not matter under a race.
+    T020 is therefore realised in `test/approvals.e2e-spec.ts` against the real database, firing two
+    genuinely concurrent `decide()` calls and asserting **one** surviving `ApprovalDecision` row and
+    `currentPosition === 2`. The unit suite additionally covers the service's translation of both
+    `P2002` variants into the right refusal. FR-021 (two different approvers racing at one level) is
+    proven the same way.
+
+15. **Tenant isolation is not observable on a local developer database.** The local `prisma` role is a
+    Postgres **superuser**, and Postgres exempts superusers from every RLS policy unconditionally —
+    `ENABLE` and `FORCE` do not apply to them and no error is raised. This is already known to the
+    codebase: `src/common/prisma/rls-preflight.ts` warns about it and refuses to boot in production.
+    The e2e test therefore asserts unconditionally that all five policies **exist and are FORCEd**
+    (queried from `pg_policy`), and asserts the isolation itself only where the role can enforce it,
+    printing a loud warning otherwise so a green run is never mistaken for evidence. **T054's RLS
+    tests (Phase 6) will need a NOSUPERUSER, NOBYPASSRLS role to mean anything.**
+
+### Still open, by design
+
+- No HTTP surface. `/approvals/*` is T044–T046 (Phase 4).
+- `checklists/module-boundary.md` remains at 0/22 — reviewer-owned, deliberately untouched.
+- The quickstart's ten manual passes have not been run; nothing here has been opened in a browser.
+- `research.md` §4's recorded risk stands unchanged: **the cron will not fire on a Render instance
+  that suspends when idle.** No task in this feature can fix it.

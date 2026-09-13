@@ -42,6 +42,9 @@ value must not lock a real user out over missing metadata.']
   refreshTokens RefreshToken [not null]
   inviteTokens InviteToken [not null]
   auditLogEntries AuditLogEntry [not null]
+  approvalsRaised ApprovalInstance [not null]
+  approvalsDelegated ApprovalInstance [not null]
+  approvalDecisions ApprovalDecision [not null]
 }
 
 Table Role {
@@ -54,6 +57,9 @@ this feature only ever reads roles, it doesn\'t expose role management).']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   userRoles UserRole [not null]
+  roleSlotMappings RoleSlotMapping [not null, note: 'Feature 016: the chain slots this role fills. A role cannot be deleted out from
+under a chain without taking its mappings with it — which is the right outcome,
+since the alternative is a level that resolves to nothing.']
 
   Note: 'A named, editable set of permissions (`settings` schema — see header comment on
 why this feature creates it ahead of 002). Seeded here with only the one
@@ -155,6 +161,11 @@ so this is not a literal inside the denomination service — Principle III.']
   assetCategories AssetCategory [not null]
   assetDocTypes AssetDocType [not null]
   conditionGrades ConditionGrade [not null]
+  approvalChains ApprovalChain [not null]
+  approvalLevels ApprovalLevel [not null]
+  roleSlotMappings RoleSlotMapping [not null]
+  approvalInstances ApprovalInstance [not null]
+  approvalDecisions ApprovalDecision [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -1642,6 +1653,157 @@ Both are statements about what was emitted before, and nothing stateless can
 answer them: recomputing the list from scratch can tell you a reminder exists, but
 never whether it has already been announced. See specs/004-dashboard-backend/
 tasks.md, the 2026-09-03 implementation note.'
+}
+
+Table ApprovalChain {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  actionType String [not null, note: 'The key a module passes to `submit()` to find its chain: `attendance_exception`,
+`payroll_run`. Free text rather than an enum because the set grows as modules
+migrate, and an enum would put a migration in the path of every migration.']
+  isFinalAuthorityRequired Boolean [not null, default: false, note: 'Whether the last level is the Super Admin gate regardless of its slot (FR-018).']
+  isActive Boolean [not null, default: true, note: 'Set false to stop accepting new items into this chain. Items already in flight
+continue under it — an in-flight item keeps the chain it entered, so a
+configuration change cannot retroactively invalidate approvals already given.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  levels ApprovalLevel [not null]
+  instances ApprovalInstance [not null]
+
+  Note: 'The ordered shape of authority for one kind of action, in one company.
+
+Per company rather than global because the client runs two companies that may staff
+the same chain shape differently — which is also why a level names a *slot* and not
+a role (research.md §2).'
+}
+
+Table ApprovalLevel {
+  id String [pk]
+  chainId String [not null]
+  chain ApprovalChain [not null]
+  companyId String [not null, note: 'Denormalised from the chain so this table carries the same
+`"companyId" = current_setting(...)` RLS policy as every other company-scoped
+table in the database. The alternative — a policy reaching through `chainId` with
+a subquery — would be the only policy of its shape in eleven schemas, and the one
+a future table would copy wrongly. Write-once, set in the same transaction as the
+chain it belongs to, and no code path moves a chain between companies.']
+  company Company [not null]
+  position Int [not null, note: '1-based and contiguous. `ApprovalInstance.currentPosition` indexes into these.']
+  slotKey String [not null, note: 'The slot authorised to act — `first_approver`, `hr`, `final` — resolved to an
+actual role per company through `RoleSlotMapping`. A level that named a role
+would hardcode one org chart into the chain definition; a slot describes the
+*shape* of authority and lets settings supply the people (research.md §2).']
+  isFinalAuthority Boolean [not null, default: false, note: 'This level is the Director gate.']
+  label String [note: 'Human label for the level, shown by the interface (FR-010). Null falls back to
+the canonical slot-key label in `approval-slots.ts`; the column exists so a
+company defining a slot outside that set still gets a legible label instead of a
+raw key.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (chainId, position) [unique]
+    (chainId, slotKey) [unique]
+  }
+
+  Note: 'One step of a chain.'
+}
+
+Table RoleSlotMapping {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  slotKey String [not null]
+  roleId String [not null]
+  role Role [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, slotKey) [unique]
+  }
+
+  Note: 'Binds a slot to one of a company\'s own roles. The table that lets two companies
+staff the same chain shape differently.'
+}
+
+Table ApprovalInstance {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  chainId String [not null]
+  chain ApprovalChain [not null]
+  entityType String [not null, note: 'What kind of thing this is — `attendance_exception`, `payroll_run`.
+**Deliberately not a foreign key, and deliberately not an enum**: the spine must
+not know the set of things it governs (research.md §1).']
+  entityId String [not null, note: 'The item\'s id in its own module\'s schema. **No foreign key** — see the block
+comment above this model group. This is the single most important absence in the
+feature, and it is intentional.']
+  subject String [not null, note: 'Copied from the owning module at submit time, because the spine cannot read the
+item to build it. This is the practical cost of the opacity above, and it is paid
+here: a queue row has to say what it is about.']
+  href String [note: 'Where the interface should send a reviewer to see the item itself. Supplied by
+the owning module for the same reason.']
+  currentPosition Int [not null, default: 1, note: 'Which level it awaits. Meaningless once `state` is terminal.']
+  state ApprovalState [not null, default: 'pending']
+  originatorUserId String [not null]
+  originator User [not null]
+  round Int [not null, default: 1, note: 'Which round of the chain this is. Incremented when a returned item is
+resubmitted, and part of both decision uniques below — without it, resubmission
+would collide with the decisions of the round that was returned (FR-005, FR-020).']
+  returnCount Int [not null, default: 0, note: 'Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
+cannot be worn down by repetition without leaving a trace.']
+  delegatedToUserId String [note: 'A one-off grant of authority at the CURRENT level to one named person (FR-019).
+
+Reassignment needs storage because authority in this model comes from holding a
+role, not from being assigned a task — so "reassign to another holder of the same
+level" would otherwise be a no-op, since every holder can already act. The case it
+actually exists for is the stall FR-021a creates: the sole holder of a level\'s role
+has already decided earlier in the chain, so *nobody* can act, and the item is
+stuck with no error anywhere.
+
+Cleared whenever the item advances, is returned or terminates — a grant is for one
+level, not for the rest of the chain. It does NOT bypass FR-021a: a delegate who has
+already decided this round is still refused, by the unique index on
+`ApprovalDecision`, so this cannot be used to launder a second decision.']
+  delegatedTo User
+  delegationReason String [note: 'Why the grant was made. Required by the service — an unexplained reassignment of an
+approval is exactly the kind of act an audit trail exists to explain.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  decisions ApprovalDecision [not null]
+
+  Note: 'One item travelling one chain. The opaque reference to the governed item lives here.'
+}
+
+Table ApprovalDecision {
+  id String [pk]
+  approvalInstanceId String [not null]
+  approvalInstance ApprovalInstance [not null]
+  companyId String [not null, note: 'Denormalised from the instance so this table carries the same
+`"companyId" = current_setting(...)` RLS policy as every other company-scoped
+table in the database, instead of the one policy in the schema that needs a
+subquery to evaluate. Write-once and set inside the same transaction as the row
+it is copied from, so it cannot drift. (Same reasoning as
+`labour.GangMember.isActive`, denormalised so an index need not join.)']
+  company Company [not null]
+  round Int [not null, default: 1, note: 'The round of the chain this decision belongs to, copied from the instance.']
+  position Int [not null, note: 'The level decided at.']
+  actorUserId String [not null]
+  actor User [not null]
+  action ApprovalDecisionAction [not null]
+  reason String [note: 'Required for `reject` and `return` (FR-006). Enforced at the service boundary,
+which returns `APPROVAL_REASON_REQUIRED` rather than letting a NOT NULL surface
+as a database error.']
+  decidedAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (approvalInstanceId, round, actorUserId) [unique]
+    (approvalInstanceId, round, position) [unique]
+  }
+
+  Note: 'One recorded act by one person at one level. Immutable once written.'
 }
 
 Table ItemCategory {
@@ -3251,6 +3413,9 @@ Enum AuditEntityType {
   ASSET_CATEGORY
   ASSET_DOC_TYPE
   CONDITION_GRADE
+  APPROVAL_DECISION
+  APPROVAL_REFUSED
+  APPROVAL_CHAIN_CONFIG
 }
 
 Enum AuditAction {
@@ -3542,6 +3707,20 @@ Enum ReminderSeverity {
   info
   warning
   overdue
+}
+
+Enum ApprovalState {
+  pending
+  approved
+  rejected
+  returned
+  abandoned
+}
+
+Enum ApprovalDecisionAction {
+  approve
+  reject
+  return
 }
 
 Enum ItemUnit {
@@ -3966,6 +4145,30 @@ Ref: ReminderSnooze.ruleKey > ReminderRule.ruleKey [delete: Cascade]
 Ref: ReminderNotification.companyId > Company.id [delete: Cascade]
 
 Ref: ReminderNotification.ruleKey > ReminderRule.ruleKey [delete: Cascade]
+
+Ref: ApprovalChain.companyId > Company.id [delete: Cascade]
+
+Ref: ApprovalLevel.chainId > ApprovalChain.id [delete: Cascade]
+
+Ref: ApprovalLevel.companyId > Company.id [delete: Cascade]
+
+Ref: RoleSlotMapping.companyId > Company.id [delete: Cascade]
+
+Ref: RoleSlotMapping.roleId > Role.id [delete: Cascade]
+
+Ref: ApprovalInstance.companyId > Company.id [delete: Cascade]
+
+Ref: ApprovalInstance.chainId > ApprovalChain.id
+
+Ref: ApprovalInstance.originatorUserId > User.id
+
+Ref: ApprovalInstance.delegatedToUserId > User.id
+
+Ref: ApprovalDecision.approvalInstanceId > ApprovalInstance.id [delete: Cascade]
+
+Ref: ApprovalDecision.companyId > Company.id [delete: Cascade]
+
+Ref: ApprovalDecision.actorUserId > User.id
 
 Ref: ItemCategory.companyId > Company.id [delete: Cascade]
 

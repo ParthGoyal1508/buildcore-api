@@ -42,3 +42,30 @@ export function toUserSummary(user: UserWithRoles): UserSummary {
     // Deliberately omits `password` — same boundary UserResponseDto enforces.
   };
 }
+
+/**
+ * A user's name for display beside a record they acted on (feature 016 FR-008).
+ *
+ * Deliberately a different composition from `toUserSummary` above, which must keep its
+ * exact current rule because it is what the Users list (002 FR-013) already renders and
+ * this feature does not change existing screens.
+ *
+ * The difference is `displayName`, preferred here and unused there. An approval history
+ * has to name a person: a Super Admin or a vendor-facing login has no `hr.Employee` to
+ * take a name from and may have neither firstname nor lastname, and "approved by
+ * (blank)" is worse than any of the fallbacks below. `email` is the last resort for the
+ * same reason — ugly, but it identifies somebody.
+ */
+export function displayNameOf(
+  user: Pick<
+    User,
+    'displayName' | 'firstname' | 'lastname' | 'username' | 'email'
+  >,
+): string {
+  return (
+    user.displayName?.trim() ||
+    [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
+    user.username ||
+    user.email
+  );
+}
