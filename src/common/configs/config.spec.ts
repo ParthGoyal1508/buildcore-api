@@ -87,3 +87,34 @@ describe('refresh cookie configuration', () => {
     expect(config.security.refreshCookie.path).toBe('/bff/auth');
   });
 });
+
+describe('normaliseRefreshCookiePath', () => {
+  // Imported lazily so the suite above keeps full control of module state.
+  const load = async () =>
+    (await import('./config')).normaliseRefreshCookiePath;
+
+  it('adds the leading slash a cookie path requires', async () => {
+    // The exact production misconfiguration. Without a leading slash the attribute is
+    // invalid and browsers silently substitute the default-path, so the value in the
+    // dashboard stops describing what is actually stored.
+    expect((await load())('bff/auth')).toBe('/bff/auth');
+  });
+
+  it('leaves a well-formed path alone', async () => {
+    expect((await load())('/bff/auth')).toBe('/bff/auth');
+  });
+
+  it('strips a trailing slash, which would stop matching the path itself', async () => {
+    expect((await load())('/bff/auth/')).toBe('/bff/auth');
+  });
+
+  it('keeps root as root', async () => {
+    expect((await load())('/')).toBe('/');
+  });
+
+  it('falls back to the legacy default when unset or blank', async () => {
+    const fn = await load();
+    expect(fn(undefined)).toBe('/auth');
+    expect(fn('   ')).toBe('/auth');
+  });
+});

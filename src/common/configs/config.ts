@@ -45,6 +45,28 @@ function parsePtSlabs(
 export const LEGACY_REFRESH_COOKIE_PATH = '/auth';
 
 /**
+ * The cookie's `Path`, normalised.
+ *
+ * A `Path` that does not begin with `/` is invalid, and RFC 6265 says to ignore it and
+ * fall back to the *default-path* — the directory of the request that set the cookie.
+ * For `/bff/auth/login` that computes to `/bff/auth`, so `REFRESH_COOKIE_PATH=bff/auth`
+ * appears to work while actually being ignored. That is a trap: the value in the
+ * dashboard no longer describes what the browser stores, and the moment the cookie is
+ * set from a response at any other depth the accident stops holding.
+ *
+ * Normalised rather than rejected, because refusing to boot would take a working API
+ * down over a leading slash. The preflight says loudly what happened.
+ */
+export function normaliseRefreshCookiePath(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return LEGACY_REFRESH_COOKIE_PATH;
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  // A trailing slash makes `/bff/auth/` which does not path-match `/bff/auth` itself.
+  const withoutTrailing = withLeadingSlash.replace(/(?!^)\/+$/, '');
+  return withoutTrailing || '/';
+}
+
+/**
  * Whether to mark the refresh cookie `Secure`. True everywhere unless explicitly
  * disabled, and impossible to disable in production.
  *
@@ -153,7 +175,7 @@ const config: Config = {
       // their first page refresh with nothing in any log to say why. That is not
       // hypothetical — it is what happened in local dev the day after 015 shipped, so
       // `refresh-cookie-preflight.ts` now says the effective value out loud at boot.
-      path: process.env.REFRESH_COOKIE_PATH || LEGACY_REFRESH_COOKIE_PATH,
+      path: normaliseRefreshCookiePath(process.env.REFRESH_COOKIE_PATH),
     },
     refreshToken: {
       sessionDays: numberFromEnv(process.env.SESSION_DAYS, 90),
