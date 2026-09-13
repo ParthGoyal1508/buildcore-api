@@ -41,16 +41,17 @@ spine's. Every task below is written so that staying inside that rule is the eas
       codes from [contracts/approval-service.md](./contracts/approval-service.md). They are separate
       because they have separate remedies; a single `403` sends people to fix the wrong thing
 - [ ] T007 Create `src/approvals/approvals.module.ts` exporting `ApprovalService`
-- [ ] T008 Implement `ChainsService` in `src/approvals/chains.service.ts`: chain and level CRUD, slot
-      mapping read/write
+- [ ] T008 Implement `ChainsService` (FR-001, FR-001a) in `src/approvals/chains.service.ts`: chain
+      and level CRUD, slot mapping read/write
 - [ ] T009 Implement the unsatisfiable-chain guard in `ChainsService`: refuse a slot mapping under
       which two levels of any active chain resolve to the same role, naming both levels (FR-021b).
       **At mapping time, not at decision time** — the failure it prevents is silent, total, and
       discovered only when work stops
 - [ ] T010 Implement `ApprovalService.submit()` — resolve the active chain, refuse a duplicate live
       instance, throw a *configuration* fault (not a 403) when no chain exists (FR-001b)
-- [ ] T011 Implement `ApprovalService.decide()` — authority via slot mapping, advance or terminate,
-      require a reason for reject and return, increment `returnCount` on resubmission
+- [ ] T011 Implement `ApprovalService.decide()` (FR-002, FR-004, FR-005, FR-006, FR-020) —
+      authority via slot mapping, advance or terminate, require a reason for reject and return,
+      increment `returnCount` on resubmission
 - [ ] T012 Implement the FR-021a refusal in `decide()`: a person who has already decided on this
       item may not decide again, returning `APPROVAL_ALREADY_DECIDED` distinct from
       `APPROVAL_NOT_AUTHORISED`. Super Admin holds every permission, so this is the common case, not
@@ -58,10 +59,21 @@ spine's. Every task below is written so that staying inside that rule is the eas
 - [ ] T013 Emit `approval.completed` on the event bus at final approval, carrying only
       `(entityType, entityId, companyId, instanceId)`. The spine must not call any module
       (checklist CHK009, CHK010)
+- [ ] T013a Include in every state the fields the interface needs but cannot compute (FR-010,
+      FR-011): `canActNow`, `levelLabel`, `awaitingUserName`, and `inertReason` with its four
+      values. `already_decided` is knowable only here — without it the interface must tell a Super
+      Admin they lack permission, which is false
 - [ ] T014 [P] Implement `stateOf()` and `statesOf()` — the batch form is what every list must use
       (contract Part 1; checklist CHK018)
 - [ ] T015 [P] Implement `abandon()` so a cancelled item closes its chain instead of waiting forever
       (research.md §1)
+- [ ] T015a Implement `reassign(instanceId, toUserId, reason)` — move a pending item to another
+      holder of the same level (FR-019). **Not a convenience.** Because FR-021a forbids a second
+      decision by the same person, this is the only way an item stalled by thin staffing can move,
+      and the analyze pass found it had no task at all. Administrative act only; an approver may not
+      use it to skip their own level
+- [ ] T015b [P] Audit every reassignment, and unit-test that an approver cannot reassign an item
+      currently awaiting themselves
 - [ ] T016 Implement `queueFor()` — resolve the caller's roles to slots, find pending instances at a
       matching level, and **exclude items they have already decided on**. A queue listing work you
       are forbidden to action trains people to ignore the queue
@@ -93,14 +105,14 @@ after each.
 - [ ] T022 [US1] Seed a default `attendance_exception` chain with three levels
       (`first_approver`, `hr`, `final`) and the `settings` copy needed to map slots to roles
 - [ ] T023 [US1] Change `src/hr/attendance-exceptions/attendance-exceptions.controller.ts` to submit
-      an exception into the chain on detection, supplying `subject` and `href` at submit time —
+      an exception into the chain on detection (FR-012), supplying `subject` and `href` at submit time —
       **the spine cannot read the punch to build them** (checklist CHK003)
 - [ ] T024 [US1] Replace the single-step `resolve` endpoint with a decision through
       `ApprovalService.decide()`, keeping the route so the interface changes once rather than twice
 - [ ] T025 [US1] Subscribe to `approval.completed` in the `hr` module and apply the outcome to the
       punch. The handler MUST be idempotent — it will be redelivered (research.md §8)
 - [ ] T026 [US1] Make the punch's effective status read from the spine rather than a local column
-      where the two could disagree; `ApprovalInstance.state` is authoritative (research.md §8)
+      where the two could disagree (FR-007); `ApprovalInstance.state` is authoritative (research.md §8)
 - [ ] T027 [US1] Data migration: backfill historical single-step resolutions as completed
       single-level instances, so old and new render through one path (research.md §7)
 - [ ] T028 [US1] e2e spec in `test/` covering spec US1 scenarios 1–5, including the refusal when
@@ -118,9 +130,9 @@ is built.
 - [ ] T030 [US2] Add unique `(companyId, period, isFnf)` and `createdBySchedule` to `PayrollRun`,
       with a migration. **Idempotency comes from this constraint, not from the scheduler being
       careful** (research.md §4)
-- [ ] T031 [US2] Implement `createRunsForPreviousPeriod()` in `payroll-runs.service.ts` — computes
-      every active company's run with advances and deductions applied, absorbing the duplicate case
-      via the constraint
+- [ ] T031 [US2] Implement `createRunsForPreviousPeriod()` (FR-013, FR-014) in
+      `payroll-runs.service.ts` — computes every active company's run with advances and deductions
+      applied, absorbing the duplicate case via the constraint
 - [ ] T032 [US2] Create `src/payroll/runs/payroll-schedule.cron.ts` mirroring
       `ReminderEvaluationCron` exactly: thin `@Cron` calling the service, errors logged not
       rethrown, timezone `Asia/Kolkata` so "the 1st" means the 1st locally
@@ -148,10 +160,10 @@ is built.
 
 ## Phase 4: US3 + US4 — Attribution and the queue surface (P2)
 
-- [ ] T042 [US3] Include latest action, actor name and time in the state returned by `stateOf()` and
-      `statesOf()`, resolving names for deactivated users too
-- [ ] T043 [US3] Implement `GET /approvals/:entityType/:entityId/history`, with the **owning module**
-      deciding whether the caller may view the item — the spine cannot know
+- [ ] T042 [US3] Include latest action, actor name and time (FR-008) in the state returned by
+      `stateOf()` and `statesOf()`, resolving names for deactivated users too
+- [ ] T043 [US3] Implement `GET /approvals/:entityType/:entityId/history` (FR-009), with the
+      **owning module** deciding whether the caller may view the item — the spine cannot know
 - [ ] T044 [US4] Implement `GET /approvals/queue` and `GET /approvals/queue/count` as separate
       endpoints. The badge appears on every screen and must not pull the queue
 - [ ] T045 [US4] Implement `POST /approvals/:instanceId/decide` with a DTO — mandatory even for a
@@ -186,6 +198,10 @@ is built.
 - [ ] T054 [P] RLS tests for `ApprovalInstance` and `ApprovalDecision` **as a non-super-admin
       caller** — this is the one place a policy mistake leaks another company's pending work into a
       user's queue
+- [ ] T054a Verify FR-022 explicitly: every module **not** migrated in this feature still approves
+      exactly as before. Run the existing indent, asset-request, muster-roll and RA-bill approval
+      e2e specs unchanged and confirm they pass untouched. The analyze pass found this requirement
+      had no task, and "we did not mean to change it" is not evidence that we did not
 - [ ] T055 Add the Principle I guard from quickstart Pass 10 as a script, then **deliberately
       introduce a violation and confirm it fails** (checklist CHK008). A guard nobody has seen fail
       is not known to work

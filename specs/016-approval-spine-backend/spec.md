@@ -41,7 +41,7 @@ Today the system has approval **permissions** (`INVENTORY_APPROVE`, `LABOUR_APPR
 **A consequence worth stating.** Forbidding a second decision and mapping levels to slots interact:
 if one company maps two slots to the same role, and only one person holds it, every item in that
 chain stalls at the second of those levels. Nothing in the model prevents that configuration. The
-escape is FR-019 (reassignment), which becomes load-bearing rather than a convenience — and FR-023
+escape is FR-019 (reassignment), which becomes load-bearing rather than a convenience — and FR-021b
 below requires the configuration to be refused at definition time rather than discovered when work
 stops.
 
@@ -240,10 +240,22 @@ confirm it does not take effect until the director approves.
   its time, without navigating elsewhere.
 - **FR-009**: Users MUST be able to see the full ordered decision history of a record, subject to
   their permission to view that record.
-- **FR-010**: System MUST present a single consistent Action/Review control wherever a decision is
-  possible, offering the same decisions in the same place across every module.
-- **FR-011**: System MUST show the control in an inert state, naming the awaited approver, when the
-  item is not awaiting the current user.
+- **FR-010**: System MUST supply, with every item's approval state, everything the interface needs to
+  render a consistent control without inferring anything: whether the caller may act now, and the
+  label of the level that decides.
+- **FR-011**: System MUST supply a machine-readable reason when the caller may **not** act,
+  distinguishing at minimum *awaiting another person*, *this caller already decided at an earlier
+  level*, *insufficient authority*, and *the level's slot is unmapped*.
+
+  The last two of those are the point. "Already decided" is knowable only here — the browser cannot
+  compute it — and without it the interface must say "no permission" to a Super Admin who has every
+  permission, which is untrue and sends the one person who can change permissions to go and change
+  them. "Slot unmapped" is a configuration fault whose remedy is a settings screen, not a permission
+  grant.
+
+  *The presentation of these states is specified in `buildcore-web/specs/016-approval-spine`
+  (its FR-001, FR-003, FR-003a). It is deliberately not restated here: the same requirement written
+  in two artifacts is how two artifacts drift.*
 - **FR-012**: System MUST raise attendance exceptions (location mismatch, face mismatch) into an
   approval chain rather than resolving them in a single step.
 - **FR-013**: System MUST create a payroll run automatically on the first day of each month for the
