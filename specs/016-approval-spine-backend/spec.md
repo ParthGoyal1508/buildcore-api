@@ -168,17 +168,19 @@ confirm it does not take effect until the director approves.
    is recorded as the final authority.
 3. **Given** such an action, **When** the director rejects, **Then** it does not take effect, and the
    reason is visible to everyone who approved earlier.
-4. **Given** no user holds the director role, **When** such an action is submitted, **Then** it is
-   accepted into the chain and held, and the configuration problem is surfaced to an administrator
-   rather than silently stalling.
+4. **Given** no active user holds the Super Admin role, **When** such an action is submitted,
+   **Then** it is accepted into the chain and held, and the configuration problem is surfaced rather
+   than silently stalling. (The system already refuses to deactivate the last Super Admin, so this
+   should be unreachable — the scenario exists to prove it.)
 
 ### Edge Cases
 
 - An approver leaves the company or is deactivated mid-chain. The item must not become
   unapprovable; it must be reassignable to another holder of that level.
-- The same person holds two consecutive levels. The specification must say whether one action
-  satisfies both or whether both must be recorded — silent double-satisfaction would let one person
-  approve their own work.
+- The same person holds two or more levels — unavoidable for Super Admin, which holds every
+  permission. The specification must say whether one action satisfies several levels, or whether each
+  must be recorded separately; silent double-satisfaction would let one person approve their own work
+  through an entire chain.
 - An approver acts on an item they created. This must be refused, or explicitly permitted by
   configuration, but never unexamined.
 - Two approvers at the same level act at the same moment. Exactly one decision may be recorded.
@@ -226,8 +228,8 @@ confirm it does not take effect until the director approves.
 - **FR-016**: System MUST restrict attendance edits for a period under payroll review to HR only.
 - **FR-017**: System MUST invalidate approvals already given for a payroll run when its underlying
   attendance changes, and restart its chain.
-- **FR-018**: System MUST allow an action type to be marked as requiring final director approval,
-  and MUST hold such actions until that approval is given.
+- **FR-018**: System MUST allow an action type to be marked as requiring final approval by the
+  Super Admin role (the client's "Director"), and MUST hold such actions until it is given.
 - **FR-019**: System MUST allow a pending item to be reassigned to another holder of the same level
   when the original approver is unavailable.
 - **FR-020**: System MUST record and surface the number of times an item has been returned and
@@ -284,6 +286,21 @@ confirm it does not take effect until the director approves.
 
 ## Assumptions
 
+- **Director is the Super Admin role** (client, 2026-09-13). The final approval level in every chain
+  resolves to Super Admin.
+
+  This carries a consequence the client should see stated, because it is not obvious from the answer:
+  Super Admin currently holds *every* permission in the system, including `USER_MANAGEMENT`,
+  `COMPANY_SETTINGS` and `DATA_DELETE`. Making it the final financial authority means the person who
+  releases payroll is also the person who can change who approves payroll, alter permissions, and
+  delete records. An approval chain exists to create control, and a final approver who can
+  reconfigure the chain is a weaker control than the client probably intends.
+
+  This specification proceeds with Super Admin as Director because that is the answer given. It is
+  worth revisiting whether the final-approval authority should be a distinct role holding
+  approval rights *without* system administration rights — which feature 019's read/write
+  granularity would make expressible. Flagged, not blocking.
+
 - The client's "Employer-HR-Director" (Note 2) and "Site Incharge < HR Office < Director" (Note 7)
   describe the same three-tier shape at different levels of the organisation, and both are
   configurable instances of one mechanism rather than two hardcoded chains.
@@ -300,14 +317,24 @@ confirm it does not take effect until the director approves.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: which roles are "HR" and "Director"?]** The nine roles that exist today are
-  Accountant, HO User, Project Manager, Site Admin, Site Engineer, Site User, Store Keeper, Super
-  Admin and Viewer. **Neither "HR" nor "Director" is among them**, and neither is "Site Incharge".
-  Either new roles are created, or these names map onto existing roles. This cannot be guessed: it
-  decides who can release payroll.
+- **[NEEDS CLARIFICATION: which roles are "HR Office" and "Site Incharge"?]** Of the three names the
+  client uses, only Director is now settled (see Assumptions — it is Super Admin). The nine roles
+  that exist are Accountant, HO User, Project Manager, Site Admin, Site Engineer, Site User, Store
+  Keeper, Super Admin and Viewer. **Neither "HR Office" nor "Site Incharge" is among them.** HO User
+  and Site Admin are the plausible candidates respectively, but plausible is not good enough here:
+  FR-016 gives HR the exclusive right to edit attendance during a payroll review, so naming the
+  wrong role either locks out the people who do the work or hands the right to people who should
+  not have it.
 - **[NEEDS CLARIFICATION: which action types require final director approval?]** Note 8 says every
   final work. The list must be enumerated before FR-018 is implementable, or the default is that only
   payment release, letter issue and final settlement are director-final.
-- **[NEEDS CLARIFICATION: may one person satisfy two consecutive levels they both hold?]** In a small
-  company one person may hold both HR and director roles. Silently allowing it means one person
-  approves their own work; forbidding it may deadlock. The client must choose.
+- **[NEEDS CLARIFICATION: may one person satisfy more than one level of the same chain?]** This
+  became sharper once Director resolved to Super Admin: a Super Admin holds every permission, so
+  without a rule they could satisfy *every* level of a chain single-handedly — raising an attendance
+  correction, approving it as HR, and approving it again as Director. The chain would then be
+  ceremony rather than control.
+
+  The options are to forbid one person from recording two decisions on the same item, to permit it
+  with each decision recorded separately and visibly, or to permit it silently. The third is what
+  happens if nobody decides. In a small company forbidding it may deadlock, so this needs the
+  client's judgement about their own staffing, not a default.

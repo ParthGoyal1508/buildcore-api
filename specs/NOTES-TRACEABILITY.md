@@ -36,6 +36,32 @@ was identified; everything else became a requirement in one of specs 016–021.
 | 26 | RTGS / payment-transfer proof attachment | `Payment.referenceNumber` only, no attachment | 017 US7 |
 | 27 | *(blank in the source sheet)* | — | — |
 
+## Where the specs live
+
+Each theme is a pair, following the convention of 001-015:
+
+| Theme | buildcore-api | buildcore-web |
+|---|---|---|
+| Approval spine | `016-approval-spine-backend` | `016-approval-spine` |
+| Documents and letters | `017-documents-and-letters-backend` | `017-documents-and-letters` |
+| BOQ, billing, P&L | `018-boq-billing-pl-backend` | `018-boq-billing-pl` |
+| Access, multi-company | `019-access-and-multi-company-backend` | `019-access-and-multi-company` |
+| Fuel, geofence | `020-fuel-accountability-geofence-backend` | `020-fuel-accountability-geofence` |
+| Search, payout, exit | `021-search-payout-and-exit-backend` | `021-search-payout-and-exit` |
+
+## Settled by the client
+
+**Director is the Super Admin role** (2026-09-13). Recorded in `016-approval-spine-backend`, along
+with the consequence: Super Admin holds every permission in the system, including
+`USER_MANAGEMENT`, `COMPANY_SETTINGS` and `DATA_DELETE`. Making it the final approval authority
+means the person who releases payroll can also change who approves payroll. Worth revisiting;
+not blocking.
+
+**"HR Office" and "Site Incharge" are still unmapped.** Neither exists among the nine roles. The
+first of them gates FR-016 — the rule that only HR may edit attendance during a payroll review — so
+naming the wrong role either locks out the people doing the work or hands the right to people who
+should not have it.
+
 ## Two things worth saying plainly
 
 **Note 14 is half done, and the built half is the harder half.** The system already detects fuel
@@ -47,6 +73,14 @@ numbers, and every one of them says it is unverified. Note 23 in particular is a
 current hosting: the production API runs on an instance class that suspends when idle, and a
 suspended instance's first request has been observed taking tens of seconds — which alone breaches
 the target, before any load is applied. That is an infrastructure decision, not a development task.
+
+**Note 25 additionally contradicts a NON-NEGOTIABLE constitutional principle.** buildcore-web's
+Principle VI defines mobile-critical surfaces as a closed list — punch, attendance viewing, leave —
+and every other screen as desktop-first. That list was narrowed to exactly that in a MAJOR version
+bump, on the explicit finding that mobile-first was "wrong about most of the product". Note 25 asks
+to reverse it. No feature specification can amend a constitution, so the six web specs each state
+where they sit against Principle VI and leave the decision recorded in `016-approval-spine`. It must
+be settled before any of them is planned.
 
 ## What is not covered
 
