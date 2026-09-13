@@ -17,3 +17,19 @@ export const SESSION_EXPIRED = 'SESSION_EXPIRED';
 
 /** Replay protection destroyed the family; the credential was presented too late. */
 export const SESSION_REVOKED = 'SESSION_REVOKED';
+
+/**
+ * No refresh cookie reached the server at all.
+ *
+ * Distinct from `SESSION_EXPIRED`, which means a credential was presented and refused.
+ * This means none was presented — the browser either never stored the cookie or is not
+ * sending it, which is nearly always a deployment fault rather than anything the user
+ * did: a `Path` that does not match where the frontend's renewal request lands, a
+ * `Secure` cookie on a plain-HTTP origin, or a `SameSite` the browser rejects.
+ *
+ * It exists because the absence of this distinction cost real debugging time. A
+ * misconfigured cookie path produced a bare 401, the client defaulted to "your session
+ * expired", and a configuration error was indistinguishable from ordinary behaviour in
+ * both the UI and the logs. A deployment fault should announce itself.
+ */
+export const SESSION_COOKIE_MISSING = 'SESSION_COOKIE_MISSING';

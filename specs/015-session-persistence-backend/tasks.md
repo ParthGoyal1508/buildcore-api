@@ -192,3 +192,60 @@ where hours past it would read as a credential somebody kept. That discriminator
 was missing when the old 5-second window destroyed five live sessions unnoticed.
 
 686/686 unit tests, `tsc` clean, eslint 0 errors, migration applied.
+
+---
+
+## Post-ship defect — 2026-09-13
+
+**The risk the plan named three times is the one that bit, two days after shipping.**
+`REFRESH_COOKIE_PATH` was never set in any environment, so the cookie went out at its
+legacy `Path=/auth` while the frontend renewed at `/bff/auth/refresh-token`. The browser
+stored the credential and never sent it. Every session ended on the first page refresh —
+the original symptom, reproduced exactly, by the fix's own configuration.
+
+Reproduced and then verified fixed against a live instance:
+
+```
+login via the /bff proxy   201  Set-Cookie: …; Path=/auth      ← the fault
+refresh (no cookie sent)   401
+refresh, cookie forced in  201                                  ← the token was always fine
+after REFRESH_COOKIE_PATH=/bff/auth:
+login                      201  Set-Cookie: …; Path=/bff/auth
+refresh, curl path-matched 201
+refresh again (rotated)    201
+```
+
+### Why documenting the variable was not enough
+
+Three places in these artifacts warn about this setting, and it was still missed. The
+warnings were load-bearing on somebody reading them at the right moment, which is not a
+mechanism. Two changes make the failure announce itself instead:
+
+- **`SESSION_COOKIE_MISSING`** (`session-error-codes.ts`). `readRefreshCookie()` threw a
+  bare `UnauthorizedException`, which the client rendered as "your session expired" — so a
+  cookie the browser was never going to send was indistinguishable from ninety days of not
+  visiting, in the UI *and* in the logs. It now carries a code and logs the attributes the
+  cookie is actually issued with, because the mismatch is between those and where the
+  browser presents it, which is the one fact neither side can see alone.
+- **`refresh-cookie-preflight.ts`**, called from `main.ts`. The fault is undetectable from
+  inside the process: the `/bff` prefix is stripped before the request arrives, so the
+  browser-facing path never appears in it. Printing the effective attributes at boot, and
+  warning on the legacy default, is the whole available mitigation.
+
+### Also corrected
+
+- **`.env.example` never mentioned `REFRESH_COOKIE_PATH`** — the file people copy from
+  omitted the one variable that breaks sessions silently. It also still described the
+  pre-015 world (`SameSite` inferred as `none`, "30d remember-me / 1d default").
+- **`REFRESH_COOKIE_SECURE`** added, refused outright when `NODE_ENV=production`. Safari
+  will not store a `Secure` cookie over `http://localhost` — Chrome and Firefox exempt
+  localhost, Safari does not — so quickstart Pass 3 was impossible to run locally in the
+  one browser whose cookie behaviour motivated this feature. The interface doc claiming
+  "browsers exempt localhost" was true of Chrome and wrong in general.
+
++16 unit tests (702 total, all passing): `auth.controller.spec.ts`,
+`refresh-cookie-preflight.spec.ts`, `config.spec.ts`.
+
+**Still outstanding:** production on Render does not have `REFRESH_COOKIE_PATH=/bff/auth`
+either. It must be set there *before* the Vercel deploy, or production reproduces this
+defect for every user.

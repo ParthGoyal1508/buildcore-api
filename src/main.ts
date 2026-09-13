@@ -6,9 +6,11 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { configureApp } from './common/configure-app';
 import { assertRlsEnforceable } from './common/prisma/rls-preflight';
+import { logRefreshCookieConfig } from './auth/refresh-cookie-preflight';
 import type {
   CorsConfig,
   NestConfig,
+  SecurityConfig,
   SwaggerConfig,
 } from './common/configs/config.interface';
 
@@ -47,6 +49,12 @@ async function bootstrap() {
   const nestConfig = configService.get<NestConfig>('nest');
   const corsConfig = configService.get<CorsConfig>('cors');
   const swaggerConfig = configService.get<SwaggerConfig>('swagger');
+
+  // Printed every boot. The one attribute that matters here — whether the cookie's Path
+  // covers where the frontend actually renews — cannot be checked from inside this
+  // process, and gets no error when it is wrong, so making it visible is the whole
+  // mitigation.
+  logRefreshCookieConfig(configService.get<SecurityConfig>('security'));
 
   // Swagger Api
   if (swaggerConfig.enabled) {

@@ -131,9 +131,13 @@ export interface SecurityConfig {
      */
     path: string;
     /**
-     * Always true: mandatory for `SameSite=None`, and required by FR-019's TLS-only rule.
-     * Browsers exempt `localhost` from the HTTPS requirement, so this still works in local
-     * dev over plain HTTP.
+     * Whether the cookie is marked `Secure`. True unless `REFRESH_COOKIE_SECURE` explicitly
+     * disables it, which `config.ts` refuses outright when `NODE_ENV=production`.
+     *
+     * The escape hatch is for Safari on local dev. Chrome and Firefox exempt `localhost`
+     * from the HTTPS requirement and will store a `Secure` cookie over plain HTTP; Safari
+     * does not, so the session flow was untestable there locally — in the one browser whose
+     * cookie behaviour motivated 015 in the first place.
      */
     secure: boolean;
   };

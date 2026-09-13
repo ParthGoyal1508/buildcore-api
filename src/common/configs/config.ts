@@ -35,6 +35,45 @@ function parsePtSlabs(
   return slabs;
 }
 
+/**
+ * The refresh cookie's `Path` before the frontend began proxying at `/bff`.
+ *
+ * Kept as the default so the API stays deployable ahead of the frontend, and named
+ * so the boot-time check in `refresh-cookie-preflight.ts` can recognise it. Any
+ * deployment actually serving buildcore-web needs `/bff/auth` instead.
+ */
+export const LEGACY_REFRESH_COOKIE_PATH = '/auth';
+
+/**
+ * Whether to mark the refresh cookie `Secure`. True everywhere unless explicitly
+ * disabled, and impossible to disable in production.
+ *
+ * The escape hatch exists for one reason: Safari will not store a `Secure` cookie
+ * over plain `http://localhost`. Chrome and Firefox exempt localhost, Safari does
+ * not — so without this, the session flow cannot be exercised locally in the very
+ * browser where third-party-cookie behaviour differs most, which is where 015's
+ * defect was most visible. Testing a session fix everywhere except the browser that
+ * motivated it is not much of a test.
+ *
+ * Throwing rather than warning on `NODE_ENV=production`: a refresh cookie sent in
+ * clear text is a session-hijacking primitive, and a warning in a boot log is not a
+ * control. There is no legitimate production reason to set this.
+ */
+function refreshCookieSecureFromEnv(): boolean {
+  const raw = process.env.REFRESH_COOKIE_SECURE?.trim().toLowerCase();
+  if (raw === undefined || raw === '') return true;
+  const disabled = raw === 'false' || raw === '0' || raw === 'no';
+  if (!disabled) return true;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'REFRESH_COOKIE_SECURE cannot be disabled when NODE_ENV=production: it ' +
+        'would send the session refresh cookie over plain HTTP. Remove the ' +
+        'variable from the production environment.',
+    );
+  }
+  return false;
+}
+
 function numberFromEnv(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') {
     return fallback;
@@ -104,11 +143,17 @@ const config: Config = {
       sameSite:
         (process.env.REFRESH_COOKIE_SAMESITE as 'strict' | 'lax' | 'none') ||
         'lax',
-      secure: true,
+      secure: refreshCookieSecureFromEnv(),
       // Must match the path the browser will present the cookie at. Behind the frontend's
       // `/bff` proxy that is `/bff/auth`; the default keeps today's behaviour so this is
       // safe to deploy before the frontend changes (015 FR-010).
-      path: process.env.REFRESH_COOKIE_PATH || '/auth',
+      //
+      // Leaving this at the default against a proxied frontend is silent: the browser
+      // stores the credential and never sends it back, and the user is signed out on
+      // their first page refresh with nothing in any log to say why. That is not
+      // hypothetical — it is what happened in local dev the day after 015 shipped, so
+      // `refresh-cookie-preflight.ts` now says the effective value out loud at boot.
+      path: process.env.REFRESH_COOKIE_PATH || LEGACY_REFRESH_COOKIE_PATH,
     },
     refreshToken: {
       sessionDays: numberFromEnv(process.env.SESSION_DAYS, 90),

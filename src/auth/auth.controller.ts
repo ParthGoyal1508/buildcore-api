@@ -6,6 +6,7 @@ import {
   Res,
   UseGuards,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import {
@@ -28,6 +29,7 @@ import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { ConfigService } from '@nestjs/config';
 import { SecurityConfig } from '../common/configs/config.interface';
+import { SESSION_COOKIE_MISSING } from './session-error-codes';
 
 const REFRESH_COOKIE_NAME = 'refreshToken';
 
@@ -35,6 +37,8 @@ const REFRESH_COOKIE_NAME = 'refreshToken';
 @UseGuards(ThrottlerGuard)
 @Controller('auth')
 export class AuthController {
+  private readonly logger = new Logger(AuthController.name);
+
   constructor(
     private readonly auth: AuthService,
     private readonly configService: ConfigService,
@@ -61,10 +65,35 @@ export class AuthController {
     });
   }
 
+  /**
+   * The refresh credential, or a refusal that says the cookie never arrived.
+   *
+   * The refusal is deliberately distinguishable from an expiry. This used to throw a
+   * bare `UnauthorizedException`, which the client rendered as "your session expired" —
+   * so a cookie the browser was never going to send looked exactly like a session that
+   * had legitimately run out, in the UI and in the logs alike. That is how a one-line
+   * `REFRESH_COOKIE_PATH` omission survived a full verification pass and then signed
+   * everyone out on their first page refresh.
+   *
+   * The warning names the attributes the cookie is actually issued with, because the
+   * mismatch is between those and where the browser is presenting it — which is the one
+   * fact nobody can see from either side alone.
+   */
   private readRefreshCookie(req: Request): string {
     const token = req.cookies?.[REFRESH_COOKIE_NAME];
     if (!token) {
-      throw new UnauthorizedException();
+      const { path, sameSite, secure } = this.refreshCookieOptions();
+      this.logger.warn(
+        `No "${REFRESH_COOKIE_NAME}" cookie on ${req.method} ${req.originalUrl}. ` +
+          `It is issued with Path=${path}; SameSite=${sameSite}; Secure=${secure}. ` +
+          `If the frontend proxies this API under a prefix, that Path must match where ` +
+          `its renewal request lands — see REFRESH_COOKIE_PATH.`,
+      );
+      throw new UnauthorizedException({
+        statusCode: 401,
+        message: 'Your session has ended. Please sign in again.',
+        code: SESSION_COOKIE_MISSING,
+      });
     }
     return token;
   }
