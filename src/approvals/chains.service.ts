@@ -14,7 +14,9 @@ import {
   ACTION_ATTENDANCE_EXCEPTION,
   ACTION_PAYROLL_RUN,
   DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
+  DEFAULT_DIRECTOR_FINAL_LEVELS,
   DEFAULT_PAYROLL_RUN_LEVELS,
+  DIRECTOR_FINAL_SEEDED_ACTIONS,
 } from './default-chains';
 
 /** One level as supplied when defining or replacing a chain. */
@@ -104,7 +106,7 @@ export class ChainsService {
     input: UpsertChainInput,
     actor: { userId: string; ipAddress: string },
   ): Promise<ChainWithLevels> {
-    this.assertLevelsWellFormed(input.levels);
+    this.assertLevelsWellFormed(input.levels, input.isFinalAuthorityRequired);
 
     const chain = await withRlsContext(this.prisma, ctx, async (tx) => {
       const existing = await tx.approvalChain.findFirst({
@@ -198,10 +200,22 @@ export class ChainsService {
     tx: Prisma.TransactionClient,
     opts: { superAdminRoleId?: string | null } = {},
   ): Promise<void> {
-    for (const [actionType, levels] of [
+    const seeds: [string, ChainLevelInput[]][] = [
       [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
       [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
-    ] as const) {
+      // FR-018's remaining action types, each a director-only chain (T048). Seeded even
+      // though no module submits into them yet: without the chain, feature 017's first
+      // work order would be refused as a configuration fault in every company at once,
+      // and the remedy would be a settings visit per company rather than a deployment.
+      ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
+        (actionType): [string, ChainLevelInput[]] => [
+          actionType,
+          DEFAULT_DIRECTOR_FINAL_LEVELS,
+        ],
+      ),
+    ];
+
+    for (const [actionType, levels] of seeds) {
       const existing = await tx.approvalChain.findFirst({
         where: { companyId, actionType },
         select: { id: true },
@@ -430,7 +444,10 @@ export class ChainsService {
    * approval, so a chain numbered 1, 2, 4 leaves every item parked at 3 forever, waiting
    * for a level that does not exist.
    */
-  private assertLevelsWellFormed(levels: ChainLevelInput[]): void {
+  private assertLevelsWellFormed(
+    levels: ChainLevelInput[],
+    isFinalAuthorityRequired = false,
+  ): void {
     if (levels.length === 0) {
       throw new BadRequestException('A chain must have at least one level.');
     }
@@ -454,9 +471,34 @@ export class ChainsService {
       );
     }
 
-    if (levels.filter((l) => l.isFinalAuthority).length > 1) {
+    const finals = levels.filter((l) => l.isFinalAuthority);
+    if (finals.length > 1) {
       throw new BadRequestException(
         'At most one level may be the final authority.',
+      );
+    }
+
+    // FR-018, T049. A chain declared director-final with no director level would
+    // complete without one — and complete *cleanly*, with every level approved, which is
+    // the worst version of the failure: nothing looks wrong. Refused at definition time
+    // for the same reason as FR-021b's guard.
+    if (isFinalAuthorityRequired && finals.length === 0) {
+      throw new BadRequestException(
+        'A chain that requires final authority must have a level marked as the final ' +
+          'authority. Without one it would complete with every level approved and no ' +
+          'director having seen it.',
+      );
+    }
+
+    // And it must be the last level. A director gate in the middle lets levels below it
+    // act *after* the final word has been given, which is not what "final" means — and
+    // FR-018 asks that the action be held until the director approves, not merely that a
+    // director appear somewhere in its history.
+    if (finals.length === 1 && finals[0].position !== levels.length) {
+      throw new BadRequestException(
+        `The final authority must be the last level (position ${levels.length}); it is ` +
+          `at position ${finals[0].position}. A level below the director would decide ` +
+          `after the final word had already been given.`,
       );
     }
   }

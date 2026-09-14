@@ -13,18 +13,23 @@ import {
   AuditEntityType,
   Prisma,
 } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
+import type { ApprovalsConfig } from '../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { UsersService } from '../users/users.service';
 import {
   APPROVAL_ALREADY_DECIDED,
   APPROVAL_ALREADY_SUBMITTED,
   APPROVAL_CHAIN_NOT_CONFIGURED,
+  APPROVAL_DIRECTOR_REQUIRED,
+  APPROVAL_NOT_COMPLETE,
   APPROVAL_NOT_AUTHORISED,
   APPROVAL_NOT_PENDING,
+  APPROVAL_NOT_SUBMITTED,
   APPROVAL_REASON_REQUIRED,
   APPROVAL_REASSIGN_FORBIDDEN,
   APPROVAL_SLOT_UNMAPPED,
@@ -41,6 +46,7 @@ import {
   InertReason,
   isLive,
   SubmitApprovalInput,
+  TakeEffectGate,
 } from './approval.types';
 import { ChainsService } from './chains.service';
 
@@ -84,13 +90,23 @@ type InstanceWithContext = Prisma.ApprovalInstanceGetPayload<{
 export class ApprovalService {
   private readonly logger = new Logger(ApprovalService.name);
 
+  /**
+   * Action types that must be approved before they take effect even when nothing is
+   * configured (FR-018a). Read once at construction — it is policy, not per-request state.
+   */
+  private readonly directorFinalActionTypes: string[];
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly chains: ChainsService,
     private readonly users: UsersService,
     private readonly audit: AuditLogService,
     private readonly events: EventEmitter2,
-  ) {}
+    configService: ConfigService,
+  ) {
+    this.directorFinalActionTypes =
+      configService.get<ApprovalsConfig>('approvals').directorFinalActionTypes;
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Submitting (T010)
@@ -589,6 +605,182 @@ export class ApprovalService {
     return [...instance.decisions]
       .sort((a, b) => a.decidedAt.getTime() - b.decidedAt.getTime())
       .map((d) => this.toDecisionView(d, instance, names));
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // The take-effect gate (FR-007, FR-018, T049, T050)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Whether an item may take effect yet — **the one gate every module asks** (T050).
+   *
+   * Feature 017 must call this for work orders, LOIs and purchase orders rather than
+   * building its own check, and the same goes for payment release and final settlement.
+   * The requirement is not stylistic: an approval rule with two implementations is an
+   * approval rule that will be enforced in one place and not the other, and the place it
+   * is missed is discovered by the money having already moved.
+   *
+   * Three questions, in this order, and the order is the content:
+   *
+   * 1. **Was it submitted at all?** For the action types FR-018 names, "no" is a refusal.
+   *    A module that skipped `submit` must not release a payment because there was
+   *    nothing to check it against. For every other action type "no" is a pass — FR-022
+   *    forbids this feature changing behaviour for modules it never migrated, and
+   *    refusing there would break every unmigrated approval in the product at once.
+   * 2. **Did the chain finish?** Pending, returned and rejected all mean no (FR-007).
+   * 3. **If the chain is director-final, did the director actually approve?** Checked
+   *    against the recorded decisions, not against the chain's shape. A chain defined
+   *    before the well-formedness rule existed would satisfy a shape check with nobody
+   *    having approved, and "whatever preceded" in FR-018 is exactly the case where
+   *    everything looks complete.
+   */
+  async mayTakeEffect(input: {
+    actionType: string;
+    entityType: string;
+    entityId: string;
+    companyId: string;
+  }): Promise<TakeEffectGate> {
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: input.companyId,
+    };
+    const instance = await this.loadByEntity(
+      ctx,
+      input.entityType,
+      input.entityId,
+    );
+
+    const clear: TakeEffectGate = {
+      allowed: true,
+      code: null,
+      message: null,
+      state: instance?.state ?? null,
+      levelLabel: null,
+      awaitingHolderCount: 0,
+    };
+
+    if (!instance) {
+      if (!this.directorFinalActionTypes.includes(input.actionType)) {
+        return clear;
+      }
+      return {
+        allowed: false,
+        code: APPROVAL_NOT_SUBMITTED,
+        message:
+          `This must be approved before it takes effect, and it has never been ` +
+          `submitted for approval. An administrator must define the approval chain ` +
+          `for "${input.actionType}".`,
+        state: null,
+        levelLabel: null,
+        awaitingHolderCount: 0,
+      };
+    }
+
+    const levels = [...instance.chain.levels].sort(
+      (a, b) => a.position - b.position,
+    );
+    const current = levels.find((l) => l.position === instance.currentPosition);
+    const levelLabel = current
+      ? labelForSlot(current.slotKey, current.label)
+      : null;
+
+    if (instance.state !== 'approved') {
+      return {
+        allowed: false,
+        code: APPROVAL_NOT_COMPLETE,
+        message:
+          instance.state === 'rejected'
+            ? 'This was rejected and cannot take effect.'
+            : `This is awaiting approval${
+                levelLabel ? ` at ${levelLabel}` : ''
+              } and cannot take effect yet.`,
+        state: instance.state,
+        levelLabel,
+        awaitingHolderCount: await this.holderCountAt(instance, current),
+      };
+    }
+
+    if (instance.chain.isFinalAuthorityRequired) {
+      const finalLevel = levels.find((l) => l.isFinalAuthority);
+      const approvedFinally =
+        finalLevel &&
+        instance.decisions.some(
+          (d) =>
+            d.position === finalLevel.position &&
+            d.round === instance.round &&
+            d.action === 'approve',
+        );
+      if (!approvedFinally) {
+        return {
+          allowed: false,
+          code: APPROVAL_DIRECTOR_REQUIRED,
+          message:
+            'This requires final approval by the director before it takes effect, ' +
+            'and no such approval is recorded.',
+          state: instance.state,
+          levelLabel: finalLevel
+            ? labelForSlot(finalLevel.slotKey, finalLevel.label)
+            : null,
+          awaitingHolderCount: await this.holderCountAt(instance, finalLevel),
+        };
+      }
+    }
+
+    return clear;
+  }
+
+  /**
+   * The same gate, as a refusal (T049).
+   *
+   * `409`, not `403`: the caller is not forbidden from releasing payments, the payment is
+   * not yet releasable. A 403 would send somebody to ask for permissions they already
+   * hold.
+   */
+  async assertMayTakeEffect(input: {
+    actionType: string;
+    entityType: string;
+    entityId: string;
+    companyId: string;
+  }): Promise<void> {
+    const gate = await this.mayTakeEffect(input);
+    if (gate.allowed) return;
+
+    // A level nobody can act on is US5 scenario 4 — held correctly, but held on nobody.
+    // Logged rather than merely returned, because the person who hits the refusal is not
+    // the person who can fix it.
+    if (gate.awaitingHolderCount === 0 && gate.levelLabel) {
+      this.logger.error(
+        `${input.actionType}/${input.entityId} is held at "${gate.levelLabel}", which ` +
+          `no active account can act on. Map the slot to a role with holders, or the ` +
+          `item will wait indefinitely.`,
+      );
+    }
+
+    throw new ConflictException({
+      statusCode: 409,
+      message: gate.message,
+      code: gate.code,
+    });
+  }
+
+  /** How many active accounts could act at a level. Zero is a configuration problem. */
+  private async holderCountAt(
+    instance: InstanceWithContext,
+    level: InstanceWithContext['chain']['levels'][number] | undefined,
+  ): Promise<number> {
+    if (!level) return 0;
+    if (instance.delegatedToUserId) return 1;
+    const roleId = await this.chains.resolveSlot(
+      { isSuperAdmin: false, companyId: instance.companyId },
+      instance.companyId,
+      level.slotKey,
+    );
+    if (!roleId) return 0;
+    const holders = await this.users.findActiveHoldersOfRole(
+      roleId,
+      instance.companyId,
+    );
+    return holders.length;
   }
 
   // ───────────────────────────────────────────────────────────────────────────

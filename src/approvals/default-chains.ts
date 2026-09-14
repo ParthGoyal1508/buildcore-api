@@ -26,6 +26,31 @@ export const ACTION_ATTENDANCE_EXCEPTION_LEGACY = 'attendance_exception_legacy';
 export const ACTION_PAYROLL_RUN = 'payroll_run';
 
 /**
+ * The action types FR-018 names besides payroll, declared here rather than in the modules
+ * that will own them.
+ *
+ * None of these has a module behind it yet: payment release belongs to the payments work
+ * and the three letter kinds to feature 017. They are declared now because the *gate* is
+ * this feature's job and 017 must consume it rather than build its own (T050) — and a
+ * constant a consuming feature imports is what makes "must consume" checkable instead of
+ * merely requested.
+ */
+export const ACTION_PAYMENT_RELEASE = 'payment_release';
+/**
+ * Work order, LOI and purchase order kept as three action types rather than one
+ * "money-committing letter".
+ *
+ * FR-018a's unit of configuration is the action type, so collapsing them would mean a
+ * company that wants purchase orders gated but not LOIs cannot say so. Three rows in a
+ * settings screen is the cost; the alternative costs a schema change.
+ */
+export const ACTION_LETTER_WORK_ORDER = 'letter_work_order';
+export const ACTION_LETTER_LOI = 'letter_loi';
+export const ACTION_LETTER_PURCHASE_ORDER = 'letter_purchase_order';
+/** Full and final settlement on exit, including any waived recoveries (FR-018.4). */
+export const ACTION_FINAL_SETTLEMENT = 'final_settlement';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these
@@ -64,4 +89,37 @@ export const DEFAULT_PAYROLL_RUN_LEVELS: ChainLevelInput[] = [
     label: 'Director',
     isFinalAuthority: true,
   },
+];
+
+/**
+ * The default shape for the action types FR-018 names but no module has built yet.
+ *
+ * One level: the director. The client described these as "the director's final word", not
+ * as chains — payment release and letter issue already sit at the end of whatever process
+ * produced them. A longer chain can be defined per company through the settings endpoints;
+ * this is the shape a company gets on day one, and it is the shape that makes FR-018 true
+ * with the fewest people in the way.
+ */
+export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
+  {
+    position: 1,
+    slotKey: SLOT_FINAL,
+    label: 'Director',
+    isFinalAuthority: true,
+  },
+];
+
+/**
+ * The action types seeded with the director-only chain above.
+ *
+ * `payroll_run` is absent deliberately: it has its own three-level chain (Note 7), and
+ * seeding order matters less than saying why — a one-level payroll chain would drop the
+ * Site Incharge and HR levels the client asked for.
+ */
+export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
+  ACTION_PAYMENT_RELEASE,
+  ACTION_LETTER_WORK_ORDER,
+  ACTION_LETTER_LOI,
+  ACTION_LETTER_PURCHASE_ORDER,
+  ACTION_FINAL_SETTLEMENT,
 ];

@@ -84,6 +84,38 @@ export const APPROVAL_CHAIN_UNSATISFIABLE = 'APPROVAL_CHAIN_UNSATISFIABLE';
  */
 export const APPROVAL_VIEW_FORBIDDEN = 'APPROVAL_VIEW_FORBIDDEN';
 
+/**
+ * An action that must be approved before it takes effect has never been submitted into a
+ * chain (FR-018, T049).
+ *
+ * The **fail-closed** answer for the action types FR-018 names. A module that skipped
+ * `submit` — or a company where nobody has defined the chain yet — must not be able to
+ * release a payment simply because there is nothing to check against. Deliberately
+ * *narrow*: any action type outside the director-final set passes the gate untouched when
+ * it has no instance, because FR-022 forbids this feature changing behaviour for modules
+ * it never migrated.
+ */
+export const APPROVAL_NOT_SUBMITTED = 'APPROVAL_NOT_SUBMITTED';
+
+/**
+ * The item is in a chain that has not finished (FR-007, FR-018).
+ *
+ * Pending, returned or rejected — all three mean "does not take effect", and the refusal
+ * carries the state and the level so the interface can say which.
+ */
+export const APPROVAL_NOT_COMPLETE = 'APPROVAL_NOT_COMPLETE';
+
+/**
+ * The chain is marked director-final but no final-authority approval is recorded
+ * (FR-018, T049).
+ *
+ * Checked against the **recorded decisions**, not against the chain's shape. A chain
+ * defined before the well-formedness rule existed, or edited by a direct database write,
+ * would satisfy a shape check while nobody had actually approved — and "whatever
+ * preceded" in FR-018 is precisely the case where everything looked complete.
+ */
+export const APPROVAL_DIRECTOR_REQUIRED = 'APPROVAL_DIRECTOR_REQUIRED';
+
 /** Every refusal code the spine can return. */
 export type ApprovalErrorCode =
   | typeof APPROVAL_NOT_AUTHORISED
@@ -95,4 +127,7 @@ export type ApprovalErrorCode =
   | typeof APPROVAL_ALREADY_SUBMITTED
   | typeof APPROVAL_REASSIGN_FORBIDDEN
   | typeof APPROVAL_CHAIN_UNSATISFIABLE
-  | typeof APPROVAL_VIEW_FORBIDDEN;
+  | typeof APPROVAL_VIEW_FORBIDDEN
+  | typeof APPROVAL_NOT_SUBMITTED
+  | typeof APPROVAL_NOT_COMPLETE
+  | typeof APPROVAL_DIRECTOR_REQUIRED;

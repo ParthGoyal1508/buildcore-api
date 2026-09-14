@@ -9,6 +9,7 @@ export interface Config {
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
   payrollSchedule: PayrollScheduleConfig;
+  approvals: ApprovalsConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
 }
@@ -252,6 +253,31 @@ export interface PayrollScheduleConfig {
    * UTC-scheduled run fires on the last evening of the previous month.
    */
   timeZone: string;
+}
+
+/**
+ * The approval spine's one tunable (016 FR-018a).
+ *
+ * FR-018a asks that the director-final set be changeable "without a code change", and the
+ * thing that actually satisfies that is `ApprovalChain.isFinalAuthorityRequired` — a
+ * per-company row an administrator edits through the settings screen. This list is not
+ * that. It is the **default** applied when a company is created, and the **fail-closed
+ * set** consulted when no chain exists at all: an action type named here that reaches the
+ * gate with nothing configured is refused rather than waved through, because these four
+ * are the ones where being waved through means money leaves the company unapproved.
+ *
+ * Anything not named here and not configured passes the gate untouched. That is FR-022 —
+ * a module this feature never migrated must keep working exactly as it did.
+ */
+export interface ApprovalsConfig {
+  /**
+   * Action types that require Super Admin ("Director") approval before taking effect.
+   *
+   * Set `APPROVALS_DIRECTOR_FINAL_ACTIONS` to a comma-separated list to override. An
+   * empty string disables the fail-closed default entirely, which is a deliberate escape
+   * hatch and a loud one — the boot log says so.
+   */
+  directorFinalActionTypes: string[];
 }
 
 export interface HrPayrollConfig {

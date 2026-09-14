@@ -118,3 +118,52 @@ describe('normaliseRefreshCookiePath', () => {
     expect(fn('   ')).toBe('/auth');
   });
 });
+
+describe('approvals.directorFinalActionTypes (016 FR-018a)', () => {
+  it('defaults to the six action types FR-018 names', async () => {
+    const config = await loadConfig({
+      APPROVALS_DIRECTOR_FINAL_ACTIONS: undefined,
+    });
+
+    // Asserted against the constants in `src/approvals/default-chains.ts` rather than
+    // against repeated string literals. The list lives in config because configuration
+    // must not depend on the feature that reads it; this test is what keeps the two
+    // halves of that separation honest, and it is the whole reason the duplication is
+    // acceptable.
+    const {
+      ACTION_PAYMENT_RELEASE,
+      ACTION_PAYROLL_RUN,
+      ACTION_LETTER_WORK_ORDER,
+      ACTION_LETTER_LOI,
+      ACTION_LETTER_PURCHASE_ORDER,
+      ACTION_FINAL_SETTLEMENT,
+    } = await import('../../approvals/default-chains');
+
+    expect(config.approvals.directorFinalActionTypes).toEqual([
+      ACTION_PAYMENT_RELEASE,
+      ACTION_PAYROLL_RUN,
+      ACTION_LETTER_WORK_ORDER,
+      ACTION_LETTER_LOI,
+      ACTION_LETTER_PURCHASE_ORDER,
+      ACTION_FINAL_SETTLEMENT,
+    ]);
+  });
+
+  it('takes a comma-separated override', async () => {
+    const config = await loadConfig({
+      APPROVALS_DIRECTOR_FINAL_ACTIONS: 'payment_release, final_settlement',
+    });
+    expect(config.approvals.directorFinalActionTypes).toEqual([
+      'payment_release',
+      'final_settlement',
+    ]);
+  });
+
+  it('treats an explicitly empty value as "none", not as "unset"', async () => {
+    // The escape hatch. `??` rather than `||` is what makes this distinguishable, and
+    // getting it wrong would silently restore the defaults for somebody who had
+    // deliberately turned the fail-closed behaviour off.
+    const config = await loadConfig({ APPROVALS_DIRECTOR_FINAL_ACTIONS: '' });
+    expect(config.approvals.directorFinalActionTypes).toEqual([]);
+  });
+});

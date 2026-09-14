@@ -154,19 +154,37 @@ export class PayrollScheduleService {
     return approval !== null && isLive(approval.state);
   }
 
-  /** The outstanding level on a run's chain, or null when it is clear to proceed. */
+  /**
+   * The outstanding level on a run's chain, or null when it is clear to proceed.
+   *
+   * A thin wrapper over `ApprovalService.mayTakeEffect` rather than its own logic, and
+   * deliberately so: FR-018's rule must have exactly one implementation. The moment
+   * payroll answers "is this approved?" its own way, the answer can differ from the one
+   * feature 017 gets for a work order, and the discrepancy is found by money having
+   * already moved.
+   *
+   * What payroll keeps is its *vocabulary* — the caller here wants a level to name in a
+   * bank-sheet refusal, not the spine's gate shape.
+   */
   async outstandingApproval(
     companyId: string,
     runId: string,
   ): Promise<{ levelLabel: string | null; state: string } | null> {
-    const approval = await this.approvals.stateOfSystem(
-      ACTION_PAYROLL_RUN,
-      runId,
+    const gate = await this.approvals.mayTakeEffect({
+      actionType: ACTION_PAYROLL_RUN,
+      entityType: ACTION_PAYROLL_RUN,
+      entityId: runId,
       companyId,
-    );
-    if (!approval) return null;
-    if (approval.state === 'approved') return null;
-    return { levelLabel: approval.levelLabel, state: approval.state };
+    });
+    if (gate.allowed) return null;
+    return {
+      levelLabel: gate.levelLabel,
+      // `state` is null when the run was never submitted at all — which for
+      // `payroll_run`, one of FR-018's named action types, is now a refusal rather than a
+      // pass. Reported as `pending` because that is what it means to whoever is waiting:
+      // the sheet is held and somebody has to approve something.
+      state: gate.state ?? 'pending',
+    };
   }
 
   /**

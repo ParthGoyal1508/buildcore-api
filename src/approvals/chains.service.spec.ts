@@ -3,6 +3,7 @@ import { BadRequestException } from '@nestjs/common';
 import { createPrismaMock } from '../settings/testing/prisma-mock';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR } from './approval-slots';
+import { DIRECTOR_FINAL_SEEDED_ACTIONS } from './default-chains';
 import { ChainsService } from './chains.service';
 
 const COMPANY = 'company-1';
@@ -105,6 +106,80 @@ describe('ChainsService', () => {
           ACTOR,
         ),
       ).rejects.toThrow(/At most one level/);
+    });
+
+    it('refuses a director-final chain with no director level (FR-018, T049)', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: { findFirst: jest.fn(), create: jest.fn() },
+      });
+      const service = new ChainsService(prisma as never, auditMock() as never);
+
+      // The worst version of the failure: the chain completes with every level approved
+      // and no director having seen it, and nothing looks wrong.
+      await expect(
+        service.upsertChain(
+          CTX,
+          {
+            companyId: COMPANY,
+            actionType: 'payment_release',
+            isFinalAuthorityRequired: true,
+            levels: [{ position: 1, slotKey: SLOT_HR }],
+          },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/must have a level marked as the final authority/);
+    });
+
+    it('refuses a final authority that is not the last level', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: { findFirst: jest.fn(), create: jest.fn() },
+      });
+      const service = new ChainsService(prisma as never, auditMock() as never);
+
+      // A level below the director would decide after the final word had been given,
+      // which is not what "final" means.
+      await expect(
+        service.upsertChain(
+          CTX,
+          {
+            companyId: COMPANY,
+            actionType: 'payment_release',
+            isFinalAuthorityRequired: true,
+            levels: [
+              { position: 1, slotKey: SLOT_FINAL, isFinalAuthority: true },
+              { position: 2, slotKey: SLOT_HR },
+            ],
+          },
+          ACTOR,
+        ),
+      ).rejects.toThrow(/must be the last level/);
+    });
+
+    it('accepts a well-formed director-final chain', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn().mockResolvedValue(chainRow([level(1, SLOT_FINAL)])),
+        },
+        roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const service = new ChainsService(prisma as never, auditMock() as never);
+
+      await expect(
+        service.upsertChain(
+          CTX,
+          {
+            companyId: COMPANY,
+            actionType: 'payment_release',
+            isFinalAuthorityRequired: true,
+            levels: [
+              { position: 1, slotKey: SLOT_FINAL, isFinalAuthority: true },
+            ],
+          },
+          ACTOR,
+        ),
+      ).resolves.toBeDefined();
     });
 
     it('deactivates the existing active chain instead of editing it', async () => {
@@ -362,6 +437,49 @@ describe('ChainsService', () => {
       await service.seedDefaultsForCompany(COMPANY, tx as never, {});
       expect(tx.approvalChain.create).toHaveBeenCalled();
       expect(tx.roleSlotMapping.upsert).not.toHaveBeenCalled();
+    });
+
+    it('seeds a director-only chain for each remaining FR-018 action type (T048)', async () => {
+      const tx: Record<string, any> = {
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
+        },
+        roleSlotMapping: { upsert: jest.fn().mockResolvedValue({}) },
+      };
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {
+        superAdminRoleId: 'role-super',
+      });
+
+      const created: Record<string, any>[] =
+        tx.approvalChain.create.mock.calls.map(
+          (c: [{ data: Record<string, any> }]) => c[0].data,
+        );
+      const byAction = new Map<string, Record<string, any>>(
+        created.map((d) => [d.actionType as string, d]),
+      );
+
+      // Seeded although no module submits into them yet: without the chain, feature
+      // 017's first work order is a configuration fault in every company at once.
+      for (const actionType of DIRECTOR_FINAL_SEEDED_ACTIONS) {
+        const chain = byAction.get(actionType);
+        expect(chain).toBeDefined();
+        expect(chain.isFinalAuthorityRequired).toBe(true);
+        expect(chain.levels.create).toHaveLength(1);
+        expect(chain.levels.create[0]).toMatchObject({
+          slotKey: SLOT_FINAL,
+          isFinalAuthority: true,
+        });
+      }
+
+      // Payroll keeps its three levels — a one-level payroll chain would drop the Site
+      // Incharge and HR levels the client asked for (Note 7).
+      expect(byAction.get('payroll_run').levels.create).toHaveLength(3);
     });
 
     it('is idempotent — a company that already has the chain is left alone', async () => {

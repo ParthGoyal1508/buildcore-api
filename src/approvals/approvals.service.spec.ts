@@ -12,6 +12,9 @@ import {
   APPROVAL_NOT_PENDING,
   APPROVAL_REASON_REQUIRED,
   APPROVAL_REASSIGN_FORBIDDEN,
+  APPROVAL_DIRECTOR_REQUIRED,
+  APPROVAL_NOT_COMPLETE,
+  APPROVAL_NOT_SUBMITTED,
   APPROVAL_SLOT_UNMAPPED,
   APPROVAL_VIEW_FORBIDDEN,
 } from './approval-error-codes';
@@ -221,12 +224,20 @@ function harness(
   const audit = { record: jest.fn().mockResolvedValue(undefined) };
   const events = { emit: jest.fn() };
 
+  const config = {
+    get: jest.fn(() => ({
+      // The four FR-018 names, as the service reads them from configuration.
+      directorFinalActionTypes: ['payment_release', 'payroll_run'],
+    })),
+  };
+
   const service = new ApprovalService(
     prisma as never,
     chains as never,
     users as never,
     audit as never,
     events as never,
+    config as never,
   );
 
   return { service, prisma, chains, users, audit, events, state };
@@ -1152,6 +1163,176 @@ describe('ApprovalService', () => {
           holder('storekeeper-1', [Permission.INVENTORY]),
         ),
       ).resolves.toEqual([]);
+    });
+  });
+
+  describe('the take-effect gate (FR-018, T049, T050)', () => {
+    const directorFinal = (overrides: Record<string, unknown> = {}) =>
+      instanceRow({
+        state: 'approved' as ApprovalState,
+        currentPosition: 3,
+        chain: {
+          ...instanceRow().chain,
+          actionType: 'payment_release',
+          isFinalAuthorityRequired: true,
+        },
+        ...overrides,
+      });
+
+    const finalApproval = {
+      id: 'dec-3',
+      approvalInstanceId: 'inst-1',
+      companyId: COMPANY,
+      round: 1,
+      position: 3,
+      actorUserId: 'director-1',
+      action: ApprovalDecisionAction.approve,
+      reason: null,
+      decidedAt: new Date('2026-09-12T10:00:00Z'),
+    };
+
+    const gateFor = (
+      service: ApprovalService,
+      actionType = 'payment_release',
+    ) =>
+      service.mayTakeEffect({
+        actionType,
+        entityType: 'attendance_exception',
+        entityId: 'punch-1',
+        companyId: COMPANY,
+      });
+
+    it('refuses an unsubmitted item whose action type is director-final', async () => {
+      const { service, prisma } = harness();
+      prisma.tx.approvalInstance.findFirst = jest.fn(async () => null);
+
+      const gate = await gateFor(service);
+
+      // Fail closed. A module that skipped `submit` must not release a payment because
+      // there was nothing to check it against.
+      expect(gate).toMatchObject({
+        allowed: false,
+        code: APPROVAL_NOT_SUBMITTED,
+        state: null,
+      });
+    });
+
+    it('waves through an unsubmitted item of any other action type (FR-022)', async () => {
+      const { service, prisma } = harness();
+      prisma.tx.approvalInstance.findFirst = jest.fn(async () => null);
+
+      // The narrowness is the point: refusing here would break every approval in every
+      // module this feature never migrated, on the day it deployed.
+      await expect(gateFor(service, 'material_indent')).resolves.toMatchObject({
+        allowed: true,
+        code: null,
+      });
+    });
+
+    it('refuses a chain that has not finished, naming the level it waits on', async () => {
+      const { service } = harness();
+
+      const gate = await gateFor(service, 'attendance_exception');
+
+      expect(gate).toMatchObject({
+        allowed: false,
+        code: APPROVAL_NOT_COMPLETE,
+        state: 'pending',
+        levelLabel: 'First approver',
+      });
+      expect(gate.message).toContain('First approver');
+    });
+
+    it('refuses a rejected item, and says so rather than saying it is waiting', async () => {
+      const { service } = harness(instanceRow({ state: 'rejected' }));
+
+      const gate = await gateFor(service, 'attendance_exception');
+
+      expect(gate.code).toBe(APPROVAL_NOT_COMPLETE);
+      expect(gate.message).toContain('rejected');
+    });
+
+    it('allows a completed chain that is not director-final', async () => {
+      const { service } = harness(instanceRow({ state: 'approved' }));
+
+      await expect(
+        gateFor(service, 'attendance_exception'),
+      ).resolves.toMatchObject({ allowed: true, code: null });
+    });
+
+    it('allows a director-final chain once the director has approved', async () => {
+      const { service } = harness(
+        directorFinal({ decisions: [finalApproval] }),
+      );
+
+      await expect(gateFor(service)).resolves.toMatchObject({
+        allowed: true,
+        code: null,
+      });
+    });
+
+    it('refuses a director-final chain whose final level nobody actually decided', async () => {
+      // The "whatever preceded" case from FR-018, and the reason the check reads the
+      // recorded decisions rather than the chain's shape: everything here *looks*
+      // complete — state approved, chain well-formed — and no director has approved.
+      const { service } = harness(directorFinal({ decisions: [] }));
+
+      const gate = await gateFor(service);
+
+      expect(gate).toMatchObject({
+        allowed: false,
+        code: APPROVAL_DIRECTOR_REQUIRED,
+        levelLabel: 'Director',
+      });
+    });
+
+    it('will not accept a decision from the previous round as the final approval', async () => {
+      const { service } = harness(
+        directorFinal({
+          round: 2,
+          decisions: [finalApproval],
+        }),
+      );
+
+      // A returned-and-resubmitted item is a new round. The director approved figures
+      // that have since been corrected, so that approval does not carry forward.
+      await expect(gateFor(service)).resolves.toMatchObject({
+        allowed: false,
+        code: APPROVAL_DIRECTOR_REQUIRED,
+      });
+    });
+
+    it('reports zero holders when the level resolves to nobody (US5 scenario 4)', async () => {
+      const { service } = harness(instanceRow(), {
+        [SLOT_FIRST_APPROVER]: null,
+        [SLOT_HR]: ROLE_HR,
+        [SLOT_FINAL]: ROLE_SUPER,
+      });
+
+      const gate = await gateFor(service, 'attendance_exception');
+
+      // Held correctly, but held on nobody. Surfaced so the module reports a
+      // configuration problem rather than letting the item stall unseen.
+      expect(gate.allowed).toBe(false);
+      expect(gate.awaitingHolderCount).toBe(0);
+    });
+
+    it('assertMayTakeEffect refuses with 409, not 403', async () => {
+      const { service } = harness();
+
+      const error = await service
+        .assertMayTakeEffect({
+          actionType: 'attendance_exception',
+          entityType: 'attendance_exception',
+          entityId: 'punch-1',
+          companyId: COMPANY,
+        })
+        .catch((e) => e);
+
+      // The caller is not forbidden from releasing payments; the payment is not yet
+      // releasable. A 403 would send them asking for permissions they already hold.
+      expect(error.getStatus()).toBe(409);
+      expect(error.getResponse().code).toBe(APPROVAL_NOT_COMPLETE);
     });
   });
 

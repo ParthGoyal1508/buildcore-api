@@ -177,6 +177,37 @@ export interface ApprovalQueuePage {
   nextCursor: string | null;
 }
 
+/**
+ * Whether an item may take effect yet (016 FR-007, FR-018, T049, T050).
+ *
+ * The single answer every module asks for before it does the irreversible thing — releases
+ * a payment, issues a work order, pays a settlement. It is a returned value rather than a
+ * thrown exception in its primary form because the same question has to be answerable for
+ * *rendering* ("show this button as held") as for *acting*, and a module that had to catch
+ * an exception to draw a disabled button would end up with two code paths that could
+ * disagree.
+ */
+export interface TakeEffectGate {
+  /** Whether the action may proceed. */
+  allowed: boolean;
+  /** Why not. Null when allowed. */
+  code: ApprovalErrorCode | null;
+  /** A sentence fit to show a person. Null when allowed. */
+  message: string | null;
+  /** The chain state, or null when the item was never submitted. */
+  state: ApprovalState | null;
+  /** The level it is waiting on, when it is waiting. */
+  levelLabel: string | null;
+  /**
+   * How many active accounts could act at the current level.
+   *
+   * **Zero is US5 scenario 4**: the item is held, correctly, but held on nobody. It is
+   * surfaced here so the module reports a configuration problem rather than letting the
+   * item stall silently in a queue no one can see.
+   */
+  awaitingHolderCount: number;
+}
+
 /** The shape every refusal from this module carries in its response body. */
 export interface ApprovalRefusal {
   statusCode: number;

@@ -176,14 +176,14 @@ is built.
 
 ## Phase 5: US5 — Final authority (P3)
 
-- [ ] T048 [US5] Make the Director-final action set configuration (FR-018a), defaulting to the four
+- [X] T048 [US5] Make the Director-final action set configuration (FR-018a), defaulting to the four
       the client named: payment release, payroll run approval, money-committing letters, final
       settlement
-- [ ] T049 [US5] Enforce that a director-final action does not take effect until Super Admin
+- [X] T049 [US5] Enforce that a director-final action does not take effect until Super Admin
       approves, whatever preceded
-- [ ] T050 [US5] Expose the gate for feature 017 to consume for work orders, LOIs and purchase
+- [X] T050 [US5] Expose the gate for feature 017 to consume for work orders, LOIs and purchase
       orders — **017 must not build its own**, or the same decision acquires two mechanisms
-- [ ] T051 [US5] e2e for spec US5 scenarios 1–4, including the held action when no Super Admin is
+- [X] T051 [US5] e2e for spec US5 scenarios 1–4, including the held action when no Super Admin is
       active (which should be unreachable, since the system refuses to deactivate the last one —
       the test exists to prove it)
 
@@ -692,3 +692,107 @@ correctly is the opacity of research.md §1 being demonstrated rather than asser
 The web half of 016 remains entirely unwritten, so the settings screen these endpoints exist for does
 not exist yet. **The slots are still unmapped in every real company**, and an attendance exception
 still cannot be decided in production until somebody maps them.
+
+---
+
+## Implementation note — Phase 5, 2026-09-14
+
+T048–T051 are done and committed. `tsc --noEmit` clean, eslint clean on every touched file,
+**827 unit tests across 79 suites**, `nest build` clean at 516 files, and
+`test/director-final.e2e-spec.ts` at **6/6** covering US5 scenarios 1–4. Full e2e baseline unmoved
+at 37 pre-existing failures in the same three suites.
+
+### T048 — where "configurable without a code change" actually lives
+
+FR-018a is satisfied by `ApprovalChain.isFinalAuthorityRequired`: a per-company row an
+administrator edits through the Phase 4 settings endpoints. That is the authority. The new
+`approvals.directorFinalActionTypes` config entry is **not** the authority — it is the default
+applied when a company is created, and the fail-closed set consulted when nothing is configured at
+all.
+
+FR-018's four become six action types: `payment_release`, `payroll_run`, `letter_work_order`,
+`letter_loi`, `letter_purchase_order`, `final_settlement`. The three letters are kept separate
+rather than collapsed into one "money-committing letter", because FR-018a's unit of configuration
+*is* the action type — collapsing them would mean a company that wants purchase orders gated but not
+LOIs cannot say so.
+
+The list is written literally in `config.ts` rather than imported from `src/approvals`, because
+configuration must not depend on the feature that reads it. `config.spec.ts` asserts it against the
+constants in `default-chains.ts`, so the duplication cannot drift — the test is the link, and it is
+the only reason the duplication is acceptable.
+
+### T049 — two enforcement points, because one would be trusted
+
+**At definition:** a chain marked director-final must have a final-authority level, and that level
+must be the **last** one. A chain declared director-final with no director level would complete with
+every level approved and no director having seen it — the worst version of the failure, because
+nothing looks wrong. A director gate in the middle would let levels below it decide *after* the final
+word had been given, which is not what "final" means.
+
+**At the gate:** `mayTakeEffect` checks for a recorded approval at the final level **in the current
+round**, not for the right chain shape. A chain defined before this rule existed, or edited by a
+direct database write, satisfies a shape check with nobody having approved — and "whatever preceded"
+in FR-018 is exactly the case where everything looks complete. The round check matters too: a
+returned-and-resubmitted item is a new round, and a director who approved figures that have since
+been corrected has not approved these.
+
+### T050 — one gate, and it is the payroll gate too
+
+`ApprovalService.mayTakeEffect` / `assertMayTakeEffect` is the single method every module calls
+before doing the irreversible thing. Feature 017 must consume it for work orders, LOIs and purchase
+orders; the constants it imports are in `default-chains.ts` so that "must consume" is checkable
+rather than merely requested.
+
+To keep that true rather than aspirational, `PayrollScheduleService.outstandingApproval` was
+rewritten as a thin wrapper over it. It previously had its own logic. An approval rule with two
+implementations is a rule enforced in one place and not the other, and the place it is missed is
+found by the money having already moved. Payroll keeps its own *vocabulary* — the bank sheet still
+refuses with `PAYROLL_RUN_NOT_APPROVED` — but not its own answer.
+
+Three new codes. `APPROVAL_NOT_SUBMITTED` is the fail-closed one, and it is deliberately **narrow**:
+an action type outside the director-final set with no instance passes the gate untouched, because
+FR-022 forbids this feature changing behaviour for modules it never migrated, and refusing there
+would break every unmigrated approval in the product on the day it deployed. `APPROVAL_NOT_COMPLETE`
+and `APPROVAL_DIRECTOR_REQUIRED` cover the rest. All three refuse with **409, not 403** — the caller
+is not forbidden from releasing payments; the payment is not yet releasable, and a 403 would send
+them asking for permissions they already hold.
+
+### T051 — scenario 4 is unreachable, so it is proven twice over
+
+US5 scenario 4's stated precondition, no active user holding Super Admin, cannot be reached through
+the API: `UsersAdminService.assertNotLastSuperAdmin` refuses to deactivate, delete or reassign the
+last one, and three tests in `users-admin.service.spec.ts` already prove that. Those are not
+duplicated here.
+
+What *is* reachable is the same failure by the other route — a chain level mapped to a role nobody
+holds. The e2e maps a slot to an empty role, submits, and asserts the item is **accepted and held**
+with `awaitingHolderCount: 0`. Zero is not "waiting patiently"; it is an item that will never move,
+and the module is told so rather than left to infer it. `assertMayTakeEffect` also logs an error in
+that case, because the person who hits the refusal is not the person who can fix it.
+
+### Two migrations, and one of them is the reason this phase carries risk
+
+`20260914100000_director_final_default_chains` seeds a one-level director chain for
+`payment_release` and the three letter types and `final_settlement`, for companies that already
+exist. `seedDefaultsForCompany` now does the same for new ones. Without it, feature 017's first work
+order would be a configuration fault in every company at once.
+
+`20260914103000_seed_live_chains_for_existing_companies` is the one that matters. The
+attendance-exception and payroll-run chains have been seeded on company *creation* since Phase 1, so
+only companies created since then have them — and that asymmetry stopped being cosmetic this phase.
+`payroll_run` is one of FR-018's named action types, so the gate now **refuses a run with no approval
+instance** rather than waving it through. Without a chain there is nothing to submit into, and
+without this migration no pre-existing company could produce a bank transfer sheet at all. Verified
+against the local database: 8 companies, 24 levels each for the two three-level chains, idempotent
+on rerun.
+
+**The chains alone are not enough, and this is the deployment risk.** A level resolves to a role
+through `RoleSlotMapping`, and neither migration creates one — which of a company's roles is its "HR"
+is a decision only that company can make, and guessing would hand the right to approve payroll to
+whichever role a heuristic happened to pick.
+
+So, stated plainly: **on the day this deploys, no existing company can produce a bank transfer sheet
+until an administrator maps `first_approver`, `hr` and `final` through the settings screen.** That is
+what FR-015 and FR-018 require and it is the correct behaviour, but it is a hard change and it will
+be discovered by payroll if it is not done first. The web half of 016, which builds that screen, is
+still unwritten.

@@ -320,6 +320,32 @@ const config: Config = {
       'Asia/Kolkata',
   },
 
+  approvals: {
+    // FR-018's four, as the six action types they decompose into. Overridable with a
+    // comma-separated `APPROVALS_DIRECTOR_FINAL_ACTIONS`; an explicitly empty value
+    // disables the fail-closed default, which is why `??` is used rather than `||` —
+    // `''` must be distinguishable from unset.
+    directorFinalActionTypes: (
+      process.env.APPROVALS_DIRECTOR_FINAL_ACTIONS ??
+      // The four the client named (FR-018), as the six action types they decompose
+      // into. Written literally here rather than imported from `src/approvals`, because
+      // configuration must not depend on the feature that reads it — `config.spec.ts`
+      // asserts this list against the constants in `default-chains.ts` so the two
+      // cannot drift.
+      [
+        'payment_release',
+        'payroll_run',
+        'letter_work_order',
+        'letter_loi',
+        'letter_purchase_order',
+        'final_settlement',
+      ].join(',')
+    )
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  },
+
   hrPayroll: {
     // 005 FR-006 — how far ahead an employee document starts reporting as
     // expiring-soon.
