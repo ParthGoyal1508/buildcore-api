@@ -102,6 +102,17 @@ export interface ApprovalInstanceView {
 
   /** Whether *this* caller may record a decision right now. */
   canActNow: boolean;
+  /**
+   * Whether *this* caller may send the item back up the chain right now (FR-005).
+   *
+   * Separate from `canActNow` and not an `inertReason`, because it is the one case where
+   * the viewer can do something and it is not a decision: a returned item awaits its
+   * originator, who is not at a level and may not decide. Without this field the
+   * interface has nothing to branch on — a returned item reports `canActNow: false` with
+   * a null reason, which renders as nothing at all, and the item quietly disappears from
+   * the screen of the only person who can move it.
+   */
+  canResubmitNow: boolean;
   /** Why not, when `canActNow` is false. Null when they can act. */
   inertReason: InertReason | null;
 

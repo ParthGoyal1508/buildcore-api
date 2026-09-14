@@ -1227,6 +1227,12 @@ export class ApprovalService {
         delegateName ?? (holders.length === 1 ? holders[0].name : null),
       awaitingHolderCount: instance.delegatedToUserId ? 1 : holders.length,
       canActNow,
+      // Only the originator, and only while it is returned. The service enforces both
+      // again on the write — this is what the interface renders, never what it relies on.
+      canResubmitNow:
+        instance.state === 'returned' &&
+        !!viewer &&
+        instance.originatorUserId === viewer.id,
       inertReason,
       latestDecision: latest
         ? this.toDecisionView(latest, instance, names)

@@ -667,6 +667,42 @@ describe('ApprovalService', () => {
       });
     });
 
+    it('tells only the originator they can resubmit a returned item (FR-005)', async () => {
+      // A returned item reports `canActNow: false` with a null reason — correct, because
+      // nobody is being asked to *decide* — which renders as nothing at all. Without a
+      // field of its own the item silently disappears from the screen of the one person
+      // who can move it, and `returned` is a live state with no other exit.
+      const returned = () => harness(instanceRow({ state: 'returned' }));
+
+      const toOriginator = await returned().service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('originator-1', []),
+      );
+      expect(toOriginator).toMatchObject({
+        state: 'returned',
+        canActNow: false,
+        inertReason: null,
+        canResubmitNow: true,
+      });
+
+      // Everyone else, including the approver who returned it, is told no.
+      const toApprover = await returned().service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('site-1', [ROLE_FIRST]),
+      );
+      expect(toApprover.canResubmitNow).toBe(false);
+
+      // And a pending item is never resubmittable, not even by its originator.
+      const pending = await harness().service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('originator-1', []),
+      );
+      expect(pending.canResubmitNow).toBe(false);
+    });
+
     it('carries the latest action, its actor and its time on the record itself (FR-008)', async () => {
       const { service } = harness();
       await service.decide(
