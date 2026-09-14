@@ -31,6 +31,7 @@ import {
   UpsertApprovalChainDto,
 } from './dto/approval-chain.dto';
 import { DecideApprovalDto } from './dto/decide-approval.dto';
+import { ReassignApprovalDto } from './dto/reassign-approval.dto';
 
 /**
  * The approval spine's HTTP surface (016 T043–T046, contracts Part 2).
@@ -265,6 +266,59 @@ export class ApprovalsController {
       { instanceId, action: dto.action, reason: dto.reason ?? null },
       caller,
       ipAddress,
+    );
+  }
+
+  @Post(':instanceId/reassign')
+  @RequirePermissions(Permission.SETTINGS)
+  @ApiOperation({
+    summary: 'Hand a pending item to another holder of its current level',
+    description:
+      'Guarded by `SETTINGS` rather than by the chain, because reassignment is an ' +
+      'administrative act and not an approval: the service already refuses the person ' +
+      'the item is awaiting (`APPROVAL_REASSIGN_FORBIDDEN`), so the current approver was ' +
+      'never a candidate for this right. The target does **not** have to hold the ' +
+      'level’s role, and that breadth is deliberate — the stall FR-019 exists to clear ' +
+      'is a level whose only holder already decided earlier in the chain, which a holder ' +
+      'check would make permanent. A mandatory reason, an audit entry naming actor and ' +
+      'level, and FR-021a still applying to the delegate are what bound it instead.',
+  })
+  async reassign(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('instanceId') instanceId: string,
+    @Body() dto: ReassignApprovalDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.approvals.reassign(
+      instanceId,
+      dto.toUserId,
+      dto.reason,
+      caller,
+      ipAddress,
+    );
+  }
+
+  @Post(':entityType/:entityId/resubmit')
+  @ApiOperation({
+    summary: 'Send a returned item back up its chain, as a new round',
+    description:
+      'Only the person who raised the item may resubmit it, which the service enforces. ' +
+      'Keyed by entity rather than by instance id deliberately: `returned` is a live ' +
+      'state holding the item’s chain slot, so there is exactly one instance this can ' +
+      'mean, and looking it up by entity makes a stale instance id impossible to act on. ' +
+      'Without this route a returned item has no exit — the partial unique index forbids ' +
+      'a replacement instance while one is live (FR-005, FR-020).',
+  })
+  async resubmit(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('entityType') entityType: string,
+    @Param('entityId') entityId: string,
+  ) {
+    return this.approvals.resubmit(
+      entityType,
+      entityId,
+      caller.companyId,
+      caller.id,
     );
   }
 

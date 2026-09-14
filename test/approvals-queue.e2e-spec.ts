@@ -83,6 +83,7 @@ describe('Approvals HTTP surface (e2e)', () => {
   let siteUserId: string;
   let hrUserId: string;
   let originatorUserId: string;
+  let outsiderUserId: string;
   let siteToken: string;
   let hrToken: string;
   let outsiderToken: string;
@@ -194,7 +195,9 @@ describe('Approvals HTTP surface (e2e)', () => {
 
     // Holds no chain role and not the permission the items declare: the person the
     // history endpoint must refuse.
-    outsiderToken = (await makeUser('Outsider', [Permission.ATTENDANCE])).token;
+    const outsider = await makeUser('Outsider', [Permission.ATTENDANCE]);
+    outsiderUserId = outsider.userId;
+    outsiderToken = outsider.token;
 
     // Raises the items, holds nothing else. Must still be able to read their history.
     const originator = await makeUser('Originator', []);
@@ -581,6 +584,133 @@ describe('Approvals HTTP surface (e2e)', () => {
   // ───────────────────────────────────────────────────────────────────────────
   // T046 — the settings surface, without which the slots are never mapped
   // ───────────────────────────────────────────────────────────────────────────
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // T061, T062 — the two routes the spine shipped without
+  // ───────────────────────────────────────────────────────────────────────────
+
+  describe('POST /approvals/:entityType/:entityId/resubmit (FR-005, T061)', () => {
+    it('is the only exit from `returned`, and it works over HTTP', async () => {
+      const entityId = unique('ret');
+      await submit(entityId, 'Returned for correction');
+
+      await http()
+        .post(`/approvals/${ACTION}/${entityId}/resubmit`)
+        .set(auth(originatorToken))
+        .expect(409); // nothing to resubmit: it is still pending
+
+      const inst = await http()
+        .get('/approvals/queue')
+        .set(auth(siteToken))
+        .expect(200);
+      const row = inst.body.items.find(
+        (i: { entityId: string }) => i.entityId === entityId,
+      );
+      expect(row).toBeDefined();
+
+      await http()
+        .post(`/approvals/${row.instanceId}/decide`)
+        .set(auth(siteToken))
+        .send({
+          action: 'return',
+          reason: 'Quantities do not match the indent',
+        })
+        .expect(201);
+
+      // Before T061 the story ended here, permanently: `returned` is a live state, the
+      // partial unique index forbids a replacement instance while one is live, and
+      // `resubmit()` had no route. Nothing could move this item again.
+      const resubmitted = await http()
+        .post(`/approvals/${ACTION}/${entityId}/resubmit`)
+        .set(auth(originatorToken))
+        .expect(201);
+
+      expect(resubmitted.body.state).toBe('pending');
+      expect(resubmitted.body.currentPosition).toBe(1);
+      expect(resubmitted.body.returnCount).toBe(1);
+      expect(resubmitted.body.round).toBe(2);
+
+      // And the chain genuinely runs again: the same site approver may decide a second
+      // time because it is a new round, which is what FR-021a's round-scoping is for.
+      await http()
+        .post(`/approvals/${resubmitted.body.instanceId}/decide`)
+        .set(auth(siteToken))
+        .send({ action: 'approve' })
+        .expect(201);
+    });
+
+    it('refuses anyone but the originator', async () => {
+      const entityId = unique('ret2');
+      const { instanceId } = await submit(entityId, 'Not yours to resubmit');
+
+      await http()
+        .post(`/approvals/${instanceId}/decide`)
+        .set(auth(siteToken))
+        .send({ action: 'return', reason: 'Missing site sign-off' })
+        .expect(201);
+
+      const refused = await http()
+        .post(`/approvals/${ACTION}/${entityId}/resubmit`)
+        .set(auth(siteToken))
+        .expect(403);
+
+      expect(refused.body.code).toBe('APPROVAL_NOT_AUTHORISED');
+    });
+  });
+
+  describe('POST /approvals/:instanceId/reassign (FR-019, T062)', () => {
+    it('grants the level to someone who holds none of its roles, deliberately', async () => {
+      const { instanceId } = await submit(unique('rs'), 'Reassign me');
+
+      // `outsider` holds no chain role at all. This is not a hole being tolerated — it
+      // is the point of FR-019. The stall it exists to clear is the one the spec's
+      // Clarifications name: a level whose only role-holder has already decided earlier
+      // in the chain. Requiring the target to hold the role would leave exactly that
+      // case unclearable, which is the failure reassignment was added to prevent. The
+      // safeguards are that it needs SETTINGS, needs a stated reason, is audited with
+      // actor and level, is cleared when the chain advances, and does not bypass FR-021a.
+      const granted = await http()
+        .post(`/approvals/${instanceId}/reassign`)
+        .set(auth(settingsToken))
+        .send({
+          toUserId: outsiderUserId,
+          reason: 'Sole holder already decided',
+        })
+        .expect(201);
+
+      expect(granted.body.awaitingHolderCount).toBe(1);
+
+      await http()
+        .post(`/approvals/${instanceId}/decide`)
+        .set(auth(outsiderToken))
+        .send({ action: 'approve' })
+        .expect(201);
+    });
+
+    it('requires SETTINGS, and refuses the person the item awaits', async () => {
+      const { instanceId } = await submit(unique('rs2'), 'Guarded');
+
+      await http()
+        .post(`/approvals/${instanceId}/reassign`)
+        .set(auth(originatorToken))
+        .send({ toUserId: siteUserId, reason: 'covering' })
+        .expect(403); // no SETTINGS permission
+
+      // Holds SETTINGS *and* the level's role: the T015b guard, reached over HTTP.
+      const approverWithSettings = await makeUser(
+        'SiteSettings',
+        [Permission.SETTINGS],
+        siteRoleId,
+      );
+      const ducked = await http()
+        .post(`/approvals/${instanceId}/reassign`)
+        .set(auth(approverWithSettings.token))
+        .send({ toUserId: siteUserId, reason: 'I am busy' })
+        .expect(403);
+
+      expect(ducked.body.code).toBe('APPROVAL_REASSIGN_FORBIDDEN');
+    });
+  });
 
   describe('chain configuration (T046)', () => {
     it('needs SETTINGS, which approval authority does not grant', async () => {

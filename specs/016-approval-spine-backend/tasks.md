@@ -987,7 +987,7 @@ surface (T044–T046) enumerated the endpoints they created without ever asking 
 requirements still had no route. `contracts/approval-service.md` documents `decide` and the
 chain endpoints and is silent on these two, so nothing downstream caught it either.
 
-- [ ] T061 **CRITICAL** Expose `resubmit()` over HTTP per FR-005 (partial). `ApprovalsService.resubmit()`
+- [X] T061 **CRITICAL** Expose `resubmit()` over HTTP per FR-005 (partial). `ApprovalsService.resubmit()`
       exists, is unit-tested and is exercised in `test/attendance-exceptions.e2e-spec.ts:413` — but only
       by calling the service directly. `approvals.controller.ts` has ten routes and none reaches it, so
       no user of the product can resubmit a returned item. This is not merely a missing convenience:
@@ -1000,7 +1000,7 @@ chain endpoints and is silent on these two, so nothing downstream caught it eith
       `abandon()` either. Add `POST /approvals/:instanceId/resubmit`, authorised to the originator (the
       service already enforces this), and add an e2e test that returns an item and drives it back
       through to a decision over HTTP.
-- [ ] T062 **HIGH** Expose `reassign()` over HTTP per FR-019 (partial). Same shape as T061:
+- [X] T062 **HIGH** Expose `reassign()` over HTTP per FR-019 (partial). Same shape as T061:
       `ApprovalsService.reassign()` exists at `approvals.service.ts:835`, audits correctly (T015b), and
       refuses the current approver reassigning to themselves — but has no route, so FR-019's "MUST
       allow a pending item to be reassigned to another holder of the same level when the original
@@ -1017,3 +1017,31 @@ chain endpoints and is silent on these two, so nothing downstream caught it eith
       approval-related audit entries (guarded by `SETTINGS`, company-scoped under RLS) or amend SC-007
       to state that retrieval is deliberately deferred to a future audit-log feature. Do not leave it
       claimed as met.
+
+### Implementation note — T061, T062, 2026-09-14
+
+Both routes shipped. `POST /approvals/:entityType/:entityId/resubmit` is keyed by entity
+rather than by instance id on purpose: `returned` is a live state, so exactly one instance
+can mean, and an entity lookup makes a stale instance id impossible to act on. Four e2e
+tests in `test/approvals-queue.e2e-spec.ts` drive the round trip over HTTP — return,
+resubmit, and a second decision by the *same* approver, which is legal because the round
+advanced.
+
+**T062 was implemented wrongly first, and the Phase 1 e2e caught it.** Reading FR-019's
+"another holder of the same level" as a precondition on the target, I added a check that
+`toUserId` must already hold the level's role, plus an `APPROVAL_REASSIGN_TARGET_INVALID`
+code. `test/approvals.e2e-spec.ts` then failed on the FR-019 stall test, and it was right
+to: the stall reassignment exists to clear is the one the spec's Clarifications name — a
+level whose only role-holder has already decided earlier in the chain — and under a holder
+check there is by definition nobody eligible, so the guard made exactly that case
+permanently unclearable. The phrase describes the *effect* of the grant, not a constraint
+on who may receive it. The check and its error code were removed.
+
+So reassignment does grant approval authority at one level to someone who holds none of
+the chain's roles, and that breadth is intended. What bounds it: `SETTINGS` on the
+endpoint, a mandatory reason, an audit entry naming actor, target and level, the grant
+clearing as soon as the chain advances, and FR-021a still applying to the delegate. The
+e2e now asserts that breadth deliberately rather than leaving it as an untested side
+effect.
+
+T063 (SC-007 retrievability) is not done.
