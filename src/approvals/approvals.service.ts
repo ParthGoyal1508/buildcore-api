@@ -191,6 +191,16 @@ export class ApprovalService {
     entityId: string,
     companyId: string,
     byUserId: string,
+    /**
+     * The caller, when one is known, so the returned view answers `canActNow` for *them*.
+     *
+     * Optional because system callers have no viewer, but the HTTP path always passes it:
+     * without it the response reports `canActNow: false` with a null reason for everyone,
+     * which renders as nothing at all — the interface would be told the item it just
+     * revived is inert. `decide()` and `reassign()` both already pass the caller; this was
+     * the one that did not.
+     */
+    viewer?: AuthenticatedUser,
   ): Promise<ApprovalInstanceView> {
     const ctx: RlsContext = { isSuperAdmin: false, companyId };
 
@@ -226,7 +236,7 @@ export class ApprovalService {
         include: { chain: { include: { levels: true } }, decisions: true },
       }),
     );
-    return this.toView(updated, null);
+    return this.toView(updated, viewer ?? null);
   }
 
   // ───────────────────────────────────────────────────────────────────────────

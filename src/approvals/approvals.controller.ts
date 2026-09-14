@@ -319,6 +319,7 @@ export class ApprovalsController {
       entityId,
       caller.companyId,
       caller.id,
+      caller,
     );
   }
 
