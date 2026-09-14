@@ -974,3 +974,46 @@ says which test proves it.
 4. **NFR-001 (load) and NFR-002 (mobile) are unverified**, as the specification itself states.
 5. `checklists/module-boundary.md` remains 0/22 — it is a reviewer-owned artifact and was
    deliberately not modified. CHK008's discipline was applied twice regardless (T041 and T055).
+
+---
+
+## Phase 7: Convergence
+
+Appended by `/speckit-converge` on 2026-09-14 against tip `2f92bee`. These are gaps between
+the shipped code and what `spec.md` requires — not new scope. Phases 1–6 are genuinely
+complete: every task listed there was done as written. The gap is that two functional
+requirements were satisfied *at the service layer only*, and the tasks that built the HTTP
+surface (T044–T046) enumerated the endpoints they created without ever asking which
+requirements still had no route. `contracts/approval-service.md` documents `decide` and the
+chain endpoints and is silent on these two, so nothing downstream caught it either.
+
+- [ ] T061 **CRITICAL** Expose `resubmit()` over HTTP per FR-005 (partial). `ApprovalsService.resubmit()`
+      exists, is unit-tested and is exercised in `test/attendance-exceptions.e2e-spec.ts:413` — but only
+      by calling the service directly. `approvals.controller.ts` has ten routes and none reaches it, so
+      no user of the product can resubmit a returned item. This is not merely a missing convenience:
+      `returned` is a **live** state (`LIVE_STATES` in `approval.types.ts:17`), and the partial unique
+      index `ApprovalInstance_entityType_entityId_live_key` (migration `20260913110556`, lines 191–193)
+      deliberately covers it so that no replacement instance can be raised for an item mid-correction —
+      its own comment says so. `resubmit()` is therefore the only exit from `returned`, and it is
+      unreachable. **Every item an approver returns for correction is permanently stuck**: the chain
+      cannot advance, no new instance can be opened, and for attendance exceptions nothing else calls
+      `abandon()` either. Add `POST /approvals/:instanceId/resubmit`, authorised to the originator (the
+      service already enforces this), and add an e2e test that returns an item and drives it back
+      through to a decision over HTTP.
+- [ ] T062 **HIGH** Expose `reassign()` over HTTP per FR-019 (partial). Same shape as T061:
+      `ApprovalsService.reassign()` exists at `approvals.service.ts:835`, audits correctly (T015b), and
+      refuses the current approver reassigning to themselves — but has no route, so FR-019's "MUST
+      allow a pending item to be reassigned to another holder of the same level when the original
+      approver is unavailable" is not true of the running system. The `delegatedToUserId` /
+      `delegationReason` columns and the `APPROVAL_REASSIGN_FORBIDDEN` code were all added for this and
+      are currently write-only from the application's point of view. Add the endpoint with a DTO
+      (Principle II) and decide explicitly who may call it — the service takes an actor but the
+      permission question is a product one: the current approver, a SETTINGS holder, or both.
+- [ ] T063 **MEDIUM** Make refused decisions retrievable per SC-007 (partial). SC-007 requires that every
+      decision refused for insufficient authority is "recorded **and retrievable**". The recording half
+      is done — `approvals.service.ts:1335` writes an audit entry carrying `attemptedAction`. The
+      retrieval half does not exist anywhere in the API: no controller in `src/` reads `AuditLog`, so
+      these rows are reachable only by direct database access. Either add a read surface for
+      approval-related audit entries (guarded by `SETTINGS`, company-scoped under RLS) or amend SC-007
+      to state that retrieval is deliberately deferred to a future audit-log feature. Do not leave it
+      claimed as met.
