@@ -7,7 +7,9 @@ import { AttendanceAdminService } from './attendance/attendance-admin.service';
 import { AttendanceImportController } from './attendance/attendance-import.controller';
 import { AttendanceImportService } from './attendance/attendance-import.service';
 import { HolidaysController } from './attendance/holidays.controller';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { AttendanceExceptionsController } from './attendance-exceptions/attendance-exceptions.controller';
+import { AttendanceExceptionsService } from './attendance-exceptions/attendance-exceptions.service';
 import { BiometricsService } from './biometrics/biometrics.service';
 import { FaceApiBiometricsService } from './biometrics/face-api-biometrics.service';
 import { FaceEnrolmentController } from './biometrics/face-enrolment.controller';
@@ -49,7 +51,10 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
   // `forwardRef` because 008 made this edge bidirectional: `projects` now needs
   // `EmployeesService` for its site-delete guard and project roster, while `hr`
   // still needs `SitesService` for punch geofencing. See projects.module.ts.
-  imports: [SettingsModule, forwardRef(() => ProjectsModule)],
+  // ApprovalsModule for feature 016: flagged punches enter an approval chain, and
+  // decisions on them are recorded through `ApprovalService` rather than by writing to
+  // the spine's tables from here (Principle I).
+  imports: [SettingsModule, ApprovalsModule, forwardRef(() => ProjectsModule)],
   controllers: [
     EmployeesController,
     AttendanceAdminController,
@@ -67,6 +72,7 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     ReimbursementController,
   ],
   providers: [
+    AttendanceExceptionsService,
     EmployeesService,
     EmployeeDocumentsService,
     AttendanceAdminService,

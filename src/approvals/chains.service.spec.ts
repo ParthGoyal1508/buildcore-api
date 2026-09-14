@@ -310,6 +310,80 @@ describe('ChainsService', () => {
     });
   });
 
+  describe('seeding a new company (T022)', () => {
+    it('seeds the three-level shape but maps ONLY the final slot', async () => {
+      const tx: Record<string, any> = {
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
+        },
+        roleSlotMapping: { upsert: jest.fn().mockResolvedValue({}) },
+      };
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {
+        superAdminRoleId: 'role-super',
+      });
+
+      const created = tx.approvalChain.create.mock.calls[0][0].data;
+      expect(created.actionType).toBe('attendance_exception');
+      expect(created.levels.create).toHaveLength(3);
+      expect(
+        created.levels.create.map((l: { slotKey: string }) => l.slotKey),
+      ).toEqual([SLOT_FIRST_APPROVER, SLOT_HR, SLOT_FINAL]);
+
+      // Exactly one mapping, and it is `final`. The other two are NOT guessable —
+      // neither "HR Office" nor "Site Incharge" exists as a role, which is the whole
+      // reason slots exist. Inventing a mapping would hand the right to approve
+      // attendance to whichever role sounded closest.
+      expect(tx.roleSlotMapping.upsert).toHaveBeenCalledTimes(1);
+      expect(tx.roleSlotMapping.upsert.mock.calls[0][0].create).toMatchObject({
+        slotKey: SLOT_FINAL,
+        roleId: 'role-super',
+      });
+    });
+
+    it('seeds no mapping at all when there is no Super Admin role to point at', async () => {
+      const tx: Record<string, any> = {
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
+        },
+        roleSlotMapping: { upsert: jest.fn() },
+      };
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {});
+      expect(tx.approvalChain.create).toHaveBeenCalled();
+      expect(tx.roleSlotMapping.upsert).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent — a company that already has the chain is left alone', async () => {
+      const tx: Record<string, any> = {
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue({ id: 'chain-existing' }),
+          create: jest.fn(),
+        },
+        roleSlotMapping: { upsert: jest.fn() },
+      };
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {
+        superAdminRoleId: 'role-super',
+      });
+      expect(tx.approvalChain.create).not.toHaveBeenCalled();
+    });
+  });
+
   describe('slot resolution (FR-001a)', () => {
     it('returns null for an unmapped slot rather than throwing', async () => {
       const prisma = createPrismaMock({

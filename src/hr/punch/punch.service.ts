@@ -1,14 +1,14 @@
 import {
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Injectable,
-  NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AuditAction,
   AuditEntityType,
+  Employee,
   ExceptionResolution,
   FaceMatchResult,
   GeofenceResult,
@@ -19,6 +19,8 @@ import {
 } from '@prisma/client';
 import { HttpException } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
+import { ApprovalService } from '../../approvals/approvals.service';
+import { ACTION_ATTENDANCE_EXCEPTION } from '../../approvals/default-chains';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   SettingsConfig,
@@ -80,6 +82,8 @@ export class PunchService {
   /** The zone every calendar-day decision here is reckoned against. */
   private readonly settingsTimeZone: string;
 
+  private readonly logger = new Logger(PunchService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
@@ -90,6 +94,7 @@ export class PunchService {
     private readonly images: ImageProcessingService,
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
+    private readonly approvals: ApprovalService,
     configService: ConfigService,
   ) {
     this.workspace = configService.get<WorkspaceConfig>('workspace');
@@ -378,69 +383,81 @@ export class PunchService {
       ipAddress: caller.ipAddress,
     });
 
+    // Feature 016 FR-012: a flagged punch enters an approval chain rather than waiting
+    // for one person to resolve it in one step.
+    if (isException) {
+      await this.raiseExceptionForApproval(record, employee, caller);
+    }
+
     return this.toResult(record);
   }
 
-  /** The pending exception queue for an admin (FR-011a). RLS confines this to the
-   * admin's own company. */
-  async listPendingExceptions(caller: Caller): Promise<PunchRecord[]> {
-    return withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.punchRecord.findMany({
-        where: { exceptionResolution: ExceptionResolution.pending },
-        orderBy: { capturedAt: 'desc' },
-      }),
-    );
-  }
-
-  /** Records an admin's verdict on a flagged punch (FR-011a). */
-  async resolveException(
+  /**
+   * Puts a flagged punch into its approval chain (016 FR-012, T023).
+   *
+   * **A failure here must never fail the punch.** Feature 003's FR-007 is that a punch
+   * which fails verification is still recorded — somebody physically at work must not end
+   * up absent from payroll because of a camera angle. That guarantee cannot be quietly
+   * weakened into "unless the approval chain is misconfigured", so every fault below is
+   * logged and swallowed. The punch keeps its local `pending` resolution, and Phase 6's
+   * reconciliation sweep is what reports the item that never entered a chain.
+   *
+   * `subject` and `href` are built here, by the module that owns the punch. The spine has
+   * no relation to `hr.PunchRecord` and cannot read it — that is research.md §1's opacity,
+   * and this is where its cost is paid.
+   */
+  private async raiseExceptionForApproval(
+    record: PunchRecord,
+    employee: Employee,
     caller: Caller,
-    punchId: string,
-    resolution: 'confirmed' | 'rejected',
-  ): Promise<PunchRecord> {
-    const updated = await withRlsContext(
-      this.prisma,
-      caller.rls,
-      async (tx) => {
-        const punch = await tx.punchRecord.findFirst({
-          where: { id: punchId },
-        });
-        if (!punch) {
-          throw new NotFoundException('Punch record not found');
-        }
-        if (punch.exceptionResolution !== ExceptionResolution.pending) {
-          // Not an error to re-read, but re-deciding a settled exception would
-          // silently overwrite another admin's judgement.
-          throw new ForbiddenException(
-            'This punch has no pending exception to resolve.',
-          );
-        }
-        return tx.punchRecord.update({
-          where: { id: punchId },
-          data: {
-            exceptionResolution:
-              resolution === 'confirmed'
-                ? ExceptionResolution.confirmed
-                : ExceptionResolution.rejected,
-            resolvedByUserId: caller.userId,
-            resolvedAt: new Date(),
-          },
-        });
-      },
-    );
+  ): Promise<void> {
+    const reasons: string[] = [];
+    if (record.faceMatchResult === FaceMatchResult.exception) {
+      reasons.push('face did not match');
+    }
+    if (record.geofenceResult === GeofenceResult.exception) {
+      reasons.push('outside the site geofence');
+    }
 
-    await this.auditLog.record({
-      entityType: AuditEntityType.PUNCH,
-      action: AuditAction.UPDATE,
-      entityId: updated.id,
-      changes: { exceptionResolution: resolution } as Prisma.InputJsonValue,
-      accountId: caller.userId,
-      companyId: caller.companyId,
-      ipAddress: caller.ipAddress,
-    });
+    const name =
+      [employee.firstName, employee.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim() || employee.employeeCode;
+    const day = zonedDateOnly(record.capturedAt, this.settingsTimeZone);
 
-    return updated;
+    try {
+      await this.approvals.submit({
+        companyId: employee.companyId,
+        actionType: ACTION_ATTENDANCE_EXCEPTION,
+        entityType: ACTION_ATTENDANCE_EXCEPTION,
+        entityId: record.id,
+        originatorUserId: caller.userId,
+        subject: `${name} — ${day}, ${
+          reasons.join(' and ') || 'flagged punch'
+        }`,
+        href: `/dashboard/hr/attendance/exceptions/${record.id}`,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Punch ${record.id} was flagged but could not enter an approval chain: ` +
+          `${
+            error instanceof Error ? error.message : String(error)
+          }. The punch is ` +
+          `recorded and remains pending; it will not be resolvable through the chain ` +
+          `until this is fixed.`,
+      );
+    }
   }
+
+  // `listPendingExceptions` and `resolveException` lived here until feature 016.
+  //
+  // They have moved to `AttendanceExceptionsService`, which records a decision at one
+  // level of an approval chain instead of settling the matter in one step (FR-012). They
+  // were deleted rather than deprecated in place: a second, still-wired path that
+  // resolved an exception without consulting the chain would not be dead code, it would
+  // be a bypass — and the whole point of this feature is that no single person can
+  // resolve an exception alone.
 
   private toResult(record: PunchRecord): PunchResult {
     return {

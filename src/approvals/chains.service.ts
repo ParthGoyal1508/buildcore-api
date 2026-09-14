@@ -9,7 +9,11 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
-import { labelForSlot } from './approval-slots';
+import { labelForSlot, SLOT_FINAL } from './approval-slots';
+import {
+  ACTION_ATTENDANCE_EXCEPTION,
+  DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
+} from './default-chains';
 
 /** One level as supplied when defining or replacing a chain. */
 export interface ChainLevelInput {
@@ -161,6 +165,72 @@ export class ChainsService {
     });
 
     return chain;
+  }
+
+  /**
+   * Seeds a new company's default chains (016 T022).
+   *
+   * Called by `CompaniesService` inside its own creation transaction, the same way
+   * document types, item categories and asset grades are seeded — so `tx` is the
+   * caller's, not one this service opens.
+   *
+   * **Only the `final` slot is mapped.** The shape of authority is knowable because the
+   * client described it (Employer → HR → Director, Note 2), and `final` resolves to
+   * Super Admin because the client said so on 2026-09-13. The other two are *not*
+   * guessable: neither "HR Office" nor "Site Incharge" exists as a role in this system,
+   * and that absence is exactly what the role-slot indirection was introduced to handle
+   * (research.md §2). Inventing a mapping would hand the right to approve attendance to
+   * whichever role happened to sound closest.
+   *
+   * The consequence is deliberate and visible: until an administrator maps the first two
+   * slots, a decision at those levels is refused with `APPROVAL_SLOT_UNMAPPED` — a
+   * configuration fault naming the settings screen that fixes it, which is what FR-001b
+   * exists for. A silent default would be worse than a loud gap.
+   *
+   * `superAdminRoleId` is passed in rather than looked up: `settings.Role` belongs to the
+   * settings module, and the spine reading it would be the cross-schema query Principle I
+   * forbids. The caller already knows it.
+   */
+  async seedDefaultsForCompany(
+    companyId: string,
+    tx: Prisma.TransactionClient,
+    opts: { superAdminRoleId?: string | null } = {},
+  ): Promise<void> {
+    const existing = await tx.approvalChain.findFirst({
+      where: { companyId, actionType: ACTION_ATTENDANCE_EXCEPTION },
+      select: { id: true },
+    });
+    // Idempotent: the backfill migration and this seeder can both reach a company.
+    if (existing) return;
+
+    await tx.approvalChain.create({
+      data: {
+        companyId,
+        actionType: ACTION_ATTENDANCE_EXCEPTION,
+        isFinalAuthorityRequired: true,
+        levels: {
+          create: DEFAULT_ATTENDANCE_EXCEPTION_LEVELS.map((level) => ({
+            companyId,
+            position: level.position,
+            slotKey: level.slotKey,
+            isFinalAuthority: level.isFinalAuthority ?? false,
+            label: level.label ?? null,
+          })),
+        },
+      },
+    });
+
+    if (opts.superAdminRoleId) {
+      await tx.roleSlotMapping.upsert({
+        where: { companyId_slotKey: { companyId, slotKey: SLOT_FINAL } },
+        create: {
+          companyId,
+          slotKey: SLOT_FINAL,
+          roleId: opts.superAdminRoleId,
+        },
+        update: {},
+      });
+    }
   }
 
   /** Every slot mapping for a company. */

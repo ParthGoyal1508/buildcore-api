@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
 import { CompaniesController } from './companies/companies.controller';
@@ -39,7 +40,10 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
  * Employees module.
  */
 @Module({
-  imports: [UsersModule],
+  // ApprovalsModule for feature 016: a new company is seeded with the default approval
+  // chains in the same transaction as its document types and asset grades, through
+  // `ChainsService` rather than by writing to the spine's tables from here.
+  imports: [UsersModule, ApprovalsModule],
   controllers: [
     ReimbursementCategoriesController,
     CompaniesController,

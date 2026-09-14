@@ -102,22 +102,22 @@ resolved in one step.
 **Independent test**: raise an exception, walk it through all three levels, confirm state and actor
 after each.
 
-- [ ] T022 [US1] Seed a default `attendance_exception` chain with three levels
+- [X] T022 [US1] Seed a default `attendance_exception` chain with three levels
       (`first_approver`, `hr`, `final`) and the `settings` copy needed to map slots to roles
-- [ ] T023 [US1] Change `src/hr/attendance-exceptions/attendance-exceptions.controller.ts` to submit
+- [X] T023 [US1] Change `src/hr/attendance-exceptions/attendance-exceptions.controller.ts` to submit
       an exception into the chain on detection (FR-012), supplying `subject` and `href` at submit time —
       **the spine cannot read the punch to build them** (checklist CHK003)
-- [ ] T024 [US1] Replace the single-step `resolve` endpoint with a decision through
+- [X] T024 [US1] Replace the single-step `resolve` endpoint with a decision through
       `ApprovalService.decide()`, keeping the route so the interface changes once rather than twice
-- [ ] T025 [US1] Subscribe to `approval.completed` in the `hr` module and apply the outcome to the
+- [X] T025 [US1] Subscribe to `approval.completed` in the `hr` module and apply the outcome to the
       punch. The handler MUST be idempotent — it will be redelivered (research.md §8)
-- [ ] T026 [US1] Make the punch's effective status read from the spine rather than a local column
+- [X] T026 [US1] Make the punch's effective status read from the spine rather than a local column
       where the two could disagree (FR-007); `ApprovalInstance.state` is authoritative (research.md §8)
-- [ ] T027 [US1] Data migration: backfill historical single-step resolutions as completed
+- [X] T027 [US1] Data migration: backfill historical single-step resolutions as completed
       single-level instances, so old and new render through one path (research.md §7)
-- [ ] T028 [US1] e2e spec in `test/` covering spec US1 scenarios 1–5, including the refusal when
+- [X] T028 [US1] e2e spec in `test/` covering spec US1 scenarios 1–5, including the refusal when
       somebody without the level's authority attempts to approve
-- [ ] T029 [P] [US1] Unit test for the idempotent completion handler: apply the same event twice,
+- [X] T029 [P] [US1] Unit test for the idempotent completion handler: apply the same event twice,
       assert one effect
 
 **Checkpoint**: spec US1 fully delivered. The feature is useful at this point even if nothing else
@@ -379,3 +379,107 @@ warned about **now pass** — fixed by `04b4e94` since that note was written.
 - The quickstart's ten manual passes have not been run; nothing here has been opened in a browser.
 - `research.md` §4's recorded risk stands unchanged: **the cron will not fire on a Render instance
   that suspends when idle.** No task in this feature can fix it.
+
+---
+
+## Implementation note — Phase 2, 2026-09-14
+
+Phase 2 (T022–T029) is complete. **Attendance exceptions now travel Employer → HR → Director**;
+the client's first note is satisfied. Phases 3–6 are untouched.
+
+### Verification actually performed
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint <changed files>` | 0 errors, 0 warnings |
+| `npm test` | **774/774 passing, 77/77 suites** (753 after Phase 1; +21 here) |
+| `npm run build` | clean, 507 files |
+| `test/attendance-exceptions.e2e-spec.ts` | **8/8** — US1 scenarios 1–5 through the real HTTP route |
+| `test/my-workspace.e2e-spec.ts` | **93/93** |
+| `npm run test:e2e` (full) ×3 | 37 pre-existing failures each time — **the Phase 1 baseline, unmoved** |
+
+### The endpoint's contract has changed, deliberately
+
+`POST /workspace-admin/attendance-exceptions/:punchId/resolve` keeps its route and its verbs, so the
+interface changes once rather than twice — but three things about it are different, and the web half
+must know:
+
+1. **A decision is now one level, not the end.** Confirming at level 1 of 3 advances the chain; the
+   punch stays `pending`. Only the final approval confirms it.
+2. **The response shape is `{ punch, approval }`**, not a bare punch. `approval` is the
+   `ApprovalInstanceView` from Phase 1 — or `null` for a punch that never entered a chain.
+   `GET` on the collection returns rows of the same shape, and a new `GET /:punchId` returns one.
+3. **`reason` is required for `rejected` and `returned`** (FR-006), refused with
+   `APPROVAL_REASON_REQUIRED`. Before 016 a rejection could be recorded with no explanation, which is
+   the rejection an employee cannot act on. `returned` is new.
+
+`my-workspace.e2e-spec.ts`'s exception block asserted the old single-step contract and was rewritten.
+Those tests were not "broken" — they were pinning down the behaviour this feature exists to replace.
+
+### Decisions taken where the plan was silent
+
+1. **Only the `final` slot is seeded (T022).** The chain *shape* is knowable — the client described
+   Employer → HR → Director — and `final` resolves to Super Admin because the client settled that on
+   2026-09-13. `first_approver` and `hr` are **not** guessable: neither "HR Office" nor "Site
+   Incharge" exists as a role, which is the whole reason role slots were introduced (research.md §2).
+
+   The consequence is deliberate and it is an operational one worth stating plainly: **until an
+   administrator maps those two slots, an attendance exception cannot be decided.** The refusal names
+   the cause (`APPROVAL_SLOT_UNMAPPED`, a configuration fault, not a 403) rather than failing
+   silently. Inventing a default would hand the right to approve attendance to whichever role
+   happened to sound closest, which is worse than a loud gap — but it does mean this feature is not
+   finished on deployment day until somebody visits the settings screen that Phase 4 builds.
+
+2. **A failed submission never fails the punch (T023).** Feature 003's FR-007 — a punch failing
+   verification is still recorded — is not weakened into "unless the approval chain is
+   misconfigured". Somebody physically at work must not lose a day's pay to a settings gap, so a
+   submit failure is logged and swallowed and the punch keeps its local `pending`. Covered by a test
+   that makes `submit` throw and asserts the punch survives.
+
+3. **Rejection and return reach the punch synchronously; only completion is an event.** The contract
+   emits `approval.completed` on final approval only, and extending it would have been scope. It is
+   not needed: a decision taken through this module's own endpoint returns the new state to the
+   caller, so `decide()` applies every outcome directly. The event handler covers decisions taken
+   elsewhere — Phase 4's cross-module queue — and both paths are idempotent, so converging is
+   harmless.
+
+4. **`PunchService.listPendingExceptions` and `resolveException` were deleted, not deprecated.** A
+   second, still-wired path that resolved an exception without consulting the chain would not be dead
+   code; it would be a bypass around the control this feature exists to create.
+
+5. **The backfill parks history on an inactive `attendance_exception_legacy` chain (T027).** A
+   backfilled instance needs a real chain to point at, and making it inactive means it accepts no new
+   items, is invisible to the FR-021b guard, and cannot collide with the live chain on the
+   `(companyId, actionType) WHERE isActive` partial unique index. A resolution whose
+   `resolvedByUserId` is null gets an instance but **no decision row** — the verdict was recorded, who
+   reached it was not, and inventing an actor would put a name against a judgement that person may
+   never have made.
+
+   The migration matched 0 rows locally, which proves only that it parses. It was additionally run
+   against fabricated historical rows: instance state, subject, originator (the employee's own
+   account, via `hr.Employee.userId`), the decision's actor, and **idempotency across a second run**
+   were all verified before this was committed.
+
+### One flaky test, reported rather than papered over
+
+Across three full `test:e2e` runs, `attendance-exceptions.e2e-spec.ts` failed **once**, on
+`walks all three levels`, with a `401` from a token minted in `beforeAll`. It passes in isolation, in
+a pair with `my-workspace`, and in the other two full runs.
+
+A 401 there means `loadUserWithPermissions` found no user — the row was momentarily unreadable.
+Ruled out: token expiry (the whole run takes 21s against a 15-minute access token), and cross-suite
+deletion (every suite's cleanup is id-scoped; none deletes by prefix or predicate). Not ruled out: a
+transient failure under twelve suites each holding their own Nest app and connection pool. **This is
+recorded as a known flake rather than claimed fixed**, because I could not reproduce it and a fix I
+cannot verify is worse than a documented one I can.
+
+### Changed outside the feature's own files
+
+- `ResolveExceptionDto` gained `returned` and an optional `reason`.
+- `CompaniesService` resolves the Super Admin role and hands it to
+  `ChainsService.seedDefaultsForCompany` inside its existing creation transaction — the spine never
+  reads `settings.Role` itself.
+- `SettingsModule` and `HrModule` now import `ApprovalsModule`.
+- Three `CompaniesService` specs needed a `role` delegate on their Prisma mock;
+  `punch.service.spec.ts` needed an `approvals` mock and an employee name.

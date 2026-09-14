@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType, Company, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { ChainsService } from '../../approvals/chains.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -39,6 +40,7 @@ export class CompaniesService {
     private readonly assetCategories: AssetCategoriesService,
     private readonly assetDocTypes: AssetDocTypesService,
     private readonly conditionGrades: ConditionGradesService,
+    private readonly approvalChains: ChainsService,
   ) {}
 
   /**
@@ -314,6 +316,19 @@ export class CompaniesService {
         await this.assetCategories.seedDefaultsForCompany(company.id, tx);
         await this.assetDocTypes.seedDefaultsForCompany(company.id, tx);
         await this.conditionGrades.seedDefaultsForCompany(company.id, tx);
+        // Feature 016's approval chains. The shape is seeded; the staffing mostly is
+        // not — only the `final` slot, which the client settled as Super Admin. The
+        // Super Admin role id is resolved HERE, in the module that owns `settings.Role`,
+        // and handed over: the approval spine lives in `shared` and reading roles itself
+        // would be the cross-schema query Principle I forbids.
+        const superAdminRole = await tx.role.findFirst({
+          where: { isProtected: true },
+          select: { id: true },
+        });
+        await this.approvalChains.seedDefaultsForCompany(company.id, tx, {
+          superAdminRoleId: superAdminRole?.id ?? null,
+        });
+
         await tx.employeeCodeSequence.create({
           data: { companyId: company.id, lastNumber: 0 },
         });
