@@ -1009,7 +1009,7 @@ chain endpoints and is silent on these two, so nothing downstream caught it eith
       are currently write-only from the application's point of view. Add the endpoint with a DTO
       (Principle II) and decide explicitly who may call it — the service takes an actor but the
       permission question is a product one: the current approver, a SETTINGS holder, or both.
-- [ ] T063 **MEDIUM** Make refused decisions retrievable per SC-007 (partial). SC-007 requires that every
+- [X] T063 **MEDIUM** Make refused decisions retrievable per SC-007 — **already satisfied; the finding was wrong**. SC-007 requires that every
       decision refused for insufficient authority is "recorded **and retrievable**". The recording half
       is done — `approvals.service.ts:1335` writes an audit entry carrying `attemptedAction`. The
       retrieval half does not exist anywhere in the API: no controller in `src/` reads `AuditLog`, so
@@ -1045,3 +1045,46 @@ e2e now asserts that breadth deliberately rather than leaving it as an untested 
 effect.
 
 T063 (SC-007 retrievability) is not done.
+
+### Implementation note — T063, 2026-09-14
+
+**No code changed. My converge finding was wrong, and SC-007 was already met.**
+
+F3 claimed refused decisions were recorded but not retrievable, on the evidence that
+`grep -rln "AuditLog" src --include="*.controller.ts"` returned nothing. That grep could
+not have found what it was looking for: `ActivityLogController` reads through
+`ActivityLogService`, never touching Prisma itself, so searching controllers for the
+model name was searching for a string the correct implementation would not contain. I
+searched for a spelling and reported the absence of a capability.
+
+What is actually there, verified live against a booted API:
+
+- `GET /activity-log` and `GET /activity-log/export`, guarded by `DASHBOARD`, registered
+  in `DashboardModule` — feature 004's Activity Log.
+- `module-bucket-mapping.ts:61` already maps `APPROVAL_REFUSED`, into the `hr` bucket,
+  with a comment written during this feature explaining why.
+- A refusal driven over HTTP (a Super Admin attempting a decision at the HR level, which
+  they do not hold) came back in the CSV export as:
+
+```
+"UPDATE","hr","APPROVAL_REFUSED:cmu1ipz6j…","","{"atPosition":2,
+ "entityType":"attendance_exception","refusedBecause":"APPROVAL_NOT_AUTHORISED",
+ "attemptedAction":"approve"}"
+```
+
+Every element SC-007 names — who, when, what was attempted, at which level, and why it
+was refused. A second row in the same export was a real `APPROVAL_SLOT_UNMAPPED` refusal
+from earlier the same day, so this has been working since the endpoint shipped.
+
+Worth recording that the write-only posture of `AuditLogService` is deliberate and
+documented at `audit-log.service.ts:35` — a clarification from spec 001 dated 2026-08-26,
+which says reading the audit log belongs to a separate Activity Log feature. Had I built
+a parallel read surface in the approvals module, I would have contradicted a ratified
+decision and duplicated a feature that already exists.
+
+**One genuine limitation, left alone deliberately.** The paginated *feed* projection
+(`activity-log.service.ts:67`) maps `entityType` into a module bucket and then discards
+it, so in the feed a refusal is indistinguishable from any other `hr` UPDATE — only the
+export carries `entity` and the `changes` payload. SC-007 says "retrievable", and it is,
+so this is not a 016 gap. It is an observation about feature 004's surface and belongs to
+whoever owns that contract, not to a feature quietly widening someone else's response.
