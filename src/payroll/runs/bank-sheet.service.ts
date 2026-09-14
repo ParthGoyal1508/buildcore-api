@@ -1,10 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
 import * as ExcelJS from 'exceljs';
 
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
+import { PayrollScheduleService } from './payroll-schedule.service';
 
 /**
  * The bank transfer sheet for a payroll run (005 FR-017).
@@ -20,6 +25,7 @@ export class BankSheetService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pii: PiiCipherService,
+    private readonly schedule: PayrollScheduleService,
   ) {}
 
   async build(
@@ -33,6 +39,31 @@ export class BankSheetService {
       }),
     );
     if (!run) throw new NotFoundException('Payroll run not found');
+
+    // 016 FR-015: a run may not produce a bank transfer sheet until its approval chain
+    // is complete. This is the point where the chain stops being paperwork and starts
+    // being control — everything before it is a record of opinions; this is the file
+    // that moves money.
+    //
+    // The refusal names the outstanding level, because "not approved" leaves whoever is
+    // waiting to guess whose desk it is on.
+    const outstanding = await this.schedule.outstandingApproval(
+      run.companyId,
+      run.id,
+    );
+    if (outstanding) {
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          outstanding.state === 'pending'
+            ? `This payroll run is awaiting ${
+                outstanding.levelLabel ?? 'approval'
+              }. A bank transfer sheet cannot be produced until every level has approved.`
+            : `This payroll run was ${outstanding.state} and cannot produce a bank ` +
+              `transfer sheet.`,
+        code: 'PAYROLL_RUN_NOT_APPROVED',
+      });
+    }
 
     const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findMany({
@@ -85,9 +116,7 @@ export class BankSheetService {
           code: e.employeeCode,
           name,
           net,
-          reason: !account
-            ? 'No bank account on file'
-            : 'No IFSC code on file',
+          reason: !account ? 'No bank account on file' : 'No IFSC code on file',
         });
         continue;
       }

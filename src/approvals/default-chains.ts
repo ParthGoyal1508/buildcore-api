@@ -22,6 +22,9 @@ export const ACTION_ATTENDANCE_EXCEPTION = 'attendance_exception';
  */
 export const ACTION_ATTENDANCE_EXCEPTION_LEGACY = 'attendance_exception_legacy';
 
+/** The key a payroll run enters its chain under (spec FR-013, FR-015). */
+export const ACTION_PAYROLL_RUN = 'payroll_run';
+
 /**
  * Employer → HR → Director, the shape Note 2 describes.
  *
@@ -32,6 +35,29 @@ export const ACTION_ATTENDANCE_EXCEPTION_LEGACY = 'attendance_exception_legacy';
 export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
   { position: 1, slotKey: SLOT_FIRST_APPROVER, label: 'Site / Employer' },
   { position: 2, slotKey: SLOT_HR, label: 'HR' },
+  {
+    position: 3,
+    slotKey: SLOT_FINAL,
+    label: 'Director',
+    isFinalAuthority: true,
+  },
+];
+
+/**
+ * Site Incharge → HR Office → Director, the shape Note 7 describes for payroll.
+ *
+ * The same three slots as the attendance chain, deliberately: the client's
+ * "Employer → HR → Director" (Note 2) and "Site Incharge < HR Office < Director"
+ * (Note 7) describe one three-tier shape at different levels of the organisation, not
+ * two mechanisms (spec Assumptions). Reusing the slots means a company staffs its
+ * approvers once and both chains follow.
+ *
+ * The labels differ because the words the client used differ, and a payroll approver
+ * should see "Site Incharge" rather than the attendance queue's "Site / Employer".
+ */
+export const DEFAULT_PAYROLL_RUN_LEVELS: ChainLevelInput[] = [
+  { position: 1, slotKey: SLOT_FIRST_APPROVER, label: 'Site Incharge' },
+  { position: 2, slotKey: SLOT_HR, label: 'HR Office' },
   {
     position: 3,
     slotKey: SLOT_FINAL,

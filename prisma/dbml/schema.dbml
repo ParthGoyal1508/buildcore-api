@@ -1208,6 +1208,13 @@ reporting/audit (research.md §12, US11).']
   generatedByUserId String
   processedAt DateTime
   paidAt DateTime
+  createdBySchedule Boolean [not null, default: false, note: 'True when the monthly schedule created this run rather than a person (016 FR-013).
+
+Not decoration: the production API is deployed on an instance class that suspends
+when idle, and a suspended instance runs no schedule (research.md §4). Without this
+column, "did the 1st-of-the-month run actually fire?" can only be answered by
+inferring from timestamps. With it, an operator can see at a glance whether the
+automation is working or whether somebody has been quietly creating runs by hand.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   lineItems PayrollLineItem [not null]
@@ -1747,8 +1754,12 @@ here: a queue row has to say what it is about.']
 the owning module for the same reason.']
   currentPosition Int [not null, default: 1, note: 'Which level it awaits. Meaningless once `state` is terminal.']
   state ApprovalState [not null, default: 'pending']
-  originatorUserId String [not null]
-  originator User [not null]
+  originatorUserId String [note: 'Who raised it. **Null for an item raised by the system** — the monthly payroll
+schedule has no person behind it, and this is a real foreign key, so attributing a
+scheduled run to a fabricated or arbitrary account would be a lie in the audit
+trail. Same reasoning as `AuditLogEntry.accountId`, which is nullable for the same
+class of event.']
+  originator User
   round Int [not null, default: 1, note: 'Which round of the chain this is. Incremented when a returned item is
 resubmitted, and part of both decision uniques below — without it, resubmission
 would collide with the decisions of the round that was returned (FR-005, FR-020).']

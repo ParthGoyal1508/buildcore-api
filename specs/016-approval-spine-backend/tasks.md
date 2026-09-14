@@ -127,32 +127,32 @@ is built.
 
 ## Phase 3: US2 — Payroll runs itself, then waits (P1)
 
-- [ ] T030 [US2] Add unique `(companyId, period, isFnf)` and `createdBySchedule` to `PayrollRun`,
+- [X] T030 [US2] Add unique `(companyId, period, isFnf)` and `createdBySchedule` to `PayrollRun`,
       with a migration. **Idempotency comes from this constraint, not from the scheduler being
       careful** (research.md §4)
-- [ ] T031 [US2] Implement `createRunsForPreviousPeriod()` (FR-013, FR-014) in
+- [X] T031 [US2] Implement `createRunsForPreviousPeriod()` (FR-013, FR-014) in
       `payroll-runs.service.ts` — computes every active company's run with advances and deductions
       applied, absorbing the duplicate case via the constraint
-- [ ] T032 [US2] Create `src/payroll/runs/payroll-schedule.cron.ts` mirroring
+- [X] T032 [US2] Create `src/payroll/runs/payroll-schedule.cron.ts` mirroring
       `ReminderEvaluationCron` exactly: thin `@Cron` calling the service, errors logged not
       rethrown, timezone `Asia/Kolkata` so "the 1st" means the 1st locally
-- [ ] T033 [US2] Add the cron expression and timezone to configuration, not as literals
+- [X] T033 [US2] Add the cron expression and timezone to configuration, not as literals
       (Principle III)
-- [ ] T034 [US2] Submit each created run into the `payroll_run` chain
-- [ ] T035 [US2] Hold `bank-sheet.service.ts` until the chain completes, refusing with the
+- [X] T034 [US2] Submit each created run into the `payroll_run` chain
+- [X] T035 [US2] Hold `bank-sheet.service.ts` until the chain completes, refusing with the
       outstanding level named (FR-015)
-- [ ] T036 [US2] Implement `isPeriodUnderReview(companyId, date)` as an exported payroll method —
+- [X] T036 [US2] Implement `isPeriodUnderReview(companyId, date)` as an exported payroll method —
       `hr` must never read `payroll` tables (research.md §5, checklist CHK012)
-- [ ] T037 [US2] Restrict attendance edits for a period under review to the HR-mapped role (FR-016),
+- [X] T037 [US2] Restrict attendance edits for a period under review to the HR-mapped role (FR-016),
       calling the method above
-- [ ] T038 [US2] Emit an invalidation **event** when attendance in a reviewed period changes, and
+- [X] T038 [US2] Emit an invalidation **event** when attendance in a reviewed period changes, and
       restart the run's chain on receipt (FR-017). This direction is an event because no answer is
       needed; the lock above is a call because one is
-- [ ] T039 [US2] Unit tests: scheduled creation is idempotent across a repeat fire, a restart, and a
+- [X] T039 [US2] Unit tests: scheduled creation is idempotent across a repeat fire, a restart, and a
       manual trigger racing the schedule
-- [ ] T040 [US2] e2e covering spec US2 scenarios 1–6: held bank sheet, non-HR edit refused, HR edit
+- [X] T040 [US2] e2e covering spec US2 scenarios 1–6: held bank sheet, non-HR edit refused, HR edit
       permitted and chain restarted, sheet produced after full approval
-- [ ] T041 [P] [US2] Unit test that `hr` code contains no Prisma access to `payroll` tables
+- [X] T041 [P] [US2] Unit test that `hr` code contains no Prisma access to `payroll` tables
 
 **Checkpoint**: spec US2 delivered. Payroll is scheduled and gated.
 
@@ -483,3 +483,103 @@ cannot verify is worse than a documented one I can.
 - `SettingsModule` and `HrModule` now import `ApprovalsModule`.
 - Three `CompaniesService` specs needed a `role` delegate on their Prisma mock;
   `punch.service.spec.ts` needed an `approvals` mock and an employee name.
+
+---
+
+## Implementation note — Phase 3, 2026-09-14
+
+Phase 3 (T030–T041) is complete. **Payroll is now scheduled and gated**: a run is drawn up on the
+1st, cannot reach a bank transfer sheet without three recorded approvals, and its inputs cannot be
+changed underneath the people reviewing it. 44 of 64 tasks done; Phases 4–6 remain.
+
+### Verification actually performed
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | clean |
+| `npx eslint <changed files>` | 0 errors, 0 warnings |
+| `npm test` | **801/801 passing, 79/79 suites** (774 after Phase 2; +27 here) |
+| `npm run build` | clean, 512 files |
+| `test/payroll-approval.e2e-spec.ts` | **8/8** — US2 scenarios 1–6 |
+| `npm run test:e2e` (full) | 37 pre-existing failures — **baseline unmoved**; all four 016 suites pass |
+
+### T030 was wrong, and following it would have been a regression
+
+The task says to add a unique constraint on `(companyId, period, isFnf)`. **That constraint already
+exists in a better form and the specified one would break F&F settlements.**
+`PayrollRun_companyId_period_regular_key` is a *partial* unique — `(companyId, period)
+WHERE "isFnf" = false` — added by feature 005 with a comment explaining exactly why: there is one
+regular run per period but **many F&F runs, one per exiting employee**. A plain compound unique on
+all three columns would permit only one F&F run per period and so forbid the second employee exit in
+a month.
+
+So T030 added `createdBySchedule` only. The idempotency the task wanted is already guaranteed, by an
+index that was right the first time.
+
+### Two other schema changes, both about not lying
+
+- **`ApprovalInstance.originatorUserId` is now nullable.** A scheduled run has no person behind it,
+  and the column is a real foreign key — so the choice was between a nullable column and attributing
+  the run to an arbitrary account. The view renders `originatorName` as **"The system"** rather than
+  "Unknown user", because unknown reads as missing data when in fact it is precisely known.
+- **`Caller.userId` is now `string | null`**, for the same reason: the scheduler is a system actor
+  and `AuditLogEntry.accountId` is a foreign key. Note `tsconfig.json` has `strictNullChecks: false`,
+  so this documents the contract rather than enforcing it — which is why it is stated in the type
+  and in a comment rather than relied upon.
+
+`Caller` also gained `roleIds`, so the attendance write path can ask "is this caller HR" — a question
+answered by the chain's slot mapping, because there deliberately is no HR permission to check.
+
+### The event had a real race, found by the e2e
+
+`emit()` does not await asynchronous listeners. The first run of US2 scenario 4 failed because the
+HTTP response came back before the chain had restarted — and that window is not a test artefact: in
+it, a director can approve figures that have already changed underneath them. Fixed by `emitAsync`,
+awaited. Awaiting is not asking payroll for an answer (the listener swallows its own failures and
+returns nothing); it is refusing to report the edit as done while the consequence FR-017 promises is
+still outstanding.
+
+### Decisions taken where the plan was silent
+
+1. **A missing chain never blocks run creation.** If `submit` fails, the run is still created and the
+   failure logged. Refusing to create it would mean nobody gets paid because nobody has configured an
+   approver yet — and no control is lost, because the bank sheet is held regardless.
+2. **One company's failure does not stop the sweep.** A sweep that abandoned twelve companies because
+   the first had a configuration problem would turn a small fault into an outage. The result object
+   reports created / already-present / failed separately.
+3. **`isPeriodUnderReview` is false when a run never entered a chain.** A configuration gap is not a
+   licence to edit, but refusing *every* attendance edit on account of one would be worse, and the
+   bank sheet is still held either way.
+4. **The lock does not apply to a paid run**, and lifts once the chain completes. A correction after
+   approval is a different problem, already governed by the payroll lock day.
+5. **Period arithmetic is done in the business timezone, not UTC.** `2026-09-01T00:30` in
+   Asia/Kolkata is `2026-08-31T19:00Z`; subtracting a month from the UTC date yields July and pays
+   the wrong month's wages. There are explicit tests for this boundary and for the January rollover.
+6. **`HrModule` and `PayrollModule` now form a declared cycle** (`forwardRef` both ways). Attendance
+   asks payroll whether a period is under review; payroll's engine reads attendance. Both directions
+   are exported service calls, which is what Principle I requires — so Nest is told about the cycle
+   rather than the boundary being broken to avoid it. Verified by booting the app (`app.e2e-spec`).
+
+### T041's guard was proven by breaking it
+
+`src/hr/hr-payroll-boundary.spec.ts` derives the forbidden set from `schema.prisma` — every model
+carrying `@@schema("payroll")` — so a payroll model added next year is covered without anybody
+remembering to update the test. It also asserts it found something, because a guard that silently
+matches nothing is worse than no guard.
+
+It was then **deliberately broken**: a `this.prisma.payrollRun.findFirst()` was added to
+`attendance-admin.service.ts`, the test failed naming the exact file and delegate, and it passed
+again on revert. This is the CHK008 discipline applied early — a guard nobody has seen fail is not
+known to work.
+
+### The risk this phase cannot close
+
+`research.md` §4 and the cron's own doc comment both say it plainly: **the production API is deployed
+on an instance class that suspends when idle, and a suspended instance runs no schedule.** T032 is
+built and tested, and it will still not fire on the 1st until the deployment changes.
+
+Two things mitigate rather than solve that: `createRunsForPreviousPeriod` is independently callable
+(the manual path remains), and `PayrollRun.createdBySchedule` makes the difference between automation
+and handwork visible, so an operator can *see* whether the schedule is firing rather than assume it.
+**SC-003 — "created without human action on the 1st, for 3 consecutive months" — cannot be satisfied
+on the current infrastructure.**

@@ -8,6 +8,7 @@ export interface Config {
   storage: StorageConfig;
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
+  payrollSchedule: PayrollScheduleConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
 }
@@ -235,6 +236,24 @@ export interface SettingsConfig {
  * HR & Payroll (feature 005) tunables. Principle III: every one of these is a policy
  * value someone will want to change without a code review.
  */
+/**
+ * When the monthly payroll run is created, and in which timezone (016 FR-013, T033).
+ *
+ * Configuration rather than literals (Constitution Principle III) because the day and
+ * time a company wants its payroll drawn up is a business decision, and because a
+ * deployment needs to be able to move it without a release.
+ */
+export interface PayrollScheduleConfig {
+  /** Cron expression. Default `30 0 1 * *` — 00:30 on the 1st. */
+  cron: string;
+  /**
+   * The timezone the expression is read in. "The 1st" must mean the 1st where the
+   * company is, not in UTC — in Asia/Kolkata those are five and a half hours apart, so a
+   * UTC-scheduled run fires on the last evening of the previous month.
+   */
+  timeZone: string;
+}
+
 export interface HrPayrollConfig {
   /**
    * How many days before an employee document's expiry it starts reporting as

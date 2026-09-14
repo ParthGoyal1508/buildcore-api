@@ -60,6 +60,7 @@ export class RecruitmentRefsService {
       companyId: caller.companyId,
       ipAddress,
       rls: rlsContextFor(caller),
+      roleIds: caller.roleIds ?? [],
     };
   }
 

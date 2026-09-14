@@ -76,7 +76,8 @@ export interface ApprovalInstanceView {
   /** Times returned and resubmitted (FR-020), so repetition leaves a visible trace. */
   returnCount: number;
 
-  originatorUserId: string;
+  originatorUserId: string | null;
+  /** "The system" when a scheduled job raised it — never a fabricated person. */
   originatorName: string;
 
   /** The label of the level that decides now — null once the chain is finished. */
@@ -113,7 +114,12 @@ export interface SubmitApprovalInput {
   actionType: string;
   entityType: string;
   entityId: string;
-  originatorUserId: string;
+  /**
+   * Who raised it. **Null for an item raised by the system** — the monthly payroll
+   * schedule has nobody behind it, and inventing an originator would put a name against
+   * work that person did not do.
+   */
+  originatorUserId: string | null;
   /**
    * What the queue row should say this is about — "Rajesh Kulkarni — 11 Sep, out of
    * geofence". Supplied by the owning module because the spine cannot read the item to

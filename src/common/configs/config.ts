@@ -308,6 +308,18 @@ const config: Config = {
       ),
     },
   },
+  payrollSchedule: {
+    // 00:30 on the 1st: late enough that the last day of the month is certainly over in
+    // the business timezone, early enough that the run is waiting when HR arrives.
+    cron: process.env.PAYROLL_SCHEDULE_CRON || '30 0 1 * *',
+    // Defaults to the same business timezone attendance already uses, so "the 1st"
+    // means one thing across the product.
+    timeZone:
+      process.env.PAYROLL_SCHEDULE_TIMEZONE ||
+      process.env.APP_TIMEZONE ||
+      'Asia/Kolkata',
+  },
+
   hrPayroll: {
     // 005 FR-006 — how far ahead an employee document starts reporting as
     // expiring-soon.

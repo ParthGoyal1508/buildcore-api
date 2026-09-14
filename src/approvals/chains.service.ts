@@ -12,7 +12,9 @@ import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
 import {
   ACTION_ATTENDANCE_EXCEPTION,
+  ACTION_PAYROLL_RUN,
   DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
+  DEFAULT_PAYROLL_RUN_LEVELS,
 } from './default-chains';
 
 /** One level as supplied when defining or replacing a chain. */
@@ -196,29 +198,35 @@ export class ChainsService {
     tx: Prisma.TransactionClient,
     opts: { superAdminRoleId?: string | null } = {},
   ): Promise<void> {
-    const existing = await tx.approvalChain.findFirst({
-      where: { companyId, actionType: ACTION_ATTENDANCE_EXCEPTION },
-      select: { id: true },
-    });
-    // Idempotent: the backfill migration and this seeder can both reach a company.
-    if (existing) return;
+    for (const [actionType, levels] of [
+      [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+      [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
+    ] as const) {
+      const existing = await tx.approvalChain.findFirst({
+        where: { companyId, actionType },
+        select: { id: true },
+      });
+      // Idempotent per chain: the backfill migration and this seeder can both reach a
+      // company, and a company seeded before the payroll chain existed must still get it.
+      if (existing) continue;
 
-    await tx.approvalChain.create({
-      data: {
-        companyId,
-        actionType: ACTION_ATTENDANCE_EXCEPTION,
-        isFinalAuthorityRequired: true,
-        levels: {
-          create: DEFAULT_ATTENDANCE_EXCEPTION_LEVELS.map((level) => ({
-            companyId,
-            position: level.position,
-            slotKey: level.slotKey,
-            isFinalAuthority: level.isFinalAuthority ?? false,
-            label: level.label ?? null,
-          })),
+      await tx.approvalChain.create({
+        data: {
+          companyId,
+          actionType,
+          isFinalAuthorityRequired: true,
+          levels: {
+            create: levels.map((level) => ({
+              companyId,
+              position: level.position,
+              slotKey: level.slotKey,
+              isFinalAuthority: level.isFinalAuthority ?? false,
+              label: level.label ?? null,
+            })),
+          },
         },
-      },
-    });
+      });
+    }
 
     if (opts.superAdminRoleId) {
       await tx.roleSlotMapping.upsert({

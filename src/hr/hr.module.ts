@@ -8,6 +8,7 @@ import { AttendanceImportController } from './attendance/attendance-import.contr
 import { AttendanceImportService } from './attendance/attendance-import.service';
 import { HolidaysController } from './attendance/holidays.controller';
 import { ApprovalsModule } from '../approvals/approvals.module';
+import { PayrollModule } from '../payroll/payroll.module';
 import { AttendanceExceptionsController } from './attendance-exceptions/attendance-exceptions.controller';
 import { AttendanceExceptionsService } from './attendance-exceptions/attendance-exceptions.service';
 import { BiometricsService } from './biometrics/biometrics.service';
@@ -54,7 +55,17 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
   // ApprovalsModule for feature 016: flagged punches enter an approval chain, and
   // decisions on them are recorded through `ApprovalService` rather than by writing to
   // the spine's tables from here (Principle I).
-  imports: [SettingsModule, ApprovalsModule, forwardRef(() => ProjectsModule)],
+  // `forwardRef(() => PayrollModule)` for 016 FR-016: the attendance write path asks
+  // payroll whether a period is under review, while payroll's engine reads attendance
+  // through this module. The cycle is real and deliberate — both directions are exported
+  // service calls, which is what Principle I requires — so Nest is told about it rather
+  // than the boundary being broken to avoid it.
+  imports: [
+    SettingsModule,
+    ApprovalsModule,
+    forwardRef(() => ProjectsModule),
+    forwardRef(() => PayrollModule),
+  ],
   controllers: [
     EmployeesController,
     AttendanceAdminController,

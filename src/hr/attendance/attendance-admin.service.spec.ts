@@ -38,23 +38,37 @@ const EMPLOYEES = [
 ];
 
 function build(
-  options: { punches?: unknown[]; statuses?: [string, string][] } = {},
+  options: {
+    punches?: unknown[];
+    statuses?: [string, string][];
+    /** 016: simulate a payroll run under review for this period. */
+    underReview?: boolean;
+    /** 016: the role id the `hr` chain slot resolves to, or null when unmapped. */
+    hrRoleId?: string | null;
+  } = {},
 ) {
   const employee = {
     findMany: jest.fn().mockResolvedValue(EMPLOYEES),
-    findFirst: jest.fn(),
+    // 016's lock tests exercise `mark()`, which resolves the employee first.
+    findFirst: jest.fn().mockResolvedValue({ id: 'emp-1', companyId: 'co-1' }),
   };
   const punchRecord = {
     findMany: jest.fn().mockResolvedValue(options.punches ?? []),
     createMany: jest.fn(),
     updateMany: jest.fn(),
     deleteMany: jest.fn(),
+    upsert: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    findFirst: jest.fn().mockResolvedValue(null),
   };
+  const attendanceModification = { create: jest.fn(), findMany: jest.fn() };
   const prisma = {
     $transaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
       cb({
         employee,
         punchRecord,
+        attendanceModification,
         $executeRaw: jest.fn().mockResolvedValue(undefined),
       }),
     ),
@@ -76,6 +90,25 @@ function build(
         : { attendanceImportMaxRows: 1000 },
   };
 
+  // 016: the attendance write path asks payroll whether the period is under review, and
+  // asks the approval chain which role is HR. Both default to "not under review" here so
+  // the existing assertions keep exercising what they were written for; the lock itself
+  // is covered below and in the e2e suite.
+  const payrollSchedule = {
+    isPeriodUnderReview: jest
+      .fn()
+      .mockResolvedValue(options.underReview ?? false),
+  };
+  const chains = {
+    resolveSlot: jest.fn().mockResolvedValue(options.hrRoleId ?? null),
+  };
+  const events = {
+    emit: jest.fn(),
+    // 016 uses `emitAsync` so the edit is not reported done while the approvals it voids
+    // are still outstanding.
+    emitAsync: jest.fn().mockResolvedValue([]),
+  };
+
   const service = new AttendanceAdminService(
     prisma,
     companies as never,
@@ -83,10 +116,22 @@ function build(
     attendanceHistory as never,
     {} as never,
     { record: jest.fn().mockResolvedValue(undefined) } as never,
+    payrollSchedule as never,
+    chains as never,
+    events as never,
     configService as never,
   );
 
-  return { service, employee, punchRecord, companies, attendanceHistory };
+  return {
+    service,
+    employee,
+    punchRecord,
+    companies,
+    attendanceHistory,
+    payrollSchedule,
+    chains,
+    events,
+  };
 }
 
 /** A punch row with only the fields `daily()` reads. */
@@ -229,5 +274,91 @@ describe('AttendanceAdminService — future dates (FR-071, FR-072, FR-074)', () 
     // The calendar is checked before the payroll lock, so a future date is
     // refused as a future date rather than as whatever the lock happens to say.
     expect(companies.getPayrollLockDay).not.toHaveBeenCalled();
+  });
+});
+
+describe('AttendanceAdminService — the payroll-review lock (016 FR-016, FR-017)', () => {
+  const HR_ROLE = 'role-hr';
+
+  const caller = (roleIds: string[]) => ({
+    userId: 'user-1',
+    companyId: 'co-1',
+    ipAddress: '10.0.0.1',
+    rls: { isSuperAdmin: false, companyId: 'co-1' },
+    roleIds,
+  });
+
+  // Today's month, so the pre-existing payroll-lock-day rule (005 FR-010) does not fire
+  // first and mask what these tests are about. `build()` already returns a null lock day,
+  // which locks every *past* period.
+  const today = new Date();
+  const THIS_PERIOD = `${today.getFullYear()}-${String(
+    today.getMonth() + 1,
+  ).padStart(2, '0')}`;
+  const edit = {
+    employeeId: 'emp-1',
+    date: `${THIS_PERIOD}-01`,
+    inTime: '09:05',
+  };
+
+  it('lets anybody edit when no run is under review', async () => {
+    const { service, events } = build();
+    await expect(
+      service.mark(caller([]) as never, edit as never),
+    ).resolves.toMatchObject({ employeeId: 'emp-1' });
+    // Nothing to invalidate, so nothing is announced.
+    expect(events.emitAsync).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-HR editor once the period is under review', async () => {
+    const { service } = build({ underReview: true, hrRoleId: HR_ROLE });
+
+    const error = await service
+      .mark(caller(['role-site']) as never, edit as never)
+      .catch((e) => e);
+
+    expect(error.response.code).toBe('ATTENDANCE_UNDER_PAYROLL_REVIEW');
+    expect(error.response.message).toMatch(/Only HR may edit/);
+  });
+
+  it('permits HR, and announces that approvals are void', async () => {
+    const { service, events } = build({ underReview: true, hrRoleId: HR_ROLE });
+
+    await expect(
+      service.mark(caller([HR_ROLE]) as never, edit as never),
+    ).resolves.toMatchObject({ employeeId: 'emp-1' });
+
+    // FR-017: the approvers agreed to figures that no longer hold.
+    expect(events.emitAsync).toHaveBeenCalledWith(
+      'attendance.changed-under-review',
+      expect.objectContaining({
+        companyId: 'co-1',
+        period: THIS_PERIOD,
+        employeeId: 'emp-1',
+      }),
+    );
+  });
+
+  it('refuses everybody, naming the settings gap, when HR is unmapped', async () => {
+    // Nobody can edit, and the honest reason is a configuration fault rather than a
+    // permissions one — otherwise HR goes looking for a permission that does not exist.
+    const { service } = build({ underReview: true, hrRoleId: null });
+
+    const error = await service
+      .mark(caller([HR_ROLE]) as never, edit as never)
+      .catch((e) => e);
+
+    expect(error.response.code).toBe('APPROVAL_SLOT_UNMAPPED');
+    expect(error.response.message).toMatch(/no role has been mapped to HR/);
+  });
+
+  it('asks payroll rather than reading its tables (Principle I)', async () => {
+    const { service, payrollSchedule } = build({ underReview: false });
+    await service.mark(caller([]) as never, edit as never);
+
+    expect(payrollSchedule.isPeriodUnderReview).toHaveBeenCalledWith(
+      'co-1',
+      expect.any(Date),
+    );
   });
 });

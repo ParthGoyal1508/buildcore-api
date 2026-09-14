@@ -56,6 +56,7 @@ describe('FaceEnrolmentService', () => {
     userId: 'user-1',
     companyId: 'co-1',
     ipAddress: '127.0.0.1',
+    roleIds: [],
     rls: { isSuperAdmin: false, companyId: 'co-1' },
   };
 

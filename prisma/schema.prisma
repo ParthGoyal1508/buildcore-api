@@ -2282,6 +2282,15 @@ model PayrollRun {
   processedAt       DateTime?
   paidAt            DateTime?
 
+  /// True when the monthly schedule created this run rather than a person (016 FR-013).
+  ///
+  /// Not decoration: the production API is deployed on an instance class that suspends
+  /// when idle, and a suspended instance runs no schedule (research.md §4). Without this
+  /// column, "did the 1st-of-the-month run actually fire?" can only be answered by
+  /// inferring from timestamps. With it, an operator can see at a glance whether the
+  /// automation is working or whether somebody has been quietly creating runs by hand.
+  createdBySchedule Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -3202,8 +3211,13 @@ model ApprovalInstance {
 
   state ApprovalState @default(pending)
 
-  originatorUserId String
-  originator       User   @relation("ApprovalOriginator", fields: [originatorUserId], references: [id])
+  /// Who raised it. **Null for an item raised by the system** — the monthly payroll
+  /// schedule has no person behind it, and this is a real foreign key, so attributing a
+  /// scheduled run to a fabricated or arbitrary account would be a lie in the audit
+  /// trail. Same reasoning as `AuditLogEntry.accountId`, which is nullable for the same
+  /// class of event.
+  originatorUserId String?
+  originator       User?   @relation("ApprovalOriginator", fields: [originatorUserId], references: [id])
 
   /// Which round of the chain this is. Incremented when a returned item is
   /// resubmitted, and part of both decision uniques below — without it, resubmission

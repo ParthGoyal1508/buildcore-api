@@ -478,6 +478,28 @@ export class ApprovalService {
   }
 
   /**
+   * The same view, for a caller that is not a person (016 T036).
+   *
+   * A scheduled job asking "has this run been approved yet?" has no viewer, so
+   * `canActNow` is false and `inertReason` null — "may this caller act" has no answer
+   * when there is no caller. Separate from `stateOf` rather than a nullable parameter on
+   * it, so a controller cannot reach this by passing an undefined user and silently lose
+   * the per-caller fields the interface depends on.
+   */
+  async stateOfSystem(
+    entityType: string,
+    entityId: string,
+    companyId: string,
+  ): Promise<ApprovalInstanceView | null> {
+    const instance = await this.loadByEntity(
+      { isSuperAdmin: false, companyId },
+      entityType,
+      entityId,
+    );
+    return instance ? this.toView(instance, null) : null;
+  }
+
+  /**
    * The batch form. **Modules MUST use this when rendering a list** (contract Part 1).
    *
    * Calling `stateOf` per row is the obvious mistake and produces an N+1 against the
@@ -929,7 +951,7 @@ export class ApprovalService {
     const latest = [...instance.decisions].sort(
       (a, b) => b.decidedAt.getTime() - a.decidedAt.getTime(),
     )[0];
-    const wanted = [instance.originatorUserId];
+    const wanted = instance.originatorUserId ? [instance.originatorUserId] : [];
     if (latest) wanted.push(latest.actorUserId);
     const names = nameCache ?? new Map<string, string>();
     const missing = wanted.filter((id) => !names.has(id));
@@ -965,7 +987,11 @@ export class ApprovalService {
       round: instance.round,
       returnCount: instance.returnCount,
       originatorUserId: instance.originatorUserId,
-      originatorName: names.get(instance.originatorUserId) ?? 'Unknown user',
+      // "The system" rather than "Unknown user": a scheduled run has no originator by
+      // design, and reporting that as unknown would read like missing data.
+      originatorName: instance.originatorUserId
+        ? names.get(instance.originatorUserId) ?? 'Unknown user'
+        : 'The system',
       levelLabel:
         finished || !level ? null : labelForSlot(level.slotKey, level.label),
       awaitingRoleName,
