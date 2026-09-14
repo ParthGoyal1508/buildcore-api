@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { UsersModule } from '../users/users.module';
 import { ApprovalsController } from './approvals.controller';
 import { ApprovalService } from './approvals.service';
 import { ChainsService } from './chains.service';
+import { ReconciliationCron } from './reconciliation.cron';
+import { ReconciliationService } from './reconciliation.service';
 
 /**
  * The approval spine (feature 016).
@@ -28,9 +31,20 @@ import { ChainsService } from './chains.service';
  * by `SETTINGS`, because defining a chain is a settings act rather than an approval one.
  */
 @Module({
-  imports: [UsersModule],
+  // `DiscoveryModule` for the reconciliation sweep: modules register a reconciler by
+  // decorating a provider in their own module, and the sweep finds it by scanning the
+  // application's provider graph. A multi-provider token would force this module to
+  // import every module that governs an approvable item — inverting the dependency graph
+  // and making the spine depend on the seven schemas it exists to stay out of.
+  imports: [UsersModule, DiscoveryModule],
   controllers: [ApprovalsController],
-  providers: [ApprovalService, ChainsService, AuditLogService],
-  exports: [ApprovalService, ChainsService],
+  providers: [
+    ApprovalService,
+    ChainsService,
+    ReconciliationService,
+    ReconciliationCron,
+    AuditLogService,
+  ],
+  exports: [ApprovalService, ChainsService, ReconciliationService],
 })
 export class ApprovalsModule {}

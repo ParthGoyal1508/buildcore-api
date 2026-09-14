@@ -191,26 +191,26 @@ is built.
 
 ## Phase 6: Reconciliation and hardening
 
-- [ ] T052 Implement the reconciliation sweep: report orphaned instances (item gone) and drifted
+- [X] T052 Implement the reconciliation sweep: report orphaned instances (item gone) and drifted
       items (module status lags the spine). Both are the same kind of drift and belong in one job
       (research.md §1, §8)
-- [ ] T053 [P] Audit chain and slot-mapping changes as `APPROVAL_CHAIN_CONFIG`
-- [ ] T054 [P] RLS tests for `ApprovalInstance` and `ApprovalDecision` **as a non-super-admin
+- [X] T053 [P] Audit chain and slot-mapping changes as `APPROVAL_CHAIN_CONFIG`
+- [X] T054 [P] RLS tests for `ApprovalInstance` and `ApprovalDecision` **as a non-super-admin
       caller** — this is the one place a policy mistake leaks another company's pending work into a
       user's queue
-- [ ] T054a Verify FR-022 explicitly: every module **not** migrated in this feature still approves
+- [X] T054a Verify FR-022 explicitly: every module **not** migrated in this feature still approves
       exactly as before. Run the existing indent, asset-request, muster-roll and RA-bill approval
       e2e specs unchanged and confirm they pass untouched. The analyze pass found this requirement
       had no task, and "we did not mean to change it" is not evidence that we did not
-- [ ] T055 Add the Principle I guard from quickstart Pass 10 as a script, then **deliberately
+- [X] T055 Add the Principle I guard from quickstart Pass 10 as a script, then **deliberately
       introduce a violation and confirm it fails** (checklist CHK008). A guard nobody has seen fail
       is not known to work
-- [ ] T056 [P] `npx tsc --noEmit`
-- [ ] T057 [P] `npx eslint <touched files>` — **not** `npm run lint`, which is `eslint --fix`
+- [X] T056 [P] `npx tsc --noEmit`
+- [X] T057 [P] `npx eslint <touched files>` — **not** `npm run lint`, which is `eslint --fix`
       repo-wide
-- [ ] T058 `npm test` — 707 passing before this feature; expect the 9 known punch failures unchanged
-- [ ] T059 `npm run build`
-- [ ] T060 Work quickstart passes 1–10. **Passes 2 and 3 are the ones that prove this feature is
+- [X] T058 `npm test` — 707 passing before this feature; expect the 9 known punch failures unchanged
+- [X] T059 `npm run build`
+- [X] T060 Work quickstart passes 1–10. **Passes 2 and 3 are the ones that prove this feature is
       control rather than ceremony**; if only two are run, run those
 
 ---
@@ -796,3 +796,181 @@ until an administrator maps `first_approver`, `hr` and `final` through the setti
 what FR-015 and FR-018 require and it is the correct behaviour, but it is a hard change and it will
 be discovered by payroll if it is not done first. The web half of 016, which builds that screen, is
 still unwritten.
+
+---
+
+## Implementation note — Phase 6, 2026-09-14
+
+T052–T060 are done. **All 64 tasks are now marked `[X]`.** `tsc --noEmit` clean, eslint clean on
+every touched file, **854 unit tests across 82 suites**, `nest build` clean at 523 files, and the
+full e2e baseline unmoved at 37 pre-existing failures in the same three suites (`plant`, `dashboard`,
+`assets` — none of them approval tests).
+
+### T054 — row-level security is now proven, not assumed
+
+This is the most substantial thing in the phase and it is worth being precise about.
+
+Postgres exempts superusers and `BYPASSRLS` roles from every policy **unconditionally**. `ENABLE`
+and `FORCE ROW LEVEL SECURITY` do not apply to them and no error is raised — the rows simply come
+back. The local development role is a superuser, which is why Phase 1's isolation test could only
+assert that the policies exist and are FORCEd, with a `console.warn` saying the isolation itself had
+not been observed.
+
+`test/approvals-rls.e2e-spec.ts` closes that. It creates a real `NOSUPERUSER NOBYPASSRLS` login
+role, grants it exactly the spine's tables, connects as it, and asks the questions again with the
+policies actually in force. **This is the only place in the repository where row-level security is
+proven rather than assumed** — the claim applies to every RLS policy in eleven schemas, not only to
+this feature's five tables.
+
+Queries are raw SQL through a second client, deliberately: Prisma always emits its own `WHERE`,
+which would mask a policy that was not working. A bare `SELECT` with no predicate can only be
+filtered by the policy.
+
+Ten assertions, and the four that matter most are the ones usually skipped: a **targeted** read of
+another company's instance by its exact id (the shape a real leak takes — not "list everything" but
+"I have an id from somewhere"); an **UPDATE** of another company's approval, which returns 0 rows
+rather than erroring; an **INSERT** attributed to another company, refused by the `WITH CHECK` that
+a `USING`-only policy implies; and **no company context at all**, which must read as "nothing", not
+as "everything".
+
+The suite was then checked for vacuousness by disabling the policy and re-running one query as the
+probe: **0 rows with the policy on, 9 rows with it off**, and the table restored to `ENABLE` +
+`FORCE` afterwards. If the current role cannot create the probe, the suite says so in a warning
+rather than passing quietly.
+
+### T055 — the boundary guard, seen to fail in both directions
+
+`src/approvals/spine-boundary.spec.ts` replaces quickstart Pass 10's grep with a test, and checks
+both directions, because they fail differently. A module querying a spine table turns the spine back
+into a shared table six features write to directly — the state this feature exists to replace,
+reached by the back door. The spine querying a module's table is the one that is tempting: the queue
+would be nicer if it could read the indent, and the settings screen would be nicer if it could
+resolve a role name. Both are one line away.
+
+Both forbidden sets are derived from `schema.prisma`, so a model added next year is covered without
+anybody remembering. The guard asserts it found something, because one that silently matches nothing
+is worse than none.
+
+**It was then deliberately broken**, per CHK008: `this.prisma.punchRecord.findFirst()` added to
+`approvals.service.ts` and `tx.approvalInstance.findMany()` added to
+`attendance-exceptions.service.ts`. Both directions failed, naming the exact file and delegate, and
+passed again on revert.
+
+### T052 — the sweep reports; it does not repair
+
+Orphans (the item is gone) and drift (the module's status lags the spine) are one job, because they
+are one fault seen from two sides — the price of having no foreign key, and the price of the
+decision and the item's status being two writes that cannot share a transaction. Two jobs would mean
+two reports and two chances to read only one.
+
+It reports rather than repairs deliberately. Repair means either deleting an approval record —
+destroying the evidence that anybody was ever asked to decide — or writing into another module's
+schema, which is the violation the whole design avoids.
+
+The spine cannot answer either question itself, so modules answer through a **registered
+reconciler**: a provider decorated in the module's own module file, discovered with
+`DiscoveryService`. This is research.md §1's "via that module's service, not a join" made literal,
+and it is the same mechanism and the same reasoning as `@ReminderRule()` — a multi-provider token
+resolves per-injector, which would force `ApprovalsModule` to import every module governing an
+approvable item and invert the dependency graph. `AttendanceExceptionReconciler` is the first, and
+proves the mechanism end to end; nothing in `src/approvals/` changes when the next module joins.
+
+Three behaviours worth naming: one module's reconciler throwing does not end the sweep (a sweep that
+reports nothing because the first reconciler threw is indistinguishable from a clean run); `inStep:
+null` means "no opinion" and is not read as drift (otherwise every module without a status column
+would report drift nightly until the report stopped being read); and an entity type with live
+approvals and **no** reconciler is itself reported, because it means a module put work into the
+spine and never taught the spine how to check on it.
+
+### T053 — three gaps in the config audit, found by looking
+
+`deactivateChain` was not audited at all, and it had just become HTTP-reachable in Phase 4. It is
+the change most worth recording: once a chain is off, nothing of that action type can enter an
+approval, and the symptom a week later is a module refusing to submit with no record of who turned
+it off.
+
+`upsertChain` recorded `supersededActiveChain: true` unconditionally — including when defining a
+first chain, where nothing was superseded. An audit trail that invents events is worse than one that
+omits them. It now records the superseded chain's id and levels, or null.
+
+`putSlotMapping` recorded only the new role id. Moving "HR" from one role to another changes who may
+approve every item on every chain using that slot, and after the upsert nothing in the database says
+what it used to be — so the previous role id is now captured before the write.
+
+### T054a — verified, and two of the four could not be
+
+FR-022 asks that unmigrated modules approve exactly as before. The evidence, in descending order of
+strength:
+
+1. **`git diff` from the pre-016 commit (`c32f906`) to HEAD across `src/inventory`, `src/labour`,
+   `src/projects`, `src/assets`, `src/plant` and `src/partners` is empty.** Not "the tests pass" —
+   the code is byte-identical. The only business-module change anywhere in the feature is one
+   additive line in `recruitment-refs.service.ts` (`roleIds` on a `Caller`).
+2. **205 unit tests across 27 suites** in those modules pass, and `inventory.e2e-spec.ts` passes
+   32/32 including its three indent-approval tests.
+3. A permanent guard, `src/approvals/fr-022-unmigrated-modules.spec.ts`, asserts each of the five
+   existing single-step approvals still has its own `approve()` **and** has not been half-migrated
+   onto the chain. Both halves are needed: the negative check alone would pass if the approval had
+   been deleted outright, and the positive alone would pass while the module also called the spine
+   and acquired two mechanisms.
+
+**Two of the four approvals the task names do not exist.** `AssetRequest` and `RABill` are schema
+models with no service layer and no approval code anywhere in `src/` — there is no asset-request or
+RA-bill approval e2e spec to run unchanged, because there is no approval to regress. That is
+reported rather than quietly counted as passing.
+
+### T060 — the quickstart passes, and which are automated rather than hand-run
+
+Nothing was opened in a browser. Every pass is instead covered by an automated test, which is
+stronger for eight of the ten and weaker for none:
+
+| Pass | Covered by |
+|---|---|
+| 1 — chain refuses the wrong role, refusal audited | `approvals-queue.e2e` (HTTP 403 + code), `approvals.service.spec` (audit) |
+| **2 — one person cannot decide twice, under a race** | `approvals.e2e` — two genuinely concurrent transactions, one row survives |
+| **3 — unsatisfiable chain refused at definition** | `approvals-queue.e2e` — HTTP `PUT`, 400, both levels named |
+| 4 — unmapped slot is a configuration fault | `approvals-queue.e2e` — 409 `APPROVAL_SLOT_UNMAPPED`, message names the settings problem |
+| 5 — payroll runs itself, once | `payroll-approval.e2e` |
+| 6 — bank sheet held until the chain completes | `payroll-approval.e2e` |
+| 7 — only HR may edit attendance under review | `payroll-approval.e2e` |
+| 8 — queue shows only actionable work | `approvals-queue.e2e` |
+| 9 — batch state, not N+1 | **newly added** — `approvals.service.spec` asserts the query count |
+| 10 — Principle I | `spine-boundary.spec` (T055), seen to fail |
+
+Pass 9's query-count assertion was the one genuinely missing piece, and the quickstart asks for it
+by name. Fifty items now cost **one** instance query, **one** holder lookup and **one** name lookup;
+an empty list costs nothing at all. This is the mistake the contract exists to prevent and it would
+otherwise have been made by the third module to migrate.
+
+The passes the quickstart singles out — 2 and 3, "the ones that prove this feature is control rather
+than ceremony" — are both covered by real tests against a real database rather than by a curl the
+author ran once.
+
+### One thing the final full run caught
+
+`director-final.e2e-spec.ts` passed 6/6 alone and then timed out on scenario 3 in the full suite.
+Not flakiness and not a logic fault: each of those tests walks a three-level chain over real HTTP,
+the e2e suites run `maxWorkers: 1` against one Postgres, and jest's 5s default is simply not enough
+under that contention. Both new HTTP suites now set a 30s budget explicitly — the same order the
+older 016 suites already use per-test — rather than the tests being split into something less like
+the thing they are testing. Re-run clean: **37 failures, the same three pre-existing suites, 340
+passing.**
+
+Phase 1's isolation warning in `approvals.e2e-spec.ts` was also reworded. It previously said tenant
+isolation was not asserted and pointed at DEPLOYMENT.md; that was true when written and is now
+misleading, because the isolation *is* asserted — in `approvals-rls.e2e-spec.ts`. The warning now
+says which test proves it.
+
+### What remains open after this feature
+
+1. **The web half is entirely unwritten.** `buildcore-web/specs/016-approval-spine`, 34 tasks,
+   untouched. The settings screen these endpoints exist for does not exist.
+2. **Therefore the slots are unmapped in every real company**, and as recorded in the Phase 5 note,
+   no existing company can produce a bank transfer sheet until an administrator maps them. This is
+   the single most important thing to do before deploying.
+3. **SC-003 cannot be satisfied on the current infrastructure** — a suspended Render instance runs no
+   cron. This is true of the new reconciliation sweep as well, though it matters less there: drift
+   is cumulative, so a sweep that runs weekly finds everything, just later.
+4. **NFR-001 (load) and NFR-002 (mobile) are unverified**, as the specification itself states.
+5. `checklists/module-boundary.md` remains 0/22 — it is a reviewer-owned artifact and was
+   deliberately not modified. CHK008's discipline was applied twice regardless (T041 and T055).

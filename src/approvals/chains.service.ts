@@ -108,6 +108,11 @@ export class ChainsService {
   ): Promise<ChainWithLevels> {
     this.assertLevelsWellFormed(input.levels, input.isFinalAuthorityRequired);
 
+    let superseded: {
+      id: string;
+      levels: { position: number; slotKey: string }[];
+    } | null = null;
+
     const chain = await withRlsContext(this.prisma, ctx, async (tx) => {
       const existing = await tx.approvalChain.findFirst({
         where: {
@@ -115,9 +120,20 @@ export class ChainsService {
           actionType: input.actionType,
           isActive: true,
         },
+        include: { levels: { orderBy: { position: 'asc' } } },
       });
 
       if (existing) {
+        // Captured before the write so the audit entry can say what the chain *was*.
+        // "Who changed the payroll chain" is only half an answer; the other half is what
+        // they changed it from, and after the update nothing in the database says.
+        superseded = {
+          id: existing.id,
+          levels: existing.levels.map((l) => ({
+            position: l.position,
+            slotKey: l.slotKey,
+          })),
+        };
         // Deactivate rather than mutate: items already travelling this chain must keep
         // the shape they entered. The partial unique index on (companyId, actionType)
         // WHERE isActive is what makes this the only way to supersede a chain.
@@ -161,7 +177,10 @@ export class ChainsService {
           position: l.position,
           slotKey: l.slotKey,
         })),
-        supersededActiveChain: true,
+        isFinalAuthorityRequired: chain.isFinalAuthorityRequired,
+        // Null when this is a first definition rather than a replacement. Previously
+        // hardcoded `true`, which recorded a supersession that had not happened.
+        supersededChain: superseded,
       },
       accountId: actor.userId,
       companyId: input.companyId,
@@ -307,6 +326,12 @@ export class ChainsService {
       });
     }
 
+    const previousRoleId = await this.resolveSlot(
+      ctx,
+      input.companyId,
+      input.slotKey,
+    );
+
     const mapping = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.roleSlotMapping.upsert({
         where: {
@@ -324,7 +349,14 @@ export class ChainsService {
       entityType: AuditEntityType.APPROVAL_CHAIN_CONFIG,
       action: AuditAction.UPDATE,
       entityId: mapping.id,
-      changes: { slotKey: input.slotKey, roleId: input.roleId },
+      // The old role id is the point of the entry. Moving "HR" from one role to another
+      // changes who may approve every item on every chain using that slot, and after the
+      // upsert nothing in the database records what it used to be.
+      changes: {
+        slotKey: input.slotKey,
+        roleId: input.roleId,
+        previousRoleId,
+      },
       accountId: actor.userId,
       companyId: input.companyId,
       ipAddress: actor.ipAddress,
@@ -516,8 +548,19 @@ export class ChainsService {
     );
   }
 
-  /** Deactivates a chain. In-flight items continue under it. */
-  async deactivateChain(ctx: RlsContext, chainId: string): Promise<void> {
+  /**
+   * Deactivates a chain. In-flight items continue under it.
+   *
+   * Audited like every other chain change (T053), and it is the one that most needs to
+   * be: once a chain is off, nothing of that action type can enter an approval at all,
+   * and the symptom a week later is a module refusing to submit with no record of who
+   * turned it off or when.
+   */
+  async deactivateChain(
+    ctx: RlsContext,
+    chainId: string,
+    actor: { userId: string; ipAddress: string },
+  ): Promise<void> {
     const chain = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.approvalChain.findUnique({ where: { id: chainId } }),
     );
@@ -529,5 +572,17 @@ export class ChainsService {
         data: { isActive: false },
       }),
     );
+
+    await this.audit.record({
+      entityType: AuditEntityType.APPROVAL_CHAIN_CONFIG,
+      // DELETE rather than UPDATE: the row survives so history stays readable, but from
+      // the company's point of view the chain is gone.
+      action: AuditAction.DELETE,
+      entityId: chainId,
+      changes: { actionType: chain.actionType, deactivated: true },
+      accountId: actor.userId,
+      companyId: chain.companyId,
+      ipAddress: actor.ipAddress,
+    });
   }
 }

@@ -226,6 +226,141 @@ describe('ChainsService', () => {
     });
   });
 
+  describe('configuration changes are audited (T053)', () => {
+    it('records what a slot mapping was changed FROM, not only to', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: { findMany: jest.fn().mockResolvedValue([]) },
+        roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'm1',
+            companyId: COMPANY,
+            slotKey: SLOT_HR,
+            roleId: 'role-old',
+          }),
+          findMany: jest.fn().mockResolvedValue([]),
+          upsert: jest.fn().mockResolvedValue({
+            id: 'm1',
+            companyId: COMPANY,
+            slotKey: SLOT_HR,
+            roleId: 'role-new',
+          }),
+        },
+      });
+      const audit = auditMock();
+      const service = new ChainsService(prisma as never, audit as never);
+
+      await service.putSlotMapping(
+        CTX,
+        { companyId: COMPANY, slotKey: SLOT_HR, roleId: 'role-new' },
+        ACTOR,
+      );
+
+      // Moving "HR" from one role to another changes who may approve every item on
+      // every chain using that slot. After the upsert nothing in the database records
+      // what it used to be, so the audit entry is the only place that answer survives.
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'APPROVAL_CHAIN_CONFIG',
+          changes: expect.objectContaining({
+            slotKey: SLOT_HR,
+            roleId: 'role-new',
+            previousRoleId: 'role-old',
+          }),
+        }),
+      );
+    });
+
+    it('does not claim to have superseded a chain when defining a first one', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+          create: jest.fn().mockResolvedValue(chainRow([level(1, SLOT_HR)])),
+        },
+        roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const audit = auditMock();
+      const service = new ChainsService(prisma as never, audit as never);
+
+      await service.upsertChain(
+        CTX,
+        {
+          companyId: COMPANY,
+          actionType: 'attendance_exception',
+          levels: [{ position: 1, slotKey: SLOT_HR }],
+        },
+        ACTOR,
+      );
+
+      // Previously hardcoded `true`, which recorded a supersession that never happened —
+      // an audit trail that invents events is worse than one that omits them.
+      expect(audit.record.mock.calls[0][0].changes.supersededChain).toBeNull();
+    });
+
+    it('records the chain it replaced, with the levels it had', async () => {
+      const existing = chainRow([level(1, SLOT_HR), level(2, SLOT_FINAL)]);
+      const prisma = createPrismaMock({
+        approvalChain: {
+          findFirst: jest.fn().mockResolvedValue(existing),
+          findMany: jest.fn().mockResolvedValue([]),
+          update: jest.fn().mockResolvedValue(existing),
+          create: jest.fn().mockResolvedValue(chainRow([level(1, SLOT_HR)])),
+        },
+        roleSlotMapping: { findMany: jest.fn().mockResolvedValue([]) },
+      });
+      const audit = auditMock();
+      const service = new ChainsService(prisma as never, audit as never);
+
+      await service.upsertChain(
+        CTX,
+        {
+          companyId: COMPANY,
+          actionType: 'attendance_exception',
+          levels: [{ position: 1, slotKey: SLOT_HR }],
+        },
+        ACTOR,
+      );
+
+      expect(audit.record.mock.calls[0][0].changes.supersededChain).toEqual({
+        id: 'chain-1',
+        levels: [
+          { position: 1, slotKey: SLOT_HR },
+          { position: 2, slotKey: SLOT_FINAL },
+        ],
+      });
+    });
+
+    it('audits a deactivation, which is the change most worth recording', async () => {
+      const prisma = createPrismaMock({
+        approvalChain: {
+          findUnique: jest.fn().mockResolvedValue({
+            id: 'chain-1',
+            companyId: COMPANY,
+            actionType: 'payroll_run',
+          }),
+          update: jest.fn().mockResolvedValue({}),
+        },
+      });
+      const audit = auditMock();
+      const service = new ChainsService(prisma as never, audit as never);
+
+      await service.deactivateChain(CTX, 'chain-1', ACTOR);
+
+      // Once a chain is off nothing of that action type can enter an approval at all,
+      // and the symptom a week later is a module refusing to submit with no record of
+      // who turned it off.
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'APPROVAL_CHAIN_CONFIG',
+          action: 'DELETE',
+          entityId: 'chain-1',
+          changes: { actionType: 'payroll_run', deactivated: true },
+          accountId: ACTOR.userId,
+        }),
+      );
+    });
+  });
+
   describe('the unsatisfiable-chain guard (FR-021b, T009)', () => {
     it('refuses a slot mapping that makes two levels of an active chain resolve to one role, naming both', async () => {
       const prisma = createPrismaMock({
@@ -289,6 +424,7 @@ describe('ChainsService', () => {
             ]),
         },
         roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
           findMany: jest.fn().mockResolvedValue([
             {
               id: 'm1',
@@ -325,6 +461,7 @@ describe('ChainsService', () => {
             ]),
         },
         roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
           findMany: jest.fn().mockResolvedValue([]),
           upsert: jest.fn().mockResolvedValue({
             id: 'm-new',
@@ -357,6 +494,7 @@ describe('ChainsService', () => {
       const prisma = createPrismaMock({
         approvalChain: { findMany: jest.fn().mockResolvedValue([]) },
         roleSlotMapping: {
+          findUnique: jest.fn().mockResolvedValue(null),
           findMany: jest.fn().mockResolvedValue([
             {
               id: 'm1',

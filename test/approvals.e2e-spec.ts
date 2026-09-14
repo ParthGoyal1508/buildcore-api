@@ -595,9 +595,10 @@ describe('Approval spine (e2e, real database)', () => {
         expect(visible.length).toBeGreaterThanOrEqual(0);
         // eslint-disable-next-line no-console
         console.warn(
-          'Tenant isolation NOT asserted: this database role bypasses RLS ' +
-            '(superuser/BYPASSRLS). The policies exist and are FORCEd, but their effect ' +
-            'is only observable under a NOSUPERUSER, NOBYPASSRLS role — DEPLOYMENT.md §2a.',
+          'Tenant isolation NOT asserted here: this database role bypasses RLS ' +
+            '(superuser/BYPASSRLS). The policies exist and are FORCEd, which is what ' +
+            'this test can check. The isolation itself IS proven, under a real ' +
+            'NOSUPERUSER NOBYPASSRLS role, in approvals-rls.e2e-spec.ts (T054).',
         );
       }
 

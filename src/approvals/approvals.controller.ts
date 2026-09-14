@@ -175,8 +175,12 @@ export class ApprovalsController {
   async deactivateChain(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
+    @Ip() ipAddress: string,
   ) {
-    await this.chains.deactivateChain(rlsContextFor(caller), id);
+    await this.chains.deactivateChain(rlsContextFor(caller), id, {
+      userId: caller.id,
+      ipAddress,
+    });
   }
 
   @Get('slot-mappings')

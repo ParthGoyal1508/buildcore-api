@@ -37,6 +37,15 @@ const PREFIX = 'E2EQ';
 const unique = (s: string) => `${PREFIX}${s}${Date.now() % 100000}`;
 const ACTION = 'e2eq_indent';
 
+/**
+ * Jest's 5s default is not enough for these: each test walks a multi-level chain over real
+ * HTTP against a real database, and the suites run with `maxWorkers: 1` against one
+ * Postgres. They pass comfortably in isolation and time out under full-suite contention,
+ * which is a property of the harness and not of the code — so the budget is raised here
+ * rather than the tests being split into something less like the thing they are testing.
+ */
+jest.setTimeout(30_000);
+
 describe('Approvals HTTP surface (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -403,6 +412,47 @@ describe('Approvals HTTP surface (e2e)', () => {
       // Distinguishable, because "wait your turn" and "you may never do this" have
       // different remedies.
       expect(res.body.code).toBe('APPROVAL_NOT_AUTHORISED');
+    });
+
+    it('reports an unmapped slot as a configuration fault, not a 403 (quickstart Pass 4)', async () => {
+      const ctx = { isSuperAdmin: false, companyId };
+      const actor = { userId: siteUserId, ipAddress: '127.0.0.1' };
+
+      // A chain whose only level names a slot this company has never mapped. Its own
+      // action type, so unmapping nothing disturbs the chains the rest of this suite
+      // runs on.
+      await chains.upsertChain(
+        ctx,
+        {
+          companyId,
+          actionType: 'e2eq_unmapped',
+          levels: [{ position: 1, slotKey: 'e2eq_never_mapped' }],
+        },
+        actor,
+      );
+      const entityId = unique('u');
+      const created = await approvals.submit({
+        companyId,
+        actionType: 'e2eq_unmapped',
+        entityType: 'e2eq_unmapped',
+        entityId,
+        originatorUserId,
+        subject: `${PREFIX} unmapped slot`,
+        viewPermission: Permission.INVENTORY,
+      });
+
+      const res = await http()
+        .post(`/approvals/${created.instanceId}/decide`)
+        .set(auth(siteToken))
+        .send({ action: 'approve' })
+        .expect(409);
+
+      // 409, not 403. A bare "forbidden" would send an administrator hunting through
+      // permissions for a problem that lives in a different screen entirely — and the
+      // message has to say so, because the person who hits it is rarely the person who
+      // can fix it.
+      expect(res.body.code).toBe('APPROVAL_SLOT_UNMAPPED');
+      expect(res.body.message).toContain('settings problem');
     });
 
     it('rejects a body the DTO does not recognise (Principle II)', async () => {

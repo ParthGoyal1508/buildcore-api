@@ -10,6 +10,7 @@ import { HolidaysController } from './attendance/holidays.controller';
 import { ApprovalsModule } from '../approvals/approvals.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { AttendanceExceptionsController } from './attendance-exceptions/attendance-exceptions.controller';
+import { AttendanceExceptionReconciler } from './attendance-exceptions/attendance-exception.reconciler';
 import { AttendanceExceptionsService } from './attendance-exceptions/attendance-exceptions.service';
 import { BiometricsService } from './biometrics/biometrics.service';
 import { FaceApiBiometricsService } from './biometrics/face-api-biometrics.service';
@@ -84,6 +85,9 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
   ],
   providers: [
     AttendanceExceptionsService,
+    // Answers the approval spine's reconciliation sweep about `hr`'s own punches (T052).
+    // Registered by being listed here and decorated; nothing in `src/approvals/` changes.
+    AttendanceExceptionReconciler,
     EmployeesService,
     EmployeeDocumentsService,
     AttendanceAdminService,

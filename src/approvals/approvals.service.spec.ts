@@ -1166,6 +1166,73 @@ describe('ApprovalService', () => {
     });
   });
 
+  describe('batch state, not N+1 (contract Part 1, quickstart Pass 9)', () => {
+    it('reads fifty items with one instance query, not fifty', async () => {
+      const { service, prisma } = harness();
+
+      const ids = Array.from({ length: 50 }, (_, i) => `punch-${i + 1}`);
+      prisma.tx.approvalInstance.findMany = jest.fn(async () =>
+        ids.map((entityId, i) => ({
+          ...instanceRow({ id: `inst-${i + 1}`, entityId }),
+        })),
+      );
+
+      const states = await service.statesOf(
+        'attendance_exception',
+        ids,
+        caller('viewer-1', []),
+      );
+
+      expect(states.size).toBe(50);
+      // The whole point of the batch method existing. Calling `stateOf` per row is the
+      // obvious mistake, and once six modules have migrated it is every list in the
+      // product hammering the spine fifty times a render.
+      expect(prisma.tx.approvalInstance.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.tx.approvalInstance.findFirst).not.toHaveBeenCalled();
+    });
+
+    it('resolves each distinct level once, and each name once', async () => {
+      const { service, prisma, chains, users } = harness();
+
+      const ids = Array.from({ length: 50 }, (_, i) => `punch-${i + 1}`);
+      prisma.tx.approvalInstance.findMany = jest.fn(async () =>
+        ids.map((entityId, i) => ({
+          ...instanceRow({ id: `inst-${i + 1}`, entityId }),
+        })),
+      );
+
+      await service.statesOf(
+        'attendance_exception',
+        ids,
+        caller('viewer-1', []),
+      );
+
+      // Fifty rows, all at level 1, all raised by the same person. The caches are what
+      // turn that into one holder lookup and one name lookup — without them the query
+      // count is linear in the list length even though the *answers* are not.
+      expect(users.findActiveHoldersOfRole).toHaveBeenCalledTimes(1);
+      expect(prisma.tx.user.findMany).toHaveBeenCalledTimes(1);
+      // `resolveSlot` is not cached and does not need to be: it is one indexed read per
+      // row against a two-column table. Asserted so that if it ever starts doing more,
+      // somebody notices here rather than in a slow list.
+      expect(chains.resolveSlot).toHaveBeenCalledTimes(50);
+    });
+
+    it('does nothing at all for an empty list', async () => {
+      const { service, prisma } = harness();
+
+      const states = await service.statesOf(
+        'attendance_exception',
+        [],
+        caller('viewer-1', []),
+      );
+
+      // A module rendering an empty page must not cost a round trip.
+      expect(states.size).toBe(0);
+      expect(prisma.tx.approvalInstance.findMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('the take-effect gate (FR-018, T049, T050)', () => {
     const directorFinal = (overrides: Record<string, unknown> = {}) =>
       instanceRow({

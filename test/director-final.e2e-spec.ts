@@ -39,6 +39,15 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
 const PREFIX = 'E2EDF';
 const unique = (s: string) => `${PREFIX}${s}${Date.now() % 100000}`;
 
+/**
+ * Jest's 5s default is not enough for these: each test walks a multi-level chain over real
+ * HTTP against a real database, and the suites run with `maxWorkers: 1` against one
+ * Postgres. They pass comfortably in isolation and time out under full-suite contention,
+ * which is a property of the harness and not of the code — so the budget is raised here
+ * rather than the tests being split into something less like the thing they are testing.
+ */
+jest.setTimeout(30_000);
+
 describe('Director-final authority (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
