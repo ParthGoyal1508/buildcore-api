@@ -25,9 +25,11 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
  * real index, under a real race, decides that — so the test that matters here runs two
  * genuinely concurrent transactions and counts the rows that survived.
  *
- * There is no HTTP surface yet: Phase 1 of this feature ships the spine with no controller
- * (that arrives with T044–T046), so the service is exercised through the DI container
- * rather than through supertest.
+ * The service is exercised through the DI container rather than through supertest, and
+ * stays that way now that the controller exists: a race between two transactions is not
+ * an HTTP claim, and routing it through supertest would only add a second thing that
+ * could be the reason a run went green. The `/approvals` endpoints are covered in
+ * `approvals-queue.e2e-spec.ts`.
  *
  * Every fixture is prefixed `E2E` and removed in `afterAll`, so the suite can run
  * repeatedly against a developer database without accumulating rows.
@@ -194,6 +196,7 @@ describe('Approval spine (e2e, real database)', () => {
       entityId,
       originatorUserId,
       subject: `${PREFIX} punch ${entityId}`,
+      viewPermission: Permission.ATTENDANCE,
       href: `/hr/attendance/${entityId}`,
     });
 

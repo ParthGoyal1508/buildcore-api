@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
-import { PayrollRunStatus } from '@prisma/client';
+import { Permission, PayrollRunStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { ApprovalService } from '../../approvals/approvals.service';
@@ -248,6 +248,9 @@ export class PayrollScheduleService {
         originatorUserId: null,
         subject: `Payroll run ${run?.period ?? ''}`.trim(),
         href: `/dashboard/hr/payroll/runs/${runId}`,
+        // Who may read this run's approval history (FR-009). Payroll figures are not
+        // company-wide reading, so this is the `PAYROLL` permission and not a laxer one.
+        viewPermission: Permission.PAYROLL,
       });
     } catch (error) {
       // A missing chain is a configuration gap. It must not abort the sweep: the run

@@ -1752,6 +1752,20 @@ item to build it. This is the practical cost of the opacity above, and it is pai
 here: a queue row has to say what it is about.']
   href String [note: 'Where the interface should send a reviewer to see the item itself. Supplied by
 the owning module for the same reason.']
+  viewPermission Permission [not null, note: 'The permission a caller must hold to read this item\'s approval history (FR-009,
+US3 scenario 4).
+
+Also module-supplied, and for the third time the same reason: the spine cannot
+dereference `entityId`, so it cannot ask the owning module whether this caller may
+see the item. Storing the answer as data at submit time is the only way the spine
+can enforce a rule it has no way to compute — and it is a *declaration*, not a
+callback, so Principle I and research.md §1 both hold.
+
+Deliberately coarse. It is the permission that guards the module\'s own screen for
+this kind of item, so it cannot express "this site\'s exceptions only". What it does
+express is the rule the spec actually states, and it is strictly tighter than the
+alternative of letting every authenticated colleague read the reasons people gave
+for rejecting each other\'s work.']
   currentPosition Int [not null, default: 1, note: 'Which level it awaits. Meaningless once `state` is terminal.']
   state ApprovalState [not null, default: 'pending']
   originatorUserId String [note: 'Who raised it. **Null for an item raised by the system** — the monthly payroll

@@ -461,6 +461,19 @@ export class ChainsService {
     }
   }
 
+  /** One chain by id, levels included. Null when it does not exist for this tenant. */
+  async getChain(
+    ctx: RlsContext,
+    chainId: string,
+  ): Promise<ChainWithLevels | null> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.approvalChain.findUnique({
+        where: { id: chainId },
+        include: { levels: { orderBy: { position: 'asc' } } },
+      }),
+    );
+  }
+
   /** Deactivates a chain. In-flight items continue under it. */
   async deactivateChain(ctx: RlsContext, chainId: string): Promise<void> {
     const chain = await withRlsContext(this.prisma, ctx, (tx) =>

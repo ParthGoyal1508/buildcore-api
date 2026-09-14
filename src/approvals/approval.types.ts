@@ -1,4 +1,8 @@
-import { ApprovalDecisionAction, ApprovalState } from '@prisma/client';
+import {
+  ApprovalDecisionAction,
+  ApprovalState,
+  Permission,
+} from '@prisma/client';
 
 import { ApprovalErrorCode } from './approval-error-codes';
 
@@ -129,6 +133,15 @@ export interface SubmitApprovalInput {
   subject: string;
   /** Where to send a reviewer to see the item itself. Also module-supplied, same reason. */
   href?: string | null;
+  /**
+   * The permission a caller must hold to read this item's approval history (FR-009).
+   *
+   * Required, not optional. An optional field here would mean a module that forgot it
+   * silently published its rejection reasons to every colleague in the company, and the
+   * omission would be invisible until somebody noticed — which is the class of mistake a
+   * type is for.
+   */
+  viewPermission: Permission;
 }
 
 /** One decision being recorded. */
@@ -147,7 +160,9 @@ export interface ApprovalQueueEntry {
   entityId: string;
   subject: string;
   href: string | null;
-  requestedById: string;
+  /** Null when the schedule raised it — see `ApprovalInstanceView.originatorUserId`. */
+  requestedById: string | null;
+  /** "The system" for a scheduled item, never a fabricated person. */
   requestedByName: string;
   requestedAt: Date;
   /** Hours since the item entered the chain, so a queue can be sorted by neglect. */

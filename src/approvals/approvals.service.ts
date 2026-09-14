@@ -28,6 +28,7 @@ import {
   APPROVAL_REASON_REQUIRED,
   APPROVAL_REASSIGN_FORBIDDEN,
   APPROVAL_SLOT_UNMAPPED,
+  APPROVAL_VIEW_FORBIDDEN,
   ApprovalErrorCode,
 } from './approval-error-codes';
 import { labelForSlot } from './approval-slots';
@@ -134,6 +135,7 @@ export class ApprovalService {
             entityId: input.entityId,
             subject: input.subject,
             href: input.href ?? null,
+            viewPermission: input.viewPermission,
             originatorUserId: input.originatorUserId,
             currentPosition: 1,
           },
@@ -541,7 +543,21 @@ export class ApprovalService {
     return result;
   }
 
-  /** The full ordered history for one item (FR-009). */
+  /**
+   * The full ordered history for one item (FR-009, US3 scenarios 2 and 4, T043).
+   *
+   * **Who may read this is decided by the owning module, not by the spine** — which is
+   * why the answer is stored on the instance at submit time rather than computed here.
+   * The spine has never read the item and has no relation through which to read it, so
+   * there is nothing for it to reason about; `viewPermission` is the module's declaration
+   * carried forward, and this method enforces it.
+   *
+   * Participants pass regardless of that permission. A site engineer who raised a
+   * correction must be able to see why it was rejected even though the reason lives
+   * behind a permission they do not hold, and an approver must be able to re-read a chain
+   * they themselves acted in. Refusing either would mean the two people most entitled to
+   * an explanation are the two who cannot get one.
+   */
   async historyOf(
     entityType: string,
     entityId: string,
@@ -552,7 +568,20 @@ export class ApprovalService {
       companyId: viewer.companyId,
     };
     const instance = await this.loadByEntity(ctx, entityType, entityId);
+    // An empty list rather than a 404, and deliberately *before* the permission check:
+    // "this item has never been in a chain" is not a secret, and 404-vs-403 on an id the
+    // caller already holds tells them nothing they did not already know.
     if (!instance) return [];
+
+    if (!this.mayViewHistory(instance, viewer)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        message:
+          'You do not have permission to view this item, so its approval history ' +
+          'is not available to you.',
+        code: APPROVAL_VIEW_FORBIDDEN,
+      });
+    }
 
     const names = await this.namesFor(
       instance.decisions.map((d) => d.actorUserId),
@@ -772,7 +801,9 @@ export class ApprovalService {
     });
 
     const page = rows.slice(0, limit);
-    const names = await this.namesFor(page.map((r) => r.originatorUserId));
+    const names = await this.namesFor(
+      page.map((r) => r.originatorUserId).filter((id): id is string => !!id),
+    );
     const now = Date.now();
 
     return {
@@ -788,8 +819,11 @@ export class ApprovalService {
           subject: instance.subject,
           href: instance.href,
           requestedById: instance.originatorUserId,
-          requestedByName:
-            names.get(instance.originatorUserId) ?? 'Unknown user',
+          // Matches `toView`: a scheduled run has no person behind it, and "Unknown user"
+          // would read as data we lost rather than a fact we know.
+          requestedByName: instance.originatorUserId
+            ? names.get(instance.originatorUserId) ?? 'Unknown user'
+            : 'The system',
           requestedAt: instance.createdAt,
           ageHours: Math.floor(
             (now - instance.createdAt.getTime()) / 3_600_000,
@@ -1054,6 +1088,24 @@ export class ApprovalService {
         ? 'awaiting_other'
         : 'insufficient_authority',
     };
+  }
+
+  /**
+   * Whether this viewer may read the item's history (FR-009, T043).
+   *
+   * Two ways in, and they are additive rather than alternative because they answer
+   * different questions. The permission answers "is this person one of the people this
+   * kind of record is for"; participation answers "was this person in this particular
+   * chain". Neither implies the other.
+   */
+  private mayViewHistory(
+    instance: InstanceWithContext,
+    viewer: AuthenticatedUser,
+  ): boolean {
+    if (viewer.permissions.includes(instance.viewPermission)) return true;
+    if (instance.originatorUserId === viewer.id) return true;
+    if (instance.delegatedToUserId === viewer.id) return true;
+    return instance.decisions.some((d) => d.actorUserId === viewer.id);
   }
 
   private toDecisionView(

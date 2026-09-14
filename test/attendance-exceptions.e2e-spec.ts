@@ -145,6 +145,7 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
       originatorUserId: employeeUserId,
       subject: `${PREFIX} Rajesh Kulkarni — outside the site geofence`,
       href: `/dashboard/hr/attendance/exceptions/${punch.id}`,
+      viewPermission: Permission.ATTENDANCE,
     });
 
     return punch.id;

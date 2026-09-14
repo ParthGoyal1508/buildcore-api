@@ -160,16 +160,16 @@ is built.
 
 ## Phase 4: US3 + US4 — Attribution and the queue surface (P2)
 
-- [ ] T042 [US3] Include latest action, actor name and time (FR-008) in the state returned by
+- [X] T042 [US3] Include latest action, actor name and time (FR-008) in the state returned by
       `stateOf()` and `statesOf()`, resolving names for deactivated users too
-- [ ] T043 [US3] Implement `GET /approvals/:entityType/:entityId/history` (FR-009), with the
+- [X] T043 [US3] Implement `GET /approvals/:entityType/:entityId/history` (FR-009), with the
       **owning module** deciding whether the caller may view the item — the spine cannot know
-- [ ] T044 [US4] Implement `GET /approvals/queue` and `GET /approvals/queue/count` as separate
+- [X] T044 [US4] Implement `GET /approvals/queue` and `GET /approvals/queue/count` as separate
       endpoints. The badge appears on every screen and must not pull the queue
-- [ ] T045 [US4] Implement `POST /approvals/:instanceId/decide` with a DTO — mandatory even for a
+- [X] T045 [US4] Implement `POST /approvals/:instanceId/decide` with a DTO — mandatory even for a
       two-field body (Principle II; this codebase has already been bitten by DTO-less params)
-- [ ] T046 [P] [US4] DTOs for chain and slot-mapping endpoints, guarded by `SETTINGS`
-- [ ] T047 [US4] e2e for the queue: only actionable items, correct ages, paging, and the count
+- [X] T046 [P] [US4] DTOs for chain and slot-mapping endpoints, guarded by `SETTINGS`
+- [X] T047 [US4] e2e for the queue: only actionable items, correct ages, paging, and the count
       agreeing with the list
 
 ---
@@ -583,3 +583,112 @@ Two things mitigate rather than solve that: `createRunsForPreviousPeriod` is ind
 and handwork visible, so an operator can *see* whether the schedule is firing rather than assume it.
 **SC-003 — "created without human action on the 1st, for 3 consecutive months" — cannot be satisfied
 on the current infrastructure.**
+
+---
+
+## Implementation note — Phase 4, 2026-09-14
+
+T042–T047 are done and committed. `tsc --noEmit` clean, eslint clean on every touched file, **810
+unit tests across 79 suites**, `nest build` clean at 516 files, and a new
+`test/approvals-queue.e2e-spec.ts` at **19/19**. The full e2e baseline is unmoved.
+
+This is the phase that makes Phases 2 and 3 usable. Until `first_approver` and `hr` are bound to
+roles, nothing on those chains can be decided by anybody, and `PUT /approvals/slot-mappings` is the
+only way to bind them.
+
+### T042 was already satisfied, and saying so is the honest answer
+
+`stateOf` and `statesOf` have carried `latestDecision` — action, actor id, resolved actor name, time,
+level label — since T013a in Phase 1, and `namesFor` never filtered on account status, so a
+deactivated actor already resolved. Rather than write code to satisfy a task that was already met,
+Phase 4 added the tests that were missing: four unit tests and one e2e that **deactivates a real
+account mid-suite** and asserts the history still names them. The unit test can only assert the
+absence of a status filter; the e2e is the one that actually proves it.
+
+One genuine gap did surface under T042, from Phase 3: `queueFor` reported `requestedByName: 'Unknown
+user'` for a scheduled payroll run. `toView` had been corrected to say "The system" but the queue had
+not, so the same item read two different ways depending on which screen you were on. Fixed, with
+`ApprovalQueueEntry.requestedById` made `string | null` to match.
+
+### T043 needed a data model the spec did not have
+
+US3 scenario 4 requires that a user who may not view a record is refused its history. The spine
+cannot evaluate that: it has never read the item, holds no relation through which to read it, and
+deliberately never will (research.md §1). There was nothing on `ApprovalInstance` to decide against.
+
+`ApprovalInstance.viewPermission` was added, **required**, migration
+`20260914080116_approval_view_permission` — added nullable, backfilled from the chain's action type,
+then set `NOT NULL`, because the table is not empty after Phase 2's backfill. Making it required is
+the point: the type change failed compilation at all four existing submit sites, which is exactly how
+a module that forgets to declare who may read its items should find out, rather than by quietly
+publishing its rejection reasons to every colleague in the company.
+
+The rule is two additive clauses:
+
+- the caller holds the permission the owning module declared, **or**
+- the caller took part in the chain — originator, any decision actor, or the current delegate.
+
+The second clause is not a convenience. Whoever raised a correction must be able to read why it was
+returned, and the reason lives behind a permission they were never going to hold. Without it the two
+people most entitled to an explanation are the two who cannot get one.
+
+It is deliberately **coarse**: a permission cannot express "this site's exceptions only". It is the
+rule the spec actually states ("subject to their permission to view that record"), and it is strictly
+tighter than the alternative of leaving the endpoint open to every authenticated colleague. Where a
+module needs item-level scoping it should render history through its own endpoint.
+
+A new refusal code, `APPROVAL_VIEW_FORBIDDEN`, separate from `APPROVAL_NOT_AUTHORISED` — being unable
+to *read* and being unable to *decide* have different remedies, and collapsing them would have the
+interface offer approval rights to somebody who only wanted to read.
+
+An item that was never submitted returns `[]`, not a refusal, and that check runs **before**
+authorisation. "This has never been in a chain" is not a secret, and 403-vs-empty on an id the caller
+already holds tells them nothing they did not know.
+
+### Decisions taken where the contract was silent
+
+1. **No `APPROVALS` permission, on any endpoint that decides.** Authority is the slot mapping,
+   resolved per item. A permission value would be a second source of truth about who may approve, and
+   the two would disagree the first time one was changed without the other. Only the four
+   configuration endpoints are guarded, by `SETTINGS` — defining a chain is a settings act, not an
+   approval one. The e2e asserts the separation directly: the site approver decides on real money
+   every day and still gets 403 from `GET /approvals/chains`.
+2. **`GET /approvals/slot-mappings` returns every canonical slot, mapped or not.** Returning only the
+   rows that exist would render an unmapped slot as an absent row, which is the one failure mode of
+   this feature that never resolves itself. It has to be visible as a gap.
+3. **Role *names* are not resolved there.** `Role` lives in the `settings` schema and the spine may
+   not read it (Principle I). The settings screen already holds the role list it needs to render the
+   ids, so the alternative would have been a cross-schema query to save the web a lookup it has
+   already done.
+4. **`PUT /approvals/chains/:id` requires the body's action type to match the chain's.** Changing it
+   is not an edit of this chain but the creation of a different one, leaving the original active and
+   unmentioned.
+5. **`DELETE /approvals/chains/:id` deactivates rather than deletes**, and is included beyond the
+   contract's list because `deactivateChain` was otherwise unreachable over HTTP and a settings
+   screen needs to be able to turn a chain off. Items already travelling the chain continue under it.
+6. **`limit` out of range is a 400, not a silent clamp.** The service still clamps defensively, but a
+   caller who asks for 5000 rows is told, rather than receiving 100 and drawing a conclusion about
+   how much work is outstanding.
+
+### What the e2e is for
+
+Nineteen tests over the real HTTP routes, against a real database. The ones that would not have been
+caught anywhere else:
+
+- the badge count and the list **agree** — they are separate endpoints precisely so the badge is
+  cheap, and being separate is exactly why they can drift;
+- a decided item leaves the deciding caller's queue *and* appears in the next level's;
+- cursor paging returns a different row on the second page;
+- `{ action: 'reject', resaon: 'typo' }` is a 400 rather than an unexplained rejection — Principle
+  II's whitelist earning its place;
+- a deactivated account is still named in history.
+
+The queue fixtures submit instances whose `entityId` points at nothing at all. That is not a
+degenerate fixture: the spine stores the pair and never dereferences it, so a queue that renders them
+correctly is the opacity of research.md §1 being demonstrated rather than asserted.
+
+### Still open after this phase
+
+The web half of 016 remains entirely unwritten, so the settings screen these endpoints exist for does
+not exist yet. **The slots are still unmapped in every real company**, and an attendance exception
+still cannot be decided in production until somebody maps them.

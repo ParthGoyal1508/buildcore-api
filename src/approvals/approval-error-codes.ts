@@ -74,6 +74,16 @@ export const APPROVAL_REASSIGN_FORBIDDEN = 'APPROVAL_REASSIGN_FORBIDDEN';
  */
 export const APPROVAL_CHAIN_UNSATISFIABLE = 'APPROVAL_CHAIN_UNSATISFIABLE';
 
+/**
+ * The caller may not read this item's approval history (FR-009, US3 scenario 4).
+ *
+ * Distinct from `APPROVAL_NOT_AUTHORISED`, which is about *deciding*. Someone can be
+ * entitled to read an item's history without being entitled to act on it, and far more
+ * often the reverse — so collapsing the two would have the interface offer "ask for
+ * approval rights" to somebody who only wanted to read.
+ */
+export const APPROVAL_VIEW_FORBIDDEN = 'APPROVAL_VIEW_FORBIDDEN';
+
 /** Every refusal code the spine can return. */
 export type ApprovalErrorCode =
   | typeof APPROVAL_NOT_AUTHORISED
@@ -84,4 +94,5 @@ export type ApprovalErrorCode =
   | typeof APPROVAL_CHAIN_NOT_CONFIGURED
   | typeof APPROVAL_ALREADY_SUBMITTED
   | typeof APPROVAL_REASSIGN_FORBIDDEN
-  | typeof APPROVAL_CHAIN_UNSATISFIABLE;
+  | typeof APPROVAL_CHAIN_UNSATISFIABLE
+  | typeof APPROVAL_VIEW_FORBIDDEN;

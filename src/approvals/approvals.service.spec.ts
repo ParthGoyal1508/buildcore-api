@@ -1,4 +1,9 @@
-import { ApprovalDecisionAction, ApprovalState, Prisma } from '@prisma/client';
+import {
+  ApprovalDecisionAction,
+  ApprovalState,
+  Permission,
+  Prisma,
+} from '@prisma/client';
 
 import { createPrismaMock } from '../settings/testing/prisma-mock';
 import {
@@ -8,6 +13,7 @@ import {
   APPROVAL_REASON_REQUIRED,
   APPROVAL_REASSIGN_FORBIDDEN,
   APPROVAL_SLOT_UNMAPPED,
+  APPROVAL_VIEW_FORBIDDEN,
 } from './approval-error-codes';
 import { SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR } from './approval-slots';
 import { APPROVAL_COMPLETED_EVENT, ApprovalService } from './approvals.service';
@@ -72,6 +78,7 @@ const instanceRow = (overrides: Record<string, unknown> = {}) => ({
   entityId: 'punch-1',
   subject: 'Rajesh Kulkarni — 11 Sep, out of geofence',
   href: '/hr/attendance/punch-1',
+  viewPermission: Permission.ATTENDANCE,
   currentPosition: 1,
   state: 'pending' as ApprovalState,
   originatorUserId: 'originator-1',
@@ -939,6 +946,215 @@ describe('ApprovalService', () => {
     });
   });
 
+  describe('attribution on the record itself (FR-008, T042)', () => {
+    const decided = () =>
+      instanceRow({
+        currentPosition: 2,
+        decisions: [
+          {
+            id: 'dec-1',
+            approvalInstanceId: 'inst-1',
+            companyId: COMPANY,
+            round: 1,
+            position: 1,
+            actorUserId: 'departed-1',
+            action: ApprovalDecisionAction.approve,
+            reason: null,
+            decidedAt: new Date('2026-09-12T05:00:00Z'),
+          },
+        ],
+      });
+
+    it('carries the latest action, its actor and its time', async () => {
+      const { service } = harness(decided());
+
+      const view = await service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('viewer-1', []),
+      );
+
+      expect(view.latestDecision).toMatchObject({
+        action: ApprovalDecisionAction.approve,
+        actorUserId: 'departed-1',
+        actorName: 'Name departed-1',
+        position: 1,
+        levelLabel: 'First approver',
+        decidedAt: new Date('2026-09-12T05:00:00Z'),
+      });
+    });
+
+    it('names a deactivated actor rather than reporting "Unknown user"', async () => {
+      const { service, prisma } = harness(decided());
+
+      await service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('viewer-1', []),
+      );
+
+      // FR-008: history that cannot say who acted is not history. The lookup must not
+      // filter on isActive — somebody who has since left still did the thing.
+      const where = prisma.tx.user.findMany.mock.calls[0][0].where;
+      expect(where.id.in).toContain('departed-1');
+      expect(where.isActive).toBeUndefined();
+      expect(where.deletedAt).toBeUndefined();
+    });
+
+    it('reads a never-decided item as awaiting its first decision', async () => {
+      const { service } = harness();
+
+      const view = await service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('viewer-1', []),
+      );
+
+      // US3 scenario 3: no action must be implied where none was taken.
+      expect(view.latestDecision).toBeNull();
+      expect(view.state).toBe('pending');
+      expect(view.currentPosition).toBe(1);
+    });
+
+    it('attributes a scheduled item to the system, not to a missing person', async () => {
+      const { service, prisma } = harness(
+        instanceRow({ originatorUserId: null }),
+      );
+      prisma.tx.roleSlotMapping.findMany = jest
+        .fn()
+        .mockResolvedValue([{ slotKey: SLOT_FIRST_APPROVER }]);
+      prisma.tx.approvalLevel.findMany = jest
+        .fn()
+        .mockResolvedValue([{ chainId: 'chain-1', position: 1 }]);
+
+      const view = await service.stateOf(
+        'attendance_exception',
+        'punch-1',
+        caller('viewer-1', []),
+      );
+      const page = await service.queueFor(caller('site-1', [ROLE_FIRST]));
+
+      // "Unknown user" would read as data we lost. Nobody raised a scheduled run, and
+      // that is a fact, not a gap.
+      expect(view.originatorName).toBe('The system');
+      expect(page.items[0].requestedByName).toBe('The system');
+      expect(page.items[0].requestedById).toBeNull();
+    });
+  });
+
+  describe('history and who may read it (FR-009, US3 scenario 4, T043)', () => {
+    const withTwoDecisions = () =>
+      instanceRow({
+        currentPosition: 3,
+        decisions: [
+          {
+            id: 'dec-2',
+            approvalInstanceId: 'inst-1',
+            companyId: COMPANY,
+            round: 1,
+            position: 2,
+            actorUserId: 'hr-1',
+            action: ApprovalDecisionAction.approve,
+            reason: null,
+            decidedAt: new Date('2026-09-12T09:00:00Z'),
+          },
+          {
+            id: 'dec-1',
+            approvalInstanceId: 'inst-1',
+            companyId: COMPANY,
+            round: 1,
+            position: 1,
+            actorUserId: 'site-1',
+            action: ApprovalDecisionAction.approve,
+            reason: 'Checked the site register.',
+            decidedAt: new Date('2026-09-12T05:00:00Z'),
+          },
+        ],
+      });
+
+    const holder = (id: string, permissions: Permission[]) =>
+      ({
+        id,
+        companyId: COMPANY,
+        permissions,
+        roleNames: [],
+        roleIds: [],
+      } as never);
+
+    it('returns the full sequence oldest first, with reasons', async () => {
+      const { service } = harness(withTwoDecisions());
+
+      const history = await service.historyOf(
+        'attendance_exception',
+        'punch-1',
+        holder('viewer-1', [Permission.ATTENDANCE]),
+      );
+
+      expect(history.map((d) => d.position)).toEqual([1, 2]);
+      expect(history[0]).toMatchObject({
+        levelLabel: 'First approver',
+        actorName: 'Name site-1',
+        reason: 'Checked the site register.',
+      });
+      expect(history[1].levelLabel).toBe('HR');
+    });
+
+    it('refuses a caller who may not view the item', async () => {
+      const { service } = harness(withTwoDecisions());
+
+      expect(
+        await refusalCode(
+          service.historyOf(
+            'attendance_exception',
+            'punch-1',
+            holder('storekeeper-1', [Permission.INVENTORY]),
+          ),
+        ),
+      ).toBe(APPROVAL_VIEW_FORBIDDEN);
+    });
+
+    it('lets the person who raised the item read it without the permission', async () => {
+      const { service } = harness(withTwoDecisions());
+
+      // Whoever raised a correction must be able to find out why it was rejected, and
+      // the reason lives behind a permission they were never going to hold.
+      await expect(
+        service.historyOf(
+          'attendance_exception',
+          'punch-1',
+          holder('originator-1', []),
+        ),
+      ).resolves.toHaveLength(2);
+    });
+
+    it('lets somebody who decided in the chain read it back', async () => {
+      const { service } = harness(withTwoDecisions());
+
+      await expect(
+        service.historyOf(
+          'attendance_exception',
+          'punch-1',
+          holder('hr-1', []),
+        ),
+      ).resolves.toHaveLength(2);
+    });
+
+    it('returns an empty history for an item never in a chain, without refusing', async () => {
+      const { service, prisma } = harness();
+      prisma.tx.approvalInstance.findFirst = jest.fn(async () => null);
+
+      // Checked before authorisation deliberately: "never submitted" is not a secret,
+      // and 403-vs-empty on an id the caller already holds tells them nothing new.
+      await expect(
+        service.historyOf(
+          'attendance_exception',
+          'punch-1',
+          holder('storekeeper-1', [Permission.INVENTORY]),
+        ),
+      ).resolves.toEqual([]);
+    });
+  });
+
   describe('submit (T010)', () => {
     it('refuses as a configuration fault when no chain is defined (FR-001b)', async () => {
       const { service, chains } = harness();
@@ -952,6 +1168,7 @@ describe('ApprovalService', () => {
           entityId: 'ind-1',
           originatorUserId: 'u1',
           subject: 'Indent 42',
+          viewPermission: Permission.INVENTORY,
         })
         .catch((e) => e);
 
@@ -983,6 +1200,7 @@ describe('ApprovalService', () => {
             entityId: 'punch-1',
             originatorUserId: 'u1',
             subject: 'A punch',
+            viewPermission: Permission.ATTENDANCE,
           }),
         ),
       ).toBe('APPROVAL_ALREADY_SUBMITTED');

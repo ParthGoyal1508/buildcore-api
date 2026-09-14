@@ -12,6 +12,7 @@ import {
   ExceptionResolution,
   FaceMatchResult,
   GeofenceResult,
+  Permission,
   Prisma,
   PunchRecord,
   PunchSource,
@@ -437,6 +438,10 @@ export class PunchService {
           reasons.join(' and ') || 'flagged punch'
         }`,
         href: `/dashboard/hr/attendance/exceptions/${record.id}`,
+        // Who may read this exception's approval history (FR-009). The spine cannot ask
+        // us, so we tell it: the same permission that guards every other attendance
+        // screen.
+        viewPermission: Permission.ATTENDANCE,
       });
     } catch (error) {
       this.logger.error(

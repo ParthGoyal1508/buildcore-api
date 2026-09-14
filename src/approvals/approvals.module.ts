@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { UsersModule } from '../users/users.module';
+import { ApprovalsController } from './approvals.controller';
 import { ApprovalService } from './approvals.service';
 import { ChainsService } from './chains.service';
 
@@ -22,12 +23,13 @@ import { ChainsService } from './chains.service';
  * every other feature module: the service is stateless and `AuthModule` does not export
  * it.
  *
- * There is no controller yet. Phase 1 of this feature deliberately ships the spine with
- * no HTTP surface and no consumers, so it can be proven in isolation before any existing
- * behaviour changes; `/approvals/*` arrives with Phase 4 (tasks T044–T046).
+ * `ApprovalsController` carries no blanket permission. Authority to decide is the chain's
+ * slot mapping, resolved per item; only the chain-configuration endpoints are guarded,
+ * by `SETTINGS`, because defining a chain is a settings act rather than an approval one.
  */
 @Module({
   imports: [UsersModule],
+  controllers: [ApprovalsController],
   providers: [ApprovalService, ChainsService, AuditLogService],
   exports: [ApprovalService, ChainsService],
 })
