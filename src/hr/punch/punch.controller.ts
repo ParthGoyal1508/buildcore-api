@@ -66,11 +66,26 @@ export class PunchController {
   @ApiOperation({
     summary: "The caller's punch state for today, and whether it is complete",
   })
-  async open(
+  async open(@UserEntity() user: AuthenticatedUser, @Req() request: Request) {
+    return this.punch.getTodayPunchState(callerFrom(user, request));
+  }
+
+  @Get('exceptions')
+  @ApiOperation({
+    summary:
+      "The caller's own flagged punches and where each approval has got to",
+    description:
+      'The employee’s side of an attendance exception. This module records the punching ' +
+      'employee as the approval’s originator, so an approver who returns an exception ' +
+      'for correction returns it to them — and every other approval surface in the ' +
+      'product is a reviewer’s. Scoped to the caller’s own employee record; there is ' +
+      'deliberately no employee-id parameter (016 FR-005, T042).',
+  })
+  async exceptions(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
   ) {
-    return this.punch.getTodayPunchState(callerFrom(user, request));
+    return this.punch.listMyExceptions(callerFrom(user, request), user);
   }
 
   @Get('history')

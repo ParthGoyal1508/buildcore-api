@@ -22,6 +22,8 @@ import { HttpException } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
 import { ApprovalService } from '../../approvals/approvals.service';
 import { ACTION_ATTENDANCE_EXCEPTION } from '../../approvals/default-chains';
+import type { AuthenticatedUser } from '../../auth/authenticated-user';
+import type { ApprovalInstanceView } from '../../approvals/approval.types';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   SettingsConfig,
@@ -75,6 +77,25 @@ export interface TodayPunchState {
   punchedOutAt: Date | null;
   /** Both punches recorded — nothing further is accepted today (FR-008). */
   isComplete: boolean;
+}
+
+/**
+ * One of the caller's own flagged punches and where its chain has got to (016 T042).
+ *
+ * A narrower punch than the reviewer's row: the fields an employee needs to recognise
+ * which punch this is, and nothing about how the match was scored.
+ */
+export interface MyPunchExceptionRow {
+  punch: {
+    id: string;
+    capturedAt: Date;
+    punchDate: Date;
+    type: PunchType;
+    faceMatchResult: FaceMatchResult | null;
+    geofenceResult: GeofenceResult | null;
+  };
+  /** Null for a punch that never entered a chain — a pre-016 row, or a failed submit. */
+  approval: ApprovalInstanceView | null;
 }
 
 @Injectable()
@@ -473,5 +494,63 @@ export class PunchService {
       faceMatchResult: record.faceMatchResult,
       geofenceResult: record.geofenceResult,
     };
+  }
+
+  /**
+   * The caller's own flagged punches, with the spine's view of each (016 FR-005, T042).
+   *
+   * The employee's side of an attendance exception, and the reason it has to exist: this
+   * module sets `originatorUserId` to the person who punched, so when an approver returns
+   * an exception for correction it is returned to *them*. Every other approval surface in
+   * the product is a reviewer's — the queue lists what awaits you as an approver, and the
+   * exceptions modal is an administrator's screen. Without this endpoint `return` is a
+   * decision with nobody downstream to receive it, and `returned` holds the item's chain
+   * slot so nothing else can be raised for the same punch either.
+   *
+   * Scoped to the caller's own employee record, never to a parameter: an employee id in
+   * the query string is the obvious way to make this read anybody's attendance.
+   */
+  async listMyExceptions(
+    caller: Caller,
+    viewer: AuthenticatedUser,
+  ): Promise<MyPunchExceptionRow[]> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+
+    const punches = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.punchRecord.findMany({
+        where: {
+          employeeId: employee.id,
+          exceptionResolution: ExceptionResolution.pending,
+        },
+        orderBy: { capturedAt: 'desc' },
+        // Only what the screen renders. A punch row carries a face descriptor distance
+        // and a stored image key, and neither belongs in a list the employee reads.
+        select: {
+          id: true,
+          capturedAt: true,
+          punchDate: true,
+          type: true,
+          faceMatchResult: true,
+          geofenceResult: true,
+        },
+      }),
+    );
+    if (punches.length === 0) return [];
+
+    // `statesOf`, never `stateOf` per row — the single form in this loop is an N+1
+    // against the spine from a list that grows with the employee's own history.
+    const states = await this.approvals.statesOf(
+      ACTION_ATTENDANCE_EXCEPTION,
+      punches.map((p) => p.id),
+      viewer,
+    );
+
+    return punches.map((punch) => ({
+      punch,
+      approval: states.get(punch.id) ?? null,
+    }));
   }
 }

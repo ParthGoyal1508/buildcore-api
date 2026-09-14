@@ -63,6 +63,7 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
   let shiftId: string;
   let employeeId: string;
   let employeeUserId: string;
+  let employeeToken: string;
 
   const userIds: string[] = [];
   const roleIds: string[] = [];
@@ -218,6 +219,9 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
       data: {
         email: `${unique('Emp')}@example.test`.toLowerCase(),
         username: unique('Emp'),
+        // A real password: T042's endpoint is the employee's own, so the only honest way
+        // to test it is as the employee, over HTTP, with their own token.
+        password: await hash('secret42'),
         displayName: `${PREFIX} Rajesh Kulkarni`,
         companyId,
         status: 'active',
@@ -225,6 +229,17 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
     });
     employeeUserId = employeeUser.id;
     userIds.push(employeeUser.id);
+
+    const employeeAccess = await sys.role.create({
+      data: {
+        name: unique('EmpAccess'),
+        permissions: [Permission.ATTENDANCE],
+      },
+    });
+    roleIds.push(employeeAccess.id);
+    await sys.userRole.create({
+      data: { userId: employeeUser.id, roleId: employeeAccess.id, companyId },
+    });
 
     const employee = await sys.employee.create({
       data: {
@@ -239,6 +254,17 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
       },
     });
     employeeId = employee.id;
+
+    employeeToken = (
+      await http()
+        .post('/auth/login')
+        .send({
+          identifier: employeeUser.email,
+          password: 'secret42',
+          rememberMe: false,
+        })
+        .expect(201)
+    ).body.accessToken;
 
     for (const label of ['Site', 'Hr', 'Final'] as const) {
       const role = await sys.role.create({
@@ -427,6 +453,90 @@ describe('Attendance exceptions through the approval chain (e2e)', () => {
     await resolve(siteToken, punchId, { resolution: 'confirmed' }).expect(201);
     const afterward = await rowFor(hrToken, punchId);
     expect(afterward.approval.currentPosition).toBe(2);
+  }, 30_000);
+
+  it('T042 — the employee sees their own returned punch and resubmits it over HTTP', async () => {
+    const punchId = await flaggedPunch(12);
+
+    // Before T042 this endpoint did not exist, and `app/my/` had no approval surface at
+    // all: an approver returning an exception was returning it to somebody with no screen
+    // on which to receive it, while `returned` held the punch's chain slot so nothing
+    // else could be raised for it either.
+    const before = await http()
+      .get('/my/punch/exceptions')
+      .set(auth(employeeToken))
+      .expect(200);
+    const mine = before.body.find(
+      (r: { punch: { id: string } }) => r.punch.id === punchId,
+    );
+    expect(mine).toBeDefined();
+    expect(mine.approval.state).toBe('pending');
+    expect(mine.approval.canResubmitNow).toBe(false);
+
+    await resolve(siteToken, punchId, {
+      resolution: 'returned',
+      reason: 'Attach the supervisor’s note.',
+    }).expect(201);
+
+    const after = await http()
+      .get('/my/punch/exceptions')
+      .set(auth(employeeToken))
+      .expect(200);
+    const returned = after.body.find(
+      (r: { punch: { id: string } }) => r.punch.id === punchId,
+    );
+    // The field the control branches on, and the reason it had to be added: a returned
+    // item reports `canActNow: false` with a null reason, which renders as nothing.
+    expect(returned.approval).toMatchObject({
+      state: 'returned',
+      canActNow: false,
+      inertReason: null,
+      canResubmitNow: true,
+    });
+    expect(returned.approval.latestDecision.reason).toBe(
+      'Attach the supervisor’s note.',
+    );
+
+    // And the employee moves it themselves, with their own token.
+    const back = await http()
+      .post(`/approvals/${ACTION_ATTENDANCE_EXCEPTION}/${punchId}/resubmit`)
+      .set(auth(employeeToken))
+      .expect(201);
+    expect(back.body).toMatchObject({
+      state: 'pending',
+      round: 2,
+      returnCount: 1,
+    });
+
+    // The chain really is running again.
+    await resolve(siteToken, punchId, { resolution: 'confirmed' }).expect(201);
+  }, 30_000);
+
+  it('T042 — derives the employee from the token, so there is nothing to tamper with', async () => {
+    const punchId = await flaggedPunch(13);
+
+    // The site approver holds ATTENDANCE and reviews this very punch on the admin screen.
+    // Here they are refused outright, because this endpoint resolves the employee through
+    // `requireByUserId` — the guarantee `EmployeesService` documents for every `/my/*`
+    // route: the employee comes only from the authenticated token, so there is no
+    // parameter to tamper with and no per-endpoint ownership check to forget later.
+    // An `?employeeId=` on this route is the obvious way to have got it wrong.
+    const refused = await http()
+      .get('/my/punch/exceptions')
+      .set(auth(siteToken))
+      .expect(403);
+    expect(refused.body.message).toMatch(/No employee record/i);
+
+    // The employee whose punch it is still sees it, on the same route.
+    const theirs = await http()
+      .get('/my/punch/exceptions')
+      .set(auth(employeeToken))
+      .expect(200);
+    expect(
+      theirs.body.some(
+        (r: { punch: { id: string } }) => r.punch.id === punchId,
+      ),
+    ).toBe(true);
   }, 30_000);
 
   it('scenario 5 — refuses an approval from somebody without that level, and records the attempt', async () => {
