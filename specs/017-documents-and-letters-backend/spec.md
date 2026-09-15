@@ -229,7 +229,14 @@ currently carry a reference number and nothing behind it.
 - **FR-004**: System MUST record an expiry date for document kinds that expire, and MUST refuse an
   upload of such a kind without one.
 - **FR-005**: System MUST raise a reminder before a company document expires.
-- **FR-006**: System MUST retain superseded documents rather than replacing them.
+- **FR-006**: System MUST retain superseded documents rather than replacing them, **including the
+  stored file itself and not merely the database row** — a retained record pointing at a deleted blob
+  is not a retained document.
+- **FR-006a**: For document kinds marked restricted (FR-024), superseded versions MUST be purged —
+  row and stored file — once a configured retention period has elapsed, and the period MUST be
+  configuration rather than a literal. FR-006's retain-indefinitely rule is right for a GST
+  certificate and wrong for regulated personal data: keeping every superseded Aadhaar scan forever is
+  a liability that grows on its own, and the general rule would otherwise mandate exactly that.
 - **FR-007**: System MUST define a required set of project document kinds covering LOI, work order,
   insurance, mining permission, labour insurance and BOQ.
 - **FR-008**: System MUST report project document readiness, and MUST make it visible in the project
@@ -239,6 +246,10 @@ currently carry a reference number and nothing behind it.
   relieving, experience, transfer, suspension, salary slip, work order, LOI, purchase order, indent,
   service order, service bill and maintenance bill.
 - **FR-011**: Users MUST be able to define a new letter kind and its template without a code change.
+- **FR-011a**: A company-defined letter kind MUST NOT reuse the stable key of a kind this product
+  ships. Two kinds answering to one key leave every lookup with two candidate rows and no stated
+  precedence, and the ambiguity would surface first in the FR-010 migration backfill, where it is
+  least recoverable.
 - **FR-012**: System MUST render a letter from fixed terms plus variable details drawn from the named
   record.
 - **FR-013**: System MUST render a previously issued letter as it was issued, regardless of later

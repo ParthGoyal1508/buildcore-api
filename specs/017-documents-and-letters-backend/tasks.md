@@ -8,7 +8,7 @@ description: "Task list for 017 Documents and Letters (backend)"
 **Input**: Design documents from `specs/017-documents-and-letters-backend/`
 
 **Prerequisites**: [plan.md](./plan.md), [spec.md](./spec.md) (clarified 2026-09-15),
-[research.md](./research.md) (six decisions), [data-model.md](./data-model.md),
+[research.md](./research.md) (seven decisions), [data-model.md](./data-model.md),
 [contracts/documents-and-letters.md](./contracts/documents-and-letters.md),
 [quickstart.md](./quickstart.md) (10 passes)
 
@@ -47,7 +47,8 @@ feature work is how a migration failure becomes indistinguishable from a feature
       `config.ts`, using `??` not `||` so an explicitly empty env value means "none" (016's lesson)
 - [ ] T004 Add `isRestricted Boolean @default(false)` to `model DocumentType` in `prisma/schema.prisma`
       and migrate. Seed `true` for Aadhaar only — this single field is what FR-024 is enforced by
-      (research §6)
+      (research §6). The seed MUST be **idempotent** (`ON CONFLICT DO NOTHING` / guarded update) so
+      re-applying the migration cannot flip an operator's later change back (CHK029)
 
 ---
 
@@ -87,8 +88,12 @@ feature work is how a migration failure becomes indistinguishable from a feature
       `DOCUMENT_EXPIRY_REQUIRED` (FR-004)
 - [ ] T012 [US1] Implement `completenessFor(companyId)` returning present / missing / expiringSoon —
       **one query** (research §4, contract Part 1)
-- [ ] T013 [US1] Implement supersede-on-replace: the previous document is retained, not deleted
-      (FR-006)
+- [ ] T013 [US1] Implement supersede-on-replace: the previous document is retained, not deleted —
+      **including its stored file**, not merely its row (FR-006)
+- [ ] T013a [US1] Implement the restricted-kind purge: superseded versions of a restricted document
+      kind are removed, row and blob, once `documents.restrictedRetentionDays` has elapsed (FR-006a).
+      Add that setting to `config.ts` beside the expiry lead time. FR-006's retain-indefinitely rule is
+      correct for a GST certificate and a growing liability for an Aadhaar scan (CHK018)
 - [ ] T014 [US1] Implement `CompanyDocumentsController` per contract Part 2, guarded by
       `COMPANY_SETTINGS`
 - [ ] T015 [US1] Audit-log every download **before** bytes are returned, through the existing
@@ -135,11 +140,21 @@ feature work is how a migration failure becomes indistinguishable from a feature
 be verified as a regression before any letter story builds on it.
 
 - [ ] T026 Add `model LetterKind` to the `settings` schema per data-model.md — `companyId String?`
-      (nullable = product-shipped, the `ReminderRule` pattern), `key`, `label`, `requiresSignature`,
-      `requiresApproval`, `approvalActionType`
-- [ ] T027 Seed the 5 existing `LetterType` values as `LetterKind` rows with **identical keys**, plus
-      the 10 FR-010 adds. Seed the 3 commercial kinds with `requiresApproval: true` and
-      `approvalActionType` matching `ACTION_LETTER_WORK_ORDER` / `_LOI` / `_PURCHASE_ORDER`
+      (nullable = product-shipped), `key`, `label`, `requiresSignature`, `requiresApproval`,
+      `approvalActionType`, with `@@unique([companyId, key])`
+- [ ] T026a Hand-author `CREATE UNIQUE INDEX "LetterKind_shipped_key" ON "settings"."LetterKind"("key")
+      WHERE "companyId" IS NULL`. **Without this the composite unique is not enough**: Postgres treats
+      NULLs as distinct, so two product-shipped kinds could share a key and T029's backfill would have
+      two candidate rows to match (CHK014, data-model.md)
+- [ ] T026b Enforce FR-011a in `src/settings/letter-kinds/` — a company-defined kind may not reuse a
+      product-shipped key, code `LETTER_KIND_KEY_RESERVED`. Unit-test it. Two kinds answering to one
+      key leave every lookup ambiguous with no stated precedence
+- [ ] T027 Seed the 5 existing `LetterType` values as `LetterKind` rows with keys **byte-identical** to
+      the enum values, plus the 10 FR-010 adds. Seed the 3 commercial kinds with
+      `requiresApproval: true` and `approvalActionType` matching `ACTION_LETTER_WORK_ORDER` / `_LOI` /
+      `_PURCHASE_ORDER`. **This runs inside the migration, not `prisma/seed.ts`** (research §7):
+      T029's backfill depends on it having run, and `seed.ts` wipes data and must never touch
+      production. Must be safe to re-apply
 - [ ] T028 Migration step 1 — add **nullable** `letterKindId` to `LetterTemplate` and
       `GeneratedLetter`. Prisma cannot add a required column to a populated table (research §1)
 - [ ] T029 Migration step 2 — backfill `letterKindId` by matching the existing `letterType` enum value

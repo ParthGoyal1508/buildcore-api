@@ -2,9 +2,12 @@
 
 **Date**: 2026-09-15 · **Spec**: [spec.md](./spec.md)
 
-Six decisions. Four of them are forced by things that already exist in this codebase rather than by
+Seven decisions. Four are forced by things that already exist in this codebase rather than by
 preference, and saying which is which matters: a decision forced by existing structure can be
 revisited cheaply if that structure changes, while a decision made on judgement cannot.
+
+§7 was added on 2026-09-15 after the migration checklist (CHK031) found that this document had
+deferred a question to `/speckit-tasks` which `/speckit-tasks` then did not answer.
 
 ---
 
@@ -173,10 +176,29 @@ and others were not — and if that requirement appears, this is the decision to
 
 ---
 
+## §7 — The `LetterKind` seed runs in a migration, not in `seed.ts`
+
+**Decision.** Seeded kinds are inserted by the migration that creates the table, idempotently
+(`ON CONFLICT DO NOTHING` against the uniqueness rules in §1), not by `prisma/seed.ts`.
+
+**Rationale.** This was left open in the first draft of this document and nothing downstream picked
+it up — raised as CHK031. It is not a free choice:
+
+- The Phase 5 backfill matches each existing `letterType` enum value to a seeded key. If the seed has
+  not run, the backfill matches nothing and `SET NOT NULL` fails. A migration guarantees the ordering;
+  `seed.ts` does not.
+- `prisma/seed.ts` **wipes** users, punches, enrolments and audit rows, and must never run against
+  production. Making a production-critical seed depend on a file that is unsafe to run in production
+  would be a trap for whoever deploys this.
+- 016 set the precedent for exactly this reason: `20260914103000_seed_live_chains_for_existing_companies`
+  exists because pre-existing companies needed chains before the feature could work at all.
+
+**Consequence for tasks.** T027 must be part of the migration sequence, before T029's backfill, and
+must be safe to re-apply.
+
+---
+
 ## Open items deliberately left to `/speckit-tasks`
 
 - Ordering between the `LetterKind` migration and the `GeneratedLetter` schema move. Both touch the
   same table; whether they are one migration or two is a task-level call, not a design one.
-- Whether the `LetterKind` seed runs in a migration or in `prisma/seed.ts`. 016 seeded chains in a
-  migration because pre-existing companies needed them before the feature could work; the same
-  argument applies here and the same precedent is available.

@@ -72,7 +72,7 @@ decision is research §2. No violation requires justification in Complexity Trac
 specs/017-documents-and-letters-backend/
 ├── spec.md
 ├── plan.md              ← this file
-├── research.md          ← Phase 0, six decisions
+├── research.md          ← Phase 0, seven decisions
 ├── data-model.md        ← Phase 1
 ├── contracts/
 │   └── documents-and-letters.md
@@ -122,7 +122,9 @@ No constitutional violation requires justification. Two items are recorded as *c
 
 ## Phase status
 
-- **Phase 0 — research**: complete → [research.md](./research.md), six decisions, zero unresolved.
+- **Phase 0 — research**: complete → [research.md](./research.md), seven decisions, zero unresolved.
+  (§7 added 2026-09-15 after `checklists/migration.md` found a question this document had deferred
+  and `/speckit-tasks` had not answered.)
 - **Phase 1 — design**: complete → [data-model.md](./data-model.md),
   [contracts/documents-and-letters.md](./contracts/documents-and-letters.md),
   [quickstart.md](./quickstart.md).

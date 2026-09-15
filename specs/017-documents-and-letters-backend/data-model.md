@@ -75,7 +75,31 @@ change) and FR-022 (refuse deletion while referenced) are both structural.
 | `approvalActionType` | `String?` | The 016 action type to gate on — `letter_work_order` etc. |
 | `isActive` | `Boolean @default(true)` | |
 
-**Indexes**: `@@unique([companyId, key])`, `@@schema("settings")`.
+**Indexes**: `@@unique([companyId, key])` for company-authored kinds, plus a **hand-authored partial
+unique index** for product-shipped ones, and `@@schema("settings")`:
+
+```sql
+CREATE UNIQUE INDEX "LetterKind_shipped_key" ON "settings"."LetterKind"("key")
+  WHERE "companyId" IS NULL;
+```
+
+> **Why the composite unique is not enough on its own** (raised as CHK014, and a real defect in the
+> first draft of this document). Postgres treats NULLs as **distinct** in a unique index, so
+> `@@unique([companyId, key])` permits two rows of `(NULL, 'offer')` — two product-shipped kinds
+> sharing a key, which makes the Phase 5 backfill's "match the enum value to the seeded key"
+> ambiguous and therefore unsafe.
+>
+> The nullable-tenant precedent this model cited, `ReminderRule`, sidesteps the problem by making
+> `ruleKey` **globally** unique (`20260903152658_reminders_engine/migration.sql:57`). That answer does
+> not transfer: reminder rules are declared in code and are global, whereas letter kinds are authored
+> by tenants, and a global unique on `key` would stop two different companies each defining a kind
+> keyed `site_transfer`. The partial index gives the shipped set its own uniqueness without
+> constraining tenants against each other.
+
+**Shadowing is forbidden, so resolution stays unambiguous.** A company-authored kind MUST NOT reuse a
+product-shipped `key`. Without that rule, resolving `offer` for a company that defined its own
+`offer` has two candidate rows and needs a precedence rule nobody has written. Enforced in the
+service with `LETTER_KIND_KEY_RESERVED`; see spec FR-011a.
 
 **Seeded rows**: the five existing enum values (`offer`, `appointment`, `confirmation`, `relieving`,
 `experience`) plus the ten FR-010 adds. The three commercial kinds are seeded with
