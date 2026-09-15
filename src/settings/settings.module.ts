@@ -4,6 +4,8 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
 import { CompaniesController } from './companies/companies.controller';
+import { CompanyDocumentsController } from './company-documents/company-documents.controller';
+import { CompanyDocumentsService } from './company-documents/company-documents.service';
 import { AssetCategoriesService } from './asset-masters/asset-categories.service';
 import { AssetDocTypesService } from './asset-masters/asset-doc-types.service';
 import { ConditionGradesService } from './asset-masters/condition-grades.service';
@@ -47,6 +49,7 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
   controllers: [
     ReimbursementCategoriesController,
     CompaniesController,
+    CompanyDocumentsController,
     RolesController,
     UsersAdminController,
     DepartmentsController,
@@ -56,6 +59,7 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
   ],
   providers: [
     CompaniesService,
+    CompanyDocumentsService,
     RolesService,
     UsersAdminService,
     ReferenceDataService,

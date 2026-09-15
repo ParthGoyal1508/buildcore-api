@@ -10,6 +10,7 @@ export interface Config {
   hrPayroll: HrPayrollConfig;
   payrollSchedule: PayrollScheduleConfig;
   approvals: ApprovalsConfig;
+  documents: DocumentsConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
 }
@@ -278,6 +279,26 @@ export interface ApprovalsConfig {
    * hatch and a loud one — the boot log says so.
    */
   directorFinalActionTypes: string[];
+}
+
+/** 017 — company and project document handling. */
+export interface DocumentsConfig {
+  /**
+   * How many days before a document expires the reminder fires (017 FR-005).
+   *
+   * Configuration because a labour licence and a GST certificate warrant different
+   * warning, and because the right number is a business call rather than a developer's.
+   */
+  expiryReminderLeadDays: number;
+  /**
+   * How long a *superseded* version of a restricted kind is kept before it is purged,
+   * row and blob (017 FR-006a).
+   *
+   * FR-006's retain-indefinitely rule is right for a GST certificate and wrong for an
+   * Aadhaar scan: keeping every superseded copy forever is a liability that grows on its
+   * own. Zero means purge on supersession.
+   */
+  restrictedRetentionDays: number;
 }
 
 export interface HrPayrollConfig {

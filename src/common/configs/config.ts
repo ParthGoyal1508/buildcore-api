@@ -320,6 +320,20 @@ const config: Config = {
       'Asia/Kolkata',
   },
 
+  documents: {
+    // `??` not `||`: an explicitly empty env value must be distinguishable from unset,
+    // the same reasoning as the approvals block below.
+    expiryReminderLeadDays: Number(
+      process.env.DOCUMENTS_EXPIRY_REMINDER_LEAD_DAYS ?? 30,
+    ),
+    // 90 days after a restricted document is superseded, the old copy goes. Long enough
+    // to recover from an upload mistake, short enough not to accumulate Aadhaar scans
+    // nobody has a reason to hold (FR-006a).
+    restrictedRetentionDays: Number(
+      process.env.DOCUMENTS_RESTRICTED_RETENTION_DAYS ?? 90,
+    ),
+  },
+
   approvals: {
     // FR-018's four, as the six action types they decompose into. Overridable with a
     // comma-separated `APPROVALS_DIRECTOR_FINAL_ACTIONS`; an explicitly empty value

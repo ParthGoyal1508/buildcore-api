@@ -355,6 +355,8 @@ model Company {
   roleSlotMappings  RoleSlotMapping[]
   approvalInstances ApprovalInstance[]
   approvalDecisions ApprovalDecision[]
+  /// 017 US1 — the certificates behind this company's registration numbers.
+  companyDocuments  CompanyDocument[]
 
   @@schema("settings")
 }
@@ -549,6 +551,12 @@ model DocumentType {
   hasExpiry   Boolean @default(false)
   needsNumber Boolean @default(false)
 
+  /// Regulated personal data — Aadhaar today (017 FR-024). This flag is the *enforcement
+  /// point*, not a label: the letter template resolver refuses a restricted type outright,
+  /// so the rule holds for letter kinds nobody has defined yet, and superseded versions are
+  /// purged on a bounded schedule rather than retained forever (017 FR-006a).
+  isRestricted Boolean @default(false)
+
   sortOrder Int     @default(0)
   /// Inactive types are excluded from new-upload selection; historical employee
   /// records referencing them are unaffected (FR-019).
@@ -557,8 +565,58 @@ model DocumentType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  companyDocuments CompanyDocument[]
+
   @@unique([companyId, code])
   @@index([companyId])
+  @@schema("settings")
+}
+
+/// A company's own statutory papers — the certificates behind the registration numbers
+/// already held on `Company` (017 US1, FR-001).
+///
+/// Deliberately the same shape as `EmployeeDocument`, `ProjectDocument`,
+/// `ContractorDocument`, `EquipmentDocument` and `AssetDocument`. A sixth document model
+/// that differed would be the one people got wrong.
+model CompanyDocument {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// `settings.DocumentType.id`. A real relation here, unlike `EmployeeDocument`, because
+  /// both models live in `settings` — no schema boundary is crossed.
+  documentTypeId String
+  documentType   DocumentType @relation(fields: [documentTypeId], references: [id])
+
+  /// Encrypted object-storage reference. Opaque: never a path a client supplies.
+  fileRef        String
+  /// The GSTIN/PAN/TAN itself, when the kind carries one (`DocumentType.needsNumber`).
+  documentNumber String?
+  /// Required when `DocumentType.hasExpiry` — enforced in the service (FR-004).
+  expiresAt      DateTime? @db.Date
+
+  /// Points back at the document this one replaced — the history chain FR-006 preserves.
+  supersedesId String?          @unique
+  supersedes   CompanyDocument? @relation("CompanyDocumentSupersession", fields: [supersedesId], references: [id])
+  supersededBy CompanyDocument? @relation("CompanyDocumentSupersession")
+
+  /// Whether this is the version that counts as present compliance today.
+  ///
+  /// A state column rather than an absence-of-pointer, and the reason is that only a
+  /// state column can carry a database-level guarantee. "Current means nothing points at
+  /// it" needs a NOT EXISTS, which no index can express; "current means this flag" is a
+  /// partial unique index, which is exactly how 016 guaranteed one live approval per item.
+  ///
+  /// Maintained in the same transaction as the supersession it records, so it cannot drift
+  /// from the chain — and the index below refuses two current rows even under a race that
+  /// a service-level check would lose.
+  isCurrent Boolean @default(true)
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([expiresAt])
   @@schema("settings")
 }
 
@@ -669,14 +727,14 @@ model RefreshToken {
   companyId String?
 
   /// Set true the moment this token is rotated (exchanged for a new one).
-  used       Boolean   @default(false)
+  used      Boolean   @default(false)
   /// When `used` was set — lets rotation tell a genuine replay apart from a benign
   /// concurrent-refresh race within a short grace window (research.md §2).
-  usedAt     DateTime?
+  usedAt    DateTime?
   /// Set on logout, reuse detection, account deactivation, or admin-reset-password.
-  revokedAt  DateTime?
-  expiresAt  DateTime
-  createdAt  DateTime  @default(now())
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
 
   @@index([familyId])
   @@index([accountId])
@@ -1481,6 +1539,34 @@ model ProjectDocument {
 
   @@index([companyId])
   @@index([projectId])
+  @@schema("projects")
+}
+
+/// Which document kinds a project must hold before it counts as fully papered
+/// (017 US2, FR-007). Configuration, not documents: the documents themselves are
+/// `ProjectDocument` rows.
+model ProjectDocumentRequirement {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// `settings.DocumentType.id` as a BARE STRING, deliberately not a foreign key.
+  ///
+  /// A declared FK across schemas would be permitted, but resolving it to a *name* for
+  /// display is a cross-schema read and Principle I forbids that outright. The projects
+  /// module receives type names from the settings module through an exported service
+  /// method and joins them in memory. Written down because the missing relation looks
+  /// like an oversight and is not.
+  documentTypeId String
+
+  /// FR-009 lets a project exist before its papers are complete; readiness is reported,
+  /// never enforced at creation.
+  isMandatory Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, documentTypeId])
+  @@index([companyId])
   @@schema("projects")
 }
 
@@ -5690,7 +5776,7 @@ model Candidate {
   fullName             String
   phone                String
   email                String
-  totalExperienceYears Decimal @db.Decimal(4, 1)
+  totalExperienceYears Decimal  @db.Decimal(4, 1)
   currentEmployer      String?
   currentCtc           Decimal? @db.Decimal(14, 2)
   expectedCtc          Decimal? @db.Decimal(14, 2)
@@ -5699,8 +5785,8 @@ model Candidate {
   referredByEmployeeId String?
   resumeRef            String?
 
-  stage      CandidateStage @default(applied)
-  employeeId String?
+  stage               CandidateStage @default(applied)
+  employeeId          String?
   previousCandidateId String?
   rejectionReason     String?
   noShowReason        String?
@@ -5730,11 +5816,11 @@ model CandidateStageHistory {
   candidateId String
   candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
-  fromStage CandidateStage?
-  toStage   CandidateStage
-  actorId   String?
-  occurredAt DateTime @default(now())
-  remarks   String?
+  fromStage  CandidateStage?
+  toStage    CandidateStage
+  actorId    String?
+  occurredAt DateTime        @default(now())
+  remarks    String?
 
   @@index([companyId])
   @@index([candidateId])
@@ -5756,8 +5842,8 @@ model Interview {
   mode        InterviewMode
   location    String?
 
-  status          InterviewStatus @default(scheduled)
-  rescheduleCount Int             @default(0)
+  status            InterviewStatus @default(scheduled)
+  rescheduleCount   Int             @default(0)
   rescheduleHistory Json?
 
   createdAt DateTime @default(now())
@@ -5801,7 +5887,7 @@ model InterviewFeedback {
   outcome               InterviewOutcome
   score                 Int
   comments              String
-  submittedAt           DateTime @default(now())
+  submittedAt           DateTime         @default(now())
 
   @@unique([interviewId, interviewerEmployeeId])
   @@index([companyId])
@@ -5821,7 +5907,7 @@ model Offer {
   designationId String
   departmentId  String
 
-  offeredCtc   Decimal @db.Decimal(14, 2)
+  offeredCtc    Decimal @db.Decimal(14, 2)
   salaryBreakup Json
 
   proposedJoiningDate  DateTime  @db.Date
@@ -5929,9 +6015,9 @@ model Resignation {
 
   employeeId String
 
-  resignationDate DateTime                  @db.Date
-  reasonCategory  ResignationReasonCategory
-  reasonDetail    String
+  resignationDate  DateTime                  @db.Date
+  reasonCategory   ResignationReasonCategory
+  reasonDetail     String
   noticePeriodDays Int
 
   expectedLastWorkingDay DateTime  @db.Date
@@ -5939,7 +6025,7 @@ model Resignation {
   noticeWaiverDays       Int?
   waiverReason           String?
 
-  status        ResignationStatus @default(submitted)
+  status         ResignationStatus @default(submitted)
   withdrawReason String?
 
   createdAt DateTime  @default(now())

@@ -37,15 +37,15 @@ feature work is how a migration failure becomes indistinguishable from a feature
 
 **Purpose**: configuration and the one schema field everything else keys off
 
-- [ ] T001 Create `src/settings/company-documents/` and `src/letters/` module skeletons per plan.md,
+- [X] T001 Create `src/settings/company-documents/` and `src/letters/` module skeletons per plan.md,
       registered in their parent modules but exporting nothing yet
-- [ ] T002 [P] Add `REQUIRED_COMPANY_DOCUMENT_KINDS` (8 kinds: GST, PF, ESIC, labour licence, PAN,
+- [X] T002 [P] Add `REQUIRED_COMPANY_DOCUMENT_KINDS` (8 kinds: GST, PF, ESIC, labour licence, PAN,
       TAN, Aadhaar, cancelled cheque) and `REQUIRED_PROJECT_DOCUMENT_KINDS` (6: LOI, work order,
       insurance, mining permission, labour insurance, BOQ) to `src/settings/document-kinds.ts` —
       configuration, not literals in services (Principle III, following `src/approvals/default-chains.ts`)
-- [ ] T003 [P] Add `documents.expiryReminderLeadDays` to `src/common/configs/config.interface.ts` and
+- [X] T003 [P] Add `documents.expiryReminderLeadDays` to `src/common/configs/config.interface.ts` and
       `config.ts`, using `??` not `||` so an explicitly empty env value means "none" (016's lesson)
-- [ ] T004 Add `isRestricted Boolean @default(false)` to `model DocumentType` in `prisma/schema.prisma`
+- [X] T004 Add `isRestricted Boolean @default(false)` to `model DocumentType` in `prisma/schema.prisma`
       and migrate. Seed `true` for Aadhaar only — this single field is what FR-024 is enforced by
       (research §6). The seed MUST be **idempotent** (`ON CONFLICT DO NOTHING` / guarded update) so
       re-applying the migration cannot flip an operator's later change back (CHK029)
@@ -56,16 +56,16 @@ feature work is how a migration failure becomes indistinguishable from a feature
 
 **⚠️ No story work begins until this phase is complete.**
 
-- [ ] T005 Add `model CompanyDocument` to `prisma/schema.prisma` in the `settings` schema, copying
+- [X] T005 Add `model CompanyDocument` to `prisma/schema.prisma` in the `settings` schema, copying
       `EmployeeDocument` (~line 2037) field for field, plus `supersedesId String?` self-relation
       (data-model.md)
-- [ ] T006 Add `model ProjectDocumentRequirement` to the `projects` schema. `documentTypeId` is a
+- [X] T006 Add `model ProjectDocumentRequirement` to the `projects` schema. `documentTypeId` is a
       **bare String, not a foreign key** — resolving it to a name would be a cross-schema read
       (research §3). Add a comment saying so, or a future reader will "fix" the missing relation
-- [ ] T007 Hand-author the RLS migration for both new tables: `ENABLE` + `FORCE` + a
+- [X] T007 Hand-author the RLS migration for both new tables: `ENABLE` + `FORCE` + a
       `tenant_isolation` policy. Never in `schema.prisma` (Principle IV). Copy the exact shape from
       `prisma/migrations/20260904200001_project_assets_rls_policies/migration.sql`
-- [ ] T008 Hand-author the partial unique index `CREATE UNIQUE INDEX … ON "settings"."CompanyDocument"
+- [X] T008 Hand-author the partial unique index `CREATE UNIQUE INDEX … ON "settings"."CompanyDocument"
       ("companyId","documentTypeId") WHERE "supersedesId" IS NULL` — Prisma cannot express the
       predicate, and without it FR-006's retain-don't-replace makes "which is current?" ambiguous
 
@@ -79,31 +79,31 @@ feature work is how a migration failure becomes indistinguishable from a feature
 
 **Independent test**: upload 7 of 8; `GET /company-documents` names the 8th.
 
-- [ ] T009 [P] [US1] DTOs in `src/settings/company-documents/dto/` — upload, list query. Mandatory
+- [X] T009 [P] [US1] DTOs in `src/settings/company-documents/dto/` — upload, list query. Mandatory
       even for small bodies (Principle II)
-- [ ] T010 [US1] Implement `CompanyDocumentsService.upload()` in
+- [X] T010 [US1] Implement `CompanyDocumentsService.upload()` in
       `src/settings/company-documents/company-documents.service.ts`, storing bytes through the
       existing `StorageService`. **No second storage path** (plan.md)
-- [ ] T011 [US1] Refuse an upload of an expiring kind with no `expiresAt`, code
+- [X] T011 [US1] Refuse an upload of an expiring kind with no `expiresAt`, code
       `DOCUMENT_EXPIRY_REQUIRED` (FR-004)
-- [ ] T012 [US1] Implement `completenessFor(companyId)` returning present / missing / expiringSoon —
+- [X] T012 [US1] Implement `completenessFor(companyId)` returning present / missing / expiringSoon —
       **one query** (research §4, contract Part 1)
-- [ ] T013 [US1] Implement supersede-on-replace: the previous document is retained, not deleted —
+- [X] T013 [US1] Implement supersede-on-replace: the previous document is retained, not deleted —
       **including its stored file**, not merely its row (FR-006)
-- [ ] T013a [US1] Implement the restricted-kind purge: superseded versions of a restricted document
+- [X] T013a [US1] Implement the restricted-kind purge: superseded versions of a restricted document
       kind are removed, row and blob, once `documents.restrictedRetentionDays` has elapsed (FR-006a).
       Add that setting to `config.ts` beside the expiry lead time. FR-006's retain-indefinitely rule is
       correct for a GST certificate and a growing liability for an Aadhaar scan (CHK018)
-- [ ] T014 [US1] Implement `CompanyDocumentsController` per contract Part 2, guarded by
+- [X] T014 [US1] Implement `CompanyDocumentsController` per contract Part 2, guarded by
       `COMPANY_SETTINGS`
-- [ ] T015 [US1] Audit-log every download **before** bytes are returned, through the existing
+- [X] T015 [US1] Audit-log every download **before** bytes are returned, through the existing
       write-only `AuditLogService`. Add **no** audit read endpoint — 016 T063 established that
       reading is feature 004's Activity Log (research §6)
-- [ ] T016 [P] [US1] Unit-test `completenessFor` and assert the **query count is 1**, not merely the
+- [X] T016 [P] [US1] Unit-test `completenessFor` and assert the **query count is 1**, not merely the
       result. Precedent: the Pass 9 block in `src/approvals/approvals.service.spec.ts`. A result-only
       test passes an N+1
-- [ ] T017 [P] [US1] Unit-test that superseding retains the old row and leaves exactly one current
-- [ ] T018 [US1] e2e in `test/company-documents.e2e-spec.ts`: upload 7 of 8, assert the 8th is named;
+- [X] T017 [P] [US1] Unit-test that superseding retains the old row and leaves exactly one current
+- [X] T018 [US1] e2e in `test/company-documents.e2e-spec.ts`: upload 7 of 8, assert the 8th is named;
       assert `DOCUMENT_EXPIRY_REQUIRED`; assert a non-permitted caller is refused (FR-023)
 
 **Checkpoint**: US1 ships alone. Quickstart Passes 1–3 pass.
@@ -323,3 +323,53 @@ the first commercial letter — but it should begin deliberately, not by momentu
   empty screen identically. Where a test asserts an absence, prove the test can see a presence.
 - Commit after each phase. Phase 5 gets its own commit regardless.
 - Do not push.
+
+### Implementation note — Phases 1–3, 2026-09-15
+
+Shipped: the company statutory document store. 8 required kinds, completeness reported in
+one query, renewal retaining its predecessor, permission-gated and audit-logged retrieval,
+tenant-isolated at the database.
+
+**Reading the precedent changed two tasks before a line was written.** `DocumentType`
+already carries `hasExpiry`, `needsNumber` and `isMandatory`, and is **per company** — so
+T002's "required kinds" are `DocumentType.code` values matched across companies, not a new
+concept, and T011's expiry rule reads `hasExpiry` rather than inventing a second flag. A
+kind the company never defined a type for is reported missing with a null
+`documentTypeId`, which is a different problem from "defined but not uploaded" and the
+interface has to tell them apart.
+
+**The supersession design was wrong twice before it was right, and both migrations were
+rolled back locally rather than patched forward.**
+
+1. First attempt: `supersedesId` pointing *backwards* at the replaced document, with a
+   partial unique index `WHERE "supersedesId" IS NULL`. That pins "current" to the
+   **oldest** version forever — the first upload is the only row that never replaced
+   anything. The index would have been enforcing the opposite of the intent.
+2. Second attempt: flip the pointer forward. Correct semantically, but it creates a
+   chicken-and-egg on insert — the new row cannot be current until the old one is not, and
+   the old one cannot point at a row that does not exist yet. Postgres unique *indexes*
+   cannot be deferred, so there is no ordering that satisfies it.
+3. What shipped: a state column, `isCurrent`, with the partial index predicated on it.
+   Demote, then insert, inside the single transaction `withRlsContext` already opens. This
+   is the shape 016 used to guarantee one live approval per item, and it was available the
+   whole time.
+
+The data-model.md description of the pointer survived review, the checklist pass, and a
+commit before the database refused it. Worth remembering that a constraint reads as
+plausible right up until something executes it.
+
+**T008 is proven by the database, not by the service.** The e2e writes straight past the
+service with `isCurrent: true` on a kind that already has one, and asserts the unique
+violation. A service-level "is there already a current one?" passes a single-threaded test
+and loses the race two concurrent uploads create.
+
+**T016 asserts the query count**, not the result — `expect(calls).toEqual(['documentType.findMany'])`.
+Eight required kinds, one query. A result-only assertion passes an N+1 happily.
+
+Verification: **861/861 unit** (83 suites, up from 855), **7/7** in
+`test/company-documents.e2e-spec.ts`, 94/94 across the neighbouring e2e suites,
+`npx tsc --noEmit` clean, `npx eslint` clean on touched files only.
+
+Not done, and not started: Phase 4 (T019–T025, project document readiness) and Phase 5
+onward (the `GeneratedLetter` schema move). `ProjectDocumentRequirement` exists as a table
+because Phase 2 creates it; nothing reads or writes it yet.

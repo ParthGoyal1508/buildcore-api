@@ -166,6 +166,7 @@ so this is not a literal inside the denomination service — Principle III.']
   roleSlotMappings RoleSlotMapping [not null]
   approvalInstances ApprovalInstance [not null]
   approvalDecisions ApprovalDecision [not null]
+  companyDocuments CompanyDocument [not null, note: '017 US1 — the certificates behind this company\'s registration numbers.']
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -298,11 +299,16 @@ Table DocumentType {
   isMandatory Boolean [not null, default: false, note: 'Gates attendance marking for an employee missing this document (FR-021).']
   hasExpiry Boolean [not null, default: false]
   needsNumber Boolean [not null, default: false]
+  isRestricted Boolean [not null, default: false, note: 'Regulated personal data — Aadhaar today (017 FR-024). This flag is the *enforcement
+point*, not a label: the letter template resolver refuses a restricted type outright,
+so the rule holds for letter kinds nobody has defined yet, and superseded versions are
+purged on a bounded schedule rather than retained forever (017 FR-006a).']
   sortOrder Int [not null, default: 0]
   isActive Boolean [not null, default: true, note: 'Inactive types are excluded from new-upload selection; historical employee
 records referencing them are unaffected (FR-019).']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+  companyDocuments CompanyDocument [not null]
 
   indexes {
     (companyId, code) [unique]
@@ -312,6 +318,40 @@ records referencing them are unaffected (FR-019).']
 (MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
 NOT stored — it is a pure function of the three booleans below, computed on read
 so it can never drift from them (research.md §7).'
+}
+
+Table CompanyDocument {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  documentTypeId String [not null, note: '`settings.DocumentType.id`. A real relation here, unlike `EmployeeDocument`, because
+both models live in `settings` — no schema boundary is crossed.']
+  documentType DocumentType [not null]
+  fileRef String [not null, note: 'Encrypted object-storage reference. Opaque: never a path a client supplies.']
+  documentNumber String [note: 'The GSTIN/PAN/TAN itself, when the kind carries one (`DocumentType.needsNumber`).']
+  expiresAt DateTime [note: 'Required when `DocumentType.hasExpiry` — enforced in the service (FR-004).']
+  supersedesId String [unique, note: 'Points back at the document this one replaced — the history chain FR-006 preserves.']
+  supersedes CompanyDocument
+  supersededBy CompanyDocument
+  isCurrent Boolean [not null, default: true, note: 'Whether this is the version that counts as present compliance today.
+
+A state column rather than an absence-of-pointer, and the reason is that only a
+state column can carry a database-level guarantee. "Current means nothing points at
+it" needs a NOT EXISTS, which no index can express; "current means this flag" is a
+partial unique index, which is exactly how 016 guaranteed one live approval per item.
+
+Maintained in the same transaction as the supersession it records, so it cannot drift
+from the chain — and the index below refuses two current rows even under a race that
+a service-level check would lose.']
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'A company\'s own statutory papers — the certificates behind the registration numbers
+already held on `Company` (017 US1, FR-001).
+
+Deliberately the same shape as `EmployeeDocument`, `ProjectDocument`,
+`ContractorDocument`, `EquipmentDocument` and `AssetDocument`. A sixth document model
+that differed would be the one people got wrong.'
 }
 
 Table Shift {
@@ -750,6 +790,30 @@ Table ProjectDocument {
 
   Note: 'A file attached to a project, stored as an object-storage reference rather than
 bytes — same pattern as `hr.EmployeeDocument`.'
+}
+
+Table ProjectDocumentRequirement {
+  id String [pk]
+  companyId String [not null]
+  documentTypeId String [not null, note: '`settings.DocumentType.id` as a BARE STRING, deliberately not a foreign key.
+
+A declared FK across schemas would be permitted, but resolving it to a *name* for
+display is a cross-schema read and Principle I forbids that outright. The projects
+module receives type names from the settings module through an exported service
+method and joins them in memory. Written down because the missing relation looks
+like an oversight and is not.']
+  isMandatory Boolean [not null, default: true, note: 'FR-009 lets a project exist before its papers are complete; readiness is reported,
+never enforced at creation.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, documentTypeId) [unique]
+  }
+
+  Note: 'Which document kinds a project must hold before it counts as fully papered
+(017 US2, FR-007). Configuration, not documents: the documents themselves are
+`ProjectDocument` rows.'
 }
 
 Table Employee {
@@ -4070,6 +4134,12 @@ Ref: KitItem.companyId > Company.id [delete: Cascade]
 Ref: LetterTemplate.companyId > Company.id [delete: Cascade]
 
 Ref: DocumentType.companyId > Company.id [delete: Cascade]
+
+Ref: CompanyDocument.companyId > Company.id [delete: Cascade]
+
+Ref: CompanyDocument.documentTypeId > DocumentType.id
+
+Ref: CompanyDocument.supersedesId - CompanyDocument.id
 
 Ref: Shift.companyId > Company.id [delete: Cascade]
 
