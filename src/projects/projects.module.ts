@@ -5,6 +5,8 @@ import { HrModule } from '../hr/hr.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
+import { ProjectDocumentsController } from './documents/project-documents.controller';
+import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
@@ -30,11 +32,23 @@ import { SitesService } from './sites/sites.service';
  */
 @Module({
   imports: [SettingsModule, forwardRef(() => HrModule)],
-  controllers: [ClientsController, SitesController, ProjectsController],
+  // `ProjectDocumentsController` is FIRST on purpose. Nest matches routes in
+  // registration order, and its path `/projects/document-requirements` is a literal
+  // that `ProjectsController`'s `GET /projects/:id` would otherwise swallow — the
+  // request would be answered with "project document-requirements not found", which
+  // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
+  // asserts the order holds rather than trusting this comment to be read.
+  controllers: [
+    ProjectDocumentsController,
+    ClientsController,
+    SitesController,
+    ProjectsController,
+  ],
   providers: [
     ClientsService,
     SitesService,
     ProjectsService,
+    ProjectDocumentsService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other
@@ -48,9 +62,14 @@ import { SitesService } from './sites/sites.service';
   // `ProjectSourcesRegistry` is exported so 006 and 009 can register the machinery
   // and materials they contribute to a project page — the inversion that keeps the
   // dependency between those modules and this one pointing one way.
+  // `ProjectDocumentsService` is exported (017 T022) so the dashboard and any other
+  // module can ask how far a project is from fully papered through a service method.
+  // `projects.ProjectDocumentRequirement` is this module's table and Principle I means
+  // nobody else may read it directly.
   exports: [
     SitesService,
     ProjectsService,
+    ProjectDocumentsService,
     ProjectLockGuard,
     ProjectSourcesRegistry,
   ],

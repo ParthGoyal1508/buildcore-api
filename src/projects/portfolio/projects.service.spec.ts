@@ -51,6 +51,9 @@ describe('ProjectsService.findOne', () => {
         machinerySource: () => null,
         materialsSource: () => null,
       } as never,
+      // 017 US2: readiness is only consulted when the caller asks for it, so these
+      // tests never reach it.
+      { readinessFor: jest.fn() } as never,
     );
   };
 
@@ -117,6 +120,9 @@ describe('ProjectsService outward contract', () => {
       { next: jest.fn() } as never,
       {} as never,
       { machinerySource: () => null, materialsSource: () => null } as never,
+      // 017 US2: readiness is only consulted when the caller asks for it, so these
+      // tests never reach it.
+      { readinessFor: jest.fn() } as never,
     );
 
   it('reports the portfolio as available, which 007 branches on', () => {
@@ -161,6 +167,9 @@ describe('ProjectsService.remove', () => {
       { next: jest.fn() } as never,
       {} as never,
       { machinerySource: () => null, materialsSource: () => null } as never,
+      // 017 US2: readiness is only consulted when the caller asks for it, so these
+      // tests never reach it.
+      { readinessFor: jest.fn() } as never,
     );
 
     const attempt = service.remove(caller, 'project-1', '10.0.0.1');

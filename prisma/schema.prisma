@@ -1529,9 +1529,24 @@ model ProjectDocument {
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   documentType String
-  fileRef      String
-  filePath     String?
-  remark       String?
+
+  /// `settings.DocumentType.id` as a BARE STRING, for the same reason
+  /// `ProjectDocumentRequirement.documentTypeId` is one — see the note there.
+  ///
+  /// Added by 017. `documentType` above is free text with no defined vocabulary, so it
+  /// cannot answer "does this project hold its work order?": two people typing "Work
+  /// Order" and "work order" would be filing against different kinds and readiness would
+  /// quietly disagree with itself. This column is the key readiness matches on; the free
+  /// text stays as the label 008 intended it to be.
+  ///
+  /// Nullable because acceptance scenario 5 requires it: a document that answers no
+  /// required kind is accepted and filed as supplementary, and null is what
+  /// "supplementary" means here rather than a second flag saying the same thing.
+  documentTypeId String?
+
+  fileRef  String
+  filePath String?
+  remark   String?
 
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String
@@ -1539,6 +1554,9 @@ model ProjectDocument {
 
   @@index([companyId])
   @@index([projectId])
+  /// Readiness asks "which of these kinds does each of these projects hold?" — this is
+  /// the index that question is answered by (FR-008).
+  @@index([companyId, projectId, documentTypeId])
   @@schema("projects")
 }
 

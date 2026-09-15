@@ -21,7 +21,11 @@ import { REQUIRED_COMPANY_DOCUMENT_KINDS } from '../src/settings/document-kinds'
  * Every fixture is prefixed `E2ECD` and removed in `afterAll`.
  */
 const PREFIX = 'E2ECD';
-const unique = (s: string) => `${PREFIX}${s}${Date.now() % 100000}`;
+// A random tail as well as the clock: e2e suites run in parallel against one database,
+// and two of them entering `unique()` in the same millisecond would collide on a name a
+// unique index protects. Observed once as a lone transient failure in a combined run.
+const unique = (s: string) =>
+  `${PREFIX}${s}${Date.now() % 100000}${Math.floor(Math.random() * 1000)}`;
 
 jest.setTimeout(30_000);
 

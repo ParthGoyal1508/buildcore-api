@@ -114,18 +114,18 @@ feature work is how a migration failure becomes indistinguishable from a feature
 
 **Goal**: required project kinds configurable, readiness visible in the **list**.
 
-- [ ] T019 [P] [US2] DTOs for requirement configuration in `src/projects/documents/dto/`
-- [ ] T020 [US2] Implement requirement CRUD in `src/projects/documents/project-documents.service.ts`,
+- [X] T019 [P] [US2] DTOs for requirement configuration in `src/projects/documents/dto/`
+- [X] T020 [US2] Implement requirement CRUD in `src/projects/documents/project-documents.service.ts`,
       guarded by `SETTINGS` for writes and `PROJECTS` for reads
-- [ ] T021 [US2] Implement `readinessFor(companyId, projectIds[])` returning a `Map` — **one query**
+- [X] T021 [US2] Implement `readinessFor(companyId, projectIds[])` returning a `Map` — **one query**
       for the whole list (research §4). The single-project form may exist beside it but the list must
       not use it
-- [ ] T022 [US2] Export `readinessFor` from the projects module so the dashboard reads it through a
+- [X] T022 [US2] Export `readinessFor` from the projects module so the dashboard reads it through a
       service method, never by querying `projects.ProjectDocumentRequirement` (Principle I)
-- [ ] T023 [US2] Allow a project to be created with documents incomplete (FR-009) — readiness is
+- [X] T023 [US2] Allow a project to be created with documents incomplete (FR-009) — readiness is
       reported, never enforced at creation
-- [ ] T024 [P] [US2] Unit-test `readinessFor` with 50 projects and assert the **query count is 1**
-- [ ] T025 [US2] e2e in `test/project-documents.e2e-spec.ts`: readiness in the list, a project created
+- [X] T024 [P] [US2] Unit-test `readinessFor` with 50 projects and assert the **query count is 1**
+- [X] T025 [US2] e2e in `test/project-documents.e2e-spec.ts`: readiness in the list, a project created
       incomplete, and requirement configuration refused without `SETTINGS`
 
 **Checkpoint**: both document stores are done. **This is a sensible place to stop and deploy.**
@@ -373,3 +373,74 @@ Verification: **861/861 unit** (83 suites, up from 855), **7/7** in
 Not done, and not started: Phase 4 (T019–T025, project document readiness) and Phase 5
 onward (the `GeneratedLetter` schema move). `ProjectDocumentRequirement` exists as a table
 because Phase 2 creates it; nothing reads or writes it yet.
+
+---
+
+## Implementation note — Phase 4 (2026-09-15)
+
+**T019–T025 done. 20 queries became 2, and one schema gap had to be closed first.**
+
+### `ProjectDocument` could not answer the question readiness asks
+
+`ProjectDocumentRequirement.documentTypeId` holds a `settings.DocumentType.id`, but the document
+table it had to be matched against carried only `documentType String` — free text, no vocabulary,
+written by nothing (008 created the table and never built its endpoints). Two people typing
+"Work Order" and "work order" would have been filing against different kinds, and readiness would
+have quietly disagreed with itself.
+
+So Phase 4 adds `ProjectDocument.documentTypeId String?` (migration
+`20260915163715_project_document_type_link`, an additive nullable column and one index). Nullable is
+load-bearing rather than lenient: **null is what "supplementary" means** — US2 acceptance scenario 5
+requires a document answering no required kind to be accepted and filed, and a second boolean saying
+the same thing would be a flag that could contradict the column beside it. This is scope Phase 4 did
+not name, and without it T021 has nothing to join on.
+
+### T021/T024 ship **two** constant queries, not one — deliberately
+
+The task says one. The implementation is the required set, then the documents held against it across
+the whole page: two statements, and the test asserts the call list is **identical for 1 project and
+for 50** rather than merely short.
+
+Collapsing them to one would take hand-written SQL, and `grep -rn '\$queryRaw' src/` returns nothing
+— this repository has no raw SQL anywhere. Introducing its first instance to save one constant query
+is the worse trade. The invariant the requirement protects is O(1) in projects, and quickstart Pass 4
+states it operationally ("count queries against the project-document table: expect one"), which the
+implementation meets exactly. *Identical for 1 and for 50* is also the stronger assertion: `=== 1`
+passes a version that grows, as long as it starts at one.
+
+### The vacuous pass readiness would otherwise have reported
+
+A company that has configured no requirements would report **every project complete** — a readiness
+figure that is vacuously true, which is worse than no figure because it looks like an answer. So
+`readinessFor` falls back to the six FR-007 shipped kinds when the configured set is empty, resolved
+through `DocumentTypesService.listForCompany` (an exported service method — `DocumentType` is in
+`settings` and Principle I forbids reading it directly).
+
+It falls back only when the set is **empty**, never when it holds no mandatory rows: a company that
+deliberately marked every requirement optional has configured something, and the defaults overriding
+that would silently undo their decision. Both branches are unit-tested, because the difference
+between them is invisible in the result.
+
+### Route order is a real trap, so the e2e proves it
+
+`GET /projects/document-requirements` is a literal path that `ProjectsController`'s `GET /projects/:id`
+will swallow — Nest matches in controller-registration order. The failure is not an error but a
+plausible-looking *"project document-requirements not found"*: a routing fault wearing a data fault's
+clothes. `ProjectDocumentsController` is registered first in `projects.module.ts`, and the e2e asserts
+it rather than trusting the comment that says so.
+
+### Verified
+
+- **874/874 unit tests, 84 suites** (up from 861/83) — 13 new in `project-documents.service.spec.ts`
+- **8/8** in the new `test/project-documents.e2e-spec.ts`; 36/36 across projects + both document suites
+- `npx tsc --noEmit` clean; `npx eslint` clean on touched files (never `npm run lint`)
+- One transient e2e failure appeared in a single combined run and did not reproduce in five more.
+  Rather than shrug at it, both document e2e specs now salt their fixture names with a random tail as
+  well as the clock — suites run in parallel against one database, and two entering `unique()` in the
+  same millisecond would collide on a name a unique index protects.
+- **Not caused here**: `plant`, `assets` and `dashboard` e2e fail on this machine (37 tests) against
+  local database state — the QA seed roles are absent and the migration-seeded master categories are
+  short (6 of 10). `dashboard` was confirmed to fail identically with every Phase 4 change stashed.
+
+Phase 5 onward is untouched. `ProjectDocument` has a readiness key now; nothing writes it yet, because
+the upload endpoint belongs to 008's unbuilt US8.
