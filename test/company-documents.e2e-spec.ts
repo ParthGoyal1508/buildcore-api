@@ -397,6 +397,48 @@ describe('Company documents (e2e)', () => {
   });
 
   /**
+   * The chicken-and-egg the first cut of FR-001a shipped with. Over HTTP because the
+   * claim is about what the ENDPOINT offers: the screen builds its upload control from
+   * this list, and a kind that is defined but not yet held has to be in it or the first
+   * document can never be filed.
+   */
+  it('offers a newly defined kind before anything is filed against it', async () => {
+    const code = unique('TRADE').toUpperCase();
+    const type = await sys.documentType.create({
+      data: { companyId, code, name: 'Trade licence' },
+    });
+
+    const res = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    // In neither "what we hold" list — nothing has been filed.
+    expect(
+      res.body.supplementary.map(
+        (d: { documentTypeId: string }) => d.documentTypeId,
+      ),
+    ).not.toContain(type.id);
+    // And offerable anyway.
+    const offered = res.body.availableKinds.find(
+      (k: { documentTypeId: string }) => k.documentTypeId === type.id,
+    );
+    expect(offered).toBeDefined();
+    expect(offered.isRequired).toBe(false);
+
+    // Which the upload then actually accepts, closing the loop.
+    await http()
+      .post(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({
+        documentTypeId: type.id,
+        data: b64,
+        contentType: 'application/pdf',
+      })
+      .expect(201);
+  });
+
+  /**
    * T085, FR-003a. AADHAAR is the kind this suite deliberately never defined a type for,
    * so it is reported missing with a null `documentTypeId` — the "never even defined"
    * branch, which had no action behind it at all before this amendment.

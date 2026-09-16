@@ -22,6 +22,7 @@ function harness(
       name: string;
       hasExpiry: boolean;
       isRestricted: boolean;
+      isActive?: boolean;
       companyDocuments: {
         id: string;
         documentTypeId: string;
@@ -121,6 +122,7 @@ function typeWithDoc(
   name: string;
   hasExpiry: boolean;
   isRestricted: boolean;
+  isActive: boolean;
   companyDocuments: {
     id: string;
     documentTypeId: string;
@@ -136,6 +138,7 @@ function typeWithDoc(
     name,
     hasExpiry: false,
     isRestricted: false,
+    isActive: true,
     companyDocuments: [
       {
         id: `doc-${id}`,
@@ -236,6 +239,41 @@ describe('CompanyDocumentsService', () => {
       expect(result.missing).toHaveLength(
         REQUIRED_COMPANY_DOCUMENT_KINDS.length - 1,
       );
+    });
+
+    /**
+     * The chicken-and-egg FR-001a shipped with: the upload control was built from kinds
+     * that already held a document, so a newly defined type appeared in no list, so it
+     * was in no dropdown, so it never received a document, so it stayed in no list.
+     * `availableKinds` answers "what may be uploaded", which is a different question from
+     * "what do we hold".
+     */
+    it('offers a defined kind that holds no document yet', async () => {
+      const empty = requiredType('dt-msme', 'MSME', 'Udyam registration');
+      empty.companyDocuments = [];
+
+      const { result, calls } = await withTypes([
+        requiredType('dt-gst', 'GST', 'GST registration certificate'),
+        empty,
+      ]);
+
+      // In neither "what we hold" list...
+      expect(result.supplementary.map((d) => d.code)).not.toContain('MSME');
+      expect(result.present.map((d) => d.code)).not.toContain('MSME');
+      // ...and still offerable, which is the whole point.
+      expect(result.availableKinds.map((k) => k.code)).toContain('MSME');
+      // Still one query — `availableKinds` is mapped from rows already fetched.
+      expect(calls).toHaveLength(1);
+    });
+
+    it('does not offer a deactivated kind', async () => {
+      const retired = requiredType('dt-old', 'OLD_LICENCE', 'Retired licence');
+      retired.companyDocuments = [];
+      retired.isActive = false;
+
+      const { result } = await withTypes([retired]);
+
+      expect(result.availableKinds).toHaveLength(0);
     });
 
     it('does not count a required kind twice when its code is lower-cased', async () => {

@@ -56,6 +56,28 @@ export interface CompanyDocumentCompleteness {
    * the screen is asking.
    */
   supplementary: CompanyDocumentView[];
+  /**
+   * Every kind this company could file against — whether or not it holds one yet.
+   *
+   * Without this the upload control can only be built from kinds that already have a
+   * document, so a newly defined type is impossible to file the FIRST document against:
+   * it is in no list, so it is in no dropdown, so it never gets a document, so it stays
+   * in no list. `present` and `supplementary` answer "what do we hold"; this answers
+   * "what may be uploaded", and they are not the same question.
+   *
+   * Free: `completenessFor` already fetches every type for the company in its one query.
+   * The alternative — the client calling `settings/document-types` — is guarded by
+   * `EMPLOYEES`, so an administrator holding only `COMPANY_SETTINGS` would get a 403 and
+   * an empty dropdown on a screen they are entitled to use.
+   */
+  availableKinds: {
+    documentTypeId: string;
+    code: string;
+    name: string;
+    hasExpiry: boolean;
+    isRestricted: boolean;
+    isRequired: boolean;
+  }[];
 }
 
 @Injectable()
@@ -136,6 +158,21 @@ export class CompanyDocumentsService {
     }
     supplementary.sort((a, b) => a.name.localeCompare(b.name));
 
+    // Built from the same rows, so it costs nothing beyond the mapping. Inactive types
+    // are excluded: deactivating a kind is how an administrator retires it, and offering
+    // it in the upload control would make that switch do nothing visible.
+    const availableKinds = types
+      .filter((t) => t.isActive)
+      .map((t) => ({
+        documentTypeId: t.id,
+        code: t.code,
+        name: t.name,
+        hasExpiry: t.hasExpiry,
+        isRestricted: t.isRestricted,
+        isRequired: requiredCodes.has(t.code.toUpperCase()),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
     const horizon = new Date();
     horizon.setDate(
       horizon.getDate() + config().documents.expiryReminderLeadDays,
@@ -150,7 +187,7 @@ export class CompanyDocumentsService {
       (d) => d.expiresAt !== null && d.expiresAt <= horizon,
     );
 
-    return { present, missing, expiringSoon, supplementary };
+    return { present, missing, expiringSoon, supplementary, availableKinds };
   }
 
   /**
