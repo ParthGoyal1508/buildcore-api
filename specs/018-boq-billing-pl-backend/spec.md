@@ -127,6 +127,53 @@ cannot be right before US3 is.
    is excluded from both the list and the totals.
 3. **Given** the group view, **When** a project is selected, **Then** its own summary opens.
 
+## Clarifications
+
+### Session 2026-09-16
+
+The three open markers all needed the client's own contract terms, and none of them could be
+answered by reading the codebase. They are resolved here with **conservative, explicitly recorded
+assumptions** rather than left open, so design and task generation can proceed — each is chosen to
+be the cheapest one to overturn if the client says otherwise, and the tasks that depend on them are
+phased last for exactly that reason.
+
+- Q: How are variations and extra items handled? → A: **A variation is a BOQ line, marked as one.**
+  It enters the same `BOQTaskItem` table with `isVariation` true and its own reference, so it prices,
+  bills and reconciles through machinery that already exists and is already tested.
+  **Why this and not the alternatives**: refusing variations outright makes the feature unusable —
+  almost every construction project bills work outside the original BOQ, and a system that cannot
+  would push billing back into a spreadsheet, which is the problem this feature exists to solve. A
+  wholly separate variation schedule is the expensive answer: it duplicates every reconciliation,
+  cumulative-quantity and roll-up path, and the two would drift. A flag on the existing line keeps
+  one code path and still lets every screen and report separate original scope from variations,
+  which is the distinction that actually matters to a reader.
+  **If the client says otherwise**: the change is a query filter and a screen section, not a data
+  model — which is why this option was chosen over the others.
+
+- Q: Is retention a percentage held per bill, and is it released on a schedule? → A: **A percentage
+  per bill, configured on the work order, released manually.**
+  `WorkOrder.retentionPercent` sets the rate; each RA bill records the amount withheld; release is an
+  explicit act somebody performs, not a date the system acts on.
+  **Why manual release**: retention terms vary by contract — some release half at practical
+  completion and half after the defects period, some on a date, some on a certificate. A schedule
+  guessed wrong does not fail loudly; it silently withholds money that was due or releases money that
+  was not, and nobody notices until the subcontractor does. Manual release is correct under every
+  contract and can be automated later once the client's actual terms are known.
+
+- Q: Does client certification enter the system? → A: **Yes, and it is nullable.**
+  A client bill carries `certifiedAmount` and `certifiedAt`, both null until somebody records a
+  certification. FR-005 requires the difference to be visible and not to vanish from cumulative
+  billed quantity.
+  **Why nullable rather than a separate decision**: a company that does not track certification
+  simply never fills it, and every figure keeps reading from `billedAmount`. Making certification
+  mandatory would force a workflow on companies that do not have one; omitting it entirely would make
+  FR-005 unimplementable for the companies that do.
+
+> **These are assumptions, not client answers.** They are recorded here so that a reviewer can see
+> exactly what was assumed and reject it cheaply. Phase ordering in `tasks.md` puts variations,
+> retention release and certification after the core billing spine, so overturning any of them costs
+> one phase rather than the feature.
+
 ### Edge Cases
 
 - A BOQ is revised mid-project after bills have been raised against the old version.
@@ -173,6 +220,10 @@ cannot be right before US3 is.
   sheets for that project and month.
 - **FR-014**: System MUST present a group view across projects with per-project and total position,
   respecting the viewer's project and company visibility.
+- **FR-015a**: System MUST distinguish variation lines from original BOQ scope wherever quantities or
+  values are reported, so a reader can always tell contracted scope from added scope.
+- **FR-016a**: System MUST record retention withheld per RA bill and MUST make the outstanding
+  retention balance per work order visible; release is an explicit recorded act, never automatic.
 - **FR-015**: System MUST NOT alter the meaning of existing work order, RA bill or budget records in
   a way that changes previously reported figures without a recorded migration.
 - **FR-016**: System MUST record the actor and time for every bill raised, edited, certified or
@@ -229,12 +280,10 @@ cannot be right before US3 is.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: how are variations and extra items handled?]** Almost every construction
-  project bills work outside the original BOQ. Whether a variation becomes a new BOQ line, a separate
-  schedule with its own approval, or is refused entirely, changes the data model and cannot be
-  guessed.
-- **[NEEDS CLARIFICATION: is retention a percentage held per bill, and is it released on a schedule?]**
-  Retention terms vary by contract; the rule must come from the client's actual contracts.
-- **[NEEDS CLARIFICATION: does client certification enter the system?]** If the client certifies less
-  than billed, somebody must record that. Whether the company tracks certification or only billing
-  determines whether FR-005 is needed at all.
+- **Variations and extra items** — resolved 2026-09-16 as a flagged BOQ line (see Clarifications).
+  Recorded as an assumption awaiting the client's confirmation, not as a client answer.
+- **Retention** — resolved 2026-09-16 as a per-work-order percentage withheld per bill and released
+  manually (see Clarifications). The release *schedule* still needs the client's contracts; manual
+  release is correct under all of them.
+- **Client certification** — resolved 2026-09-16 as nullable fields on the client bill (see
+  Clarifications). A company that does not certify never fills them.
