@@ -28,6 +28,8 @@ import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 import { SkillCategoriesService } from './skill-categories/skill-categories.service';
 import { KitItemsService } from './kit-items/kit-items.service';
+import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
+import { LetterKindsService } from './letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from './letter-templates/letter-templates.service';
 
 /**
@@ -47,6 +49,7 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
   // `ChainsService` rather than by writing to the spine's tables from here.
   imports: [UsersModule, ApprovalsModule],
   controllers: [
+    LetterKindsController,
     ReimbursementCategoriesController,
     CompaniesController,
     CompanyDocumentsController,
@@ -74,6 +77,7 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
     SkillCategoriesService,
     KitItemsService,
     LetterTemplatesService,
+    LetterKindsService,
     // Declared so `CompaniesService` can seed the three asset masters for a new
     // company (012 US1). Not exported: `AssetsModule` declares its own instances,
     // the same arrangement the machinery masters have with `PlantModule`.
@@ -111,6 +115,9 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
     // above.
     KitItemsService,
     LetterTemplatesService,
+    // 017: `recruitment` and `letters` both resolve kind keys through this rather
+    // than reading `settings.LetterKind` (Principle I).
+    LetterKindsService,
   ],
 })
 export class SettingsModule {}

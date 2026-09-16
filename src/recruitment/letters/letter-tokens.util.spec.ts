@@ -1,5 +1,3 @@
-import { LetterType } from '@prisma/client';
-
 import {
   extractTokens,
   renderTemplate,
@@ -14,12 +12,12 @@ describe('letter-tokens.util', () => {
   });
 
   it('flags tokens outside a letter type set', () => {
-    expect(
-      unknownTokens('{{employeeName}} {{salary}}', LetterType.appointment),
-    ).toEqual(['salary']);
-    expect(
-      unknownTokens('{{candidateName}} {{offeredCtc}}', LetterType.offer),
-    ).toEqual([]);
+    expect(unknownTokens('{{employeeName}} {{salary}}', 'appointment')).toEqual(
+      ['salary'],
+    );
+    expect(unknownTokens('{{candidateName}} {{offeredCtc}}', 'offer')).toEqual(
+      [],
+    );
   });
 
   it('substitutes known tokens and empties unresolved ones', () => {

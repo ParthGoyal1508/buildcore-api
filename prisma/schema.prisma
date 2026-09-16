@@ -358,6 +358,11 @@ model Company {
   /// 017 US1 — the certificates behind this company's registration numbers.
   companyDocuments  CompanyDocument[]
 
+  // 017 letters (T026, T052).
+  letterKinds LetterKind[]
+  signatories Signatory[]
+  issuedLetters IssuedLetter[]
+
   @@schema("settings")
 }
 
@@ -478,13 +483,77 @@ model SkillCategory {
 }
 
 /// Letter types feature 011 generates from per-company templates (011 FR-020).
-enum LetterType {
-  offer
-  appointment
-  confirmation
-  relieving
-  experience
+/// A kind of letter (017 §1, FR-010, FR-011, FR-022).
+///
+/// Replaces `enum LetterType`, which had five values and needed a migration for each
+/// new one — directly contradicting FR-011, "define a new letter kind without a code
+/// change". A row is what makes both FR-011 and FR-022 (refuse deletion while letters
+/// reference it) structural rather than conventional.
+model LetterKind {
+  id String @id @default(cuid())
 
+  /// NULL = a kind this product ships for everyone; a value = one company defined it.
+  /// The same nullable-tenant pattern as `ReminderRule`.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Stable identifier — `offer`, `letter_work_order`. What code and the 016 action
+  /// types match on, and deliberately not editable: the label is what a human changes.
+  ///
+  /// The five keys migrated from `enum LetterType` are byte-identical to the old enum
+  /// values, which is what let the backfill match them and what keeps Recruitment's
+  /// behaviour unchanged.
+  key   String
+  label String
+
+  /// FR-016: whether a signature is applied at issue.
+  requiresSignature Boolean @default(false)
+  /// FR-015a: true for work order, LOI and purchase order — the three that commit money.
+  requiresApproval  Boolean @default(false)
+  /// The 016 action type to gate on. Must equal a constant exported from
+  /// `src/approvals/default-chains.ts`; a unit test asserts that rather than trusting
+  /// two files to stay in step.
+  approvalActionType String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  templates LetterTemplate[]
+  letters   IssuedLetter[]
+
+  /// Company-authored kinds are unique per company. Product-shipped ones (companyId
+  /// NULL) need a SECOND, hand-authored partial unique index, because Postgres treats
+  /// NULLs as distinct and this composite would happily admit two `(NULL, 'offer')`
+  /// rows — see `LetterKind_shipped_key` in the migration.
+  @@unique([companyId, key])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// A named person whose signature is applied to letters (017 FR-016, research §5).
+model Signatory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name  String
+  title String
+
+  /// Storage key for the signature graphic, through the existing `StorageService`.
+  signatureRef String
+
+  /// Someone leaves; the letters they signed stay valid. Deactivating hides them from
+  /// new issues without touching what was already issued.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  letters IssuedLetter[]
+
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -520,17 +589,22 @@ model LetterTemplate {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  letterType        LetterType
+  /// 017 §1: was `letterType LetterType`. The enum is gone; a template now points at a
+  /// `LetterKind` row, so a template can be written for a kind that did not exist when
+  /// this code shipped.
+  letterKindId String
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Restrict)
+
   name              String
   bodyTemplate      String
   letterheadAssetId String?
-  isActive          Boolean    @default(false)
+  isActive          Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
-  @@index([companyId, letterType])
+  @@index([companyId, letterKindId])
   @@schema("settings")
 }
 
@@ -6004,26 +6078,71 @@ model OnboardingItem {
 
 /// A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
 /// prior version; both remain downloadable.
-model GeneratedLetter {
-  id        String @id @default(cuid())
+/// A letter, composed and then issued (017 §2 — was `recruitment.GeneratedLetter`).
+///
+/// **Moved to `shared` and renamed.** A work order addressed to a vendor is not a
+/// recruitment record, and leaving the table in `recruitment` would have forced the
+/// recruitment module to learn about `partners`, `projects` and `inventory` — which
+/// Principle I forbids outright. In `shared` it belongs to no business module and can
+/// address anything.
+model IssuedLetter {
+  id        String  @id @default(cuid())
   companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  letterType  LetterType
+  letterKindId String
+  /// `Restrict`, so FR-022 ("refuse to delete a kind letters reference") is the
+  /// database's job. The service check exists to produce a legible message, not to be
+  /// the guarantee.
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Restrict)
+
+  /// Recruitment's two addressing forms, untouched by the move.
   employeeId  String?
   candidateId String?
-  templateId  String
 
-  renderedRef  String
+  /// The third form: an OPAQUE pair — `vendor`, `project`, `purchase`. This module
+  /// never dereferences it. Resolving `subjectId` to a vendor name would be exactly the
+  /// cross-schema read the move was made to avoid; the owning module resolves it.
+  subjectType String?
+  subjectId   String?
+
+  templateId String
+
+  /// Who signed, and **the graphic as applied** (research §5). Both, not just the id:
+  /// FR-013 requires a previously issued letter to render as it was issued, and a
+  /// signatory's graphic can be replaced. An implementation storing only `signatoryId`
+  /// silently rewrites history the first time somebody uploads a new signature.
+  signatoryId         String?
+  signatory           Signatory? @relation(fields: [signatoryId], references: [id], onDelete: SetNull)
+  appliedSignatureRef String?
+
+  /// FR-017: the executed copy that comes back, and FR-018's issued-vs-executed
+  /// distinction, which is rendered from whether this is null.
+  countersignedRef String?
+  countersignedAt  DateTime?
+
+  /// Empty until the letter is issued — a composed letter awaiting approval has no
+  /// rendered document yet, because rendering it would produce a file indistinguishable
+  /// from the real one.
+  renderedRef  String  @default("")
   version      Int     @default(1)
   isSuperseded Boolean @default(false)
 
-  issuedAt DateTime @default(now())
+  /// **NULL means composed but not yet issued.** A gated kind (FR-015a) must clear its
+  /// 016 chain before it takes effect, and the chain needs something to be raised
+  /// against — so the letter exists first and is issued second. The same null-as-not-yet
+  /// idiom `countersignedAt` uses two fields up.
+  issuedAt DateTime?
   issuedBy String?
 
+  createdAt DateTime @default(now())
+
   @@index([companyId])
-  @@index([companyId, letterType, employeeId])
-  @@index([companyId, letterType, candidateId])
-  @@schema("recruitment")
+  @@index([companyId, letterKindId, employeeId])
+  @@index([companyId, letterKindId, candidateId])
+  /// FR-019: letters where the work is — listed by the opaque subject pair.
+  @@index([companyId, subjectType, subjectId])
+  @@schema("shared")
 }
 
 /// An employee's resignation record (011 US8) — the trigger 005's exit flow consumes.

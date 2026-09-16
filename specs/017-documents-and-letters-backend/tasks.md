@@ -139,44 +139,44 @@ feature work is how a migration failure becomes indistinguishable from a feature
 **Nothing in this phase adds a feature.** It is structural, it touches shipped behaviour, and it must
 be verified as a regression before any letter story builds on it.
 
-- [ ] T026 Add `model LetterKind` to the `settings` schema per data-model.md — `companyId String?`
+- [X] T026 Add `model LetterKind` to the `settings` schema per data-model.md — `companyId String?`
       (nullable = product-shipped), `key`, `label`, `requiresSignature`, `requiresApproval`,
       `approvalActionType`, with `@@unique([companyId, key])`
-- [ ] T026a Hand-author `CREATE UNIQUE INDEX "LetterKind_shipped_key" ON "settings"."LetterKind"("key")
+- [X] T026a Hand-author `CREATE UNIQUE INDEX "LetterKind_shipped_key" ON "settings"."LetterKind"("key")
       WHERE "companyId" IS NULL`. **Without this the composite unique is not enough**: Postgres treats
       NULLs as distinct, so two product-shipped kinds could share a key and T029's backfill would have
       two candidate rows to match (CHK014, data-model.md)
-- [ ] T026b Enforce FR-011a in `src/settings/letter-kinds/` — a company-defined kind may not reuse a
+- [X] T026b Enforce FR-011a in `src/settings/letter-kinds/` — a company-defined kind may not reuse a
       product-shipped key, code `LETTER_KIND_KEY_RESERVED`. Unit-test it. Two kinds answering to one
       key leave every lookup ambiguous with no stated precedence
-- [ ] T027 Seed the 5 existing `LetterType` values as `LetterKind` rows with keys **byte-identical** to
+- [X] T027 Seed the 5 existing `LetterType` values as `LetterKind` rows with keys **byte-identical** to
       the enum values, plus the 10 FR-010 adds. Seed the 3 commercial kinds with
       `requiresApproval: true` and `approvalActionType` matching `ACTION_LETTER_WORK_ORDER` / `_LOI` /
       `_PURCHASE_ORDER`. **This runs inside the migration, not `prisma/seed.ts`** (research §7):
       T029's backfill depends on it having run, and `seed.ts` wipes data and must never touch
       production. Must be safe to re-apply
-- [ ] T028 Migration step 1 — add **nullable** `letterKindId` to `LetterTemplate` and
+- [X] T028 Migration step 1 — add **nullable** `letterKindId` to `LetterTemplate` and
       `GeneratedLetter`. Prisma cannot add a required column to a populated table (research §1)
-- [ ] T029 Migration step 2 — backfill `letterKindId` by matching the existing `letterType` enum value
+- [X] T029 Migration step 2 — backfill `letterKindId` by matching the existing `letterType` enum value
       to the seeded key, then `SET NOT NULL` and add the foreign key with `onDelete: Restrict`
-- [ ] T030 Migration step 3 — drop the `letterType` column and `enum LetterType`
-- [ ] T031 Move `GeneratedLetter` from `recruitment` to `shared` and rename to `IssuedLetter`:
+- [X] T030 Migration step 3 — drop the `letterType` column and `enum LetterType`
+- [X] T031 Move `GeneratedLetter` from `recruitment` to `shared` and rename to `IssuedLetter`:
       `ALTER TABLE "recruitment"."GeneratedLetter" SET SCHEMA "shared"` plus the rename, and
       regenerate the Prisma client (research §2)
-- [ ] T032 Add `subjectType String?` / `subjectId String?` to `IssuedLetter`, plus `signatoryId`,
+- [X] T032 Add `subjectType String?` / `subjectId String?` to `IssuedLetter`, plus `signatoryId`,
       `appliedSignatureRef`, `countersignedRef`, `countersignedAt`. Keep `employeeId` / `candidateId`
       untouched so Recruitment's behaviour does not change
-- [ ] T033 Hand-author the CHECK constraint enforcing **exactly one addressing form** per row
+- [X] T033 Hand-author the CHECK constraint enforcing **exactly one addressing form** per row
       (data-model.md). Without it "who is this letter for?" stops having one answer
-- [ ] T034 Hand-author RLS for `LetterKind`, `Signatory` and `IssuedLetter`. `LetterKind` needs the
+- [X] T034 Hand-author RLS for `LetterKind`, `Signatory` and `IssuedLetter`. `LetterKind` needs the
       `ReminderRule` variant that also admits `"companyId" IS NULL`
-- [ ] T035 **REGRESSION GATE** — run the full existing suite and confirm Recruitment's offer and
+- [X] T035 **REGRESSION GATE** — run the full existing suite and confirm Recruitment's offer and
       appointment letters still issue, render and list exactly as before. If anything here fails, the
       move is wrong; do not proceed into Phase 6 with it red
-- [ ] T036 [P] Unit-test that every `LetterKind.approvalActionType` string **equals** a constant
+- [X] T036 [P] Unit-test that every `LetterKind.approvalActionType` string **equals** a constant
       exported from `src/approvals/default-chains.ts`. Two files agreeing today is not a guarantee
       they agree after the next edit
-- [ ] T037 e2e: prove the CHECK constraint refuses a row with both addressing forms and a row with
+- [X] T037 e2e: prove the CHECK constraint refuses a row with both addressing forms and a row with
       neither
 
 **Checkpoint**: letters can address anything, Recruitment is unbroken, and the enum is gone.

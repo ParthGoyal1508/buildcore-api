@@ -69,6 +69,12 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
     // Phase 1. If a business module changed at all during this feature, that is worth a
     // person looking at, whatever the tests say.
     //
+    // FEATURES AFTER 016 ARE EXCLUDED BY PATH, not by relaxing the assertion. 017 US2
+    // adds project document readiness, which genuinely belongs in `src/projects` — so
+    // those paths are listed below and everything else in every business module stays
+    // guarded. The alternative, deleting this check once a later feature touched a
+    // business module, would throw away the guard the first time it became inconvenient.
+    //
     // Skipped rather than failed outside a git checkout — a packaged build has no
     // history to consult, and a test that cannot run must not masquerade as one that
     // passed.
@@ -88,6 +94,12 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           'src/assets',
           'src/plant',
           'src/partners',
+          // Owned by 017 US2 (project document readiness), not by anything in 016.
+          ':(exclude)src/projects/documents',
+          ':(exclude)src/projects/projects.module.ts',
+          ':(exclude)src/projects/portfolio/projects.service.ts',
+          ':(exclude)src/projects/portfolio/projects.service.spec.ts',
+          ':(exclude)src/projects/portfolio/dto/project.dto.ts',
         ],
         {
           cwd: REPO_ROOT,

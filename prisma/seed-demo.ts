@@ -2615,6 +2615,15 @@ async function main() {
     // One active template per type. Generation refuses outright without one, so a
     // demo missing them has a Letters screen that can only produce an error.
     const templates = new Map<string, string>();
+
+    // 017 §1: `letterType` was an enum and is now a `LetterKind` row. The keys are
+    // byte-identical to the old enum values, so the strings below did not change —
+    // only the indirection did.
+    const letterKinds = new Map(
+      (await prisma.letterKind.findMany({ where: { companyId: null } })).map(
+        (k) => [k.key, k.id],
+      ),
+    );
     for (const t of [
       {
         type: 'offer' as const,
@@ -2648,7 +2657,7 @@ async function main() {
       const row = await prisma.letterTemplate.create({
         data: {
           companyId: company.id,
-          letterType: t.type,
+          letterKindId: letterKinds.get(t.type)!,
           name: t.name,
           bodyTemplate: t.body,
           isActive: true,
@@ -2963,10 +2972,10 @@ async function main() {
         const accepted = reached >= HIRING_PATH.indexOf('offer_accepted');
 
         const letter = canWriteBlobs
-          ? await prisma.generatedLetter.create({
+          ? await prisma.issuedLetter.create({
               data: {
                 companyId: company.id,
-                letterType: 'offer',
+                letterKindId: letterKinds.get('offer')!,
                 candidateId: candidate.id,
                 templateId: templates.get('offer')!,
                 renderedRef: await writeLetterPdf(
@@ -3034,10 +3043,10 @@ async function main() {
       if (joined && employee) {
         const req = reqPlan[c.req];
         if (canWriteBlobs) {
-          await prisma.generatedLetter.create({
+          await prisma.issuedLetter.create({
             data: {
               companyId: company.id,
-              letterType: 'appointment',
+              letterKindId: letterKinds.get('appointment')!,
               employeeId: employee.id,
               candidateId: candidate.id,
               templateId: templates.get('appointment')!,

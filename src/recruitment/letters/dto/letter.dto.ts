@@ -1,18 +1,24 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { LetterType } from '@prisma/client';
 import {
   IsBoolean,
-  IsEnum,
   IsNotEmpty,
   IsOptional,
   IsString,
+  MinLength,
 } from 'class-validator';
 
 export class CreateLetterTemplateDto {
   @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
-  @ApiProperty({ enum: LetterType })
-  @IsEnum(LetterType)
-  letterType!: LetterType;
+  @ApiProperty({
+    description:
+      "The letter kind's key — `offer`, `appointment`, `relieving`. A plain string " +
+      'since 017: kinds are rows now (FR-011), so an enum here would reject any kind ' +
+      'defined after this code shipped. The five original values are unchanged.',
+    example: 'appointment',
+  })
+  @IsString()
+  @MinLength(1)
+  letterType!: string;
   @ApiProperty() @IsString() @IsNotEmpty() name!: string;
   @ApiProperty({ description: 'Body with {{token}} substitutions' })
   @IsString()
@@ -30,8 +36,15 @@ export class UpdateLetterTemplateDto {
 }
 
 export class GenerateLetterDto {
-  @ApiProperty({ enum: LetterType })
-  @IsEnum(LetterType)
-  letterType!: LetterType;
+  @ApiProperty({
+    description:
+      "The letter kind's key — `offer`, `appointment`, `relieving`. A plain string " +
+      'since 017: kinds are rows now (FR-011), so an enum here would reject any kind ' +
+      'defined after this code shipped. The five original values are unchanged.',
+    example: 'appointment',
+  })
+  @IsString()
+  @MinLength(1)
+  letterType!: string;
   @ApiProperty() @IsString() @IsNotEmpty() employeeId!: string;
 }
