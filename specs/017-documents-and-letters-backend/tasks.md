@@ -185,53 +185,53 @@ be verified as a regression before any letter story builds on it.
 
 ## Phase 6: US3 — Fifteen kinds, drafted once, issued many times (P1)
 
-- [ ] T038 [P] [US3] DTOs for issue and reissue in `src/letters/dto/`
-- [ ] T039 [US3] Implement `template-resolver.ts` — resolves variables for a kind, and **refuses any
+- [X] T038 [P] [US3] DTOs for issue and reissue in `src/letters/dto/`
+- [X] T039 [US3] Implement `template-resolver.ts` — resolves variables for a kind, and **refuses any
       restricted `DocumentType` structurally** so the rule holds for kinds nobody has defined yet
       (research §6). Code `DOCUMENT_TYPE_RESTRICTED`
-- [ ] T040 [US3] Implement `LettersService.issue()` in `src/letters/letters.service.ts` per contract
+- [X] T040 [US3] Implement `LettersService.issue()` in `src/letters/letters.service.ts` per contract
       Part 1, rendering through the existing storage path
-- [ ] T041 [US3] Gate issue on 016: when the kind's `requiresApproval` is true, call
+- [X] T041 [US3] Gate issue on 016: when the kind's `requiresApproval` is true, call
       `ApprovalService.assertMayTakeEffect`. **Do not reimplement the check** (FR-015a) — reuse 016's
       `APPROVAL_NOT_COMPLETE` code rather than inventing one
-- [ ] T042 [US3] Implement `reissue()` — supersede, never overwrite; both versions stay retrievable
+- [X] T042 [US3] Implement `reissue()` — supersede, never overwrite; both versions stay retrievable
       (FR-014)
-- [ ] T043 [US3] Implement `LettersController` per contract Part 2. There is **no single `LETTERS`
+- [X] T043 [US3] Implement `LettersController` per contract Part 2. There is **no single `LETTERS`
       permission** — the guard resolves per kind, for the same reason 016 has no `APPROVALS`
       permission
-- [ ] T044 [P] [US3] Unit-test that the resolver refuses a restricted type **for a letter kind created
+- [X] T044 [P] [US3] Unit-test that the resolver refuses a restricted type **for a letter kind created
       at test time**, not only for the seeded ones
-- [ ] T045 [P] [US3] Unit-test that `issue()` calls `assertMayTakeEffect` for gated kinds and does not
+- [X] T045 [P] [US3] Unit-test that `issue()` calls `assertMayTakeEffect` for gated kinds and does not
       for ungated ones
-- [ ] T046 [US3] e2e in `test/letters.e2e-spec.ts`: a work order refused `409 APPROVAL_NOT_COMPLETE`
+- [X] T046 [US3] e2e in `test/letters.e2e-spec.ts`: a work order refused `409 APPROVAL_NOT_COMPLETE`
       while its chain is pending, then issued after the director approves
 
 ---
 
 ## Phase 7: US5 — New kinds without a developer (P2)
 
-- [ ] T047 [P] [US5] DTOs for letter-kind and template CRUD
-- [ ] T048 [US5] Implement letter-kind CRUD in `src/settings/letter-kinds/`, guarded by `SETTINGS`
-- [ ] T049 [US5] Refuse deleting a kind while issued letters reference it — `409 LETTER_KIND_IN_USE`.
+- [X] T047 [P] [US5] DTOs for letter-kind and template CRUD
+- [X] T048 [US5] Implement letter-kind CRUD in `src/settings/letter-kinds/`, guarded by `SETTINGS`
+- [X] T049 [US5] Refuse deleting a kind while issued letters reference it — `409 LETTER_KIND_IN_USE`.
       The FK `onDelete: Restrict` is the real guard; the service check is the legible message
-- [ ] T050 [US5] Point `LetterTemplate` CRUD at `letterKindId` instead of the dropped enum
-- [ ] T051 [P] [US5] e2e: define a brand-new kind **without a code change**, issue a letter of it, then
+- [X] T050 [US5] Point `LetterTemplate` CRUD at `letterKindId` instead of the dropped enum
+- [X] T051 [P] [US5] e2e: define a brand-new kind **without a code change**, issue a letter of it, then
       fail to delete the kind
 
 ---
 
 ## Phase 8: US4 — Signed, and the signed copy comes back (P2)
 
-- [ ] T052 [P] [US4] Add `model Signatory` to the `settings` schema and its DTOs
-- [ ] T053 [US4] Implement signatory CRUD with signature-image upload through `StorageService`
-- [ ] T054 [US4] Apply the signature at issue for kinds with `requiresSignature`, and record **both**
+- [X] T052 [P] [US4] Add `model Signatory` to the `settings` schema and its DTOs
+- [X] T053 [US4] Implement signatory CRUD with signature-image upload through `StorageService`
+- [X] T054 [US4] Apply the signature at issue for kinds with `requiresSignature`, and record **both**
       `signatoryId` and `appliedSignatureRef` — the graphic as applied (research §5)
-- [ ] T055 [US4] Implement countersigned-copy upload (FR-017) and the issued-vs-executed distinction
+- [X] T055 [US4] Implement countersigned-copy upload (FR-017) and the issued-vs-executed distinction
       (FR-018)
-- [ ] T056 [P] [US4] Unit-test FR-013 directly: issue with signatory A, **replace A's graphic**,
+- [X] T056 [P] [US4] Unit-test FR-013 directly: issue with signatory A, **replace A's graphic**,
       re-render the original letter, assert it still carries the signature as applied. This is the
       test that catches a `signatoryId`-only implementation
-- [ ] T057 [US4] e2e: issue → download → upload countersigned → confirm both remain distinguishable
+- [X] T057 [US4] e2e: issue → download → upload countersigned → confirm both remain distinguishable
 
 ---
 
@@ -246,11 +246,11 @@ be verified as a regression before any letter story builds on it.
 
 ## Phase 10: US6 — Letters where the work is (P3)
 
-- [ ] T061 [US6] Implement `GET /letters?subjectType=&subjectId=` — returns the opaque pair,
+- [X] T061 [US6] Implement `GET /letters?subjectType=&subjectId=` — returns the opaque pair,
       **never resolves it** into a vendor or project (research §2)
-- [ ] T062 [US6] Expose a service method so project and candidate screens list their letters through
+- [X] T062 [US6] Expose a service method so project and candidate screens list their letters through
       the letters module rather than querying `shared.IssuedLetter` (Principle I)
-- [ ] T063 [P] [US6] e2e: letters listed for a project and for a candidate
+- [X] T063 [P] [US6] e2e: letters listed for a project and for a candidate
 
 ---
 
