@@ -12,10 +12,14 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
-import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  rlsContextFor,
+  withRlsContext,
+  type RlsContext,
+} from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../company-scope';
 import { DEFAULT_DOCUMENT_TYPES } from './default-document-types';
-import { scopeForCode } from '../document-kinds';
+import { scopeForCode, type RequiredDocumentKind } from '../document-kinds';
 import {
   DocumentTypeFlag,
   computeDocumentTypeFlag,
@@ -239,6 +243,81 @@ export class DocumentTypesService {
    * need the master by id — the same shape `hasMissingMandatoryDocs` below takes.
    * Exposing this keeps `hr` out of the `settings` schema (Principle I).
    */
+  /**
+   * Brings a kind this product *declares* into existence for a company (FR-003a, FR-007a).
+   *
+   * Lives here because this service owns `settings.DocumentType`. Every field of the row
+   * comes from the `RequiredDocumentKind` handed in, so a caller supplies no name, no
+   * flags and no scope — only which declared kind to materialise.
+   *
+   * **It validates no code set of its own, deliberately.** Each caller resolves against
+   * the set it is entitled to: company documents against the eight under
+   * `COMPANY_SETTINGS`, project requirements against the six under `SETTINGS`. A shared
+   * method checking the union of both would quietly hand each surface the other's list,
+   * which is the permission boundary this arrangement exists to hold (plan D8).
+   *
+   * Idempotent: two administrators clicking at the same moment produce one type and two
+   * successful responses, not a unique violation on `(companyId, code)`.
+   */
+  async defineDeclaredKind(
+    ctx: RlsContext,
+    companyId: string,
+    kind: RequiredDocumentKind,
+    actor: { userId: string; ipAddress: string },
+  ): Promise<{ documentTypeId: string; code: string; name: string }> {
+    const existing = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.documentType.findFirst({
+        where: { companyId, code: kind.code },
+        select: { id: true, code: true, name: true },
+      }),
+    );
+    if (existing) {
+      return {
+        documentTypeId: existing.id,
+        code: existing.code,
+        name: existing.name,
+      };
+    }
+
+    const created = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.documentType.create({
+        data: {
+          companyId,
+          code: kind.code,
+          name: kind.label,
+          isMandatory: false,
+          hasExpiry: kind.hasExpiry,
+          needsNumber: kind.needsNumber,
+          isRestricted: kind.isRestricted ?? false,
+          // Aadhaar and PAN come out `both`: required of the company and held on an
+          // employee's file. The rule is `scopeForCode`, shared with the backfill.
+          scope: scopeForCode(kind.code, DEFAULT_DOCUMENT_TYPE_CODES),
+          // Below the defaults seeded at company creation, which start at 10 and step by
+          // ten. A statutory paper defined later belongs after the employee file rather
+          // than interleaved with it.
+          sortOrder: 500,
+        },
+        select: { id: true, code: true, name: true },
+      }),
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DOCUMENT_TYPE,
+      action: AuditAction.CREATE,
+      entityId: created.id,
+      changes: { documentTypeCode: created.code, definedFor: 'declared-kind' },
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return {
+      documentTypeId: created.id,
+      code: created.code,
+      name: created.name,
+    };
+  }
+
   async listForCompany(companyId: string): Promise<DocumentType[]> {
     return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.documentType.findMany({

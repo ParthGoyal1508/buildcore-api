@@ -15,4 +15,17 @@
  */
 export const PROJECT_DOCUMENT_TYPE_UNKNOWN = 'PROJECT_DOCUMENT_TYPE_UNKNOWN';
 
-export type ProjectDocumentErrorCode = typeof PROJECT_DOCUMENT_TYPE_UNKNOWN;
+/**
+ * A code outside the declared PROJECT set was passed to the kind materialiser (FR-007a).
+ *
+ * The route exists so a `SETTINGS` holder can bring one of the six kinds FR-007 names
+ * into existence. Refusing everything else is what keeps it from reaching the company's
+ * eight — which live behind `COMPANY_SETTINGS` — or arbitrary document-type creation,
+ * which lives behind `EMPLOYEES`.
+ */
+export const PROJECT_DOCUMENT_KIND_NOT_REQUIRED =
+  'PROJECT_DOCUMENT_KIND_NOT_REQUIRED';
+
+export type ProjectDocumentErrorCode =
+  | typeof PROJECT_DOCUMENT_TYPE_UNKNOWN
+  | typeof PROJECT_DOCUMENT_KIND_NOT_REQUIRED;

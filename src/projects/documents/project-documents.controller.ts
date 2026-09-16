@@ -3,6 +3,8 @@ import {
   Controller,
   Get,
   Ip,
+  Param,
+  Post,
   Put,
   Query,
   UseGuards,
@@ -81,6 +83,32 @@ export class ProjectDocumentsController {
       rlsContextFor(caller),
       resolveCompanyId(caller, companyId),
       dto,
+      { userId: caller.id, ipAddress },
+    );
+  }
+
+  @Post('kinds/:code')
+  @RequirePermissions(Permission.SETTINGS)
+  @ApiOperation({
+    summary: 'Bring a declared project document kind into existence (FR-007a)',
+    description:
+      'For a code `undefinedCodes` reports — a kind FR-007 names that this company has ' +
+      'no document type for, so it cannot be required yet. Name, flags and scope come ' +
+      'from `REQUIRED_PROJECT_DOCUMENT_KINDS`; the request supplies only the code. A ' +
+      'code outside that set is refused with `PROJECT_DOCUMENT_KIND_NOT_REQUIRED` — the ' +
+      "company's own required kinds are a different set behind a different permission. " +
+      'Idempotent.',
+  })
+  async defineKind(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('code') code: string,
+    @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.documents.defineRequiredKind(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      code,
       { userId: caller.id, ipAddress },
     );
   }

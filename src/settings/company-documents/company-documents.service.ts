@@ -17,6 +17,7 @@ import {
   scopeForCode,
 } from '../document-kinds';
 import { DEFAULT_DOCUMENT_TYPES } from '../reference-data/default-document-types';
+import { DocumentTypesService } from '../reference-data/document-types.service';
 import {
   DOCUMENT_EXPIRY_REQUIRED,
   DOCUMENT_KIND_NOT_REQUIRED,
@@ -93,6 +94,10 @@ export class CompanyDocumentsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly audit: AuditLogService,
+    // Owns `settings.DocumentType`. Creating a declared kind goes through it rather than
+    // being written here, so the two surfaces that may do so share one implementation and
+    // differ only in which set each is entitled to resolve against (plan D8).
+    private readonly documentTypes: DocumentTypesService,
   ) {}
 
   /**
@@ -219,6 +224,10 @@ export class CompanyDocumentsService {
     actor: { userId: string; ipAddress: string },
   ): Promise<{ documentTypeId: string; code: string; name: string }> {
     const normalised = code.trim().toUpperCase();
+    // Resolved against the COMPANY set only, here, by the surface entitled to it. The
+    // service that actually creates the row validates no code set of its own — see
+    // `DocumentTypesService.defineDeclaredKind` — precisely so that this guard and the
+    // project surface's guard cannot leak into each other (plan D8).
     const kind = REQUIRED_COMPANY_DOCUMENT_KINDS.find(
       (k) => k.code.toUpperCase() === normalised,
     );
@@ -233,60 +242,7 @@ export class CompanyDocumentsService {
       });
     }
 
-    const existing = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.documentType.findFirst({
-        where: { companyId, code: kind.code },
-        select: { id: true, code: true, name: true },
-      }),
-    );
-    if (existing) {
-      return {
-        documentTypeId: existing.id,
-        code: existing.code,
-        name: existing.name,
-      };
-    }
-
-    const created = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.documentType.create({
-        data: {
-          companyId,
-          code: kind.code,
-          name: kind.label,
-          isMandatory: false,
-          hasExpiry: kind.hasExpiry,
-          needsNumber: kind.needsNumber,
-          isRestricted: kind.isRestricted ?? false,
-          // Aadhaar and PAN come out `both`: required of the company and held on an
-          // employee's file. The rule is `scopeForCode`, shared with the backfill.
-          scope: scopeForCode(kind.code, DEFAULT_DOCUMENT_TYPE_CODES),
-          // Below the defaults seeded at company creation, which start at 10 and step by
-          // ten. A statutory paper defined later belongs after the employee file rather
-          // than interleaved with it.
-          sortOrder: 500,
-        },
-        select: { id: true, code: true, name: true },
-      }),
-    );
-
-    await this.audit.record({
-      entityType: AuditEntityType.COMPANY,
-      action: AuditAction.CREATE,
-      entityId: created.id,
-      changes: {
-        documentTypeCode: created.code,
-        definedFor: 'company-document',
-      },
-      accountId: actor.userId,
-      companyId,
-      ipAddress: actor.ipAddress,
-    });
-
-    return {
-      documentTypeId: created.id,
-      code: created.code,
-      name: created.name,
-    };
+    return this.documentTypes.defineDeclaredKind(ctx, companyId, kind, actor);
   }
 
   /**

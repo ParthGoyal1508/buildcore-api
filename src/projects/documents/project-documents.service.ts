@@ -6,7 +6,10 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
-import { PROJECT_DOCUMENT_TYPE_UNKNOWN } from './project-document-error-codes';
+import {
+  PROJECT_DOCUMENT_KIND_NOT_REQUIRED,
+  PROJECT_DOCUMENT_TYPE_UNKNOWN,
+} from './project-document-error-codes';
 import { SetProjectDocumentRequirementsDto } from './dto/project-document-requirement.dto';
 
 /** One configured requirement, with the words a person reads. */
@@ -34,6 +37,23 @@ export interface ProjectDocumentRequirementSet {
    * be there.
    */
   undefinedCodes: string[];
+  /**
+   * The kinds that MAY be required — the organisation's paperwork this company has
+   * defined, whether or not it is currently required (FR-007a).
+   *
+   * The set was configurable through `PUT` from the day this feature shipped and was
+   * unreachable from any interface anyway, because naming a requirement meant knowing a
+   * document type's internal identifier. This is the list that makes an editor possible.
+   *
+   * Scoped to `company | both`: an employee's marksheet is not something a project holds,
+   * and offering it would be the same mixing `DocumentType.scope` exists to end.
+   */
+  availableTypes: {
+    documentTypeId: string;
+    code: string;
+    name: string;
+    isRequired: boolean;
+  }[];
 }
 
 /** How far one project is from fully papered (FR-008). */
@@ -91,7 +111,12 @@ export class ProjectDocumentsService {
           isMandatory: requirement.isMandatory,
         });
       }
-      return { requirements, usingDefaults: false, undefinedCodes: [] };
+      return {
+        requirements,
+        usingDefaults: false,
+        undefinedCodes: [],
+        availableTypes: this.availableFrom(types, requirements),
+      };
     }
 
     // Nothing configured: the FR-007 shipped set applies. Matched on `code`, because
@@ -112,7 +137,80 @@ export class ProjectDocumentsService {
         undefinedCodes.push(kind.code);
       }
     }
-    return { requirements, usingDefaults: true, undefinedCodes };
+    return {
+      requirements,
+      usingDefaults: true,
+      undefinedCodes,
+      availableTypes: this.availableFrom(types, requirements),
+    };
+  }
+
+  /**
+   * The kinds available to require, from rows `listRequirements` already has.
+   *
+   * Filtered HERE rather than by narrowing `DocumentTypesService.listForCompany`: `hr`
+   * resolves an employee's document types through that same method, and a scope filter
+   * there would silently drop rows already attached to employee records. What may be
+   * required of a project is this surface's decision, not the master fetch's (plan D5).
+   *
+   * A mapping over rows in hand, so `listRequirements` still makes the same two calls it
+   * always did — the thing a later "let me just fetch the types" refactor would break.
+   */
+  private availableFrom(
+    types: {
+      id: string;
+      code: string;
+      name: string;
+      scope: string;
+      isActive: boolean;
+    }[],
+    requirements: ProjectDocumentRequirementView[],
+  ): ProjectDocumentRequirementSet['availableTypes'] {
+    const required = new Set(requirements.map((r) => r.documentTypeId));
+    return types
+      .filter((t) => t.isActive && t.scope !== 'employee')
+      .map((t) => ({
+        documentTypeId: t.id,
+        code: t.code,
+        name: t.name,
+        isRequired: required.has(t.id),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Materialises a declared PROJECT kind the company has no document type for (FR-007a).
+   *
+   * The state `undefinedCodes` reports: a kind FR-007 names, which this company cannot
+   * require because nothing represents it. Reporting it without offering the one action
+   * that resolves it is the gap this closes.
+   *
+   * Resolved against `REQUIRED_PROJECT_DOCUMENT_KINDS` **here**, by the surface entitled
+   * to it. `DocumentTypesService.defineDeclaredKind` validates no code set of its own, so
+   * a `SETTINGS` holder reaching this route can materialise a project kind and nothing
+   * else — not the company's eight, which live behind `COMPANY_SETTINGS`, and not a kind
+   * of their own invention (plan D8).
+   */
+  async defineRequiredKind(
+    ctx: RlsContext,
+    companyId: string,
+    code: string,
+    actor: { userId: string; ipAddress: string },
+  ): Promise<{ documentTypeId: string; code: string; name: string }> {
+    const normalised = code.trim().toUpperCase();
+    const kind = REQUIRED_PROJECT_DOCUMENT_KINDS.find(
+      (k) => k.code.toUpperCase() === normalised,
+    );
+    if (!kind) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message:
+          `"${code}" is not one of the required project document kinds. This route ` +
+          `only brings a declared kind into existence.`,
+        code: PROJECT_DOCUMENT_KIND_NOT_REQUIRED,
+      });
+    }
+    return this.documentTypes.defineDeclaredKind(ctx, companyId, kind, actor);
   }
 
   /**

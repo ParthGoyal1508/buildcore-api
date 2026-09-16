@@ -537,23 +537,23 @@ required kind that has no type and upload against it.
 - [ ] T099 [US2] `CompanyDocumentsService.defineRequiredKind` delegates to it, still resolving
   against `REQUIRED_COMPANY_DOCUMENT_KINDS`. Its existing refusal test must pass **unchanged** — if
   it needs editing, the permission boundary moved and that is the bug.
-- [ ] T100 [US2] `listRequirements` returns `availableTypes`, filtered to `company | both` from the
+- [X] T100 [US2] `listRequirements` returns `availableTypes`, filtered to `company | both` from the
   `scope` already on the rows it fetches. Do NOT add a scope filter to `listForCompany`: `hr`
   resolves employee document types through it and would silently lose rows (plan D5).
-- [ ] T101 [P] [US2] Unit test: `availableTypes` excludes an employee-scoped kind and includes a
+- [X] T101 [P] [US2] Unit test: `availableTypes` excludes an employee-scoped kind and includes a
   `both`-scoped one, and `listRequirements` still makes the same number of calls it did before —
   the addition is a mapping over rows already fetched, and a follow-up query is what a later
   "small refactor" would introduce.
-- [ ] T102 [US2] `POST /projects/document-requirements/kinds/:code` under `Permission.SETTINGS`,
+- [X] T102 [US2] `POST /projects/document-requirements/kinds/:code` under `Permission.SETTINGS`,
   resolving against `REQUIRED_PROJECT_DOCUMENT_KINDS` and delegating to T098. A code outside that
   set is refused.
-- [ ] T103 [P] [US2] Unit test for T102's refusal — **the one that matters**: a `SETTINGS` holder
+- [X] T103 [P] [US2] Unit test for T102's refusal — **the one that matters**: a `SETTINGS` holder
   must not be able to reach the company's declared kinds, or arbitrary type creation, through this
   route. Assert a company-only code (`GST`) is refused here, and that the created row's name, flags
   and scope come from configuration.
-- [ ] T104 [P] [US2] e2e in `test/project-documents.e2e-spec.ts`: read the set, add a requirement,
+- [X] T104 [P] [US2] e2e in `test/project-documents.e2e-spec.ts`: read the set, add a requirement,
   toggle one to optional, remove one, save, read it back; then materialise an undefined project kind
   and confirm it becomes requirable. Include the case the screen depends on — a company running on
   defaults whose first save writes the six rows.
-- [ ] T105 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T105 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
   Baseline to beat: 933 unit / 90 suites, 445 e2e / 22 suites.

@@ -365,4 +365,247 @@ describe('Project documents (e2e)', () => {
       missingTypeIds: [],
     });
   });
+
+  /**
+   * FR-007a. The set has been writable over HTTP since this feature shipped; what no
+   * interface had was the list that makes naming a requirement possible without knowing
+   * a document type's internal identifier.
+   */
+  describe('configuring the set (FR-007a)', () => {
+    /** A company of its own, so deleting and defining types cannot disturb the fixtures above. */
+    let cfgCompanyId: string;
+    let cfgToken: string;
+
+    beforeAll(async () => {
+      const company = await sys.company.create({
+        data: {
+          name: `${PREFIX} Config Constructions`,
+          shortCode: unique('C').slice(0, 10),
+          payrollLockDay: 7,
+          pfEmployerRate: 12,
+          esicEmployerRate: 3.25,
+          gratuityRate: 4.81,
+          bonusRate: 8.33,
+        },
+      });
+      cfgCompanyId = company.id;
+
+      // Five of the six, so `undefinedCodes` has the sixth to report and the materialiser
+      // has something to materialise.
+      for (const kind of REQUIRED_PROJECT_DOCUMENT_KINDS) {
+        if (kind.code === 'MINING_PERMISSION') continue;
+        await sys.documentType.create({
+          data: {
+            companyId: cfgCompanyId,
+            code: kind.code,
+            name: kind.label,
+            scope: 'company',
+          },
+        });
+      }
+      // An employee kind, to prove the picker excludes it.
+      await sys.documentType.create({
+        data: {
+          companyId: cfgCompanyId,
+          code: 'MARKSHEET_10',
+          name: '10th Marksheet',
+          scope: 'employee',
+        },
+      });
+
+      const user = await sys.user.create({
+        data: {
+          email: `${unique('cfg')}@example.test`.toLowerCase(),
+          username: unique('cfg'),
+          password: await hash('secret42'),
+          companyId: cfgCompanyId,
+          status: 'active',
+        },
+      });
+      userIds.push(user.id);
+      const role = await sys.role.create({
+        data: {
+          name: unique('CfgRole'),
+          permissions: [Permission.PROJECTS, Permission.SETTINGS],
+        },
+      });
+      roleIds.push(role.id);
+      await sys.userRole.create({
+        data: { userId: user.id, roleId: role.id, companyId: cfgCompanyId },
+      });
+      cfgToken = (
+        await http()
+          .post('/auth/login')
+          .send({
+            identifier: user.email,
+            password: 'secret42',
+            rememberMe: false,
+          })
+          .expect(201)
+      ).body.accessToken;
+    }, 120_000);
+
+    afterAll(async () => {
+      await sys.projectDocumentRequirement.deleteMany({
+        where: { companyId: cfgCompanyId },
+      });
+      await sys.documentType.deleteMany({ where: { companyId: cfgCompanyId } });
+      await sys.auditLogEntry.deleteMany({
+        where: { companyId: cfgCompanyId },
+      });
+      await sys.refreshToken.deleteMany({ where: { companyId: cfgCompanyId } });
+      await sys.company.deleteMany({ where: { id: cfgCompanyId } });
+    }, 60_000);
+
+    it('reports what may be required, excluding the employee file', async () => {
+      const res = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const codes = res.body.availableTypes.map(
+        (t: { code: string }) => t.code,
+      );
+      expect(codes).toContain('LOI');
+      expect(codes).not.toContain('MARKSHEET_10');
+      expect(res.body.undefinedCodes).toContain('MINING_PERMISSION');
+      expect(res.body.usingDefaults).toBe(true);
+    });
+
+    /**
+     * The state the screen depends on: a company running on the shipped defaults, whose
+     * first save turns them into rows of its own. No endpoint exists for "adopt the
+     * defaults" — the ordinary PUT does it, because it replaces rather than merges.
+     */
+    it('adopts the defaults on the first save, then reports the set as configured', async () => {
+      const before = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(before.body.usingDefaults).toBe(true);
+
+      await http()
+        .put(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .send({
+          requirements: before.body.requirements.map(
+            (r: { documentTypeId: string }) => ({
+              documentTypeId: r.documentTypeId,
+              isMandatory: true,
+            }),
+          ),
+        })
+        .expect(200);
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(after.body.usingDefaults).toBe(false);
+      expect(after.body.requirements).toHaveLength(
+        before.body.requirements.length,
+      );
+    });
+
+    it('moves a kind to optional, removes another, and reads both back', async () => {
+      const current = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const rows = current.body.requirements as {
+        documentTypeId: string;
+        code: string;
+      }[];
+      const dropped = rows.find((r) => r.code === 'BOQ')!;
+      const optional = rows.find((r) => r.code === 'INSURANCE')!;
+
+      await http()
+        .put(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .send({
+          requirements: rows
+            .filter((r) => r.documentTypeId !== dropped.documentTypeId)
+            .map((r) => ({
+              documentTypeId: r.documentTypeId,
+              isMandatory: r.documentTypeId !== optional.documentTypeId,
+            })),
+        })
+        .expect(200);
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const byCode = new Map(
+        (
+          after.body.requirements as { code: string; isMandatory: boolean }[]
+        ).map((r) => [r.code, r.isMandatory]),
+      );
+      expect(byCode.has('BOQ')).toBe(false);
+      expect(byCode.get('INSURANCE')).toBe(false);
+      // And the dropped kind is offerable again, which is what makes removal reversible
+      // from the screen rather than a one-way door.
+      expect(
+        (
+          after.body.availableTypes as { code: string; isRequired: boolean }[]
+        ).find((t) => t.code === 'BOQ')?.isRequired,
+      ).toBe(false);
+    });
+
+    it('materialises the undefined kind, which then becomes requirable', async () => {
+      const created = await http()
+        .post(
+          `/projects/document-requirements/kinds/MINING_PERMISSION?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(cfgToken))
+        .expect(201);
+      expect(created.body.code).toBe('MINING_PERMISSION');
+
+      const row = await sys.documentType.findUnique({
+        where: { id: created.body.documentTypeId },
+      });
+      // Company-scoped, so it stays out of the employee file — the same boundary the
+      // company-documents materialiser holds on its side.
+      expect(row.scope).toBe('company');
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(after.body.undefinedCodes).not.toContain('MINING_PERMISSION');
+      expect(
+        after.body.availableTypes.map((t: { code: string }) => t.code),
+      ).toContain('MINING_PERMISSION');
+    });
+
+    /**
+     * The assertion that matters. This route creates a `settings.DocumentType` under
+     * `SETTINGS`; it stays safe only because it resolves against the PROJECT set alone.
+     */
+    it('refuses a code from the company set, which a different permission owns', async () => {
+      const res = await http()
+        .post(
+          `/projects/document-requirements/kinds/GST?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(cfgToken))
+        .expect(400);
+      expect(res.body.code).toBe('PROJECT_DOCUMENT_KIND_NOT_REQUIRED');
+
+      const leaked = await sys.documentType.findFirst({
+        where: { companyId: cfgCompanyId, code: 'GST' },
+      });
+      expect(leaked).toBeNull();
+    });
+
+    it('refuses the kind route without SETTINGS', async () => {
+      await http()
+        .post(
+          `/projects/document-requirements/kinds/LOI?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(readerToken))
+        .expect(403);
+    });
+  });
 });

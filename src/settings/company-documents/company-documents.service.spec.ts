@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 
 import { DOCUMENT_KIND_NOT_REQUIRED } from './company-document-error-codes';
 import { CompanyDocumentsService } from './company-documents.service';
+import { DocumentTypesService } from '../reference-data/document-types.service';
 import { REQUIRED_COMPANY_DOCUMENT_KINDS } from '../document-kinds';
 
 const COMPANY = 'co-1';
@@ -104,8 +105,24 @@ function harness(
   const audit: any = { record: jest.fn().mockResolvedValue(undefined) };
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const service = new CompanyDocumentsService(prisma, storage, audit);
-  return { service, calls, tx, storage, audit };
+  /**
+   * A real `DocumentTypesService` on the same mock, not a stub.
+   *
+   * `defineRequiredKind` resolves the code here and delegates the creation there, and
+   * the interesting claims — that the row's fields come from configuration and that a
+   * second call creates nothing — are about what the delegate does. Stubbing it would
+   * leave those tests asserting that a mock was called with arguments, which is a
+   * different and much weaker statement.
+   */
+  const documentTypes = new DocumentTypesService(prisma, audit);
+
+  const service = new CompanyDocumentsService(
+    prisma,
+    storage,
+    audit,
+    documentTypes,
+  );
+  return { service, calls, tx, storage, audit, documentTypes };
 }
 
 const ctx = { isSuperAdmin: false, companyId: COMPANY };
