@@ -57,17 +57,11 @@ abstract class PendingModuleRule implements ReminderRuleProvider {
   }
 }
 
-/** Feature 002's company-documents amendment (FR-036). */
-@ReminderRule()
-export class CompanyDocumentExpiryRule extends PendingModuleRule {
-  readonly ruleKey = 'settings-company-document-expiry';
-  readonly sourceModule = 'settings';
-  readonly type = 'document_expiry';
-  readonly entityType = 'COMPANY_DOCUMENT';
-  /** Statutory registrations take weeks to renew, so the warning band is wider. */
-  readonly leadDays = 60;
-  readonly severityLadder: ReminderSeverityLadder = { warnWithinDays: 14 };
-}
+// Feature 002's company-documents amendment used to be declared here as a placeholder.
+// It is gone because 017 built the module: the real provider lives in
+// `src/settings/company-documents/company-document.reminder-rule.ts` and is discovered
+// from `SettingsModule`'s own providers array. Leaving the placeholder behind would
+// report the same `ruleKey` as available AND pending at once.
 
 // Feature 006's two rules — `machinery-document-expiry` and `machinery-service-due`
 // — used to be declared here as placeholders. They are gone because the module is
@@ -114,7 +108,6 @@ export class AssetOverdueReturnRule extends PendingModuleRule {
 
 /** Every placeholder, for the module's provider list. */
 export const UNBUILT_MODULE_RULES = [
-  CompanyDocumentExpiryRule,
   AssetDocumentExpiryRule,
   AssetInspectionDueRule,
   AssetOverdueReturnRule,

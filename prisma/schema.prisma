@@ -3905,6 +3905,16 @@ model Payment {
   /// `amount − allocatedAmount`, derived on read.
   allocatedAmount Decimal @default(0) @db.Decimal(18, 2)
 
+  /// The RTGS advice or transaction confirmation, through `StorageService` (017 US7,
+  /// FR-020). Nullable because a payment is recorded when the money moves and the
+  /// advice often arrives afterwards — refusing the payment until the proof exists
+  /// would push people to record it somewhere else.
+  ///
+  /// `referenceNumber` above is a number somebody typed. This is the document behind
+  /// it, which is the whole of what US7 closes.
+  proofRef        String?
+  proofUploadedAt DateTime?
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -3915,6 +3925,9 @@ model Payment {
 
   @@index([companyId])
   @@index([companyId, vendorId])
+  /// FR-021: which payments lack a proof, answered by an index rather than by reading
+  /// every payment a company ever made.
+  @@index([companyId, proofRef])
   @@schema("inventory")
 }
 

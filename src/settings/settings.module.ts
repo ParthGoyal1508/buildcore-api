@@ -28,6 +28,7 @@ import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 import { SkillCategoriesService } from './skill-categories/skill-categories.service';
 import { KitItemsService } from './kit-items/kit-items.service';
+import { CompanyDocumentExpiryRule } from './company-documents/company-document.reminder-rule';
 import { SignatoriesController } from './signatories/signatories.controller';
 import { SignatoriesService } from './signatories/signatories.service';
 import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
@@ -82,6 +83,9 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
     LetterTemplatesService,
     LetterKindsService,
     SignatoriesService,
+    // 017 FR-005. Discovered by the 004 reminder engine from this array — nothing in
+    // `src/dashboard/` knows this rule exists.
+    CompanyDocumentExpiryRule,
     // Declared so `CompaniesService` can seed the three asset masters for a new
     // company (012 US1). Not exported: `AssetsModule` declares its own instances,
     // the same arrangement the machinery masters have with `PlantModule`.

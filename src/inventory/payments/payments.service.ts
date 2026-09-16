@@ -9,6 +9,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -37,6 +38,15 @@ export interface PaymentView {
   /** `amount − allocatedAmount`. Positive when the payment exceeded what was owed. */
   unallocatedBalance: number;
   allocatedBillCount: number;
+  /**
+   * FR-021: whether the RTGS advice is attached.
+   *
+   * A boolean rather than the reference itself. The list needs to show which payments
+   * lack proof; handing every row a storage key would put an internal identifier on a
+   * screen for no reader's benefit.
+   */
+  hasProof: boolean;
+  proofUploadedAt: Date | null;
   createdAt: Date;
 }
 
@@ -85,6 +95,10 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly refs: InventoryRefsService,
+    // 017 US7. The same encrypted blob path every other document in this product uses —
+    // a second storage path for payment advices would be a second thing to encrypt,
+    // back up and rotate.
+    private readonly storage: StorageService,
   ) {}
 
   /** Rounds to paise. Every allocation arithmetic result goes through this, so a
@@ -213,6 +227,8 @@ export class PaymentsService {
       // is billed.
       unallocatedBalance: this.paise(dto.amount - created.allocatedAmount),
       allocatedBillCount: created.count,
+      hasProof: false,
+      proofUploadedAt: null,
       createdAt: created.payment.createdAt,
     };
   }
@@ -232,6 +248,10 @@ export class PaymentsService {
       deleted: false,
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       ...(query.paymentMode ? { paymentMode: query.paymentMode } : {}),
+      // FR-021, as a filter rather than a count. "14 payments lack proof" makes somebody
+      // scroll looking for them; `?missingProof=true` hands them the list.
+      ...(query.missingProof === true ? { proofRef: null } : {}),
+      ...(query.missingProof === false ? { proofRef: { not: null } } : {}),
       ...(query.dateFrom || query.dateTo
         ? {
             date: {
@@ -285,6 +305,8 @@ export class PaymentsService {
           allocatedAmount: allocated,
           unallocatedBalance: this.paise(amount - allocated),
           allocatedBillCount: row._count.allocations,
+          hasProof: row.proofRef !== null,
+          proofUploadedAt: row.proofUploadedAt,
           createdAt: row.createdAt,
         };
       }),
@@ -415,5 +437,110 @@ export class PaymentsService {
       companyId: removed.companyId,
       ipAddress,
     });
+  }
+
+  /**
+   * Attach the transaction proof to a recorded payment (FR-020).
+   *
+   * Replacing an existing proof is allowed and the old blob is deliberately NOT deleted:
+   * the first advice attached to a payment is itself a record of what somebody believed
+   * at the time, and a bank re-issuing a corrected advice should not erase that.
+   */
+  async attachProof(
+    caller: AuthenticatedUser,
+    paymentId: string,
+    input: { data: Buffer; contentType: string },
+    ipAddress: string,
+  ): Promise<PaymentView> {
+    const ctx = rlsContextFor(caller);
+    const payment = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.payment.findFirst({ where: { id: paymentId, deleted: false } }),
+    );
+    if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
+    assertInScope(caller, payment, `Payment ${paymentId}`);
+
+    const proofRef = await this.storage.put(
+      `payment-proof/${payment.companyId}`,
+      input.data,
+      input.contentType,
+    );
+
+    const updated = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.payment.update({
+        where: { id: paymentId },
+        data: { proofRef, proofUploadedAt: new Date() },
+        include: { _count: { select: { allocations: true } } },
+      }),
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.PAYMENT,
+      action: AuditAction.UPDATE,
+      entityId: paymentId,
+      changes: { proofAttached: true, replaced: payment.proofRef !== null },
+      accountId: caller.id,
+      companyId: payment.companyId,
+      ipAddress,
+    });
+
+    const vendorNames = await this.refs.vendorNames(caller, [updated.vendorId]);
+    const amount = toNumber(updated.amount);
+    const allocated = toNumber(updated.allocatedAmount);
+    return {
+      id: updated.id,
+      companyId: updated.companyId,
+      vendorId: updated.vendorId,
+      vendorName: vendorNames.get(updated.vendorId) ?? 'Unknown vendor',
+      amount,
+      date: updated.date,
+      paymentMode: updated.paymentMode,
+      referenceNumber: updated.referenceNumber,
+      allocatedAmount: allocated,
+      unallocatedBalance: this.paise(amount - allocated),
+      allocatedBillCount: updated._count.allocations,
+      hasProof: true,
+      proofUploadedAt: updated.proofUploadedAt,
+      createdAt: updated.createdAt,
+    };
+  }
+
+  /**
+   * The proof itself (FR-020 scenario 3, FR-023).
+   *
+   * Audit-logged on READ, like every other restricted-document retrieval in 017: a
+   * payment advice names an account number, and who looked at it is worth knowing.
+   */
+  async downloadProof(
+    caller: AuthenticatedUser,
+    paymentId: string,
+    ipAddress: string,
+  ): Promise<{ data: Buffer; contentType: string }> {
+    const ctx = rlsContextFor(caller);
+    const payment = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.payment.findFirst({ where: { id: paymentId, deleted: false } }),
+    );
+    if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
+    assertInScope(caller, payment, `Payment ${paymentId}`);
+    if (!payment.proofRef) {
+      throw new NotFoundException(
+        `Payment ${paymentId} has no transaction proof attached.`,
+      );
+    }
+
+    // Written BEFORE the bytes, for the reason 017 US1 established: an entry that only
+    // appears once the transfer succeeded cannot describe the retrieval that failed
+    // halfway.
+    await this.auditLog.record({
+      entityType: AuditEntityType.PAYMENT,
+      action: AuditAction.READ,
+      entityId: paymentId,
+      changes: { retrieved: 'proof' },
+      accountId: caller.id,
+      companyId: payment.companyId,
+      ipAddress,
+    });
+
+    const data = await this.storage.get(payment.proofRef);
+    return { data, contentType: 'application/octet-stream' };
   }
 }

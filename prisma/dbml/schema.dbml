@@ -2166,6 +2166,14 @@ Table Payment {
   allocatedAmount Decimal [not null, default: 0, note: 'How much of `amount` reached bills. Stored because FIFO allocation writes it in
 the same transaction as the `PaymentAllocation` rows; `unallocatedBalance` is
 `amount − allocatedAmount`, derived on read.']
+  proofRef String [note: 'The RTGS advice or transaction confirmation, through `StorageService` (017 US7,
+FR-020). Nullable because a payment is recorded when the money moves and the
+advice often arrives afterwards — refusing the payment until the proof exists
+would push people to record it somewhere else.
+
+`referenceNumber` above is a number somebody typed. This is the document behind
+it, which is the whole of what US7 closes.']
+  proofUploadedAt DateTime
   deleted Boolean [not null, default: false]
   deletedAt DateTime
   createdAt DateTime [default: `now()`, not null]

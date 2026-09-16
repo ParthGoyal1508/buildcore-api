@@ -75,6 +75,9 @@ const build = (bills: ReturnType<typeof bill>[]) => {
     prisma as never,
     { record: jest.fn() } as never,
     refs,
+    // 017 US7: storage is only reached by the proof endpoints, which these tests do not
+    // exercise.
+    { put: jest.fn(), get: jest.fn() } as never,
   );
   return {
     service,

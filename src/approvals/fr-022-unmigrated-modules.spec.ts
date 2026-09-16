@@ -96,6 +96,10 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           'src/partners',
           // Owned by 017 US2 (project document readiness), not by anything in 016.
           ':(exclude)src/projects/documents',
+          // Owned by 017 US7 (payment proof). The indent approval this guard is really
+          // about lives in src/inventory/indents and is NOT excluded — the per-file
+          // assertions above still read it, and any change there still shows up here.
+          ':(exclude)src/inventory/payments',
           ':(exclude)src/projects/projects.module.ts',
           ':(exclude)src/projects/portfolio/projects.service.ts',
           ':(exclude)src/projects/portfolio/projects.service.spec.ts',

@@ -258,6 +258,62 @@ describe('Project documents (e2e)', () => {
     expect(row.documentReadiness.present).toBe(0);
   });
 
+  it('costs ONE query against the project-document table for 50 projects (T070, Pass 4)', async () => {
+    // Quickstart Pass 4, executed rather than described: "open the project list for a
+    // company with 50 projects and count queries against the project-document table —
+    // expect one." It is the pass most likely to be skipped and the one whose absence
+    // costs most, because three projects in development hide an N+1 perfectly.
+    const extra: string[] = [];
+    for (let i = 0; i < 48; i += 1) {
+      const p = await sys.project.create({
+        data: {
+          companyId,
+          clientId,
+          code: `${PREFIX}B${i}${Date.now() % 10000}`,
+          name: `${PREFIX} Bulk ${i}`,
+          contractValue: 100000,
+          startDate: new Date('2026-04-01'),
+        },
+      });
+      extra.push(p.id);
+    }
+
+    // Counted with a Prisma middleware rather than inferred from timing: the claim is
+    // about the number of statements, so the number of statements is what is measured.
+    let projectDocumentQueries = 0;
+    let requirementQueries = 0;
+    const count = async (
+      params: { model?: string },
+      next: (p: unknown) => Promise<unknown>,
+    ) => {
+      if (params.model === 'ProjectDocument') projectDocumentQueries += 1;
+      if (params.model === 'ProjectDocumentRequirement')
+        requirementQueries += 1;
+      return next(params);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$use(count);
+
+    try {
+      const res = await http()
+        .get('/projects?include=documentReadiness&pageSize=50')
+        .set(auth(adminToken))
+        .expect(200);
+
+      expect(res.body.items.length).toBeGreaterThanOrEqual(50);
+      for (const item of res.body.items) {
+        expect(item.documentReadiness).toBeDefined();
+      }
+    } finally {
+      await sys.project.deleteMany({ where: { id: { in: extra } } });
+    }
+
+    // ONE against the documents, ONE against the requirements. Not "fewer than fifty" —
+    // exactly one each, whatever the page size.
+    expect(projectDocumentQueries).toBe(1);
+    expect(requirementQueries).toBe(1);
+  });
+
   it('refuses requirement configuration without SETTINGS (FR-007)', async () => {
     await http()
       .put('/projects/document-requirements')

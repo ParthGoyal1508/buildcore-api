@@ -237,10 +237,10 @@ be verified as a regression before any letter story builds on it.
 
 ## Phase 9: US7 — Proof that the money moved (P2)
 
-- [ ] T058 [P] [US7] Add a payment-proof attachment to the existing payment record, through
+- [X] T058 [P] [US7] Add a payment-proof attachment to the existing payment record, through
       `StorageService`
-- [ ] T059 [US7] Report which payments lack a proof (FR-021)
-- [ ] T060 [P] [US7] e2e: attach a proof, list payments missing one
+- [X] T059 [US7] Report which payments lack a proof (FR-021)
+- [X] T060 [P] [US7] e2e: attach a proof, list payments missing one
 
 ---
 
@@ -256,31 +256,31 @@ be verified as a regression before any letter story builds on it.
 
 ## Phase 11: Reminders, boundaries and verification
 
-- [ ] T064 Implement the company-document expiry rule with `@ReminderRule()` in
+- [X] T064 Implement the company-document expiry rule with `@ReminderRule()` in
       `src/settings/company-documents/company-document.reminder-rule.ts`, **replacing** the relevant
       placeholder in `src/dashboard/reminders/unbuilt-module.rules.ts` rather than adding a parallel
       rule (FR-005)
-- [ ] T065 [P] Boundary test in `src/letters/letters-boundary.spec.ts`, copying
+- [X] T065 [P] Boundary test in `src/letters/letters-boundary.spec.ts`, copying
       `src/approvals/spine-boundary.spec.ts`. **Both directions**: `src/letters/` must not query
       `partners` / `projects` / `inventory` tables, and no business module may query
       `shared.IssuedLetter`
-- [ ] T066 Prove the boundary by breaking it in both directions, confirming T065 fails each time, then
+- [X] T066 Prove the boundary by breaking it in both directions, confirming T065 fails each time, then
       reverting. A guard that has never failed has not been shown to work
-- [ ] T067 RLS e2e in `test/documents-rls.e2e-spec.ts`: create a `NOSUPERUSER NOBYPASSRLS` probe role,
+- [X] T067 RLS e2e in `test/documents-rls.e2e-spec.ts`: create a `NOSUPERUSER NOBYPASSRLS` probe role,
       grant it the five new tables, run **unfiltered** raw SQL, expect zero cross-tenant rows.
       Template: `test/approvals-rls.e2e-spec.ts`
-- [ ] T068 Check T067 for vacuousness — disable the policy, confirm rows **do** appear, restore
+- [X] T068 Check T067 for vacuousness — disable the policy, confirm rows **do** appear, restore
       `ENABLE` + `FORCE`. A superuser bypasses RLS unconditionally, which is what made every pre-016
       RLS test in this repo vacuous
-- [ ] T069 Work quickstart Passes 1–3, 6, 7, 8 (company documents, approval gate, signature freeze,
+- [X] T069 Work quickstart Passes 1–3, 6, 7, 8 (company documents, approval gate, signature freeze,
       kind-in-use)
-- [ ] T070 Quickstart Pass 4: **50 projects**, count queries against the project-document table,
+- [X] T070 Quickstart Pass 4: **50 projects**, count queries against the project-document table,
       expect one. Three projects in development hide an N+1 perfectly
-- [ ] T071 Quickstart Pass 5: define a **new** letter kind and confirm Aadhaar is still refused. If it
+- [X] T071 Quickstart Pass 5: define a **new** letter kind and confirm Aadhaar is still refused. If it
       is not, the restriction was written into the kinds that existed at build time
-- [ ] T072 Quickstart Passes 9 and 10 (RLS proof, boundary both ways) — these are T065–T068 executed
+- [X] T072 Quickstart Passes 9 and 10 (RLS proof, boundary both ways) — these are T065–T068 executed
       as a final gate rather than in isolation
-- [ ] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
+- [X] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
       numbers**; if something fails, say so with the output rather than summarising it as passing
 
 ---
