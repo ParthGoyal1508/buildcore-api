@@ -24,9 +24,34 @@ import { hash } from 'argon2';
 import * as PDFDocument from 'pdfkit';
 
 import {
+  ACTION_ATTENDANCE_EXCEPTION,
+  ACTION_PAYROLL_RUN,
+  DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
+  DEFAULT_DIRECTOR_FINAL_LEVELS,
+  DEFAULT_PAYROLL_RUN_LEVELS,
+  DIRECTOR_FINAL_SEEDED_ACTIONS,
+} from '../src/approvals/default-chains';
+import { SLOT_FINAL } from '../src/approvals/approval-slots';
+import {
+  DEFAULT_ASSET_CATEGORIES,
+  DEFAULT_ASSET_DOC_TYPES,
+  DEFAULT_CONDITION_GRADES,
+} from '../src/assets/constants/assets.constants';
+import {
   encryptBlob,
   parseEncryptionKey,
 } from '../src/common/storage/blob-cipher';
+import { DEFAULT_ITEM_CATEGORIES } from '../src/inventory/constants/inventory.constants';
+import {
+  DEFAULT_EQUIPMENT_CATEGORIES,
+  DEFAULT_EQUIPMENT_DOC_TYPES,
+} from '../src/plant/constants/plant.constants';
+import {
+  REQUIRED_COMPANY_DOCUMENT_KINDS,
+  REQUIRED_PROJECT_DOCUMENT_KINDS,
+} from '../src/settings/document-kinds';
+import { DEFAULT_DOCUMENT_TYPES } from '../src/settings/reference-data/default-document-types';
+import { DEFAULT_VENDOR_CATEGORIES } from '../src/settings/vendor-categories/vendor-categories.service';
 
 // Resolved before the client is built, because a remote target has to adjust
 // DATABASE_URL and `PrismaClient` reads it at construction.
@@ -139,8 +164,25 @@ const money = (n: number) => new Prisma.Decimal(n);
  * Going through the same cipher, namespace and reference shape `LocalStorageAdapter`
  * uses costs a dozen lines and makes the screen genuinely work.
  */
-async function writeLetterPdf(title: string, body: string): Promise<string> {
-  const pdf: Buffer = await new Promise((done, fail) => {
+async function writeBlob(namespace: string, bytes: Buffer): Promise<string> {
+  const ref = `${namespace}/${randomUUID()}`;
+  const target = resolvePath(
+    process.cwd(),
+    process.env.STORAGE_LOCAL_PATH || 'var/storage',
+    ref,
+  );
+  await fs.mkdir(dirname(target), { recursive: true });
+  await fs.writeFile(
+    target,
+    encryptBlob(bytes, parseEncryptionKey(process.env.STORAGE_ENCRYPTION_KEY)),
+    { mode: 0o600 },
+  );
+  return ref;
+}
+
+/** Renders plain text into a one-column A4 PDF, as the letter services do. */
+async function renderPdf(title: string, body: string): Promise<Buffer> {
+  return new Promise((done, fail) => {
     const doc = new PDFDocument({ margin: 56 });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -150,20 +192,583 @@ async function writeLetterPdf(title: string, body: string): Promise<string> {
     doc.fontSize(11).text(body, { align: 'left' });
     doc.end();
   });
+}
 
-  const ref = `recruitment-letter/${randomUUID()}`;
-  const target = resolvePath(
-    process.cwd(),
-    process.env.STORAGE_LOCAL_PATH || 'var/storage',
-    ref,
+async function writeLetterPdf(title: string, body: string): Promise<string> {
+  return writeBlob('recruitment-letter', await renderPdf(title, body));
+}
+
+/**
+ * Everything `CompaniesService.create()` gives a company, for the two this script
+ * creates directly.
+ *
+ * The seed writes `prisma.company.create()` rather than going through the service,
+ * so none of the per-company masters that hang off company creation ever ran for
+ * them. On a database built the way this script expects — `migrate reset` then seed
+ * — that matters more than it sounds: the backfill migrations which seeded these
+ * masters for the companies existing at the time run against an empty `Company`
+ * table and seed nothing, so the demo ends up with masters no code path ever fills.
+ * The condition-grade ladder is the one that bites: a return maps its grade to the
+ * asset's next status (012 FR-015), so an empty ladder does not inconvenience the
+ * register, it makes returning an asset impossible.
+ *
+ * Built from the same constants the services use, via `createMany` with
+ * `skipDuplicates`, so this cannot drift into a second idea of "default" and a
+ * re-run is a no-op rather than a unique violation.
+ */
+async function seedCompanyDefaults(
+  companyId: string,
+  superAdminRoleId: string | null,
+): Promise<void> {
+  await prisma.documentType.createMany({
+    data: DEFAULT_DOCUMENT_TYPES.map((d) => ({ ...d, companyId })),
+    skipDuplicates: true,
+  });
+  await prisma.vendorCategory.createMany({
+    data: DEFAULT_VENDOR_CATEGORIES.map((c) => ({
+      companyId,
+      name: c.name,
+      description: c.description,
+      isDefault: true,
+    })),
+    skipDuplicates: true,
+  });
+  await prisma.itemCategory.createMany({
+    data: DEFAULT_ITEM_CATEGORIES.map((name) => ({ companyId, name })),
+    skipDuplicates: true,
+  });
+  await prisma.assetCategory.createMany({
+    data: DEFAULT_ASSET_CATEGORIES.map((c) => ({
+      companyId,
+      name: c.name,
+      trackingMode: c.trackingMode as 'serialised' | 'bulk',
+      depreciationRatePercent: c.depreciationRatePercent,
+      usefulLifeYears: c.usefulLifeYears,
+      custodyRequired: c.custodyRequired,
+      inspectionRequired: c.inspectionRequired,
+      inspectionIntervalDays: c.inspectionIntervalDays,
+    })),
+    skipDuplicates: true,
+  });
+  await prisma.assetDocType.createMany({
+    data: DEFAULT_ASSET_DOC_TYPES.map((t) => ({
+      companyId,
+      name: t.name,
+      alertDays: t.alertDays,
+    })),
+    skipDuplicates: true,
+  });
+  await prisma.conditionGrade.createMany({
+    data: DEFAULT_CONDITION_GRADES.map((g) => ({
+      companyId,
+      name: g.name,
+      sequence: g.sequence,
+      isDamaged: g.isDamaged,
+      isScrap: g.isScrap,
+    })),
+    skipDuplicates: true,
+  });
+
+  // The two plant masters are seeded here even though `CompaniesService.create()`
+  // does NOT call their seeders: `EquipmentCategoriesService` is provided by
+  // `PlantModule`, and `CompaniesService` lives in `SettingsModule`, which cannot
+  // inject across that edge without a cycle. Companies that existed when 006 shipped
+  // got them from migration `20260904081331_plant_permissions_and_masters`; a company
+  // created after it gets none, which is a real gap in the product and not one a seed
+  // script should paper over silently. Seeded here so the demo matches what a
+  // migrated production company actually holds.
+  await prisma.equipmentCategory.createMany({
+    data: DEFAULT_EQUIPMENT_CATEGORIES.map((c) => ({
+      companyId,
+      name: c.name,
+      meterType: c.meterType as 'hours' | 'km',
+    })),
+    skipDuplicates: true,
+  });
+  await prisma.equipmentDocType.createMany({
+    data: DEFAULT_EQUIPMENT_DOC_TYPES.map((t) => ({
+      companyId,
+      name: t.name,
+      alertDays: t.alertDays,
+    })),
+    skipDuplicates: true,
+  });
+
+  // 016's chains. Seeded here rather than left to the backfill migration for the same
+  // reason as the masters above — and it matters more, because without a chain the
+  // first work order 017 composes is refused as a configuration fault rather than
+  // sent for approval, which looks like a bug in the letter screen.
+  const chains: [string, typeof DEFAULT_DIRECTOR_FINAL_LEVELS][] = [
+    [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+    [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
+    ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
+      (actionType): [string, typeof DEFAULT_DIRECTOR_FINAL_LEVELS] => [
+        actionType,
+        DEFAULT_DIRECTOR_FINAL_LEVELS,
+      ],
+    ),
+  ];
+  for (const [actionType, levels] of chains) {
+    const existing = await prisma.approvalChain.findFirst({
+      where: { companyId, actionType },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.approvalChain.create({
+      data: {
+        companyId,
+        actionType,
+        isFinalAuthorityRequired: true,
+        levels: {
+          create: levels.map((level) => ({
+            companyId,
+            position: level.position,
+            slotKey: level.slotKey,
+            isFinalAuthority: level.isFinalAuthority ?? false,
+            label: level.label ?? null,
+          })),
+        },
+      },
+    });
+  }
+  if (superAdminRoleId) {
+    await prisma.roleSlotMapping.upsert({
+      where: { companyId_slotKey: { companyId, slotKey: SLOT_FINAL } },
+      create: { companyId, slotKey: SLOT_FINAL, roleId: superAdminRoleId },
+      update: {},
+    });
+  }
+}
+
+/**
+ * A signature graphic, drawn rather than photographed.
+ *
+ * 017 FR-016 stores a signatory's signature as an image and FR-013 renders a letter
+ * with the graphic that was applied at the time, so a signatory row whose blob does
+ * not exist gives the composer a broken image on every preview. A small PNG inline
+ * keeps the seed self-contained — no fixture file to lose — and a thousand bytes is
+ * cheaper than the machinery to generate one.
+ */
+const SIGNATURE_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAARgAAABaCAYAAABjaUlfAAAD3ElEQVR42u3czbXbIBBA' +
+  'YdeQZYpITa8WFZbWlFU2PrbBMgPD+LvnaJUfZGAuAwJuNwAAAAAAAABAbX79/nP8f9QG' +
+  'gAjBnAQDIFQwJAMgSjCyGAAhgpHFACAZAAWmSiQDICqLIRkAJAOAZACAZACQDACSAQCS' +
+  'AUAyAEgGAEgGC/uQe4hAMggRy3nff/QhvOosOkmSbCBbWzTEQjSQzWxS92e2gG1lLK/+' +
+  'XAujnGRaGUGG3/UkMNMF7Kt37P09ogtlJNORESzPCnoEkiFgr5T/6N/MFrZIJplVGcHy' +
+  'rKA3I0gUsG/X1eyLz+7LE8UkMz0jyJAVXC17xU2Fn9bRrDp2iyPJpMoIVmUFn9bnzEAa' +
+  'UdaMOl6V3WFh8C56x13S+HNA0IYKf2TQRtexBeVakknXmJ924FmSGVVO9Igd0c5R72tq' +
+  'ZMqUWi6zRsHRUogKrKj2jXhfciGZLeQSnRUEB+3Q941s15Ffeay7kMz08jcYZSOzjSNr' +
+  'VvREYCMGBOsuJLNXuUHSOmctcGbPCAK+TEUvcjsp/k2SiS4vcNo142vPsE/JE9rwkshG' +
+  'ibDnGMmrnd/kU1Ayk8sZ1YGn71fJnoVerZtBu4qPzmMk91Lp/Xv7CmezQ3vHDl83IuSw' +
+  'cAPf1Y17q3Yzd9fPu+3/hlCOAU/K0+9XGiW9PQP3UKwYZd8WRJJ1qbRHD66W3VunV4QS' +
+  'MOjvKZqOo/wPK3FnyWwcsKuCtkuKGT7z9pT/LDPu/D+nD75bi6ZxlL9rYWoXySS6pqAZ' +
+  'gFl2OfesxWS6vbAljg+vichyFUedm/6yyWbQqeE0Afuo/GzntEYH7CqJV7m0quxNf1lk' +
+  '805Had3lkjQAMgbs0XEPTtpzZBVvxMvYt5fIZrZkst/n2hkAqYLgSSdOO3o23rfUHpPy' +
+  'V4r2rnjPOqE78x0GBsC5wdUVxy6fTlvveytI2Wymc34Y8oN33TfQuoIzcdtu03nLB1vi' +
+  'tcZSWc2u5t5tl6b3NWXaOqsZfbDOWQ58M18XE9ELwyQDiInQKZRLg4AaSwhpp1CuPQS6' +
+  'Yuy7YmPkRj6SAUyZQmVjqgSQzHDZPNjRSzAAyQyRzbPt9yoPIJmPZPPqGkIVB5DMcOG4' +
+  'QBkgGQAkA4BkAIBkAJAMAJJRMwDCJKNWAERJRhYDgGQAbCwZNYJWh/mp+GjZKZIhGFLo' +
+  'ev4We8gKSCaFKtlLmnrRw5FBGEbq3NO9aW0jgkgjqkMaJWsJK7wPaJ1ancfohUxZrL5V' +
+  'MNvQqNgxQ9Y/d8k2tASKyOhHRco2gDAZqRzZBoDZ9lU7AAAAAAAAAAAAAAAAAAAAAAAA' +
+  'AADU5B/aoQlXR0m8zAAAAABJRU5ErkJggg==';
+
+/**
+ * The statutory papers 017 asks a company and a project to hold (FR-002, FR-007).
+ *
+ * These are `DocumentType` rows, and they are NOT in `DEFAULT_DOCUMENT_TYPES` — that
+ * list is the *employee* file (Aadhaar, marksheets, PF forms), which happens to share
+ * the table. A company with no GST document type reports GST missing, which is the
+ * right answer but leaves nothing to upload against, so the demo defines them.
+ *
+ * `hasExpiry` is set only where the paper genuinely lapses. It is load-bearing rather
+ * than descriptive: FR-004 refuses an upload of an expiring kind with no expiry date,
+ * and the reminder rule only has something to warn about where a date exists.
+ */
+const STATUTORY_DOCUMENT_TYPES: {
+  code: string;
+  name: string;
+  hasExpiry: boolean;
+  needsNumber: boolean;
+}[] = [
+  {
+    code: 'GST',
+    name: 'GST Registration Certificate',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'PF',
+    name: 'PF Establishment Certificate',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'ESIC',
+    name: 'ESIC Registration Certificate',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'TAN',
+    name: 'TAN Allotment Letter',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'LABOUR_LICENCE',
+    name: 'Labour Licence',
+    hasExpiry: true,
+    needsNumber: true,
+  },
+  {
+    code: 'CANCELLED_CHEQUE',
+    name: 'Cancelled Cheque',
+    hasExpiry: false,
+    needsNumber: false,
+  },
+  {
+    code: 'LOI',
+    name: 'Letter of Intent',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'WORK_ORDER',
+    name: 'Work Order',
+    hasExpiry: false,
+    needsNumber: true,
+  },
+  {
+    code: 'INSURANCE',
+    name: 'Insurance Policy',
+    hasExpiry: true,
+    needsNumber: true,
+  },
+  {
+    code: 'MINING_PERMISSION',
+    name: 'Mining Permission',
+    hasExpiry: true,
+    needsNumber: true,
+  },
+  {
+    code: 'LABOUR_INSURANCE',
+    name: 'Labour Insurance (WC Policy)',
+    hasExpiry: true,
+    needsNumber: true,
+  },
+  {
+    code: 'BOQ',
+    name: 'Bill of Quantities',
+    hasExpiry: false,
+    needsNumber: false,
+  },
+];
+
+/**
+ * Feature 017's half of the demo: statutory documents, project readiness, a signatory
+ * and the templates a commercial letter needs.
+ *
+ * Seeded deliberately *incomplete*. A company holding all eight papers and projects
+ * holding all six makes every completeness figure read 100%, which is the one state
+ * that proves nothing — it looks identical whether the calculation works or always
+ * returns "complete". Six of eight and a spread across projects means the number on
+ * the screen can be checked against something.
+ *
+ * What it does NOT seed is an issued commercial letter. Issuing one is gated on 016's
+ * approval chain completing (FR-015a), and a row inserted straight into the table
+ * would be a work order that was never approved — the exact thing the gate exists to
+ * prevent, sitting in the register looking legitimate. The templates, kinds, chain and
+ * signatory are all here so that path can be walked in the browser instead.
+ */
+async function seedDocumentsAndLetters(input: {
+  companyId: string;
+  companyName: string;
+  shortCode: string;
+  gstin: string;
+  pan: string;
+  projects: { id: string; name: string }[];
+  uploadedByUserId: string;
+  letterKinds: Map<string, string>;
+  canWriteBlobs: boolean;
+}): Promise<{ companyDocuments: number; projectDocuments: number }> {
+  const {
+    companyId,
+    companyName,
+    shortCode,
+    gstin,
+    pan,
+    projects,
+    uploadedByUserId,
+    letterKinds,
+    canWriteBlobs,
+  } = input;
+
+  // ── Document types the statutory papers hang off ────────────────────────────
+  for (const [i, t] of STATUTORY_DOCUMENT_TYPES.entries()) {
+    await prisma.documentType.upsert({
+      where: { companyId_code: { companyId, code: t.code } },
+      update: {},
+      create: {
+        companyId,
+        code: t.code,
+        name: t.name,
+        isMandatory: false,
+        hasExpiry: t.hasExpiry,
+        needsNumber: t.needsNumber,
+        sortOrder: 200 + i,
+      },
+    });
+  }
+  const typeIdByCode = new Map(
+    (
+      await prisma.documentType.findMany({
+        where: { companyId },
+        select: { id: true, code: true },
+      })
+    ).map((t) => [t.code, t.id] as const),
   );
-  await fs.mkdir(dirname(target), { recursive: true });
-  await fs.writeFile(
-    target,
-    encryptBlob(pdf, parseEncryptionKey(process.env.STORAGE_ENCRYPTION_KEY)),
-    { mode: 0o600 },
-  );
-  return ref;
+
+  if (!canWriteBlobs) return { companyDocuments: 0, projectDocuments: 0 };
+
+  const certificate = (title: string, lines: string[]) =>
+    renderPdf(title, [`${companyName}`, '', ...lines].join('\n'));
+
+  // ── Company statutory documents (FR-002, FR-003) ────────────────────────────
+  // Six of the eight. TAN and the cancelled cheque are left out so the completeness
+  // panel has something to report missing.
+  const held: {
+    code: string;
+    title: string;
+    number: string | null;
+    expiresInDays?: number;
+    lines: string[];
+  }[] = [
+    {
+      code: 'GST',
+      title: 'GST Registration Certificate',
+      number: gstin,
+      lines: [`GSTIN ${gstin}`, 'Registered under the CGST Act, 2017.'],
+    },
+    {
+      code: 'PF',
+      title: 'PF Establishment Certificate',
+      number: `${shortCode}/PF/0001`,
+      lines: ['Establishment covered under the EPF & MP Act, 1952.'],
+    },
+    {
+      code: 'ESIC',
+      title: 'ESIC Registration Certificate',
+      number: `${shortCode}/ESIC/0001`,
+      lines: ['Establishment covered under the ESI Act, 1948.'],
+    },
+    {
+      code: 'PAN',
+      title: 'PAN Card',
+      number: pan,
+      lines: [`Permanent Account Number ${pan}`],
+    },
+    {
+      // The restricted one (FR-024). Held rather than missing, because the badge and
+      // the audit-logged download are only testable against a document that exists.
+      code: 'AADHAAR',
+      title: 'Aadhaar Card',
+      number: 'XXXX XXXX 4821',
+      lines: [
+        'Aadhaar of the authorised signatory.',
+        'Retained under restricted access.',
+      ],
+    },
+    {
+      // Expires inside the 30-day reminder horizon, so the dashboard has a real
+      // document-expiry reminder to show rather than an empty rule.
+      code: 'LABOUR_LICENCE',
+      title: 'Labour Licence',
+      number: `${shortCode}/LL/2026`,
+      expiresInDays: 18,
+      lines: ['Licence under the CLRA Act, 1970.'],
+    },
+  ];
+
+  let companyDocuments = 0;
+  for (const doc of held) {
+    const documentTypeId = typeIdByCode.get(doc.code);
+    if (!documentTypeId) continue;
+    await prisma.companyDocument.create({
+      data: {
+        companyId,
+        documentTypeId,
+        fileRef: await writeBlob(
+          `company-documents/${companyId}`,
+          await certificate(doc.title, doc.lines),
+        ),
+        documentNumber: doc.number,
+        expiresAt:
+          doc.expiresInDays === undefined ? null : daysAgo(-doc.expiresInDays),
+        uploadedByUserId,
+        isCurrent: true,
+      },
+    });
+    companyDocuments++;
+  }
+
+  // One supersession, so the history is not an empty list on every kind (FR-006).
+  const gstTypeId = typeIdByCode.get('GST');
+  if (gstTypeId) {
+    const current = await prisma.companyDocument.findFirst({
+      where: { companyId, documentTypeId: gstTypeId, isCurrent: true },
+    });
+    if (current) {
+      await prisma.companyDocument.update({
+        where: { id: current.id },
+        data: { isCurrent: false },
+      });
+      await prisma.companyDocument.create({
+        data: {
+          companyId,
+          documentTypeId: gstTypeId,
+          fileRef: await writeBlob(
+            `company-documents/${companyId}`,
+            await certificate('GST Registration Certificate', [
+              `GSTIN ${gstin}`,
+              'Amended: principal place of business updated.',
+            ]),
+          ),
+          documentNumber: gstin,
+          uploadedByUserId,
+          isCurrent: true,
+          supersedesId: current.id,
+        },
+      });
+      companyDocuments++;
+    }
+  }
+
+  // ── Project document requirements and readiness (FR-007, FR-008) ────────────
+  for (const kind of REQUIRED_PROJECT_DOCUMENT_KINDS) {
+    const documentTypeId = typeIdByCode.get(kind.code);
+    if (!documentTypeId) continue;
+    await prisma.projectDocumentRequirement.upsert({
+      where: { companyId_documentTypeId: { companyId, documentTypeId } },
+      update: {},
+      create: {
+        companyId,
+        documentTypeId,
+        // Mining permission and labour insurance are real on some sites and absurd on
+        // others, so they are configured but not mandatory — which is also what gives
+        // the readiness figure a denominator smaller than the list.
+        isMandatory: !['MINING_PERMISSION', 'LABOUR_INSURANCE'].includes(
+          kind.code,
+        ),
+      },
+    });
+  }
+
+  // A different amount of paperwork per project: the first is complete, the rest
+  // trail off. A column where every row says the same thing cannot be read.
+  const perProject = [
+    ['LOI', 'WORK_ORDER', 'INSURANCE', 'BOQ'],
+    ['LOI', 'WORK_ORDER'],
+    ['LOI'],
+    ['WORK_ORDER', 'BOQ'],
+    [],
+  ];
+  let projectDocuments = 0;
+  for (const [pi, project] of projects.entries()) {
+    for (const code of perProject[pi % perProject.length]) {
+      const documentTypeId = typeIdByCode.get(code);
+      if (!documentTypeId) continue;
+      const kind = REQUIRED_PROJECT_DOCUMENT_KINDS.find(
+        (k) => k.code === code,
+      )!;
+      await prisma.projectDocument.create({
+        data: {
+          companyId,
+          projectId: project.id,
+          // Both are written: `documentType` is the free-text label the screen has
+          // always shown, `documentTypeId` is what 017 added so readiness has
+          // something to join on.
+          documentType: kind.label,
+          documentTypeId,
+          fileRef: await writeBlob(
+            `project-documents/${companyId}`,
+            await certificate(kind.label, [
+              `Project: ${project.name}`,
+              `Reference ${shortCode}/${code}/${1000 + pi}`,
+            ]),
+          ),
+          uploadedByUserId,
+        },
+      });
+      projectDocuments++;
+    }
+  }
+
+  // ── Signatory and the commercial letter templates (FR-010, FR-016) ──────────
+  const signatory = await prisma.signatory.create({
+    data: {
+      companyId,
+      name: 'Director',
+      title: 'Authorised Signatory',
+      signatureRef: await writeBlob(
+        `signature/${companyId}`,
+        Buffer.from(SIGNATURE_PNG_BASE64, 'base64'),
+      ),
+    },
+  });
+  void signatory;
+
+  for (const t of [
+    {
+      key: 'letter_work_order',
+      name: 'Standard Work Order',
+      body:
+        'To,\n{{vendorName}}\n\nSub: Work order for {{scope}} at {{projectName}}.\n\n' +
+        'You are hereby awarded the work described above for a value of {{orderValue}}, ' +
+        'to be completed by {{completionDate}}. Payment terms: {{paymentTerms}}.\n\n' +
+        'For {{companyName}}\n\nIssued on {{issueDate}}.',
+    },
+    {
+      key: 'letter_loi',
+      name: 'Letter of Intent',
+      body:
+        'To,\n{{vendorName}}\n\nSub: Letter of intent for {{scope}}.\n\n' +
+        'We confirm our intent to award you the work described above at {{projectName}}, ' +
+        'subject to execution of a formal agreement.\n\n' +
+        'For {{companyName}}\n\nIssued on {{issueDate}}.',
+    },
+    {
+      key: 'letter_purchase_order',
+      name: 'Purchase Order',
+      body:
+        'To,\n{{vendorName}}\n\nSub: Purchase order for {{scope}}.\n\n' +
+        'Please supply the material described above to {{projectName}} by ' +
+        '{{completionDate}}. Order value {{orderValue}}. Payment terms: ' +
+        '{{paymentTerms}}.\n\nFor {{companyName}}\n\nIssued on {{issueDate}}.',
+    },
+  ]) {
+    // Thrown, not skipped. These three keys are the gated commercial kinds (016's
+    // `DIRECTOR_FINAL_SEEDED_ACTIONS`), and a silent `continue` on a renamed key would
+    // produce a demo whose Compose screen has no template to offer and no explanation
+    // — which is exactly what happened on the first run of this block.
+    const letterKindId = letterKinds.get(t.key);
+    if (!letterKindId) {
+      throw new Error(
+        `No shipped LetterKind with key "${t.key}" — seeded keys are: ` +
+          `${[...letterKinds.keys()].sort().join(', ')}`,
+      );
+    }
+    await prisma.letterTemplate.create({
+      data: {
+        companyId,
+        letterKindId,
+        name: t.name,
+        bodyTemplate: t.body,
+        isActive: true,
+      },
+    });
+  }
+
+  return { companyDocuments, projectDocuments };
 }
 
 interface StaffSpec {
@@ -1081,6 +1686,25 @@ async function main() {
   const fy = '2026-2027';
   const today = dateOnly(new Date());
 
+  /**
+   * One role with no permissions at all, which no migration seeds.
+   *
+   * It exists for the negative half of an authorization test: proving a guard refuses
+   * a caller needs an account the guard will actually refuse, and every seeded role
+   * grants *something*. `test/dashboard.e2e-spec.ts` looks it up by this exact name
+   * with `findUniqueOrThrow`, so a database without it fails that suite in `beforeAll`
+   * — all fourteen tests at once, with an error that points at the role lookup rather
+   * than at the missing fixture.
+   *
+   * Deliberately not in the default-roles migration: it is a QA fixture, and shipping
+   * it to production would put a role in the Settings list that no one should assign.
+   */
+  await prisma.role.upsert({
+    where: { name: 'QA No Modules' },
+    update: {},
+    create: { name: 'QA No Modules', permissions: [] },
+  });
+
   // Roles come from migration 20260830090000_seed_default_roles, which `migrate reset`
   // has already applied — re-seeding them here would fight it.
   const roleByName = new Map(
@@ -1132,6 +1756,9 @@ async function main() {
     onboarding: 0,
     letters: 0,
     resignations: 0,
+    companyDocuments: 0,
+    projectDocuments: 0,
+    paymentProofs: 0,
   };
   let firstCompanyId: string | null = null;
 
@@ -1178,6 +1805,10 @@ async function main() {
       },
     });
     console.log(`\n  ${company.name} (${company.shortCode})`);
+    await seedCompanyDefaults(
+      company.id,
+      roleByName.get('Super Admin') ?? null,
+    );
     // The Super Admin needs a home company even though CROSS_COMPANY_ACCESS lets
     // them see past it: the company-scoped widgets resolve against the caller's own
     // `companyId`, so an account without one reads zero employees on a database with
@@ -1609,11 +2240,17 @@ async function main() {
       );
     }
 
+    // Same reason as the document types: the ten defaults are already in, and this
+    // list overlaps them.
     const itemCats = new Map<string, string>();
     for (const name of [...new Set(ITEMS.map((i) => i.cat))]) {
-      const row = await prisma.itemCategory.create({
-        data: { companyId: company.id, name },
-      });
+      const row =
+        (await prisma.itemCategory.findFirst({
+          where: { companyId: company.id, name },
+        })) ??
+        (await prisma.itemCategory.create({
+          data: { companyId: company.id, name },
+        }));
       itemCats.set(name, row.id);
     }
     const items = [];
@@ -1634,9 +2271,13 @@ async function main() {
     const eqCats = new Map<string, string>();
     for (const e of EQUIPMENT) {
       if (eqCats.has(e.cat)) continue;
-      const row = await prisma.equipmentCategory.create({
-        data: { companyId: company.id, name: e.cat, meterType: e.meter },
-      });
+      const row =
+        (await prisma.equipmentCategory.findFirst({
+          where: { companyId: company.id, name: e.cat },
+        })) ??
+        (await prisma.equipmentCategory.create({
+          data: { companyId: company.id, name: e.cat, meterType: e.meter },
+        }));
       eqCats.set(e.cat, row.id);
     }
     /**
@@ -1684,9 +2325,13 @@ async function main() {
     const astCats = new Map<string, string>();
     for (const a of ASSETS) {
       if (astCats.has(a.cat)) continue;
-      const row = await prisma.assetCategory.create({
-        data: { companyId: company.id, name: a.cat, trackingMode: a.mode },
-      });
+      const row =
+        (await prisma.assetCategory.findFirst({
+          where: { companyId: company.id, name: a.cat },
+        })) ??
+        (await prisma.assetCategory.create({
+          data: { companyId: company.id, name: a.cat, trackingMode: a.mode },
+        }));
       astCats.set(a.cat, row.id);
     }
     for (const [i, a] of ASSETS.entries()) {
@@ -2580,11 +3225,20 @@ async function main() {
       totals.workers++;
     }
     // ── Recruitment: requisitions, pipeline, offers, onboarding, exits ───────
+    // Upsert, not create: `seedCompanyDefaults` has already laid down the seventeen
+    // defaults, two of which (AADHAAR, PAN) share a code with this list. Creating
+    // them again would be a unique violation on (companyId, code), and overwriting
+    // the defaults' flags would quietly undo `isRestricted` on Aadhaar (017 FR-024) —
+    // so an existing row is left exactly as the defaults made it.
     const docTypes = [];
     for (const [di, dt] of DOCUMENT_TYPES.entries()) {
       docTypes.push(
-        await prisma.documentType.create({
-          data: {
+        await prisma.documentType.upsert({
+          where: {
+            companyId_code: { companyId: company.id, code: dt.code },
+          },
+          update: {},
+          create: {
             companyId: company.id,
             code: dt.code,
             name: dt.name,
@@ -3187,8 +3841,65 @@ async function main() {
       void xi;
     }
 
+    // ── Feature 017 ────────────────────────────────────────────────────────────
+    const documents = await seedDocumentsAndLetters({
+      companyId: company.id,
+      companyName: company.name,
+      shortCode: spec.shortCode,
+      gstin: spec.gstin,
+      pan: spec.pan,
+      projects,
+      uploadedByUserId: superAdmin.id,
+      letterKinds,
+      canWriteBlobs,
+    });
+    totals.companyDocuments += documents.companyDocuments;
+    totals.projectDocuments += documents.projectDocuments;
+
+    /**
+     * Transaction proof on two payments, not all of them (017 FR-020, FR-021).
+     *
+     * The screen's useful state is the list filtered to payments *missing* a proof —
+     * that is the question US7 asks. Attaching one to every payment empties that
+     * filter and leaves the feature looking like it does nothing.
+     */
+    if (canWriteBlobs) {
+      const toProve = await prisma.payment.findMany({
+        where: { companyId: company.id, deleted: false },
+        orderBy: { date: 'desc' },
+        take: 2,
+      });
+      for (const payment of toProve) {
+        await prisma.payment.update({
+          where: { id: payment.id },
+          data: {
+            proofRef: await writeBlob(
+              `payment-proof/${company.id}`,
+              await renderPdf(
+                'PAYMENT ADVICE',
+                [
+                  `${company.name}`,
+                  '',
+                  `Reference ${payment.referenceNumber}`,
+                  `Amount Rs ${payment.amount.toString()}`,
+                  `Value date ${payment.date.toISOString().slice(0, 10)}`,
+                  '',
+                  'Transaction completed. This advice is computer generated.',
+                ].join('\n'),
+              ),
+            ),
+            proofUploadedAt: at(payment.date, 11, 30),
+          },
+        });
+        totals.paymentProofs++;
+      }
+    }
+
     console.log(
       `    ${LABOUR_NAMES.length} labour workers, ${ASSETS.length} assets, ${ITEMS.length} items, ${EQUIPMENT.length} machines`,
+    );
+    console.log(
+      `    ${documents.companyDocuments} company documents, ${documents.projectDocuments} project documents`,
     );
   }
 
@@ -3203,6 +3914,9 @@ async function main() {
   );
   console.log(
     `  Recruitment: ${totals.candidates} candidates, ${totals.interviews} interviews, ${totals.offers} offers, ${totals.onboarding} onboarding checklists, ${totals.letters} letters, ${totals.resignations} resignations`,
+  );
+  console.log(
+    `  Documents: ${totals.companyDocuments} company documents, ${totals.projectDocuments} project documents, ${totals.paymentProofs} payment proofs`,
   );
   console.log(
     '\n  Every login is  <first>.<last>@<company-domain>  with password  secret42',

@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 import { DocumentTypesService } from './document-types.service';
 import { computeDocumentTypeFlag } from './document-type-flag';
 import { DEFAULT_DOCUMENT_TYPES } from './default-document-types';
@@ -52,6 +55,48 @@ describe('DEFAULT_DOCUMENT_TYPES', () => {
     expect(flagOf('PHOTO')).toBe('Mandatory');
     expect(flagOf('DRIVING_LICENCE')).toBe('ExpiryNumber');
     expect(flagOf('MEDICAL_FITNESS')).toBe('Expiry');
+  });
+
+  /**
+   * 017 FR-024. The restriction reaches an existing company through a one-time
+   * `UPDATE` in migration `20260915162449_company_documents` and a newly created one
+   * through this array, so the two lists have to name the same codes. Asserting the
+   * defaults alone would still pass if the migration were later widened, and a
+   * company's Aadhaar type would be restricted or not depending only on the date the
+   * company was created.
+   */
+  it('restricts Aadhaar and nothing else, in step with the migration', () => {
+    const restricted = DEFAULT_DOCUMENT_TYPES.filter((d) => d.isRestricted).map(
+      (d) => d.code,
+    );
+    expect(restricted).toEqual(['AADHAAR']);
+
+    const sql = readFileSync(
+      join(
+        __dirname,
+        '../../../prisma/migrations/20260915162449_company_documents/migration.sql',
+      ),
+      'utf8',
+    );
+    const clause =
+      /SET "isRestricted" = true\s+WHERE upper\("code"\) IN \(([^)]*)\)/i.exec(
+        sql,
+      );
+    expect(clause).not.toBeNull();
+    const migrationCodes = clause![1]
+      .split(',')
+      .map((c) => c.trim().replace(/'/g, ''));
+
+    // The migration matches spelling variants an operator may have used; every
+    // *default* code it names must be one this array restricts, and vice versa.
+    expect(migrationCodes).toContain('AADHAAR');
+    for (const code of restricted) {
+      expect(migrationCodes).toContain(code);
+    }
+    const defaultCodes = new Set(DEFAULT_DOCUMENT_TYPES.map((d) => d.code));
+    for (const code of migrationCodes.filter((c) => defaultCodes.has(c))) {
+      expect(restricted).toContain(code);
+    }
   });
 });
 
