@@ -207,3 +207,70 @@ already mounts its own provider, so hoisting would render two company selectors 
   and writes `settings.DocumentType` from a `settings` controller. Principle II holds: the new route
   takes a DTO. Principle III holds: the eight kinds stay in `src/settings/document-kinds.ts` and the
   new route reads them rather than restating them.
+
+---
+
+## Amendment — 2026-09-16 (second), FR-007a
+
+The write endpoint has existed since this feature shipped. What made the screen read-only was that
+nothing told it which kinds could be required, so the only way to name one was to know a document
+type's internal identifier. `DocumentType.scope` removed that obstacle; this is the wiring.
+
+### D5 — `availableTypes` is filtered in `projects`, not by changing what `settings` returns
+
+`listRequirements` already calls `DocumentTypesService.listForCompany(companyId)` for name
+resolution, so the rows are in hand and the addition costs no query. They are filtered to
+`company | both` **in the projects service**, from the `scope` already on each row.
+
+`listForCompany` is deliberately left alone. `hr` depends on it returning everything — it resolves
+an employee's document types by id, and a scope filter there would silently drop rows that already
+exist on employee records. The decision about what may be *required of a project* belongs to the
+surface making that offer, not to the method that fetches the master.
+
+No Principle I concern either way: `projects` reaches `settings` through an exported service method
+and never queries `settings.DocumentType` itself, which is why
+`ProjectDocumentRequirement.documentTypeId` is a bare string (research §3).
+
+### D6 — the picker offers what is not already required
+
+Filtered from `availableTypes` minus the current set. The backend deduplicates a set sent with one
+kind twice — a client mistake it declines to fail a whole configuration over — but an interface that
+offers an option which silently does nothing is a different problem, and belongs fixed where the
+offer is made.
+
+### D7 — the defaults become the company's set on the first save, with no new endpoint
+
+`setRequirements` already replaces rather than merges, so a screen that loads whatever `GET` returned
+and PUTs it back does exactly the right thing for a company running on defaults: the six shipped
+kinds land as six rows. `usingDefaults` is already in the response and is what the screen says it
+with. **No backend change for this at all**; recorded here because "the first save adopts the
+defaults" sounds like it needs one.
+
+### D8 — one materialiser, two callers, each constrained to its own declared set
+
+`undefinedCodes` names a required kind the company has no document type for. On Company Documents
+that state now has an action behind it; leaving it actionless here would be the same gap we just
+closed, one screen over.
+
+`POST /company-documents/required-kinds/:code` cannot serve it: it is guarded by `COMPANY_SETTINGS`
+and validates against `REQUIRED_COMPANY_DOCUMENT_KINDS`, so a `SETTINGS` holder configuring project
+paperwork is refused twice over — once by the guard and once by the code list.
+
+So the creation moves into `DocumentTypesService.defineDeclaredKind(ctx, companyId, kind, actor)`,
+which owns `settings.DocumentType` and takes an already-resolved `RequiredDocumentKind`. It performs
+**no code-set validation of its own** — each caller resolves against the set it is entitled to:
+
+- `CompanyDocumentsService.defineRequiredKind` against `REQUIRED_COMPANY_DOCUMENT_KINDS`, under
+  `COMPANY_SETTINGS`. Its existing refusal test stands unchanged.
+- The project requirements surface against `REQUIRED_PROJECT_DOCUMENT_KINDS`, under `SETTINGS`.
+
+That is the whole permission argument, kept intact on both sides: neither caller can materialise a
+kind the other owns, and neither can invent one. A shared method validating against the union of both
+sets would quietly hand each surface the other's list.
+
+### Phase status
+
+- **Post-amendment constitution re-check**: PASS. No new table, no migration, no cross-schema query —
+  `projects` reaches `settings` through exported service methods it already injects. Principle II
+  holds: the new route takes a path parameter validated against configuration, and the existing PUT
+  already has its DTO. Principle III holds: both declared sets stay in `src/settings/document-kinds.ts`.
