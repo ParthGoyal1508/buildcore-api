@@ -14,7 +14,9 @@ import { StorageService } from '../../common/storage/storage.service';
 import {
   REQUIRED_COMPANY_DOCUMENT_CODES,
   REQUIRED_COMPANY_DOCUMENT_KINDS,
+  scopeForCode,
 } from '../document-kinds';
+import { DEFAULT_DOCUMENT_TYPES } from '../reference-data/default-document-types';
 import {
   DOCUMENT_EXPIRY_REQUIRED,
   DOCUMENT_KIND_NOT_REQUIRED,
@@ -79,6 +81,9 @@ export interface CompanyDocumentCompleteness {
     isRequired: boolean;
   }[];
 }
+
+/** The employee file's codes, for `scopeForCode`. Derived, never restated. */
+const DEFAULT_DOCUMENT_TYPE_CODES = DEFAULT_DOCUMENT_TYPES.map((d) => d.code);
 
 @Injectable()
 export class CompanyDocumentsService {
@@ -162,7 +167,10 @@ export class CompanyDocumentsService {
     // are excluded: deactivating a kind is how an administrator retires it, and offering
     // it in the upload control would make that switch do nothing visible.
     const availableKinds = types
-      .filter((t) => t.isActive)
+      // The organisation's papers only (017 amendment). An employee's marksheet is not
+      // something a company files against itself, and offering it here was the other
+      // half of the same mixing that put GST in the Employee Setup list.
+      .filter((t) => t.isActive && t.scope !== 'employee')
       .map((t) => ({
         documentTypeId: t.id,
         code: t.code,
@@ -249,6 +257,9 @@ export class CompanyDocumentsService {
           hasExpiry: kind.hasExpiry,
           needsNumber: kind.needsNumber,
           isRestricted: kind.isRestricted ?? false,
+          // Aadhaar and PAN come out `both`: required of the company and held on an
+          // employee's file. The rule is `scopeForCode`, shared with the backfill.
+          scope: scopeForCode(kind.code, DEFAULT_DOCUMENT_TYPE_CODES),
           // Below the defaults seeded at company creation, which start at 10 and step by
           // ten. A statutory paper defined later belongs after the employee file rather
           // than interleaved with it.
@@ -266,6 +277,82 @@ export class CompanyDocumentsService {
         documentTypeCode: created.code,
         definedFor: 'company-document',
       },
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return {
+      documentTypeId: created.id,
+      code: created.code,
+      name: created.name,
+    };
+  }
+
+  /**
+   * Defines a document kind this company invents for itself (FR-001b).
+   *
+   * Scoped to `company` unconditionally. That single fact is what lets this sit behind
+   * `COMPANY_SETTINGS` rather than the `EMPLOYEES` permission guarding
+   * `settings/document-types`: a kind created here can never appear in the employee file,
+   * so this is not general document-type creation reached through a second door.
+   *
+   * The code is derived rather than asked for. It is an internal identifier that only
+   * has to be unique within the company, and an administrator holding a certificate has
+   * no basis on which to invent one. Collisions get a numeric suffix rather than a
+   * refusal — two kinds a person would name "Insurance" are a real thing, and making
+   * somebody rename their second one to satisfy a column they cannot see is the kind of
+   * refusal that teaches people the software is against them.
+   */
+  async createCompanyKind(
+    ctx: RlsContext,
+    companyId: string,
+    input: { name: string; hasExpiry?: boolean; needsNumber?: boolean },
+    actor: { userId: string; ipAddress: string },
+  ): Promise<{ documentTypeId: string; code: string; name: string }> {
+    const name = input.name.trim();
+    const base =
+      name
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40) || 'DOCUMENT';
+
+    const created = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const taken = new Set(
+        (
+          await tx.documentType.findMany({
+            where: { companyId, code: { startsWith: base } },
+            select: { code: true },
+          })
+        ).map((t) => t.code),
+      );
+      let code = base;
+      for (let n = 2; taken.has(code); n++) code = `${base}_${n}`;
+
+      return tx.documentType.create({
+        data: {
+          companyId,
+          code,
+          name,
+          isMandatory: false,
+          hasExpiry: input.hasExpiry ?? false,
+          needsNumber: input.needsNumber ?? false,
+          // Never from the request. FR-024's restriction is a rule about regulated
+          // personal data settled in configuration, not a checkbox on a creation form.
+          isRestricted: false,
+          scope: 'company',
+          sortOrder: 600,
+        },
+        select: { id: true, code: true, name: true },
+      });
+    });
+
+    await this.audit.record({
+      entityType: AuditEntityType.COMPANY,
+      action: AuditAction.CREATE,
+      entityId: created.id,
+      changes: { documentTypeCode: created.code, scope: 'company' },
       accountId: actor.userId,
       companyId,
       ipAddress: actor.ipAddress,

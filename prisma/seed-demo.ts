@@ -49,6 +49,7 @@ import {
 import {
   REQUIRED_COMPANY_DOCUMENT_KINDS,
   REQUIRED_PROJECT_DOCUMENT_KINDS,
+  scopeForCode,
 } from '../src/settings/document-kinds';
 import { DEFAULT_DOCUMENT_TYPES } from '../src/settings/reference-data/default-document-types';
 import { DEFAULT_VENDOR_CATEGORIES } from '../src/settings/vendor-categories/vendor-categories.service';
@@ -221,7 +222,14 @@ async function seedCompanyDefaults(
   superAdminRoleId: string | null,
 ): Promise<void> {
   await prisma.documentType.createMany({
-    data: DEFAULT_DOCUMENT_TYPES.map((d) => ({ ...d, companyId })),
+    data: DEFAULT_DOCUMENT_TYPES.map((d) => ({
+      ...d,
+      companyId,
+      scope: scopeForCode(
+        d.code,
+        DEFAULT_DOCUMENT_TYPES.map((x) => x.code),
+      ),
+    })),
     skipDuplicates: true,
   });
   await prisma.vendorCategory.createMany({
@@ -447,6 +455,12 @@ async function seedDocumentsAndLetters(input: {
         hasExpiry: t.hasExpiry,
         needsNumber: t.needsNumber,
         isRestricted: t.isRestricted ?? false,
+        // The shared rule (017 amendment), so the seed cannot disagree with the
+        // migration about which list a kind belongs to.
+        scope: scopeForCode(
+          t.code,
+          DEFAULT_DOCUMENT_TYPES.map((d) => d.code),
+        ),
         sortOrder: 200 + i,
       },
     });
@@ -3174,6 +3188,10 @@ async function main() {
             companyId: company.id,
             code: dt.code,
             name: dt.name,
+            // The demo's own kit documents are an employee's, not the company's.
+            // Left at the column default they would come out `both` and show up in the
+            // Company Documents dropdown beside the GST certificate.
+            scope: 'employee',
             isMandatory: false,
             hasExpiry: dt.expiry ?? false,
             needsNumber: dt.number ?? false,

@@ -361,6 +361,7 @@ Table DocumentType {
 point*, not a label: the letter template resolver refuses a restricted type outright,
 so the rule holds for letter kinds nobody has defined yet, and superseded versions are
 purged on a bounded schedule rather than retained forever (017 FR-006a).']
+  scope DocumentTypeScope [not null, default: 'both', note: 'Which list this kind belongs to. See `DocumentTypeScope`.']
   sortOrder Int [not null, default: 0]
   isActive Boolean [not null, default: true, note: 'Inactive types are excluded from new-upload selection; historical employee
 records referencing them are unaffected (FR-019).']
@@ -371,11 +372,6 @@ records referencing them are unaffected (FR-019).']
   indexes {
     (companyId, code) [unique]
   }
-
-  Note: 'Per-company employee document types. The display flag
-(MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
-NOT stored — it is a pure function of the three booleans below, computed on read
-so it can never drift from them (research.md §7).'
 }
 
 Table CompanyDocument {
@@ -3496,6 +3492,12 @@ Enum LabourWageCycle {
 Enum TaxRegime {
   old
   new
+}
+
+Enum DocumentTypeScope {
+  employee
+  company
+  both
 }
 
 Enum ExportFormat {

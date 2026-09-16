@@ -37,6 +37,7 @@ against what this specification says, not new scope invented afterwards.
 
 - Q: May an administrator file a company document of a kind outside the required eight — a MSME certificate, a trade licence, a rent agreement? → A: **Yes.** The required eight are the set *completeness is measured against*, never the set that may be *stored*. Any document kind the company has defined may be filed, and the ones outside the required eight are supplementary — present in the list, absent from the completeness count. FR-001 already said "classified by kind" without restricting which; the shipped list filtered to the required codes, so a supplementary document could be uploaded and then never seen again.
 - Q: When a required kind has no document type defined for the company at all, what should the interface offer? → A: **Define the type in place.** The distinction between "defined but not uploaded" and "never defined" is already carried through the contract as a null type identifier, and the existing answer to the second case is an interface that offers nothing at all. An administrator looking at a kind reported missing must be able to act on it where they are standing.
+- Q: An administrator wants to file a kind this product never declared — an MSME certificate, a trade licence, a rent agreement. Where do they define it? → A: **On the documents screen, as a company-scoped kind.** `DocumentType` serves two unrelated lists through one table — the employee file and the organisation's paperwork — and they were already mixed, so every company's Employee Setup list showed GST and work order among the marksheets. The kinds now carry a scope, the two screens show only what belongs to them, and each may create only into its own list. That is what allows creation from a `COMPANY_SETTINGS` screen without it becoming a second door to the `EMPLOYEES` permission guarding the employee master.
 - Q: The company documents and signatory surfaces are pinned to the caller's own company while the rest of this feature accepts a named company. Fix here, or wait for feature 019's multi-company work? → A: **Fix here, narrowly.** These two surfaces are made consistent with the two this same feature already shipped (letter kinds, project document requirements), reusing the company selector the plant and recruitment sections already mount. Feature 019 FR-008–FR-013 owns the *product* answer — one switcher at the top of every screen, persisted across reloads, hidden for single-company users — and replaces that selector everywhere when it lands. This clarification does not move that scope into 017; it removes an inconsistency inside 017.
 
 ## User Scenarios & Testing *(mandatory)*
@@ -246,6 +247,13 @@ currently carry a reference number and nothing behind it.
   Stated explicitly because FR-001 and FR-003 are separable and were implemented as one — the shipped
   list was filtered to the required codes, so a supplementary document could be stored and was then
   invisible, which is worse than refusing it.
+- **FR-001b**: Users MUST be able to define a company document kind the product never declared, from
+  the documents surface, without holding the permission that guards the employee document master
+  (Clarifications, 2026-09-16). Document kinds MUST carry a scope distinguishing the employee file
+  from the organisation's paperwork, each surface MUST list only the kinds belonging to it, and a
+  kind created from one surface MUST NOT appear on the other. A kind serving both — Aadhaar and PAN
+  are required of the company and held on an employee's file — MUST be expressible as such rather
+  than forced to one side.
 - **FR-002**: System MUST define a required set of company document kinds covering at least GST, PF,
   ESIC, labour licence, PAN, TAN, Aadhaar and cancelled cheque.
 - **FR-003**: System MUST report which required company document kinds are present and which are

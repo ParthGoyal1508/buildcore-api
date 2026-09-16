@@ -612,6 +612,31 @@ model LetterTemplate {
 /// (MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
 /// NOT stored — it is a pure function of the three booleans below, computed on read
 /// so it can never drift from them (research.md §7).
+/// Which vocabulary a document kind belongs to (017 amendment, 2026-09-16).
+///
+/// `DocumentType` is one table serving two unrelated lists: the employee file (Aadhaar,
+/// marksheets, PF forms) and the organisation's paperwork (GST certificate, labour
+/// licence, work order). They were already mixed — every company's Employee Setup list
+/// showed the statutory kinds too — and the screens owning each list are guarded by
+/// different permissions, so the mixing is not merely untidy: it is a question about who
+/// may add to whose list.
+///
+/// `company` covers project paperwork as well as the company's own. Both are the
+/// organisation's papers rather than a person's, and a third value would split a
+/// distinction no screen makes.
+///
+/// `both` is the default, and the honest answer for a kind that genuinely serves both —
+/// Aadhaar and PAN are required of the company AND held on file for an employee. It is
+/// also the only safe landing place for a kind this product did not define, because it
+/// is the one value that cannot hide an existing row from a screen already showing it.
+enum DocumentTypeScope {
+  employee
+  company
+  both
+
+  @@schema("settings")
+}
+
 model DocumentType {
   id        String  @id @default(cuid())
   companyId String
@@ -630,6 +655,9 @@ model DocumentType {
   /// so the rule holds for letter kinds nobody has defined yet, and superseded versions are
   /// purged on a bounded schedule rather than retained forever (017 FR-006a).
   isRestricted Boolean @default(false)
+
+  /// Which list this kind belongs to. See `DocumentTypeScope`.
+  scope DocumentTypeScope @default(both)
 
   sortOrder Int     @default(0)
   /// Inactive types are excluded from new-upload selection; historical employee

@@ -505,3 +505,25 @@ required kind that has no type and upload against it.
 
 - [X] T089 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
   Report **actual numbers**; the baseline to beat is 917 unit / 89 suites and 435 e2e / 22 suites.
+
+### FR-001b — a kind of the company's own (added 2026-09-16, after browser verification)
+
+- [X] T090 [US1] `DocumentTypeScope` enum and `DocumentType.scope`, defaulting to `both` — the only
+  value that cannot hide an existing row from a screen already showing it.
+- [X] T091 [US1] `scopeForCode()` in `src/settings/document-kinds.ts`: ONE rule, shared by the
+  migration backfill, the required-kind materialiser, both seeders and the demo seed.
+- [X] T092 [US1] Migration `20260916120000_document_type_scope` — column plus a three-statement
+  backfill, one file so it is one transaction.
+- [X] T093 [P] [US1] `document-type-scope.spec.ts` parses the migration SQL and fails if it stops
+  agreeing with `scopeForCode()`. Asserts the code COUNT first, so a regex that stopped matching
+  cannot pass over three empty lists.
+- [X] T094 [US1] Scope the two read paths: Employee Setup lists `employee|both`, `availableKinds`
+  lists `company|both`.
+- [X] T095 [US1] `POST /company-documents/types` under `COMPANY_SETTINGS` — always company-scoped,
+  code derived from the name, `isRestricted` never from the request.
+- [X] T096 [P] [US1] e2e: the created kind is offerable immediately AND absent from the employee
+  master. The second half is the one that would be a silent authorization hole.
+- [X] T097 [US1] Set scope at creation in `DocumentTypesService.seedDefaultsForCompany` and the demo
+  seed, with a unit test. **Found by reseeding and reading the result**: the migration backfill only
+  reaches rows that existed when it ran, so without this every company created afterwards got its
+  seventeen employee defaults listed in Company Documents beside the GST certificate.

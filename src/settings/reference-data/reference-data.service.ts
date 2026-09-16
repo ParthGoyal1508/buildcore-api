@@ -317,11 +317,14 @@ export class ReferenceDataService {
   async getShift(
     shiftId: string,
   ): Promise<{ inTime: string; outTime: string; graceMinutes: number } | null> {
-    const shift = await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
-      tx.shift.findUnique({
-        where: { id: shiftId },
-        select: { inTime: true, outTime: true, graceMinutes: true },
-      }),
+    const shift = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.shift.findUnique({
+          where: { id: shiftId },
+          select: { inTime: true, outTime: true, graceMinutes: true },
+        }),
     );
     if (!shift) return null;
     return {

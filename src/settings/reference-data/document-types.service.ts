@@ -15,6 +15,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../company-scope';
 import { DEFAULT_DOCUMENT_TYPES } from './default-document-types';
+import { scopeForCode } from '../document-kinds';
 import {
   DocumentTypeFlag,
   computeDocumentTypeFlag,
@@ -38,6 +39,9 @@ function toView(documentType: DocumentType): DocumentTypeView {
   };
 }
 
+/** Derived once, never restated — `scopeForCode` needs the employee file's codes. */
+const DEFAULT_DOCUMENT_TYPE_CODES = DEFAULT_DOCUMENT_TYPES.map((d) => d.code);
+
 @Injectable()
 export class DocumentTypesService {
   constructor(
@@ -58,7 +62,17 @@ export class DocumentTypesService {
   ): Promise<number> {
     const run = async (client: Prisma.TransactionClient) => {
       const { count } = await client.documentType.createMany({
-        data: DEFAULT_DOCUMENT_TYPES.map((d) => ({ ...d, companyId })),
+        // `scope` through the shared rule (017 amendment) rather than left to the column
+        // default. The default is `both`, which is right for a row nobody classified and
+        // wrong for these: every company created after the scope migration would get its
+        // seventeen employee defaults showing up in the Company Documents list beside the
+        // GST certificate, and the migration's backfill only ever reaches rows that
+        // existed when it ran.
+        data: DEFAULT_DOCUMENT_TYPES.map((d) => ({
+          ...d,
+          companyId,
+          scope: scopeForCode(d.code, DEFAULT_DOCUMENT_TYPE_CODES),
+        })),
         // Re-seeding an existing company must not blow up on its existing codes.
         skipDuplicates: true,
       });
@@ -80,7 +94,13 @@ export class DocumentTypesService {
       rlsContextFor(caller),
       (tx) =>
         tx.documentType.findMany({
-          where: companyScope(caller, companyId),
+          where: {
+            ...companyScope(caller, companyId),
+            // The employee file only (017 amendment). Before the scope column this
+            // returned the organisation's statutory kinds too — GST, work order, BOQ —
+            // mixed in among the marksheets, in every company.
+            scope: { in: ['employee', 'both'] },
+          },
           orderBy: [{ sortOrder: 'asc' }, { code: 'asc' }],
         }),
     );
@@ -113,6 +133,11 @@ export class DocumentTypesService {
             companyId,
             code,
             name: dto.name.trim(),
+            // This is the Employee Setup master's create route, so what it creates is an
+            // employee document type (017 amendment). The column default is `both`,
+            // which is right for a row nobody classified and wrong for one created here
+            // by somebody looking at the employee file.
+            scope: 'employee',
             isMandatory: dto.isMandatory ?? false,
             hasExpiry: dto.hasExpiry ?? false,
             needsNumber: dto.needsNumber ?? false,

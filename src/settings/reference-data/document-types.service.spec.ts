@@ -4,6 +4,7 @@ import { join } from 'path';
 import { DocumentTypesService } from './document-types.service';
 import { computeDocumentTypeFlag } from './document-type-flag';
 import { DEFAULT_DOCUMENT_TYPES } from './default-document-types';
+import { scopeForCode } from '../document-kinds';
 import { createPrismaMock } from '../testing/prisma-mock';
 
 describe('computeDocumentTypeFlag', () => {
@@ -97,6 +98,51 @@ describe('DEFAULT_DOCUMENT_TYPES', () => {
     for (const code of migrationCodes.filter((c) => defaultCodes.has(c))) {
       expect(restricted).toContain(code);
     }
+  });
+});
+
+/**
+ * The same class of bug as the Aadhaar one above, and found the same way — by running
+ * the seed and reading the result rather than by reasoning about it.
+ *
+ * A row's scope reaches it from two places: the migration backfill for rows that already
+ * existed, and the creating code for everything after. Miss the second and every company
+ * created from now on gets its seventeen employee defaults listed in Company Documents
+ * beside the GST certificate, with no error anywhere.
+ */
+describe('DocumentTypesService.seedDefaultsForCompany', () => {
+  it('sets a scope on every default rather than leaving the column default', async () => {
+    const createMany = jest.fn().mockResolvedValue({ count: 0 });
+    const prisma = createPrismaMock({ documentType: { createMany } });
+    const service = new DocumentTypesService(
+      prisma as never,
+      { record: jest.fn() } as never,
+    );
+
+    await service.seedDefaultsForCompany('co-1', prisma.tx as never);
+
+    const rows = createMany.mock.calls[0][0].data as {
+      code: string;
+      scope: string;
+    }[];
+    expect(rows).toHaveLength(DEFAULT_DOCUMENT_TYPES.length);
+    for (const row of rows) {
+      expect(row.scope).toBeDefined();
+      expect(row.scope).toBe(
+        scopeForCode(
+          row.code,
+          DEFAULT_DOCUMENT_TYPES.map((d) => d.code),
+        ),
+      );
+    }
+
+    // The two that are genuinely both, spelled out: Aadhaar and PAN are required of the
+    // company AND held on an employee's file, and resolving either to one side would
+    // remove it from the other screen entirely.
+    const scopeOf = (code: string) => rows.find((r) => r.code === code)!.scope;
+    expect(scopeOf('AADHAAR')).toBe('both');
+    expect(scopeOf('PAN')).toBe('both');
+    expect(scopeOf('MARKSHEET_10')).toBe('employee');
   });
 });
 

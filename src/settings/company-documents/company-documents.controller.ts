@@ -21,7 +21,10 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../company-scope';
 import { CompanyDocumentsService } from './company-documents.service';
-import { UploadCompanyDocumentDto } from './dto/company-document.dto';
+import {
+  CreateCompanyDocumentKindDto,
+  UploadCompanyDocumentDto,
+} from './dto/company-document.dto';
 
 /**
  * The company's statutory papers (017 US1, FR-001 to FR-006, FR-023, FR-024).
@@ -105,6 +108,31 @@ export class CompanyDocumentsController {
         documentNumber: dto.documentNumber ?? null,
         expiresAt: dto.expiresAt ?? null,
       },
+      { userId: caller.id, ipAddress },
+    );
+  }
+
+  @Post('types')
+  @ApiOperation({
+    summary: 'Define a document kind this company invents for itself (FR-001b)',
+    description:
+      'For anything outside the required eight — an MSME certificate, a trade licence, ' +
+      'a rent agreement. Created **company-scoped**, so it appears here and never in the ' +
+      'employee document list; that is what lets this route sit behind ' +
+      '`COMPANY_SETTINGS` rather than the `EMPLOYEES` permission on ' +
+      '`settings/document-types`. The code is derived from the name — it is an internal ' +
+      'identifier, and asking for one here would be asking the wrong person.',
+  })
+  async createKind(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: CreateCompanyDocumentKindDto,
+    @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.documents.createCompanyKind(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      dto,
       { userId: caller.id, ipAddress },
     );
   }

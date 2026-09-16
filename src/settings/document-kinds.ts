@@ -133,3 +133,39 @@ export const REQUIRED_COMPANY_DOCUMENT_CODES: string[] =
 
 export const REQUIRED_PROJECT_DOCUMENT_CODES: string[] =
   REQUIRED_PROJECT_DOCUMENT_KINDS.map((k) => k.code);
+
+/**
+ * Which list a *declared* document kind belongs to (017 amendment, 2026-09-16).
+ *
+ * The rule, in one place, because three things have to agree on it: the backfill in
+ * migration `20260916..._document_type_scope`, the route that materialises a required
+ * kind, and the demo seed. `document-type-scope.spec.ts` parses the migration's SQL and
+ * fails if it stops matching this function — two lists of codes maintained by hand would
+ * disagree the first time anybody added a kind, and the symptom would be a document type
+ * quietly missing from one of the two screens.
+ *
+ * A code this product never declared returns `both`, which is also the column default: an
+ * operator-created kind cannot be classified from here, and `both` is the only answer
+ * that cannot hide it from a screen that was already showing it.
+ */
+export type DocumentTypeScopeValue = 'employee' | 'company' | 'both';
+
+export function scopeForCode(
+  code: string,
+  employeeDefaultCodes: readonly string[],
+): DocumentTypeScopeValue {
+  const upper = code.trim().toUpperCase();
+  const isEmployee = employeeDefaultCodes.some(
+    (c) => c.toUpperCase() === upper,
+  );
+  const isOrganisation = [
+    ...REQUIRED_COMPANY_DOCUMENT_CODES,
+    ...REQUIRED_PROJECT_DOCUMENT_CODES,
+  ].some((c) => c.toUpperCase() === upper);
+
+  // Aadhaar and PAN land here: required of the company, and held on an employee's file.
+  if (isEmployee && isOrganisation) return 'both';
+  if (isOrganisation) return 'company';
+  if (isEmployee) return 'employee';
+  return 'both';
+}

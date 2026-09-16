@@ -8,7 +8,11 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
-import { REQUIRED_COMPANY_DOCUMENT_KINDS } from '../src/settings/document-kinds';
+import {
+  REQUIRED_COMPANY_DOCUMENT_KINDS,
+  scopeForCode,
+} from '../src/settings/document-kinds';
+import { DEFAULT_DOCUMENT_TYPES } from '../src/settings/reference-data/default-document-types';
 
 /**
  * Company statutory documents over HTTP (017 US1, T018).
@@ -60,6 +64,8 @@ describe('Company documents (e2e)', () => {
   let adminToken: string;
   let outsiderToken: string;
   let crossToken: string;
+  /** Holds EMPLOYEES, which is what guards the employee document master. */
+  let employeeAdminToken: string;
   let otherCompanyId: string;
   let otherGstTypeId: string;
   const userIds: string[] = [];
@@ -126,6 +132,14 @@ describe('Company documents (e2e)', () => {
           code: kind.code,
           name: kind.label,
           hasExpiry: kind.code === 'LABOUR_LICENCE',
+          // Through the same rule the migration and the service use, rather than the
+          // column default. A fixture that left these `both` would be testing a state
+          // production never produces, and the assertion below would fail for a reason
+          // that has nothing to do with the behaviour under test.
+          scope: scopeForCode(
+            kind.code,
+            DEFAULT_DOCUMENT_TYPES.map((d) => d.code),
+          ),
         },
       });
       if (kind.code === 'GST') gstTypeId = t.id;
@@ -161,6 +175,15 @@ describe('Company documents (e2e)', () => {
     crossToken = (
       await makeUser('Cross', [
         Permission.COMPANY_SETTINGS,
+        Permission.CROSS_COMPANY_ACCESS,
+      ])
+    ).token;
+    // A separate account on purpose: `/settings/document-types` is guarded by EMPLOYEES
+    // and this suite's admin holds only COMPANY_SETTINGS. Needing a second account to
+    // read that list is itself the permission split these tests are about.
+    employeeAdminToken = (
+      await makeUser('EmpAdmin', [
+        Permission.EMPLOYEES,
         Permission.CROSS_COMPANY_ACCESS,
       ])
     ).token;
@@ -439,6 +462,86 @@ describe('Company documents (e2e)', () => {
   });
 
   /**
+   * FR-001b — the thing the screen could not do at all before: add a kind of its own.
+   *
+   * Over HTTP, and asserting the *scope* as well as the row, because scope is the whole
+   * argument for this route existing behind `COMPANY_SETTINGS` instead of `EMPLOYEES`.
+   * A kind created here that came out visible in the employee file would make this route
+   * general document-type creation reached through a second door.
+   */
+  it('defines a company kind of its own, scoped so it stays out of the employee file', async () => {
+    const created = await http()
+      .post(`/company-documents/types?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({ name: 'MSME / Udyam registration', needsNumber: true })
+      .expect(201);
+
+    expect(created.body.code).toBe('MSME_UDYAM_REGISTRATION');
+
+    const row = await sys.documentType.findUnique({
+      where: { id: created.body.documentTypeId },
+    });
+    expect(row.scope).toBe('company');
+    // Never from the request: restriction is FR-024's rule, settled in configuration.
+    expect(row.isRestricted).toBe(false);
+
+    // Offerable immediately, which is the point of having defined it.
+    const list = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+    expect(
+      list.body.availableKinds.map((k: { code: string }) => k.code),
+    ).toContain('MSME_UDYAM_REGISTRATION');
+
+    // And absent from the employee document master, which is the half that would be a
+    // silent authorization hole rather than a visible bug.
+    const employeeTypes = await http()
+      .get(`/settings/document-types?companyId=${companyId}`)
+      .set(auth(employeeAdminToken))
+      .expect(200);
+    expect(
+      employeeTypes.body.map((t: { code: string }) => t.code),
+    ).not.toContain('MSME_UDYAM_REGISTRATION');
+  });
+
+  it('suffixes a derived code rather than refusing a duplicate name', async () => {
+    const first = await http()
+      .post(`/company-documents/types?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({ name: 'Rent agreement' })
+      .expect(201);
+    const second = await http()
+      .post(`/company-documents/types?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({ name: 'Rent agreement' })
+      .expect(201);
+
+    expect(first.body.code).toBe('RENT_AGREEMENT');
+    expect(second.body.code).toBe('RENT_AGREEMENT_2');
+  });
+
+  /**
+   * The other side of the split: the statutory kinds used to appear in Employee Setup's
+   * list in every company, mixed in with the marksheets.
+   */
+  it('keeps the statutory kinds out of the employee document list', async () => {
+    const employeeTypes = await http()
+      .get(`/settings/document-types?companyId=${companyId}`)
+      .set(auth(employeeAdminToken))
+      .expect(200);
+    const codes = employeeTypes.body.map((t: { code: string }) => t.code);
+
+    expect(codes).not.toContain('GST');
+    expect(codes).not.toContain('LABOUR_LICENCE');
+    expect(codes).not.toContain('WORK_ORDER');
+    // Aadhaar's claim is asserted where it is created, not here: this suite skips
+    // defining it so the "never defined" branch has something to exercise, so whether it
+    // exists at this point depends on test order. An assertion that depends on test order
+    // is worse than no assertion, because it passes until somebody reorders the file.
+  });
+
+  /**
    * T085, FR-003a. AADHAAR is the kind this suite deliberately never defined a type for,
    * so it is reported missing with a null `documentTypeId` — the "never even defined"
    * branch, which had no action behind it at all before this amendment.
@@ -465,6 +568,10 @@ describe('Company documents (e2e)', () => {
       where: { id: defined.body.documentTypeId },
     });
     expect(row.isRestricted).toBe(true);
+    // And `both`, not `company`: Aadhaar is required of the company AND held on an
+    // employee's file. Resolving it to one side would make it vanish from the other —
+    // and for Aadhaar the other side is the screen carrying FR-024's handling.
+    expect(row.scope).toBe('both');
 
     await http()
       .post(`/company-documents?companyId=${companyId}`)
