@@ -30,6 +30,15 @@ and no letter can be signed.
 - Q: Must issuing a work order, LOI or purchase order always go through the feature-016 approval chain, or only above a value threshold? → A: **Always.** Every commercial letter kind passes the director-final chain before it may be issued. No monetary threshold, and letters carry no committed-value field.
 - Q: Should Aadhaar remain in the required company document set given it is regulated personal data? → A: **Keep it**, with the controls previously written as assumptions promoted to testable requirements: permission-restricted access, every retrieval audit-logged, and never rendered into any letter.
 
+### Session 2026-09-16
+
+Raised during manual verification of the shipped feature. All three are gaps in what was built
+against what this specification says, not new scope invented afterwards.
+
+- Q: May an administrator file a company document of a kind outside the required eight — a MSME certificate, a trade licence, a rent agreement? → A: **Yes.** The required eight are the set *completeness is measured against*, never the set that may be *stored*. Any document kind the company has defined may be filed, and the ones outside the required eight are supplementary — present in the list, absent from the completeness count. FR-001 already said "classified by kind" without restricting which; the shipped list filtered to the required codes, so a supplementary document could be uploaded and then never seen again.
+- Q: When a required kind has no document type defined for the company at all, what should the interface offer? → A: **Define the type in place.** The distinction between "defined but not uploaded" and "never defined" is already carried through the contract as a null type identifier, and the existing answer to the second case is an interface that offers nothing at all. An administrator looking at a kind reported missing must be able to act on it where they are standing.
+- Q: The company documents and signatory surfaces are pinned to the caller's own company while the rest of this feature accepts a named company. Fix here, or wait for feature 019's multi-company work? → A: **Fix here, narrowly.** These two surfaces are made consistent with the two this same feature already shipped (letter kinds, project document requirements), reusing the company selector the plant and recruitment sections already mount. Feature 019 FR-008–FR-013 owns the *product* answer — one switcher at the top of every screen, persisted across reloads, hidden for single-company users — and replaces that selector everywhere when it lands. This clarification does not move that scope into 017; it removes an inconsistency inside 017.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The company's statutory papers live in the system (Priority: P1)
@@ -61,6 +70,15 @@ confirm the set is reported as complete only when all required kinds are present
    previous version is retained and marked superseded rather than destroyed.
 6. **Given** a user without company-settings permission, **When** they request a company document,
    **Then** it is refused.
+7. **Given** a document kind the company has defined that is not one of the required eight, **When** a
+   document is filed against it, **Then** it appears in the company's documents and does not change
+   the completeness count either way.
+8. **Given** a required kind for which the company has no document type at all, **When** the
+   administrator acts on it from the documents screen, **Then** the type can be defined there and the
+   kind becomes uploadable without leaving the screen.
+9. **Given** a user who works across more than one company, **When** they choose a company on the
+   documents screen, **Then** the documents, the completeness count and every upload belong to the
+   chosen company.
 
 ---
 
@@ -222,10 +240,20 @@ currently carry a reference number and nothing behind it.
 ### Functional Requirements
 
 - **FR-001**: System MUST store documents against a company, each classified by kind.
+- **FR-001a**: System MUST accept and list a company document of **any** document kind the company has
+  defined, not only the required ones (Clarifications, 2026-09-16). Kinds outside the required set are
+  supplementary: they appear in the company's documents and are excluded from the completeness count.
+  Stated explicitly because FR-001 and FR-003 are separable and were implemented as one — the shipped
+  list was filtered to the required codes, so a supplementary document could be stored and was then
+  invisible, which is worse than refusing it.
 - **FR-002**: System MUST define a required set of company document kinds covering at least GST, PF,
   ESIC, labour licence, PAN, TAN, Aadhaar and cancelled cheque.
 - **FR-003**: System MUST report which required company document kinds are present and which are
   missing.
+- **FR-003a**: Where a required kind has no document type defined for the company, System MUST allow
+  that type to be defined from the documents surface itself (Clarifications, 2026-09-16). "Defined but
+  not uploaded" and "never defined" are already distinguished in the contract; this makes the second
+  case actionable rather than merely reported.
 - **FR-004**: System MUST record an expiry date for document kinds that expire, and MUST refuse an
   upload of such a kind without one.
 - **FR-005**: System MUST raise a reminder before a company document expires.
@@ -283,6 +311,14 @@ currently carry a reference number and nothing behind it.
   document MUST NOT be rendered into, attached to, or referenced by any letter template
   (Clarifications, 2026-09-15). These were assumptions until this session; they are requirements now
   because the cost of getting them wrong is legal rather than functional.
+- **FR-025**: Every surface in this feature MUST let a caller who may work across companies name the
+  company they are acting in, and MUST refuse a cross-company caller who names none rather than
+  guessing (Clarifications, 2026-09-16). This is a consistency requirement, not a multi-company
+  feature: letter kinds and project document requirements already behave this way, company documents
+  and signatories do not, and the difference is invisible until a user with access to two companies
+  finds one surface pinned to the wrong one. **Feature 019 FR-008–FR-013 owns the product answer** —
+  a persistent switcher at the top of every screen — and supersedes the per-section selector this
+  requirement settles for.
 
 ### Non-Functional Requirements
 

@@ -133,3 +133,77 @@ No constitutional violation requires justification. Two items are recorded as *c
 
 **Next**: `/speckit-tasks`. Expect a task count near 016's and a phased breakdown — the two document
 stores are independent of the letter restructure and can ship first.
+
+---
+
+## Amendment — 2026-09-16 (Clarifications session of the same date)
+
+Design for FR-001a, FR-003a and FR-025. Scoped as an amendment rather than a new plan because the
+three are gaps between what this document specified and what shipped, not new capability.
+
+### D1 — `completenessFor` drops the code filter and partitions in memory
+
+The shipped query is `where: { companyId, code: { in: REQUIRED_COMPANY_DOCUMENT_CODES } }`, which is
+why a supplementary document is stored and then invisible. **The filter is removed**: the query
+fetches every `DocumentType` for the company with its current document joined, and the split into
+required-present / required-missing / supplementary happens in memory against
+`REQUIRED_COMPANY_DOCUMENT_CODES`.
+
+This is deliberately the *simpler* query, not a more complex one. It stays **one query**, so
+research §4 and the T016 query-count assertion hold unchanged — and T016 gains a case proving the
+count is still one when supplementary types exist, because "one query" is the property that would
+silently rot first. The cost is fetching the company's full type master (33 rows in the seeded demo)
+instead of eight; a second query to fetch the supplementary half would be the worse trade.
+
+### D2 — `supplementary` is a third list, not a widened `present`
+
+`CompanyDocumentCompleteness` gains `supplementary: CompanyDocumentView[]`. It is NOT merged into
+`present`, because `present` is what the completeness figure counts and merging would make an
+unrelated trade licence move a compliance number. The web schema takes it with a `.default([])` so a
+client deployed ahead of the server degrades to today's behaviour rather than failing to parse.
+
+### D3 — materialising a required type is a company-documents route, not a document-types one
+
+FR-003a's obvious implementation is to call the existing `POST /settings/document-types` from the
+documents screen. **It is rejected**: that controller is guarded by `Permission.EMPLOYEES` and this
+one by `Permission.COMPANY_SETTINGS`, so the affordance would be invisible to exactly the
+administrator the requirement is written for — someone who administers the company's statutory papers
+and has no reason to hold the employee-records permission.
+
+Instead the company-documents controller gains a route that materialises a **required** kind by its
+code, with the name and flags taken from `REQUIRED_COMPANY_DOCUMENT_KINDS` rather than from the
+request. A code outside that set is refused. This cannot become a general document-type creation
+backdoor around `EMPLOYEES`: the caller supplies no name, no code of their choosing and no flags —
+only which of the eight declared kinds to bring into existence. Idempotent, so two administrators
+clicking at once produce one type rather than a unique violation.
+
+### D4 — `companyIdFor()` is copied, not invented
+
+`company-documents.controller.ts` and `signatories.controller.ts` take `@Query('companyId')` on every
+route and resolve it through the same private `companyIdFor(caller, requested)` helper that
+`letter-kinds.controller.ts` and `project-documents.controller.ts` already carry: a cross-company
+caller may name any company and is refused with a 400 if they name none; a company-scoped caller gets
+their own and cannot name another. Row-level scoping is unchanged — `assertInScope` and RLS already
+enforce it, and this decides only *which* company's list is being asked for.
+
+Deliberately duplicated in a fourth and fifth file rather than extracted to a shared helper. Three
+copies is where extraction usually pays, but the two existing copies are in different modules
+(`settings`, `projects`) and the shared home for it would be `common/`, where it would become a
+dependency of every controller that ever needs company scoping — a larger commitment than this
+amendment should make on its own. Recorded here so the next person to touch it has the reason rather
+than the impression of carelessness.
+
+### Web (see the companion plan)
+
+All four 017 screens, not merely company documents: none of the typed clients sends `companyId`
+today, so the two controllers that already accept it are also being called single-company.
+`CompanyProvider` is mounted **per page** on the four 017 pages rather than on
+`app/dashboard/settings/layout.tsx` — the layout wraps every settings section, and `employee-setup`
+already mounts its own provider, so hoisting would render two company selectors on that page.
+
+### Phase status
+
+- **Post-amendment constitution re-check**: PASS. No new table, no new cross-schema query — D3 reads
+  and writes `settings.DocumentType` from a `settings` controller. Principle II holds: the new route
+  takes a DTO. Principle III holds: the eight kinds stay in `src/settings/document-kinds.ts` and the
+  new route reads them rather than restating them.
