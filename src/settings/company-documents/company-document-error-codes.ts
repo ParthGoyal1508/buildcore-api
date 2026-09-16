@@ -26,7 +26,18 @@ export const DOCUMENT_TYPE_NOT_FOUND = 'DOCUMENT_TYPE_NOT_FOUND';
  */
 export const DOCUMENT_TYPE_RESTRICTED = 'DOCUMENT_TYPE_RESTRICTED';
 
+/**
+ * A code outside the required set was passed to the required-kind materialiser (FR-003a).
+ *
+ * The route exists so an administrator holding `COMPANY_SETTINGS` can bring one of the
+ * eight declared kinds into existence without also holding `EMPLOYEES`, which is what
+ * guards general document-type creation. Refusing anything outside that set is what keeps
+ * it from being a way around that permission rather than a convenience within it.
+ */
+export const DOCUMENT_KIND_NOT_REQUIRED = 'DOCUMENT_KIND_NOT_REQUIRED';
+
 export type CompanyDocumentErrorCode =
   | typeof DOCUMENT_EXPIRY_REQUIRED
   | typeof DOCUMENT_TYPE_NOT_FOUND
-  | typeof DOCUMENT_TYPE_RESTRICTED;
+  | typeof DOCUMENT_TYPE_RESTRICTED
+  | typeof DOCUMENT_KIND_NOT_REQUIRED;

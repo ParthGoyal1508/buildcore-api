@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Ip,
-  NotFoundException,
   Put,
   Query,
   UseGuards,
@@ -19,6 +18,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { SetProjectDocumentRequirementsDto } from './dto/project-document-requirement.dto';
 import { ProjectDocumentsService } from './project-documents.service';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /**
  * Which documents a project is expected to hold (017 US2, FR-007, FR-008, FR-009).
@@ -57,7 +57,7 @@ export class ProjectDocumentsController {
   ) {
     return this.documents.listRequirements(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
     );
   }
 
@@ -79,7 +79,7 @@ export class ProjectDocumentsController {
   ) {
     return this.documents.setRequirements(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
       dto,
       { userId: caller.id, ipAddress },
     );
@@ -89,19 +89,4 @@ export class ProjectDocumentsController {
    * A cross-company caller must say which company they mean; everyone else is pinned to
    * their own, so a query parameter can never widen a caller's scope.
    */
-  private companyIdFor(caller: AuthenticatedUser, requested?: string): string {
-    if (rlsContextFor(caller).isSuperAdmin) {
-      const companyId = requested ?? caller.companyId;
-      if (!companyId) {
-        throw new NotFoundException(
-          'companyId is required for a cross-company caller',
-        );
-      }
-      return companyId;
-    }
-    if (!caller.companyId) {
-      throw new NotFoundException('Caller has no company assigned');
-    }
-    return caller.companyId;
-  }
 }

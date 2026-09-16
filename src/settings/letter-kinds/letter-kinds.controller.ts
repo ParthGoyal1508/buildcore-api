@@ -5,7 +5,6 @@ import {
   Get,
   HttpCode,
   Ip,
-  NotFoundException,
   Param,
   Post,
   Put,
@@ -26,6 +25,7 @@ import {
   UpdateLetterKindDto,
 } from './dto/letter-kind.dto';
 import { LetterKindsService } from './letter-kinds.service';
+import { resolveCompanyId } from '../company-scope';
 
 /**
  * Letter kinds as data (017 US5, FR-011, FR-022).
@@ -57,7 +57,7 @@ export class LetterKindsController {
   ) {
     return this.kinds.listFor(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
       { includeInactive: includeInactive === 'true' },
     );
   }
@@ -78,7 +78,7 @@ export class LetterKindsController {
   ) {
     return this.kinds.create(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
       dto,
       { userId: caller.id, ipAddress },
     );
@@ -100,7 +100,7 @@ export class LetterKindsController {
   ) {
     return this.kinds.update(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
       id,
       dto,
       { userId: caller.id, ipAddress },
@@ -123,25 +123,9 @@ export class LetterKindsController {
   ) {
     await this.kinds.remove(
       rlsContextFor(caller),
-      this.companyIdFor(caller, companyId),
+      resolveCompanyId(caller, companyId),
       id,
       { userId: caller.id, ipAddress },
     );
-  }
-
-  private companyIdFor(caller: AuthenticatedUser, requested?: string): string {
-    if (rlsContextFor(caller).isSuperAdmin) {
-      const companyId = requested ?? caller.companyId;
-      if (!companyId) {
-        throw new NotFoundException(
-          'companyId is required for a cross-company caller',
-        );
-      }
-      return companyId;
-    }
-    if (!caller.companyId) {
-      throw new NotFoundException('Caller has no company assigned');
-    }
-    return caller.companyId;
   }
 }

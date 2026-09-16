@@ -17,6 +17,7 @@ import {
 } from '../document-kinds';
 import {
   DOCUMENT_EXPIRY_REQUIRED,
+  DOCUMENT_KIND_NOT_REQUIRED,
   DOCUMENT_TYPE_NOT_FOUND,
 } from './company-document-error-codes';
 
@@ -46,6 +47,15 @@ export interface CompanyDocumentCompleteness {
   present: CompanyDocumentView[];
   missing: MissingKind[];
   expiringSoon: CompanyDocumentView[];
+  /**
+   * Documents filed against a kind outside the required set (FR-001a).
+   *
+   * A separate list rather than more entries in `present`, because `present` is what
+   * the completeness figure counts: merging them would let filing an unrelated trade
+   * licence move a compliance number, which answers a different question than the one
+   * the screen is asking.
+   */
+  supplementary: CompanyDocumentView[];
 }
 
 @Injectable()
@@ -69,6 +79,14 @@ export class CompanyDocumentsService {
    * `DocumentType` is per company, so a kind the company never defined a type for is
    * reported missing with a null `documentTypeId`: that is the honest answer to "do you
    * hold a GST certificate?" and it tells the interface it must create the type first.
+   *
+   * The query is **not** filtered to the required codes (FR-001a, plan D1). It was, and
+   * that is why a document filed against any other kind was stored and then never seen
+   * again — worse than refusing the upload, because the file exists and nothing says so.
+   * Every type the company has defined is fetched and the split into required and
+   * supplementary happens below. That is the simpler query, not a more complex one: it
+   * stays ONE statement whatever the company has defined, which is the property T016
+   * asserts and the only one that would rot quietly.
    */
   async completenessFor(
     ctx: RlsContext,
@@ -76,7 +94,7 @@ export class CompanyDocumentsService {
   ): Promise<CompanyDocumentCompleteness> {
     const types = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.documentType.findMany({
-        where: { companyId, code: { in: REQUIRED_COMPANY_DOCUMENT_CODES } },
+        where: { companyId },
         include: {
           // Only the CURRENT document per type. Superseded ones are history, not
           // evidence of present compliance, and the partial unique index guarantees
@@ -104,15 +122,123 @@ export class CompanyDocumentsService {
       }
     }
 
+    // Everything else the company actually holds. Required codes are compared
+    // case-insensitively here exactly as they are above, so a type recorded as `gst`
+    // cannot be counted in `present` and listed again as supplementary.
+    const requiredCodes = new Set(
+      REQUIRED_COMPANY_DOCUMENT_CODES.map((c) => c.toUpperCase()),
+    );
+    const supplementary: CompanyDocumentView[] = [];
+    for (const type of types) {
+      if (requiredCodes.has(type.code.toUpperCase())) continue;
+      const doc = type.companyDocuments[0];
+      if (doc) supplementary.push(this.toView(doc, type));
+    }
+    supplementary.sort((a, b) => a.name.localeCompare(b.name));
+
     const horizon = new Date();
     horizon.setDate(
       horizon.getDate() + config().documents.expiryReminderLeadDays,
     );
-    const expiringSoon = present.filter(
+    // Over BOTH lists, not just `present` (FR-001a). `CompanyDocumentExpiryRule` has
+    // never filtered by kind — it reminds on every current document with a date — so a
+    // required-only warning list here would leave the dashboard warning about a lapsing
+    // trade licence that the documents screen itself shows as fine. `expiringSoon` is a
+    // warning, not the compliance count; D2's rule is that supplementary kinds must not
+    // move `present`/`missing`, and they do not.
+    const expiringSoon = [...present, ...supplementary].filter(
       (d) => d.expiresAt !== null && d.expiresAt <= horizon,
     );
 
-    return { present, missing, expiringSoon };
+    return { present, missing, expiringSoon, supplementary };
+  }
+
+  /**
+   * Brings a required kind's `DocumentType` into existence for this company (FR-003a).
+   *
+   * Every field of the created row comes from `REQUIRED_COMPANY_DOCUMENT_KINDS`
+   * (Principle III) — **the caller supplies only which code**. That is the whole reason
+   * this route can sit behind `COMPANY_SETTINGS` while general document-type creation
+   * sits behind `EMPLOYEES`: an administrator here cannot invent a type, only materialise
+   * one this feature already declares required. A code outside that set is refused, and
+   * `company-documents.service.spec.ts` asserts that refusal rather than trusting it.
+   *
+   * Idempotent. Two administrators clicking "Define and upload" at the same moment should
+   * produce one type and two successful responses, not one success and a unique violation
+   * on `(companyId, code)`.
+   */
+  async defineRequiredKind(
+    ctx: RlsContext,
+    companyId: string,
+    code: string,
+    actor: { userId: string; ipAddress: string },
+  ): Promise<{ documentTypeId: string; code: string; name: string }> {
+    const normalised = code.trim().toUpperCase();
+    const kind = REQUIRED_COMPANY_DOCUMENT_KINDS.find(
+      (k) => k.code.toUpperCase() === normalised,
+    );
+    if (!kind) {
+      throw new BadRequestException({
+        statusCode: 400,
+        message:
+          `"${code}" is not one of the required company document kinds. This route ` +
+          `only brings a declared kind into existence; other document types are ` +
+          `defined under Settings → Document Types.`,
+        code: DOCUMENT_KIND_NOT_REQUIRED,
+      });
+    }
+
+    const existing = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.documentType.findFirst({
+        where: { companyId, code: kind.code },
+        select: { id: true, code: true, name: true },
+      }),
+    );
+    if (existing) {
+      return {
+        documentTypeId: existing.id,
+        code: existing.code,
+        name: existing.name,
+      };
+    }
+
+    const created = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.documentType.create({
+        data: {
+          companyId,
+          code: kind.code,
+          name: kind.label,
+          isMandatory: false,
+          hasExpiry: kind.hasExpiry,
+          needsNumber: kind.needsNumber,
+          isRestricted: kind.isRestricted ?? false,
+          // Below the defaults seeded at company creation, which start at 10 and step by
+          // ten. A statutory paper defined later belongs after the employee file rather
+          // than interleaved with it.
+          sortOrder: 500,
+        },
+        select: { id: true, code: true, name: true },
+      }),
+    );
+
+    await this.audit.record({
+      entityType: AuditEntityType.COMPANY,
+      action: AuditAction.CREATE,
+      entityId: created.id,
+      changes: {
+        documentTypeCode: created.code,
+        definedFor: 'company-document',
+      },
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return {
+      documentTypeId: created.id,
+      code: created.code,
+      name: created.name,
+    };
   }
 
   /**

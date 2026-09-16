@@ -59,6 +59,9 @@ describe('Company documents (e2e)', () => {
   let licenceTypeId: string;
   let adminToken: string;
   let outsiderToken: string;
+  let crossToken: string;
+  let otherCompanyId: string;
+  let otherGstTypeId: string;
   const userIds: string[] = [];
   const roleIds: string[] = [];
 
@@ -129,19 +132,55 @@ describe('Company documents (e2e)', () => {
       if (kind.code === 'LABOUR_LICENCE') licenceTypeId = t.id;
     }
 
+    // A second company, so FR-025's scoping can be asserted against a real other-company
+    // row rather than against an empty list — an empty list is what a broken scope and a
+    // correct one look like identically.
+    const other = await sys.company.create({
+      data: {
+        name: 'E2ECD Other Constructions',
+        shortCode: unique('O').slice(0, 10),
+        payrollLockDay: 7,
+        pfEmployerRate: 12,
+        esicEmployerRate: 3.25,
+        gratuityRate: 4.81,
+        bonusRate: 8.33,
+      },
+    });
+    otherCompanyId = other.id;
+    const otherGst = await sys.documentType.create({
+      data: {
+        companyId: otherCompanyId,
+        code: 'GST',
+        name: 'GST registration certificate',
+      },
+    });
+    otherGstTypeId = otherGst.id;
+
     adminToken = (await makeUser('Admin', [Permission.COMPANY_SETTINGS])).token;
     outsiderToken = (await makeUser('Outsider', [Permission.ATTENDANCE])).token;
+    crossToken = (
+      await makeUser('Cross', [
+        Permission.COMPANY_SETTINGS,
+        Permission.CROSS_COMPANY_ACCESS,
+      ])
+    ).token;
   }, 120_000);
 
   afterAll(async () => {
     await sys.companyDocument.deleteMany({ where: { companyId } });
+    await sys.companyDocument.deleteMany({
+      where: { companyId: otherCompanyId },
+    });
     await sys.documentType.deleteMany({ where: { companyId } });
+    await sys.documentType.deleteMany({ where: { companyId: otherCompanyId } });
     await sys.auditLogEntry.deleteMany({ where: { companyId } });
     await sys.refreshToken.deleteMany({ where: { companyId } });
     await sys.userRole.deleteMany({ where: { userId: { in: userIds } } });
     await sys.user.deleteMany({ where: { id: { in: userIds } } });
     await sys.role.deleteMany({ where: { id: { in: roleIds } } });
-    await sys.company.deleteMany({ where: { id: companyId } });
+    await sys.company.deleteMany({
+      where: { id: { in: [companyId, otherCompanyId] } },
+    });
     await app?.close();
   }, 60_000);
 
@@ -309,5 +348,179 @@ describe('Company documents (e2e)', () => {
 
   it('refuses a caller without COMPANY_SETTINGS (FR-023)', async () => {
     await http().get('/company-documents').set(auth(outsiderToken)).expect(403);
+  });
+
+  /**
+   * T081, FR-001a. The regression behind this: the completeness query filtered to the
+   * required codes, so a document filed against any other kind was accepted, stored, and
+   * then never appeared anywhere. Worse than a refusal — the file exists and nothing on
+   * the screen says so.
+   */
+  it('lists a document of a non-required kind as supplementary (FR-001a)', async () => {
+    const msme = await sys.documentType.create({
+      data: {
+        companyId,
+        code: unique('MSME').toUpperCase(),
+        name: 'Udyam registration',
+      },
+    });
+
+    const before = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    await http()
+      .post(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({
+        documentTypeId: msme.id,
+        data: b64,
+        contentType: 'application/pdf',
+      })
+      .expect(201);
+
+    const after = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    expect(
+      after.body.supplementary.map(
+        (d: { documentTypeId: string }) => d.documentTypeId,
+      ),
+    ).toContain(msme.id);
+    // And the compliance figure did not move, which is the half that would be a quiet
+    // wrong answer rather than a visible one.
+    expect(after.body.present).toHaveLength(before.body.present.length);
+    expect(after.body.missing).toHaveLength(before.body.missing.length);
+  });
+
+  /**
+   * T085, FR-003a. AADHAAR is the kind this suite deliberately never defined a type for,
+   * so it is reported missing with a null `documentTypeId` — the "never even defined"
+   * branch, which had no action behind it at all before this amendment.
+   */
+  it('materialises a required kind that has no type, then accepts an upload against it', async () => {
+    const before = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+    const aadhaar = before.body.missing.find(
+      (m: { code: string }) => m.code === 'AADHAAR',
+    );
+    expect(aadhaar.documentTypeId).toBeNull();
+
+    const defined = await http()
+      .post(`/company-documents/required-kinds/AADHAAR?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(201);
+    expect(defined.body.code).toBe('AADHAAR');
+
+    // Aadhaar comes out restricted whatever the caller sent, because the flag is read
+    // from configuration and not from the request (FR-024).
+    const row = await sys.documentType.findUnique({
+      where: { id: defined.body.documentTypeId },
+    });
+    expect(row.isRestricted).toBe(true);
+
+    await http()
+      .post(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .send({
+        documentTypeId: defined.body.documentTypeId,
+        data: b64,
+        contentType: 'application/pdf',
+        documentNumber: 'XXXX XXXX 4821',
+      })
+      .expect(201);
+
+    const after = await http()
+      .get(`/company-documents?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(200);
+    expect(after.body.present.map((d: { code: string }) => d.code)).toContain(
+      'AADHAAR',
+    );
+  });
+
+  it('is idempotent — defining the same required kind twice yields one type', async () => {
+    const first = await http()
+      .post(`/company-documents/required-kinds/TAN?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(201);
+    const second = await http()
+      .post(`/company-documents/required-kinds/TAN?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(201);
+
+    expect(second.body.documentTypeId).toBe(first.body.documentTypeId);
+    const types = await sys.documentType.findMany({
+      where: { companyId, code: 'TAN' },
+    });
+    expect(types).toHaveLength(1);
+  });
+
+  /**
+   * The test that would matter if `resolveCompanyId` were copied wrong: this route now
+   * creates a `settings.DocumentType`, which `settings/document-types` guards with
+   * `EMPLOYEES`. It stays safe only because the caller cannot name the kind freely.
+   */
+  it('refuses to define a kind outside the required set (FR-003a)', async () => {
+    const res = await http()
+      .post(`/company-documents/required-kinds/MSME?companyId=${companyId}`)
+      .set(auth(adminToken))
+      .expect(400);
+    expect(res.body.code).toBe('DOCUMENT_KIND_NOT_REQUIRED');
+  });
+
+  describe('naming the company (FR-025)', () => {
+    it('gives a cross-company caller the company they named', async () => {
+      await http()
+        .post(`/company-documents?companyId=${otherCompanyId}`)
+        .set(auth(crossToken))
+        .send({
+          documentTypeId: otherGstTypeId,
+          data: b64,
+          contentType: 'application/pdf',
+        })
+        .expect(201);
+
+      const res = await http()
+        .get(`/company-documents?companyId=${otherCompanyId}`)
+        .set(auth(crossToken))
+        .expect(200);
+
+      expect(
+        res.body.present.map(
+          (d: { documentTypeId: string }) => d.documentTypeId,
+        ),
+      ).toContain(otherGstTypeId);
+    });
+
+    /**
+     * The one that would be a data leak rather than an inconvenience. A company-scoped
+     * caller naming somebody else's company must get their OWN company back — the query
+     * parameter must never widen scope, which is the rule `companyScope()` has always
+     * followed and the reason `resolveCompanyId` ignores `requested` for these callers.
+     */
+    it('ignores a companyId from a caller without cross-company access', async () => {
+      const res = await http()
+        .get(`/company-documents?companyId=${otherCompanyId}`)
+        .set(auth(adminToken))
+        .expect(200);
+
+      expect(
+        res.body.present.map(
+          (d: { documentTypeId: string }) => d.documentTypeId,
+        ),
+      ).not.toContain(otherGstTypeId);
+      // Their own company's GST, not the other company's.
+      expect(
+        res.body.present.map(
+          (d: { documentTypeId: string }) => d.documentTypeId,
+        ),
+      ).toContain(gstTypeId);
+    });
   });
 });

@@ -458,50 +458,50 @@ required kind that has no type and upload against it.
 
 ### FR-001a — a supplementary document is stored *and visible*
 
-- [ ] T077 [US1] Remove the `code: { in: REQUIRED_COMPANY_DOCUMENT_CODES }` filter from
+- [X] T077 [US1] Remove the `code: { in: REQUIRED_COMPANY_DOCUMENT_CODES }` filter from
   `completenessFor()` in `src/settings/company-documents/company-documents.service.ts` and partition
   the result in memory into `present` / `missing` / `supplementary`. `present` and `missing` keep
   measuring the required eight **only** — a supplementary document must not be able to move a
   compliance figure (D2).
-- [ ] T078 [US1] Add `supplementary: CompanyDocumentView[]` to `CompanyDocumentCompleteness` and to
+- [X] T078 [US1] Add `supplementary: CompanyDocumentView[]` to `CompanyDocumentCompleteness` and to
   the contract in `contracts/documents-and-letters.md`.
-- [ ] T079 [P] [US1] Unit test: a company holding one required and one non-required document reports
+- [X] T079 [P] [US1] Unit test: a company holding one required and one non-required document reports
   the first in `present`, the second in `supplementary`, and a completeness count of 1 — not 2.
-- [ ] T080 [US1] **Extend T016's query-count assertion** rather than writing a second test: assert
+- [X] T080 [US1] **Extend T016's query-count assertion** rather than writing a second test: assert
   the statement count is still exactly one when supplementary types exist. "One query" is the
   property most likely to rot here, and a result-only test passes an N+1 happily (research §4).
-- [ ] T081 [P] [US1] e2e in `test/company-documents.e2e-spec.ts`: upload against a non-required type
+- [X] T081 [P] [US1] e2e in `test/company-documents.e2e-spec.ts`: upload against a non-required type
   and confirm it comes back in `supplementary` — the regression that proves the stored-and-invisible
   bug is gone.
 
 ### FR-003a — materialise a required kind that has no type
 
-- [ ] T082 [US1] Add `POST /company-documents/required-kinds/:code` to
+- [X] T082 [US1] Add `POST /company-documents/required-kinds/:code` to
   `src/settings/company-documents/company-documents.controller.ts`, guarded by the controller's
   existing `COMPANY_SETTINGS`. Name, flags and label come from `REQUIRED_COMPANY_DOCUMENT_KINDS`
   (Principle III) — **the request body supplies none of them** (D3).
-- [ ] T083 [US1] Service method: idempotent (returns the existing type if one is already defined for
+- [X] T083 [US1] Service method: idempotent (returns the existing type if one is already defined for
   the code), and refuses a code outside `REQUIRED_COMPANY_DOCUMENT_CODES` with a named error code.
-- [ ] T084 [P] [US1] Unit test proving the refusal — **this is the test that matters**: a caller
+- [X] T084 [P] [US1] Unit test proving the refusal — **this is the test that matters**: a caller
   holding `COMPANY_SETTINGS` but not `EMPLOYEES` must not be able to reach arbitrary document-type
   creation through this route. Assert an unlisted code is refused, and that the created row's name
   and flags come from configuration regardless of what the request contains.
-- [ ] T085 [P] [US1] e2e: materialise a missing required kind, then upload against it in the same
+- [X] T085 [P] [US1] e2e: materialise a missing required kind, then upload against it in the same
   session; and calling it twice yields one type, not a unique violation.
 
 ### FR-025 — name the company
 
-- [ ] T086 Add `@Query('companyId')` and a private `companyIdFor(caller, requested)` to
+- [X] T086 Add `@Query('companyId')` and a private `companyIdFor(caller, requested)` to
   `src/settings/company-documents/company-documents.controller.ts`, copied from
   `src/settings/letter-kinds/letter-kinds.controller.ts`. All routes: list, history, upload,
   download, and T082's new one.
-- [ ] T087 [P] The same for `src/settings/signatories/signatories.controller.ts`, replacing its
+- [X] T087 [P] The same for `src/settings/signatories/signatories.controller.ts`, replacing its
   current bare `caller.companyId` guard.
-- [ ] T088 [P] e2e: a cross-company caller naming company B gets B's documents; naming none is
+- [X] T088 [P] e2e: a cross-company caller naming company B gets B's documents; naming none is
   refused with 400; a company-scoped caller naming another company does not receive it. The third
   case is the one that would be a data leak if `companyIdFor` were copied wrong.
 
 ### Verification
 
-- [ ] T089 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T089 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
   Report **actual numbers**; the baseline to beat is 917 unit / 89 suites and 435 e2e / 22 suites.

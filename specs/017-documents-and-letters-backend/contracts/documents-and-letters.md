@@ -23,8 +23,31 @@ completenessFor(companyId: string): Promise<{
 ```
 
 Exported so the dashboard can render KYC completeness without reading `settings.CompanyDocument`
-itself. Never takes a `caller`-supplied company id from a query string — the company comes from the
-authenticated context (the guarantee `EmployeesService.requireByUserId` documents for `/my/*`).
+itself.
+
+**Amended 2026-09-16.** Two sentences here were wrong and the implementation followed them.
+
+1. *"Never takes a caller-supplied company id from a query string."* This was written to prevent a
+   query parameter **widening** a caller's scope, which is right — but it was implemented as taking
+   the company from `caller.companyId` and nothing else, which leaves a cross-company administrator
+   pinned to one company with no way out, on the only two surfaces in this feature that behave that
+   way. The rule is now `resolveCompanyId(caller, requested)` in `src/settings/company-scope.ts`: a
+   cross-company caller may name any company and is refused with **400** if they name none; a
+   company-scoped caller's own company always wins and `requested` is ignored outright. The original
+   guarantee survives intact — no parameter can widen scope — and the pinning does not (FR-025).
+2. The shape below is what was actually built, and `supplementary` is new (FR-001a):
+
+```ts
+completenessFor(ctx, companyId: string): Promise<{
+  present: CompanyDocumentView[];       // required kinds held — what the count counts
+  missing: { code; label; documentTypeId: string | null }[];
+  expiringSoon: CompanyDocumentView[];  // across BOTH lists; a warning, not the count
+  supplementary: CompanyDocumentView[]; // kinds outside the required set (FR-001a)
+}>;
+```
+
+Still ONE query. The `code IN (...)` filter was **removed** rather than a second query added, which
+is why the count assertion in `company-documents.service.spec.ts` still holds.
 
 ### `ProjectDocumentsService` (projects)
 
@@ -71,11 +94,23 @@ question and 017 consumes the answer.
 | `GET` | `/company-documents` | `COMPANY_SETTINGS` | Current documents plus completeness (FR-003) |
 | `POST` | `/company-documents` | `COMPANY_SETTINGS` | Upload. Refuses a kind that expires without `expiresAt` (FR-004) |
 | `GET` | `/company-documents/:id/download` | `COMPANY_SETTINGS` | **Audit-logged** before bytes are returned (FR-024) |
-| `DELETE` | `/company-documents/:id` | `COMPANY_SETTINGS` | Supersede semantics — never a hard delete (FR-006) |
+| `POST` | `/company-documents/required-kinds/:code` | `COMPANY_SETTINGS` | **Added 2026-09-16 (FR-003a).** Materialises the `DocumentType` for one *declared* required kind. Idempotent. `DOCUMENT_KIND_NOT_REQUIRED` for anything else |
+
+Every route above takes an optional `?companyId=` (FR-025).
 
 `GET /company-documents` returns, for each required kind, whether it is present — so the client
 renders the missing list without computing it. The missing list is the server's answer, not the
 browser's inference.
+
+**No `DELETE`.** An earlier draft of this table listed one; it was never built and should not be —
+FR-006 retains superseded documents, so "replace" is an upload and a delete verb has nothing it
+could honestly mean.
+
+`POST /company-documents/required-kinds/:code` takes **only the code**. Name, expiry flag, number
+flag and restriction all come from `REQUIRED_COMPANY_DOCUMENT_KINDS`. That is load-bearing rather
+than tidy: general document-type creation is guarded by `EMPLOYEES` and this route by
+`COMPANY_SETTINGS`, and a caller able to supply a name and flags here would be creating arbitrary
+document types without the permission that guards them.
 
 ### Project document requirements
 

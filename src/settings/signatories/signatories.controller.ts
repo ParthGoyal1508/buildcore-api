@@ -3,7 +3,6 @@ import {
   Controller,
   Get,
   Ip,
-  NotFoundException,
   Param,
   Post,
   Put,
@@ -21,6 +20,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { CreateSignatoryDto, UpdateSignatoryDto } from './dto/signatory.dto';
 import { SignatoriesService } from './signatories.service';
+import { resolveCompanyId } from '../company-scope';
 
 /**
  * Signatories (017 US4, FR-016).
@@ -42,10 +42,11 @@ export class SignatoriesController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('includeInactive') includeInactive?: string,
+    @Query('companyId') companyId?: string,
   ) {
     return this.signatories.listFor(
       rlsContextFor(caller),
-      this.companyOf(caller),
+      resolveCompanyId(caller, companyId),
       { includeInactive: includeInactive === 'true' },
     );
   }
@@ -56,10 +57,11 @@ export class SignatoriesController {
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CreateSignatoryDto,
     @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
   ) {
     return this.signatories.create(
       rlsContextFor(caller),
-      this.companyOf(caller),
+      resolveCompanyId(caller, companyId),
       dto,
       { userId: caller.id, ipAddress },
     );
@@ -78,20 +80,14 @@ export class SignatoriesController {
     @Param('id') id: string,
     @Body() dto: UpdateSignatoryDto,
     @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
   ) {
     return this.signatories.update(
       rlsContextFor(caller),
-      this.companyOf(caller),
+      resolveCompanyId(caller, companyId),
       id,
       dto,
       { userId: caller.id, ipAddress },
     );
-  }
-
-  private companyOf(caller: AuthenticatedUser): string {
-    if (!caller.companyId) {
-      throw new NotFoundException('Caller has no company assigned');
-    }
-    return caller.companyId;
   }
 }

@@ -375,94 +375,25 @@ const SIGNATURE_PNG_BASE64 =
 /**
  * The statutory papers 017 asks a company and a project to hold (FR-002, FR-007).
  *
- * These are `DocumentType` rows, and they are NOT in `DEFAULT_DOCUMENT_TYPES` — that
- * list is the *employee* file (Aadhaar, marksheets, PF forms), which happens to share
- * the table. A company with no GST document type reports GST missing, which is the
- * right answer but leaves nothing to upload against, so the demo defines them.
+ * Taken from `REQUIRED_COMPANY_DOCUMENT_KINDS` and `REQUIRED_PROJECT_DOCUMENT_KINDS`
+ * rather than restated: since the 2026-09-16 amendment those carry `hasExpiry` and
+ * `needsNumber`, which is exactly what a `DocumentType` row needs. A second copy of the
+ * list here is how a seed and the product it demonstrates drift into disagreeing about
+ * whether a labour licence expires.
  *
- * `hasExpiry` is set only where the paper genuinely lapses. It is load-bearing rather
- * than descriptive: FR-004 refuses an upload of an expiring kind with no expiry date,
- * and the reminder rule only has something to warn about where a date exists.
+ * They are NOT in `DEFAULT_DOCUMENT_TYPES` — that list is the *employee* file (Aadhaar,
+ * marksheets, PF forms), which happens to share the table. A company with no GST document
+ * type reports GST missing, which is the right answer but leaves nothing to upload
+ * against, so the demo defines them.
  */
-const STATUTORY_DOCUMENT_TYPES: {
-  code: string;
-  name: string;
-  hasExpiry: boolean;
-  needsNumber: boolean;
-}[] = [
-  {
-    code: 'GST',
-    name: 'GST Registration Certificate',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'PF',
-    name: 'PF Establishment Certificate',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'ESIC',
-    name: 'ESIC Registration Certificate',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'TAN',
-    name: 'TAN Allotment Letter',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'LABOUR_LICENCE',
-    name: 'Labour Licence',
-    hasExpiry: true,
-    needsNumber: true,
-  },
-  {
-    code: 'CANCELLED_CHEQUE',
-    name: 'Cancelled Cheque',
-    hasExpiry: false,
-    needsNumber: false,
-  },
-  {
-    code: 'LOI',
-    name: 'Letter of Intent',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'WORK_ORDER',
-    name: 'Work Order',
-    hasExpiry: false,
-    needsNumber: true,
-  },
-  {
-    code: 'INSURANCE',
-    name: 'Insurance Policy',
-    hasExpiry: true,
-    needsNumber: true,
-  },
-  {
-    code: 'MINING_PERMISSION',
-    name: 'Mining Permission',
-    hasExpiry: true,
-    needsNumber: true,
-  },
-  {
-    code: 'LABOUR_INSURANCE',
-    name: 'Labour Insurance (WC Policy)',
-    hasExpiry: true,
-    needsNumber: true,
-  },
-  {
-    code: 'BOQ',
-    name: 'Bill of Quantities',
-    hasExpiry: false,
-    needsNumber: false,
-  },
-];
+const STATUTORY_DOCUMENT_TYPES = [
+  ...REQUIRED_COMPANY_DOCUMENT_KINDS,
+  ...REQUIRED_PROJECT_DOCUMENT_KINDS,
+].filter(
+  // AADHAAR and PAN are already among the seventeen `seedCompanyDefaults` lays down;
+  // re-creating them would be a unique violation on (companyId, code).
+  (kind) => !DEFAULT_DOCUMENT_TYPES.some((d) => d.code === kind.code),
+);
 
 /**
  * Feature 017's half of the demo: statutory documents, project readiness, a signatory
@@ -511,10 +442,11 @@ async function seedDocumentsAndLetters(input: {
       create: {
         companyId,
         code: t.code,
-        name: t.name,
+        name: t.label,
         isMandatory: false,
         hasExpiry: t.hasExpiry,
         needsNumber: t.needsNumber,
+        isRestricted: t.isRestricted ?? false,
         sortOrder: 200 + i,
       },
     });

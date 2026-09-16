@@ -5,6 +5,7 @@ import {
   Ip,
   Param,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -18,6 +19,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
+import { resolveCompanyId } from '../company-scope';
 import { CompanyDocumentsService } from './company-documents.service';
 import { UploadCompanyDocumentDto } from './dto/company-document.dto';
 
@@ -50,10 +52,13 @@ export class CompanyDocumentsController {
       'first time somebody changed it. Resolved in one query regardless of how many ' +
       'kinds are required (FR-003).',
   })
-  async list(@UserEntity() caller: AuthenticatedUser) {
+  async list(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('companyId') companyId?: string,
+  ) {
     return this.documents.completenessFor(
       rlsContextFor(caller),
-      caller.companyId,
+      resolveCompanyId(caller, companyId),
     );
   }
 
@@ -67,10 +72,11 @@ export class CompanyDocumentsController {
   async history(
     @UserEntity() caller: AuthenticatedUser,
     @Param('documentTypeId') documentTypeId: string,
+    @Query('companyId') companyId?: string,
   ) {
     return this.documents.historyFor(
       rlsContextFor(caller),
-      caller.companyId,
+      resolveCompanyId(caller, companyId),
       documentTypeId,
     );
   }
@@ -87,17 +93,44 @@ export class CompanyDocumentsController {
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: UploadCompanyDocumentDto,
     @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
   ) {
     return this.documents.upload(
       rlsContextFor(caller),
       {
-        companyId: caller.companyId,
+        companyId: resolveCompanyId(caller, companyId),
         documentTypeId: dto.documentTypeId,
         data: Buffer.from(dto.data, 'base64'),
         contentType: dto.contentType,
         documentNumber: dto.documentNumber ?? null,
         expiresAt: dto.expiresAt ?? null,
       },
+      { userId: caller.id, ipAddress },
+    );
+  }
+
+  @Post('required-kinds/:code')
+  @ApiOperation({
+    summary:
+      'Bring a required document kind into existence for this company (FR-003a)',
+    description:
+      'For the case where a required kind is reported missing with a null document type ' +
+      '— the company has never defined one, so there is nothing to upload against. Name, ' +
+      'flags and restriction come from `REQUIRED_COMPANY_DOCUMENT_KINDS`; **the request ' +
+      'supplies only the code**, which is what lets this sit behind `COMPANY_SETTINGS` ' +
+      'while general document-type creation sits behind `EMPLOYEES`. A code outside the ' +
+      'required set is refused with `DOCUMENT_KIND_NOT_REQUIRED`. Idempotent.',
+  })
+  async defineRequiredKind(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('code') code: string,
+    @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.documents.defineRequiredKind(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      code,
       { userId: caller.id, ipAddress },
     );
   }
@@ -117,10 +150,11 @@ export class CompanyDocumentsController {
     @Param('id') id: string,
     @Ip() ipAddress: string,
     @Res() res: Response,
+    @Query('companyId') companyId?: string,
   ) {
     const { data, view } = await this.documents.download(
       rlsContextFor(caller),
-      caller.companyId,
+      resolveCompanyId(caller, companyId),
       id,
       { userId: caller.id, ipAddress },
     );

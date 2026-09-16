@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 
+import { DOCUMENT_KIND_NOT_REQUIRED } from './company-document-error-codes';
 import { CompanyDocumentsService } from './company-documents.service';
 import { REQUIRED_COMPANY_DOCUMENT_KINDS } from '../document-kinds';
 
@@ -31,6 +32,8 @@ function harness(
       }[];
     }[];
     currentDoc?: { id: string } | null;
+    /** Explicit override for `documentType.findFirst`, so `null` can mean "none". */
+    existingType?: { id: string; code: string; name: string } | null;
   } = {},
 ) {
   const calls: string[] = [];
@@ -43,7 +46,13 @@ function harness(
       }),
       findFirst: jest.fn(async () => {
         calls.push('documentType.findFirst');
-        return opts.types?.[0] ?? null;
+        return opts.existingType !== undefined
+          ? opts.existingType
+          : opts.types?.[0] ?? null;
+      }),
+      create: jest.fn(async (args: { data: Record<string, unknown> }) => {
+        calls.push('documentType.create');
+        return { id: 'dt-new', ...args.data };
       }),
     },
     companyDocument: {
@@ -99,6 +108,55 @@ function harness(
 }
 
 const ctx = { isSuperAdmin: false, companyId: COMPANY };
+const actor = { userId: 'user-1', ipAddress: '127.0.0.1' };
+
+/** A document type holding one current document, in the shape the harness mock returns. */
+function typeWithDoc(
+  id: string,
+  code: string,
+  name: string,
+): {
+  id: string;
+  code: string;
+  name: string;
+  hasExpiry: boolean;
+  isRestricted: boolean;
+  companyDocuments: {
+    id: string;
+    documentTypeId: string;
+    documentNumber: string | null;
+    expiresAt: Date | null;
+    uploadedAt: Date;
+    isCurrent: boolean;
+  }[];
+} {
+  return {
+    id,
+    code,
+    name,
+    hasExpiry: false,
+    isRestricted: false,
+    companyDocuments: [
+      {
+        id: `doc-${id}`,
+        documentTypeId: id,
+        documentNumber: null,
+        expiresAt: null,
+        uploadedAt: new Date('2026-01-01'),
+        isCurrent: true,
+      },
+    ],
+  };
+}
+const requiredType = typeWithDoc;
+const supplementaryType = typeWithDoc;
+
+/** Runs `completenessFor` over a given type master and hands back both halves. */
+async function withTypes(types: ReturnType<typeof typeWithDoc>[]) {
+  const { service, calls } = harness({ types });
+  const result = await service.completenessFor(ctx, COMPANY);
+  return { service, calls, result };
+}
 
 describe('CompanyDocumentsService', () => {
   describe('completenessFor (FR-003, T012, T016)', () => {
@@ -136,6 +194,57 @@ describe('CompanyDocumentsService', () => {
       expect(result.missing).toHaveLength(
         REQUIRED_COMPANY_DOCUMENT_KINDS.length - 1,
       );
+    });
+
+    /**
+     * T080. The 2026-09-16 amendment removed the `code IN (...)` filter so supplementary
+     * kinds are visible (FR-001a), which means this query now fetches the company's whole
+     * type master. Extending the count assertion here rather than adding a second test:
+     * the property at risk is "still one statement", and it is at risk precisely when
+     * somebody adds the supplementary half as a follow-up query.
+     */
+    it('stays ONE query when the company holds supplementary kinds too', async () => {
+      const { service, calls, result } = await withTypes([
+        requiredType('dt-gst', 'GST', 'GST registration certificate'),
+        supplementaryType('dt-msme', 'MSME', 'Udyam registration'),
+        supplementaryType('dt-trade', 'TRADE_LICENCE', 'Trade licence'),
+      ]);
+
+      expect(calls).toEqual(['documentType.findMany']);
+      expect(calls).toHaveLength(1);
+      expect(result.supplementary).toHaveLength(2);
+    });
+
+    /**
+     * FR-001a and plan D2. The bug this replaces: a document filed against a kind outside
+     * the required eight was stored and then never appeared anywhere, because the query
+     * filtered them out — worse than refusing the upload, because the file exists and
+     * nothing says so.
+     */
+    it('lists a non-required kind as supplementary without moving the count', async () => {
+      const { result } = await withTypes([
+        requiredType('dt-gst', 'GST', 'GST registration certificate'),
+        supplementaryType('dt-msme', 'MSME', 'Udyam registration'),
+      ]);
+
+      expect(result.present.map((d) => d.code)).toEqual(['GST']);
+      expect(result.supplementary.map((d) => d.code)).toEqual(['MSME']);
+      // The compliance figure counts the required eight and nothing else. If filing an
+      // Udyam certificate could move it, the number would answer a different question
+      // than the one the screen asks.
+      expect(result.present).toHaveLength(1);
+      expect(result.missing).toHaveLength(
+        REQUIRED_COMPANY_DOCUMENT_KINDS.length - 1,
+      );
+    });
+
+    it('does not count a required kind twice when its code is lower-cased', async () => {
+      const { result } = await withTypes([
+        requiredType('dt-gst', 'gst', 'GST registration certificate'),
+      ]);
+
+      expect(result.present.map((d) => d.code)).toEqual(['gst']);
+      expect(result.supplementary).toHaveLength(0);
     });
 
     it('names what is missing rather than counting it', async () => {
@@ -273,6 +382,76 @@ describe('CompanyDocumentsService', () => {
       const insert = calls.indexOf('companyDocument.create');
       expect(demote).toBeGreaterThanOrEqual(0);
       expect(insert).toBeGreaterThan(demote);
+    });
+  });
+
+  /**
+   * T084, FR-003a. This route lets a caller holding `COMPANY_SETTINGS` create a
+   * `settings.DocumentType` row — something `settings/document-types` guards with
+   * `EMPLOYEES`. What keeps that from being a way around the second permission is that
+   * the caller names only *which declared kind* to materialise, and every field of the
+   * resulting row comes from configuration. These tests assert that boundary rather than
+   * trusting the doc comment above the method to keep being true.
+   */
+  describe('defineRequiredKind (FR-003a)', () => {
+    it('refuses a code outside the required set', async () => {
+      const { service, calls } = harness({ existingType: null });
+
+      await expect(
+        service.defineRequiredKind(ctx, COMPANY, 'MSME', actor),
+      ).rejects.toMatchObject({
+        response: { code: DOCUMENT_KIND_NOT_REQUIRED },
+      });
+
+      // Refused before touching the database at all, so a rejected attempt cannot even
+      // be inferred from a row that briefly existed.
+      expect(calls).toEqual([]);
+    });
+
+    it('takes name, flags and restriction from configuration, not the caller', async () => {
+      const { service, tx } = harness({ existingType: null });
+
+      await service.defineRequiredKind(ctx, COMPANY, 'AADHAAR', actor);
+
+      const created = (tx.documentType.create as jest.Mock).mock.calls[0][0]
+        .data;
+      const kind = REQUIRED_COMPANY_DOCUMENT_KINDS.find(
+        (k) => k.code === 'AADHAAR',
+      )!;
+      expect(created.code).toBe(kind.code);
+      expect(created.name).toBe(kind.label);
+      expect(created.hasExpiry).toBe(kind.hasExpiry);
+      expect(created.needsNumber).toBe(kind.needsNumber);
+      // The one that would be a real leak if it were taken from a request body: Aadhaar
+      // must come out restricted whatever the caller sends (FR-024).
+      expect(created.isRestricted).toBe(true);
+      expect(created.companyId).toBe(COMPANY);
+    });
+
+    it('accepts the code in any case, and normalises to the declared spelling', async () => {
+      const { service, tx } = harness({ existingType: null });
+
+      await service.defineRequiredKind(ctx, COMPANY, '  gst  ', actor);
+
+      expect(
+        (tx.documentType.create as jest.Mock).mock.calls[0][0].data.code,
+      ).toBe('GST');
+    });
+
+    it('is idempotent — a second call returns the first type, it does not create another', async () => {
+      const { service, tx } = harness({
+        existingType: { id: 'dt-gst', code: 'GST', name: 'GST certificate' },
+      });
+
+      const result = await service.defineRequiredKind(
+        ctx,
+        COMPANY,
+        'GST',
+        actor,
+      );
+
+      expect(result.documentTypeId).toBe('dt-gst');
+      expect(tx.documentType.create).not.toHaveBeenCalled();
     });
   });
 
