@@ -404,6 +404,46 @@ export interface WorkspaceConfig {
      */
     minEnrolmentPhotos: number;
     maxEnrolmentPhotos: number;
+    /**
+     * Which detector finds the face before landmarks and the descriptor are
+     * computed. `tiny` is `tinyFaceDetector`; `ssd` is `ssdMobilenetv1`.
+     *
+     * Measured on 2026-09-17 against a 640×480 punch-sized frame, same machine:
+     *
+     * | detector      | process RSS | inference | event-loop block |
+     * |---------------|-------------|-----------|------------------|
+     * | `ssd`         | 399 MB      | 221–232ms | 228ms            |
+     * | `tiny` @320   | 239 MB      | 29–36ms   | 35ms             |
+     *
+     * `tiny` is the default because the blocking figure is the one that decides
+     * whether an attendance peak works: WASM inference runs on the main thread, so
+     * for its duration the API answers nothing else. At 228ms a 150-punch burst is
+     * roughly 34 seconds of aggregate stall; at 35ms it is about five.
+     *
+     * The trade is detection sensitivity — `tiny` is worse at *finding* a small,
+     * angled or badly lit face. Landmarks and the descriptor are unchanged, so this
+     * cannot cause a false *match*; it causes a miss, and under 020 FR-013 a miss is
+     * a refused punch and a lost day. Env-overridable in both directions so a
+     * deployment finding too many misses can return to `ssd` without a release.
+     */
+    detector: 'tiny' | 'ssd';
+    /**
+     * Input square the `tiny` detector resizes the frame to. One of 128, 160, 224,
+     * 320, 416, 512, 608 — larger finds smaller faces and costs more. Ignored when
+     * `detector` is `ssd`. 320 measured 29–36ms against 416's 49–56ms with no
+     * accuracy difference worth the latency on a punch selfie, where the face fills
+     * much of the frame.
+     */
+    tinyInputSize: number;
+    /**
+     * Whether to load the models during application startup instead of on the first
+     * punch. True on a long-lived instance: the load is ~40–90ms plus the WASM heap
+     * allocation, and paying it at boot puts it where nobody is waiting — and
+     * surfaces an out-of-memory at startup rather than mid-punch. False keeps the
+     * original lazy behaviour, which is right where deploys are frequent and punches
+     * rare.
+     */
+    preloadModels: boolean;
   };
   offlineQueue: {
     /**

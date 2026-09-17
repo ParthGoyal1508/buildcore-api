@@ -22,10 +22,20 @@ import { ImageProcessingService } from './image-processing.service';
  * build, but it installs identically everywhere and needs no build toolchain in the
  * production image.
  *
- * Models load once, lazily, on first use rather than at construction — a punch is
- * the only thing that needs them, and paying ~6 MB of model loading during
- * application startup would slow every deploy for a capability most requests never
- * touch.
+ * Models load once and are reused. Whether that happens at startup or on first use
+ * is `workspace.faceMatch.preloadModels`, and it now defaults to startup: the
+ * instance is long-lived, so the cost belongs where nobody is waiting, and an
+ * out-of-memory during model loading is far easier to diagnose as a failed boot than
+ * as a failed punch. Either way the load happens exactly once — `ensureLoaded` holds
+ * the in-flight promise so concurrent first punches await one load.
+ *
+ * **Inference blocks the event loop.** tfjs-wasm executes on the main thread, so for
+ * the duration of a face match this process serves no other request. That is why the
+ * detector is configurable and why its default changed on 2026-09-17: measured on a
+ * 640×480 punch frame, `ssdMobilenetv1` blocked the loop for 228ms per punch against
+ * `tinyFaceDetector@320`'s 35ms, and held 399 MB of process RSS against 239 MB. The
+ * fix that removes the blocking rather than shrinking it is a worker thread, which is
+ * a design change and deliberately not attempted here.
  */
 @Injectable()
 export class FaceApiBiometricsService
@@ -34,6 +44,12 @@ export class FaceApiBiometricsService
 {
   private readonly logger = new Logger(FaceApiBiometricsService.name);
   private readonly distanceThreshold: number;
+  private readonly detector: 'tiny' | 'ssd';
+  private readonly tinyInputSize: number;
+  private readonly preloadModels: boolean;
+  /** Built once at load time, not per inference: constructing it per call allocates
+   * an options object for every punch to say the same thing each time. */
+  private detectorOptions: unknown;
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   private faceapi: any;
@@ -47,27 +63,55 @@ export class FaceApiBiometricsService
     private readonly images: ImageProcessingService,
   ) {
     super();
-    this.distanceThreshold =
-      configService.get<WorkspaceConfig>(
-        'workspace',
-      ).faceMatch.distanceThreshold;
+    const { faceMatch } = configService.get<WorkspaceConfig>('workspace');
+    this.distanceThreshold = faceMatch.distanceThreshold;
+    this.detector = faceMatch.detector;
+    this.tinyInputSize = faceMatch.tinyInputSize;
+    this.preloadModels = faceMatch.preloadModels;
   }
 
   onModuleInit(): void {
-    // Intentionally does not await: see the lazy-loading note above.
     this.logger.log(
-      `Face matching ready (WASM backend, distance threshold ${this.distanceThreshold}).`,
+      `Face matching configured (WASM backend, detector ${this.detector}` +
+        `${this.detector === 'tiny' ? `@${this.tinyInputSize}` : ''}, ` +
+        `distance threshold ${this.distanceThreshold}).`,
+    );
+
+    if (!this.preloadModels) return;
+
+    // Deliberately not awaited, and deliberately not allowed to fail the boot
+    // silently. Awaiting here would hold up every other module's initialisation for
+    // the sake of one capability; letting the rejection escape would crash the
+    // process on a transient read. So it is started here and its failure logged —
+    // `ensureLoaded` will retry on the first punch if this attempt failed, because a
+    // rejected `ready` promise is cleared below.
+    void this.ensureLoaded().then(
+      () => this.logger.log('Face-api models preloaded at startup.'),
+      (error) =>
+        this.logger.error(
+          `Face-api model preload failed; will retry on first use. ${error}`,
+        ),
     );
   }
 
-  private async ensureLoaded(): Promise<void> {
+  /** `protected` rather than `private` so a test subclass can drive the load
+   * lifecycle without mocking the WASM modules — this repo tests through real
+   * subclasses rather than module mocks (`biometrics.service.spec.ts`). */
+  protected async ensureLoaded(): Promise<void> {
     if (!this.ready) {
-      this.ready = this.load();
+      // Clear on failure so a transient model-read error is retried by the next
+      // caller instead of being cached as a permanent one. Without this, a failed
+      // preload would refuse every punch for the life of the process.
+      this.ready = this.load().catch((error) => {
+        this.ready = null;
+        throw error;
+      });
     }
     return this.ready;
   }
 
-  private async load(): Promise<void> {
+  /** `protected` for the same reason as `ensureLoaded` above. */
+  protected async load(): Promise<void> {
     /* eslint-disable @typescript-eslint/no-var-requires */
     const faceapi = require('@vladmandic/face-api/dist/face-api.node-wasm.js');
     const tf = require('@tensorflow/tfjs');
@@ -92,13 +136,32 @@ export class FaceApiBiometricsService
       dirname(require.resolve('@vladmandic/face-api/package.json')),
       'model',
     );
-    await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath);
+    // Only the detector is configurable. `faceLandmark68Net` stays the full model
+    // rather than its tiny variant: measured, the tiny landmarks saved 9 MB and no
+    // measurable time, while landmark precision is what aligns the crop the
+    // descriptor is computed from — so downgrading it would cost match quality for
+    // nothing. `faceRecognitionNet` produces the descriptor and has no alternative.
+    if (this.detector === 'ssd') {
+      await faceapi.nets.ssdMobilenetv1.loadFromDisk(modelPath);
+    } else {
+      await faceapi.nets.tinyFaceDetector.loadFromDisk(modelPath);
+    }
     await faceapi.nets.faceLandmark68Net.loadFromDisk(modelPath);
     await faceapi.nets.faceRecognitionNet.loadFromDisk(modelPath);
 
+    this.detectorOptions =
+      this.detector === 'ssd'
+        ? new faceapi.SsdMobilenetv1Options({ minConfidence: 0.5 })
+        : new faceapi.TinyFaceDetectorOptions({
+            inputSize: this.tinyInputSize,
+            scoreThreshold: 0.5,
+          });
+
     this.faceapi = faceapi;
     this.tf = tf;
-    this.logger.log(`Face-api models loaded from ${modelPath}.`);
+    this.logger.log(
+      `Face-api models loaded from ${modelPath} (detector ${this.detector}).`,
+    );
   }
 
   /** Decodes one photo and returns its descriptor, or null if no face is found. */
@@ -117,7 +180,7 @@ export class FaceApiBiometricsService
     ]);
     try {
       const detection = await this.faceapi
-        .detectSingleFace(tensor)
+        .detectSingleFace(tensor, this.detectorOptions)
         .withFaceLandmarks()
         .withFaceDescriptor();
       return detection ? (detection.descriptor as Float32Array) : null;
