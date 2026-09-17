@@ -7,7 +7,6 @@ import {
 import {
   AuditAction,
   AuditEntityType,
-  LetterType,
   Prisma,
   ResignationStatus,
 } from '@prisma/client';
@@ -19,6 +18,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
+import { LetterKindsService } from '../../settings/letter-kinds/letter-kinds.service';
 import { LETTER_NAMESPACE } from '../constants/recruitment.constants';
 import { RecruitmentRefsService } from '../recruitment-refs.service';
 import { renderTemplate } from './letter-tokens.util';
@@ -48,40 +48,50 @@ export class LetterService {
     private readonly auditLog: AuditLogService,
     private readonly storage: StorageService,
     private readonly refs: RecruitmentRefsService,
+    // 017 §1. Recruitment still speaks in kind KEYS — `offer`, `appointment` — exactly
+    // as it did when they were enum values. This resolves a key to the row that replaced
+    // it, and is the only thing about this service the restructure changed.
+    private readonly kinds: LetterKindsService,
   ) {}
 
   async findAll(
     caller: AuthenticatedUser,
-    query: { companyId?: string; letterType?: LetterType; employeeId?: string },
+    query: { companyId?: string; letterType?: string; employeeId?: string },
   ) {
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       (tx) =>
-        tx.generatedLetter.findMany({
+        tx.issuedLetter.findMany({
           where: {
             ...companyScope(caller, query.companyId),
-            ...(query.letterType ? { letterType: query.letterType } : {}),
+            ...(query.letterType
+              ? { letterKind: { key: query.letterType } }
+              : {}),
             ...(query.employeeId ? { employeeId: query.employeeId } : {}),
+            // Composed-but-unissued letters are 017's, not Recruitment's. Excluding
+            // them keeps this list exactly what it was before the restructure.
+            issuedAt: { not: null },
           },
+          include: { letterKind: { select: { key: true } } },
           orderBy: [{ issuedAt: 'desc' }],
         }),
     );
     return rows.map((r) => ({
       id: r.id,
-      letterType: r.letterType,
+      letterType: r.letterKind.key,
       employeeId: r.employeeId,
       candidateId: r.candidateId,
       version: r.version,
       isSuperseded: r.isSuperseded,
-      issuedAt: r.issuedAt.toISOString(),
+      issuedAt: r.issuedAt?.toISOString() ?? null,
     }));
   }
 
   /** Generates a letter for an employee (appointment/confirmation/relieving/experience). */
   async generateForEmployee(
     caller: AuthenticatedUser,
-    dto: { letterType: LetterType; employeeId: string },
+    dto: { letterType: string; employeeId: string },
     ipAddress: string,
   ) {
     const companyId = companyScope(caller).companyId;
@@ -97,7 +107,7 @@ export class LetterService {
       );
     }
 
-    if (dto.letterType === LetterType.relieving) {
+    if (dto.letterType === 'relieving') {
       const processed = await this.refs.isFnfProcessed(caller, dto.employeeId);
       if (!processed) {
         throw new ConflictException(
@@ -119,10 +129,7 @@ export class LetterService {
 
     let lastWorkingDay = '';
     let tenure = '';
-    if (
-      dto.letterType === LetterType.relieving ||
-      dto.letterType === LetterType.experience
-    ) {
+    if (dto.letterType === 'relieving' || dto.letterType === 'experience') {
       const resignation = await withRlsContext(
         this.prisma,
         rlsContextFor(caller),
@@ -221,7 +228,7 @@ export class LetterService {
 
     const letter = await this.renderInTx(tx, caller, {
       companyId: offer.companyId,
-      letterType: LetterType.offer,
+      letterType: 'offer',
       employeeId: null,
       candidateId: offer.candidateId,
       values,
@@ -238,7 +245,11 @@ export class LetterService {
     const letter = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) => tx.generatedLetter.findUnique({ where: { id: letterId } }),
+      (tx) =>
+        tx.issuedLetter.findUnique({
+          where: { id: letterId },
+          include: { letterKind: { select: { key: true } } },
+        }),
     );
     if (!letter) throw new NotFoundException(`Letter ${letterId} not found`);
     assertInScope(caller, letter, `Letter ${letterId}`);
@@ -251,14 +262,17 @@ export class LetterService {
       companyId: letter.companyId,
       ipAddress,
     });
-    return { buffer, filename: `${letter.letterType}-v${letter.version}.pdf` };
+    return {
+      buffer,
+      filename: `${letter.letterKind.key}-v${letter.version}.pdf`,
+    };
   }
 
   private async render(
     caller: AuthenticatedUser,
     input: {
       companyId: string;
-      letterType: LetterType;
+      letterType: string;
       employeeId: string | null;
       candidateId: string | null;
       values: Record<string, string>;
@@ -275,16 +289,21 @@ export class LetterService {
     caller: AuthenticatedUser,
     input: {
       companyId: string;
-      letterType: LetterType;
+      letterType: string;
       employeeId: string | null;
       candidateId: string | null;
       values: Record<string, string>;
       ipAddress: string;
     },
   ) {
-    const template = await this.refs.getActiveTemplate(
+    const kind = await this.kinds.requireByKey(
+      rlsContextFor(caller),
       input.companyId,
       input.letterType,
+    );
+    const template = await this.refs.getActiveTemplate(
+      input.companyId,
+      kind.id,
       tx,
     );
     if (!template) {
@@ -306,33 +325,37 @@ export class LetterService {
     );
 
     // Supersede the prior current letter of this type for this subject.
-    const subjectWhere: Prisma.GeneratedLetterWhereInput = {
+    const subjectWhere: Prisma.IssuedLetterWhereInput = {
       companyId: input.companyId,
-      letterType: input.letterType,
+      letterKindId: kind.id,
       isSuperseded: false,
       ...(input.employeeId ? { employeeId: input.employeeId } : {}),
       ...(input.candidateId ? { candidateId: input.candidateId } : {}),
     };
-    const prior = await tx.generatedLetter.findFirst({
+    const prior = await tx.issuedLetter.findFirst({
       where: subjectWhere,
       orderBy: { version: 'desc' },
     });
     if (prior) {
-      await tx.generatedLetter.update({
+      await tx.issuedLetter.update({
         where: { id: prior.id },
         data: { isSuperseded: true },
       });
     }
 
-    const letter = await tx.generatedLetter.create({
+    const letter = await tx.issuedLetter.create({
       data: {
         companyId: input.companyId,
-        letterType: input.letterType,
+        letterKindId: kind.id,
         employeeId: input.employeeId,
         candidateId: input.candidateId,
         templateId: template.id,
         renderedRef: ref,
         version: (prior?.version ?? 0) + 1,
+        // Recruitment issues immediately: none of its kinds require approval, so there
+        // is no draft stage to sit in. `issuedAt` was `@default(now())` before 017 made
+        // it nullable, so it is set explicitly here to keep the behaviour identical.
+        issuedAt: new Date(),
         issuedBy: caller.id,
       },
     });

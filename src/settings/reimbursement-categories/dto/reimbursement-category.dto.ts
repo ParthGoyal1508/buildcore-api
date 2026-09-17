@@ -40,7 +40,9 @@ export class CreateReimbursementCategoryDto {
   @IsBoolean()
   isActive?: boolean;
 
-  @ApiPropertyOptional({ description: 'Required only for a cross-company caller.' })
+  @ApiPropertyOptional({
+    description: 'Required only for a cross-company caller.',
+  })
   @IsOptional()
   @IsString()
   companyId?: string;

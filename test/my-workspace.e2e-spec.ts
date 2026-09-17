@@ -711,10 +711,21 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
   });
 
   // ------------------------------------------------------ Admin exception queue
-  describe('Attendance exceptions (US2 admin, T030, FR-011a)', () => {
+  //
+  // Rewritten by feature 016. These tests asserted the single-step contract — one admin
+  // confirms a flagged punch and the matter is closed — which is precisely what 016
+  // replaces with a three-level chain (FR-012). The route is unchanged; what happens
+  // underneath is not, and the response shape now carries the punch alongside the chain
+  // state the interface renders.
+  //
+  // This suite's company is created through raw Prisma rather than through
+  // `CompaniesService`, so it has **no approval chain seeded** — which makes it the right
+  // place to pin down what happens when a chain is missing. The full three-level walk
+  // lives in `test/attendance-exceptions.e2e-spec.ts`, where a chain is configured.
+  describe('Attendance exceptions (US2 admin, T030, FR-011a; 016 FR-012)', () => {
     let pendingPunchId: string;
 
-    it('lists pending exceptions for an admin', async () => {
+    it('lists pending exceptions for an admin, each with its approval state', async () => {
       const res = await http()
         .get('/workspace-admin/attendance-exceptions')
         .set(auth(adminToken))
@@ -722,7 +733,11 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
 
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThan(0);
-      pendingPunchId = res.body[0].id;
+      // The row is now `{ punch, approval }` — the punch as before, plus where its chain
+      // has got to (016 T026).
+      expect(res.body[0].punch).toBeDefined();
+      expect(res.body[0].punch.exceptionResolution).toBe('pending');
+      pendingPunchId = res.body[0].punch.id;
     });
 
     it('refuses a caller without the ATTENDANCE permission', async () => {
@@ -732,47 +747,50 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         .expect(403);
     });
 
-    it('resolves an exception as confirmed', async () => {
+    it('still records the flagged punch when no approval chain is configured', async () => {
+      // Feature 003's FR-007 is that a punch failing verification is still recorded.
+      // Feature 016 must not quietly weaken that into "unless the chain is
+      // misconfigured" — somebody physically at work must not end up absent from payroll
+      // because an administrator has not finished a settings screen.
+      const res = await http()
+        .get('/workspace-admin/attendance-exceptions')
+        .set(auth(adminToken))
+        .expect(200);
+
+      const row = res.body.find(
+        (r: { punch: { id: string } }) => r.punch.id === pendingPunchId,
+      );
+      expect(row.punch.exceptionResolution).toBe('pending');
+      // No chain in this company, so no approval state — rendered as null rather than
+      // failing the list.
+      expect(row.approval).toBeNull();
+    });
+
+    it('refuses a decision on a punch that never entered a chain, and says why', async () => {
+      // 404 rather than the old 201: without a chain there is no level to decide at. The
+      // message names the cause, because "not found" about a punch the admin is looking
+      // at is otherwise baffling.
       const res = await http()
         .post(
           `/workspace-admin/attendance-exceptions/${pendingPunchId}/resolve`,
         )
         .set(auth(adminToken))
         .send({ resolution: 'confirmed' })
-        .expect(201);
+        .expect(404);
 
-      expect(res.body.exceptionResolution).toBe('confirmed');
-      expect(res.body.resolvedByUserId).toBe(adminUserId);
-      expect(res.body.resolvedAt).not.toBeNull();
-    });
-
-    it('refuses to re-decide an already-resolved exception', async () => {
-      // Re-deciding would silently overwrite another admin's judgement.
-      await http()
-        .post(
-          `/workspace-admin/attendance-exceptions/${pendingPunchId}/resolve`,
-        )
-        .set(auth(adminToken))
-        .send({ resolution: 'rejected' })
-        .expect(403);
+      expect(res.body.message).toMatch(/no approval chain/i);
     });
 
     it('rejects an invalid resolution value', async () => {
       // `pending` is a state, not a decision — resolving back to unresolved must
       // not be expressible.
-      const res = await http()
-        .get('/workspace-admin/attendance-exceptions')
+      await http()
+        .post(
+          `/workspace-admin/attendance-exceptions/${pendingPunchId}/resolve`,
+        )
         .set(auth(adminToken))
-        .expect(200);
-      if (res.body.length > 0) {
-        await http()
-          .post(
-            `/workspace-admin/attendance-exceptions/${res.body[0].id}/resolve`,
-          )
-          .set(auth(adminToken))
-          .send({ resolution: 'pending' })
-          .expect(400);
-      }
+        .send({ resolution: 'pending' })
+        .expect(400);
     });
   });
 

@@ -1,9 +1,13 @@
 import {
   BadRequestException,
+  ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   AuditAction,
   AuditEntityType,
@@ -13,16 +17,23 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { SLOT_HR } from '../../approvals/approval-slots';
+import { ChainsService } from '../../approvals/chains.service';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   HrPayrollConfig,
   SettingsConfig,
 } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { PayrollScheduleService } from '../../payroll/runs/payroll-schedule.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
 import { zonedDateOnly } from '../leave/leave-days';
+import {
+  ATTENDANCE_CHANGED_UNDER_REVIEW_EVENT,
+  AttendanceChangedUnderReviewEvent,
+} from './attendance-events';
 import { isPayrollLocked } from '../punch/payroll-lock';
 import {
   AttendanceHistoryService,
@@ -86,6 +97,15 @@ export class AttendanceAdminService {
     private readonly attendanceHistory: AttendanceHistoryService,
     private readonly referenceData: ReferenceDataService,
     private readonly auditLog: AuditLogService,
+    // 016 FR-016: payroll owns the answer to "is this period under review"; `hr` must
+    // never read `payroll` tables to find out (research.md §5). forwardRef because
+    // PayrollModule imports HrModule for the engine's attendance reads.
+    @Inject(forwardRef(() => PayrollScheduleService))
+    private readonly payrollSchedule: PayrollScheduleService,
+    // 016 FR-016: which role *is* HR is answered by the chain's slot mapping, not by a
+    // permission — there is deliberately no HR permission to check.
+    private readonly chains: ChainsService,
+    private readonly events: EventEmitter2,
     configService: ConfigService,
   ) {
     this.timeZone = configService.get<SettingsConfig>('settings').timezone;
@@ -249,6 +269,39 @@ export class AttendanceAdminService {
       });
     }
 
+    // 016 FR-016. A run under review has been computed from this attendance and is
+    // sitting in front of approvers; a site user quietly adjusting its inputs is exactly
+    // the thing the chain exists to prevent. HR keeps the right because corrections are
+    // real and someone has to be able to make them.
+    const underReview = await this.payrollSchedule.isPeriodUnderReview(
+      employee.companyId,
+      date,
+    );
+    if (underReview) {
+      const hrRoleId = await this.chains.resolveSlot(
+        caller.rls,
+        employee.companyId,
+        SLOT_HR,
+      );
+      const isHr = hrRoleId !== null && caller.roleIds.includes(hrRoleId);
+      if (!isHr) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          message:
+            hrRoleId === null
+              ? 'Attendance for this period is under payroll review, and no role has ' +
+                'been mapped to HR for this company, so nobody can edit it. An ' +
+                'administrator must map the HR slot in settings.'
+              : 'Attendance for this period is under payroll review. Only HR may edit ' +
+                'it until the run is approved or returned.',
+          code:
+            hrRoleId === null
+              ? 'APPROVAL_SLOT_UNMAPPED'
+              : 'ATTENDANCE_UNDER_PAYROLL_REVIEW',
+        });
+      }
+    }
+
     await this.employeeDocuments.assertMandatoryDocsComplete(
       employee.id,
       employee.companyId,
@@ -293,6 +346,31 @@ export class AttendanceAdminService {
       companyId: employee.companyId,
       ipAddress: caller.ipAddress,
     });
+
+    // 016 FR-017. The run's approvers agreed to figures that no longer hold, so every
+    // approval already given is void and the chain must start again. Announced rather
+    // than called: `hr` needs no answer, and Principle I puts exactly this kind of
+    // fan-out on the event bus.
+    //
+    // Emitted after the write commits, not inside it — a listener that restarted a chain
+    // for an edit the transaction then rolled back would invalidate approvals over a
+    // change that never happened.
+    //
+    // `emitAsync`, and awaited. `emit` does not wait for asynchronous listeners, which
+    // leaves a window between this edit being acknowledged and the approvals actually
+    // being voided — and in that window a director can approve figures that have already
+    // changed underneath them. Awaiting is not asking payroll for an answer (the listener
+    // swallows its own failures and returns nothing); it is refusing to report the edit
+    // as done while the consequence the requirement promises is still outstanding.
+    if (underReview) {
+      const event: AttendanceChangedUnderReviewEvent = {
+        companyId: employee.companyId,
+        period: dto.date.slice(0, 7),
+        employeeId: dto.employeeId,
+        actorUserId: caller.userId,
+      };
+      await this.events.emitAsync(ATTENDANCE_CHANGED_UNDER_REVIEW_EVENT, event);
+    }
 
     return { employeeId: dto.employeeId, date: dto.date };
   }

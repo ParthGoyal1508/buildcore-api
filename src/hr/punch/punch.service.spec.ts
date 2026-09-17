@@ -55,11 +55,17 @@ describe('PunchService', () => {
     companyId: 'co-1',
     siteId: 'site-1',
     shiftId: 'sh-1',
+    // Feature 016 composes the approval queue's subject line from these — the spine
+    // cannot read the punch to build one itself (research.md §1).
+    firstName: 'Rajesh',
+    lastName: 'Kulkarni',
+    employeeCode: 'CO1-0001',
   };
   const caller: Caller = {
     userId: 'user-1',
     companyId: 'co-1',
     ipAddress: '127.0.0.1',
+    roleIds: [],
     rls: { isSuperAdmin: false, companyId: 'co-1' },
   };
 
@@ -122,6 +128,7 @@ describe('PunchService', () => {
     // punch's own calendar day (FR-008) — not just an open one.
     prisma.tx.$queryRaw = jest.fn().mockResolvedValue(dayPunches);
 
+    const approvals = { submit: jest.fn().mockResolvedValue(undefined) };
     const service = new PunchService(
       prisma as never,
       { requireByUserId: jest.fn().mockResolvedValue(employee) } as never,
@@ -137,6 +144,10 @@ describe('PunchService', () => {
       { compressPunchPhoto: jest.fn(async (b: Buffer) => b) } as never,
       { put: jest.fn().mockResolvedValue('punch/ref-1') } as never,
       { record: jest.fn().mockResolvedValue(undefined) } as never,
+      // 016: a flagged punch is submitted into an approval chain. Resolved here so the
+      // existing biometric/geofence assertions are unaffected; the submission itself is
+      // covered in punch-approval.spec.ts and the e2e suite.
+      approvals as never,
       {
         get: (key: string) =>
           key === 'settings'
@@ -153,7 +164,7 @@ describe('PunchService', () => {
               },
       } as never,
     );
-    return { service, prisma, created };
+    return { service, prisma, created, approvals };
   };
 
   const punchDto = (overrides: Record<string, unknown> = {}) =>
@@ -316,6 +327,77 @@ describe('PunchService', () => {
       biometrics.next = null;
       const result = await service.submitPunch(caller, punchDto());
       expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+    });
+
+    // ── 016 FR-012: a flagged punch enters an approval chain ──────────────────
+
+    it('submits a flagged punch into its approval chain, naming what it is about', async () => {
+      const { service, approvals, created } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ latitude: SITE.latitude + 0.05 }),
+      );
+
+      expect(result.geofenceResult).toBe(GeofenceResult.exception);
+      expect(approvals.submit).toHaveBeenCalledTimes(1);
+      expect(approvals.submit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          companyId: 'co-1',
+          actionType: 'attendance_exception',
+          entityType: 'attendance_exception',
+          entityId: created[0].id,
+          originatorUserId: 'user-1',
+        }),
+      );
+
+      // `subject` and `href` are supplied by this module because the spine has no
+      // relation to `hr.PunchRecord` and can never read it. A queue row has to say what
+      // it is about, and this is where that cost is paid.
+      const submitted = approvals.submit.mock.calls[0][0];
+      expect(submitted.subject).toContain('Rajesh Kulkarni');
+      expect(submitted.subject).toContain('outside the site geofence');
+      expect(submitted.href).toContain(created[0].id);
+    });
+
+    it('names both reasons when a punch fails the face check and the geofence', async () => {
+      const { service, approvals } = build();
+      biometrics.next = Float32Array.from(
+        { length: FACE_DESCRIPTOR_LENGTH },
+        () => 5,
+      );
+      await service.submitPunch(
+        caller,
+        punchDto({ latitude: SITE.latitude + 0.05 }),
+      );
+
+      const submitted = approvals.submit.mock.calls[0][0];
+      expect(submitted.subject).toContain('face did not match');
+      expect(submitted.subject).toContain('outside the site geofence');
+    });
+
+    it('does not submit a clean punch', async () => {
+      const { service, approvals } = build();
+      await service.submitPunch(caller, punchDto());
+      expect(approvals.submit).not.toHaveBeenCalled();
+    });
+
+    it('still records the punch when the chain cannot accept it', async () => {
+      // The guarantee this protects is feature 003's FR-007, and it is not negotiable:
+      // a punch that fails verification is still recorded. "Unless the approval chain is
+      // misconfigured" would be a silent weakening of it, and the person who loses a
+      // day's pay would have no idea why.
+      const { service, approvals, created } = build();
+      approvals.submit = jest.fn(async () => {
+        throw new Error('No active approval chain is configured');
+      });
+
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ latitude: SITE.latitude + 0.05 }),
+      );
+
+      expect(result.geofenceResult).toBe(GeofenceResult.exception);
+      expect(created[0].exceptionResolution).toBe(ExceptionResolution.pending);
     });
   });
 

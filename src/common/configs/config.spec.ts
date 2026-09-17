@@ -87,3 +87,83 @@ describe('refresh cookie configuration', () => {
     expect(config.security.refreshCookie.path).toBe('/bff/auth');
   });
 });
+
+describe('normaliseRefreshCookiePath', () => {
+  // Imported lazily so the suite above keeps full control of module state.
+  const load = async () =>
+    (await import('./config')).normaliseRefreshCookiePath;
+
+  it('adds the leading slash a cookie path requires', async () => {
+    // The exact production misconfiguration. Without a leading slash the attribute is
+    // invalid and browsers silently substitute the default-path, so the value in the
+    // dashboard stops describing what is actually stored.
+    expect((await load())('bff/auth')).toBe('/bff/auth');
+  });
+
+  it('leaves a well-formed path alone', async () => {
+    expect((await load())('/bff/auth')).toBe('/bff/auth');
+  });
+
+  it('strips a trailing slash, which would stop matching the path itself', async () => {
+    expect((await load())('/bff/auth/')).toBe('/bff/auth');
+  });
+
+  it('keeps root as root', async () => {
+    expect((await load())('/')).toBe('/');
+  });
+
+  it('falls back to the legacy default when unset or blank', async () => {
+    const fn = await load();
+    expect(fn(undefined)).toBe('/auth');
+    expect(fn('   ')).toBe('/auth');
+  });
+});
+
+describe('approvals.directorFinalActionTypes (016 FR-018a)', () => {
+  it('defaults to the six action types FR-018 names', async () => {
+    const config = await loadConfig({
+      APPROVALS_DIRECTOR_FINAL_ACTIONS: undefined,
+    });
+
+    // Asserted against the constants in `src/approvals/default-chains.ts` rather than
+    // against repeated string literals. The list lives in config because configuration
+    // must not depend on the feature that reads it; this test is what keeps the two
+    // halves of that separation honest, and it is the whole reason the duplication is
+    // acceptable.
+    const {
+      ACTION_PAYMENT_RELEASE,
+      ACTION_PAYROLL_RUN,
+      ACTION_LETTER_WORK_ORDER,
+      ACTION_LETTER_LOI,
+      ACTION_LETTER_PURCHASE_ORDER,
+      ACTION_FINAL_SETTLEMENT,
+    } = await import('../../approvals/default-chains');
+
+    expect(config.approvals.directorFinalActionTypes).toEqual([
+      ACTION_PAYMENT_RELEASE,
+      ACTION_PAYROLL_RUN,
+      ACTION_LETTER_WORK_ORDER,
+      ACTION_LETTER_LOI,
+      ACTION_LETTER_PURCHASE_ORDER,
+      ACTION_FINAL_SETTLEMENT,
+    ]);
+  });
+
+  it('takes a comma-separated override', async () => {
+    const config = await loadConfig({
+      APPROVALS_DIRECTOR_FINAL_ACTIONS: 'payment_release, final_settlement',
+    });
+    expect(config.approvals.directorFinalActionTypes).toEqual([
+      'payment_release',
+      'final_settlement',
+    ]);
+  });
+
+  it('treats an explicitly empty value as "none", not as "unset"', async () => {
+    // The escape hatch. `??` rather than `||` is what makes this distinguishable, and
+    // getting it wrong would silently restore the defaults for somebody who had
+    // deliberately turned the fail-closed behaviour off.
+    const config = await loadConfig({ APPROVALS_DIRECTOR_FINAL_ACTIONS: '' });
+    expect(config.approvals.directorFinalActionTypes).toEqual([]);
+  });
+});

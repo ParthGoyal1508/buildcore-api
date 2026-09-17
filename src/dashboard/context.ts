@@ -38,6 +38,7 @@ export function buildDashboardContext(
     caller: {
       userId: user.id,
       companyId: user.companyId,
+      roleIds: user.roleIds ?? [],
       ipAddress,
       rls: rlsContextFor(user),
     },

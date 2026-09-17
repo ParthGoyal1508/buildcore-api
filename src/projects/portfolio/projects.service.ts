@@ -27,6 +27,10 @@ import { EmployeesService } from '../../hr/employees/employees.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import {
+  ProjectDocumentReadiness,
+  ProjectDocumentsService,
+} from '../documents/project-documents.service';
+import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   PROJECT_CODE_INFIX,
@@ -57,6 +61,29 @@ export interface ProjectListItem {
   startDate: Date;
   expectedEndDate: Date | null;
   isLocked: boolean;
+  /**
+   * Present only when the caller asked for `include=documentReadiness` (017 FR-008).
+   *
+   * Optional rather than always computed: readiness costs two extra queries, and the
+   * screens that do not show it should not pay for it.
+   */
+  documentReadiness?: ProjectDocumentReadiness;
+}
+
+/**
+ * The value of `?include=` that asks for readiness (017 FR-008).
+ *
+ * A comma-separated list rather than a boolean flag: the list will grow, and
+ * `?include=documentReadiness,budget` is the shape that does not need renaming when it
+ * does.
+ */
+export const INCLUDE_DOCUMENT_READINESS = 'documentReadiness';
+
+function wantsReadiness(include?: string): boolean {
+  return (include ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .includes(INCLUDE_DOCUMENT_READINESS);
 }
 
 export interface ProjectListPage {
@@ -133,6 +160,10 @@ export class ProjectsService {
     // import back would make the dependency a five-module cycle. See
     // `ProjectSourcesRegistry` for the whole argument.
     private readonly sources: ProjectSourcesRegistry,
+    // 017 US2. Same module, same schema — readiness is this module's own question, and
+    // the dashboard asks it through `ProjectDocumentsService`'s exported method rather
+    // than by reading the table.
+    private readonly documents: ProjectDocumentsService,
   ) {}
 
   /** See `ClientsService.targetCompanyOf()` for why the caller's own company is the
@@ -252,37 +283,79 @@ export class ProjectsService {
         : {}),
     };
 
-    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
-      const [rows, total] = await Promise.all([
-        tx.project.findMany({
-          where,
-          orderBy: { code: 'asc' },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-          include: { client: { select: { name: true } } },
-        }),
-        tx.project.count({ where }),
-      ]);
+    const listed = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const [rows, total] = await Promise.all([
+          tx.project.findMany({
+            where,
+            orderBy: { code: 'asc' },
+            skip: (page - 1) * pageSize,
+            take: pageSize,
+            include: { client: { select: { name: true } } },
+          }),
+          tx.project.count({ where }),
+        ]);
 
-      return {
-        items: rows.map((project) => ({
-          id: project.id,
-          code: project.code,
-          name: project.name,
-          client: project.client.name,
-          location: project.location,
-          // Prisma hands back Decimal; JSON consumers want a number.
-          contractValue: Number(project.contractValue),
-          status: project.status,
-          startDate: project.startDate,
-          expectedEndDate: project.expectedEndDate,
-          isLocked: project.isLocked,
-        })),
-        total,
-        page,
-        pageSize,
-      };
+        return {
+          items: rows.map((project) => ({
+            id: project.id,
+            code: project.code,
+            name: project.name,
+            client: project.client.name,
+            location: project.location,
+            // Prisma hands back Decimal; JSON consumers want a number.
+            contractValue: Number(project.contractValue),
+            status: project.status,
+            startDate: project.startDate,
+            expectedEndDate: project.expectedEndDate,
+            isLocked: project.isLocked,
+          })),
+          total,
+          page,
+          pageSize,
+          companyIds: rows.map((project) => project.companyId),
+        };
+      },
+    );
+
+    const { companyIds, ...page_ } = listed;
+    if (!wantsReadiness(query.include)) return page_;
+
+    // FR-008: readiness in the LIST, without opening each project. Fetched after the
+    // transaction above has closed rather than inside it — `withRlsContext` opens a
+    // transaction of its own and Prisma cannot nest one.
+    //
+    // Grouped by company because a cross-company caller's page may span several, and
+    // readiness is a per-company question. The cost is two queries per company in the
+    // page, never one per project — which is the whole point of the batch form.
+    const byCompany = new Map<string, string[]>();
+    page_.items.forEach((item, index) => {
+      const companyId = companyIds[index];
+      byCompany.set(companyId, [...(byCompany.get(companyId) ?? []), item.id]);
     });
+
+    const ctx = rlsContextFor(caller);
+    const readiness = new Map<string, ProjectDocumentReadiness>();
+    for (const [companyId, projectIds] of byCompany) {
+      const forCompany = await this.documents.readinessFor(
+        ctx,
+        companyId,
+        projectIds,
+      );
+      for (const [projectId, value] of forCompany) {
+        readiness.set(projectId, value);
+      }
+    }
+
+    return {
+      ...page_,
+      items: page_.items.map((item) => ({
+        ...item,
+        documentReadiness: readiness.get(item.id),
+      })),
+    };
   }
 
   /**

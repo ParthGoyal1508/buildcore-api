@@ -72,6 +72,16 @@ describe('Plant module (e2e)', () => {
   };
   const today = () => dayOffset(0);
 
+  /**
+   * Compiling the whole `AppModule` and seeding fixtures does not fit in jest's 5-second
+   * default, and this suite never said otherwise — it passed because it usually finished
+   * in four. Observed failing at the `beforeAll` in a full 22-suite run, taking all fifty
+   * of its tests down with an error that points at module compilation rather than at the
+   * clock. Eight of the other suites already declare this; plant was one of the fourteen
+   * relying on luck.
+   */
+  jest.setTimeout(120_000);
+
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],

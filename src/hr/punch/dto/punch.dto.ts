@@ -9,8 +9,10 @@ import {
   IsLatitude,
   IsLongitude,
   IsNotEmpty,
+  IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -62,10 +64,33 @@ export class PunchResultDto {
  * not a decision anyone can submit. Validating against the full enum would let a
  * caller "resolve" an exception back to unresolved.
  */
+/**
+ * One decision on a flagged punch.
+ *
+ * `returned` joins the original two with feature 016: an exception can now be sent back
+ * to the person who raised it for correction, rather than only being confirmed or
+ * rejected outright (FR-005).
+ *
+ * `reason` is **required for `rejected` and `returned`** (FR-006). That is a deliberate
+ * change to this endpoint's contract: before 016 a rejection could be recorded with no
+ * explanation, and an unexplained rejection is the one an employee cannot act on. The
+ * requirement is enforced by the approval spine rather than here, so the refusal carries
+ * the machine-readable `APPROVAL_REASON_REQUIRED` code the interface branches on.
+ */
 export class ResolveExceptionDto {
-  @ApiProperty({ enum: ['confirmed', 'rejected'] })
-  @IsIn(['confirmed', 'rejected'])
-  resolution: 'confirmed' | 'rejected';
+  @ApiProperty({ enum: ['confirmed', 'rejected', 'returned'] })
+  @IsIn(['confirmed', 'rejected', 'returned'])
+  resolution: 'confirmed' | 'rejected' | 'returned';
+
+  @ApiProperty({
+    required: false,
+    description:
+      'Why. Required when rejecting or returning; ignored when confirming.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 /**

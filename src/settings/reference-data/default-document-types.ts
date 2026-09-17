@@ -17,6 +17,19 @@ export interface DefaultDocumentType {
   hasExpiry: boolean;
   needsNumber: boolean;
   sortOrder: number;
+  /**
+   * 017 FR-024. Omitted on every type but Aadhaar, which is the only regulated
+   * identifier in this list.
+   *
+   * It lives here rather than only in migration `20260915162449_company_documents`
+   * because that migration is a one-time `UPDATE` over the companies that existed
+   * when 017 shipped. Every company created afterwards is built by
+   * `DocumentTypesService.seedDefaultsForCompany` from this array, and without the
+   * flag here its Aadhaar type would come out unrestricted — the protection would
+   * quietly apply to old companies and not new ones, which is the worst of the
+   * three possible states because the screen still says the word "Aadhaar".
+   */
+  isRestricted?: boolean;
 }
 
 export const DEFAULT_DOCUMENT_TYPES: DefaultDocumentType[] = [
@@ -28,6 +41,7 @@ export const DEFAULT_DOCUMENT_TYPES: DefaultDocumentType[] = [
     hasExpiry: false,
     needsNumber: true,
     sortOrder: 10,
+    isRestricted: true,
   },
   // Number
   {

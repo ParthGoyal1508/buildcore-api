@@ -1,7 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentMode, PurchaseBillStatus } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBase64,
+  IsBoolean,
   IsDateString,
   IsEnum,
   IsInt,
@@ -48,6 +50,18 @@ export class CreatePaymentDto {
 }
 
 export class ListPaymentsDto {
+  @ApiPropertyOptional({
+    description:
+      'FR-021. `true` lists only payments with no transaction proof attached; `false` ' +
+      'only those with one. Omit for both.',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === 'true' ? true : value === 'false' ? false : undefined,
+  )
+  @IsBoolean()
+  missingProof?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -106,4 +120,22 @@ export class ListBillsDto {
   @IsOptional()
   @IsString()
   companyId?: string;
+}
+
+/**
+ * The RTGS advice or transaction confirmation behind a payment (017 US7, FR-020).
+ *
+ * Base64 rather than multipart, matching every other document upload in this product:
+ * 015 established that the web client has no FormData anywhere, and one transport for
+ * uploads is worth more than a marginally smaller request body.
+ */
+export class AttachPaymentProofDto {
+  @ApiProperty({ description: 'The advice, base64-encoded.' })
+  @IsBase64()
+  data: string;
+
+  @ApiProperty({ example: 'application/pdf' })
+  @IsString()
+  @MaxLength(100)
+  contentType: string;
 }

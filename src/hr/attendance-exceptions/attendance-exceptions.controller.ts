@@ -17,7 +17,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../caller-context';
 import { ResolveExceptionDto } from '../punch/dto/punch.dto';
-import { PunchService } from '../punch/punch.service';
+import { AttendanceExceptionsService } from './attendance-exceptions.service';
 
 /**
  * The admin side of attendance exceptions (FR-011a).
@@ -32,29 +32,53 @@ import { PunchService } from '../punch/punch.service';
 @RequirePermissions(Permission.ATTENDANCE)
 @Controller('workspace-admin/attendance-exceptions')
 export class AttendanceExceptionsController {
-  constructor(private readonly punch: PunchService) {}
+  constructor(private readonly exceptions: AttendanceExceptionsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Punches awaiting exception resolution' })
+  @ApiOperation({
+    summary: 'Punches awaiting exception resolution, with their approval state',
+  })
   async listPending(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
   ) {
-    return this.punch.listPendingExceptions(callerFrom(user, request));
+    return this.exceptions.listPending(callerFrom(user, request), user);
   }
 
+  @Get(':punchId')
+  @ApiOperation({
+    summary: 'One flagged punch and where its approval has got to',
+  })
+  async getOne(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('punchId') punchId: string,
+  ) {
+    return this.exceptions.getOne(callerFrom(user, request), user, punchId);
+  }
+
+  /**
+   * The route is unchanged from before feature 016 so the interface changes once rather
+   * than twice — but a decision here is now one level of a chain, not the end of the
+   * matter (FR-012). Confirming at level 1 of 3 advances; it does not confirm the punch.
+   */
   @Post(':punchId/resolve')
-  @ApiOperation({ summary: 'Confirm or reject a flagged punch' })
+  @ApiOperation({
+    summary:
+      'Record a decision on a flagged punch at the current approval level',
+  })
   async resolve(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('punchId') punchId: string,
     @Body() dto: ResolveExceptionDto,
   ) {
-    return this.punch.resolveException(
+    return this.exceptions.decide(
       callerFrom(user, request),
+      user,
       punchId,
       dto.resolution,
+      dto.reason ?? null,
     );
   }
 }

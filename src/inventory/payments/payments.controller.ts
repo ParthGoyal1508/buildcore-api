@@ -9,10 +9,12 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -20,6 +22,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
+  AttachPaymentProofDto,
   CreatePaymentDto,
   ListBillsDto,
   ListPaymentsDto,
@@ -78,6 +81,58 @@ export class PaymentsController {
     @Query('companyId') companyId?: string,
   ) {
     return this.payments.create(caller, dto, ipAddress, companyId);
+  }
+
+  @Post('payments/:id/proof')
+  @ApiOperation({
+    summary: 'Attach the RTGS advice or transaction confirmation (017 FR-020)',
+    description:
+      'Closes the gap US7 names: a payment carried a reference number somebody typed ' +
+      'and nothing behind it. Re-attaching replaces the current proof and deliberately ' +
+      'does not delete the old blob — the first advice is itself a record of what was ' +
+      'believed at the time.',
+  })
+  async attachProof(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: AttachPaymentProofDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.payments.attachProof(
+      caller,
+      id,
+      {
+        data: Buffer.from(dto.data, 'base64'),
+        contentType: dto.contentType,
+      },
+      ipAddress,
+    );
+  }
+
+  @Get('payments/:id/proof')
+  @ApiOperation({
+    summary: 'Open the proof without leaving the payment (FR-020 scenario 3)',
+    description:
+      'Audit-logged on read, before the bytes are sent: a payment advice names an ' +
+      'account number, and who looked at it is worth knowing (FR-023).',
+  })
+  async downloadProof(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Ip() ipAddress: string,
+    @Res() res: Response,
+  ) {
+    const { data, contentType } = await this.payments.downloadProof(
+      caller,
+      id,
+      ipAddress,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="payment-proof-${id}"`,
+    );
+    res.send(data);
   }
 
   @Delete('payments/:id')

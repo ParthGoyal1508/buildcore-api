@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { LetterType, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import type { RecruitmentConfig } from '../common/configs/config.interface';
@@ -60,6 +60,7 @@ export class RecruitmentRefsService {
       companyId: caller.companyId,
       ipAddress,
       rls: rlsContextFor(caller),
+      roleIds: caller.roleIds ?? [],
     };
   }
 
@@ -106,13 +107,13 @@ export class RecruitmentRefsService {
     return this.kitItems.defaultsForCompany(caller, companyId, tx);
   }
 
-  /** The active letter template for a type, or null (the caller raises 409). */
+  /** The active letter template for a kind, or null (the caller raises 409). */
   async getActiveTemplate(
     companyId: string,
-    letterType: LetterType,
+    letterKindId: string,
     tx: Prisma.TransactionClient,
   ) {
-    return this.letterTemplates.getActive(companyId, letterType, tx);
+    return this.letterTemplates.getActive(companyId, letterKindId, tx);
   }
 
   /** Whether the employee's F&F run is processed — gates relieving letters (FR-023). */

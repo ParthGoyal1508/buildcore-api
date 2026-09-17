@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor } from '../common/prisma/rls-context';
 
@@ -57,4 +57,42 @@ export function assertInScope(
   if (row.companyId !== caller.companyId) {
     throw new NotFoundException(`${label} not found`);
   }
+}
+
+/**
+ * The single company a write (or a single-company read) belongs to.
+ *
+ * `companyScope()` above answers a different question — it builds a `where` fragment,
+ * and a cross-company caller who names nothing legitimately means "all of them". This
+ * one is for surfaces where exactly one company must be settled before anything can
+ * happen: uploading a document, defining a type, listing one company's completeness.
+ *
+ * A 400, **not** a 404: the company is not missing, the caller never named one. Feature
+ * 017 hand-rolled this twice and got that wrong both times, reporting "not found" and
+ * sending a cross-company administrator to look for a company that was never absent. The
+ * majority of the codebase already raises `BadRequestException` here with this exact
+ * sentence; this is that majority, extracted so the count stops growing.
+ *
+ * A company-scoped caller's own company always wins and `requested` is ignored — a
+ * query parameter must never widen a caller's scope, the same rule `companyScope()`
+ * follows.
+ */
+export function resolveCompanyId(
+  caller: AuthenticatedUser,
+  requested?: string,
+): string {
+  const ctx = rlsContextFor(caller);
+  if (ctx.isSuperAdmin) {
+    const companyId = requested ?? caller.companyId;
+    if (!companyId) {
+      throw new BadRequestException(
+        'companyId is required for a cross-company caller.',
+      );
+    }
+    return companyId;
+  }
+  if (!caller.companyId) {
+    throw new BadRequestException('Caller has no company assigned.');
+  }
+  return caller.companyId;
 }

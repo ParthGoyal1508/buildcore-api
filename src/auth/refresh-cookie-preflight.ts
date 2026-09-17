@@ -42,6 +42,18 @@ export function logRefreshCookieConfig(security: SecurityConfig): void {
     );
   }
 
+  // Says so explicitly, because the normalisation is invisible otherwise and the
+  // dashboard would keep showing a value that is not what the browser receives.
+  const configured = process.env.REFRESH_COOKIE_PATH?.trim();
+  if (configured && configured !== path) {
+    logger.warn(
+      `REFRESH_COOKIE_PATH is set to "${configured}", which is not a valid cookie ` +
+        `path; using "${path}" instead. A Path not starting with "/" is ignored by ` +
+        `browsers entirely, so the value you set was never what got stored. Correct ` +
+        `it in the environment.`,
+    );
+  }
+
   if (!secure) {
     logger.warn(
       `REFRESH_COOKIE_SECURE is disabled: the refresh cookie will be sent over plain ` +

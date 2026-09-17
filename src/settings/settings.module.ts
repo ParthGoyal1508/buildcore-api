@@ -1,8 +1,11 @@
 import { Module } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
 import { CompaniesController } from './companies/companies.controller';
+import { CompanyDocumentsController } from './company-documents/company-documents.controller';
+import { CompanyDocumentsService } from './company-documents/company-documents.service';
 import { AssetCategoriesService } from './asset-masters/asset-categories.service';
 import { AssetDocTypesService } from './asset-masters/asset-doc-types.service';
 import { ConditionGradesService } from './asset-masters/condition-grades.service';
@@ -25,6 +28,11 @@ import { ItemsService } from './item-masters/items.service';
 import { VendorCategoriesService } from './vendor-categories/vendor-categories.service';
 import { SkillCategoriesService } from './skill-categories/skill-categories.service';
 import { KitItemsService } from './kit-items/kit-items.service';
+import { CompanyDocumentExpiryRule } from './company-documents/company-document.reminder-rule';
+import { SignatoriesController } from './signatories/signatories.controller';
+import { SignatoriesService } from './signatories/signatories.service';
+import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
+import { LetterKindsService } from './letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from './letter-templates/letter-templates.service';
 
 /**
@@ -39,10 +47,16 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
  * Employees module.
  */
 @Module({
-  imports: [UsersModule],
+  // ApprovalsModule for feature 016: a new company is seeded with the default approval
+  // chains in the same transaction as its document types and asset grades, through
+  // `ChainsService` rather than by writing to the spine's tables from here.
+  imports: [UsersModule, ApprovalsModule],
   controllers: [
+    LetterKindsController,
+    SignatoriesController,
     ReimbursementCategoriesController,
     CompaniesController,
+    CompanyDocumentsController,
     RolesController,
     UsersAdminController,
     DepartmentsController,
@@ -52,6 +66,7 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
   ],
   providers: [
     CompaniesService,
+    CompanyDocumentsService,
     RolesService,
     UsersAdminService,
     ReferenceDataService,
@@ -66,6 +81,11 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
     SkillCategoriesService,
     KitItemsService,
     LetterTemplatesService,
+    LetterKindsService,
+    SignatoriesService,
+    // 017 FR-005. Discovered by the 004 reminder engine from this array — nothing in
+    // `src/dashboard/` knows this rule exists.
+    CompanyDocumentExpiryRule,
     // Declared so `CompaniesService` can seed the three asset masters for a new
     // company (012 US1). Not exported: `AssetsModule` declares its own instances,
     // the same arrangement the machinery masters have with `PlantModule`.
@@ -103,6 +123,11 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
     // above.
     KitItemsService,
     LetterTemplatesService,
+    // 017: `recruitment` and `letters` both resolve kind keys through this rather
+    // than reading `settings.LetterKind` (Principle I).
+    LetterKindsService,
+    // 017 US4: the letters module applies signatures at issue and needs the row.
+    SignatoriesService,
   ],
 })
 export class SettingsModule {}

@@ -319,13 +319,17 @@ describe('Dashboard reminders (e2e)', () => {
       // feature 006 shipped and registers both rules for real, which is the
       // handover FR-028 exists to make possible.
       expect(pending).toEqual(
-        expect.arrayContaining([
-          'settings-company-document-expiry',
-          'project-assets-overdue-return',
-        ]),
+        expect.arrayContaining(['project-assets-overdue-return']),
       );
       expect(pending).not.toContain('machinery-service-due');
       expect(pending).not.toContain('machinery-document-expiry');
+      // And `settings-company-document-expiry` left the list the same way: 017 built
+      // company documents and `CompanyDocumentExpiryRule` now registers under that
+      // exact `ruleKey`, replacing the placeholder rather than running beside it.
+      // Asserting its absence is what proves the replacement happened — two rules
+      // sharing a key would otherwise show up as one working reminder and one
+      // permanent "module pending" entry for the same thing.
+      expect(pending).not.toContain('settings-company-document-expiry');
       expect(res.body.unavailable[0].reason).toBe('module_pending');
     });
 

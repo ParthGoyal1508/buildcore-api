@@ -3,12 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  AuditAction,
-  AuditEntityType,
-  LetterType,
-  Prisma,
-} from '@prisma/client';
+import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
@@ -19,16 +14,40 @@ import { assertInScope, companyScope } from '../company-scope';
 export interface LetterTemplateView {
   id: string;
   companyId: string;
-  letterType: LetterType;
+  /**
+   * The `LetterKind` this template belongs to (017 §1 — was `letterType LetterType`).
+   */
+  letterKindId: string;
+  /**
+   * The kind's key, still carried on the wire under its original name.
+   *
+   * 017 replaced the enum with a table, and the five migrated keys are byte-identical to
+   * the old enum values — so a client that sent `letterType: "offer"` before sends the
+   * same thing now and gets the same answer. Renaming the wire field would have broken
+   * every recruitment screen for a change they do not care about.
+   */
+  letterType: string;
   name: string;
   bodyTemplate: string;
   letterheadAssetId: string | null;
   isActive: boolean;
 }
 
+/** A row with its kind joined, which is all `toView` needs. */
+type TemplateRow = {
+  id: string;
+  companyId: string;
+  letterKindId: string;
+  name: string;
+  bodyTemplate: string;
+  letterheadAssetId: string | null;
+  isActive: boolean;
+  letterKind?: { key: string } | null;
+};
+
 /**
  * Letter template master (011 FR-020, FR-021) — a `settings`-schema master owned by
- * feature 011. Enforces at most one active template per (company, letterType) by
+ * feature 011. Enforces at most one active template per (company, letterKind) by
  * deactivating the prior active one when a template is activated. Token-set
  * validation is the recruitment controller's job (it owns the per-type token sets).
  */
@@ -39,16 +58,17 @@ export class LetterTemplatesService {
     private readonly auditLog: AuditLogService,
   ) {}
 
-  private toView(row: {
-    id: string;
-    companyId: string;
-    letterType: LetterType;
-    name: string;
-    bodyTemplate: string;
-    letterheadAssetId: string | null;
-    isActive: boolean;
-  }): LetterTemplateView {
-    return { ...row };
+  private toView(row: TemplateRow): LetterTemplateView {
+    return {
+      id: row.id,
+      companyId: row.companyId,
+      letterKindId: row.letterKindId,
+      letterType: row.letterKind?.key ?? '',
+      name: row.name,
+      bodyTemplate: row.bodyTemplate,
+      letterheadAssetId: row.letterheadAssetId,
+      isActive: row.isActive,
+    };
   }
 
   async findAll(
@@ -61,7 +81,8 @@ export class LetterTemplatesService {
       (tx) =>
         tx.letterTemplate.findMany({
           where: companyScope(caller, companyId),
-          orderBy: [{ letterType: 'asc' }, { name: 'asc' }],
+          include: { letterKind: { select: { key: true } } },
+          orderBy: [{ letterKindId: 'asc' }, { name: 'asc' }],
         }),
     );
     return rows.map((r) => this.toView(r));
@@ -71,11 +92,12 @@ export class LetterTemplatesService {
    * when none is active (the caller raises the FR-020 "missing template" 409). */
   async getActive(
     companyId: string,
-    letterType: LetterType,
+    letterKindId: string,
     tx: Prisma.TransactionClient,
   ): Promise<LetterTemplateView | null> {
     const row = await tx.letterTemplate.findFirst({
-      where: { companyId, letterType, isActive: true },
+      where: { companyId, letterKindId, isActive: true },
+      include: { letterKind: { select: { key: true } } },
     });
     return row ? this.toView(row) : null;
   }
@@ -84,7 +106,7 @@ export class LetterTemplatesService {
     caller: AuthenticatedUser,
     dto: {
       companyId?: string;
-      letterType: LetterType;
+      letterKindId: string;
       name: string;
       bodyTemplate: string;
       letterheadAssetId?: string;
@@ -111,19 +133,24 @@ export class LetterTemplatesService {
       async (tx) => {
         if (dto.isActive) {
           await tx.letterTemplate.updateMany({
-            where: { companyId, letterType: dto.letterType, isActive: true },
+            where: {
+              companyId,
+              letterKindId: dto.letterKindId,
+              isActive: true,
+            },
             data: { isActive: false },
           });
         }
         return tx.letterTemplate.create({
           data: {
             companyId,
-            letterType: dto.letterType,
+            letterKindId: dto.letterKindId,
             name: dto.name.trim(),
             bodyTemplate: dto.bodyTemplate,
             letterheadAssetId: dto.letterheadAssetId ?? null,
             isActive: dto.isActive ?? false,
           },
+          include: { letterKind: { select: { key: true } } },
         });
       },
     );
@@ -162,7 +189,7 @@ export class LetterTemplatesService {
           await tx.letterTemplate.updateMany({
             where: {
               companyId: existing.companyId,
-              letterType: existing.letterType,
+              letterKindId: existing.letterKindId,
               isActive: true,
             },
             data: { isActive: false },
@@ -170,6 +197,7 @@ export class LetterTemplatesService {
         }
         return tx.letterTemplate.update({
           where: { id },
+          include: { letterKind: { select: { key: true } } },
           data: {
             name: dto.name?.trim() ?? undefined,
             bodyTemplate: dto.bodyTemplate ?? undefined,

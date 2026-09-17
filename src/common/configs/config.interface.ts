@@ -8,6 +8,9 @@ export interface Config {
   storage: StorageConfig;
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
+  payrollSchedule: PayrollScheduleConfig;
+  approvals: ApprovalsConfig;
+  documents: DocumentsConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
 }
@@ -235,6 +238,69 @@ export interface SettingsConfig {
  * HR & Payroll (feature 005) tunables. Principle III: every one of these is a policy
  * value someone will want to change without a code review.
  */
+/**
+ * When the monthly payroll run is created, and in which timezone (016 FR-013, T033).
+ *
+ * Configuration rather than literals (Constitution Principle III) because the day and
+ * time a company wants its payroll drawn up is a business decision, and because a
+ * deployment needs to be able to move it without a release.
+ */
+export interface PayrollScheduleConfig {
+  /** Cron expression. Default `30 0 1 * *` — 00:30 on the 1st. */
+  cron: string;
+  /**
+   * The timezone the expression is read in. "The 1st" must mean the 1st where the
+   * company is, not in UTC — in Asia/Kolkata those are five and a half hours apart, so a
+   * UTC-scheduled run fires on the last evening of the previous month.
+   */
+  timeZone: string;
+}
+
+/**
+ * The approval spine's one tunable (016 FR-018a).
+ *
+ * FR-018a asks that the director-final set be changeable "without a code change", and the
+ * thing that actually satisfies that is `ApprovalChain.isFinalAuthorityRequired` — a
+ * per-company row an administrator edits through the settings screen. This list is not
+ * that. It is the **default** applied when a company is created, and the **fail-closed
+ * set** consulted when no chain exists at all: an action type named here that reaches the
+ * gate with nothing configured is refused rather than waved through, because these four
+ * are the ones where being waved through means money leaves the company unapproved.
+ *
+ * Anything not named here and not configured passes the gate untouched. That is FR-022 —
+ * a module this feature never migrated must keep working exactly as it did.
+ */
+export interface ApprovalsConfig {
+  /**
+   * Action types that require Super Admin ("Director") approval before taking effect.
+   *
+   * Set `APPROVALS_DIRECTOR_FINAL_ACTIONS` to a comma-separated list to override. An
+   * empty string disables the fail-closed default entirely, which is a deliberate escape
+   * hatch and a loud one — the boot log says so.
+   */
+  directorFinalActionTypes: string[];
+}
+
+/** 017 — company and project document handling. */
+export interface DocumentsConfig {
+  /**
+   * How many days before a document expires the reminder fires (017 FR-005).
+   *
+   * Configuration because a labour licence and a GST certificate warrant different
+   * warning, and because the right number is a business call rather than a developer's.
+   */
+  expiryReminderLeadDays: number;
+  /**
+   * How long a *superseded* version of a restricted kind is kept before it is purged,
+   * row and blob (017 FR-006a).
+   *
+   * FR-006's retain-indefinitely rule is right for a GST certificate and wrong for an
+   * Aadhaar scan: keeping every superseded copy forever is a liability that grows on its
+   * own. Zero means purge on supersession.
+   */
+  restrictedRetentionDays: number;
+}
+
 export interface HrPayrollConfig {
   /**
    * How many days before an employee document's expiry it starts reporting as

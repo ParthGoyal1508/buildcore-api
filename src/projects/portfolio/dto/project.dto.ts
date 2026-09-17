@@ -198,4 +198,16 @@ export class ListProjectsDto {
   @IsOptional()
   @IsString()
   companyId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Comma-separated extras. `documentReadiness` attaches each project’s document ' +
+      'readiness to the row (017 FR-008), so the portfolio shows what a project still ' +
+      'owes without opening it. Opt-in because it costs two extra queries and the ' +
+      'screens that do not show it should not pay for them.',
+    example: 'documentReadiness',
+  })
+  @IsOptional()
+  @IsString()
+  include?: string;
 }

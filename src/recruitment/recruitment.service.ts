@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import { LetterType } from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { RlsContext } from '../common/prisma/rls-context';
@@ -28,7 +27,7 @@ export class RecruitmentService {
   generateEmployeeLetter(
     caller: AuthenticatedUser,
     employeeId: string,
-    letterType: LetterType,
+    letterType: string,
     ipAddress: string,
   ) {
     return this.letters.generateForEmployee(

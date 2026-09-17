@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { LetterType, Permission } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -20,6 +20,8 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { rlsContextFor } from '../../common/prisma/rls-context';
+import { LetterKindsService } from '../../settings/letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from '../../settings/letter-templates/letter-templates.service';
 import { LetterService } from './letter.service';
 import { unknownTokens } from './letter-tokens.util';
@@ -38,6 +40,9 @@ export class LetterController {
   constructor(
     private readonly templates: LetterTemplatesService,
     private readonly letters: LetterService,
+    // 017 §1: the wire still says `letterType` and still carries `offer`, but the enum
+    // behind it is a table now, so the key has to be resolved to a row.
+    private readonly kinds: LetterKindsService,
   ) {}
 
   @Get('letter-templates')
@@ -53,13 +58,29 @@ export class LetterController {
   @ApiOperation({
     summary: 'Create a letter template (unknown tokens rejected)',
   })
-  createTemplate(
+  async createTemplate(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CreateLetterTemplateDto,
     @Ip() ip: string,
   ) {
     this.assertTokensKnown(dto.bodyTemplate, dto.letterType);
-    return this.templates.create(caller, dto, ip);
+    const companyId = dto.companyId ?? caller.companyId;
+    if (!companyId) {
+      throw new BadRequestException(
+        'companyId is required for a cross-company caller.',
+      );
+    }
+    const kind = await this.kinds.requireByKey(
+      rlsContextFor(caller),
+      companyId,
+      dto.letterType,
+    );
+    const { letterType: _letterType, ...rest } = dto;
+    return this.templates.create(
+      caller,
+      { ...rest, letterKindId: kind.id },
+      ip,
+    );
   }
 
   @Patch('letter-templates/:id')
@@ -115,7 +136,7 @@ export class LetterController {
     res.send(buffer);
   }
 
-  private assertTokensKnown(body: string, letterType: LetterType) {
+  private assertTokensKnown(body: string, letterType: string) {
     const unknown = unknownTokens(body, letterType);
     if (unknown.length > 0) {
       throw new BadRequestException(

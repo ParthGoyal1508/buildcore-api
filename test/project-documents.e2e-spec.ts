@@ -1,0 +1,611 @@
+import { INestApplication } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { Permission } from '@prisma/client';
+import { hash } from 'argon2';
+import { PrismaService } from 'nestjs-prisma';
+import * as request from 'supertest';
+
+import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/common/configure-app';
+import { withRlsContext } from '../src/common/prisma/rls-context';
+import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../src/settings/document-kinds';
+
+/**
+ * Project document readiness over HTTP (017 US2, T025).
+ *
+ * Driven over HTTP because every claim here is about the endpoint: that readiness rides
+ * in the **list** rather than requiring each project to be opened, that a project may be
+ * created before its papers arrive, that configuring the required set is a `SETTINGS`
+ * decision while reading it is not, and that `/projects/document-requirements` is not
+ * swallowed by `/projects/:id`.
+ *
+ * Every fixture is prefixed `E2EPD` and removed in `afterAll`.
+ */
+const PREFIX = 'E2EPD';
+// A random tail as well as the clock: e2e suites run in parallel against one database,
+// and two of them entering `unique()` in the same millisecond would collide on a name a
+// unique index protects. Observed once as a lone transient failure in a combined run.
+const unique = (s: string) =>
+  `${PREFIX}${s}${Date.now() % 100000}${Math.floor(Math.random() * 1000)}`;
+
+jest.setTimeout(30_000);
+
+describe('Project documents (e2e)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  let http: () => request.SuperTest<request.Test>;
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const sys: any = new Proxy(
+    {},
+    {
+      get: (_t, model: string) =>
+        new Proxy(
+          {},
+          {
+            get: (_x, operation: string) => (args?: unknown) =>
+              withRlsContext(prisma, { isSuperAdmin: true }, (tx) =>
+                (tx as any)[model][operation](args),
+              ),
+          },
+        ),
+    },
+  );
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+  let companyId: string;
+  let clientId: string;
+  let adminToken: string;
+  let readerToken: string;
+  const typeIdByCode = new Map<string, string>();
+  const userIds: string[] = [];
+  const roleIds: string[] = [];
+  const projectIds: string[] = [];
+
+  const makeUser = async (label: string, permissions: Permission[]) => {
+    const user = await sys.user.create({
+      data: {
+        email: `${unique(label)}@example.test`.toLowerCase(),
+        username: unique(label),
+        password: await hash('secret42'),
+        displayName: `${PREFIX} ${label}`,
+        companyId,
+        status: 'active',
+      },
+    });
+    userIds.push(user.id);
+    const role = await sys.role.create({
+      data: { name: unique(`${label}Role`), permissions },
+    });
+    roleIds.push(role.id);
+    await sys.userRole.create({
+      data: { userId: user.id, roleId: role.id, companyId },
+    });
+    const login = await http()
+      .post('/auth/login')
+      .send({ identifier: user.email, password: 'secret42', rememberMe: false })
+      .expect(201);
+    return login.body.accessToken as string;
+  };
+
+  const createProject = async (name: string) => {
+    const res = await http()
+      .post('/projects')
+      .set(auth(adminToken))
+      .send({
+        code: unique('P').slice(0, 30),
+        name: `${PREFIX} ${name}`,
+        clientId,
+        contractValue: 1000000,
+        startDate: '2026-04-01',
+      })
+      .expect(201);
+    projectIds.push(res.body.id);
+    return res.body.id as string;
+  };
+
+  beforeAll(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    await app.init();
+    http = () => request(app.getHttpServer());
+    prisma = app.get(PrismaService);
+
+    const company = await sys.company.create({
+      data: {
+        name: 'E2EPD Project Documents Constructions',
+        shortCode: unique('P').slice(0, 10),
+        payrollLockDay: 7,
+        pfEmployerRate: 12,
+        esicEmployerRate: 3.25,
+        gratuityRate: 4.81,
+        bonusRate: 8.33,
+      },
+    });
+    companyId = company.id;
+
+    for (const kind of REQUIRED_PROJECT_DOCUMENT_KINDS) {
+      const type = await sys.documentType.create({
+        data: { companyId, code: kind.code, name: kind.label },
+      });
+      typeIdByCode.set(kind.code, type.id);
+    }
+
+    const client = await sys.client.create({
+      data: { companyId, name: `${PREFIX} Highways Authority` },
+    });
+    clientId = client.id;
+
+    adminToken = await makeUser('Admin', [
+      Permission.PROJECTS,
+      Permission.SETTINGS,
+    ]);
+    readerToken = await makeUser('Reader', [Permission.PROJECTS]);
+  }, 120_000);
+
+  afterAll(async () => {
+    await sys.projectDocument.deleteMany({ where: { companyId } });
+    await sys.projectDocumentRequirement.deleteMany({ where: { companyId } });
+    await sys.project.deleteMany({ where: { companyId } });
+    await sys.client.deleteMany({ where: { companyId } });
+    await sys.documentType.deleteMany({ where: { companyId } });
+    await sys.auditLogEntry.deleteMany({ where: { companyId } });
+    await sys.refreshToken.deleteMany({ where: { companyId } });
+    await sys.userRole.deleteMany({ where: { userId: { in: userIds } } });
+    await sys.user.deleteMany({ where: { id: { in: userIds } } });
+    await sys.role.deleteMany({ where: { id: { in: roleIds } } });
+    await sys.company.deleteMany({ where: { id: companyId } });
+    await app?.close();
+  }, 60_000);
+
+  it('serves /projects/document-requirements rather than treating it as a project id', async () => {
+    // Nest matches routes in registration order. If `ProjectsController` were registered
+    // first, `GET /projects/:id` would swallow this path and answer "project
+    // document-requirements not found" — a routing fault wearing a data fault's clothes.
+    const res = await http()
+      .get('/projects/document-requirements')
+      .set(auth(readerToken))
+      .expect(200);
+
+    expect(res.body.usingDefaults).toBe(true);
+    expect(res.body.requirements).toHaveLength(
+      REQUIRED_PROJECT_DOCUMENT_KINDS.length,
+    );
+  });
+
+  it('lets a project be created before any of its documents exist (FR-009)', async () => {
+    const projectId = await createProject('Ring Road');
+
+    // Creation succeeds; readiness is reported, never enforced.
+    const readiness = await http()
+      .get('/projects?include=documentReadiness')
+      .set(auth(adminToken))
+      .expect(200);
+
+    const row = readiness.body.items.find(
+      (p: { id: string }) => p.id === projectId,
+    );
+    expect(row.documentReadiness.required).toBe(
+      REQUIRED_PROJECT_DOCUMENT_KINDS.length,
+    );
+    expect(row.documentReadiness.present).toBe(0);
+  });
+
+  it('reports readiness in the LIST, without opening each project (FR-008)', async () => {
+    const projectId = projectIds[0];
+
+    // A document filed against a required kind. The upload endpoint belongs to 008's
+    // unbuilt US8; what 017 owns is whether readiness notices the row.
+    await sys.projectDocument.create({
+      data: {
+        companyId,
+        projectId,
+        documentType: 'Letter of intent',
+        documentTypeId: typeIdByCode.get('LOI'),
+        fileRef: 'e2epd/loi.pdf',
+        uploadedByUserId: userIds[0],
+      },
+    });
+
+    const res = await http()
+      .get('/projects?include=documentReadiness')
+      .set(auth(adminToken))
+      .expect(200);
+
+    const row = res.body.items.find((p: { id: string }) => p.id === projectId);
+    expect(row.documentReadiness.present).toBe(1);
+    expect(row.documentReadiness.missingTypeIds).not.toContain(
+      typeIdByCode.get('LOI'),
+    );
+    expect(row.documentReadiness.missingTypeIds).toContain(
+      typeIdByCode.get('BOQ'),
+    );
+  });
+
+  it('omits readiness entirely when it was not asked for', async () => {
+    const res = await http().get('/projects').set(auth(adminToken)).expect(200);
+
+    // Opt-in: the screens that do not show readiness should not pay two queries for it.
+    for (const item of res.body.items) {
+      expect(item.documentReadiness).toBeUndefined();
+    }
+  });
+
+  it('ignores a supplementary document, which answers no required kind', async () => {
+    const projectId = await createProject('Bypass');
+    await sys.projectDocument.create({
+      data: {
+        companyId,
+        projectId,
+        documentType: 'Site photograph',
+        // Null: filed, but against no required kind (US2 scenario 5).
+        documentTypeId: null,
+        fileRef: 'e2epd/photo.jpg',
+        uploadedByUserId: userIds[0],
+      },
+    });
+
+    const res = await http()
+      .get('/projects?include=documentReadiness')
+      .set(auth(adminToken))
+      .expect(200);
+    const row = res.body.items.find((p: { id: string }) => p.id === projectId);
+    expect(row.documentReadiness.present).toBe(0);
+  });
+
+  it('costs ONE query against the project-document table for 50 projects (T070, Pass 4)', async () => {
+    // Quickstart Pass 4, executed rather than described: "open the project list for a
+    // company with 50 projects and count queries against the project-document table —
+    // expect one." It is the pass most likely to be skipped and the one whose absence
+    // costs most, because three projects in development hide an N+1 perfectly.
+    const extra: string[] = [];
+    for (let i = 0; i < 48; i += 1) {
+      const p = await sys.project.create({
+        data: {
+          companyId,
+          clientId,
+          code: `${PREFIX}B${i}${Date.now() % 10000}`,
+          name: `${PREFIX} Bulk ${i}`,
+          contractValue: 100000,
+          startDate: new Date('2026-04-01'),
+        },
+      });
+      extra.push(p.id);
+    }
+
+    // Counted with a Prisma middleware rather than inferred from timing: the claim is
+    // about the number of statements, so the number of statements is what is measured.
+    let projectDocumentQueries = 0;
+    let requirementQueries = 0;
+    const count = async (
+      params: { model?: string },
+      next: (p: unknown) => Promise<unknown>,
+    ) => {
+      if (params.model === 'ProjectDocument') projectDocumentQueries += 1;
+      if (params.model === 'ProjectDocumentRequirement')
+        requirementQueries += 1;
+      return next(params);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (prisma as any).$use(count);
+
+    try {
+      const res = await http()
+        .get('/projects?include=documentReadiness&pageSize=50')
+        .set(auth(adminToken))
+        .expect(200);
+
+      expect(res.body.items.length).toBeGreaterThanOrEqual(50);
+      for (const item of res.body.items) {
+        expect(item.documentReadiness).toBeDefined();
+      }
+    } finally {
+      await sys.project.deleteMany({ where: { id: { in: extra } } });
+    }
+
+    // ONE against the documents, ONE against the requirements. Not "fewer than fifty" —
+    // exactly one each, whatever the page size.
+    expect(projectDocumentQueries).toBe(1);
+    expect(requirementQueries).toBe(1);
+  });
+
+  it('refuses requirement configuration without SETTINGS (FR-007)', async () => {
+    await http()
+      .put('/projects/document-requirements')
+      .set(auth(readerToken))
+      .send({ requirements: [{ documentTypeId: typeIdByCode.get('LOI') }] })
+      .expect(403);
+  });
+
+  it('refuses a requirement naming a document type this company does not have', async () => {
+    const res = await http()
+      .put('/projects/document-requirements')
+      .set(auth(adminToken))
+      .send({ requirements: [{ documentTypeId: 'dt-belongs-to-nobody' }] })
+      .expect(400);
+
+    expect(res.body.code).toBe('PROJECT_DOCUMENT_TYPE_UNKNOWN');
+  });
+
+  it('applies a configured set in place of the shipped defaults', async () => {
+    const res = await http()
+      .put('/projects/document-requirements')
+      .set(auth(adminToken))
+      .send({
+        requirements: [
+          { documentTypeId: typeIdByCode.get('LOI') },
+          {
+            documentTypeId: typeIdByCode.get('WORK_ORDER'),
+            isMandatory: false,
+          },
+        ],
+      })
+      .expect(200);
+
+    expect(res.body.usingDefaults).toBe(false);
+    expect(res.body.requirements).toHaveLength(2);
+
+    // The optional one does not count: the first project holds its LOI, so it is now
+    // complete despite holding none of the other five shipped kinds.
+    const list = await http()
+      .get('/projects?include=documentReadiness')
+      .set(auth(adminToken))
+      .expect(200);
+    const row = list.body.items.find(
+      (p: { id: string }) => p.id === projectIds[0],
+    );
+    expect(row.documentReadiness).toEqual({
+      required: 1,
+      present: 1,
+      missingTypeIds: [],
+    });
+  });
+
+  /**
+   * FR-007a. The set has been writable over HTTP since this feature shipped; what no
+   * interface had was the list that makes naming a requirement possible without knowing
+   * a document type's internal identifier.
+   */
+  describe('configuring the set (FR-007a)', () => {
+    /** A company of its own, so deleting and defining types cannot disturb the fixtures above. */
+    let cfgCompanyId: string;
+    let cfgToken: string;
+
+    beforeAll(async () => {
+      const company = await sys.company.create({
+        data: {
+          name: `${PREFIX} Config Constructions`,
+          shortCode: unique('C').slice(0, 10),
+          payrollLockDay: 7,
+          pfEmployerRate: 12,
+          esicEmployerRate: 3.25,
+          gratuityRate: 4.81,
+          bonusRate: 8.33,
+        },
+      });
+      cfgCompanyId = company.id;
+
+      // Five of the six, so `undefinedCodes` has the sixth to report and the materialiser
+      // has something to materialise.
+      for (const kind of REQUIRED_PROJECT_DOCUMENT_KINDS) {
+        if (kind.code === 'MINING_PERMISSION') continue;
+        await sys.documentType.create({
+          data: {
+            companyId: cfgCompanyId,
+            code: kind.code,
+            name: kind.label,
+            scope: 'company',
+          },
+        });
+      }
+      // An employee kind, to prove the picker excludes it.
+      await sys.documentType.create({
+        data: {
+          companyId: cfgCompanyId,
+          code: 'MARKSHEET_10',
+          name: '10th Marksheet',
+          scope: 'employee',
+        },
+      });
+
+      const user = await sys.user.create({
+        data: {
+          email: `${unique('cfg')}@example.test`.toLowerCase(),
+          username: unique('cfg'),
+          password: await hash('secret42'),
+          companyId: cfgCompanyId,
+          status: 'active',
+        },
+      });
+      userIds.push(user.id);
+      const role = await sys.role.create({
+        data: {
+          name: unique('CfgRole'),
+          permissions: [Permission.PROJECTS, Permission.SETTINGS],
+        },
+      });
+      roleIds.push(role.id);
+      await sys.userRole.create({
+        data: { userId: user.id, roleId: role.id, companyId: cfgCompanyId },
+      });
+      cfgToken = (
+        await http()
+          .post('/auth/login')
+          .send({
+            identifier: user.email,
+            password: 'secret42',
+            rememberMe: false,
+          })
+          .expect(201)
+      ).body.accessToken;
+    }, 120_000);
+
+    afterAll(async () => {
+      await sys.projectDocumentRequirement.deleteMany({
+        where: { companyId: cfgCompanyId },
+      });
+      await sys.documentType.deleteMany({ where: { companyId: cfgCompanyId } });
+      await sys.auditLogEntry.deleteMany({
+        where: { companyId: cfgCompanyId },
+      });
+      await sys.refreshToken.deleteMany({ where: { companyId: cfgCompanyId } });
+      await sys.company.deleteMany({ where: { id: cfgCompanyId } });
+    }, 60_000);
+
+    it('reports what may be required, excluding the employee file', async () => {
+      const res = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const codes = res.body.availableTypes.map(
+        (t: { code: string }) => t.code,
+      );
+      expect(codes).toContain('LOI');
+      expect(codes).not.toContain('MARKSHEET_10');
+      expect(res.body.undefinedCodes).toContain('MINING_PERMISSION');
+      expect(res.body.usingDefaults).toBe(true);
+    });
+
+    /**
+     * The state the screen depends on: a company running on the shipped defaults, whose
+     * first save turns them into rows of its own. No endpoint exists for "adopt the
+     * defaults" — the ordinary PUT does it, because it replaces rather than merges.
+     */
+    it('adopts the defaults on the first save, then reports the set as configured', async () => {
+      const before = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(before.body.usingDefaults).toBe(true);
+
+      await http()
+        .put(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .send({
+          requirements: before.body.requirements.map(
+            (r: { documentTypeId: string }) => ({
+              documentTypeId: r.documentTypeId,
+              isMandatory: true,
+            }),
+          ),
+        })
+        .expect(200);
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(after.body.usingDefaults).toBe(false);
+      expect(after.body.requirements).toHaveLength(
+        before.body.requirements.length,
+      );
+    });
+
+    it('moves a kind to optional, removes another, and reads both back', async () => {
+      const current = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const rows = current.body.requirements as {
+        documentTypeId: string;
+        code: string;
+      }[];
+      const dropped = rows.find((r) => r.code === 'BOQ')!;
+      const optional = rows.find((r) => r.code === 'INSURANCE')!;
+
+      await http()
+        .put(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .send({
+          requirements: rows
+            .filter((r) => r.documentTypeId !== dropped.documentTypeId)
+            .map((r) => ({
+              documentTypeId: r.documentTypeId,
+              isMandatory: r.documentTypeId !== optional.documentTypeId,
+            })),
+        })
+        .expect(200);
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+
+      const byCode = new Map(
+        (
+          after.body.requirements as { code: string; isMandatory: boolean }[]
+        ).map((r) => [r.code, r.isMandatory]),
+      );
+      expect(byCode.has('BOQ')).toBe(false);
+      expect(byCode.get('INSURANCE')).toBe(false);
+      // And the dropped kind is offerable again, which is what makes removal reversible
+      // from the screen rather than a one-way door.
+      expect(
+        (
+          after.body.availableTypes as { code: string; isRequired: boolean }[]
+        ).find((t) => t.code === 'BOQ')?.isRequired,
+      ).toBe(false);
+    });
+
+    it('materialises the undefined kind, which then becomes requirable', async () => {
+      const created = await http()
+        .post(
+          `/projects/document-requirements/kinds/MINING_PERMISSION?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(cfgToken))
+        .expect(201);
+      expect(created.body.code).toBe('MINING_PERMISSION');
+
+      const row = await sys.documentType.findUnique({
+        where: { id: created.body.documentTypeId },
+      });
+      // Company-scoped, so it stays out of the employee file — the same boundary the
+      // company-documents materialiser holds on its side.
+      expect(row.scope).toBe('company');
+
+      const after = await http()
+        .get(`/projects/document-requirements?companyId=${cfgCompanyId}`)
+        .set(auth(cfgToken))
+        .expect(200);
+      expect(after.body.undefinedCodes).not.toContain('MINING_PERMISSION');
+      expect(
+        after.body.availableTypes.map((t: { code: string }) => t.code),
+      ).toContain('MINING_PERMISSION');
+    });
+
+    /**
+     * The assertion that matters. This route creates a `settings.DocumentType` under
+     * `SETTINGS`; it stays safe only because it resolves against the PROJECT set alone.
+     */
+    it('refuses a code from the company set, which a different permission owns', async () => {
+      const res = await http()
+        .post(
+          `/projects/document-requirements/kinds/GST?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(cfgToken))
+        .expect(400);
+      expect(res.body.code).toBe('PROJECT_DOCUMENT_KIND_NOT_REQUIRED');
+
+      const leaked = await sys.documentType.findFirst({
+        where: { companyId: cfgCompanyId, code: 'GST' },
+      });
+      expect(leaked).toBeNull();
+    });
+
+    it('refuses the kind route without SETTINGS', async () => {
+      await http()
+        .post(
+          `/projects/document-requirements/kinds/LOI?companyId=${cfgCompanyId}`,
+        )
+        .set(auth(readerToken))
+        .expect(403);
+    });
+  });
+});

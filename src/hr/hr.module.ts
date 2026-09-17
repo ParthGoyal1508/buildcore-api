@@ -7,7 +7,11 @@ import { AttendanceAdminService } from './attendance/attendance-admin.service';
 import { AttendanceImportController } from './attendance/attendance-import.controller';
 import { AttendanceImportService } from './attendance/attendance-import.service';
 import { HolidaysController } from './attendance/holidays.controller';
+import { ApprovalsModule } from '../approvals/approvals.module';
+import { PayrollModule } from '../payroll/payroll.module';
 import { AttendanceExceptionsController } from './attendance-exceptions/attendance-exceptions.controller';
+import { AttendanceExceptionReconciler } from './attendance-exceptions/attendance-exception.reconciler';
+import { AttendanceExceptionsService } from './attendance-exceptions/attendance-exceptions.service';
 import { BiometricsService } from './biometrics/biometrics.service';
 import { FaceApiBiometricsService } from './biometrics/face-api-biometrics.service';
 import { FaceEnrolmentController } from './biometrics/face-enrolment.controller';
@@ -49,7 +53,20 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
   // `forwardRef` because 008 made this edge bidirectional: `projects` now needs
   // `EmployeesService` for its site-delete guard and project roster, while `hr`
   // still needs `SitesService` for punch geofencing. See projects.module.ts.
-  imports: [SettingsModule, forwardRef(() => ProjectsModule)],
+  // ApprovalsModule for feature 016: flagged punches enter an approval chain, and
+  // decisions on them are recorded through `ApprovalService` rather than by writing to
+  // the spine's tables from here (Principle I).
+  // `forwardRef(() => PayrollModule)` for 016 FR-016: the attendance write path asks
+  // payroll whether a period is under review, while payroll's engine reads attendance
+  // through this module. The cycle is real and deliberate — both directions are exported
+  // service calls, which is what Principle I requires — so Nest is told about it rather
+  // than the boundary being broken to avoid it.
+  imports: [
+    SettingsModule,
+    ApprovalsModule,
+    forwardRef(() => ProjectsModule),
+    forwardRef(() => PayrollModule),
+  ],
   controllers: [
     EmployeesController,
     AttendanceAdminController,
@@ -67,6 +84,10 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     ReimbursementController,
   ],
   providers: [
+    AttendanceExceptionsService,
+    // Answers the approval spine's reconciliation sweep about `hr`'s own punches (T052).
+    // Registered by being listed here and decorated; nothing in `src/approvals/` changes.
+    AttendanceExceptionReconciler,
     EmployeesService,
     EmployeeDocumentsService,
     AttendanceAdminService,

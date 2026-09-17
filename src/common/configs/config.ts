@@ -45,6 +45,28 @@ function parsePtSlabs(
 export const LEGACY_REFRESH_COOKIE_PATH = '/auth';
 
 /**
+ * The cookie's `Path`, normalised.
+ *
+ * A `Path` that does not begin with `/` is invalid, and RFC 6265 says to ignore it and
+ * fall back to the *default-path* — the directory of the request that set the cookie.
+ * For `/bff/auth/login` that computes to `/bff/auth`, so `REFRESH_COOKIE_PATH=bff/auth`
+ * appears to work while actually being ignored. That is a trap: the value in the
+ * dashboard no longer describes what the browser stores, and the moment the cookie is
+ * set from a response at any other depth the accident stops holding.
+ *
+ * Normalised rather than rejected, because refusing to boot would take a working API
+ * down over a leading slash. The preflight says loudly what happened.
+ */
+export function normaliseRefreshCookiePath(raw: string | undefined): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return LEGACY_REFRESH_COOKIE_PATH;
+  const withLeadingSlash = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  // A trailing slash makes `/bff/auth/` which does not path-match `/bff/auth` itself.
+  const withoutTrailing = withLeadingSlash.replace(/(?!^)\/+$/, '');
+  return withoutTrailing || '/';
+}
+
+/**
  * Whether to mark the refresh cookie `Secure`. True everywhere unless explicitly
  * disabled, and impossible to disable in production.
  *
@@ -153,7 +175,7 @@ const config: Config = {
       // their first page refresh with nothing in any log to say why. That is not
       // hypothetical — it is what happened in local dev the day after 015 shipped, so
       // `refresh-cookie-preflight.ts` now says the effective value out loud at boot.
-      path: process.env.REFRESH_COOKIE_PATH || LEGACY_REFRESH_COOKIE_PATH,
+      path: normaliseRefreshCookiePath(process.env.REFRESH_COOKIE_PATH),
     },
     refreshToken: {
       sessionDays: numberFromEnv(process.env.SESSION_DAYS, 90),
@@ -286,6 +308,58 @@ const config: Config = {
       ),
     },
   },
+  payrollSchedule: {
+    // 00:30 on the 1st: late enough that the last day of the month is certainly over in
+    // the business timezone, early enough that the run is waiting when HR arrives.
+    cron: process.env.PAYROLL_SCHEDULE_CRON || '30 0 1 * *',
+    // Defaults to the same business timezone attendance already uses, so "the 1st"
+    // means one thing across the product.
+    timeZone:
+      process.env.PAYROLL_SCHEDULE_TIMEZONE ||
+      process.env.APP_TIMEZONE ||
+      'Asia/Kolkata',
+  },
+
+  documents: {
+    // `??` not `||`: an explicitly empty env value must be distinguishable from unset,
+    // the same reasoning as the approvals block below.
+    expiryReminderLeadDays: Number(
+      process.env.DOCUMENTS_EXPIRY_REMINDER_LEAD_DAYS ?? 30,
+    ),
+    // 90 days after a restricted document is superseded, the old copy goes. Long enough
+    // to recover from an upload mistake, short enough not to accumulate Aadhaar scans
+    // nobody has a reason to hold (FR-006a).
+    restrictedRetentionDays: Number(
+      process.env.DOCUMENTS_RESTRICTED_RETENTION_DAYS ?? 90,
+    ),
+  },
+
+  approvals: {
+    // FR-018's four, as the six action types they decompose into. Overridable with a
+    // comma-separated `APPROVALS_DIRECTOR_FINAL_ACTIONS`; an explicitly empty value
+    // disables the fail-closed default, which is why `??` is used rather than `||` —
+    // `''` must be distinguishable from unset.
+    directorFinalActionTypes: (
+      process.env.APPROVALS_DIRECTOR_FINAL_ACTIONS ??
+      // The four the client named (FR-018), as the six action types they decompose
+      // into. Written literally here rather than imported from `src/approvals`, because
+      // configuration must not depend on the feature that reads it — `config.spec.ts`
+      // asserts this list against the constants in `default-chains.ts` so the two
+      // cannot drift.
+      [
+        'payment_release',
+        'payroll_run',
+        'letter_work_order',
+        'letter_loi',
+        'letter_purchase_order',
+        'final_settlement',
+      ].join(',')
+    )
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  },
+
   hrPayroll: {
     // 005 FR-006 — how far ahead an employee document starts reporting as
     // expiring-soon.

@@ -58,10 +58,28 @@ export interface ReEnrolmentStateView {
 
 /** Everything a call into this service needs about who is asking. */
 export interface Caller {
-  userId: string;
+  /**
+   * Null for a system actor — a scheduled job with no user behind it (016 T032).
+   *
+   * Widened rather than worked around with a cast: `AuditLogEntry.accountId` is a real
+   * foreign key, so a scheduled payroll run has to record *no* account rather than a
+   * fabricated one. Note that `tsconfig.json` sets `strictNullChecks: false`, so this
+   * annotation documents the contract rather than enforcing it — which is the more
+   * reason to state it plainly here.
+   */
+  userId: string | null;
   companyId: string | null;
   ipAddress: string;
   rls: RlsContext;
+  /**
+   * The ids of the roles this caller holds (016 FR-016).
+   *
+   * Carried so the attendance write path can ask whether the caller is the company's
+   * HR — a question answered by the chain's slot mapping, not by a permission — without
+   * a second lookup per edit. Empty for a system actor, which is correct: a scheduled
+   * job holds no role and must not pass a role check by accident.
+   */
+  roleIds: string[];
 }
 
 /**

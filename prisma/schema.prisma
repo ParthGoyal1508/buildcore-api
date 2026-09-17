@@ -82,6 +82,13 @@ model User {
   inviteTokens    InviteToken[]
   auditLogEntries AuditLogEntry[]
 
+  // Feature 016's approval spine. Two relations to the same table because the person
+  // who raised an item and the people who decide on it are different roles in the
+  // story — and FR-021a means they must be different people.
+  approvalsRaised    ApprovalInstance[] @relation("ApprovalOriginator")
+  approvalsDelegated ApprovalInstance[] @relation("ApprovalDelegate")
+  approvalDecisions  ApprovalDecision[] @relation("ApprovalActor")
+
   @@schema("shared")
 }
 
@@ -133,6 +140,11 @@ model Role {
   updatedAt   DateTime     @updatedAt
 
   userRoles UserRole[]
+
+  /// Feature 016: the chain slots this role fills. A role cannot be deleted out from
+  /// under a chain without taking its mappings with it — which is the right outcome,
+  /// since the alternative is a level that resolves to nothing.
+  roleSlotMappings RoleSlotMapping[]
 
   @@schema("settings")
 }
@@ -336,6 +348,21 @@ model Company {
   assetDocTypes   AssetDocType[]
   conditionGrades ConditionGrade[]
 
+  // Feature 016's approval spine. Chains and slot mappings are per company because the
+  // client runs two companies that may staff the same chain shape differently.
+  approvalChains    ApprovalChain[]
+  approvalLevels    ApprovalLevel[]
+  roleSlotMappings  RoleSlotMapping[]
+  approvalInstances ApprovalInstance[]
+  approvalDecisions ApprovalDecision[]
+  /// 017 US1 — the certificates behind this company's registration numbers.
+  companyDocuments  CompanyDocument[]
+
+  // 017 letters (T026, T052).
+  letterKinds LetterKind[]
+  signatories Signatory[]
+  issuedLetters IssuedLetter[]
+
   @@schema("settings")
 }
 
@@ -456,13 +483,77 @@ model SkillCategory {
 }
 
 /// Letter types feature 011 generates from per-company templates (011 FR-020).
-enum LetterType {
-  offer
-  appointment
-  confirmation
-  relieving
-  experience
+/// A kind of letter (017 §1, FR-010, FR-011, FR-022).
+///
+/// Replaces `enum LetterType`, which had five values and needed a migration for each
+/// new one — directly contradicting FR-011, "define a new letter kind without a code
+/// change". A row is what makes both FR-011 and FR-022 (refuse deletion while letters
+/// reference it) structural rather than conventional.
+model LetterKind {
+  id String @id @default(cuid())
 
+  /// NULL = a kind this product ships for everyone; a value = one company defined it.
+  /// The same nullable-tenant pattern as `ReminderRule`.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Stable identifier — `offer`, `letter_work_order`. What code and the 016 action
+  /// types match on, and deliberately not editable: the label is what a human changes.
+  ///
+  /// The five keys migrated from `enum LetterType` are byte-identical to the old enum
+  /// values, which is what let the backfill match them and what keeps Recruitment's
+  /// behaviour unchanged.
+  key   String
+  label String
+
+  /// FR-016: whether a signature is applied at issue.
+  requiresSignature Boolean @default(false)
+  /// FR-015a: true for work order, LOI and purchase order — the three that commit money.
+  requiresApproval  Boolean @default(false)
+  /// The 016 action type to gate on. Must equal a constant exported from
+  /// `src/approvals/default-chains.ts`; a unit test asserts that rather than trusting
+  /// two files to stay in step.
+  approvalActionType String?
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  templates LetterTemplate[]
+  letters   IssuedLetter[]
+
+  /// Company-authored kinds are unique per company. Product-shipped ones (companyId
+  /// NULL) need a SECOND, hand-authored partial unique index, because Postgres treats
+  /// NULLs as distinct and this composite would happily admit two `(NULL, 'offer')`
+  /// rows — see `LetterKind_shipped_key` in the migration.
+  @@unique([companyId, key])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+/// A named person whose signature is applied to letters (017 FR-016, research §5).
+model Signatory {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  name  String
+  title String
+
+  /// Storage key for the signature graphic, through the existing `StorageService`.
+  signatureRef String
+
+  /// Someone leaves; the letters they signed stay valid. Deactivating hides them from
+  /// new issues without touching what was already issued.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  letters IssuedLetter[]
+
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -498,17 +589,22 @@ model LetterTemplate {
   companyId String
   company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  letterType        LetterType
+  /// 017 §1: was `letterType LetterType`. The enum is gone; a template now points at a
+  /// `LetterKind` row, so a template can be written for a kind that did not exist when
+  /// this code shipped.
+  letterKindId String
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Restrict)
+
   name              String
   bodyTemplate      String
   letterheadAssetId String?
-  isActive          Boolean    @default(false)
+  isActive          Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
-  @@index([companyId, letterType])
+  @@index([companyId, letterKindId])
   @@schema("settings")
 }
 
@@ -516,6 +612,31 @@ model LetterTemplate {
 /// (MandatoryNumber/Mandatory/ExpiryNumber/Expiry/Number/Optional) is deliberately
 /// NOT stored — it is a pure function of the three booleans below, computed on read
 /// so it can never drift from them (research.md §7).
+/// Which vocabulary a document kind belongs to (017 amendment, 2026-09-16).
+///
+/// `DocumentType` is one table serving two unrelated lists: the employee file (Aadhaar,
+/// marksheets, PF forms) and the organisation's paperwork (GST certificate, labour
+/// licence, work order). They were already mixed — every company's Employee Setup list
+/// showed the statutory kinds too — and the screens owning each list are guarded by
+/// different permissions, so the mixing is not merely untidy: it is a question about who
+/// may add to whose list.
+///
+/// `company` covers project paperwork as well as the company's own. Both are the
+/// organisation's papers rather than a person's, and a third value would split a
+/// distinction no screen makes.
+///
+/// `both` is the default, and the honest answer for a kind that genuinely serves both —
+/// Aadhaar and PAN are required of the company AND held on file for an employee. It is
+/// also the only safe landing place for a kind this product did not define, because it
+/// is the one value that cannot hide an existing row from a screen already showing it.
+enum DocumentTypeScope {
+  employee
+  company
+  both
+
+  @@schema("settings")
+}
+
 model DocumentType {
   id        String  @id @default(cuid())
   companyId String
@@ -529,6 +650,15 @@ model DocumentType {
   hasExpiry   Boolean @default(false)
   needsNumber Boolean @default(false)
 
+  /// Regulated personal data — Aadhaar today (017 FR-024). This flag is the *enforcement
+  /// point*, not a label: the letter template resolver refuses a restricted type outright,
+  /// so the rule holds for letter kinds nobody has defined yet, and superseded versions are
+  /// purged on a bounded schedule rather than retained forever (017 FR-006a).
+  isRestricted Boolean @default(false)
+
+  /// Which list this kind belongs to. See `DocumentTypeScope`.
+  scope DocumentTypeScope @default(both)
+
   sortOrder Int     @default(0)
   /// Inactive types are excluded from new-upload selection; historical employee
   /// records referencing them are unaffected (FR-019).
@@ -537,8 +667,58 @@ model DocumentType {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  companyDocuments CompanyDocument[]
+
   @@unique([companyId, code])
   @@index([companyId])
+  @@schema("settings")
+}
+
+/// A company's own statutory papers — the certificates behind the registration numbers
+/// already held on `Company` (017 US1, FR-001).
+///
+/// Deliberately the same shape as `EmployeeDocument`, `ProjectDocument`,
+/// `ContractorDocument`, `EquipmentDocument` and `AssetDocument`. A sixth document model
+/// that differed would be the one people got wrong.
+model CompanyDocument {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// `settings.DocumentType.id`. A real relation here, unlike `EmployeeDocument`, because
+  /// both models live in `settings` — no schema boundary is crossed.
+  documentTypeId String
+  documentType   DocumentType @relation(fields: [documentTypeId], references: [id])
+
+  /// Encrypted object-storage reference. Opaque: never a path a client supplies.
+  fileRef        String
+  /// The GSTIN/PAN/TAN itself, when the kind carries one (`DocumentType.needsNumber`).
+  documentNumber String?
+  /// Required when `DocumentType.hasExpiry` — enforced in the service (FR-004).
+  expiresAt      DateTime? @db.Date
+
+  /// Points back at the document this one replaced — the history chain FR-006 preserves.
+  supersedesId String?          @unique
+  supersedes   CompanyDocument? @relation("CompanyDocumentSupersession", fields: [supersedesId], references: [id])
+  supersededBy CompanyDocument? @relation("CompanyDocumentSupersession")
+
+  /// Whether this is the version that counts as present compliance today.
+  ///
+  /// A state column rather than an absence-of-pointer, and the reason is that only a
+  /// state column can carry a database-level guarantee. "Current means nothing points at
+  /// it" needs a NOT EXISTS, which no index can express; "current means this flag" is a
+  /// partial unique index, which is exactly how 016 guaranteed one live approval per item.
+  ///
+  /// Maintained in the same transaction as the supersession it records, so it cannot drift
+  /// from the chain — and the index below refuses two current rows even under a race that
+  /// a service-level check would lose.
+  isCurrent Boolean @default(true)
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([expiresAt])
   @@schema("settings")
 }
 
@@ -649,14 +829,14 @@ model RefreshToken {
   companyId String?
 
   /// Set true the moment this token is rotated (exchanged for a new one).
-  used       Boolean   @default(false)
+  used      Boolean   @default(false)
   /// When `used` was set — lets rotation tell a genuine replay apart from a benign
   /// concurrent-refresh race within a short grace window (research.md §2).
-  usedAt     DateTime?
+  usedAt    DateTime?
   /// Set on logout, reuse detection, account deactivation, or admin-reset-password.
-  revokedAt  DateTime?
-  expiresAt  DateTime
-  createdAt  DateTime  @default(now())
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
 
   @@index([familyId])
   @@index([accountId])
@@ -893,6 +1073,20 @@ enum AuditEntityType {
   ASSET_CATEGORY
   ASSET_DOC_TYPE
   CONDITION_GRADE
+
+  // Feature 016's approval spine (016 FR-002, FR-003, research.md §6).
+  //
+  // Note what is NOT here: the decisions themselves. `ApprovalDecision` is the spine's
+  // own table because "who is this waiting on" is read on every render of an item, and
+  // serving that by replaying an append-only forensic log would make the log
+  // load-bearing on the hot path.
+  //
+  // These three are the off-path, security-adjacent records: a decision worth
+  // cross-referencing from the activity log, every *refused* attempt (FR-003), and any
+  // change to who is allowed to approve what.
+  APPROVAL_DECISION
+  APPROVAL_REFUSED
+  APPROVAL_CHAIN_CONFIG
 
   @@schema("shared")
 }
@@ -1437,9 +1631,24 @@ model ProjectDocument {
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   documentType String
-  fileRef      String
-  filePath     String?
-  remark       String?
+
+  /// `settings.DocumentType.id` as a BARE STRING, for the same reason
+  /// `ProjectDocumentRequirement.documentTypeId` is one — see the note there.
+  ///
+  /// Added by 017. `documentType` above is free text with no defined vocabulary, so it
+  /// cannot answer "does this project hold its work order?": two people typing "Work
+  /// Order" and "work order" would be filing against different kinds and readiness would
+  /// quietly disagree with itself. This column is the key readiness matches on; the free
+  /// text stays as the label 008 intended it to be.
+  ///
+  /// Nullable because acceptance scenario 5 requires it: a document that answers no
+  /// required kind is accepted and filed as supplementary, and null is what
+  /// "supplementary" means here rather than a second flag saying the same thing.
+  documentTypeId String?
+
+  fileRef  String
+  filePath String?
+  remark   String?
 
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String
@@ -1447,6 +1656,37 @@ model ProjectDocument {
 
   @@index([companyId])
   @@index([projectId])
+  /// Readiness asks "which of these kinds does each of these projects hold?" — this is
+  /// the index that question is answered by (FR-008).
+  @@index([companyId, projectId, documentTypeId])
+  @@schema("projects")
+}
+
+/// Which document kinds a project must hold before it counts as fully papered
+/// (017 US2, FR-007). Configuration, not documents: the documents themselves are
+/// `ProjectDocument` rows.
+model ProjectDocumentRequirement {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// `settings.DocumentType.id` as a BARE STRING, deliberately not a foreign key.
+  ///
+  /// A declared FK across schemas would be permitted, but resolving it to a *name* for
+  /// display is a cross-schema read and Principle I forbids that outright. The projects
+  /// module receives type names from the settings module through an exported service
+  /// method and joins them in memory. Written down because the missing relation looks
+  /// like an oversight and is not.
+  documentTypeId String
+
+  /// FR-009 lets a project exist before its papers are complete; readiness is reported,
+  /// never enforced at creation.
+  isMandatory Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, documentTypeId])
+  @@index([companyId])
   @@schema("projects")
 }
 
@@ -2248,6 +2488,15 @@ model PayrollRun {
   processedAt       DateTime?
   paidAt            DateTime?
 
+  /// True when the monthly schedule created this run rather than a person (016 FR-013).
+  ///
+  /// Not decoration: the production API is deployed on an instance class that suspends
+  /// when idle, and a suspended instance runs no schedule (research.md §4). Without this
+  /// column, "did the 1st-of-the-month run actually fire?" can only be answered by
+  /// inferring from timestamps. With it, an operator can see at a glance whether the
+  /// automation is working or whether somebody has been quietly creating runs by hand.
+  createdBySchedule Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2980,6 +3229,317 @@ model ReminderNotification {
 }
 
 // ============================================================================
+// shared schema — feature 016's approval spine.
+//
+// Five tables that together say: *this record moves through named people in a fixed
+// order, everyone can see who acted, and somebody has the last word.*
+//
+// They live in `shared` because an approval chain spans seven modules — hr
+// (attendance), payroll (runs), inventory (indents), labour (muster rolls, payment
+// sheets), projects (RA bills), plant (hire bills) and recruitment. A table holding a
+// real relation to any one of those would belong to that module, and seven of them
+// would be seven Principle I violations.
+//
+// THE ABSENCE OF A FOREIGN KEY TO THE GOVERNED ITEM IS THE DESIGN. `ApprovalInstance`
+// names its item as an opaque `(entityType, entityId)` pair, and the spine never
+// dereferences it — doing so would be the cross-schema query this shape exists to
+// avoid. Modules reach the spine through the exported `ApprovalService`; the spine
+// reaches nobody, and knows nothing about an item beyond what its owning module hands
+// over at submit time (research.md §1, contracts/approval-service.md).
+//
+// The cost, put here so a future reader meets it rather than discovers it: there is no
+// referential integrity. A hard-deleted item leaves an instance pointing at nothing.
+// Three things carry that — modules soft-delete already, `abandon()` closes a chain
+// explicitly when an item is cancelled, and a reconciliation sweep reports orphans.
+// ============================================================================
+
+/// Where an item has got to.
+///
+/// **Terminal** is `approved`, `rejected` and `abandoned`. `returned` is *not* terminal:
+/// the item is waiting on its originator to correct and resubmit it, and it still holds
+/// the item's one live chain slot. Treating it as closed would let a module submit a
+/// second instance for an item that is already mid-correction, which is the double-
+/// approval the "one live chain per item" index exists to prevent.
+enum ApprovalState {
+  pending
+  approved
+  rejected
+  returned
+  abandoned
+
+  @@schema("shared")
+}
+
+/// The three things a person at a level can do. `reject` stops the chain; `return`
+/// sends it back to the originator, who may resubmit into a fresh round.
+enum ApprovalDecisionAction {
+  approve
+  reject
+  return
+
+  @@schema("shared")
+}
+
+/// The ordered shape of authority for one kind of action, in one company.
+///
+/// Per company rather than global because the client runs two companies that may staff
+/// the same chain shape differently — which is also why a level names a *slot* and not
+/// a role (research.md §2).
+model ApprovalChain {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The key a module passes to `submit()` to find its chain: `attendance_exception`,
+  /// `payroll_run`. Free text rather than an enum because the set grows as modules
+  /// migrate, and an enum would put a migration in the path of every migration.
+  actionType String
+
+  /// Whether the last level is the Super Admin gate regardless of its slot (FR-018).
+  isFinalAuthorityRequired Boolean @default(false)
+
+  /// Set false to stop accepting new items into this chain. Items already in flight
+  /// continue under it — an in-flight item keeps the chain it entered, so a
+  /// configuration change cannot retroactively invalidate approvals already given.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  levels    ApprovalLevel[]
+  instances ApprovalInstance[]
+
+  /// One *active* chain per action type per company is a partial unique index
+  /// (`WHERE "isActive"`), hand-authored in the migration — Prisma cannot express a
+  /// predicate. This plain index is what the lookup in `submit()` actually rides on.
+  @@index([companyId, actionType])
+  @@schema("shared")
+}
+
+/// One step of a chain.
+model ApprovalLevel {
+  id String @id @default(cuid())
+
+  chainId String
+  chain   ApprovalChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the chain so this table carries the same
+  /// `"companyId" = current_setting(...)` RLS policy as every other company-scoped
+  /// table in the database. The alternative — a policy reaching through `chainId` with
+  /// a subquery — would be the only policy of its shape in eleven schemas, and the one
+  /// a future table would copy wrongly. Write-once, set in the same transaction as the
+  /// chain it belongs to, and no code path moves a chain between companies.
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// 1-based and contiguous. `ApprovalInstance.currentPosition` indexes into these.
+  position Int
+
+  /// The slot authorised to act — `first_approver`, `hr`, `final` — resolved to an
+  /// actual role per company through `RoleSlotMapping`. A level that named a role
+  /// would hardcode one org chart into the chain definition; a slot describes the
+  /// *shape* of authority and lets settings supply the people (research.md §2).
+  slotKey String
+
+  /// This level is the Director gate.
+  isFinalAuthority Boolean @default(false)
+
+  /// Human label for the level, shown by the interface (FR-010). Null falls back to
+  /// the canonical slot-key label in `approval-slots.ts`; the column exists so a
+  /// company defining a slot outside that set still gets a legible label instead of a
+  /// raw key.
+  label String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// `(chainId, slotKey)` is the first half of the unsatisfiable-chain guard
+  /// (FR-021b): one slot may not appear twice in a chain. The second half — two
+  /// *different* slots mapping to the same role — cannot be a constraint at all and is
+  /// checked when the mapping is written (`ChainsService.putSlotMapping`).
+  @@unique([chainId, position])
+  @@unique([chainId, slotKey])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// Binds a slot to one of a company's own roles. The table that lets two companies
+/// staff the same chain shape differently.
+model RoleSlotMapping {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  slotKey String
+
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, slotKey])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// One item travelling one chain. The opaque reference to the governed item lives here.
+model ApprovalInstance {
+  id String @id @default(cuid())
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  chainId String
+  chain   ApprovalChain @relation(fields: [chainId], references: [id])
+
+  /// What kind of thing this is — `attendance_exception`, `payroll_run`.
+  /// **Deliberately not a foreign key, and deliberately not an enum**: the spine must
+  /// not know the set of things it governs (research.md §1).
+  entityType String
+  /// The item's id in its own module's schema. **No foreign key** — see the block
+  /// comment above this model group. This is the single most important absence in the
+  /// feature, and it is intentional.
+  entityId   String
+
+  /// Copied from the owning module at submit time, because the spine cannot read the
+  /// item to build it. This is the practical cost of the opacity above, and it is paid
+  /// here: a queue row has to say what it is about.
+  subject String
+  /// Where the interface should send a reviewer to see the item itself. Supplied by
+  /// the owning module for the same reason.
+  href    String?
+
+  /// The permission a caller must hold to read this item's approval history (FR-009,
+  /// US3 scenario 4).
+  ///
+  /// Also module-supplied, and for the third time the same reason: the spine cannot
+  /// dereference `entityId`, so it cannot ask the owning module whether this caller may
+  /// see the item. Storing the answer as data at submit time is the only way the spine
+  /// can enforce a rule it has no way to compute — and it is a *declaration*, not a
+  /// callback, so Principle I and research.md §1 both hold.
+  ///
+  /// Deliberately coarse. It is the permission that guards the module's own screen for
+  /// this kind of item, so it cannot express "this site's exceptions only". What it does
+  /// express is the rule the spec actually states, and it is strictly tighter than the
+  /// alternative of letting every authenticated colleague read the reasons people gave
+  /// for rejecting each other's work.
+  viewPermission Permission
+
+  /// Which level it awaits. Meaningless once `state` is terminal.
+  currentPosition Int @default(1)
+
+  state ApprovalState @default(pending)
+
+  /// Who raised it. **Null for an item raised by the system** — the monthly payroll
+  /// schedule has no person behind it, and this is a real foreign key, so attributing a
+  /// scheduled run to a fabricated or arbitrary account would be a lie in the audit
+  /// trail. Same reasoning as `AuditLogEntry.accountId`, which is nullable for the same
+  /// class of event.
+  originatorUserId String?
+  originator       User?   @relation("ApprovalOriginator", fields: [originatorUserId], references: [id])
+
+  /// Which round of the chain this is. Incremented when a returned item is
+  /// resubmitted, and part of both decision uniques below — without it, resubmission
+  /// would collide with the decisions of the round that was returned (FR-005, FR-020).
+  round Int @default(1)
+
+  /// Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
+  /// cannot be worn down by repetition without leaving a trace.
+  returnCount Int @default(0)
+
+  /// A one-off grant of authority at the CURRENT level to one named person (FR-019).
+  ///
+  /// Reassignment needs storage because authority in this model comes from holding a
+  /// role, not from being assigned a task — so "reassign to another holder of the same
+  /// level" would otherwise be a no-op, since every holder can already act. The case it
+  /// actually exists for is the stall FR-021a creates: the sole holder of a level's role
+  /// has already decided earlier in the chain, so *nobody* can act, and the item is
+  /// stuck with no error anywhere.
+  ///
+  /// Cleared whenever the item advances, is returned or terminates — a grant is for one
+  /// level, not for the rest of the chain. It does NOT bypass FR-021a: a delegate who has
+  /// already decided this round is still refused, by the unique index on
+  /// `ApprovalDecision`, so this cannot be used to launder a second decision.
+  delegatedToUserId String?
+  delegatedTo       User?   @relation("ApprovalDelegate", fields: [delegatedToUserId], references: [id])
+  /// Why the grant was made. Required by the service — an unexplained reassignment of an
+  /// approval is exactly the kind of act an audit trail exists to explain.
+  delegationReason  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  decisions ApprovalDecision[]
+
+  /// "One live chain per item" is a partial unique index on `(entityType, entityId)`
+  /// WHERE the state is non-terminal, hand-authored in the migration. It is what stops
+  /// a double-submit creating two parallel approvals of the same thing, and it has to
+  /// be partial so that a rejected item can be raised again later.
+  ///
+  /// This composite index serves the approval queue, which is the hottest read in the
+  /// feature.
+  @@index([companyId, state, currentPosition])
+  @@index([entityType, entityId])
+  @@schema("shared")
+}
+
+/// One recorded act by one person at one level. Immutable once written.
+model ApprovalDecision {
+  id String @id @default(cuid())
+
+  approvalInstanceId String
+  approvalInstance   ApprovalInstance @relation(fields: [approvalInstanceId], references: [id], onDelete: Cascade)
+
+  /// Denormalised from the instance so this table carries the same
+  /// `"companyId" = current_setting(...)` RLS policy as every other company-scoped
+  /// table in the database, instead of the one policy in the schema that needs a
+  /// subquery to evaluate. Write-once and set inside the same transaction as the row
+  /// it is copied from, so it cannot drift. (Same reasoning as
+  /// `labour.GangMember.isActive`, denormalised so an index need not join.)
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The round of the chain this decision belongs to, copied from the instance.
+  round Int @default(1)
+
+  /// The level decided at.
+  position Int
+
+  actorUserId String
+  actor       User   @relation("ApprovalActor", fields: [actorUserId], references: [id])
+
+  action ApprovalDecisionAction
+
+  /// Required for `reject` and `return` (FR-006). Enforced at the service boundary,
+  /// which returns `APPROVAL_REASON_REQUIRED` rather than letting a NOT NULL surface
+  /// as a database error.
+  reason String?
+
+  decidedAt DateTime @default(now())
+
+  /// The two constraints that make FR-021 and FR-021a true under a race rather than
+  /// only under a single-threaded test.
+  ///
+  /// `(instance, round, actorUserId)` is FR-021a: one person, one decision per round,
+  /// whatever roles they hold. Super Admin holds every permission, so this is the
+  /// common case and not an edge case.
+  ///
+  /// `(instance, round, position)` is FR-021: two approvers at the same level cannot
+  /// both record. Exactly one wins.
+  ///
+  /// Both are scoped by `round` because a returned item restarts from position 1 and
+  /// the same people must decide again — the round is what makes "again" legitimate
+  /// while keeping "twice" impossible.
+  @@unique([approvalInstanceId, round, actorUserId])
+  @@unique([approvalInstanceId, round, position])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+// ============================================================================
 // settings schema — feature 009's two reference-data masters.
 //
 // Items and their categories are `settings`-schema masters, not `inventory`-owned
@@ -3373,6 +3933,16 @@ model Payment {
   /// `amount − allocatedAmount`, derived on read.
   allocatedAmount Decimal @default(0) @db.Decimal(18, 2)
 
+  /// The RTGS advice or transaction confirmation, through `StorageService` (017 US7,
+  /// FR-020). Nullable because a payment is recorded when the money moves and the
+  /// advice often arrives afterwards — refusing the payment until the proof exists
+  /// would push people to record it somewhere else.
+  ///
+  /// `referenceNumber` above is a number somebody typed. This is the document behind
+  /// it, which is the whole of what US7 closes.
+  proofRef        String?
+  proofUploadedAt DateTime?
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -3383,6 +3953,9 @@ model Payment {
 
   @@index([companyId])
   @@index([companyId, vendorId])
+  /// FR-021: which payments lack a proof, answered by an index rather than by reading
+  /// every payment a company ever made.
+  @@index([companyId, proofRef])
   @@schema("inventory")
 }
 
@@ -5336,7 +5909,7 @@ model Candidate {
   fullName             String
   phone                String
   email                String
-  totalExperienceYears Decimal @db.Decimal(4, 1)
+  totalExperienceYears Decimal  @db.Decimal(4, 1)
   currentEmployer      String?
   currentCtc           Decimal? @db.Decimal(14, 2)
   expectedCtc          Decimal? @db.Decimal(14, 2)
@@ -5345,8 +5918,8 @@ model Candidate {
   referredByEmployeeId String?
   resumeRef            String?
 
-  stage      CandidateStage @default(applied)
-  employeeId String?
+  stage               CandidateStage @default(applied)
+  employeeId          String?
   previousCandidateId String?
   rejectionReason     String?
   noShowReason        String?
@@ -5376,11 +5949,11 @@ model CandidateStageHistory {
   candidateId String
   candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
 
-  fromStage CandidateStage?
-  toStage   CandidateStage
-  actorId   String?
-  occurredAt DateTime @default(now())
-  remarks   String?
+  fromStage  CandidateStage?
+  toStage    CandidateStage
+  actorId    String?
+  occurredAt DateTime        @default(now())
+  remarks    String?
 
   @@index([companyId])
   @@index([candidateId])
@@ -5402,8 +5975,8 @@ model Interview {
   mode        InterviewMode
   location    String?
 
-  status          InterviewStatus @default(scheduled)
-  rescheduleCount Int             @default(0)
+  status            InterviewStatus @default(scheduled)
+  rescheduleCount   Int             @default(0)
   rescheduleHistory Json?
 
   createdAt DateTime @default(now())
@@ -5447,7 +6020,7 @@ model InterviewFeedback {
   outcome               InterviewOutcome
   score                 Int
   comments              String
-  submittedAt           DateTime @default(now())
+  submittedAt           DateTime         @default(now())
 
   @@unique([interviewId, interviewerEmployeeId])
   @@index([companyId])
@@ -5467,7 +6040,7 @@ model Offer {
   designationId String
   departmentId  String
 
-  offeredCtc   Decimal @db.Decimal(14, 2)
+  offeredCtc    Decimal @db.Decimal(14, 2)
   salaryBreakup Json
 
   proposedJoiningDate  DateTime  @db.Date
@@ -5546,26 +6119,71 @@ model OnboardingItem {
 
 /// A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
 /// prior version; both remain downloadable.
-model GeneratedLetter {
-  id        String @id @default(cuid())
+/// A letter, composed and then issued (017 §2 — was `recruitment.GeneratedLetter`).
+///
+/// **Moved to `shared` and renamed.** A work order addressed to a vendor is not a
+/// recruitment record, and leaving the table in `recruitment` would have forced the
+/// recruitment module to learn about `partners`, `projects` and `inventory` — which
+/// Principle I forbids outright. In `shared` it belongs to no business module and can
+/// address anything.
+model IssuedLetter {
+  id        String  @id @default(cuid())
   companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
-  letterType  LetterType
+  letterKindId String
+  /// `Restrict`, so FR-022 ("refuse to delete a kind letters reference") is the
+  /// database's job. The service check exists to produce a legible message, not to be
+  /// the guarantee.
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Restrict)
+
+  /// Recruitment's two addressing forms, untouched by the move.
   employeeId  String?
   candidateId String?
-  templateId  String
 
-  renderedRef  String
+  /// The third form: an OPAQUE pair — `vendor`, `project`, `purchase`. This module
+  /// never dereferences it. Resolving `subjectId` to a vendor name would be exactly the
+  /// cross-schema read the move was made to avoid; the owning module resolves it.
+  subjectType String?
+  subjectId   String?
+
+  templateId String
+
+  /// Who signed, and **the graphic as applied** (research §5). Both, not just the id:
+  /// FR-013 requires a previously issued letter to render as it was issued, and a
+  /// signatory's graphic can be replaced. An implementation storing only `signatoryId`
+  /// silently rewrites history the first time somebody uploads a new signature.
+  signatoryId         String?
+  signatory           Signatory? @relation(fields: [signatoryId], references: [id], onDelete: SetNull)
+  appliedSignatureRef String?
+
+  /// FR-017: the executed copy that comes back, and FR-018's issued-vs-executed
+  /// distinction, which is rendered from whether this is null.
+  countersignedRef String?
+  countersignedAt  DateTime?
+
+  /// Empty until the letter is issued — a composed letter awaiting approval has no
+  /// rendered document yet, because rendering it would produce a file indistinguishable
+  /// from the real one.
+  renderedRef  String  @default("")
   version      Int     @default(1)
   isSuperseded Boolean @default(false)
 
-  issuedAt DateTime @default(now())
+  /// **NULL means composed but not yet issued.** A gated kind (FR-015a) must clear its
+  /// 016 chain before it takes effect, and the chain needs something to be raised
+  /// against — so the letter exists first and is issued second. The same null-as-not-yet
+  /// idiom `countersignedAt` uses two fields up.
+  issuedAt DateTime?
   issuedBy String?
 
+  createdAt DateTime @default(now())
+
   @@index([companyId])
-  @@index([companyId, letterType, employeeId])
-  @@index([companyId, letterType, candidateId])
-  @@schema("recruitment")
+  @@index([companyId, letterKindId, employeeId])
+  @@index([companyId, letterKindId, candidateId])
+  /// FR-019: letters where the work is — listed by the opaque subject pair.
+  @@index([companyId, subjectType, subjectId])
+  @@schema("shared")
 }
 
 /// An employee's resignation record (011 US8) — the trigger 005's exit flow consumes.
@@ -5575,9 +6193,9 @@ model Resignation {
 
   employeeId String
 
-  resignationDate DateTime                  @db.Date
-  reasonCategory  ResignationReasonCategory
-  reasonDetail    String
+  resignationDate  DateTime                  @db.Date
+  reasonCategory   ResignationReasonCategory
+  reasonDetail     String
   noticePeriodDays Int
 
   expectedLastWorkingDay DateTime  @db.Date
@@ -5585,7 +6203,7 @@ model Resignation {
   noticeWaiverDays       Int?
   waiverReason           String?
 
-  status        ResignationStatus @default(submitted)
+  status         ResignationStatus @default(submitted)
   withdrawReason String?
 
   createdAt DateTime  @default(now())

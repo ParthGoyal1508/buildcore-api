@@ -16,6 +16,7 @@ export function callerFrom(user: AuthenticatedUser, request: Request): Caller {
     companyId: user.companyId,
     ipAddress: clientIpOf(request),
     rls: rlsContextFor(user),
+    roleIds: user.roleIds ?? [],
   };
 }
 

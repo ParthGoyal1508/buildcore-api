@@ -14,7 +14,7 @@ import {
   rlsContextFor,
   withRlsContext,
 } from '../common/prisma/rls-context';
-import { UserSummary, toUserSummary } from './user-summary';
+import { UserSummary, displayNameOf, toUserSummary } from './user-summary';
 
 @Injectable()
 export class UsersService {
@@ -43,6 +43,7 @@ export class UsersService {
       ...updated,
       permissions: caller.permissions,
       roleNames: caller.roleNames,
+      roleIds: caller.roleIds,
     };
   }
 
@@ -101,6 +102,7 @@ export class UsersService {
       ...updated,
       permissions: caller.permissions,
       roleNames: caller.roleNames,
+      roleIds: caller.roleIds,
     };
   }
 
@@ -122,6 +124,49 @@ export class UsersService {
     return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.userRole.count({ where: { roleId } }),
     );
+  }
+
+  /**
+   * Active accounts holding `roleId` in `companyId`, with their display names.
+   *
+   * Added for feature 016's approval spine, which needs to say *who* an item is waiting
+   * on. A level resolves to a role, and turning that into people means reading
+   * `settings.UserRole` — which the spine's `shared` tables may not do directly
+   * (Principle I). So it lives here, on the module that owns `shared.User` and already
+   * owns every other user-to-role question (`countByRoleId` above,
+   * `clearRoleAssignment` below).
+   *
+   * Runs as system/bypass because it is called while answering "who must approve this",
+   * a question about a company the caller is already scoped to; the `companyId` filter
+   * is explicit rather than inherited from the RLS context so the method cannot
+   * accidentally return holders from every company.
+   */
+  async findActiveHoldersOfRole(
+    roleId: string,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: {
+            companyId,
+            status: 'active',
+            userRoles: { some: { roleId } },
+          },
+          select: {
+            id: true,
+            displayName: true,
+            firstname: true,
+            lastname: true,
+            username: true,
+            email: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+    );
+    return rows.map((u) => ({ id: u.id, name: displayNameOf(u) }));
   }
 
   /** Removes every assignment of `roleId`, leaving affected accounts with no module

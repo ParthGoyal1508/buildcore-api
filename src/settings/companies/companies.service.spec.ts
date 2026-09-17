@@ -28,6 +28,8 @@ const itemCategories = { seedDefaultsForCompany: jest.fn() };
 const assetCategories = { seedDefaultsForCompany: jest.fn() };
 const assetDocTypes = { seedDefaultsForCompany: jest.fn() };
 const conditionGrades = { seedDefaultsForCompany: jest.fn() };
+// 016 seeds the default approval chains the same way, in the same transaction.
+const approvalChains = { seedDefaultsForCompany: jest.fn() };
 
 const decimal = (n: number) => new Prisma.Decimal(n);
 const companyRow = (over: Record<string, unknown> = {}) => ({
@@ -61,6 +63,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await expect(
@@ -85,6 +88,9 @@ describe('CompaniesService', () => {
       const prisma = createPrismaMock({
         company: { findFirst: jest.fn().mockResolvedValue(null), create },
         employeeCodeSequence: { create: jest.fn() },
+        // 016 resolves the Super Admin role here so the approval spine never reads
+        // `settings.Role` itself (Principle I). Null is a valid answer.
+        role: { findFirst: jest.fn().mockResolvedValue(null) },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -96,6 +102,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await service.create(
@@ -121,6 +128,9 @@ describe('CompaniesService', () => {
       const prisma = createPrismaMock({
         company: { findFirst: jest.fn().mockResolvedValue(null), create },
         employeeCodeSequence: { create: jest.fn() },
+        // 016 resolves the Super Admin role here so the approval spine never reads
+        // `settings.Role` itself (Principle I). Null is a valid answer.
+        role: { findFirst: jest.fn().mockResolvedValue(null) },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -132,6 +142,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await service.create(
@@ -160,6 +171,7 @@ describe('CompaniesService', () => {
           create: jest.fn().mockResolvedValue(companyRow()),
         },
         employeeCodeSequence: { create: seqCreate },
+        role: { findFirst: jest.fn().mockResolvedValue({ id: 'role-super' }) },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -171,6 +183,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await service.create(
@@ -208,6 +221,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await expect(
@@ -235,6 +249,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
       await expect(
         service.update(
@@ -261,6 +276,7 @@ describe('CompaniesService', () => {
         assetCategories as never,
         assetDocTypes as never,
         conditionGrades as never,
+        approvalChains as never,
       );
 
       await service.listActiveForOtherModules();
