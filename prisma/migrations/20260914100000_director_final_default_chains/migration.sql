@@ -12,6 +12,32 @@
 -- A single level — the director. These action types are the end of a process, not a
 -- process; a company wanting more levels defines them through the settings endpoints.
 
+-- ── RLS context for this data migration ─────────────────────────────────────
+--
+-- `shared.ApprovalChain` and `shared.ApprovalLevel` both FORCE row-level security
+-- (20260913110556_approval_spine), and their `tenant_isolation` policy is declared with
+-- a USING clause and no WITH CHECK. Postgres then uses USING as the WITH CHECK
+-- expression for INSERT, so every row written here is tested against
+--
+--   "companyId" = current_setting('app.current_company_id', true)
+--   OR current_setting('app.is_super_admin', true) = 'true'
+--
+-- A migration sets neither GUC, so both calls return NULL, the expression evaluates to
+-- NULL rather than true, and the INSERT is rejected: "new row violates row-level
+-- security policy". That is exactly how this migration failed in production on
+-- 2026-09-16.
+--
+-- It passed locally because the local database role is a SUPERUSER and bypasses RLS
+-- entirely — the condition `assertRlsEnforceable` warns about on every boot. Production
+-- connects as a NOSUPERUSER role, where the policy actually fires. This class of failure
+-- therefore cannot be caught by running migrations locally.
+--
+-- The third argument makes this transaction-local, so it is gone when the migration
+-- commits and cannot leak into a later session. Same escape hatch the application uses
+-- for system work that legitimately spans tenants (`withRlsContext(prisma,
+-- { isSuperAdmin: true })`), and the same line 20260904081331 added for the same reason.
+SELECT set_config('app.is_super_admin', 'true', true);
+
 INSERT INTO "shared"."ApprovalChain" ("id", "companyId", "actionType", "isFinalAuthorityRequired", "isActive", "createdAt", "updatedAt")
 SELECT
   gen_random_uuid()::text,

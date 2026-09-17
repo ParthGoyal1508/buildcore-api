@@ -108,6 +108,25 @@ ON CONFLICT ("key") WHERE "companyId" IS NULL DO NOTHING;
 ALTER TABLE "settings"."LetterTemplate"     ADD COLUMN "letterKindId" TEXT;
 ALTER TABLE "recruitment"."GeneratedLetter" ADD COLUMN "letterKindId" TEXT;
 
+-- ── RLS context for the data statements in this migration ───────────────────
+--
+-- The tables written below FORCE row-level security, and their `tenant_isolation`
+-- policy is declared with USING and no WITH CHECK. Postgres then applies USING as the
+-- WITH CHECK expression for INSERT, and as the row-visibility filter for UPDATE.
+-- A migration sets neither GUC, so `current_setting(..., true)` returns NULL, the
+-- expression is NULL rather than true, and the statement either fails (INSERT) or
+-- silently matches zero rows (UPDATE) -- the second being the worse of the two,
+-- because the deploy goes green with the data unset.
+--
+-- Production connects as `buildcore_app` (NOSUPERUSER, NOBYPASSRLS), where the policy
+-- fires. Local development connects as a SUPERUSER and bypasses RLS entirely, which is
+-- why this class of defect cannot be caught by running migrations locally -- the
+-- condition `assertRlsEnforceable` warns about on every boot.
+--
+-- Transaction-local (third argument), so it cannot leak into a later session. Same line
+-- 20260904081331 added after failing in production for exactly this reason.
+SELECT set_config('app.is_super_admin', 'true', true);
+
 UPDATE "settings"."LetterTemplate" t
    SET "letterKindId" = k."id"
   FROM "settings"."LetterKind" k
