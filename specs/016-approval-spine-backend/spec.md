@@ -58,6 +58,15 @@ The first half is specified in feature 020; it changes what this feature's User 
 - Q: What does "reflect in the attendance of the affected employee" mean — a notification, or something on the record? → A: **On the record, in the employee's own view.** The employee opening their own attendance sees that the day was modified, by whom, when, and from what to what. It is not a notification that can be missed or cleared; it is a property of the day, permanent and visible for as long as the record is.
 - Q: Does an employee see the reason a modification was made? → A: **Yes, where one was stated.** Withholding the reason from the person whose pay it changes would leave them able to see that something happened to their attendance and unable to find out why, which is worse than not showing it at all.
 
+### Session 2026-09-29
+
+Raised against the client's re-stated requirement list, item 7: *"Every critical action across the
+system requires Director-level approval before execution."* FR-018 names four action types; the
+client's sentence names all of them. The gap between those two readings is the whole of US5.
+
+- Q: Should the director-final set be widened to every state-changing action, with an exemption list? → A: **No — the named, configurable set stays.** Defaulting every write to a director gate means the Director approves each attendance edit, each inventory issue and each meter reading, and the predictable outcome is that the gate is bypassed by sharing the Director's account. A closed set is also the only version that can be tested: "every critical action" cannot be verified, because nothing defines critical. What changes instead is that the set becomes visible and its editing becomes guarded (FR-018b, FR-018c) — so the client can see at any time exactly which actions are final and which are not, and nobody can quietly remove payment release from the list.
+- Q: FR-018a said "the client confirmed these four". Did they? → A: **No, and the wording is corrected.** The four were proposed on 2026-09-13 as the defensible reading of Note 8; the client's re-statement on 2026-09-16 asks for all actions, which is the opposite of a confirmation. The requirement now says the four are this product's proposal pending the client's list, which is what is true.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - An attendance correction survives the people who must see it (Priority: P1)
@@ -208,6 +217,11 @@ confirm it does not take effect until the director approves.
    is recorded as the final authority.
 3. **Given** such an action, **When** the director rejects, **Then** it does not take effect, and the
    reason is visible to everyone who approved earlier.
+3a. **Given** an attempt to remove an action type from the director-final set, **When** it is
+    submitted, **Then** it is itself held for the director's approval, and the set before and after is
+    recorded.
+3b. **Given** the director-final set, **When** it is reported, **Then** every action type the system
+    knows of is listed with whether it is final, so the client can see what is and is not gated.
 4. **Given** no active user holds the Super Admin role, **When** such an action is submitted,
    **Then** it is accepted into the chain and held, and the configuration problem is surfaced rather
    than silently stalling. (The system already refuses to deactivate the last Super Admin, so this
@@ -223,6 +237,10 @@ confirm it does not take effect until the director approves.
   through an entire chain.
 - An approver acts on an item they created. This must be refused, or explicitly permitted by
   configuration, but never unexamined.
+- The director-final set is edited while items are pending under the previous configuration. An item
+  already in a chain must not lose or gain a level underneath it.
+- An action type is added to the set while an instance of it is mid-flight and has already taken
+  effect. Nothing retrospective can be gated; the specification must not imply otherwise.
 - Two approvers at the same level act at the same moment. Exactly one decision may be recorded.
 - An item's underlying data changes after partial approval (US2 scenario 4 for payroll). Every
   chain must state whether prior approvals survive; the default is that they do not.
@@ -317,8 +335,18 @@ confirm it does not take effect until the director approves.
      the letters themselves are feature 017, which MUST consume this rather than build its own gate.
   4. **Final settlement on exit**, including any waived recoveries.
 - **FR-018a**: The set above MUST be configurable, so that an action type can be added to or removed
-  from it without a code change. Note 8 asks for "every final work"; four are named because applying
-  it literally to every action would halt daily work, and the client confirmed these four.
+  from it without a code change. Note 8 asks for "every final work" and the client's re-stated item 7
+  asks for "every critical action"; four are named because applying either literally to every action
+  would halt daily work. These four are **this product's proposal, not the client's answer** — the
+  client has re-stated the broad reading rather than confirming a list, and the list they will accept
+  is still open (see "Needing the client's decision").
+- **FR-018b**: A change to the director-final set MUST itself be a director-final action, and MUST be
+  recorded with its actor, its time, and the set before and after. Without this, FR-018a is the way
+  around FR-018: whoever may edit the set may remove payment release from it and then release a
+  payment.
+- **FR-018c**: System MUST be able to report the director-final set in full at any time — every action
+  type the system knows of, and for each whether it is director-final. This is how item 7's "every
+  critical action" is answered: not by a claim, but by a list the client can read and amend.
 - **FR-019**: System MUST allow a pending item to be reassigned to another holder of the same level
   when the original approver is unavailable.
 - **FR-020**: System MUST record and surface the number of times an item has been returned and
@@ -467,7 +495,28 @@ confirm it does not take effect until the director approves.
 ### Needing the client's decision
 
 All three markers raised when this specification was written were answered on 2026-09-13 and are
-recorded under Clarifications above. Nothing blocking remains.
+recorded under Clarifications above. The client's re-stated requirement list re-opened three,
+reviewed on 2026-09-29:
+
+- **[NEEDS CLARIFICATION: which action types are director-final?]** *(item 7)* FR-018 names four as
+  this product's proposal. The client has twice asked for the broad reading — "every final work"
+  (Note 8) and "every critical action" (item 7) — and has not been shown a list to accept or amend.
+  FR-018c exists so that list can be produced and put in front of them. **Not blocking**: the four
+  named are buildable now, and FR-018a makes changing the set a configuration change rather than a
+  rewrite.
+- **[NEEDS CLARIFICATION: which of the nine roles are "Site Incharge" and "HR Office"?]** *(item 6)*
+  Neither exists among the roles this system has. FR-016 — only HR may edit attendance during a
+  payroll review — cannot be built without the answer, because naming the wrong role either locks out
+  the people doing the work or grants the right to people who should not have it. **Blocking for
+  FR-016 and for US2's chain**; nothing else in this feature waits on it.
+- **[NEEDS CLARIFICATION: is buildcore-web's Principle VI to be amended?]** *(item 22)* The client
+  asks that the whole admin portal work on Android and iOS. buildcore-web's Principle VI closes the
+  mobile-critical list to punch, attendance viewing and leave, and is NON-NEGOTIABLE — no feature
+  specification can amend it, and the v2.1.0 amendment already moved every other screen's breakage
+  floor to 320px, which may or may not be what the client means by "fully functional". Reviewed on
+  2026-09-29 and **deliberately left for a separate decision**: widening the principle is a MAJOR
+  version bump affecting all six web features and every one shipped before them, which is not a
+  side effect a bug batch should have. NFR-002 here states the 320px floor and nothing stronger.
 
 Two items are deliberately deferred to planning rather than left as open questions, because they
 are design decisions rather than client decisions:

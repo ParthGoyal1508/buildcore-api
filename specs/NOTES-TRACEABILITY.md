@@ -72,6 +72,83 @@ reached a human, and under the new one it reaches nobody unless a supervisor not
 hard refusal must not ship before 016's correction chain exists, or a refused punch has no recovery
 route at all.
 
+## Client bug review, 2026-09-29 — the remaining items
+
+Items 5-23 were reviewed against every specification and, where the specification was silent, against
+the code. The first finding is that **the list is almost entirely already specified**: bugs.md is a
+re-statement of the same 26 notes, so the mapping below is mostly the mapping above read through the
+client's new numbering. Three items were genuinely short, and three cannot be closed by writing a
+specification at all.
+
+### bugs.md item → where it lives
+
+| bugs.md | Item | Spec | Verdict 2026-09-29 |
+|---|---|---|---|
+| 1 | Company document management | 017 FR-001–006, FR-023 | Covered (2026-09-16) |
+| 2 | Attendance blocking + modification log | 020 FR-012–013d, 016 FR-012a–e | Covered (2026-09-16) |
+| 3 | Project document management | 017 FR-007–009e | Covered (2026-09-16) |
+| 4 | Project search | 021 FR-001–004 | Covered (2026-09-16) |
+| 5 | Multi-company root selector | 019 FR-008–013 | Covered |
+| 6 | Payroll automation | 016 FR-013–017 | Covered, **blocked on role mapping** |
+| 7 | Director approval for all final actions | 016 FR-018–018c | **Amended** — closed set kept, made visible and guarded |
+| 8 | Salary slip email | 021 FR-005–009 | Covered |
+| 9 | Advance salary settlement | 021 FR-010–013 | Covered |
+| 10 | Full & final settlement + **asset tracking** | 021 FR-014–014e, FR-018a–b | **Amended** — assets were absent entirely |
+| 11 | Project BOQ & billing | **008 US4** (entry, shipped) + 018 FR-001–014 | Covered |
+| 12 | Subcontractor billing | 018 FR-006–009, FR-016a | Covered |
+| 13 | Fuel & machinery deductions | 020 FR-001–010 | Covered; one open marker (recovery cap) |
+| 14 | Project labour & expense summary | 018 FR-010–011a | **Amended** — monthly roll-up and export |
+| 15 | Geo-fencing | 020 FR-011–016 | Covered (2026-09-16) |
+| 16 | Cash visibility toggle | 019 FR-014–017 | Covered |
+| 17 | Project & labour ID, auto wage | **Already built** (013) | Covered — verified in code |
+| 18 | Letter template system | 017 FR-010–019 | Covered — FR-010 names 15 kinds to the client's 13 |
+| 19 | Sub-module permissions | 019 FR-001–007 | Covered |
+| 20 | 100-150 concurrent users | NFRs in 016, 018, 019, 020 | Read path measured; **punch path and cold start open** |
+| 21 | Approval & action tracking | 016 FR-002, FR-008–011 | Covered |
+| 22 | Mobile compatibility | Web NFRs | **Blocked — contradicts a NON-NEGOTIABLE principle** |
+| 23 | Payment transfer attachments | 017 FR-020–021 | Covered |
+
+### The three amendments
+
+| Item | What was missing | Decision |
+|---|---|---|
+| 10 | The word "asset" did not appear in 021 at all. FR-014's "recoverable kit" is the inventory issue register; `assets.AssetAllocation`, which records the custodian, the site and the expected return date, was never reached. An employee could clear exit holding a company laptop. | An open allocation **blocks** final settlement on the same terms as kit, waivable under FR-016 with an author and reason, and every asset held appears on the settlement summary whether or not it blocked. Value is **not** recovered — no valuation rule exists to recover it by. |
+| 14 | Two narrow gaps, not the whole item. Feature 013's `LabourPaymentSheet` already *is* a per-project per-worker wage register, and 018 FR-010/FR-013 already give the monthly labour cost reconciled to it. What was missing: the sheet's period is a *wage period*, not a calendar month, so a fortnightly cycle has no monthly per-worker view; and nothing let the monthly position leave the screen. | 018 FR-010a/b add the calendar-month roll-up across sheets, stating how a straddling sheet was apportioned, derived and never recomputing a wage. FR-011a adds the export. |
+| 7 | 016 FR-018 names four director-final action types; the client has now twice asked for all of them. FR-018a also claimed "the client confirmed these four", which the re-statement contradicts. And the configurability was unguarded — whoever could edit the set could remove payment release from it and then release a payment. | The closed configurable set **stays** (a literal reading halts daily work and cannot be tested, since nothing defines "critical"). What changes: the wording now says the four are this product's proposal, not the client's answer; FR-018b makes editing the set itself director-final; FR-018c requires the full set to be reportable, and web 016 US4 puts it on a screen the client can read and amend. |
+
+### The three that a specification cannot close
+
+- **Item 6 — "Site Incharge" and "HR Office" do not exist among the nine roles.** 016 FR-016 restricts
+  attendance edits during a payroll review to HR; naming the wrong role either locks out the people
+  doing the work or grants the right to people who should not have it. **Blocking for FR-016 and US2's
+  chain.** This has been outstanding since 2026-09-13.
+- **Item 20 — measured in part only.** The read path sustains 170-190 rps (below). The punch path
+  costs an unmeasured amount of CPU per request and the cold start has never been reproduced. 020
+  NFR-001 is the open one.
+- **Item 22 — contradicts buildcore-web Principle VI, which is NON-NEGOTIABLE.** Recorded in both
+  016 specifications on 2026-09-29 and deliberately **left for a separate decision**: widening the
+  mobile-critical list is a MAJOR constitution bump affecting every web feature shipped and unshipped,
+  and no feature specification may amend a constitution. Note that v2.1.0 already moved every
+  non-critical screen's breakage floor to 320px — that may already be what the client means by "fully
+  functional", and asking them is cheaper than a constitutional amendment.
+
+### Two claims corrected while checking
+
+Both were mine, and both would have produced work that was not needed:
+
+- **Item 11 does not need a BOQ entry requirement.** "Allow detailed BOQ entry per project" is feature
+  008 User Story 4, shipped, including validated Excel import. 018 begins where entry ends.
+- **Item 14 was very nearly complete, not half missing.** The first read treated the per-project
+  labour summary as absent. `LabourPaymentSheet` and `PaymentSheetLine` carry days worked, the resolved
+  rate, gross, deductions and net per worker per project. Only the calendar-month framing and the
+  export were short, and the amendment is correspondingly small.
+
+Item 17's third bullet — *"Use AI to auto-calculate wages for daily workers (male/female) based on
+pre-set rates per project"* — was checked in code rather than assumed. `MusterService` resolves the
+rate through `WageRateService` on every muster line, `WageRate` is per project, skill category and
+effective date, and male and female rates are two `SkillCategory` rows. Nothing about this needs a
+model; the word "AI" describes automation that exists.
+
 ## Settled by the client
 
 **Director is the Super Admin role** (2026-09-13). Recorded in `016-approval-spine-backend`, along

@@ -174,6 +174,21 @@ phased last for exactly that reason.
 > retention release and certification after the core billing spine, so overturning any of them costs
 > one phase rather than the feature.
 
+### Session 2026-09-29
+
+Raised against the client's re-stated requirement list, item 14: *"Generate a monthly labour wages
+summary per project (similar to staff payroll)"* and *"Produce a total monthly expense sheet per
+project for client billing reference."*
+
+Most of this item was already specified or already built, and that was checked before anything was
+added here. Feature 013's `LabourPaymentSheet` and its per-worker lines already give a per-project
+wage sheet carrying days worked, the resolved rate, gross, deductions and net — a wage register in
+the shape of a staff payroll. FR-010 through FR-013 already give the monthly cost position per
+project with the labour figure reconciled to those sheets. Two narrow things were genuinely missing.
+
+- Q: Feature 013's payment sheet covers a *wage period*, which the caller names — it is not necessarily a calendar month. Does item 14's "monthly" need its own view? → A: **Yes, a monthly roll-up.** A fortnightly or weekly payment cycle produces two or four sheets inside one month, and a month that begins mid-period produces a fraction of one. Asking a reader to add sheets up by hand and pro-rate the straddling one is exactly the arithmetic this feature exists to remove. The roll-up is a derived view over existing sheets; it introduces no new wage record and changes no sheet.
+- Q: The client wants an expense sheet "for client billing reference" — something to hand over. Is a screen enough? → A: **No, it must leave the system.** A figure quoted to a client in a negotiation is quoted from a document, and the only requirement here today is FR-012's drill-down on screen. Export is added as a requirement rather than left to be assumed.
+
 ### Edge Cases
 
 - A BOQ is revised mid-project after bills have been raised against the old version.
@@ -188,6 +203,12 @@ phased last for exactly that reason.
 - A project spans a financial year boundary.
 - Two billing engineers raise bills for the same BOQ lines concurrently.
 - Labour cost for a month where the payment sheet is frozen but not yet disbursed.
+- A payment sheet whose period straddles two calendar months — the commonest case under any
+  fortnightly cycle, and the one FR-010a must state its apportionment for.
+- A month in which a payment sheet is reopened and re-approved after the monthly roll-up was exported.
+  The export carries its production date for exactly this reason.
+- A project whose workers are engaged through a contractor, where the sheet is the contractor's basis
+  of payment rather than a per-worker disbursement.
 
 ## Requirements *(mandatory)*
 
@@ -212,8 +233,17 @@ phased last for exactly that reason.
   approval.
 - **FR-010**: System MUST produce, per project and per month, revenue billed and cost by category
   covering at least subcontractor, labour, material and plant.
+- **FR-010a**: System MUST present, per project and per calendar month, a labour wages roll-up over
+  every payment sheet overlapping that month, itemised per worker with days worked, the rate applied,
+  gross and net. Where a payment sheet's period straddles the month boundary, the roll-up MUST state
+  how the sheet was apportioned rather than silently including or excluding it.
+- **FR-010b**: The roll-up in FR-010a MUST be derived from feature 013's payment sheets and MUST NOT
+  create, alter or duplicate any wage record. A sheet remains the only place a wage is computed.
 - **FR-011**: System MUST present each project's monthly and cumulative position against its budget,
   with variance shown.
+- **FR-011a**: System MUST allow the monthly position in FR-010 and FR-011 to be exported as a
+  document that can be handed to a client, carrying the same figures as the screen, the project and
+  month it covers, and the date it was produced.
 - **FR-012**: Users MUST be able to open any figure on the project summary and see the source records
   that comprise it.
 - **FR-013**: System MUST reconcile the monthly labour cost figure to the approved labour payment
@@ -248,6 +278,8 @@ phased last for exactly that reason.
   measured in the period.
 - **Project Cost Position**: The derived monthly and cumulative view of revenue and cost by category
   for a project, against budget. Derived, not entered.
+- **Monthly Labour Roll-up**: The derived per-worker wage view for a project and a calendar month,
+  assembled from the payment sheets overlapping it. Derived, not entered, and not a wage record.
 
 ## Success Criteria *(mandatory)*
 
@@ -264,6 +296,10 @@ phased last for exactly that reason.
   project, without exporting anything.
 - **SC-006**: Over-billing of a BOQ line is impossible without a recorded reason, across all entry
   paths.
+- **SC-007**: The monthly labour roll-up for a project equals the apportioned sum of the payment
+  sheets overlapping that month, to the rupee, verified where a sheet straddles the month boundary.
+- **SC-008**: A project's monthly position can be exported and handed to a client without any figure
+  being retyped, and the exported figures match the screen exactly.
 
 ## Assumptions
 
@@ -279,6 +315,10 @@ phased last for exactly that reason.
 - Plant cost is taken from hire bills and internal hire rates already recorded.
 - Existing project budget records remain the budget baseline; this feature reports against them
   rather than replacing them.
+- Feature 013's payment sheets are the sole source of labour wage figures. This feature aggregates
+  them and never recomputes a wage, so a sheet corrected after the fact corrects every view over it.
+- Apportioning a straddling payment sheet is done on days worked within the month, which the sheet's
+  lines already carry, rather than on elapsed calendar days.
 
 ### Needing the client's decision
 

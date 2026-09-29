@@ -28,6 +28,17 @@ to quickly find projects."*
 - Q: Does a name match rank differently from a code match? → A: **An exact code match ranks first.** A code is unambiguous and someone who typed one knows exactly what they want; a name match is a guess the system is helping with. Beyond that single rule, ordering is not specified here.
 - Q: Does searching by name widen what a user can see? → A: **No.** FR-002's company and permission scoping is applied to results regardless of which field matched. A name is not a weaker key than a code for authorisation purposes — it is only a second way to arrive at the same record, and a record the caller may not view stays invisible either way.
 
+### Session 2026-09-29
+
+Raised against the client's re-stated requirement list, item 10, whose second bullet — *"Support for
+asset allocation tracking — any assets assigned to the employee should appear in the F&F summary"* —
+had no counterpart anywhere in this specification. FR-014's "recoverable kit" is the inventory issue
+register; the asset register's custody assignment (feature 012) was not reached at all, so an
+employee holding a company laptop could clear exit without it being noticed.
+
+- Q: Should an asset the employee still holds block final settlement, or only be listed on the summary? → A: **Block it, on the same terms as recoverable kit.** The client's words ask only for visibility, but a line on a summary nobody is required to act on is how property leaves the company. Blocking is the behaviour FR-015 already establishes for every other obligation, and it is waivable under FR-016, so the case where somebody decides the asset is not worth chasing is already handled — with the decision on the record and attributed, which a summary line would not give.
+- Q: Should the value of an unreturned asset be recovered from the final payable? → A: **No, not in this feature.** Recovery needs a valuation rule — original cost, depreciated value, or replacement — and that is a commercial decision the client has not made. The waiver under FR-016 records that the asset was written off; turning that into a rupee figure is separable work and is listed under "Needing the client's decision".
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Find anything by its code (Priority: P1)
@@ -128,14 +139,16 @@ confirm the advance is recovered and the net reflects it.
 
 ### User Story 4 - Nobody leaves with the company's property or an open balance (Priority: P2)
 
-When an employee exits, a clearance checklist runs: issued kit returned, company documents handed
-back, advances and loans settled, reimbursements closed, accounts and access revoked. Final
-settlement cannot be completed while anything on it is outstanding, or it is waived by somebody
-who is recorded as having waived it.
+When an employee exits, a clearance checklist runs: issued kit returned, **company assets in their
+custody returned**, company documents handed back, advances and loans settled, reimbursements
+closed, accounts and access revoked. Final settlement cannot be completed while anything on it is
+outstanding, or it is waived by somebody who is recorded as having waived it.
 
-**Why this priority**: Note 11. Exit records and final settlement payroll already exist, and kit
-items already carry a recoverable-at-exit flag; what is missing is the checklist that ties them
-together and the gate that makes it matter.
+**Why this priority**: Note 11, and the client's re-stated item 10. Exit records and final settlement
+payroll already exist, and kit items already carry a recoverable-at-exit flag; what is missing is the
+checklist that ties them together and the gate that makes it matter. Asset custody was added to this
+story on 2026-09-29: the asset register already records who holds what and when it is due back, and
+exit was the one event that ignored it.
 
 **Independent Test**: Exit an employee holding an outstanding advance and an issued item, and confirm
 settlement is blocked until both are resolved or waived.
@@ -155,6 +168,15 @@ settlement is blocked until both are resolved or waived.
    the final payable shown.
 6. **Given** a completed exit, **When** the employee's access is reviewed, **Then** their account is
    revoked and the revocation is recorded.
+7. **Given** an employee holding an asset whose allocation is still open, **When** final settlement is
+   attempted, **Then** it is refused, naming the asset and the site it was allocated at.
+8. **Given** that asset returned through the asset register's own return path, **When** the clearance
+   is reopened, **Then** its item reads satisfied with no second action taken here.
+9. **Given** an asset allocated to the employee's project but with no custodian named, **When** the
+   clearance is opened, **Then** it is not listed — it is not that employee's obligation.
+10. **Given** an asset item waived, **When** the final settlement summary is produced, **Then** the
+    asset appears on it with the waiver's author and reason, and the allocation is **not** recorded as
+    returned.
 
 ### Edge Cases
 
@@ -170,6 +192,14 @@ settlement is blocked until both are resolved or waived.
 - An advance is recorded between bank sheet production and actual transfer.
 - An employee exits mid-month with attendance not yet processed.
 - An employee is rehired after an exit with waived recoveries outstanding.
+- An asset is allocated to the employee after their exit is initiated but before settlement.
+- An asset comes back damaged: the allocation closes and the clearance item is satisfied, but the
+  company is out of pocket. FR-018b is deliberate about this.
+- A bulk allocation of ten units where six are returned. The asset register closes an allocation as a
+  whole, so this reads as outstanding until all ten are accounted for.
+- The employee is custodian of an asset at a site they were transferred away from months ago.
+- An asset's allocation is closed by somebody else during the exit, between the checklist being read
+  and settlement being attempted.
 
 ## Requirements *(mandatory)*
 
@@ -201,14 +231,35 @@ settlement is blocked until both are resolved or waived.
 - **FR-011**: System MUST show each recovery as a named line on the bank payment sheet.
 - **FR-012**: System MUST NOT produce a negative transfer; an unrecovered balance MUST carry forward.
 - **FR-013**: System MUST NOT recover the same advance twice.
-- **FR-014**: System MUST present an exit clearance checklist covering recoverable kit, company
-  documents, advances and loans, reimbursements, and access revocation.
+- **FR-014**: System MUST present an exit clearance checklist covering recoverable kit, **assets in
+  the employee's custody**, company documents, advances and loans, reimbursements, and access
+  revocation.
+- **FR-014a**: The checklist MUST include every asset allocation that names the exiting employee as
+  custodian and is not yet closed, as one item per allocation, stating the asset, the project or site
+  it was allocated at, the quantity held where an allocation covers more than one unit, and the date
+  its return was expected.
+- **FR-014b**: An open asset allocation MUST prevent final settlement under FR-015 on the same terms
+  as recoverable kit — satisfied by return, or by a waiver recorded under FR-016.
+- **FR-014c**: The asset register MUST remain the sole owner of custody state. This feature MUST
+  reflect it and MUST NOT keep a second record of who holds what: an asset returned through the asset
+  module's own return path MUST satisfy its clearance item without a further action here, and waiving
+  a clearance item MUST NOT mark the allocation returned or closed.
+- **FR-014d**: An allocation with no custodian named MUST NOT appear on any employee's checklist. An
+  asset held by a project or a site is the project's obligation, not a departing person's.
+- **FR-014e**: The checklist MUST recompute custody at the moment it is read, so that an allocation
+  opened after the exit was initiated is caught rather than missed by a snapshot taken earlier.
 - **FR-015**: System MUST prevent final settlement while a checklist item is outstanding and not
   waived.
 - **FR-016**: System MUST record the author and reason for every waiver.
 - **FR-017**: System MUST revoke the exiting employee's access on exit completion, and record it.
 - **FR-018**: System MUST include pending salary, notice recovery, outstanding advances,
   reimbursements and other deductions in the final settlement, showing the final payable.
+- **FR-018a**: The final settlement summary MUST list every asset the employee held at exit with its
+  outcome — returned, or waived with the waiver's author and reason — whether or not it blocked the
+  settlement. This is the client's item 10 read literally; FR-014b is what makes it act.
+- **FR-018b**: The value of an unreturned asset MUST NOT be deducted from the final payable under
+  this feature. No valuation rule is specified (Clarifications, 2026-09-29), and a deduction computed
+  from an unstated rule is worse than none.
 
 ### Non-Functional Requirements
 
@@ -229,7 +280,8 @@ settlement is blocked until both are resolved or waived.
 - **Bank Transaction Record**: An uploaded line of what the bank actually transferred, matched to a
   payroll line.
 - **Exit Clearance Item**: One obligation an exiting employee must settle, its state, and its waiver
-  if any.
+  if any. Obligations are of several kinds; an **asset custody** obligation derives from the asset
+  register's own allocation record rather than being stored here (FR-014c).
 
 ## Success Criteria *(mandatory)*
 
@@ -249,6 +301,10 @@ settlement is blocked until both are resolved or waived.
 - **SC-005**: An advance taken between approval and payment is recovered on the bank sheet in 100% of
   cases, and never recovered twice.
 - **SC-006**: No final settlement completes with an outstanding, unwaived clearance item.
+- **SC-006a**: No final settlement completes while an asset allocation naming the exiting employee is
+  open and unwaived, verified with a serialised asset and with a bulk allocation.
+- **SC-006b**: Every asset the employee held at exit appears on the final settlement summary with its
+  outcome, verified for a returned asset and for a waived one.
 - **SC-007**: Every exited employee's access is revoked, verified by attempting sign-in after exit.
 
 ## Assumptions
@@ -265,6 +321,11 @@ settlement is blocked until both are resolved or waived.
 - Exit clearance reuses the existing exit record and final settlement payroll rather than introducing
   a parallel process.
 - Access revocation on exit is an account operation and does not delete the employee's history.
+- Asset custody is read from the asset register (feature 012), which already records the custodian,
+  the site, the expected return date and the condition on return. This feature adds no parallel
+  record of custody and no new way to return an asset.
+- An asset allocation is open or closed as a whole. Partial return of a bulk allocation is not a state
+  the asset register holds, so the checklist cannot report it and does not pretend to.
 
 ### Needing the client's decision
 
@@ -277,3 +338,8 @@ settlement is blocked until both are resolved or waived.
 - **[NEEDS CLARIFICATION: may an exit complete with a waived recovery, and who may waive?]** A waiver
   writes off company money. The authority for it should sit with the same person who holds final
   approval elsewhere, but the client should confirm.
+- **[NEEDS CLARIFICATION: how is an unreturned asset valued, if its cost is ever to be recovered?]**
+  FR-018b deliberately recovers nothing, because original cost, depreciated book value and
+  replacement cost give three different figures and the client has chosen none. Until that is
+  answered, an unreturned asset is written off through a waiver with a name against it. This does not
+  block anything in this feature.
