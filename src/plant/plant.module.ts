@@ -35,6 +35,7 @@ import { ServiceScheduleController } from './services/service-schedule.controlle
 import { ServiceScheduleService } from './services/service-schedule.service';
 import { SparePartsController } from './spare-parts/spare-parts.controller';
 import { SparePartsService } from './spare-parts/spare-parts.service';
+import { EquipmentSearchSource } from './equipment/equipment-search.source';
 
 /**
  * The `plant` module: asset register, logbook, fuel, service schedules, maintenance
@@ -82,6 +83,8 @@ import { SparePartsService } from './spare-parts/spare-parts.service';
     ServiceBillsController,
   ],
   providers: [
+    // 021 US1 — see ProjectSearchSource.
+    EquipmentSearchSource,
     PlantService,
     PlantRefsService,
     EquipmentService,

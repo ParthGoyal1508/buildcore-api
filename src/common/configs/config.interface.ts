@@ -13,6 +13,7 @@ export interface Config {
   documents: DocumentsConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
+  search: SearchConfig;
 }
 
 /**
@@ -279,6 +280,44 @@ export interface ApprovalsConfig {
    * hatch and a loud one — the boot log says so.
    */
   directorFinalActionTypes: string[];
+}
+
+/**
+ * 021 US1 — cross-register search tunables.
+ *
+ * All three are policy values rather than developer choices, which is why none of them is
+ * a literal in `SearchSourcesRegistry` or in any of the four `SearchSource`
+ * implementations (Principle III). The cap values in particular are the honest answer to
+ * the spec's "a search that would match thousands" edge case: they are admitted through
+ * `truncated`, not hidden.
+ */
+export interface SearchConfig {
+  /**
+   * Shortest term the endpoint will accept (021 FR-003, contract Part 3).
+   *
+   * Three characters, because the name match compiles to `ILIKE '%term%'` and a
+   * two-character term matches most of every register — which is slow *and* useless. A
+   * shorter term is a 400 rather than an empty result, so the interface can say "keep
+   * typing" instead of "nothing matched"; those are different facts and a client cannot
+   * distinguish them from an empty list.
+   */
+  minTermLength: number;
+  /**
+   * Longest term accepted, bounding the work a single request can ask for.
+   */
+  maxTermLength: number;
+  /**
+   * How many results one register may contribute before its contribution is truncated.
+   *
+   * Passed to each `SearchSource` as a parameter rather than read by each of them, so
+   * four implementations cannot disagree about the cap (contract Part 1).
+   */
+  perRegisterLimit: number;
+  /**
+   * How many results the merged response may carry. Reached after ranking, so an
+   * exact-code match is never the row that gets cut (021 FR-001b).
+   */
+  totalLimit: number;
 }
 
 /** 017 — company and project document handling. */

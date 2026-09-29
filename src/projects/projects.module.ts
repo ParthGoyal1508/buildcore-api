@@ -9,6 +9,7 @@ import { ProjectDocumentsController } from './documents/project-documents.contro
 import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { ProjectsController } from './portfolio/projects.controller';
+import { ProjectSearchSource } from './portfolio/project-search.source';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
@@ -45,6 +46,9 @@ import { SitesService } from './sites/sites.service';
     ProjectsController,
   ],
   providers: [
+    // 021 US1: registers this register with `SearchSourcesRegistry` on init. The query
+    // lives here because `projects` owns the table (Principle I).
+    ProjectSearchSource,
     ClientsService,
     SitesService,
     ProjectsService,

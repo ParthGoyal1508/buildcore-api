@@ -12,6 +12,7 @@ import { AccountCreationModule } from './account-creation/account-creation.modul
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { LettersModule } from './letters/letters.module';
+import { SearchModule } from './search/search.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -83,6 +84,11 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // rather than at the first module migration.
     ApprovalsModule,
     LettersModule,
+    // 021 US1's cross-register search (`bugs.md` item 4). Listed **before** nothing in
+    // particular and after everything on purpose: it is `@Global`, and each register
+    // registers itself with its registry on init, so the import order of the four owning
+    // modules cannot matter. The module itself owns no tables — see its doc comment.
+    SearchModule,
   ],
   controllers: [AppController],
   providers: [

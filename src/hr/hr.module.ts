@@ -36,6 +36,7 @@ import { PunchController } from './punch/punch.controller';
 import { PunchService } from './punch/punch.service';
 import { ReimbursementController } from './reimbursements/reimbursement.controller';
 import { ReimbursementService } from './reimbursements/reimbursement.service';
+import { EmployeeSearchSource } from './employees/employee-search.source';
 
 /**
  * The `hr` module: the employee-facing My Workspace surface.
@@ -84,6 +85,8 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     ReimbursementController,
   ],
   providers: [
+    // 021 US1 — see ProjectSearchSource.
+    EmployeeSearchSource,
     AttendanceExceptionsService,
     // Answers the approval spine's reconciliation sweep about `hr`'s own punches (T052).
     // Registered by being listed here and decorated; nothing in `src/approvals/` changes.

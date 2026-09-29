@@ -360,6 +360,16 @@ const config: Config = {
     ),
   },
 
+  search: {
+    // Three, for the reason in the interface: `ILIKE '%ab%'` matches most of every
+    // register. Overridable because the right floor depends on how long this client's
+    // codes actually are, which a developer cannot know.
+    minTermLength: numberFromEnv(process.env.SEARCH_MIN_TERM_LENGTH, 3),
+    maxTermLength: numberFromEnv(process.env.SEARCH_MAX_TERM_LENGTH, 100),
+    perRegisterLimit: numberFromEnv(process.env.SEARCH_PER_REGISTER_LIMIT, 10),
+    totalLimit: numberFromEnv(process.env.SEARCH_TOTAL_LIMIT, 30),
+  },
+
   approvals: {
     // FR-018's four, as the six action types they decompose into. Overridable with a
     // comma-separated `APPROVALS_DIRECTOR_FINAL_ACTIONS`; an explicitly empty value

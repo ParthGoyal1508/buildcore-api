@@ -29,50 +29,50 @@ reports which could not be asked. Search is a second instance of it.
 
 Phase 1 alone closes `bugs.md` item 4, which names projects specifically.
 
-- [ ] T001 Create `src/search/` with `search.module.ts`, and a module doc comment stating that this
+- [X] T001 Create `src/search/` with `search.module.ts`, and a module doc comment stating that this
   module **owns no tables and issues no queries** — it is the only shape Principle I permits for
   something spanning four schemas, and a module with no models reads as unfinished when it is not.
-- [ ] T002 Define `SearchSource` in `src/search/search-source.interface.ts` per contracts Part 1:
+- [X] T002 Define `SearchSource` in `src/search/search-source.interface.ts` per contracts Part 1:
   `register`, `permission`, and `search(ctx, companyId, term, limit)`. **`ctx` and `companyId` are
   parameters, not something the implementation chooses** — an implementation that ignores them is then
   visible in review rather than invisible in a closure.
-- [ ] T003 Define `SearchResult` and `SearchResponse` in `src/search/dto/` per data-model.md. A result
+- [X] T003 Define `SearchResult` and `SearchResponse` in `src/search/dto/` per data-model.md. A result
   is an identifying summary plus an `href` — never a domain object, which is what keeps this module
   from learning business rules.
-- [ ] T004 `SearchSourcesRegistry` in `src/search/search-sources.registry.ts`, mirroring
+- [X] T004 `SearchSourcesRegistry` in `src/search/search-sources.registry.ts`, mirroring
   `ProjectSourcesRegistry`. `searchAll` fans out with `Promise.all` — parallel is the performance claim
   NFR-001 rests on, since four queries then cost about the slowest rather than their sum.
-- [ ] T005 **CRITICAL** In `searchAll`, check each source's `permission` **before** calling it, and
+- [X] T005 **CRITICAL** In `searchAll`, check each source's `permission` **before** calling it, and
   contribute an empty list when the caller lacks it. Never gather-then-filter: a merged-then-filtered
   result leaks through counts and timing, and every register added later would have to remember to be
   filtered (FR-001c, plan D23).
-- [ ] T006 **CRITICAL** Do **not** name a permission-denied register in `unavailableSources`. That
+- [X] T006 **CRITICAL** Do **not** name a permission-denied register in `unavailableSources`. That
   field is inherited from the project registry where it means "we could not ask"; using it for "you
   may not see this register" discloses exactly what FR-002 forbids. Put the warning in a comment beside
   the field — the name invites the mistake.
-- [ ] T007 Catch a throwing source and report it in `unavailableSources` instead. One register being
+- [X] T007 Catch a throwing source and report it in `unavailableSources` instead. One register being
   down must not fail the whole search.
-- [ ] T008 `SearchQueryDto` with `q` — **minimum 3 characters** and a bounded maximum — plus optional
+- [X] T008 `SearchQueryDto` with `q` — **minimum 3 characters** and a bounded maximum — plus optional
   `companyId`, resolved the way every other 017/021 surface resolves it. Read the minimum from
   configuration, not a literal (Principle III).
-- [ ] T009 A term shorter than the minimum is a **400, not an empty result**. The client needs to
+- [X] T009 A term shorter than the minimum is a **400, not an empty result**. The client needs to
   distinguish "keep typing" from "nothing matched", and it cannot if both are an empty list.
-- [ ] T010 `GET /search?q=` in `src/search/search.controller.ts`, authenticated only. Per-register
+- [X] T010 `GET /search?q=` in `src/search/search.controller.ts`, authenticated only. Per-register
   permission is applied per source, not on the route — a route-level guard would have to name one
   register's permission and be wrong for the other three.
-- [ ] T011 Implement `SearchSource` for projects in `src/projects/portfolio/`: **prefix** match on
+- [X] T011 Implement `SearchSource` for projects in `src/projects/portfolio/`: **prefix** match on
   `code`, **substring** match on `name`. Prefix on code because it is indexable and is how codes are
   typed; substring on name because "Tirupati" must find "Parth Tirupati Phase II", which is the whole
   point of the 2026-09-16 clarification (research §3).
-- [ ] T012 Register it in `search.module.ts` and bound the per-source result count from the `limit`
+- [X] T012 Register it in `search.module.ts` and bound the per-source result count from the `limit`
   parameter — passed in rather than read from config by each source, so four implementations cannot
   disagree about the cap.
-- [ ] T013 [P] Unit test for T011: found by full code, by partial code, by a name substring, and
+- [X] T013 [P] Unit test for T011: found by full code, by partial code, by a name substring, and
   **not** found for a two-character term.
-- [ ] T014 [P] e2e per quickstart pass 1: a project named "Parth Tirupati Phase II" with code
+- [X] T014 [P] e2e per quickstart pass 1: a project named "Parth Tirupati Phase II" with code
   `PRJ-014` is found by `Tirupati` with `matchedOn: "name"`, and by `PRJ-01` with `matchedOn: "code"`,
   and its `href` resolves.
-- [ ] T015 **CRITICAL** [P] e2e per quickstart pass 3 — the pass that matters most and is easiest to
+- [X] T015 **CRITICAL** [P] e2e per quickstart pass 3 — the pass that matters most and is easiest to
   get wrong. A caller lacking a register's permission must receive a response **byte-identical** to the
   same search where no matching record exists: the record absent, `unavailableSources` empty, nothing
   disclosed. Assert it for a **name** match as well as a code match, and for a record in another
@@ -84,20 +84,20 @@ Phase 1 alone closes `bugs.md` item 4, which names projects specifically.
 
 Each is an independent implementation of an interface that exists by now, and each ships separately.
 
-- [ ] T016 [P] `SearchSource` for vendors in `src/partners/vendors/`: prefix on `code`, substring on
+- [X] T016 [P] `SearchSource` for vendors in `src/partners/vendors/`: prefix on `code`, substring on
   `name`.
-- [ ] T017 [P] `SearchSource` for equipment in `src/plant/equipment/`: prefix on `code`, substring on
+- [X] T017 [P] `SearchSource` for equipment in `src/plant/equipment/`: prefix on `code`, substring on
   `name`.
-- [ ] T018 `SearchSource` for employees in `src/hr/employees/`: prefix on `employeeCode`, substring on
+- [X] T018 `SearchSource` for employees in `src/hr/employees/`: prefix on `employeeCode`, substring on
   `firstName` **and** `lastName` matched **independently, not concatenated**. Both are nullable, and a
   concatenation in the predicate is unindexable even for the prefix case and drops the rows a surname
   search needs (research §3).
-- [ ] T019 [P] Unit test for T018 with an employee who has **only** a last name — the null-name case a
+- [X] T019 [P] Unit test for T018 with an employee who has **only** a last name — the null-name case a
   concatenation would silently drop.
-- [ ] T020 Register all three and confirm each applies its own module's permission.
-- [ ] T021 [P] e2e per quickstart pass 2: one record in each of the four registers sharing a name
+- [X] T020 Register all three and confirm each applies its own module's permission.
+- [X] T021 [P] e2e per quickstart pass 2: one record in each of the four registers sharing a name
   token, found in one search, each carrying its own `register` and a working `href`.
-- [ ] T022 [P] e2e per quickstart pass 6: make one source throw, confirm the other three still return
+- [X] T022 [P] e2e per quickstart pass 6: make one source throw, confirm the other three still return
   and the failing register appears in `unavailableSources`. Asserting this beside T015 keeps both
   meanings of the field visible.
 
@@ -105,16 +105,16 @@ Each is an independent implementation of an interface that exists by now, and ea
 
 ## Phase 3: Ranking and caps (FR-001b)
 
-- [ ] T023 Two-tier sort on the merged list: records whose `code` matches the term **exactly** first,
+- [X] T023 Two-tier sort on the merged list: records whose `code` matches the term **exactly** first,
   then everything else, with each tier keeping the order its sources returned. **Not a relevance
   score** — a weighted function across four heterogeneous registers gets tuned forever and cannot be
   tested, and the clarification declined to specify ordering beyond this one rule (plan D27).
-- [ ] T024 [P] e2e per quickstart pass 4: a vendor with code `TIRU` outranks a project named "Tirupati
+- [X] T024 [P] e2e per quickstart pass 4: a vendor with code `TIRU` outranks a project named "Tirupati
   Yard" when searching `TIRU`. Assert **only** the tier, not the order within it — a test pinning
   intra-tier order fails on unrelated changes and teaches the next person to loosen the wrong
   assertion.
-- [ ] T025 Total and per-register caps from configuration; set `truncated: true` when a cap is hit.
-- [ ] T026 [P] e2e per quickstart pass 5: more matches than the cap returns exactly the cap with
+- [X] T025 Total and per-register caps from configuration; set `truncated: true` when a cap is hit.
+- [X] T026 [P] e2e per quickstart pass 5: more matches than the cap returns exactly the cap with
   `truncated: true` — the spec's "a search that would match thousands" edge case answered by admitting
   it rather than silently showing the first handful.
 
@@ -122,11 +122,11 @@ Each is an independent implementation of an interface that exists by now, and ea
 
 ## Verification
 
-- [ ] T027 **CRITICAL** Module-boundary spec for `src/search/`, following
+- [X] T027 **CRITICAL** Module-boundary spec for `src/search/`, following
   `src/approvals/spine-boundary.spec.ts`: a query from `src/search/` directly into `hr`, `partners`,
   `plant` or `projects` must fail the test. This module owning no tables is the entire design, and the
   way that erodes is one direct query added by someone who found the fan-out inconvenient.
-- [ ] T028 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T028 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
 - [ ] T029 **Measure NFR-001** against production-scale data, not seed data, and record the p95. This
   is the measurement research §4's deferred `pg_trgm` decision is waiting on: the name substring match
   compiles to `ILIKE '%term%'` and no btree index serves it. If p95 exceeds 1 second, the ordered
@@ -135,6 +135,25 @@ Each is an independent implementation of an interface that exists by now, and ea
   measured, and the measurement is this task.
 
 ---
+
+## Implementation notes, 2026-09-30
+
+T001-T028 complete. **T029 remains open** — NFR-001 must be measured against
+production-scale data and this environment has seed data only. The `pg_trgm` decision
+research §4 defers is still waiting on that measurement, and nothing should adopt it
+pre-emptively.
+
+**One design defect was found by T026 and fixed.** Truncation was reported only when the
+*merged* list exceeded the total cap. With a per-register cap of 10 and 36 matching
+projects, the merged list came to 13 rows against a total cap of 30, so `truncated` read
+`false` while 26 matches were being withheld — exactly the silence the spec's "a search
+that would match thousands" edge case exists to prevent. The registry now asks each source
+for `perRegister + 1` and treats a full-to-the-brim response as truncation, discarding the
+extra row. It needed no change to `SearchSource`, and two unit tests now cover both sides
+of the boundary.
+
+The e2e was written before the fix and failed on exactly this, which is the outcome T026
+was written for.
 
 ## Dependencies & Execution Order
 
