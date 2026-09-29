@@ -208,3 +208,122 @@ the decision is still cheap to reverse. T016 is the task that delivers the numbe
 **The comment at `punch.service.ts:257` is tracked as its own task (T018)** because it is the single
 clearest statement of the behaviour being inverted, and a comment asserting the opposite of the code
 is worse than no comment.
+
+## Phase 5: The fuel exception becomes reviewable (FR-001, FR-002, FR-008, FR-009)
+
+Detection is already built and this phase does not touch it — `Equipment.fuelBenchmark`,
+`FuelEntry.variancePercent` and `FuelEntry.varianceAlert` stay exactly as they are (FR-017). What is
+added is the review that turns an alert nobody must act on into a decision with a name against it.
+
+This phase moves no money.
+
+- [ ] T041 [US1] Add `model FuelVarianceException` to `prisma/schema.prisma` in `plant` —
+  `companyId`, `fuelEntryId` (→ `FuelEntry`), `status`, `attribution`, `operatorEmployeeId String?`,
+  `reviewedByUserId String?`, `reviewedAt`, `reason String?`, timestamps.
+  `@@unique([fuelEntryId])` — one alert raises one exception, and a second row for the same reading
+  would be two reviews of one fact.
+- [ ] T042 [US1] Add `enum FuelExceptionStatus { open confirmed dismissed }` and
+  `enum FuelAttribution { hirer operator neither }`, both in `plant`.
+- [ ] T043 [US1] `attribution` is **nullable until confirmed and has no default** (plan D27). A default
+  would decide, quietly and at scale, who pays for fuel nobody can account for.
+- [ ] T044 [US1] RLS: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
+  hand-authored. Migration opens with `SELECT set_config('app.is_super_admin', 'true', true);` if it
+  carries any data statement.
+- [ ] T045 [US1] Raise an `open` exception from an existing `varianceAlert` — on read, or by a sweep
+  over alerts without one. Do **not** change the code that sets `varianceAlert`; FR-017 keeps detection
+  untouched, and a raise inside the detector would couple the two.
+- [ ] T046 [US1] `GET /plant/fuel/exceptions` showing actual average, benchmark, variance percent and
+  the machine, per FR-001.
+- [ ] T047 [US1] `PATCH /plant/fuel/exceptions/:id` to confirm with an attribution, or dismiss with a
+  reason. Refuse a confirmation with no attribution named (FR-002) and a dismissal with no reason
+  (FR-008).
+- [ ] T048 [US1] Require `operatorEmployeeId` explicitly when attributing to the operator and the
+  machine had more than one in the period (FR-009). Do not infer the operator from the logbook — the
+  requirement says named explicitly, and inferring is how the wrong person's wages get docked.
+- [ ] T049 [P] [US1] Unit test: confirming without an attribution is refused; dismissing without a
+  reason is refused.
+- [ ] T050 [P] [US1] Unit test: a machine with two operators in the period refuses a confirmation that
+  does not name one.
+- [ ] T051 [P] [US1] Unit test: `varianceAlert` and `variancePercent` are unchanged by every path in
+  this phase (FR-017).
+- [ ] T052 [P] [US1] Probe test with `NOSUPERUSER NOBYPASSRLS`.
+
+## Phase 6: Consequence — the hire bill and the operator's salary (FR-003 to FR-007, FR-010)
+
+This is where a figure first moves. It is gated on feature 016's chain, which is complete.
+
+- [ ] T053 [US1] Add `model HireBillDeduction` in `plant` — `companyId`, `hireBillId`,
+  `fuelVarianceExceptionId`, `amount`, `createdBy`, timestamps.
+  `@@unique([fuelVarianceExceptionId])`, so one exception cannot be recovered twice from a bill.
+- [ ] T054 [US1] **Recompute** `HireBill.netPayable` from `grossAmount`, `tdsAmount` and the sum of
+  deductions. Do not decrement it in place — a vendor disputing a bill is owed the arithmetic, and a net
+  reduced by an `UPDATE` cannot produce it (plan D28).
+- [ ] T055 [US1] Refuse a deduction against a bill already `paid`, and carry the recovery to the next
+  bill for that equipment and vendor. Adjusting a paid bill changes a figure somebody has already
+  transferred against.
+- [ ] T056 [P] [US1] Unit test: `netPayable` equals gross less TDS less deductions, for zero, one and
+  two deductions.
+- [ ] T057 [P] [US1] Unit test: a deduction against a paid bill is refused with a code naming the
+  reason.
+- [ ] T058 [US2] Add `model OperatorFuelRecovery` in `plant` — `companyId`,
+  `fuelVarianceExceptionId`, `employeeId`, `amount`, `status`, `approvalItemId String?`,
+  `appliedPayrollLineItemId String?`, `reversedAt`, `reversedByUserId`, timestamps.
+  `@@unique([fuelVarianceExceptionId])`.
+- [ ] T059 [US2] Raise the recovery and submit it to `ApprovalsService`. It MUST have **no path to a
+  payroll line except through an approved item** (FR-006) — this is a spine gate, not a check inside the
+  payroll service, and the difference is whether it can be bypassed by a second caller.
+- [ ] T060 [US2] Apply on `approval.completed`, idempotently, as a **named** deduction on the payroll
+  line (FR-007) — named as a fuel recovery, not as an advance. It settles through
+  `SalaryAdvance`'s recovery machinery, which already handles instalments and a recovery exceeding the
+  month's net, but it is not an advance: this is a recovery for loss, not money lent.
+- [ ] T061 [US2] Show the recovery on the payroll line and the payslip (FR-007). A deduction an employee
+  cannot see explained is a grievance waiting to happen.
+- [ ] T062 [US1] [US2] Reversal (FR-010) — delete the deduction line or mark the recovery reversed,
+  recording who and when. Deleting a line rather than posting an inverse adjustment is why T054
+  recomputes.
+- [ ] T063 [US1] Enforce FR-002's attribution as **exclusive**: an exception attributed to the hirer has
+  no operator recovery and vice versa. Double recovery for one loss is the failure this prevents, and
+  the `@@unique` on both tables is what makes it structural rather than a convention.
+- [ ] T064 [P] [US2] e2e: raise a recovery, confirm it does **not** reach payroll while pending, approve
+  it, confirm it appears as a named deduction.
+- [ ] T065 [P] [US2] e2e: a rejected recovery never touches a payroll line.
+- [ ] T066 [P] [US1] Unit test: an exception attributed to the hirer cannot also raise an operator
+  recovery.
+- [ ] T067 [P] [US1] Unit test: reversing a recovery after the underlying reading is corrected leaves the
+  reversal recorded and the payroll line adjusted.
+
+## Phase 7: The recovery cap ⚠️ RESTS ON AN UNANSWERED CLIENT QUESTION
+
+Do not start until the client gives the cap on operator salary recovery. It is the one open
+`[NEEDS CLARIFICATION]` in this spec and belongs to User Story 2.
+
+Building phase 6 uncapped first is safe **only because FR-006 holds** — nothing reaches payroll without
+approval, so an unreasonable recovery is refused by a person before it is deducted from one. That is the
+specific reason this ordering is acceptable here and would not be elsewhere (plan D30).
+
+- [ ] T068 [US2] Add the cap as a stored company setting with a config default, following D19's
+  precedent for the accuracy maximum in this same feature.
+- [ ] T069 [US2] Refuse a recovery above the cap at raise time, naming the cap in the refusal. Refusing
+  at raise rather than at apply means the reviewer never approves something that cannot be applied.
+- [ ] T070 [P] [US2] Unit test: a recovery at the cap is accepted, one above it refused.
+- [ ] T071 [US2] Update the spec's Clarifications with the client's answer and the date, and remove the
+  marker.
+
+## Verification for phases 5-7
+
+- [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [ ] T073 Re-read `spec.md` FR-001 to FR-010 and FR-017 and confirm the built behaviour matches.
+  Confirm explicitly that **detection is unchanged** — the client's item 13 asked for consequence, and
+  the half that already worked must still work identically.
+
+### Dependencies for phases 5-7
+
+Phase 5 → 6 → 7. Phase 6 is gated on feature 016's chain (complete). Phases 5-7 are **independent of
+phases 1-4**, the geofence half: the two halves of this feature share a specification and no code, so
+they can be built in either order or in parallel by two people.
+
+### MVP for this amendment
+
+**Phase 5.** It puts every existing alert in front of a human with an attribution and a reason, which
+is the whole of what is missing today, and it moves no money. Phase 6 is where recovery starts and is
+the one that needs care.

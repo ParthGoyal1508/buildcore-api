@@ -242,3 +242,157 @@ module-boundary spec, following `src/approvals/spine-boundary.spec.ts`.
 
 **Next**: `/speckit-tasks` for User Story 1. User Stories 2–4 are planned when `bugs.md` items 8, 9
 and 10 reach their batches.
+
+## Amendment — 2026-09-29: User Stories 2, 3 and 4 (bugs.md items 8, 9, 10)
+
+### Scope
+
+This plan previously covered User Story 1 — search — only, and said US2 to US4 would be planned "when
+bugs.md items 8, 9 and 10 reach their batches". They have. FR-005 to FR-018b are planned here, including
+the asset-custody requirements added to the spec on 2026-09-29.
+
+### What already exists
+
+| Piece | Where |
+|---|---|
+| Transactional email, adapter-selected | `src/shared/email/` — `resend-email.adapter.ts`, `console-email.adapter.ts`, `email-templates.ts` |
+| Payroll runs and their lines | `payroll.PayrollRun` (2473), `payroll.PayrollLineItem` (2525) |
+| Advances and their recovery | `hr.SalaryAdvance` (2443) |
+| Exit records and the F&F run | `hr.ExitRecord` (2359) with `fnfPayrollRunId` |
+| Asset custody | `assets.AssetAllocation` (5477) with `custodianEmployeeId`, `status`, `expectedReturnDate`, `actualReturnDate` |
+
+So none of the three stories needs new infrastructure. Email exists and is unwired to slips; advances
+exist and are recovered at payroll rather than at bank-sheet time; the exit record exists with no
+clearance gate.
+
+### D9 — a slip delivery is a record, and a failure is a row rather than a log line
+
+FR-006 requires reporting employees whose slip could not be delivered, and retrying only those.
+`payroll.SlipDelivery { payrollRunId, employeeId, address, sentAt, status, failureReason }`, unique on
+`(payrollRunId, employeeId)`.
+
+The uniqueness constraint is what makes FR-006's retry safe: retrying is an upsert per employee, so a
+retry that runs twice sends once. Without it, "retry failures" and "retry everything" differ only by
+the correctness of a filter, and the failure mode is 500 employees receiving a second copy of their
+salary slip.
+
+`address` is stored as sent, not joined at read time. An employee whose email is corrected after a
+failed send must not have the failure read as though it went to the new address.
+
+### D10 — delivery is per-employee isolated, and one bad address stops nothing
+
+NFR-003: 500 employees within 15 minutes, failures isolated. Each send is independent and records its
+own outcome; a rejection is a row with `status: failed`, not a thrown error that abandons the run.
+
+The spec's edge case — a shared site address several employees use — is why `SlipDelivery` is keyed on
+the employee and not the address. Several employees legitimately resolving to one mailbox is a
+configuration the client may well have, and it must not look like a duplicate.
+
+### D11 — the transaction sheet is parsed against one configured format, and unmatched lines are kept
+
+FR-008 and FR-009. `payroll.BankTransactionLine`, one row per line of the uploaded sheet, each either
+matched to a `PayrollLineItem` or held unmatched with the reason.
+
+**Unmatched lines are stored, not rejected.** SC-004 requires every line be either matched or reported,
+and a parse that refuses the file on the first unrecognised row reports nothing. The upload succeeds and
+the reconciliation is the thing that is incomplete.
+
+The format is one configured mapping, per the spec's assumption, not automatic detection.
+
+### D12 — item 9 cannot be finished without a file, and the plan says where that stops being true
+
+The open marker asks which bank and what sheet format. Per the 2026-09-29 decision, this is planned and
+phased last.
+
+What is buildable without the answer: the upload endpoint, `BankTransactionLine`, the matching rule
+against payroll lines, the unmatched report, and the difference explanation. What is **not**: the column
+mapping itself, which is a fixture of somebody's real spreadsheet.
+
+So Phase 6 builds against a declared mapping with a single seeded profile, and the client's file becomes
+a second profile rather than a rewrite. If the file arrives before Phase 6 starts, the seeded profile is
+simply theirs.
+
+### D13 — advance recovery at bank-sheet time adjusts the transfer, never the approved run
+
+FR-010 to FR-013, and the spec's assumption says this plainly. The payroll run's figures stay as
+approved; the recovery is a line on the bank payment sheet.
+
+`payroll.BankSheetRecovery { payrollRunId, employeeId, salaryAdvanceId, amount }`, unique on
+`(payrollRunId, salaryAdvanceId)` — which is FR-013 ("MUST NOT recover the same advance twice") enforced
+by the database rather than by a check somebody has to remember.
+
+FR-012's "no negative transfer, carry the balance forward" is a per-employee cap at the net payable, with
+the unrecovered remainder left outstanding on the advance. Capping rather than refusing matters: an
+employee whose advance exceeds one month's net still gets paid something, and the advance settles over
+two months instead of producing a transfer nobody can execute.
+
+### D14 — the exit clearance is a derived checklist with stored waivers, not a stored checklist
+
+FR-014 to FR-018b. The obligations are computed from where they already live — open `AssetAllocation`
+rows, unreturned recoverable kit, outstanding `SalaryAdvance`, open reimbursements, the account's state.
+Only the **waiver** is stored: `hr.ExitClearanceWaiver { exitRecordId, itemKind, itemRef, reason,
+waivedBy, waivedAt }`.
+
+This is FR-014c read into the design. A stored checklist would be a second copy of custody, and it would
+be stale the moment an asset was returned through the asset register — which is precisely the path
+FR-014c requires to satisfy the item without a second action. Deriving means "returned in the asset
+module" and "satisfied here" are the same fact rather than two facts that have to be kept in step.
+
+FR-014e's "recompute at read time" is therefore not an extra requirement; it is what deriving means. It
+is stated in the spec because a reader of the requirement alone would not know that.
+
+### D15 — assets reach the clearance through the assets module, never by a join
+
+`ExitRecord` is in `hr`; `AssetAllocation` is in `assets`. Principle I forbids the join. The clearance
+calls the assets module's service for allocations naming the employee as custodian and not closed —
+the same shape as this repository's other cross-schema reads.
+
+`custodianEmployeeId` is nullable and indexed with `companyId`, so the query is cheap and FR-014d — no
+custodian, not an obligation — is the natural reading rather than a filter somebody adds.
+
+### D16 — no asset value is recovered, and the code should make that visible
+
+FR-018b. The final settlement includes no figure derived from an unreturned asset. A waiver records that
+it was written off, with a name against it.
+
+The plan notes this explicitly because the absence is a decision, not an omission: the next person to
+read the settlement computation should find a comment saying no valuation rule exists rather than
+concluding one was forgotten.
+
+### Phases
+
+| Phase | Work | Requirements |
+|---|---|---|
+| 4 | `SlipDelivery`, per-employee isolated send on run-paid, undeliverable report, retry-failures-only, refusal for an unapproved run | FR-005 to FR-007 |
+| 5 | `BankSheetRecovery`, recovery at sheet production, named lines, the net cap with carry-forward, the double-recovery constraint | FR-010 to FR-013 |
+| 6 ⚠️ | Transaction sheet upload, `BankTransactionLine`, matching, unmatched report, one seeded format profile — **the mapping rests on a file the client has not supplied** | FR-008, FR-009 |
+| 7 | Derived exit clearance, `ExitClearanceWaiver`, the settlement gate, asset custody through the assets service, the settlement summary listing every asset with its outcome | FR-014 to FR-018b |
+| 8 | Access revocation on exit completion, recorded | FR-017 |
+
+Phase 5 before Phase 6 deliberately: recovery at bank-sheet time is independent of the sheet's *format*,
+and the format is the part that is blocked.
+
+### Constitution re-check
+
+| Principle | Assessment |
+|---|---|
+| **I. Schema-per-module boundaries** | `SlipDelivery`, `BankTransactionLine` and `BankSheetRecovery` in `payroll`; `ExitClearanceWaiver` in `hr`. Asset custody read through the assets module's service (D15), never joined. |
+| **II. Validated DTO contracts** | The upload is a validated multipart DTO with a declared format profile. The waiver requires a reason with a minimum length — a mandatory field satisfied by a space is not a reason. |
+| **IV. Multi-tenant isolation & PII** | All four tables get `ENABLE` + `FORCE` RLS with explicit `WITH CHECK`, probe-verified. `SlipDelivery.address` is personal data and is readable only under a payroll permission. |
+| **V. AuthN/AuthZ** | Waiver authority is the third open client question. Until answered it requires the same permission as final settlement — the narrowest defensible reading, and recorded as such. |
+| **VI. Observability & safe migrations** | Four additive tables, no backfill, no change to `PayrollRun` or `ExitRecord`. Every migration sets `app.is_super_admin` transaction-locally. |
+
+### Risks
+
+| Risk | Consequence | Mitigation |
+|---|---|---|
+| A retry re-sends to everybody | 500 employees receive a duplicate salary slip | D9's `(payrollRunId, employeeId)` uniqueness makes a send an upsert |
+| An advance is recovered twice | An employee is short-paid | D13's `(payrollRunId, salaryAdvanceId)` uniqueness, enforced by the database |
+| A recovery exceeds net pay | A negative transfer the bank cannot execute | FR-012's cap with carry-forward |
+| The clearance is stale against the asset register | Settlement blocked for a returned asset, or allowed for an unreturned one | D14 derives rather than stores; nothing to go stale |
+| Slips sent for a run later corrected | Employees hold a slip that no longer matches | The spec's edge case; FR-007 gates on full approval and the delivery record carries `sentAt` so a corrected run's slips are identifiable |
+
+### Phase status
+
+**Next**: `/speckit-tasks` for phases 4-8. Phases 1-3 (search, 29 tasks) are not started and are
+independent of all of the above.

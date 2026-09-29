@@ -166,3 +166,160 @@ naming a denied register in `unavailableSources`, and a response that differs me
 substring match. The plan's Risks table names it, research §4 orders the remedies, and this task is
 where the number that chooses between them comes from. Shipping without it means the first person to
 notice will be a user.
+
+## Phase 4: Salary slips reach the people they belong to (FR-005 to FR-007)
+
+Email already exists — `src/shared/email/` with a Resend adapter, a console adapter and
+`email-templates.ts`. Nothing here builds email; it wires slips to it and records what happened.
+
+- [ ] T030 [US2] Add `model SlipDelivery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
+  `address String`, `status`, `failureReason String?`, `sentAt`, timestamps.
+  `@@unique([payrollRunId, employeeId])`.
+- [ ] T031 [US2] That uniqueness constraint is what makes FR-006's retry safe: a retry becomes an upsert
+  per employee, so running it twice sends once. Without it, "retry failures" and "retry everything"
+  differ only by the correctness of a filter, and the failure mode is 500 employees receiving a second
+  copy of their salary slip. Note this beside the model.
+- [ ] T032 [US2] Store `address` **as sent**, not joined at read time. An employee whose email is
+  corrected after a failed send must not have the old failure read as though it went to the new address.
+- [ ] T033 [US2] RLS: `ENABLE` + `FORCE` with an explicit `WITH CHECK`. `address` is personal data —
+  reading this table requires a payroll permission, not merely being authenticated.
+- [ ] T034 [US2] Send on a run being marked paid, **one employee at a time and independently**. A
+  rejection writes `status: failed` with its reason; it does not throw and abandon the run (NFR-003:
+  500 employees, 15 minutes, failures isolated).
+- [ ] T035 [US2] Refuse delivery for a run that is not fully approved (FR-007), with a code naming the
+  reason.
+- [ ] T036 [US2] `GET /payroll/runs/:id/slip-deliveries` reporting delivered, failed and undeliverable
+  (FR-006).
+- [ ] T037 [US2] `POST /payroll/runs/:id/slip-deliveries/retry` resending **only** failures.
+- [ ] T038 [P] [US2] Unit test: one failing address does not stop the other 499.
+- [ ] T039 [P] [US2] Unit test: retry run twice sends once per failed employee, and never re-sends a
+  success.
+- [ ] T040 [P] [US2] Unit test: several employees sharing one site mailbox each get their own row and
+  their own slip — the spec's edge case. Keying on the employee rather than the address is why this
+  works, and this test is what stops somebody "de-duplicating" it later.
+- [ ] T041 [P] [US2] e2e: an unapproved run refuses delivery; approving it then permits delivery.
+- [ ] T042 [US2] **Resolve the open question before building a send trigger**: FR-005 assumes automatic
+  delivery on payment, and the client asked "please check this". If unanswered, build the explicit action
+  and schedule the automatic trigger behind it — an explicit send can be automated later, while an
+  automatic send that was wrong has already emailed 500 people.
+
+## Phase 5: Advances settle against the transfer, not the approved run (FR-010 to FR-013)
+
+- [ ] T043 [US3] Add `model BankSheetRecovery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
+  `salaryAdvanceId`, `amount`, timestamps. `@@unique([payrollRunId, salaryAdvanceId])`.
+- [ ] T044 [US3] That constraint **is** FR-013 ("MUST NOT recover the same advance twice"), enforced by
+  the database rather than by a check somebody has to remember. Note it beside the model.
+- [ ] T045 [US3] Recover advances outstanding at bank-sheet production, adjusting the **transfer** and
+  leaving the approved run's figures untouched (FR-010, and the spec's own assumption). The run stays
+  immutable; the difference is a recovery line.
+- [ ] T046 [US3] Show each recovery as a **named** line on the bank payment sheet (FR-011).
+- [ ] T047 [US3] Cap the recovery per employee at their net payable, carrying the remainder forward on
+  the advance (FR-012). Cap rather than refuse: an employee whose advance exceeds one month's net still
+  gets paid something, and the advance settles over two months instead of producing a transfer the bank
+  cannot execute.
+- [ ] T048 [P] [US3] Unit test: an advance larger than net pay recovers to zero transfer, never
+  negative, with the balance still outstanding.
+- [ ] T049 [P] [US3] Unit test: producing the sheet twice recovers once.
+- [ ] T050 [P] [US3] Unit test: an advance taken between approval and sheet production **is** recovered
+  (SC-005) — this is the case item 9 exists for.
+- [ ] T051 [P] [US3] Unit test: the approved run's figures are byte-identical before and after sheet
+  production.
+
+## Phase 6: The transaction sheet ⚠️ THE FORMAT RESTS ON A FILE THE CLIENT HAS NOT SUPPLIED
+
+Everything below is buildable without the client's file **except** the column mapping. Phase 6 builds
+against one seeded format profile; their file becomes a second profile rather than a rewrite. If it
+arrives before this phase starts, the seeded profile is simply theirs (plan D12).
+
+- [ ] T052 [US3] Add `model BankTransactionLine` in `payroll` — `companyId`, `payrollRunId`, the raw
+  parsed fields, `matchedPayrollLineItemId String?`, `unmatchedReason String?`, timestamps.
+- [ ] T053 [US3] Declare the format as a named mapping profile in configuration, not literals in the
+  parser (Principle III).
+- [ ] T054 [US3] Validated multipart upload DTO (Principle II).
+- [ ] T055 [US3] **Store unmatched lines; do not reject the file.** SC-004 requires every line be either
+  matched or reported, and a parser that refuses on the first unrecognised row reports nothing. The
+  upload succeeds and the reconciliation is what is incomplete.
+- [ ] T056 [US3] Match lines to payroll lines and report unmatched ones with a reason (FR-009).
+- [ ] T057 [US3] Explain differences line by line between the sheet and the run.
+- [ ] T058 [P] [US3] Unit test: a file with three good rows and one unparseable row uploads, matches
+  three and reports one — the upload does not fail.
+- [ ] T059 [P] [US3] Unit test: a sheet in a format the bank changed produces unmatched lines with
+  reasons, not an exception.
+- [ ] T060 [US3] Update the spec's Clarifications when the client supplies a file, naming the bank.
+
+## Phase 7: Nobody leaves holding the company's property (FR-014 to FR-018b)
+
+The clearance is **derived**, not stored. Only waivers are stored. A stored checklist would be a second
+copy of custody, stale the moment an asset came back through the asset register — which is exactly the
+path FR-014c requires to satisfy an item without a second action (plan D14).
+
+- [ ] T061 [US4] Add `model ExitClearanceWaiver` in `hr` — `companyId`, `exitRecordId`, `itemKind`,
+  `itemRef`, `reason String`, `waivedByUserId`, `waivedAt`. `@@unique([exitRecordId, itemKind, itemRef])`.
+- [ ] T062 [US4] RLS with an explicit `WITH CHECK`; migration carries the `set_config` line if it has any
+  data statement.
+- [ ] T063 [US4] Require a reason with a **minimum length**. A mandatory field satisfied by a space is
+  not a reason, and this one writes off company money.
+- [ ] T064 [US4] Compute the checklist from where each obligation already lives — open recoverable kit,
+  outstanding `SalaryAdvance`, open reimbursements, the account's state — with waivers overlaid. Store no
+  obligation.
+- [ ] T065 [US4] **Asset custody through the assets module's service, never a join.** `ExitRecord` is in
+  `hr` and `AssetAllocation` is in `assets`; Principle I forbids the join. Query allocations naming the
+  employee as custodian with `status` not closed (FR-014a).
+- [ ] T066 [US4] Report per allocation: the asset, the project or site, the quantity where more than one
+  unit is held, and `expectedReturnDate` (FR-014a).
+- [ ] T067 [US4] Exclude allocations with **no custodian named** (FR-014d). An asset held by a project is
+  the project's obligation, not a departing person's.
+- [ ] T068 [US4] Recompute at read time (FR-014e). This is not an extra requirement — it is what deriving
+  means, and it is what catches an allocation opened after the exit was initiated.
+- [ ] T069 [US4] Block final settlement on any outstanding unwaived item, including an open allocation
+  (FR-015, FR-014b), naming every blocking item.
+- [ ] T070 [US4] A waiver MUST NOT mark an allocation returned or closed (FR-014c). The asset register
+  stays the sole owner of custody; a waiver records that the company stopped chasing it.
+- [ ] T071 [US4] Include pending salary, notice recovery, advances, reimbursements and deductions in the
+  settlement with the final payable (FR-018).
+- [ ] T072 [US4] List every asset the employee held on the settlement summary with its outcome —
+  returned, or waived with author and reason — whether or not it blocked (FR-018a).
+- [ ] T073 [US4] **Recover no asset value** (FR-018b), and leave a comment at the settlement computation
+  saying no valuation rule exists. The next reader should find a decision, not conclude something was
+  forgotten.
+- [ ] T074 [P] [US4] e2e: an employee with an open allocation is refused settlement naming the asset;
+  the allocation is closed **through the asset register**; the clearance then reads satisfied with no
+  action taken in this feature.
+- [ ] T075 [P] [US4] Unit test: waiving an asset item leaves `AssetAllocation.status` open and
+  `actualReturnDate` null.
+- [ ] T076 [P] [US4] Unit test: an allocation with a null custodian never appears on any checklist.
+- [ ] T077 [P] [US4] Unit test: an allocation created after the exit was initiated appears on the next
+  read.
+- [ ] T078 [P] [US4] Unit test: a bulk allocation reads as outstanding until closed, with the quantity
+  stated — partial return is not a state the asset register holds and this must not pretend otherwise.
+- [ ] T079 [US4] Waiver authority: until the client answers, require the same permission as final
+  settlement — the narrowest defensible reading. Record it as an assumption in the spec, not as the
+  answer.
+
+## Phase 8: Access revocation on exit (FR-017)
+
+- [ ] T080 [US4] Revoke the exiting employee's account on exit completion and record the revocation.
+- [ ] T081 [US4] Do **not** delete history (the spec's assumption). Revocation is an account operation.
+- [ ] T082 [P] [US4] e2e: sign-in fails after exit completion, and the employee's attendance and payroll
+  history is still readable by those permitted (SC-007).
+
+## Verification for phases 4-8
+
+- [ ] T083 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [ ] T084 Re-read `spec.md` FR-005 to FR-018b and confirm each is built or explicitly deferred with a
+  reason.
+- [ ] T085 Confirm the three open markers are still marked and have not been quietly closed by an
+  assumption that got built: automatic versus explicit slip send, the bank format, and waiver authority.
+
+### Dependencies for phases 4-8
+
+Phase 5 before Phase 6 **deliberately** — recovery at bank-sheet time is independent of the sheet's
+format, and the format is the blocked part. Phase 7 depends on the assets module (shipped, feature 012)
+and on nothing in phases 4-6. Phase 8 depends on Phase 7 only for where the revocation is triggered.
+Phases 1-3 (search) are independent of all of it.
+
+### MVP for this amendment
+
+**Phase 7.** It closes bugs.md item 10 including the asset gap that was absent from this specification
+altogether, and it needs no client answer. Phase 4 is next and is blocked only on a question with a safe
+default (T042).

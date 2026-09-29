@@ -274,3 +274,119 @@ repo-wide), `npx jest <touched specs>`, and the e2e suite against a real databas
 
 **Next**: `/speckit-tasks` for User Story 3. User Stories 1 and 2 are planned when `bugs.md` item 13
 reaches its batch.
+
+## Amendment — 2026-09-29: User Stories 1 and 2, the fuel half (bugs.md item 13)
+
+### Scope
+
+This plan previously covered User Story 3 only — the geofence half — and said US1 and US2 would be
+planned "when bugs.md item 13 reaches its batch". It has. FR-001 to FR-010 are planned here.
+
+### What already exists, and what the client is actually asking for
+
+Detection is **built**, and it is the harder half:
+
+| Piece | Where |
+|---|---|
+| The benchmark per machine | `Equipment.fuelBenchmark Decimal?` (schema line 4101) |
+| Actual versus benchmark | `FuelEntry.variancePercent Decimal?` (4404) |
+| The alert | `FuelEntry.varianceAlert Boolean @default(false)` (4405) |
+| The hire bill to deduct from | `HireBill` with `grossAmount`, `tdsAmount`, `netPayable`, `status` (4486) |
+| A salary-deduction precedent | `SalaryAdvance` (2443) recovering against `PayrollLineItem` (2525) |
+
+So nothing here detects anything new. FR-017 says so explicitly, and this amendment adds no change to
+the detection path. What is missing is **consequence**: an alert that nobody has to act on, and no way
+to turn a confirmed one into money recovered from either the hirer or the operator.
+
+### D26 — the exception is a record, not a query over alerts
+
+`FuelEntry.varianceAlert` is a boolean on a reading. An exception under FR-001 needs a state that
+outlives the reading — reviewed, attributed, dismissed, recovered, reversed — and a boolean cannot
+carry it.
+
+`plant.FuelVarianceException`, one row per confirmed-or-dismissed alert, referencing the `FuelEntry`
+that raised it. The boolean stays as the detector's output; the exception is the review's subject.
+
+Why not a status enum on `FuelEntry`: a reading is a fact about a machine at a time, and it should not
+acquire a workflow. Correcting a reading and dismissing an exception are different acts by different
+people, and putting both on one row makes the second look like an edit of the first.
+
+### D27 — attribution is a required choice with no default
+
+FR-002 attributes a confirmed exception to the hirer, to the operator, or to neither. There is
+deliberately **no default**: a default would decide, quietly and at scale, who pays for fuel nobody can
+account for. The reviewer names it, or the exception stays open.
+
+FR-009 already requires the operator be named explicitly where a machine had more than one. This
+extends the same principle to the attribution itself.
+
+### D28 — the hire-bill deduction is a line, and `netPayable` is recomputed
+
+FR-003 and FR-004. A deduction is a row referencing the exception and the bill, and `HireBill.netPayable`
+is recomputed from `grossAmount`, `tdsAmount` and the deductions — not decremented in place.
+
+Decrementing would lose the audit: a vendor disputing a bill is owed the arithmetic, and a bill whose
+net was reduced by an `UPDATE` cannot produce it. Recomputing also makes FR-010's reversal a deletion of
+a line rather than an inverse adjustment that has to be got exactly right.
+
+**A bill already `paid` cannot take a deduction.** The recovery moves to the next bill for that
+equipment and vendor, or waits for one. Adjusting a paid bill would change a figure somebody has already
+transferred against.
+
+### D29 — the operator recovery never reaches payroll unapproved, and it reuses the advance path
+
+FR-005 to FR-007. The recovery is raised against the operator, approved through feature 016's spine, and
+only then applied as a named deduction on the payroll line — FR-006 and FR-007 read together.
+
+It reuses `SalaryAdvance`'s recovery mechanism rather than introducing a parallel one, because that path
+already handles the two things that make salary recovery difficult: instalments, and a recovery larger
+than the month's net. What it must **not** inherit is the advance's meaning — this is a recovery for
+loss, not money lent — so it is a distinct record that settles through the same machinery, and the
+payroll line names it as a fuel recovery.
+
+### D30 — the recovery cap is unanswered, and Phase 7 is where the answer lands
+
+The one open `[NEEDS CLARIFICATION]` in this spec is the cap on operator salary recovery. It is the
+client's decision and remains open.
+
+Per the 2026-09-29 decision to plan open questions and phase them last: the recovery is built without a
+cap in Phase 6, and Phase 7 adds the cap as a company setting once the figure is known. Building it
+uncapped first is safe **only because FR-006 holds** — nothing reaches payroll without approval, so an
+unreasonable recovery is refused by a person before it is deducted from one.
+
+That is the specific reason this ordering is acceptable here and would not be elsewhere. If FR-006 were
+not already required, an uncapped recovery would be the wrong thing to build first.
+
+### Phases
+
+| Phase | Work | Requirements |
+|---|---|---|
+| 5 | `FuelVarianceException` + RLS, raised from existing alerts, review and dismissal with author and reason | FR-001, FR-002, FR-008, FR-009 |
+| 6 | Hire-bill deduction line, `netPayable` recomputation, operator recovery raised and approved through the spine, applied as a named payroll deduction, reversal | FR-003 to FR-007, FR-010 |
+| 7 ⚠️ | The recovery cap as a company setting — **rests on the client's answer** | the open marker |
+
+Phase 5 is inert with respect to money: it adds a review surface over alerts that already exist.
+Phase 6 is where a figure first moves, and it is gated on feature 016's chain, which is complete.
+
+### Constitution re-check
+
+| Principle | Assessment |
+|---|---|
+| **I. Schema-per-module boundaries** | `FuelVarianceException` and the deduction line go in `plant`, beside `FuelEntry` and `HireBill`. The payroll recovery is written through the payroll module's service, never by a cross-schema write. |
+| **III. Centralized configuration** | The cap (Phase 7) is a stored company setting with a config default, following D19's precedent for the accuracy maximum in this same feature. |
+| **IV. Multi-tenant isolation** | Both new tables get `ENABLE` + `FORCE` RLS with an explicit `WITH CHECK`, proved with the `NOSUPERUSER NOBYPASSRLS` probe. |
+| **VI. Observability & safe migrations** | Both tables additive, no backfill. `varianceAlert` and `variancePercent` are untouched — FR-017. |
+
+### Risks
+
+| Risk | Consequence | Mitigation |
+|---|---|---|
+| A deduction is raised against a paid bill | A transferred figure changes after the fact | D28 refuses it and carries the recovery to the next bill |
+| An operator recovery reaches payroll unapproved | Money taken from someone's wages with no decision behind it | FR-006 is a spine gate, not a check in the payroll service; the recovery has no path to a payroll line except through an approved item |
+| The same exception is recovered twice — once from the hirer, once from the operator | Double recovery for one loss | FR-002's attribution is exclusive; the exception carries one attribution and the deduction references the exception |
+| An exception is recovered and the underlying reading is then corrected | A recovery with no basis | Reversal (FR-010) exists for exactly this and records who reversed it |
+
+### Phase status
+
+**Next**: `/speckit-tasks` for phases 5-7. Phases 1-4 (the geofence half, 41 tasks) are not started and
+are independent — the two halves of this feature share a spec and no code.

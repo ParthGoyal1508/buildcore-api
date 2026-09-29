@@ -254,3 +254,99 @@ assumes "append-only" means "survives everything".
 - **Phase order**: this work belongs in **phase 2** as specified above ("attendance exceptions onto
   the spine"), because D15 is the same migration that phase describes, now aimed at corrections. D14
   and D16 are independent of the spine entirely and can ship before phase 1.
+
+## Amendment — 2026-09-29, client bug review: item 7 (FR-018a corrected, FR-018b, FR-018c)
+
+### What changed in the spec
+
+Item 7 asks that "every critical action across the system requires Director-level approval". The
+decision on 2026-09-29 was to **keep the named, configurable set** rather than widen it — a literal
+reading halts daily work and cannot be tested, because nothing defines "critical". Three requirements
+followed:
+
+- **FR-018a corrected.** It claimed "the client confirmed these four". They have not; they have twice
+  asked for the broad reading. The four are now stated as this product's proposal.
+- **FR-018b** (new): changing the director-final set is itself a director-final action, recorded with
+  actor, time, and the set before and after.
+- **FR-018c** (new): the full set must be reportable — every action type the system knows of, and for
+  each whether it is director-final.
+
+### The finding that shapes this amendment
+
+`directorFinalActionTypes` is **configuration, not data**. `approvals.service.ts:107` reads it from
+`configService.get<ApprovalsConfig>('approvals')`, which resolves
+`process.env.APPROVALS_DIRECTOR_FINAL_ACTIONS` with a six-element literal default in
+`src/common/configs/config.ts:368`, guarded by `config.spec.ts` against `default-chains.ts`.
+
+That satisfies FR-018a only in its weakest sense. An env var is "no code change" but it is also:
+
+- **a redeploy**, so the client cannot change it themselves;
+- **global**, so the client's two companies cannot differ;
+- **unauditable**, so FR-018b's "the set before and after" has nowhere to be recorded;
+- **not reportable**, so FR-018c cannot list what the system knows of versus what is gated.
+
+So FR-018b and FR-018c are not additions on top of the current mechanism — they require the set to
+become stored data. That is the whole of this amendment.
+
+### D23 — the set becomes a table, and config becomes its seed
+
+`settings.DirectorFinalAction { companyId, actionType, isFinal, updatedAt, updatedBy }`, unique on
+`(companyId, actionType)`.
+
+The config list stops being the source of truth and becomes the **seed** for a company's first row set
+and the fallback when a company has no row for an action type. Keeping it as the fallback rather than
+deleting it matters: a new action type registered by a later feature must have a defined answer before
+anybody configures it, and the safe answer is the one the client already accepted.
+
+`config.spec.ts`'s existing assertion against `default-chains.ts` stays. It is now guarding the seed
+rather than the live set, which is still worth guarding — a seed that disagrees with the chains it
+seeds produces a company whose first configuration is wrong.
+
+### D24 — editing the set goes through the spine, as action type `director_final_set_change`
+
+FR-018b says the edit is itself director-final, so it is an ordinary chain item with one level mapped
+to `SLOT_FINAL`. No new mechanism: the spine already holds an item pending, records the decision, and
+refuses a decision from the wrong role.
+
+The `before` and `after` sets are held on the pending item's payload, which is what makes FR-018b's
+record possible at all — the decision log records that the change was approved, and the payload
+records what the change was.
+
+**`director_final_set_change` is itself seeded as director-final**, and the seed is the only way it
+gets that way. If it were configurable by the same mechanism it governs, the first act of anybody who
+wanted to bypass the gate would be to remove the gate on removing gates.
+
+### D25 — FR-018c reports the union, not the table
+
+"Every action type the system knows of" is not the table's contents — the table holds only what
+somebody has configured. It is the union of: the registered chain action types, the seeded defaults,
+and any row in the table. An action type present in none of the three does not exist; one present in
+the registry with no row and no seed reports as **not gated**, and reports *why* — because nothing
+configures it, which is different from somebody having decided it needs no director.
+
+That distinction is the point of FR-018c. A list that showed "not final" for both cases would hide
+exactly the gap the client is asking about.
+
+### Phases
+
+| Phase | Work | Requirements |
+|---|---|---|
+| 9 | `DirectorFinalAction` table, RLS, seed from config per existing company. `approvals.service` reads the table with the config fallback. No behaviour change — the seed reproduces today's set | FR-018a |
+| 10 | `director_final_set_change` action type, its default chain level at `SLOT_FINAL`, the edit endpoint submitting to the spine, the before/after payload | FR-018b |
+| 11 | The union report (D25), readable under `COMPANY_SETTINGS` at read | FR-018c |
+
+Phase 9 is inert by construction: if the seed is right, nothing changes, and if the seed is wrong,
+phase 9 is where that is discovered rather than phase 10.
+
+### Risks
+
+| Risk | Consequence | Mitigation |
+|---|---|---|
+| The seed omits an action type currently gated by the env var | An action silently stops needing the director | Phase 9's gate is a comparison of the resolved set per company against `APPROVALS_DIRECTOR_FINAL_ACTIONS` before and after, not a green deploy |
+| The seeding migration writes under RLS with no GUC | Every company seeded with nothing, deploy green, every gate silently gone | `set_config('app.is_super_admin','true',true)` — this is the 2026-09-16 failure shape, and here it would remove approval gates rather than merely leave a column unset |
+| `director_final_set_change` becomes editable | The gate on the gate can be removed | D24 — seeded only, never listed as configurable |
+
+### Phase status
+
+**Next**: `/speckit-tasks` for phases 9-11. Phases 1-7 are complete; phase 8 (item 2) has 20 tasks
+outstanding and does not block this amendment — they touch attendance, not the chain configuration.

@@ -89,8 +89,8 @@ specification at all.
 | 3 | Project document management | 017 FR-007–009e | Covered (2026-09-16) |
 | 4 | Project search | 021 FR-001–004 | Covered (2026-09-16) |
 | 5 | Multi-company root selector | 019 FR-008–013 | Covered |
-| 6 | Payroll automation | 016 FR-013–017 | Covered, **blocked on role mapping** |
-| 7 | Director approval for all final actions | 016 FR-018–018c | **Amended** — closed set kept, made visible and guarded |
+| 6 | Payroll automation | 016 FR-013–017 | Covered and **built**; needs a settings entry, not code |
+| 7 | Director approval for all final actions | 016 FR-018–018c | **Amended** — closed set kept, made visible and guarded; backend built |
 | 8 | Salary slip email | 021 FR-005–009 | Covered |
 | 9 | Advance salary settlement | 021 FR-010–013 | Covered |
 | 10 | Full & final settlement + **asset tracking** | 021 FR-014–014e, FR-018a–b | **Amended** — assets were absent entirely |
@@ -118,10 +118,14 @@ specification at all.
 
 ### The three that a specification cannot close
 
-- **Item 6 — "Site Incharge" and "HR Office" do not exist among the nine roles.** 016 FR-016 restricts
-  attendance edits during a payroll review to HR; naming the wrong role either locks out the people
-  doing the work or grants the right to people who should not have it. **Blocking for FR-016 and US2's
-  chain.** This has been outstanding since 2026-09-13.
+- **Item 6 — "Site Incharge" and "HR Office" do not exist among the nine roles.** Recorded here since
+  2026-09-13 as blocking FR-016. **That was overstated, and is corrected on 2026-09-29 after reading
+  the code.** FR-016 is built (016 T037, complete) and resolves HR through
+  `chains.resolveSlot(SLOT_HR)` rather than through a hardcoded role or a permission —
+  `attendance-admin.service.ts` says so at the call site, and there is a specific refusal for when the
+  slot is unmapped, telling the caller an administrator must map it. So the client's answer is a
+  **settings entry to be made before go-live**, not a development dependency. The same holds for
+  item 7's director-final list. Neither blocks implementation; both block correct operation.
 - **Item 20 — measured in part only.** The read path sustains 170-190 rps (below). The punch path
   costs an unmeasured amount of CPU per request and the cold start has never been reproduced. 020
   NFR-001 is the open one.

@@ -143,3 +143,76 @@ complaint; the P&L is what they make truthful.
 **Do not start Phase 6, 7 or 8 until the client has confirmed the three assumptions.** They are
 implementable today under what is recorded in the spec, and each is a phase's worth of rework if the
 answer differs — which is exactly why they are separable.
+
+## Phase 10: Amendment of 2026-09-29 — the monthly labour roll-up (FR-010a, FR-010b)
+
+**No migration in this phase or the next.** Both requirements are read paths over tables that already
+exist — `labour.LabourPaymentSheet` and `labour.PaymentSheetLine` — which is why item 14's amendment is
+two phases and no schema change. Most of what the client asked for was already built; see plan D12.
+
+- [ ] T056 [US3] Add a validated query DTO for the roll-up — `projectId`, `year`, `month`, with bounded
+  month and year (Principle II). A month outside 1-12 or a year outside a sane range is a 400, not a
+  query that returns nothing and looks like an empty month.
+- [ ] T057 [US3] Resolve every `LabourPaymentSheet` **overlapping** the calendar month for the project:
+  `periodFrom <= monthEnd AND periodTo >= monthStart`. Not `periodFrom` within the month — a fortnightly
+  sheet starting on the 28th belongs to two months and would be missed by a containment test.
+- [ ] T058 [US3] Apportion a straddling sheet **on days worked inside the month**, from the muster dates
+  behind each `PaymentSheetLine`, not on elapsed calendar days. A worker who worked four days of a
+  fortnight all in the first week is not half-attributable to each month, and a labour figure that
+  disagrees with the muster is worse than a coarse one (plan D12).
+- [ ] T059 [US3] Itemise per worker: days worked in the month, `resolvedRate`, gross and net. Read the
+  figures as the sheet recorded them — **recompute nothing** (FR-010b). There is exactly one place a
+  wage is computed and this is not it.
+- [ ] T060 [US3] State the apportionment **on the response**, per sheet apportioned — which sheet, its
+  period, and the days attributed to this month. FR-010a requires this; a figure the reader cannot
+  account for is what this feature exists to remove.
+- [ ] T061 [US3] Reach `labour`'s tables through the labour module's service, never a cross-schema join
+  from `projects` (Principle I). FR-013's existing reconciliation already takes this route; follow it
+  rather than opening a second one.
+- [ ] T062 [P] [US3] Unit test: a sheet wholly inside the month contributes its full figures.
+- [ ] T063 [P] [US3] Unit test: a sheet straddling the month boundary contributes only the days inside
+  it, and the response says how it was apportioned. This is the test that earns the phase.
+- [ ] T064 [P] [US3] Unit test: the apportioned sum equals FR-013's monthly labour figure **to the
+  rupee**. This is SC-007, and it is the assertion that catches an apportionment rule that is merely
+  plausible.
+- [ ] T065 [P] [US3] Unit test: a month whose labour was engaged entirely through a contractor returns
+  the sheet's totals with the engagement type stated and no per-worker disbursement list — the spec's
+  edge case. An empty list here must not render as a broken screen.
+- [ ] T066 [P] [US3] Unit test: a sheet corrected and re-approved changes the roll-up on the next read,
+  because nothing is stored (FR-010b).
+- [ ] T067 [US3] Confirm no table was added in this phase. If one was, D13's reasoning was overridden
+  somewhere and a second figure for the same wage now exists.
+
+## Phase 11: Amendment of 2026-09-29 — the monthly position export (FR-011a)
+
+- [ ] T068 [US3] Export the selected month's position — revenue billed, cost by category, budget and
+  variance — in the repository's existing export format. Do not introduce a second export mechanism.
+- [ ] T069 [US3] Carry the project, the month, and the **date the export was produced**. The production
+  date is not decoration: the spec's edge case is a payment sheet reopened after a month was exported,
+  and this is the only thing that distinguishes two exports of the same month. Without it the older
+  document is indistinguishable from the current position and somebody quotes it to a client.
+- [ ] T070 [P] [US3] Unit test: the exported figures equal the screen's figures exactly (SC-008). Not
+  approximately — a client-facing document that disagrees with the system by a rounding step is the
+  problem this asserts against.
+- [ ] T071 [P] [US3] Unit test: two exports of the same month taken either side of a sheet correction
+  carry different production dates and different figures.
+- [ ] T072 [US3] Respect feature 019's cash hiding if it has shipped: a hidden cash figure exports as
+  marked-absent, never as zero. If 019 has not shipped, note here that this export will need revisiting
+  when it does — an export that silently understates a total by every cash payment in it is worse than
+  one that says a figure is hidden.
+- [ ] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`.
+- [ ] T074 Re-read `spec.md` FR-010a, FR-010b and FR-011a and confirm the built behaviour matches.
+  Record in the traceability notes that item 14 was **largely already satisfied** by feature 013's
+  payment sheets, and that this amendment added the calendar-month framing and the export only.
+
+### Dependencies for phases 10-11
+
+Phase 10 depends on **Phase 5** (the project P&L), whose monthly labour figure it itemises, and on
+nothing else. Phase 11 depends on Phase 10 only for the labour line of the exported month; the rest of
+the position comes from Phase 5. Neither depends on phases 6-8, which rest on client assumptions.
+
+### MVP for this amendment
+
+**Phase 10.** The per-worker monthly view is the half of item 14 that nobody can currently assemble
+without opening several payment sheets and adding them up. The export is a convenience over a figure
+that is by then already correct.
