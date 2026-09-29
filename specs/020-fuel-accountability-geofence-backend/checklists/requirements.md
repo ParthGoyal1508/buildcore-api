@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — **3 open, deliberately**
+- [ ] No [NEEDS CLARIFICATION] markers remain — **1 open, deliberately** (3 on 2026-09-13, a 4th raised and 3 closed on 2026-09-16)
 - [X] Requirements are testable and unambiguous
 - [X] Success criteria are measurable
 - [X] Success criteria are technology-agnostic (no implementation details)
@@ -31,10 +31,16 @@
 
 ## Notes
 
-The 3 open [NEEDS CLARIFICATION] markers are **not** oversights and must not be closed by
-guessing. Each one names a decision that changes what gets built and that only the client can
-make — they are listed under "Needing the client's decision" at the end of the spec. Planning
-this feature before they are answered risks building the wrong thing.
+The remaining open [NEEDS CLARIFICATION] marker is **not** an oversight and must not be closed by
+guessing. It names a decision that changes what gets built and that only the client can make — the
+cap on operator salary recovery, listed under "Needing the client's decision" at the end of the spec.
+
+Three markers stood here on 2026-09-13. The punch-refusal decision of 2026-09-16 raised a fourth —
+the face-match confidence — and made three of the four blocking, and the client closed those three
+the same day: the unassigned-location fallback (site geofence, as today), the acceptable GPS accuracy
+(a Super Admin setting defaulting to 50 metres), and the face-match confidence (unchanged from
+feature 003). The recovery cap is the one left; it belongs to User Story 2 and does not block the
+geofence work, so this feature's geofence half may now be planned.
 
 Non-functional requirements state plainly where nothing is verified today. That wording is
 deliberate: no load test and no device testing exists for this system, and a specification that

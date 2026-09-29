@@ -198,7 +198,42 @@ must be safe to re-apply.
 
 ---
 
+## §8 — Staging project documents so a creation can be refused (added 2026-09-16, bug 3)
+
+**Decision.** Files destined for a project are uploaded first to a `StagedProjectDocument` row and
+referenced by id on `CreateProjectDto`; `ProjectsService.create` validates the staged set against the
+company's mandatory kinds, then converts the staged rows to `ProjectDocument` rows inside the same
+transaction as the `Project` insert.
+
+**Rationale.** FR-009 requires two things at once that pull in opposite directions: documents must
+arrive *with* the creation request, and no project may be created when a mandatory kind is missing.
+Anything that writes the project first — a draft, a pending state, a two-step wizard persisting as it
+goes — fails the second. Anything that puts the files in the creation request itself must make
+`POST /projects` multipart. Staging is what satisfies both without reshaping the endpoint every
+client already calls.
+
+**Alternatives considered.**
+
+- *Multipart `POST /projects`.* One request, no new table, no sweep — genuinely the lazier design, and
+  rejected only because an arbitrary number of kind-tagged files in one body makes DTO validation
+  awkward under Principle II and changes the shape of the product's most-called creation endpoint to
+  serve a rule that is inert until mandatory kinds are configured.
+- *Draft project, completed later.* Rejected by the specification: FR-009 says "creating no project",
+  and a draft project is a project — it holds a code from the `PROJECTS` series, appears in queries
+  that do not filter for it, and becomes the thing the gate was supposed to prevent.
+- *Client-side enforcement only.* Rejected by the spec's own assumption that no second creation path
+  may produce a project the gate would have refused.
+
+**Cost, stated plainly.** One table, one RLS policy, one scheduled sweep, one configuration value for
+the staging window. This is the most expensive part of bug 3, and it buys only the word "cannot" in
+"Project Managers cannot create a project without them". If the client later accepts a draft project,
+§8 is the first thing to delete.
+
+---
+
 ## Open items deliberately left to `/speckit-tasks`
 
 - Ordering between the `LetterKind` migration and the `GeneratedLetter` schema move. Both touch the
   same table; whether they are one migration or two is a task-level call, not a design one.
+- Whether the staged-document sweep is a new scheduled rule or a case added to the existing reminder
+  sweep (§8). Cheap either way, and better decided with the task list in view.

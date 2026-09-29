@@ -141,6 +141,51 @@ active chain unsatisfiable**, naming the conflicting levels (FR-021b, data-model
 
 ---
 
+## Part 3 — added 2026-09-16 (bug 2)
+
+### `AttendanceMonth` gains per-day modifications (FR-012c)
+
+The employee's own attendance comes from `GET /my/punch/history`, which returns `AttendanceMonth`.
+Each day gains:
+
+```ts
+modifications: Array<{
+  actorName: string;   // the NAME, not the id — a cuid does not tell an employee who changed their day
+  at: string;          // ISO timestamp
+  before: unknown;     // the same Json the admin Modifications Modal renders
+  after: unknown;
+  reason: string | null;
+}>;
+```
+
+Resolved in **one** query for the whole month from `hr.AttendanceModification` and joined in memory
+against the days already being built. Never per day — the same N+1 the Risks table names for
+`statesOf`, and the index `@@index([employeeId, date])` is already the access path for it.
+
+Additive, so the web schema takes it with `.default([])`: a client deployed ahead of the server
+renders today's view rather than failing to parse.
+
+### `GET /attendance/modifications` gains an actor filter (FR-012d)
+
+`ModificationsQueryDto` takes `employeeId`, `from`, `to`, `page`, `pageSize`. One field is added:
+
+| Field | Notes |
+|---|---|
+| `actorUserId?` | "What did this person change" — the half of an audit question the current filters cannot ask |
+
+### `POST /attendance` changes what it returns (FR-012, plan D15)
+
+**Behaviour change on a shipped route.** The path and the DTO are unchanged; the response becomes the
+pending `ApprovalInstanceView` rather than the applied attendance row, because a manual correction now
+enters the chain instead of taking effect in one step. The `AttendanceModification` row is written
+when the chain completes, not when the correction is submitted — a rejected correction modified
+nothing, and logging it would make the log disagree with the attendance.
+
+Consumers to find before this ships: the admin daily view, the import commit path (which calls the
+service, not the route, and is the one that will be missed), and any test asserting an applied row.
+
+---
+
 ## What this contract deliberately does not do
 
 - **No polymorphic expansion.** The spine never resolves `entityId` into the item. Every caller that

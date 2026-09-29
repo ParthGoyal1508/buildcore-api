@@ -47,7 +47,7 @@ permission, labour insurance, BOQ.
 | `id` | `String @id @default(cuid())` | |
 | `companyId` | `String` | Requirements are per company, not global |
 | `documentTypeId` | `String` | **Not** an FK — `DocumentType` is in `settings` |
-| `isMandatory` | `Boolean @default(true)` | FR-009 allows a project to exist incomplete |
+| `isMandatory` | `Boolean @default(true)` | **The strength FR-007b asks for, already here.** True = mandatory, refuses project creation (FR-009). False = advisory, reported outstanding, never blocking |
 
 > **The `documentTypeId` is a bare string on purpose.** A foreign key from `projects` into
 > `settings.DocumentType` is declared data and would be permitted, but resolving it to a *name* for
@@ -56,6 +56,62 @@ permission, labour insurance, BOQ.
 > this here because a future reader will otherwise "fix" the missing relation.
 
 **Indexes**: `@@unique([companyId, documentTypeId])`, `@@schema("projects")`.
+
+> **Amended 2026-09-16 (bug 3).** `isMandatory` shipped inert: it filtered readiness and nothing
+> else, and the column comment in `schema.prisma` still says "readiness is reported, never enforced
+> at creation" — which FR-009's reversal makes false. **That comment must be rewritten with the
+> enforcement, not left to contradict the behaviour.** No migration: the column, its default and its
+> DTO field all already exist, which is the one piece of luck in this bug.
+>
+> The meaning of `false` does change. It used to mean *counted toward nothing*; it now means
+> *advisory — reported outstanding, never blocking*. See plan D12 for why that is served by new
+> fields on the readiness shape rather than by widening the two that shipped.
+
+---
+
+## New: `StagedProjectDocument` — `projects`
+
+A document uploaded *before* the project it belongs to exists. Added 2026-09-16 by bug 3: FR-009
+requires mandatory documents to arrive with the creation request and no project to be created
+without them, and `POST /projects` is a JSON endpoint while a document is a file. Plan D10 records
+the two cheaper bridges and why both were rejected.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | `String @id @default(cuid())` | This is the `stagedDocumentId` the client holds |
+| `companyId` | `String` | |
+| `documentTypeId` | `String?` | Null = supplementary, exactly as on `ProjectDocument` |
+| `documentType` | `String` | The free-text label, carried through to the created row |
+| `fileRef` | `String` | The blob in `common/storage`, unchanged mechanism |
+| `filePath` | `String?` | |
+| `uploadedBy` | `String` | Who staged it. **An authorisation input, not just attribution** (FR-009c, plan D10a): `create` refuses a reference whose `uploadedBy` is not the calling user. Never make this nullable |
+| `createdAt` | `DateTime @default(now())` | What the sweep measures |
+
+**Indexes**: `@@index([companyId, createdAt])` — the sweep's access path, and the only query that
+reads the table in bulk. `@@schema("projects")`.
+
+**Lifecycle**: created by `POST /projects/document-uploads`; consumed and deleted by
+`ProjectsService.create` in the same transaction that writes the `ProjectDocument` rows and the
+`Project`; otherwise deleted with its blob by the scheduled sweep once older than the configured
+staging window. A row consumed by a creation is never left behind — the delete is in the
+transaction, so a failed creation strands neither a project nor a staged row.
+
+> **This table is the cost of bug 3.** It exists only because the gate must refuse *before* a project
+> row exists. If the client ever accepts a draft project instead, this table and its sweep are the
+> first things to delete.
+
+---
+
+## Changed: `ProjectDocumentReadiness` (shape, not a table)
+
+Amended 2026-09-16. The three shipped fields keep counting the mandatory set and only the mandatory
+set, so the figure already on the portfolio list does not move. Three fields are added for the
+advisory half (plan D12):
+
+| Field | Meaning |
+|---|---|
+| `required`, `present`, `missingTypeIds` | **Unchanged** — mandatory kinds only |
+| `advisoryRequired`, `advisoryPresent`, `advisoryMissingTypeIds` | The advisory half, reported outstanding and never blocking |
 
 ---
 

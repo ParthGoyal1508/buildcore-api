@@ -17,21 +17,34 @@ They share no mechanism — they are grouped because each is small, self-contain
 shippable, and splitting them into four specifications would cost more in ceremony than it would
 return in clarity. Each user story below can be built, tested and released on its own.
 
+## Clarifications
+
+### Session 2026-09-16
+
+Raised against the client's re-stated requirement list, item 4: *"Add a search bar on the dashboard
+to quickly find projects."*
+
+- Q: FR-001 specifies search by *code*. The client asks to "quickly find projects", which people do by name. Widen it? → A: **Yes — code and name, in every register.** Nobody at head office memorises project codes; they know the site by what it is called. Partial matching was already required, so matching a name is the same mechanism applied to a second field rather than new machinery. The widening applies to all four registers, not only projects: the same argument holds for a vendor's trading name and an employee's name.
+- Q: Does a name match rank differently from a code match? → A: **An exact code match ranks first.** A code is unambiguous and someone who typed one knows exactly what they want; a name match is a guess the system is helping with. Beyond that single rule, ordering is not specified here.
+- Q: Does searching by name widen what a user can see? → A: **No.** FR-002's company and permission scoping is applied to results regardless of which field matched. A name is not a weaker key than a code for authorisation purposes — it is only a second way to arrive at the same record, and a record the caller may not view stays invisible either way.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Find anything by its code (Priority: P1)
 
-Somebody at head office has a vendor code, a vehicle number, an employee ID or a project code, and
-types it into a search box on the dashboard. The matching record's summary appears, and from there
-the full record is one click away. They do not need to know which module owns it.
+Somebody at head office has a vendor code, a vehicle number, an employee ID or a project code — or
+just the name of the site, the vendor or the person — and types it into a search box on the
+dashboard. The matching record's summary appears, and from there the full record is one click away.
+They do not need to know which module owns it, and they do not need to know its code.
 
 **Why this priority**: The client asks for it twice — once for project codes (Note 4) and once, in
 the sheet's Dashboard section, for *"every Vendor, Vehicle, Employee ID... that has must required."*
 It is the most-used kind of interaction in a system with this many registers, and there is no search
 of any kind today.
 
-**Independent Test**: Search for a known code of each supported kind and confirm the right record is
-found and reachable, and that a code belonging to another company is not.
+**Independent Test**: Search for a known code and a known name of each supported kind and confirm
+the right record is found and reachable in both cases, and that neither a code nor a name belonging
+to another company is.
 
 **Acceptance Scenarios**:
 
@@ -40,6 +53,12 @@ found and reachable, and that a code belonging to another company is not.
 2. **Given** a valid vendor, vehicle or project code, **When** it is searched, **Then** the matching
    record appears in the same way.
 3. **Given** a partial code, **When** it is searched, **Then** matching records are listed.
+3a. **Given** a project's name or part of it, **When** it is searched from the dashboard, **Then** the
+   project is listed and reachable, with no knowledge of its code required.
+3b. **Given** an employee's or vendor's name, **When** it is searched, **Then** the matching records
+   are listed on the same terms.
+3c. **Given** a term that is an exact code for one record and part of another's name, **When** it is
+   searched, **Then** the exact code match is listed first.
 4. **Given** a code belonging to a company the user cannot access, **When** it is searched, **Then**
    nothing is returned — and the response does not reveal that the code exists elsewhere.
 5. **Given** a search matching records the user lacks permission to view, **When** results are
@@ -141,7 +160,10 @@ settlement is blocked until both are resolved or waived.
 
 - A search term that is a valid code in two registers at once (a vehicle number that is also a
   vendor code).
-- A search that would match thousands of records.
+- A search that would match thousands of records. Name matching makes this likelier than code
+  matching did — a two-letter term against a name field matches almost everything.
+- A search term matching one record by code and a different record by name.
+- Two projects or two employees with the same name, distinguishable only by code.
 - An employee's email bounces, or is a shared site address several employees use.
 - A salary slip is emailed and the run is then corrected and re-approved.
 - A bank transaction sheet in a format the bank changed without notice.
@@ -155,10 +177,17 @@ settlement is blocked until both are resolved or waived.
 
 - **FR-001**: Users MUST be able to search by code across at least employees, vendors, equipment and
   projects from the dashboard.
+- **FR-001a**: Users MUST be able to search by **name** as well as by code, across the same four
+  registers, from the dashboard (Clarifications, 2026-09-16). Finding a project by the site's name is
+  the client's stated need in item 4, and no register is exempt from it.
+- **FR-001b**: Where a term is an exact code match for one record, that record MUST be returned ahead
+  of records matched only by name.
+- **FR-001c**: Company and permission scoping (FR-002) MUST apply identically to name matches and
+  code matches. A record the caller may not view MUST NOT become reachable by searching its name.
 - **FR-002**: System MUST return results scoped to the user's company and permissions, and MUST NOT
   disclose the existence of records outside them.
-- **FR-003**: System MUST support partial matching and MUST identify which register each result
-  belongs to.
+- **FR-003**: System MUST support partial matching on both code and name, and MUST identify which
+  register each result belongs to.
 - **FR-004**: System MUST make the full record reachable from a result.
 - **FR-005**: System MUST send each employee their own salary slip when a payroll run is marked paid.
 - **FR-006**: System MUST report employees whose slip could not be delivered, and MUST allow retry
@@ -206,8 +235,11 @@ settlement is blocked until both are resolved or waived.
 
 ### Measurable Outcomes
 
-- **SC-001**: Any employee, vendor, equipment or project can be reached from the dashboard by code in
-  under 10 seconds, with no knowledge of which module owns it.
+- **SC-001**: Any employee, vendor, equipment or project can be reached from the dashboard by code
+  **or by name** in under 10 seconds, with no knowledge of which module owns it and no knowledge of
+  its code.
+- **SC-001a**: A term that exactly matches one record's code returns that record first, verified
+  where the same term also matches another record's name.
 - **SC-002**: A search never returns a record outside the user's company or permissions, verified
   across every register.
 - **SC-003**: 100% of employees with a valid email address receive their own slip within 15 minutes

@@ -30,7 +30,7 @@ was identified; everything else became a requirement in one of specs 016–021.
 | 20 | Create new letter templates without a developer | Templates exist but bounded by a 5-value enum | 017 US5 |
 | 21 | Letter menus in Recruitment and in Project Details | Recruitment only | 017 US6 |
 | 22 | Part-level permissions within a module (logbook entry only) | Module-level only; **no read/write split** | 019 US1 |
-| 23 | 100–150 concurrent at attendance peak, 50–60 normal | **Never measured** | NFR in 016, 018, 020 |
+| 23 | 100–150 concurrent at attendance peak, 50–60 normal | **Read path measured 2026-09-17**; punch path and cold start still unmeasured | NFR in 016, 018, 020 |
 | 24 | Two companies with a switcher at the top | Data layer ready (`CROSS_COMPANY_ACCESS`); **no switcher UI** | 019 US2 |
 | 25 | Admin site usable on Android and iPhone | Only `/my/*` held to a mobile standard | NFR in 016, 017, 019, 021 |
 | 26 | RTGS / payment-transfer proof attachment | `Payment.referenceNumber` only, no attachment | 017 US7 |
@@ -48,6 +48,29 @@ Each theme is a pair, following the convention of 001-015:
 | Access, multi-company | `019-access-and-multi-company-backend` | `019-access-and-multi-company` |
 | Fuel, geofence | `020-fuel-accountability-geofence-backend` | `020-fuel-accountability-geofence` |
 | Search, payout, exit | `021-search-payout-and-exit-backend` | `021-search-payout-and-exit` |
+
+## Client bug review, 2026-09-16
+
+The client re-stated the requirement list as `bugs.md`, to be worked in batches of four. The first
+batch — company documents, attendance blocking and modification logging, project documents, project
+search — mapped onto notes 1, 2, 3, 4 and 16, already specified in 016, 017, 020 and 021. The specs
+were amended in place rather than restated in a new feature, and four decisions were taken:
+
+| Decision | Effect |
+|---|---|
+| Required project documents are **per-kind mandatory or advisory**, configured by Super Admin from settings | **017 FR-007, FR-007b–d, FR-009** — reverses FR-009's guarantee that a project may always be created with documents outstanding, for mandatory kinds only |
+| A punch failing location **or face** validation is **refused with nothing recorded** | **020 FR-012, FR-013, FR-013a–c, FR-015** — reverses FR-013's exception-for-review behaviour |
+| 016's approval chain is **re-aimed at manual attendance corrections** | **016 US1, FR-012** — the refused punch no longer exists to review, so the correction is what enters the chain |
+| Search matches **code and name** | **021 FR-001a–c, FR-003** |
+
+Item 1 (company documents) needed no change: 017 FR-001–FR-006 and FR-023 already specify storage,
+retrieval, the eight required kinds and permission-restricted access.
+
+Two consequences are worth naming. First, 020's GPS-accuracy and face-confidence thresholds became
+**blocking** clarifications on this date — under the old behaviour a wrongly refused punch still
+reached a human, and under the new one it reaches nobody unless a supervisor notices. Second, 020's
+hard refusal must not ship before 016's correction chain exists, or a refused punch has no recovery
+route at all.
 
 ## Settled by the client
 
@@ -69,10 +92,31 @@ overconsumption per machine. What it does not do is act on it. The specification
 020 adds consequences and explicitly leaves detection alone.
 
 **Notes 23 and 25 cannot be closed by writing code.** They are written as testable NFRs with real
-numbers, and every one of them says it is unverified. Note 23 in particular is at risk from the
-current hosting: the production API runs on an instance class that suspends when idle, and a
-suspended instance's first request has been observed taking tens of seconds — which alone breaches
-the target, before any load is applied. That is an infrastructure decision, not a development task.
+numbers, and until 2026-09-17 every one of them said it was unverified.
+
+**Note 23, measured in part on 2026-09-17.** A read-only ramp against the production free-tier
+instance (0.1 shared CPU) sustained **170–190 requests per second** with zero errors, zero timeouts
+and zero non-2xx responses at up to 150 concurrent connections, degrading by queueing rather than
+failing and returning to baseline immediately. The full table is under 016 NFR-001.
+
+The result **inverts the expected conclusion**: request volume is not the constraint. 150 employees
+punching within a 15-minute window is 0.17 requests per second averaged, 2.5 per second in a
+one-minute burst, against a ceiling of 170. The concurrency numbers the client asked for are
+comfortably within free-tier reach *for requests of that weight*.
+
+What the measurement does not cover is the weight of a real attendance action. The route tested
+touches no database; a punch decodes and resizes an image, runs face matching on the WASM/CPU
+backend, encrypts a blob and writes rows. That is CPU-bound, and 0.1 shared CPU is exactly where
+CPU-bound work fails — so the risk has moved from "can it take the traffic" to "what does one punch
+cost", which is 020 NFR-001 and is still open.
+
+**The cold-start claim previously asserted here is withdrawn as unverified.** This document stated
+that a suspended instance's first request "has been observed taking tens of seconds". The instance
+was already awake when tested, so that figure was neither confirmed nor reproduced, and it should
+not be repeated as fact until it is. What remains true and unmeasured: the free tier suspends after
+roughly 15 minutes idle, and no cold start can meet a 2-second target whatever its exact length —
+which lands on whoever punches first each morning. That part is an infrastructure decision, not a
+development task.
 
 **Note 25 additionally contradicts a NON-NEGOTIABLE constitutional principle.** buildcore-web's
 Principle VI defines mobile-critical surfaces as a closed list — punch, attendance viewing, leave —

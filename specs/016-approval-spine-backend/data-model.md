@@ -130,6 +130,38 @@ The existing single-step resolution fields are **retained** through this feature
 completed single-level instances (research.md §7), so historical items render through the same path
 as new ones.
 
+> **Amended 2026-09-16 (bug 2).** Feature 020's FR-013 refuses a punch that fails location or face
+> validation and records nothing, so **no new attendance exceptions will be raised from punches**.
+> Nothing here changes: the machinery stays, the backfill stays, and the history it renders is real.
+> What changes is the spine's input — the manual correction rather than the refused punch. See plan
+> D15.
+
+### AttendanceModification (`hr` schema) — unchanged, and that is the finding
+
+FR-012a through FR-012e read as new work and are almost entirely built. The table already carries
+every column the requirement names:
+
+| Field | Serves |
+|---|---|
+| `employeeId`, `date` | Which day, whose |
+| `actorUserId` | FR-012a's "by any role" — recorded by code path, never gated on the actor's role, so a Super Admin edit is logged on the same terms as a supervisor's |
+| `before`, `after` (`Json`) | The before/after FR-012a and FR-012c both require |
+| `reason` | FR-012c's stated reason, shown to the employee where one was given |
+| `createdAt` | |
+
+**No migration.** The write already happens inside the edit transaction at
+`attendance-admin.service.ts:324`, and the import path reaches it through the same service rather
+than around it.
+
+Two caveats worth recording against the model rather than leaving to a reader:
+
+- **`employee` carries `onDelete: Cascade`.** Hard-deleting an employee deletes their modification
+  history, which sits awkwardly beside FR-012b's "immutable and not deletable". Soft-delete is the
+  norm in this product so no live path reaches it; accepted as a limit in the plan's Risks table
+  rather than fixed, because breaking the cascade strands rows against a deleted employee.
+- **`@@index([employeeId, date])`** is the access path D14's employee-visible list needs, already in
+  place. The month query is one statement, not one per day.
+
 ---
 
 ## State transitions

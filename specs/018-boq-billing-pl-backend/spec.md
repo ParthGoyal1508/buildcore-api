@@ -234,7 +234,9 @@ phased last for exactly that reason.
 - **NFR-001**: The project summary for a project with 12 months of activity MUST render within 3
   seconds at the 95th percentile. **Not verified today**; no equivalent roll-up exists to measure.
 - **NFR-002** *(Note 23)*: The group view MUST remain within that budget with 60 concurrent users.
-  **Not verified today** — see 016 NFR-001 for why the current deployment would not meet it.
+  **Not verified today** — see 016 NFR-001, which now carries the 2026-09-17 read-only measurement:
+  the free-tier instance sustains 170–190 requests per second with zero errors, so request volume is
+  not the constraint, but no database-backed or CPU-heavy path has been measured.
 
 ### Key Entities
 

@@ -274,3 +274,150 @@ sets would quietly hand each surface the other's list.
   `projects` reaches `settings` through exported service methods it already injects. Principle II
   holds: the new route takes a path parameter validated against configuration, and the existing PUT
   already has its DTO. Principle III holds: both declared sets stay in `src/settings/document-kinds.ts`.
+
+---
+
+## Amendment — 2026-09-16 (third), client bug review: bug 3
+
+Design for FR-007, FR-007b–d, FR-008a, FR-009 and FR-009a. Bug 1 (company documents) produced no
+spec change and produces no plan work — FR-001–FR-006 and FR-023 were already built.
+
+The survey that preceded this amendment found the picture better and worse than expected.
+**Better**: `ProjectDocumentRequirement.isMandatory` already exists, is already in
+`SetProjectDocumentRequirementsDto`, and already drives `mandatoryTypeIdsFor`, so the per-kind
+strength FR-007b asks for needs **no migration and no new column**. **Worse**: no endpoint anywhere
+creates a `ProjectDocument`. The model is read by `readinessFor` and written by nothing. So US2's
+acceptance scenarios 3 and 5 have never been executable, FR-008a has nothing to list, and FR-009's
+gate has nothing to gate on.
+
+That inverts the shape of this work. The gate is the small part; the upload path it gates is the
+part that does not exist.
+
+### D9 — the missing upload path is built first, as its own route on the existing controller
+
+`POST /projects/document-requirements` is the requirements surface; documents themselves get
+`POST /projects/:projectId/documents` (multipart, one file, one kind) and
+`GET /projects/:projectId/documents`, on the same `ProjectDocumentsController`, guarded by
+`Permission.PROJECTS`.
+
+`documentTypeId` is optional on the request exactly as it is nullable on the model: supplying it
+files against a required kind, omitting it files a supplementary paper. That is already what null
+means on the column (008's `documentType` free text stays as the label), so the upload route adds no
+new vocabulary — it writes the column the readiness query has always read.
+
+Bytes go through `src/common/storage/` unchanged, as every other document in this feature does. No
+second storage path, per the Technical Context above.
+
+### D10 — the creation gate needs staged uploads, and that is the real cost of bug 3
+
+FR-009 requires documents to arrive *with* the creation request and no project to be created when a
+mandatory kind is missing. `POST /projects` is a JSON endpoint taking `CreateProjectDto`, and a
+document is a file. Three ways to bridge that, and the cheap two are both wrong:
+
+- **Make `POST /projects` multipart.** Rejected: an arbitrary number of kind-tagged files in one
+  multipart body makes DTO validation awkward and rewrites the shape of the one endpoint every
+  client already calls, to serve a rule that applies only when mandatory kinds are configured.
+- **Create the project, then require documents before it is usable.** Rejected by the specification
+  itself — FR-009 says "creating no project". A draft project is a project.
+- **Stage the uploads, then reference them.** Chosen. `POST /projects/document-uploads` (multipart,
+  `Permission.PROJECTS`) stores the file through `StorageService` and returns a
+  `stagedDocumentId`; `CreateProjectDto` gains `stagedDocumentIds: string[]`; `create` validates the
+  staged set covers every mandatory kind, and attaches them as `ProjectDocument` rows in the same
+  transaction that writes the project.
+
+This is the honest cost: **a new `StagedProjectDocument` table** (companyId, documentTypeId nullable,
+fileRef, uploadedBy, createdAt), its RLS policy, and a scheduled sweep that deletes rows older than
+the configured staging window along with their blobs. It is recorded as cost rather than hidden,
+because "attach documents when creating a project" sounds free and is not.
+
+The staging window goes in configuration, not a literal (Principle III), beside the reminder lead
+time this feature already added.
+
+### D10a — what authorises a staged upload, since no project exists to authorise it against
+
+Added after `checklists/staging-gate.md` found this the densest gap in the amendment (CHK043–CHK046),
+and it is a real one: every other document upload in this feature is authorised against the record it
+attaches to, and a staged document has no such record yet. The `stagedDocumentId` returned to the
+caller is a bearer reference to stored bytes.
+
+Three controls, none of which is identifier secrecy:
+
+- **`Permission.PROJECTS` to stage**, the same permission that files a document against an existing
+  project (FR-009b). Staging cannot be a weaker door to the same storage.
+- **`uploadedBy` is checked on use, not just recorded** (FR-009c). `ProjectsService.create` refuses a
+  `stagedDocumentId` whose `uploadedBy` is not the calling user, with
+  `PROJECT_STAGED_DOCUMENT_UNKNOWN` — the same code as a nonexistent id, deliberately, so the refusal
+  does not confirm that somebody else's staged document exists.
+- **Company scoping via RLS**, inherited rather than re-implemented, as `StagedProjectDocument`
+  carries `companyId` and its policy is the same `tenant_isolation` every other table in this feature
+  gets.
+
+`uploadedBy` was already on the model for attribution. The change is that it becomes an authorisation
+input, which is worth stating because a column read only for display and a column read for access
+control need different care when someone later considers making it nullable.
+
+FR-009d and FR-009e complete it: an unconsumed staged document is discarded with its bytes, and a
+failed creation leaves neither a project nor a half-attached document. The sweep already handled the
+"never came back" case; what these add is the refused case, which the sweep would otherwise leave for
+up to a full staging window.
+
+### D11 — the gate lives in `ProjectsService.create`, and it is a refusal, not a filter
+
+`create` calls an exported `ProjectDocumentsService` method —
+`assertMandatoryKindsSatisfied(ctx, companyId, stagedDocumentIds)` — which resolves the company's
+mandatory set and refuses with `PROJECT_DOCUMENTS_MANDATORY_MISSING` naming every missing kind's
+**label**, not its id. A refusal that names internal identifiers is a refusal the person reading it
+cannot act on, which is the same argument that produced FR-007a.
+
+Placed in `projects` rather than `settings` because `ProjectsService` already injects
+`ProjectDocumentsService` for readiness (`projects.service.ts:166`), so this introduces no new
+dependency and no cross-schema query. Enforced in the service, never only in the controller or the
+form, per the spec's own assumption about second creation paths.
+
+FR-009a needs no code: a project created before a kind became mandatory is simply a project whose
+readiness reports the kind outstanding, which `readinessFor` already does. Recorded because
+"MUST NOT retroactively invalidate" reads like it needs a guard and does not.
+
+### D12 — advisory kinds become visible additively, leaving the shipped readiness figures alone
+
+Today `isMandatory: false` means *counted toward nothing* — an optional kind is reported nowhere, and
+the DTO's own comment says as much. FR-007b needs advisory kinds **reported as outstanding** while
+staying non-blocking, which is a third state relative to the two that shipped.
+
+Repurposing `required`/`present` to span both strengths would change a number already rendered on
+the portfolio list. So `ProjectDocumentReadiness` gains `advisoryRequired`, `advisoryPresent` and
+`advisoryMissingTypeIds` alongside the existing three, which keep counting the mandatory set and only
+the mandatory set. The web schema takes the new fields with `.default(...)`, matching D2's reasoning
+for `supplementary`: a client deployed ahead of the server degrades to today's behaviour.
+
+`mandatoryTypeIdsFor` already selects `isMandatory` per row, so both partitions come from the query
+it already runs. Still one statement for the whole page — research §4 and the query-count assertion
+hold.
+
+### D13 — FR-007c is satisfied by the guards already in place, and the spec was corrected to say so
+
+FR-007c originally named `COMPANY_SETTINGS`. The shipped `@Put()` is guarded by
+`Permission.SETTINGS` (`project-documents.controller.ts:67`), and D8 above drew that line
+deliberately. **The spec was amended rather than the code**: the requirement's real content is that
+whoever may upload project documents (`PROJECTS`) cannot thereby change the requirement that gates
+them (`SETTINGS`), and that separation already holds. Super Admin holds every permission, so the
+client's "Super Admin can configure mandatory documents" is satisfied either way.
+
+FR-007d is likewise mostly built: the PUT already refuses a type the company does not have
+(`PROJECT_DOCUMENT_TYPE_UNKNOWN`) and `POST kinds/:code` already materialises a declared kind in
+place (D8). What is added is the narrower rule — a kind may not be marked **mandatory** while
+undefined — which is the same refusal at a different strength.
+
+### Phase status
+
+- **Post-amendment constitution re-check**: PASS with one new table. `StagedProjectDocument` lives in
+  `projects` beside `ProjectDocument`, gets `ENABLE` + `FORCE` RLS and a `tenant_isolation` policy in
+  hand-authored SQL, and is proved with the `NOSUPERUSER NOBYPASSRLS` probe role this feature already
+  uses rather than asserted. Principle I holds: no new cross-schema query — `projects` reaches
+  `settings` through the exported service methods it already injects. Principle II holds: the upload
+  routes take DTO classes and the staged-id list is validated on `CreateProjectDto`. Principle III
+  holds: the staging window is configuration. Principle VI holds: the new table is additive, so the
+  migration needs no backfill, and the sweep reuses `@nestjs/schedule` as the reminder rule does.
+- **Open question for tasks**: whether the staging sweep is a new scheduled rule or a case added to
+  the existing reminder sweep. Cheap either way; decided at `/speckit-tasks` with the task list in
+  view rather than guessed here.

@@ -42,6 +42,20 @@ against what this specification says, not new scope invented afterwards.
 - Q: A company that has configured nothing runs on the six kinds this product ships. What should an editor do with that? → A: **Open on them, and say they are defaults until saved.** The first save adopts them as the company's own set. Starting empty would throw away a reasonable answer every company would rebuild by hand, and hiding the defaults behind a separate "start configuring" step would make the screen explain a state instead of showing it.
 - Q: The company documents and signatory surfaces are pinned to the caller's own company while the rest of this feature accepts a named company. Fix here, or wait for feature 019's multi-company work? → A: **Fix here, narrowly.** These two surfaces are made consistent with the two this same feature already shipped (letter kinds, project document requirements), reusing the company selector the plant and recruitment sections already mount. Feature 019 FR-008–FR-013 owns the *product* answer — one switcher at the top of every screen, persisted across reloads, hidden for single-company users — and replaces that selector everywhere when it lands. This clarification does not move that scope into 017; it removes an inconsistency inside 017.
 
+### Session 2026-09-16 (client bug review, items 1 and 3)
+
+Raised against the client's re-stated requirement list. Item 1 — company documents uploaded and
+downloaded from the portal — is already covered by FR-001 through FR-006 and FR-023, and needed no
+change. Item 3 contradicted FR-009 as written.
+
+- Q: Item 3 says a Project Manager "cannot create a project without" its required documents, while FR-009 guarantees the opposite — that a project may be created with documents outstanding. Which holds? → A: **Both, decided per kind.** Every kind in the required set is marked either *mandatory* or *advisory*. A mandatory kind with nothing filed against it refuses the creation; an advisory one is reported as outstanding and the creation proceeds. This satisfies the client's instruction without discarding the finding FR-009 rested on — that in practice these papers do not arrive together, and a BOQ in particular is often produced after award.
+- Q: If mandatory documents gate project creation, and documents are filed *against* a project, how is the first one ever uploaded? → A: **They travel with the creation request.** The client's wording is "attach required documents when creating a project", which is the same shape as the request itself. Documents supplied with the request are filed against the project the request creates; a request short of a mandatory kind is refused whole, and no project is created.
+- Q: Who configures the required set, and from where? → A: **The Super Admin, from settings.** The requirement surface of the previous session becomes writable, guarded by `SETTINGS` — the permission the shipped route already enforces and which the Super Admin holds by definition (feature 016 FR-018). A Project Manager may upload against the set (`PROJECTS`) and read its readiness, but may not alter which kinds are required or how strong each is — otherwise the gate is one the gated party can open. The separation of those two permissions is the requirement; which of the settings permissions guards the write is secondary, and `SETTINGS` is what already guards it (plan D13).
+- Q: Item 3 asks that "all uploaded documents" be visible on the project page, and FR-008 reports readiness only. What is missing? → A: **The documents themselves, required and supplementary alike.** Readiness answers "what is missing"; the client is asking for the filed papers to be reachable where the project is, rather than through a separate documents screen. Supplementary documents are included — a kind outside the required set is still a paper someone filed against that project and expects to find again.
+- Q: A document supplied with a creation request exists before the project does, so it cannot be authorised against that project. What authorises it? → A: **The same permission that files a document against an existing project, plus explicit ownership.** Raised by the requirements-quality review of this amendment (`checklists/staging-gate.md`), which found this the densest gap: every other document upload in this feature is authorised against the thing it attaches to, and this one has no such thing. The reference returned to the caller is a bearer token for stored bytes, so the control cannot be that the identifier is hard to guess — it is an explicit check that the caller who supplies a reference is the caller who created it, in their own company. FR-009b and FR-009c.
+- Q: What happens to documents supplied with a creation that is then refused? → A: **Discarded, with their bytes.** The refusal is whole — no project, no attached document, nothing left to leak or to grow. An unconsumed document does not persist indefinitely; FR-009d and FR-009e.
+- Q: A kind is marked mandatory but the company has never defined a document type for it. Every project creation then fails with nothing the creator can do. → A: **A kind with no defined type cannot be mandatory.** The marking is refused at the point it is made, where an administrator with `SETTINGS` can define the type in place (the same affordance FR-003a gives the company-documents screen under `COMPANY_SETTINGS`), rather than at every project creation afterwards, where the person facing the refusal has neither the permission nor the context to fix it.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The company's statutory papers live in the system (Priority: P1)
@@ -87,21 +101,25 @@ confirm the set is reported as complete only when all required kinds are present
 
 ### User Story 2 - A new project cannot start half-documented (Priority: P1)
 
-When a project is created, the system knows which documents it needs — LOI, work order, insurance,
-mining permission, labour insurance, BOQ — and says which are still missing. A project can be created
-before they all arrive, because in practice they do not arrive together, but its readiness is visible
-and its gaps are nameable.
+The Super Admin decides, in settings, which documents a project needs — LOI, work order, insurance,
+mining permission, labour insurance, BOQ — and how strongly it needs each. The papers that must be
+in hand before work can be committed are marked *mandatory*, and a Project Manager cannot create a
+project without attaching them; the rest are marked *advisory*, reported as outstanding against the
+project so the gap is nameable rather than forgotten. Every document filed against the project,
+required or not, is visible on the project itself.
 
-**Why this priority**: Note 3. Missing project paperwork surfaces months later as an unbillable
-claim or an uninsured site.
+**Why this priority**: Note 3, restated by the client as a hard gate. Missing project paperwork
+surfaces months later as an unbillable claim or an uninsured site, and the client's answer is to
+refuse the project rather than to report the gap.
 
-**Independent Test**: Create a project, confirm the required set is listed as outstanding, upload
-some, and confirm the outstanding list shrinks accordingly.
+**Independent Test**: Mark one kind mandatory and one advisory, attempt a creation with neither and
+confirm it is refused naming only the mandatory kind, then attach that one and confirm the project
+is created with the advisory kind reported outstanding.
 
 **Acceptance Scenarios**:
 
-1. **Given** a newly created project, **When** its documents are viewed, **Then** the six required
-   kinds are listed with their status.
+1. **Given** a newly created project, **When** its documents are viewed, **Then** every kind in the
+   company's required set is listed with its status and its mandatory or advisory marking.
 2. **Given** a project missing required documents, **When** it is viewed in the portfolio, **Then**
    its document readiness is visible without opening it.
 3. **Given** a document uploaded against a required kind, **When** the project is viewed, **Then**
@@ -110,6 +128,18 @@ some, and confirm the outstanding list shrinks accordingly.
    **Then** it reports complete.
 5. **Given** a document kind not in the required set, **When** it is uploaded, **Then** it is accepted
    and filed as supplementary.
+6. **Given** a required set with a mandatory kind, **When** a project creation is attempted without a
+   document of that kind attached, **Then** the creation is refused, the missing mandatory kinds are
+   named, and no project is created.
+7. **Given** the same required set, **When** a creation attaches every mandatory kind but no advisory
+   one, **Then** the project is created and the advisory kinds are reported outstanding against it.
+8. **Given** a caller holding `PROJECTS` but not `SETTINGS` — a Project Manager who may upload a
+   project's documents — **When** they attempt to change the required set or a kind's mandatory
+   marking, **Then** the attempt is refused.
+9. **Given** a project with both required and supplementary documents filed, **When** the project is
+   viewed, **Then** all of them are listed there and each is retrievable from that surface.
+10. **Given** a document kind for which the company has defined no document type, **When** it is
+    marked mandatory, **Then** the marking is refused and the type may be defined in place.
 
 ---
 
@@ -230,7 +260,13 @@ currently carry a reference number and nothing behind it.
 - A required document kind is uploaded with the wrong file type (a photo of a certificate rather
   than a PDF). The specification must say what is accepted.
 - A document is uploaded whose reference number contradicts the number held on the company record.
-- A project is created for a client who supplies no LOI, only a verbal instruction.
+- A project is created for a client who supplies no LOI, only a verbal instruction. If LOI is
+  mandatory, the project cannot be created at all — the client has accepted that consequence, and the
+  escape is for the Super Admin to mark the kind advisory, not for the gate to be bypassed per project.
+- A kind is marked mandatory after projects already exist without it. Existing projects are already
+  created; the marking cannot retroactively refuse them, and they report as outstanding instead.
+- Every kind in the required set is marked advisory, leaving no gate. This is permitted and is the
+  behaviour FR-009 originally specified.
 - A letter template is edited between an approval and an issue.
 - A signed copy is uploaded that does not correspond to the issued letter. The system cannot verify
   this; the requirement is that both are retained so a human can.
@@ -275,16 +311,51 @@ currently carry a reference number and nothing behind it.
   configuration rather than a literal. FR-006's retain-indefinitely rule is right for a GST
   certificate and wrong for regulated personal data: keeping every superseded Aadhaar scan forever is
   a liability that grows on its own, and the general rule would otherwise mandate exactly that.
-- **FR-007**: System MUST define a required set of project document kinds covering LOI, work order,
-  insurance, mining permission, labour insurance and BOQ.
+- **FR-007**: System MUST maintain a required set of project document kinds per company,
+  **configurable from settings** (Clarifications, 2026-09-16) and defaulting to LOI, work order,
+  insurance, mining permission, labour insurance and BOQ until a company saves its own.
 - **FR-007a**: The project document requirement surface MUST report which document kinds are
   *available to require* alongside which are required (Clarifications, 2026-09-16), scoped to the
   organisation's paperwork rather than the employee file (FR-001b). Without it the write endpoint
   FR-007 implies is unreachable from an interface: naming a requirement would mean knowing a
   document type's internal identifier, which nobody administering paperwork has or should need.
+- **FR-007b**: Each kind in the required project document set MUST carry a strength of either
+  **mandatory** or **advisory** (Clarifications, 2026-09-16). FR-009 enforces the distinction; without
+  it the set has a single strength and cannot express both the client's gate and the papers that
+  genuinely arrive after award.
+- **FR-007c**: Changing the required project document set or any kind's strength MUST require the
+  `SETTINGS` permission, and MUST NOT be possible for a caller holding only the permission that
+  allows project documents to be uploaded. The property is the separation: the gated party cannot
+  open their own gate. Super Admin holds every permission and therefore holds this one, which is what
+  satisfies the client's "Super Admin can configure mandatory documents".
+- **FR-007d**: System MUST refuse to mark a kind mandatory while the company has no document type
+  defined for it, and MUST allow that type to be defined from the requirement surface itself. A
+  mandatory kind that cannot be satisfied would refuse every project creation, and the person facing
+  that refusal holds neither the permission nor the context to resolve it.
 - **FR-008**: System MUST report project document readiness, and MUST make it visible in the project
   list without opening each project.
-- **FR-009**: System MUST allow a project to be created before its required documents are complete.
+- **FR-008a**: System MUST list every document filed against a project — required and supplementary
+  alike — on the project's own surface, each retrievable from there (Clarifications, 2026-09-16).
+- **FR-009**: System MUST accept documents as part of a project creation request, and MUST refuse the
+  request while any **mandatory** kind in the required set has no document attached, naming every
+  missing mandatory kind in the refusal and creating no project. A request whose only outstanding
+  kinds are **advisory** MUST succeed, with those kinds reported outstanding against the created
+  project.
+- **FR-009a**: System MUST NOT retroactively invalidate a project created before a kind became
+  mandatory; such a project MUST report the kind as outstanding instead.
+- **FR-009b**: Supplying a document with a project creation request MUST require the same permission
+  that allows a document to be filed against an existing project. A document that arrives before its
+  project cannot be authorised against that project, so the permission is the only control available
+  and MUST be stated rather than assumed (Clarifications, 2026-09-16).
+- **FR-009c**: A document supplied ahead of its project MUST be usable **only** by the caller who
+  supplied it, and only within their own company. Identifier secrecy MUST NOT be the control: the
+  reference is a bearer token for stored bytes, and ownership MUST be checked explicitly on use.
+- **FR-009d**: A document supplied ahead of its project MUST be discarded, together with its stored
+  bytes, when it is not consumed by a successful creation — whether the creation was refused, was
+  abandoned, or never came. No document supplied this way may persist indefinitely unreferenced.
+- **FR-009e**: A creation request MUST be refused whole. Where it fails for any reason, System MUST
+  leave neither a project, nor a partially attached document, nor a consumed reference that cannot be
+  retried.
 - **FR-010**: System MUST support letter kinds covering at minimum: offer, appointment, confirmation,
   relieving, experience, transfer, suspension, salary slip, work order, LOI, purchase order, indent,
   service order, service bill and maintenance bill.
@@ -367,6 +438,17 @@ currently carry a reference number and nothing behind it.
   reported accurately for a company with any subset present.
 - **SC-002**: Project document readiness is visible for every project in the portfolio list without
   opening any of them.
+- **SC-002a**: No project can be created with a mandatory required document kind unattached, across
+  every creation path the product offers.
+- **SC-002b**: The required project document set and each kind's strength can be changed by a Super
+  Admin from settings with no developer involvement, and a Project Manager attempting the same change
+  is refused.
+- **SC-002c**: Every document filed against a project is reachable from that project's own surface,
+  including kinds outside the required set.
+- **SC-002d**: A document supplied ahead of its project cannot be consumed by any caller other than
+  the one who supplied it, verified across companies and across users within one company.
+- **SC-002e**: No refused or abandoned creation leaves a stored document or its bytes behind, verified
+  by counting both after a refusal.
 - **SC-003**: All 15 letter kinds in FR-010 can be issued, up from 5 today.
 - **SC-004**: A new letter kind can be created and issued by an administrator in under 10 minutes
   with no developer involvement.
@@ -394,4 +476,7 @@ currently carry a reference number and nothing behind it.
 - Existing offer and appointment letter behaviour in Recruitment continues unchanged; this feature
   extends the mechanism rather than replacing it.
 - Reminders reuse the existing reminder engine rather than introducing a second notification path.
+- The project creation gate is enforced on the server, not only in the creation form, so that no
+  second creation path — an import, a script, another client — can produce a project the gate would
+  have refused.
 
