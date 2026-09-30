@@ -1499,3 +1499,142 @@ describe('ApprovalService', () => {
     });
   });
 });
+
+/**
+ * The director-final set, and why it reports **three** states (016 FR-018c, web T062).
+ *
+ * The client asked that "every critical action" require the Director. The answer is a named,
+ * configurable set — which only works if they can see the set, and *that* only works if a type
+ * nothing configures is distinguishable from one somebody decided needs no Director. Collapsing
+ * those two hides exactly the gap the question is about: an action nobody has considered looks
+ * identical to one deliberately left open.
+ *
+ * Untested until now, which is why this block exists rather than an assertion added to a
+ * neighbouring test: the three-state distinction is the load-bearing part of the answer.
+ */
+describe('ApprovalService.directorFinalSet — the three states', () => {
+  const COMPANY_ID = 'co-1';
+
+  const build = (
+    rows: {
+      actionType: string;
+      isFinal: boolean;
+      updatedBy?: string | null;
+      updatedAt?: Date | null;
+    }[],
+    chainTypes: string[] = [],
+  ) => {
+    const prisma = createPrismaMock({
+      directorFinalAction: {
+        findMany: jest.fn(async () =>
+          rows.map((r) => ({
+            companyId: COMPANY_ID,
+            updatedAt: r.updatedAt ?? new Date('2026-09-20T00:00:00Z'),
+            updatedBy: r.updatedBy ?? null,
+            ...r,
+          })),
+        ),
+        findUnique: jest.fn(async () => null),
+      },
+      approvalChain: {
+        findMany: jest.fn(async () =>
+          chainTypes.map((actionType) => ({ actionType })),
+        ),
+      },
+      user: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'user-9',
+            displayName: null,
+            firstname: 'Anita',
+            lastname: 'Reddy',
+            username: null,
+            email: null,
+          },
+        ]),
+      },
+    });
+    const service = new ApprovalService(
+      prisma as never,
+      { resolveSlot: jest.fn() } as never,
+      { holdersOfRole: jest.fn(async () => []) } as never,
+      { record: jest.fn() } as never,
+      { emit: jest.fn() } as never,
+      {
+        get: jest.fn(() => ({
+          directorFinalActionTypes: ['payment_release', 'payroll_run'],
+        })),
+      } as never,
+    );
+    return { service, prisma };
+  };
+
+  const stateOf = (
+    entries: { actionType: string; state: string }[],
+    actionType: string,
+  ) => entries.find((e) => e.actionType === actionType)?.state;
+
+  it('reports a shipped default as final', async () => {
+    const { service } = build([]);
+
+    const entries = await service.directorFinalSet(COMPANY_ID);
+
+    expect(stateOf(entries, 'payment_release')).toBe('final');
+  });
+
+  it('distinguishes "somebody decided no" from "nobody has said"', async () => {
+    // The distinction the whole surface exists for. A stored `false` is a decision; a type with
+    // neither a row nor a seed is a gap, and the two must not render the same.
+    const { service } = build(
+      [{ actionType: 'payment_release', isFinal: false }],
+      ['material_indent'],
+    );
+
+    const entries = await service.directorFinalSet(COMPANY_ID);
+
+    expect(stateOf(entries, 'payment_release')).toBe('not_final_by_decision');
+    expect(stateOf(entries, 'material_indent')).toBe('not_configured');
+  });
+
+  it('is the union of stored rows, configured chains and shipped defaults', async () => {
+    // Not the contents of one table: a type reachable through a chain but never marked is
+    // precisely the one an administrator needs to see is unmarked.
+    const { service } = build(
+      [{ actionType: 'letter_loi', isFinal: true }],
+      ['material_indent'],
+    );
+
+    const entries = await service.directorFinalSet(COMPANY_ID);
+
+    expect(entries.map((e) => e.actionType)).toEqual([
+      'letter_loi',
+      'material_indent',
+      'payment_release',
+      'payroll_run',
+    ]);
+  });
+
+  it('names who decided, rather than reporting their id', async () => {
+    const { service } = build([
+      { actionType: 'payment_release', isFinal: false, updatedBy: 'user-9' },
+    ]);
+
+    const entries = await service.directorFinalSet(COMPANY_ID);
+
+    const entry = entries.find((e) => e.actionType === 'payment_release');
+    expect(entry?.updatedByName).toBe('Anita Reddy');
+    // The id stays alongside: a surface that wants to link to the account should not have to
+    // parse a display name back into one.
+    expect(entry?.updatedBy).toBe('user-9');
+  });
+
+  it('leaves the name null for a state nobody set', async () => {
+    const { service } = build([]);
+
+    const entries = await service.directorFinalSet(COMPANY_ID);
+
+    expect(
+      entries.find((e) => e.actionType === 'payment_release')?.updatedByName,
+    ).toBeNull();
+  });
+});

@@ -1161,6 +1161,15 @@ export class ApprovalService {
       isFinal: boolean;
       updatedAt: Date | null;
       updatedBy: string | null;
+      /**
+       * Who decided it, by name (web T061, T064).
+       *
+       * Alongside `updatedBy` rather than replacing it: the id still identifies the account, and
+       * a surface that wants to link to it should not have to parse a display name back. What a
+       * settings screen must never render is the id — "changed by cmuoe9b7l00q5v8..." tells a
+       * client nothing about who chose that their payments need a Director.
+       */
+      updatedByName: string | null;
     }[]
   > {
     const ctx: RlsContext = { isSuperAdmin: false, companyId };
@@ -1177,6 +1186,10 @@ export class ApprovalService {
         }),
       ),
     ]);
+
+    const names = await this.namesFor(
+      rows.map((r) => r.updatedBy).filter((id): id is string => !!id),
+    );
 
     const byType = new Map(rows.map((r) => [r.actionType, r]));
     const known = new Set<string>([
@@ -1196,6 +1209,9 @@ export class ApprovalService {
           isFinal: row.isFinal,
           updatedAt: row.updatedAt,
           updatedBy: row.updatedBy,
+          updatedByName: row.updatedBy
+            ? names.get(row.updatedBy) ?? row.updatedBy
+            : null,
         };
       }
       const seeded = this.directorFinalActionTypes.includes(actionType);
@@ -1208,6 +1224,7 @@ export class ApprovalService {
         isFinal: seeded,
         updatedAt: null,
         updatedBy: null,
+        updatedByName: null,
       };
     });
   }
@@ -1288,6 +1305,8 @@ export class ApprovalService {
   async pendingDirectorFinalChange(companyId: string): Promise<{
     instanceId: string;
     proposedBy: string;
+    /** Who proposed it, by name (web T065): two people must not submit the same edit. */
+    proposedByName: string;
     before: unknown;
     after: unknown;
     createdAt: Date;
@@ -1318,9 +1337,11 @@ export class ApprovalService {
     // pending change and must not be shown as one.
     if (!instance || instance.state !== 'pending') return null;
 
+    const names = await this.namesFor([row.proposedBy]);
     return {
       instanceId: row.approvalInstanceId,
       proposedBy: row.proposedBy,
+      proposedByName: names.get(row.proposedBy) ?? row.proposedBy,
       before: row.before,
       after: row.after,
       createdAt: row.createdAt,
