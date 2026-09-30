@@ -621,3 +621,111 @@ describe('AttendanceAdminService — outstanding corrections on the daily list',
     expect(rows[0].pendingCorrection).toBeNull();
   });
 });
+
+/**
+ * The audit says **who**, by name (016 FR-012d, web T055).
+ *
+ * An audit trail rendering `cmuoe9b7l00q5v8x58gmyytpz` where a person's name belongs is an audit
+ * nobody can read, and resolving the name in the browser would mean one request per row.
+ */
+describe('AttendanceAdminService.modifications — naming the actor', () => {
+  const build = (
+    rows: { id: string; actorUserId: string | null }[],
+    users: { id: string; firstname: string | null; lastname: string | null }[],
+  ) => {
+    const seen: { where?: Record<string, unknown>; distinct?: unknown }[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      employee: { findMany: async () => [{ id: 'emp-1' }] },
+      attendanceModification: {
+        findMany: async (args: {
+          where?: Record<string, unknown>;
+          distinct?: unknown;
+        }) => {
+          seen.push(args);
+          // The distinct call is the options list; the other is the page itself.
+          return args.distinct ? rows : rows;
+        },
+        count: async () => rows.length,
+      },
+      user: {
+        findMany: async () =>
+          users.map((u) => ({ ...u, email: null, username: null })),
+      },
+    };
+    const service = new AttendanceAdminService(
+      {
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      } as never,
+      { getPayrollLockDay: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { record: jest.fn() } as never,
+      { isPeriodUnderReview: jest.fn() } as never,
+      { resolveSlot: jest.fn() } as never,
+      { submit: jest.fn() } as never,
+      { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+    );
+    return { service, seen };
+  };
+
+  const caller = { userId: 'u-1', rls: { isSuperAdmin: true } } as never;
+
+  it('carries the actor name on every row', async () => {
+    const { service } = build(
+      [{ id: 'mod-1', actorUserId: 'admin-7' }],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items[0].actorName).toBe('Anita Reddy');
+  });
+
+  it('falls back to the id rather than a blank when the user is gone', async () => {
+    // A blank would read as "nobody changed this", which is the opposite of what the row records.
+    const { service } = build([{ id: 'mod-1', actorUserId: 'admin-gone' }], []);
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items[0].actorName).toBe('admin-gone');
+  });
+
+  it('offers the filter options from the unfiltered scope', async () => {
+    // Deriving them from the filtered rows would leave the dropdown holding only the person
+    // already selected, with no way back to anybody else.
+    const { service, seen } = build(
+      [{ id: 'mod-1', actorUserId: 'admin-7' }],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+    } as never);
+
+    const optionsQuery = seen.find((call) => call.distinct);
+    expect(optionsQuery?.where?.actorUserId).toBeUndefined();
+    expect(result.actors).toEqual([{ id: 'admin-7', name: 'Anita Reddy' }]);
+  });
+
+  it('resolves names in one query however many rows share an actor', async () => {
+    const { service } = build(
+      [
+        { id: 'mod-1', actorUserId: 'admin-7' },
+        { id: 'mod-2', actorUserId: 'admin-7' },
+        { id: 'mod-3', actorUserId: 'admin-7' },
+      ],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items.map((i) => i.actorName)).toEqual([
+      'Anita Reddy',
+      'Anita Reddy',
+      'Anita Reddy',
+    ]);
+  });
+});

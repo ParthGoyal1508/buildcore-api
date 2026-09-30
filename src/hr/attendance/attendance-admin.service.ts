@@ -30,6 +30,7 @@ import {
 import { ACTION_ATTENDANCE_CORRECTION } from '../../approvals/default-chains';
 import { ChainsService } from '../../approvals/chains.service';
 import type { AuthenticatedUser } from '../../auth/authenticated-user';
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   HrPayrollConfig,
@@ -757,7 +758,81 @@ export class AttendanceAdminService {
         ]),
     );
 
-    return { items, total, page, pageSize };
+    // 016 FR-012d, web T055. Names resolved **here**, not in the browser: the requirement is
+    // that an audit says who made a change, and a cuid does not say that. Resolved in one query
+    // for the page's distinct actors rather than one per row.
+    const actorIds = [
+      ...new Set(items.map((item) => item.actorUserId).filter(Boolean)),
+    ] as string[];
+    const names = await this.actorNamesFor(actorIds);
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        // Falls back to the id only when the user row has gone entirely. A blank would read as
+        // "nobody changed this", which is the opposite of what the row records.
+        actorName: item.actorUserId
+          ? names.get(item.actorUserId) ?? item.actorUserId
+          : null,
+      })),
+      total,
+      page,
+      pageSize,
+      // Who the filter may name (web T053).
+      //
+      // **Deliberately unaffected by `actorUserId`.** Deriving the options from the filtered rows
+      // would leave a dropdown holding one entry — the person already selected — and no way back
+      // to the others. It is also not "every user": an audit filter offering people who have never
+      // touched attendance is a list nobody can use. So it is the distinct actors across the same
+      // employee and date scope, which is the set that can actually return rows.
+      actors: await this.modificationActors(caller, companyId, query, where),
+    };
+  }
+
+  /** Distinct actors within a modifications query's scope, ignoring its actor filter. */
+  private async modificationActors(
+    caller: Caller,
+    companyId: string,
+    query: ModificationsQueryDto,
+    where: Prisma.AttendanceModificationWhereInput,
+  ): Promise<{ id: string; name: string }[]> {
+    // Copied and stripped rather than destructured: the discarded half would be an unused
+    // binding, and the intent — "the same scope, without the actor clause" — reads better said.
+    const scope: Prisma.AttendanceModificationWhereInput = { ...where };
+    delete scope.actorUserId;
+    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.attendanceModification.findMany({
+        where: scope,
+        distinct: ['actorUserId'],
+        select: { actorUserId: true },
+      }),
+    );
+    const ids = rows.map((r) => r.actorUserId).filter(Boolean) as string[];
+    const names = await this.actorNamesFor(ids);
+    return ids
+      .map((id) => ({ id, name: names.get(id) ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * User ids to display names, in one query.
+   *
+   * Runs as system because `shared.User` is another schema and the ids being resolved were read
+   * from rows the caller's own context already bounded — so there is nothing further for RLS to
+   * decide here, and reaching for it would only fail.
+   */
+  private async actorNamesFor(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const users = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: ids } },
+          select: ACTOR_NAME_SELECT,
+        }),
+    );
+    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
   }
 
   /** Punches flagged as a face-match or geofence exception and not yet resolved. */

@@ -1222,6 +1222,26 @@ second administrator sees nothing, and the obvious next move is to submit the co
   once, a completed chain reports nothing, the oldest wins when a day carries two, and a caller
   without a viewer gets `null`.
 
+### Phase 8b: what T070 left half-built (added 2026-10-01)
+
+T070 added `actorUserId` to `ModificationsQueryDto` — the filter's *input*. Nothing added its
+output: the endpoint returned raw rows, so the trail carried a cuid where the audit's whole point is
+a name, and there was no way for a filter control to know which people to offer. A web screen could
+have resolved names itself at one request per row; T055 forbids exactly that, and rightly.
+
+- [X] T083e Resolve `actorName` on every row of `AttendanceAdminService.modifications`, in one
+  query for the page's distinct actors. Fall back to the id only when the user row has gone —
+  a blank reads as "nobody changed this", which is the opposite of what the row records.
+- [X] T083f Return `actors`: the distinct actors within the same employee and date scope,
+  **ignoring the actor filter itself**. Deriving them from the filtered rows would leave a dropdown
+  holding only the person already selected, with no way back to anyone else. Not "every user"
+  either — an audit filter offering people who have never touched attendance cannot be used.
+- [X] T083g Extract the id-to-name lookup as `actorNamesFor`, shared by both of the above, and run
+  it as system: `shared.User` is another schema, and the ids were read from rows the caller's own
+  context already bounded.
+- [X] T083h Unit tests: the name reaches every row, a vanished user falls back to the id, the
+  options come from the unfiltered scope, and one actor across many rows costs one lookup.
+
 ### Notes on this phase
 
 **What did not change, deliberately.** The `AttendanceModification` table, its columns, and the write
