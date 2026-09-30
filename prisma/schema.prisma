@@ -182,6 +182,32 @@ model Role {
 /// FR-004's failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
 /// reaching for a module they hold nothing in, which is a security signal. Without this column
 /// the two are the same row, and the only thing anybody could do with the log is count it.
+/// Which company a user is currently working in (019 FR-008 to FR-013).
+///
+/// **Stored server-side, not carried in the token.** FR-011 requires the selection to survive
+/// a browser restart, and access tokens here are short-lived — a JWT claim would not survive
+/// one. A cookie would make the selection a client assertion about authorisation scope, which
+/// is the one thing it must never be.
+///
+/// `userId` is the primary key, so two selections for one user are **unrepresentable** rather
+/// than merely prevented.
+///
+/// The selection is not authorisation. It is validated against the user's accessible companies
+/// on every read, not only on write: the spec's own edge case is cross-company access being
+/// revoked while the other company is selected, and a stored selection trusted at read time is
+/// how that becomes a cross-tenant read.
+model UserCompanySelection {
+  userId String @id
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@schema("settings")
+}
+
 model PermissionRefusal {
   id        String @id @default(cuid())
   companyId String
@@ -474,6 +500,9 @@ model Company {
 
   /// 016 FR-018b: proposed changes to this company's director-final set.
   directorFinalChangeProposals DirectorFinalChangeProposal[]
+
+  /// 019 FR-008: users currently working in this company.
+  userCompanySelections UserCompanySelection[]
 }
 
 enum CompanyStatus {

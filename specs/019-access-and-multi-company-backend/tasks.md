@@ -259,55 +259,106 @@ depend on that. Now wrapped, with the test that found it.
 
 ## Phase 4: Company selection (FR-008 to FR-013)
 
-- [ ] T044 Add `model UserCompanySelection` — `userId` as the primary key, so two selections for one
+- [X] T044 Add `model UserCompanySelection` — `userId` as the primary key, so two selections for one
   user are unrepresentable rather than merely prevented. RLS on `companyId`. Migration with the
   `set_config` line.
-- [ ] T045 `GET /settings/companies/selectable` returning the caller's accessible companies, one
+- [X] T045 `GET /settings/companies/selectable` returning the caller's accessible companies, one
   element for a single-company user. This is what lets the interface satisfy FR-013 without a second
   call.
-- [ ] T046 `PUT /my/company-selection`, validated DTO, `403 COMPANY_NOT_ACCESSIBLE` for a company the
+- [X] T046 `PUT /my/company-selection`, validated DTO, `403 COMPANY_NOT_ACCESSIBLE` for a company the
   caller may not reach. **Not 404** — a 404 tells a caller which company ids exist.
-- [ ] T047 **Validate the stored selection on every read, not only on write** (plan D5). An
+- [X] T047 **Validate the stored selection on every read, not only on write** (plan D5). An
   inaccessible stored selection resolves to the caller's own company and is re-recorded. This is the
   spec's own edge case — access revoked while the other company is selected — and trusting the stored
   row at read time is how it becomes a cross-tenant read.
-- [ ] T048 Make the selection the company context for the request, flowing to the RLS GUC the existing
+- [X] T048 Make the selection the company context for the request, flowing to the RLS GUC the existing
   company scoping already sets. The selection **chooses** the context; RLS still enforces it.
-- [ ] T049 [P] Unit test: a selection for an inaccessible company resolves to the caller's own and
+- [X] T049 [P] Unit test: a selection for an inaccessible company resolves to the caller's own and
   rewrites the row.
-- [ ] T050 [P] e2e: switch company, confirm a list returns only the new company's records, restart the
+- [X] T050 [P] e2e: switch company, confirm a list returns only the new company's records, restart the
   **server**, sign in, confirm the selection persists. Restarting the server rather than the browser
   is the stronger test — it proves the selection is stored, not held in memory.
-- [ ] T051 [P] e2e: revoke `CROSS_COMPANY_ACCESS` with company B selected, then confirm the next
+- [X] T051 [P] e2e: revoke `CROSS_COMPANY_ACCESS` with company B selected, then confirm the next
   request returns **no** company B record. A cross-tenant read here is the failure this test exists
   for.
-- [ ] T052 [P] Unit test: a single-company user's `selectable` returns exactly one element (FR-013).
-- [ ] T053 Add `companies` and the selection to `GET /auth/me` per the contract, if T027 did not.
+- [X] T052 [P] Unit test: a single-company user's `selectable` returns exactly one element (FR-013).
+- [X] T053 Add `companies` and the selection to `GET /auth/me` per the contract, if T027 did not.
 
 ## Phase 5: Cash visibility (FR-014 to FR-017)
 
-- [ ] T054 Add the cash-bearing surface list as **one exported constant** (Principle III), from
+- [X] T054 Add the cash-bearing surface list as **one exported constant** (Principle III), from
   research §4: `Payment.paymentMode = cash`; the payment-sheet disbursement's `paymentMode`;
   `LabourPaymentSheet.denominationBreakup`. **Not**
   `CompanySettings.labourCashDenominations` — that is configuration, and hiding it would break the
   payment-sheet builder while hiding nothing anybody wanted hidden.
-- [ ] T055 `PATCH /settings/company-settings/cash-visibility` requiring `COMPANY_SETTINGS` at write,
+- [X] T055 `PATCH /settings/company-settings/cash-visibility` requiring `COMPANY_SETTINGS` at write,
   writing actor and time through the existing audit-log service (FR-016).
-- [ ] T056 Add the response interceptor shaping cash fields to `amount: null` with
+- [X] T056 Add the response interceptor shaping cash fields to `amount: null` with
   `amountHidden: true`. **Never `amount: 0`** — a zero is a figure, and a spreadsheet summing a column
   cannot tell a hidden amount from a real zero.
-- [ ] T057 Apply the same rule to exports: the column is present and marked, not dropped. Dropping it
+- [X] T057 Apply the same rule to exports: the column is present and marked, not dropped. Dropping it
   changes the shape of a file somebody's spreadsheet depends on.
-- [ ] T058 [P] Unit test: with hiding on, a cash payment's amount is null and `amountHidden` true; a
+- [X] T058 [P] Unit test: with hiding on, a cash payment's amount is null and `amountHidden` true; a
   non-cash payment is untouched.
-- [ ] T059 [P] Unit test: the stored row is unchanged (FR-017). Read the amount directly and assert it
+- [X] T059 [P] Unit test: the stored row is unchanged (FR-017). Read the amount directly and assert it
   is the real figure — hiding is display, not a data operation.
-- [ ] T060 [P] **The staleness guard.** A test that parses `schema.prisma` for enum values named
+- [X] T060 [P] **The staleness guard.** A test that parses `schema.prisma` for enum values named
   `cash` and fails if one is not named in T054's constant. A closed list is a liability; this makes a
   new cash surface a failing test rather than a figure on a screen somebody was told would be hidden.
-- [ ] T061 [P] e2e: hiding on, a labour payment sheet's amounts hidden. Record in the test's comment
+- [X] T061 [P] e2e: hiding on, a labour payment sheet's amounts hidden. Record in the test's comment
   that the spec's edge case — such a sheet may be **unusable** with its amounts hidden — is an open
   client question, and that this behaviour is the assumption, not the answer.
+
+## Phases 4-5 implementation record, 2026-09-30
+
+**T044-T061 complete.** Phases 1-5 done. Phase 6 waits on the client; Phase 7 is verification.
+
+### The selection is resolved once, and that was not enough
+
+`JwtStrategy.validate` resolves it per request, so every `rlsContextFor(caller)` respects it
+without any of them changing. That was the design and it was **half right**: three helpers in
+`company-scope.ts` — `companyScope`, `resolveCompanyId` and `assertInScope` — read
+`caller.companyId` directly rather than the context's effective company, so a cross-company
+caller who switched to company B kept seeing company A's lists.
+
+Caught by the e2e, not by review. All three now derive from `rlsContextFor`'s result, which
+makes them consistent by construction rather than by three people remembering.
+
+### The safety property, stated once
+
+**A selection narrows and never widens.** A cross-company caller with a selection arrives with
+`isSuperAdmin: false` and the selected company on the context; one with no selection keeps the
+bypass. So the worst a stale or forged selection can do is show the caller *less* than they are
+entitled to — never more.
+
+### Two globals, for the same structural reason
+
+`CompanySelectionModule` and `PermissionRefusalModule` are both `@Global`, because both are
+needed *below* the module that owns their routes: the selection has to be resolved in the JWT
+strategy, and the refusal recorder has to be injectable into a guard declared on 91 controllers.
+`AuthModule` importing `SettingsModule` would be a cycle.
+
+### Cash hiding nulls, never zeroes
+
+`amount: null` with `amountHidden: true`. A zero is a figure, and neither a reader nor a
+spreadsheet summing a column can tell a hidden amount from a real one — an export would silently
+understate its total by the value of every cash payment in it. The flag is also what keeps an
+export's **shape**: the column is present and marked rather than dropped, because dropping it
+changes the shape of a file somebody's spreadsheet depends on.
+
+The interceptor is deliberately conservative about what it walks: a `Date`, a `Buffer` or a
+Prisma `Decimal` is returned untouched. Rebuilding one as a plain object while hiding an amount
+would corrupt every timestamp in the response — a far worse bug than the one this prevents.
+
+`Company.labourCashDenominations` stays visible, and there is a test asserting it. It looks like
+cash and is not: it is configuration, and hiding it would break the payment-sheet builder while
+concealing nothing anybody wanted concealed.
+
+### The staleness guard works
+
+`cash-surfaces.spec.ts` parses `schema.prisma` and fails when an enum grows a `cash` value the
+constant does not name. Verified by adding one: it failed naming `ScratchCashMode`, and passed on
+removal.
 
 ## Phase 6: Cash entry restriction ⚠️ RESTS ON AN UNANSWERED CLIENT QUESTION
 

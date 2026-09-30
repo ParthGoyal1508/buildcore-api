@@ -41,6 +41,19 @@ export interface AuthenticatedUser extends User {
    * meaningless rather than wrong, and `permissions` is the right field for them.
    */
   grants: Grant[];
+  /**
+   * The company this caller has chosen to work in, when they may work in more than one
+   * (019 FR-008, FR-010).
+   *
+   * Resolved per request from `settings.UserCompanySelection` and **validated against the
+   * caller's accessible companies every time** — not trusted because it is stored. The spec's
+   * own edge case is cross-company access being revoked while the other company is selected,
+   * and a selection trusted at read time is how that becomes a cross-tenant read.
+   *
+   * Null for a caller with one company: their own always wins, and FR-013 says such a caller
+   * is offered no switcher. `rlsContextFor` reads this — see there for what it changes.
+   */
+  selectedCompanyId?: string | null;
 }
 
 /** One area the caller holds, at one level. */

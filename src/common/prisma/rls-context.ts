@@ -15,10 +15,24 @@ export interface RlsContext {
 export function rlsContextFor(caller: {
   companyId: string | null;
   permissions: Permission[];
+  selectedCompanyId?: string | null;
 }): RlsContext {
   if (caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) {
+    // 019 FR-010. A cross-company caller who has **chosen** a company is scoped to it, so
+    // every list, report and creation reflects the selection without each of them being
+    // changed. One who has chosen nothing keeps the bypass, which is what Super Admin needs
+    // for the screens that legitimately span companies.
+    //
+    // The selection narrowing the scope rather than widening it is the whole safety property
+    // here: the worst a forged or stale selection can do is show the caller less than they are
+    // entitled to. It can never show them more, because narrowing is all it does.
+    if (caller.selectedCompanyId) {
+      return { isSuperAdmin: false, companyId: caller.selectedCompanyId };
+    }
     return { isSuperAdmin: true };
   }
+  // A company-scoped caller's own company always wins. A selection must never widen scope,
+  // which is the same rule `companyScope()` and `resolveCompanyId()` follow.
   return { isSuperAdmin: false, companyId: caller.companyId };
 }
 

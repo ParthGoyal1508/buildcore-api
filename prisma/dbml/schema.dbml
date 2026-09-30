@@ -82,19 +82,11 @@ company), so Principle IV\'s per-tenant isolation requirement doesn\'t apply her
 actually *holds* a role) is the tenant-scoped side, and is RLS-protected.'
 }
 
-Table PermissionRefusal {
-  id String [pk]
+Table UserCompanySelection {
+  userId String [pk]
   companyId String [not null]
-  userId String [not null]
-  method String [not null]
-  path String [not null, note: 'The route **template**, never the resolved URL. A resolved URL carries record ids, and a
-security log quietly accumulating them becomes a store of personal data nobody
-classified as one.']
-  requiredPermission Permission [not null]
-  requiredLevel AccessLevel [not null]
-  heldLevel AccessLevel [note: 'The level actually held for that area. **Null means the area was not held at all** —
-which is a different event from holding it at the wrong level.']
-  createdAt DateTime [default: `now()`, not null]
+  company Company [not null]
+  updatedAt DateTime [not null]
 
   Note: 'One grant: a role may do `level` to `permission` (019 FR-001, FR-002).
 
@@ -116,7 +108,36 @@ A refused request, recorded (019 FR-003).
 a required `write` is an **interface** that offered a control it should have hidden —
 FR-004\'s failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
 reaching for a module they hold nothing in, which is a security signal. Without this column
-the two are the same row, and the only thing anybody could do with the log is count it.'
+the two are the same row, and the only thing anybody could do with the log is count it.
+Which company a user is currently working in (019 FR-008 to FR-013).
+
+**Stored server-side, not carried in the token.** FR-011 requires the selection to survive
+a browser restart, and access tokens here are short-lived — a JWT claim would not survive
+one. A cookie would make the selection a client assertion about authorisation scope, which
+is the one thing it must never be.
+
+`userId` is the primary key, so two selections for one user are **unrepresentable** rather
+than merely prevented.
+
+The selection is not authorisation. It is validated against the user\'s accessible companies
+on every read, not only on write: the spec\'s own edge case is cross-company access being
+revoked while the other company is selected, and a stored selection trusted at read time is
+how that becomes a cross-tenant read.'
+}
+
+Table PermissionRefusal {
+  id String [pk]
+  companyId String [not null]
+  userId String [not null]
+  method String [not null]
+  path String [not null, note: 'The route **template**, never the resolved URL. A resolved URL carries record ids, and a
+security log quietly accumulating them becomes a store of personal data nobody
+classified as one.']
+  requiredPermission Permission [not null]
+  requiredLevel AccessLevel [not null]
+  heldLevel AccessLevel [note: 'The level actually held for that area. **Null means the area was not held at all** —
+which is a different event from holding it at the wrong level.']
+  createdAt DateTime [default: `now()`, not null]
 }
 
 Table RolePermission {
@@ -242,6 +263,7 @@ payment-sheet builder while concealing nothing anybody wanted concealed.']
   issuedLetters IssuedLetter [not null]
   directorFinalActions DirectorFinalAction [not null, note: '016 FR-018a: which action types this company requires the Director to approve.']
   directorFinalChangeProposals DirectorFinalChangeProposal [not null, note: '016 FR-018b: proposed changes to this company\'s director-final set.']
+  userCompanySelections UserCompanySelection [not null, note: '019 FR-008: users currently working in this company.']
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -4399,6 +4421,8 @@ Enum ResignationStatus {
   accepted
   withdrawn
 }
+
+Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]
 
 Ref: RolePermission.roleId > Role.id [delete: Cascade]
 
