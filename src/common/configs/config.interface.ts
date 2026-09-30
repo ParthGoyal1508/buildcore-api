@@ -440,6 +440,18 @@ export interface HrPayrollConfig {
 }
 
 export interface WorkspaceConfig {
+  /**
+   * The product default for the worst GPS accuracy a punch may report and still be located, in
+   * metres (020 FR-012b).
+   *
+   * The **fallback**, not the answer: a company that has set `punchAccuracyMaxMetres` overrides it,
+   * and a company that has not gets this. 50 metres because that is roughly what a phone reports
+   * indoors or under cover, which is where a site office often is.
+   *
+   * Deliberately separate from feature 013's labour GPS tolerance. Same units, different surface —
+   * merging them means tuning one to fix the other.
+   */
+  punchAccuracyMaxMetresDefault: number;
   faceMatch: {
     /**
      * Maximum Euclidean distance between two 128-float face descriptors for a punch

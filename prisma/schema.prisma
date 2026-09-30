@@ -433,6 +433,22 @@ model Company {
   /// so this is not a literal inside the denomination service — Principle III.
   labourCashDenominations Int[] @default([500, 200, 100, 50, 20, 10, 5, 1])
 
+  /// The worst GPS accuracy a punch may report and still be located, in metres
+  /// (020 FR-012b).
+  ///
+  /// The client asked for this in those words — "configurable from the settings by super admin" —
+  /// and an environment variable does not satisfy it: it needs a redeploy and it is the same for
+  /// both companies.
+  ///
+  /// **Nullable rather than defaulted in the database.** Null means "this company has not decided",
+  /// which is a different fact from "this company chose 50" — and only the first should follow a
+  /// change to the product default. A column defaulted to 50 makes every company look as though it
+  /// had made a decision nobody made.
+  ///
+  /// Deliberately **not** feature 013's `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
+  /// different surface, different tolerance. Merging them means tuning one to fix the other.
+  punchAccuracyMaxMetres Int?
+
   /// Hides cash amounts and cash transactions across the application (019 FR-014).
   ///
   /// A **display** control, never a data operation — FR-017 is explicit that nothing is
@@ -2016,6 +2032,9 @@ model Employee {
   @@index([companyId])
   @@index([siteId])
   @@schema("hr")
+
+  /// 020 FR-013c: punches refused for this employee.
+  punchRefusals PunchRefusal[]
 }
 
 /// Exactly one row per employee. A completed re-enrolment replaces `descriptor`,
@@ -2539,6 +2558,64 @@ model HolidaySite {
 /// nothing, and logging it as a modification would make the log disagree with the
 /// attendance. A rejected correction stays visible as an approval instance, which is
 /// where it belongs.
+/// Why a punch was, or would have been, refused (020 FR-013c).
+enum PunchRefusalReason {
+  /// Located, and outside the assigned fence.
+  outside_geofence
+  /// The GPS fix was worse than the company's threshold, so the punch could not be located at all
+  /// — a different fact from being located somewhere wrong, and the reason the two are separate
+  /// values rather than one.
+  unlocatable
+  /// The photo did not match the enrolled face closely enough.
+  face_mismatch
+  /// No face was detectable in the photo.
+  no_face_detected
+
+  @@schema("hr")
+}
+
+/// A punch that was refused, or in Phase 2 would have been (020 FR-013c).
+///
+/// **Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
+/// system could not establish whose face it is — retaining an unattributed biometric against a named
+/// employee is worse than the exception record it replaces, and the photo would be evidence of
+/// nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
+/// number is not a biometric.
+///
+/// This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
+/// punch at all — which is the point — so without this the refusal would leave no trace anywhere and
+/// a worker wrongly refused would have nothing to appeal to.
+model PunchRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  type PunchType
+
+  reason PunchRefusalReason
+
+  /// Where they were, and how far from the fence. Evidence, so it is the **real** distance rather
+  /// than one adjusted by the accuracy allowance.
+  latitude       Decimal  @db.Decimal(10, 7)
+  longitude      Decimal  @db.Decimal(10, 7)
+  distanceMeters Decimal? @db.Decimal(12, 2)
+  accuracyMeters Int?
+
+  /// The face-match distance, when a comparison happened at all. A number, not a biometric.
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  /// When the punch was taken, and when it reached the server — a refused offline punch may arrive
+  /// long after the moment it describes.
+  capturedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, employeeId, capturedAt])
+  @@schema("hr")
+}
+
 model PendingAttendanceCorrection {
   id        String @id @default(cuid())
   companyId String

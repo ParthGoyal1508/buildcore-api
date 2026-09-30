@@ -40,6 +40,7 @@ import { EmployeeSearchSource } from './employees/employee-search.source';
 import { ExitClearanceController } from './offboarding/exit-clearance.controller';
 import { ExitClearanceService } from './offboarding/exit-clearance.service';
 import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
+import { PunchRefusalsService } from './punch/punch-refusals.service';
 
 /**
  * The `hr` module: the employee-facing My Workspace surface.
@@ -89,6 +90,7 @@ import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
     ReimbursementController,
   ],
   providers: [
+    PunchRefusalsService,
     ExitCustodyRegistry,
     ExitClearanceService,
     // 021 US1 — see ProjectSearchSource.

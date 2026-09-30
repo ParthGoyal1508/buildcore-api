@@ -36,14 +36,18 @@ const CATEGORIES = [
 async function main() {
   const shortCode = process.env.COMPANY_SHORT_CODE;
   if (!shortCode) {
-    throw new Error('COMPANY_SHORT_CODE is required (e.g. DEMO locally, BCD in production)');
+    throw new Error(
+      'COMPANY_SHORT_CODE is required (e.g. DEMO locally, BCD in production)',
+    );
   }
 
   await prisma.$executeRaw`SELECT set_config('app.is_super_admin', 'true', false)`;
 
   const company = await prisma.company.findFirst({ where: { shortCode } });
   if (!company) {
-    throw new Error(`No company with short code "${shortCode}" in this database.`);
+    throw new Error(
+      `No company with short code "${shortCode}" in this database.`,
+    );
   }
 
   for (const category of CATEGORIES) {
@@ -62,7 +66,9 @@ async function main() {
   for (const c of all) {
     console.log(
       `  ${c.name.padEnd(10)} receipt required above: ` +
-        `${c.receiptRequiredAbove === null ? 'never' : c.receiptRequiredAbove}` +
+        `${
+          c.receiptRequiredAbove === null ? 'never' : c.receiptRequiredAbove
+        }` +
         `${c.isActive ? '' : '  [inactive]'}`,
     );
   }

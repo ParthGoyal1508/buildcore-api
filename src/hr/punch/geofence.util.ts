@@ -51,12 +51,19 @@ export interface GeofenceCheck {
  * someone's attendance an exception.
  */
 export function checkGeofence(
-  punch: { latitude: number; longitude: number },
+  punch: { latitude: number; longitude: number; accuracyMeters?: number },
   site: { latitude: number; longitude: number; geofenceRadiusMeters: number },
 ): GeofenceCheck {
   const distanceMeters = haversineDistanceMeters(punch, site);
+  // 020 FR-012a. The device's own uncertainty is added to the fence rather than ignored: a worker
+  // standing legitimately at a site whose phone reports a 40-metre fix should not be refused for the
+  // phone's doubt, and under the hard refusal that refusal costs them a day.
+  //
+  // `?? 0` is the whole backward-compatibility story. Every client shipped today omits the field and
+  // gets exactly today's verdict — the allowance is additive, so an absent accuracy widens nothing.
+  const allowance = punch.accuracyMeters ?? 0;
   return {
-    withinGeofence: distanceMeters <= site.geofenceRadiusMeters,
+    withinGeofence: distanceMeters <= site.geofenceRadiusMeters + allowance,
     distanceMeters,
   };
 }

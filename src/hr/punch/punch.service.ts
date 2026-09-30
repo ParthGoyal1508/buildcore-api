@@ -17,6 +17,7 @@ import {
   PunchRecord,
   PunchSource,
   PunchType,
+  PunchRefusalReason,
 } from '@prisma/client';
 import { HttpException } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
@@ -42,6 +43,7 @@ import { EmployeeDocumentsService } from '../employees/documents/employee-docume
 import { EmployeesService } from '../employees/employees.service';
 import { SubmitPunchDto } from './dto/punch.dto';
 import { checkGeofence } from './geofence.util';
+import { PunchRefusalsService } from './punch-refusals.service';
 import { isPayrollLocked } from './payroll-lock';
 
 const PUNCH_NAMESPACE = 'punch';
@@ -107,6 +109,7 @@ export class PunchService {
   private readonly logger = new Logger(PunchService.name);
 
   constructor(
+    private readonly punchRefusals: PunchRefusalsService,
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly employeeDocuments: EmployeeDocumentsService,
@@ -275,17 +278,70 @@ export class PunchService {
     }
 
     const geofence = await this.sites.getGeofence(caller.rls, employee.siteId);
+
+    // 020 FR-012b. Read per request in the same call that already read the payroll lock day, so a
+    // Super Admin raising the threshold takes effect on the next punch with no restart — which is
+    // what "configurable from the settings" has to mean to be useful.
+    const accuracyMax = await this.companies.getPunchAccuracyMaxMetres(
+      employee.companyId,
+    );
+
+    // A fix worse than the company's threshold means the punch cannot be **located**, which is a
+    // different fact from being located outside the fence. Both currently produce the same
+    // `exception`; FR-013b's refusal distinguishes them, and that is why the reason is computed
+    // here rather than inferred later from the distance.
+    const unlocatable =
+      dto.accuracyMeters !== undefined && dto.accuracyMeters > accuracyMax;
+
     const { withinGeofence, distanceMeters } = checkGeofence(
-      { latitude: dto.latitude, longitude: dto.longitude },
+      {
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        // The allowance is only extended to a fix the company is willing to trust. Widening the
+        // fence by an accuracy that already failed the threshold would let the worst fixes buy the
+        // largest allowance, which is exactly backwards.
+        accuracyMeters: unlocatable ? undefined : dto.accuracyMeters,
+      },
       geofence,
     );
-    const geofenceResult = withinGeofence
-      ? GeofenceResult.in_range
-      : GeofenceResult.exception;
+    const geofenceResult =
+      withinGeofence && !unlocatable
+        ? GeofenceResult.in_range
+        : GeofenceResult.exception;
 
     const isException =
       faceMatchResult === FaceMatchResult.exception ||
       geofenceResult === GeofenceResult.exception;
+
+    // 020 FR-013c, Phase 2. **The punch is still accepted** — this records what *would* have been
+    // refused once FR-013's hard block is switched on, so the client can see how often that block
+    // would fire before it does. They accepted its cost without that number; producing it while the
+    // decision is still reversible is the obligation this phase discharges (T016).
+    //
+    // Awaited but non-throwing: an accepted punch must not become a 500 because a log write failed.
+    if (isException) {
+      await this.punchRefusals.record(caller.rls, {
+        companyId: employee.companyId,
+        employeeId: employee.id,
+        type: dto.type,
+        // The reason is computed from the checks rather than inferred later from the distance,
+        // because "could not be located" and "located outside the fence" are different facts that a
+        // distance alone cannot distinguish.
+        reason: unlocatable
+          ? PunchRefusalReason.unlocatable
+          : geofenceResult === GeofenceResult.exception
+          ? PunchRefusalReason.outside_geofence
+          : candidate === null
+          ? PunchRefusalReason.no_face_detected
+          : PunchRefusalReason.face_mismatch,
+        latitude: dto.latitude,
+        longitude: dto.longitude,
+        distanceMeters,
+        accuracyMeters: dto.accuracyMeters ?? null,
+        faceMatchDistance,
+        capturedAt,
+      });
+    }
 
     const photoRef = await this.storage.put(
       PUNCH_NAMESPACE,

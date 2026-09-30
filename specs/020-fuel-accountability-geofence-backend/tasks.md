@@ -26,31 +26,31 @@ The plan's four phases are load-bearing, not presentation:
 
 ## Phase 1: Accuracy, non-blocking (FR-012a, FR-012b)
 
-- [ ] T001 Add `accuracyMeters?: number` to `SubmitPunchDto` in `src/hr/punch/dto/` with a
+- [X] T001 Add `accuracyMeters?: number` to `SubmitPunchDto` in `src/hr/punch/dto/` with a
   non-negative validator and a bounded ceiling. The bound matters: an accuracy of 10^9 metres would
   otherwise accept every punch on Earth (research §2).
-- [ ] T002 Extend `checkGeofence` in `src/hr/punch/geofence.util.ts` to
+- [X] T002 Extend `checkGeofence` in `src/hr/punch/geofence.util.ts` to
   `distance <= radius + (accuracyMeters ?? 0)`. **`?? 0` is the whole backward-compatibility story** —
   every client shipped today omits the field and must get exactly today's verdict. Keep the boundary
   inclusive, for the reason already written into that function.
-- [ ] T003 [P] Unit test for T002: 120 m from a 100 m fence with 40 m accuracy is inside; the same
+- [X] T003 [P] Unit test for T002: 120 m from a 100 m fence with 40 m accuracy is inside; the same
   punch with no accuracy is outside; the boundary stays inclusive.
-- [ ] T004 Add `punchAccuracyMaxMetres Int?` to `settings.Company` in `prisma/schema.prisma`.
+- [X] T004 Add `punchAccuracyMaxMetres Int?` to `settings.Company` in `prisma/schema.prisma`.
   **Nullable, not defaulted in the database**: null means "this company has not decided", which is a
   different fact from "this company chose 50", and only the first should follow a change to the
   product default.
-- [ ] T005 Migration for T004. Additive, no backfill.
-- [ ] T006 Add the 50-metre default to configuration in `src/common/configs/config.ts` — **not** a
+- [X] T005 Migration for T004. Additive, no backfill.
+- [X] T006 Add the 50-metre default to configuration in `src/common/configs/config.ts` — **not** a
   literal in a service (Principle III). Do **not** reuse feature 013's
   `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units, different surface, different tolerance, and
   merging them means tuning one to fix the other (research §3).
-- [ ] T007 `CompaniesService.getPunchAccuracyMaxMetres(companyId)` resolving the column against the
+- [X] T007 `CompaniesService.getPunchAccuracyMaxMetres(companyId)` resolving the column against the
   configured default, so no caller knows the fallback exists. Read it in `punch.service.ts` in the
   same method that already calls `getPayrollLockDay` — no new cross-module reach (Principle I).
-- [ ] T008 `PUT /settings/company/punch-accuracy` under `Permission.COMPANY_SETTINGS`, which Super
+- [X] T008 `PUT /settings/company/punch-accuracy` under `Permission.COMPANY_SETTINGS`, which Super
   Admin holds by definition. This is the client's actual answer — *"configurable from the settings by
   super admin"* — and an env var does not satisfy it.
-- [ ] T009 [P] e2e per quickstart pass 3: refuse a punch as unlocatable, raise the threshold through
+- [X] T009 [P] e2e per quickstart pass 3: refuse a punch as unlocatable, raise the threshold through
   the route, retry the identical punch and confirm it is now judged against the new value, with no
   restart. Then confirm a caller without `COMPANY_SETTINGS` is refused the write.
 
@@ -60,27 +60,76 @@ The plan's four phases are load-bearing, not presentation:
 
 This phase changes no user-visible behaviour. Its output is a number.
 
-- [ ] T010 Add `PunchRefusal` and `enum PunchRefusalReason` to `prisma/schema.prisma` in the `hr`
+- [X] T010 Add `PunchRefusal` and `enum PunchRefusalReason` to `prisma/schema.prisma` in the `hr`
   schema per data-model.md. **No photo column** — plan D20 and research §4; a face-mismatch refusal
   means the system could not establish whose face it is, and retaining an unattributed biometric
   against a named employee is worse than the record it replaces. `faceMatchDistance` is kept because a
   number is not a biometric.
-- [ ] T011 Migration for T010 plus `ENABLE` + `FORCE` RLS and a `tenant_isolation` policy in
+- [X] T011 Migration for T010 plus `ENABLE` + `FORCE` RLS and a `tenant_isolation` policy in
   hand-authored SQL, never in `schema.prisma`.
-- [ ] T012 [P] RLS proof with the `NOSUPERUSER NOBYPASSRLS` probe role, following 016 and 017. This
+- [X] T012 [P] RLS proof with the `NOSUPERUSER NOBYPASSRLS` probe role, following 016 and 017. This
   table holds location and failed-verification facts about a named person; a policy asserted rather
   than proved is not adequate here.
-- [ ] T013 `PunchRefusalsService.record` in `src/hr/punch/punch-refusals.service.ts` per contracts
+- [X] T013 `PunchRefusalsService.record` in `src/hr/punch/punch-refusals.service.ts` per contracts
   Part 2.
-- [ ] T014 Call it from `punch.service.ts` wherever a punch **would** be refused, while still
+- [X] T014 Call it from `punch.service.ts` wherever a punch **would** be refused, while still
   recording the punch as an exception. Both happen in this phase — that is the point.
-- [ ] T015 [P] e2e per quickstart pass 7: confirm `PunchRefusal` rows accumulate while `PunchRecord`
+- [X] T015 [P] e2e per quickstart pass 7: confirm `PunchRefusal` rows accumulate while `PunchRecord`
   rows are still written.
 - [ ] T016 **Report the refusal rate to the client before phase 3 begins.** Not a code task. Phase 2
   exists to produce this number, and the client accepted the hard block's cost without one; delivering
   it while the decision is still reversible is the obligation this phase discharges.
 
 ---
+
+## Phases 1-2 implementation record, 2026-09-30
+
+**T001-T015 complete. T016 is not mine to discharge, and Phase 3 is gated on it.**
+
+### T016 is a client obligation, not a code task
+
+Phase 2 exists to produce one number: how often FR-013's hard block would fire. The client accepted
+that block's cost **without** such a number, and the task list says plainly that Phase 3 does not
+begin until they have seen one. `PunchRefusalsService.rateSince` produces it — refusals, punches, the
+percentage, and the breakdown by reason.
+
+It is a method rather than a query somebody writes once and loses, because the point is to show the
+figure while the decision is still reversible. **Nothing in Phase 3 should be built until that
+conversation has happened.**
+
+### What Phase 1 changed, and what it deliberately did not
+
+The accuracy allowance is **additive and absent-safe**: `?? 0`, so every client shipped today omits
+the field and gets exactly today's verdict. Both directions are tested, because under the hard
+refusal a wrongly widened fence accepts a punch from the wrong place and a wrongly narrowed one costs
+somebody a day.
+
+The allowance is extended only to a fix the company is willing to trust. A punch whose accuracy
+already exceeds the threshold gets **no** allowance — widening the fence by an accuracy that failed
+its own check would let the worst fixes buy the largest allowance, which is exactly backwards. That
+was not in the tasks; it fell out of writing the two rules next to each other.
+
+`punchAccuracyMaxMetres` is nullable and **not defaulted in the database**. Null means "this company
+has not decided", which is a different fact from "this company chose 50" — only the first should
+follow a change to the product default, and a defaulted column would make every company look as
+though it had made a decision nobody made.
+
+Read per request in the same call that already reads the payroll lock day, so a Super Admin raising
+the threshold takes effect on the next punch with no restart. That is what "configurable from the
+settings" has to mean to be useful, and an environment variable does not provide it.
+
+### Why the refusal reason is computed rather than inferred
+
+"Could not be located" and "located outside the fence" are different facts, and a distance alone
+cannot tell them apart. FR-013b has to return the failing check to the worker, so the reason is
+computed where the checks happen — not reconstructed later from the numbers.
+
+### No photo on a refusal
+
+Plan D20, and worth restating because it looks like missing evidence. A face-mismatch refusal means
+the system could not establish whose face it is; retaining an unattributed biometric against a named
+employee is worse than the exception record it replaces. `faceMatchDistance` is kept, because a number
+is not a biometric.
 
 ## Phase 3: The inversion (FR-012, FR-013, FR-013a, FR-013b, FR-013d, FR-015, FR-015a)
 

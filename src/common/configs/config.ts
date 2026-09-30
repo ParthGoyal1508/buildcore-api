@@ -224,6 +224,10 @@ const config: Config = {
     timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata',
   },
   workspace: {
+    punchAccuracyMaxMetresDefault: numberFromEnv(
+      process.env.WORKSPACE_PUNCH_ACCURACY_MAX_METRES,
+      50,
+    ),
     faceMatch: {
       // face-api's own documented default, and the threshold its published accuracy
       // numbers are quoted at (research.md §2). Env-overridable because the right

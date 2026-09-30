@@ -219,6 +219,20 @@ default. Company-configurable rather than a literal — Constitution Principle I
 (013 FR-027), descending. Company-configurable because the notes in circulation
 change by legislation (the ₹2000 note\'s withdrawal being the recent example),
 so this is not a literal inside the denomination service — Principle III.']
+  punchAccuracyMaxMetres Int [note: 'The worst GPS accuracy a punch may report and still be located, in metres
+(020 FR-012b).
+
+The client asked for this in those words — "configurable from the settings by super admin" —
+and an environment variable does not satisfy it: it needs a redeploy and it is the same for
+both companies.
+
+**Nullable rather than defaulted in the database.** Null means "this company has not decided",
+which is a different fact from "this company chose 50" — and only the first should follow a
+change to the product default. A column defaulted to 50 makes every company look as though it
+had made a decision nobody made.
+
+Deliberately **not** feature 013\'s `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
+different surface, different tolerance. Merging them means tuning one to fix the other.']
   hideCashTransactions Boolean [not null, default: false, note: 'Hides cash amounts and cash transactions across the application (019 FR-014).
 
 A **display** control, never a data operation — FR-017 is explicit that nothing is
@@ -989,8 +1003,20 @@ display is a cross-schema read and Principle I forbids that outright. The projec
 module receives type names from the settings module through an exported service
 method and joins them in memory. Written down because the missing relation looks
 like an oversight and is not.']
-  isMandatory Boolean [not null, default: true, note: 'FR-009 lets a project exist before its papers are complete; readiness is reported,
-never enforced at creation.']
+  isMandatory Boolean [not null, default: true, note: 'Whether a project **cannot be created** without a document of this kind (017 FR-007b,
+FR-009).
+
+**Reversed on 2026-09-16.** This comment used to read "FR-009 lets a project exist before its
+papers are complete; readiness is reported, never enforced at creation" — which the client\'s
+bug review item 3 made false. A mandatory kind now refuses the creation, naming every missing
+kind, and creating nothing.
+
+An **advisory** kind (false) is reported outstanding and blocks nothing. The two are counted
+separately in `ProjectDocumentReadiness` rather than together, so a reader can tell "we cannot
+start this project" from "we are still chasing paperwork".
+
+A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
+that would refuse every creation with no way to comply.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1101,6 +1127,7 @@ last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.'
   loans Loan [not null]
   taxDeclarations TaxDeclaration [not null]
   salaryAdvances SalaryAdvance [not null]
+  punchRefusals PunchRefusal [not null, note: '020 FR-013c: punches refused for this employee.']
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -1358,6 +1385,36 @@ Table HolidaySite {
   }
 }
 
+Table PunchRefusal {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  type PunchType [not null]
+  reason PunchRefusalReason [not null]
+  latitude Decimal [not null, note: 'Where they were, and how far from the fence. Evidence, so it is the **real** distance rather
+than one adjusted by the accuracy allowance.']
+  longitude Decimal [not null]
+  distanceMeters Decimal
+  accuracyMeters Int
+  faceMatchDistance Decimal [note: 'The face-match distance, when a comparison happened at all. A number, not a biometric.']
+  capturedAt DateTime [not null, note: 'When the punch was taken, and when it reached the server — a refused offline punch may arrive
+long after the moment it describes.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A punch that was refused, or in Phase 2 would have been (020 FR-013c).
+
+**Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
+system could not establish whose face it is — retaining an unattributed biometric against a named
+employee is worse than the exception record it replaces, and the photo would be evidence of
+nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
+number is not a biometric.
+
+This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
+punch at all — which is the point — so without this the refusal would leave no trace anywhere and
+a worker wrongly refused would have nothing to appeal to.'
+}
+
 Table PendingAttendanceCorrection {
   id String [pk]
   companyId String [not null]
@@ -1374,28 +1431,6 @@ and this table is in `hr`, and a foreign key across that boundary is the couplin
 Principle I forbids.']
   appliedAt DateTime
   createdAt DateTime [default: `now()`, not null]
-
-  Note: 'Append-only audit of every manual attendance edit (FR-010). Never updated.
-A manual attendance correction that has been submitted and not yet applied
-(016 FR-012, plan D15).
-
-**Why this table exists at all.** The correction enters the approval chain, so its
-intended values have to survive between submission and the chain completing — and the
-spine cannot hold them. `ApprovalInstance` carries no payload by design: it stores an
-opaque `(entityType, entityId)` pair and never dereferences it, which is what lets the
-spine know nothing about the modules it serves (016 research §1). So the payload lives
-here, in `hr`, owned by the module that understands it, and the spine\'s `entityId`
-points at a row in this table.
-
-Neither the plan nor the task list named this table; it was found during
-implementation on 2026-09-30, because "submit to ApprovalsService and return the
-pending instance" has nowhere to keep the correction otherwise.
-
-Rows are **not** the audit trail. `AttendanceModification` is, and it is written only
-when a correction is applied (FR-012b, plan D15) — a rejected correction modified
-nothing, and logging it as a modification would make the log disagree with the
-attendance. A rejected correction stays visible as an approval instance, which is
-where it belongs.'
 }
 
 Table ExitClearanceWaiver {
@@ -4067,6 +4102,13 @@ Enum HolidayType {
   company
 }
 
+Enum PunchRefusalReason {
+  outside_geofence
+  unlocatable
+  face_mismatch
+  no_face_detected
+}
+
 Enum ExitReason {
   resignation
   termination
@@ -4567,6 +4609,8 @@ Ref: EmployeeDocument.employeeId > Employee.id [delete: Cascade]
 Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 
 Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
+
+Ref: PunchRefusal.employeeId > Employee.id [delete: Cascade]
 
 Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
 

@@ -87,7 +87,9 @@ async function main() {
     throw new Error(`No account ${EMAIL} in this database — aborting.`);
   }
 
-  const employee = await prisma.employee.findFirst({ where: { userId: user.id } });
+  const employee = await prisma.employee.findFirst({
+    where: { userId: user.id },
+  });
   if (!employee) {
     throw new Error(
       `${EMAIL} has no Employee record. Run prisma/wire-prod-testuser.ts first — ` +
@@ -103,25 +105,53 @@ async function main() {
   console.log('--- TARGET ---');
   console.log('account :', user.email);
   console.log('employee:', employee.employeeCode);
-  console.log('company :', company ? `${company.name} (${company.shortCode})` : '(unknown)');
+  console.log(
+    'company :',
+    company ? `${company.name} (${company.shortCode})` : '(unknown)',
+  );
   console.log('active  :', employee.isActive);
 
-  const currently = (v: unknown) => (v === null || v === undefined ? 'NULL' : String(v));
+  const currently = (v: unknown) =>
+    v === null || v === undefined ? 'NULL' : String(v);
 
   console.log('\n--- SALARY: CURRENT -> PROPOSED ---');
   const rows: [string, string, string][] = [
     ['basic', currently(employee.basic), String(SALARY.basic)],
     ['hra', currently(employee.hra), String(SALARY.hra)],
-    ['conveyanceAllowance', currently(employee.conveyanceAllowance), String(SALARY.conveyanceAllowance)],
-    ['siteAllowance', currently(employee.siteAllowance), String(SALARY.siteAllowance)],
-    ['specialAllowance', currently(employee.specialAllowance), String(SALARY.specialAllowance)],
-    ['hoursPerDay', currently(employee.hoursPerDay), String(SALARY.hoursPerDay)],
+    [
+      'conveyanceAllowance',
+      currently(employee.conveyanceAllowance),
+      String(SALARY.conveyanceAllowance),
+    ],
+    [
+      'siteAllowance',
+      currently(employee.siteAllowance),
+      String(SALARY.siteAllowance),
+    ],
+    [
+      'specialAllowance',
+      currently(employee.specialAllowance),
+      String(SALARY.specialAllowance),
+    ],
+    [
+      'hoursPerDay',
+      currently(employee.hoursPerDay),
+      String(SALARY.hoursPerDay),
+    ],
     ['calculationMode', currently(employee.calculationMode), 'monthly'],
     ['pfApplicable', currently(employee.pfApplicable), 'true'],
     ['esicApplicable', currently(employee.esicApplicable), 'true'],
     ['uan', currently(employee.uan), employee.uan ?? '(generated placeholder)'],
-    ['pfNumber', currently(employee.pfNumber), employee.pfNumber ?? '(generated placeholder)'],
-    ['esicNumber', currently(employee.esicNumber), employee.esicNumber ?? '(generated placeholder)'],
+    [
+      'pfNumber',
+      currently(employee.pfNumber),
+      employee.pfNumber ?? '(generated placeholder)',
+    ],
+    [
+      'esicNumber',
+      currently(employee.esicNumber),
+      employee.esicNumber ?? '(generated placeholder)',
+    ],
   ];
   for (const [field, before, after] of rows) {
     console.log(`  ${field.padEnd(22)} ${before.padEnd(14)} -> ${after}`);
@@ -183,7 +213,9 @@ async function main() {
     },
   });
 
-  console.log(`\n--- APPLIED to ${employee.employeeCode} (no rows deleted) ---`);
+  console.log(
+    `\n--- APPLIED to ${employee.employeeCode} (no rows deleted) ---`,
+  );
   console.log(
     'Next: generate a payroll run for the current period from /dashboard/hr/payroll, ' +
       'then process it — the register, deduction report and challans all read from a ' +

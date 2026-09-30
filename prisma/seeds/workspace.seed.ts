@@ -69,7 +69,9 @@ export async function seedWorkspaceFixtures(
   accountLabel = 'admin',
 ): Promise<void> {
   const company =
-    (await prisma.company.findFirst({ where: { shortCode: DEMO_SHORT_CODE } })) ??
+    (await prisma.company.findFirst({
+      where: { shortCode: DEMO_SHORT_CODE },
+    })) ??
     (await prisma.company.create({
       data: {
         name: 'Demo Constructions',
@@ -104,7 +106,10 @@ export async function seedWorkspaceFixtures(
       },
     }));
 
-  const latitude = numberFromEnv(process.env.SEED_SITE_LATITUDE, DEFAULT_LATITUDE);
+  const latitude = numberFromEnv(
+    process.env.SEED_SITE_LATITUDE,
+    DEFAULT_LATITUDE,
+  );
   const longitude = numberFromEnv(
     process.env.SEED_SITE_LONGITUDE,
     DEFAULT_LONGITUDE,
@@ -178,7 +183,12 @@ export async function seedWorkspaceFixtures(
   } else {
     await prisma.employee.update({
       where: { id: existingEmployee.id },
-      data: { companyId: company.id, siteId: site.id, shiftId: shift.id, employeeCode },
+      data: {
+        companyId: company.id,
+        siteId: site.id,
+        shiftId: shift.id,
+        employeeCode,
+      },
     });
   }
 
