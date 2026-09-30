@@ -175,7 +175,8 @@ export function summarise(
     totalLateMinutes: days.reduce((a, d) => a + d.lateMinutes, 0),
     earlyDepartureDays: days.filter((d) => d.earlyDepartureMinutes > 0).length,
     shortHoursDays: days.filter((d) => d.shortHours > 0).length,
-    daysWithoutShift: days.filter((d) => d.marker === 'no_shift_assigned').length,
+    daysWithoutShift: days.filter((d) => d.marker === 'no_shift_assigned')
+      .length,
     daysWithoutPunchTimes: days.filter((d) => d.marker === 'no_punch_times')
       .length,
     repeatLateComer: lateDays >= repeatThreshold,

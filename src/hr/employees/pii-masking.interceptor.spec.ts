@@ -9,7 +9,7 @@ const ctx = () =>
   ({
     getHandler: () => () => undefined,
     getClass: () => class {},
-  }) as never;
+  } as never);
 
 const run = async (interceptor: PiiMaskingInterceptor, body: unknown) =>
   lastValueFrom(
@@ -68,7 +68,10 @@ describe('PiiMaskingInterceptor', () => {
 
   it('passes non-PII fields through untouched', async () => {
     const d = new Date('2026-01-01T00:00:00.000Z');
-    const out = await run(interceptor, { employeeCode: 'ACME-0001', joined: d });
+    const out = await run(interceptor, {
+      employeeCode: 'ACME-0001',
+      joined: d,
+    });
     expect(out).toEqual({ employeeCode: 'ACME-0001', joined: d });
   });
 

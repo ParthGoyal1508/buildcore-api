@@ -49,6 +49,7 @@ import {
   TakeEffectGate,
 } from './approval.types';
 import { ChainsService } from './chains.service';
+import { actorNameOf } from '../common/actor-name';
 
 /** The event a module listens for to learn its item finished the chain (T013). */
 export const APPROVAL_COMPLETED_EVENT = 'approval.completed';
@@ -1128,15 +1129,11 @@ export class ApprovalService {
 
     // Deactivated users are included deliberately (FR-008): history that cannot name who
     // acted is not history. `User` is a `shared` table, the same schema as the spine.
-    return new Map(
-      rows.map((u) => [
-        u.id,
-        u.displayName?.trim() ||
-          [u.firstname, u.lastname].filter(Boolean).join(' ').trim() ||
-          u.username ||
-          u.email,
-      ]),
-    );
+    //
+    // The fallback chain itself lives in `src/common/actor-name.ts`, shared with 016's
+    // attendance-modification view — the same actor must not appear under two different
+    // names on two screens.
+    return new Map(rows.map((u) => [u.id, actorNameOf(u)]));
   }
 
   /**

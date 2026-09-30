@@ -190,8 +190,8 @@ export class ReimbursementService {
     const receiptRef = dto.receipt
       ? await this.storeReceipt(dto.receipt)
       : dto.receiptRef !== undefined
-        ? dto.receiptRef
-        : existing.receiptRef;
+      ? dto.receiptRef
+      : existing.receiptRef;
     const category = await this.categories.requireCategory(
       caller.rls,
       employee.companyId,

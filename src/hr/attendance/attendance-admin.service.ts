@@ -3,11 +3,12 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   AuditAction,
   AuditEntityType,
@@ -15,9 +16,18 @@ import {
   PunchSource,
   PunchType,
 } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { randomUUID } from 'crypto';
+
 import { SLOT_HR } from '../../approvals/approval-slots';
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalCompletedEvent,
+  ApprovalService,
+} from '../../approvals/approvals.service';
+import { ACTION_ATTENDANCE_CORRECTION } from '../../approvals/default-chains';
 import { ChainsService } from '../../approvals/chains.service';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
@@ -90,6 +100,8 @@ export class AttendanceAdminService {
   private readonly timeZone: string;
   private readonly hrPayroll: HrPayrollConfig;
 
+  private readonly logger = new Logger(AttendanceAdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly companies: CompaniesService,
@@ -105,6 +117,9 @@ export class AttendanceAdminService {
     // 016 FR-016: which role *is* HR is answered by the chain's slot mapping, not by a
     // permission — there is deliberately no HR permission to check.
     private readonly chains: ChainsService,
+    // 016 FR-012: a manual correction enters the chain rather than taking effect in one
+    // step. `hr` submits and listens; it never reads a spine table (Principle I).
+    private readonly approvals: ApprovalService,
     private readonly events: EventEmitter2,
     configService: ConfigService,
   ) {
@@ -136,6 +151,104 @@ export class AttendanceAdminService {
   }
 
   /** FR-071 / FR-072 as a rejection; see `isFutureDate` for the rule itself. */
+  /**
+   * Every gate a manual correction must pass, applied at **submission** (016 T076).
+   *
+   * Factored out of `mark` so submission and application cannot disagree about what is
+   * allowed. Checking at submission rather than at apply is what stops a reviewer approving
+   * a correction that then fails: a date in a locked payroll period should be refused to
+   * the person typing it, while they are still looking at the screen.
+   */
+  private async validateCorrection(
+    caller: Caller,
+    dto: MarkAttendanceDto,
+  ): Promise<{ id: string; companyId: string; name?: string | null }> {
+    if (!dto.inTime && !dto.outTime && !dto.statusOverride) {
+      throw new BadRequestException(
+        'Provide at least one of inTime, outTime or statusOverride.',
+      );
+    }
+    if (dto.inTime && dto.outTime && dto.outTime < dto.inTime) {
+      throw new BadRequestException('outTime cannot precede inTime.');
+    }
+
+    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: dto.employeeId },
+        select: { id: true, companyId: true },
+      }),
+    );
+    if (!employee) throw new NotFoundException('Employee not found');
+
+    this.assertNotFuture(dto.date);
+
+    const date = new Date(`${dto.date}T00:00:00.000Z`);
+    const lockDay = await this.companies.getPayrollLockDay(employee.companyId);
+    if (isPayrollLocked(date, lockDay, new Date(), this.timeZone)) {
+      // 423 Locked, matching how the self-service path reports the same rule.
+      throw new BadRequestException({
+        statusCode: 423,
+        message:
+          'That date falls in a payroll period that is already locked (FR-010).',
+      });
+    }
+
+    // 016 FR-016. A run under review has been computed from this attendance and is
+    // sitting in front of approvers; a site user quietly adjusting its inputs is exactly
+    // the thing the chain exists to prevent. HR keeps the right because corrections are
+    // real and someone has to be able to make them.
+    const underReview = await this.payrollSchedule.isPeriodUnderReview(
+      employee.companyId,
+      date,
+    );
+    if (underReview) {
+      const hrRoleId = await this.chains.resolveSlot(
+        caller.rls,
+        employee.companyId,
+        SLOT_HR,
+      );
+      const isHr = hrRoleId !== null && caller.roleIds.includes(hrRoleId);
+      if (!isHr) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          message:
+            hrRoleId === null
+              ? 'Attendance for this period is under payroll review, and no role has ' +
+                'been mapped to HR for this company, so nobody can edit it. An ' +
+                'administrator must map the HR slot in settings.'
+              : 'Attendance for this period is under payroll review. Only HR may edit ' +
+                'it until the run is approved or returned.',
+          code:
+            hrRoleId === null
+              ? 'APPROVAL_SLOT_UNMAPPED'
+              : 'ATTENDANCE_UNDER_PAYROLL_REVIEW',
+        });
+      }
+    }
+
+    await this.employeeDocuments.assertMandatoryDocsComplete(
+      employee.id,
+      employee.companyId,
+    );
+
+    return employee;
+  }
+
+  /** The employee a correction belongs to, with no gate applied. */
+  private async requireEmployee(
+    caller: Caller,
+    employeeId: string,
+  ): Promise<{ id: string; companyId: string }> {
+    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: employeeId },
+        select: { id: true, companyId: true },
+      }),
+    );
+    if (!employee) throw new NotFoundException('Employee not found');
+    return employee;
+  }
+
   private assertNotFuture(date: string): void {
     if (this.isFutureDate(date)) {
       throw new BadRequestException(
@@ -235,76 +348,166 @@ export class AttendanceAdminService {
    * the mandatory-document check — because an admin route that bypassed them would
    * make both trivially avoidable.
    */
+  /**
+   * Submits a manual correction into the approval chain (016 FR-012, plan D15).
+   *
+   * **This is what `POST /attendance` now calls.** The path and the DTO are unchanged;
+   * what changed is what comes back — a pending approval instance rather than an applied
+   * row. Until the chain completes, the attendance is untouched, and the employee's own
+   * view shows nothing (FR-009c on the web side depends on that being true here).
+   *
+   * Every gate `mark` applies is applied **here, at submission**, not deferred to apply
+   * time. Validating at submission is what stops a reviewer approving something that will
+   * then fail: a correction into a locked payroll period should be refused to the person
+   * who typed it, while they are still looking at the screen, not three approvals later.
+   *
+   * The payroll lock and the chain are **independent** gates and both remain (FR-016,
+   * T076). An HR correction during payroll review passes the first and still enters the
+   * second; neither subsumes the other.
+   */
+  async submitCorrection(
+    caller: Caller,
+    dto: MarkAttendanceDto,
+  ): Promise<{ approvalInstanceId: string; state: string }> {
+    const employee = await this.validateCorrection(caller, dto);
+
+    // Generated here rather than by the database, so the spine can be given a real
+    // entityId at submit while the row it points at is written immediately afterwards. The
+    // alternative — submit, create, then retarget — would need a new spine method for the
+    // retarget, and the spine's whole point is that modules do not reach into it.
+    const correctionId = randomUUID();
+
+    const instance = await this.approvals.submit({
+      companyId: employee.companyId,
+      actionType: ACTION_ATTENDANCE_CORRECTION,
+      entityType: ACTION_ATTENDANCE_CORRECTION,
+      entityId: correctionId,
+      originatorUserId: caller.userId,
+      subject: `${employee.name ?? employee.id} — ${
+        dto.date
+      }, manual attendance correction`,
+      href: `/hr/attendance?employeeId=${dto.employeeId}&date=${dto.date}`,
+      viewPermission: Permission.ATTENDANCE,
+    });
+
+    // If this fails after the submit succeeded, the result is an approval instance whose
+    // entity does not exist. `onApprovalCompleted` finds nothing and returns, so nothing is
+    // applied on the strength of a missing correction, and the reconciliation sweep reports
+    // the orphan. That is the right failure: an item nobody can approve into effect.
+    await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.pendingAttendanceCorrection.create({
+        data: {
+          id: correctionId,
+          companyId: employee.companyId,
+          employeeId: dto.employeeId,
+          date: new Date(`${dto.date}T00:00:00.000Z`),
+          payload: dto as unknown as Prisma.InputJsonValue,
+          submittedByUserId: caller.userId,
+          approvalInstanceId: instance.instanceId,
+        },
+      }),
+    );
+
+    return { approvalInstanceId: instance.instanceId, state: instance.state };
+  }
+
+  /**
+   * Applies a correction whose chain has completed (016 FR-012, T074).
+   *
+   * **Idempotent**, because it will be redelivered: the event bus offers no once-only
+   * guarantee and a decision can reach completion through more than one path. `appliedAt`
+   * is the guard — a row already stamped is skipped, so applying the same event twice
+   * writes once.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_ATTENDANCE_CORRECTION) return;
+
+    try {
+      const pending = await withRlsContext(
+        this.prisma,
+        { isSuperAdmin: true },
+        (tx) =>
+          tx.pendingAttendanceCorrection.findUnique({
+            where: { approvalInstanceId: event.instanceId },
+          }),
+      );
+      if (!pending || pending.appliedAt) return;
+
+      const dto = pending.payload as unknown as MarkAttendanceDto;
+      await this.mark(
+        {
+          userId: pending.submittedByUserId,
+          roleIds: [],
+          // `AuditLogEntry.ipAddress` is a required column and there is no request behind
+          // an application: the chain completed on somebody else's decision, possibly
+          // minutes later. Following `payroll-schedule.service.ts`'s convention of naming
+          // the system path rather than passing an empty string, so the audit row says what
+          // actually caused it.
+          ipAddress: 'system/attendance-correction',
+          rls: { isSuperAdmin: false, companyId: pending.companyId },
+        } as Caller,
+        dto,
+        { skipGates: true },
+      );
+
+      await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.pendingAttendanceCorrection.update({
+          where: { id: pending.id },
+          data: { appliedAt: new Date() },
+        }),
+      );
+    } catch (error) {
+      // A handler that throws takes nothing with it — the decision is already committed
+      // and the spine is authoritative — so this is logged rather than rethrown, and the
+      // drift is what the reconciliation sweep exists to report. Same reasoning as
+      // `attendance-exceptions.service.ts`.
+      this.logger.error(
+        `Approval ${event.instanceId} completed but its attendance correction could ` +
+          `not be applied: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  /**
+   * Applies a correction immediately, writing the `AttendanceModification` row.
+   *
+   * **Two callers, and the difference matters** (016 T077):
+   *
+   * 1. `onApprovalCompleted` above, once a chain has finished. Gates were already checked
+   *    at submission, so it passes `skipGates`.
+   * 2. `attendance-import.service.ts`'s commit, which is **deliberately exempt from the
+   *    chain**. A month's CSV for 150 employees is several thousand rows; raising a chain
+   *    item per row would create thousands of pending approvals that nobody will ever walk
+   *    through, and the import already has its own human gate — the two-phase
+   *    validate-then-commit flow, where a person reads the validation report before
+   *    committing. That review is the approval. Every imported row is still logged as a
+   *    modification (FR-012a, FR-012e: the log does not depend on whether approval was
+   *    required), so the audit and the employee's own view are complete either way.
+   *
+   * It is no longer reachable from `POST /attendance` — that route submits instead.
+   */
   async mark(
     caller: Caller,
     dto: MarkAttendanceDto,
+    options: { skipGates?: boolean } = {},
   ): Promise<{ employeeId: string; date: string }> {
-    if (!dto.inTime && !dto.outTime && !dto.statusOverride) {
-      throw new BadRequestException(
-        'Provide at least one of inTime, outTime or statusOverride.',
-      );
-    }
-    if (dto.inTime && dto.outTime && dto.outTime < dto.inTime) {
-      throw new BadRequestException('outTime cannot precede inTime.');
-    }
-
-    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.findFirst({
-        where: { id: dto.employeeId },
-        select: { id: true, companyId: true },
-      }),
-    );
-    if (!employee) throw new NotFoundException('Employee not found');
-
-    this.assertNotFuture(dto.date);
+    const employee = options.skipGates
+      ? await this.requireEmployee(caller, dto.employeeId)
+      : await this.validateCorrection(caller, dto);
 
     const date = new Date(`${dto.date}T00:00:00.000Z`);
-    const lockDay = await this.companies.getPayrollLockDay(employee.companyId);
-    if (isPayrollLocked(date, lockDay, new Date(), this.timeZone)) {
-      // 423 Locked, matching how the self-service path reports the same rule.
-      throw new BadRequestException({
-        statusCode: 423,
-        message:
-          'That date falls in a payroll period that is already locked (FR-010).',
-      });
-    }
 
-    // 016 FR-016. A run under review has been computed from this attendance and is
-    // sitting in front of approvers; a site user quietly adjusting its inputs is exactly
-    // the thing the chain exists to prevent. HR keeps the right because corrections are
-    // real and someone has to be able to make them.
+    // 016 FR-017's trigger. Recomputed here rather than passed down from the gate, because
+    // an application arriving through the chain is a *later* moment than its submission and
+    // a run may have entered review in between — which is precisely when the approvers'
+    // figures need voiding.
     const underReview = await this.payrollSchedule.isPeriodUnderReview(
       employee.companyId,
       date,
-    );
-    if (underReview) {
-      const hrRoleId = await this.chains.resolveSlot(
-        caller.rls,
-        employee.companyId,
-        SLOT_HR,
-      );
-      const isHr = hrRoleId !== null && caller.roleIds.includes(hrRoleId);
-      if (!isHr) {
-        throw new ForbiddenException({
-          statusCode: 403,
-          message:
-            hrRoleId === null
-              ? 'Attendance for this period is under payroll review, and no role has ' +
-                'been mapped to HR for this company, so nobody can edit it. An ' +
-                'administrator must map the HR slot in settings.'
-              : 'Attendance for this period is under payroll review. Only HR may edit ' +
-                'it until the run is approved or returned.',
-          code:
-            hrRoleId === null
-              ? 'APPROVAL_SLOT_UNMAPPED'
-              : 'ATTENDANCE_UNDER_PAYROLL_REVIEW',
-        });
-      }
-    }
-
-    await this.employeeDocuments.assertMandatoryDocsComplete(
-      employee.id,
-      employee.companyId,
     );
 
     const before = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -422,6 +625,10 @@ export class AttendanceAdminService {
 
     const where: Prisma.AttendanceModificationWhereInput = {
       employeeId: query.employeeId ?? { in: employees.map((e) => e.id) },
+      // 016 FR-012d. Spread as an optional key rather than `actorUserId: query.actorUserId`
+      // — an explicit `undefined` would be a filter on nothing in some Prisma versions and
+      // a no-op in others, and the difference is an audit silently returning everything.
+      ...(query.actorUserId ? { actorUserId: query.actorUserId } : {}),
       ...(query.from || query.to
         ? {
             date: {

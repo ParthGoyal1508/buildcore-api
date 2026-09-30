@@ -47,6 +47,22 @@ const TIME_ONLY = /^([01]\d|2[0-3]):[0-5]\d$/;
  * whoever uploaded it has no way to know which rows landed, and re-uploading
  * double-counts.
  *
+ * ## Deliberately exempt from the approval chain (016 T077)
+ *
+ * `POST /attendance` now submits a correction into the Site / Employer → HR → Director
+ * chain (016 FR-012). **This path does not, and that is a decision rather than an
+ * oversight.** A month's CSV for 150 employees is several thousand rows; one chain item per
+ * row would create thousands of pending approvals nobody will ever walk through, and an
+ * approval queue nobody can finish is an approval gate in name only.
+ *
+ * The import already has its own human gate: the two explicit phases below. A person reads
+ * the validation report and then decides to commit. That review is the approval, and it is
+ * a better-shaped one than three thousand individual decisions.
+ *
+ * Every imported row is still written to `AttendanceModification`, because FR-012e requires
+ * the log whether or not approval was required — so the audit and the affected employee's
+ * own view are complete either way.
+ *
  * Commit goes through the same `AttendanceAdminService.mark()` the manual screen
  * uses, so imported rows obey the payroll lock, the mandatory-document gate, and
  * write the same Modifications audit entries. An import that bypassed those would

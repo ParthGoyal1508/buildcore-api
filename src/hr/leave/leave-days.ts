@@ -81,7 +81,9 @@ export function zonedDayBounds(
   timeZone: string,
 ): { start: Date; end: Date } {
   const start = zonedMidnight(dateOnly, timeZone);
-  const nextDay = toDateOnly(new Date(parseDateOnly(dateOnly).getTime() + MS_PER_DAY));
+  const nextDay = toDateOnly(
+    new Date(parseDateOnly(dateOnly).getTime() + MS_PER_DAY),
+  );
   return { start, end: zonedMidnight(nextDay, timeZone) };
 }
 
@@ -99,7 +101,10 @@ function zonedMidnight(dateOnly: string, timeZone: string): Date {
   let candidate = utcMidnight;
   for (let pass = 0; pass < 2; pass += 1) {
     const shown = new Date(
-      `${zonedDateOnly(candidate, timeZone)}T${zonedTimeOnly(candidate, timeZone)}Z`,
+      `${zonedDateOnly(candidate, timeZone)}T${zonedTimeOnly(
+        candidate,
+        timeZone,
+      )}Z`,
     );
     const offset = shown.getTime() - candidate.getTime();
     candidate = new Date(utcMidnight.getTime() - offset);

@@ -1022,6 +1022,7 @@ last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.'
   documents EmployeeDocument [not null]
   transfers EmployeeTransfer [not null]
   attendanceModifications AttendanceModification [not null]
+  pendingAttendanceCorrections PendingAttendanceCorrection [not null]
   exitRecords ExitRecord [not null]
   payrollLineItems PayrollLineItem [not null]
   loans Loan [not null]
@@ -1284,6 +1285,46 @@ Table HolidaySite {
   }
 }
 
+Table PendingAttendanceCorrection {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  date DateTime [not null]
+  payload Json [not null, note: 'The `MarkAttendanceDto` as submitted — times, status override, remarks. Stored whole
+rather than as columns: this is a payload in transit, and mirroring the DTO\'s fields
+here would mean a schema change every time the DTO grew a field.']
+  submittedByUserId String [not null, note: 'Who submitted it. Becomes `AttendanceModification.actorUserId` on apply, so the
+employee sees the person who asked for the change and not the person who approved it.']
+  approvalInstanceId String [unique, not null, note: 'The spine instance governing it. Not a relation: `ApprovalInstance` is in `shared`
+and this table is in `hr`, and a foreign key across that boundary is the coupling
+Principle I forbids.']
+  appliedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'Append-only audit of every manual attendance edit (FR-010). Never updated.
+A manual attendance correction that has been submitted and not yet applied
+(016 FR-012, plan D15).
+
+**Why this table exists at all.** The correction enters the approval chain, so its
+intended values have to survive between submission and the chain completing — and the
+spine cannot hold them. `ApprovalInstance` carries no payload by design: it stores an
+opaque `(entityType, entityId)` pair and never dereferences it, which is what lets the
+spine know nothing about the modules it serves (016 research §1). So the payload lives
+here, in `hr`, owned by the module that understands it, and the spine\'s `entityId`
+points at a row in this table.
+
+Neither the plan nor the task list named this table; it was found during
+implementation on 2026-09-30, because "submit to ApprovalsService and return the
+pending instance" has nowhere to keep the correction otherwise.
+
+Rows are **not** the audit trail. `AttendanceModification` is, and it is written only
+when a correction is applied (FR-012b, plan D15) — a rejected correction modified
+nothing, and logging it as a modification would make the log disagree with the
+attendance. A rejected correction stays visible as an approval instance, which is
+where it belongs.'
+}
+
 Table AttendanceModification {
   id String [pk]
   employeeId String [not null]
@@ -1293,9 +1334,15 @@ Table AttendanceModification {
   after Json [not null]
   reason String
   createdAt DateTime [default: `now()`, not null]
-  employee Employee [not null]
+  employee Employee [not null, note: '**The one honest caveat on FR-012b\'s "immutable and not deletable"** (016 T081).
 
-  Note: 'Append-only audit of every manual attendance edit (FR-010). Never updated.'
+`onDelete: Cascade` means hard-deleting an employee deletes their modification
+history with them, which sits awkwardly beside a requirement calling the log
+append-only. It is left as a cascade deliberately: breaking it would strand rows
+against an employee who no longer exists, which is worse than losing them with her.
+Soft-delete is this product\'s norm and no live path hard-deletes an employee, so
+nothing reaches this today — but "append-only" should not be read as "survives
+everything", and this is where that is written down.']
 }
 
 Table ExitRecord {
@@ -4357,6 +4404,8 @@ Ref: EmployeeDocument.employeeId > Employee.id [delete: Cascade]
 Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 
 Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
+
+Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
 
 Ref: AttendanceModification.employeeId > Employee.id [delete: Cascade]
 

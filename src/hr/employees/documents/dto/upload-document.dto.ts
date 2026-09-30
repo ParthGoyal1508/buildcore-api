@@ -15,7 +15,9 @@ import {
  * encryption and storage path is identical regardless of what is being uploaded.
  */
 export class UploadEmployeeDocumentDto {
-  @ApiProperty({ description: '`settings.DocumentType.id` this document satisfies.' })
+  @ApiProperty({
+    description: '`settings.DocumentType.id` this document satisfies.',
+  })
   @IsString()
   @IsNotEmpty()
   documentTypeId: string;
@@ -39,7 +41,8 @@ export class UploadEmployeeDocumentDto {
   documentNumber?: string;
 
   @ApiPropertyOptional({
-    description: 'YYYY-MM-DD. Required when the document type sets `hasExpiry`.',
+    description:
+      'YYYY-MM-DD. Required when the document type sets `hasExpiry`.',
   })
   @IsOptional()
   @IsDateString()

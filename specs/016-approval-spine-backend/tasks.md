@@ -1114,34 +1114,34 @@ The real work of bug 2. There is no `my/attendance` controller; the employee's o
 `GET /my/punch/history` (`punch.controller.ts:91`), which returns `AttendanceMonth` — every date with
 its computed status, and nothing about how that status came to be.
 
-- [ ] T064 [US3] Extend `AttendanceMonth`'s per-day shape in `src/hr/attendance/` with
+- [X] T064 [US3] Extend `AttendanceMonth`'s per-day shape in `src/hr/attendance/` with
   `modifications: Array<{ actorName, at, before, after, reason }>` per contracts Part 3. Additive, so
   the web schema takes it with `.default([])` and a client deployed ahead of the server renders
   today's view.
-- [ ] T065 [US3] `AttendanceHistoryService.getMonthHistory` resolves them in **one** query for the
+- [X] T065 [US3] `AttendanceHistoryService.getMonthHistory` resolves them in **one** query for the
   whole month from `hr.AttendanceModification`, joined in memory against the days it already builds.
   Never per day — `@@index([employeeId, date])` is already the access path, and this is the same N+1
   the Risks table names for `statesOf`.
-- [ ] T066 [US3] Resolve `actorUserId` to the actor's **name**, not the id. The requirement is that
+- [X] T066 [US3] Resolve `actorUserId` to the actor's **name**, not the id. The requirement is that
   the employee can see who changed their attendance, and a cuid does not tell them that. Same argument
   as 017's FR-009 refusal naming labels.
-- [ ] T067 [P] [US3] Unit test: a modified day carries its actor's name, time, before, after and
+- [X] T067 [P] [US3] Unit test: a modified day carries its actor's name, time, before, after and
   reason; an unmodified day carries an empty array; and the month costs one modification query
   regardless of how many days were modified.
-- [ ] T068 [P] [US3] e2e: an admin corrects an employee-day, then the **employee's own** history shows
+- [X] T068 [P] [US3] e2e: an admin corrects an employee-day, then the **employee's own** history shows
   the modification with the actor's name. This is the client's sentence — *"it should also reflect in
   the attendance of the affected employee"* — as one assertion.
-- [ ] T069 [US3] Note in the task's closing comment that `reason` is free text written by an
+- [X] T069 [US3] Note in the task's closing comment that `reason` is free text written by an
   administrator who did not know the employee would read it. No code change; it is a consequence worth
   recording once rather than discovering through a complaint.
 
 ### FR-012d — the audit can ask what one person changed (plan D16)
 
-- [ ] T070 [US3] Add `actorUserId?` to `ModificationsQueryDto` in
+- [X] T070 [US3] Add `actorUserId?` to `ModificationsQueryDto` in
   `src/hr/attendance/dto/mark-attendance.dto.ts` with a validator, and the matching `where` clause in
   `AttendanceAdminService.modifications`. One field and one clause; an audit that cannot ask "what did
   this person change" answers the wrong half of the question.
-- [ ] T071 [P] [US3] Unit test for the filter, including that it composes with the existing
+- [X] T071 [P] [US3] Unit test for the filter, including that it composes with the existing
   `employeeId` and date-range filters rather than replacing them.
 
 ### FR-012 — the correction enters the chain (plan D15)
@@ -1149,40 +1149,40 @@ its computed status, and nothing about how that status came to be.
 **Behaviour change on a shipped route.** `POST /attendance` currently applies a correction
 immediately, subject to the payroll lock.
 
-- [ ] T072 [US1] Register a chain action for the manual attendance correction, reusing the existing
+- [X] T072 [US1] Register a chain action for the manual attendance correction, reusing the existing
   `ACTION_ATTENDANCE_EXCEPTION` key in `src/approvals/default-chains.ts` rather than renaming it.
   Renaming means migrating live instances and slot mappings for a vocabulary improvement; the key
   becomes slightly inaccurate and that is the cheaper error. Record the mismatch in a comment so it
   reads as a decision.
-- [ ] T073 [US1] `AttendanceAdminService.mark` submits to `ApprovalsService` and returns the pending
+- [X] T073 [US1] `AttendanceAdminService.mark` submits to `ApprovalsService` and returns the pending
   instance instead of the applied row. The path and the DTO are unchanged; what changes is what comes
   back.
-- [ ] T074 [US1] Move the write into the `approval.completed` handler, which must be **idempotent** —
+- [X] T074 [US1] Move the write into the `approval.completed` handler, which must be **idempotent** —
   the Risks table's "two writes, one boundary" already requires this of every consumer.
-- [ ] T075 [US1] Write the `AttendanceModification` row **on apply, not on submit**. A rejected
+- [X] T075 [US1] Write the `AttendanceModification` row **on apply, not on submit**. A rejected
   correction modified nothing, and logging it as a modification would make the log disagree with the
   attendance. A rejected correction lives as an approval instance, which is correct.
-- [ ] T076 [US1] Keep the payroll lock (FR-016) and the chain as **independent** gates. An HR
+- [X] T076 [US1] Keep the payroll lock (FR-016) and the chain as **independent** gates. An HR
   correction during payroll review passes the first and still enters the second; neither subsumes the
   other.
-- [ ] T077 **CRITICAL** [US1] Find every consumer of `POST /attendance` and of
+- [X] T077 **CRITICAL** [US1] Find every consumer of `POST /attendance` and of
   `AttendanceAdminService.mark` before this ships. The import commit path
   (`attendance-import.service.ts`) is the one that will be missed — it calls the **service**, not the
   route, and its own comment says the Modifications audit applies to it. Decide explicitly whether a
   bulk import raises one chain item per row or is exempt, and say which in the task's closing note. An
   import that silently creates a thousand pending approvals is a different product.
-- [ ] T078 [P] [US1] e2e: raise a correction for a day with no accepted punch, walk it through all
+- [X] T078 [P] [US1] e2e: raise a correction for a day with no accepted punch, walk it through all
   three levels, and confirm the attendance shows the correct state and actor after each — and that the
   affected employee can see the modification once applied (US1 acceptance scenario 3a).
-- [ ] T079 [P] [US1] Unit test: a **rejected** correction leaves no `AttendanceModification` row and
+- [X] T079 [P] [US1] Unit test: a **rejected** correction leaves no `AttendanceModification` row and
   the day is not counted present.
 
 ### FR-012b — the log's immutability, and its one honest caveat
 
-- [ ] T080 [US3] Confirm no route deletes or updates an `AttendanceModification`, and add none. The
+- [X] T080 [US3] Confirm no route deletes or updates an `AttendanceModification`, and add none. The
   requirement holds by construction for every path a user has; this task is to verify that and record
   it, not to build anything.
-- [ ] T081 [US3] Record the caveat in `prisma/schema.prisma` beside the model:
+- [X] T081 [US3] Record the caveat in `prisma/schema.prisma` beside the model:
   `employee Employee @relation(..., onDelete: Cascade)` means hard-deleting an employee deletes their
   modification history, which sits awkwardly beside "immutable and not deletable". Soft-delete is the
   norm so no live path reaches it. **Do not change the cascade** — breaking it strands rows against a
@@ -1190,8 +1190,8 @@ immediately, subject to the payroll lock.
 
 ### Verification
 
-- [ ] T082 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
-- [ ] T083 Re-read `spec.md`'s User Story 1 and confirm the built behaviour matches the re-aimed
+- [X] T082 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T083 Re-read `spec.md`'s User Story 1 and confirm the built behaviour matches the re-aimed
   story rather than the original punch-exception one. The story text changed on 2026-09-16; the tasks
   above are the only place that change becomes code.
 
@@ -1210,6 +1210,76 @@ returns is not, and the import path calls the service directly — so the compil
 become a paid day, but there is a manual correction standing on a supervisor's assertion. The chain
 (T072–T079) and the employee-visible log (T064–T068) are the controls chosen against it. That is why
 this phase is two halves of one bug rather than two unrelated pieces of work.
+
+## Phase 8 implementation record, 2026-09-30
+
+**T064-T083 complete.** Phases 1-8 are now done; 9-11 remain.
+
+### Two things the plan and tasks did not name
+
+1. **A pending correction needed a table.** T073 says "submit to `ApprovalsService` and
+   return the pending instance", but the spine holds no payload by design — it stores an
+   opaque `(entityType, entityId)` pair and never dereferences it. So the correction's
+   intended values had nowhere to live between submission and completion.
+   `hr.PendingAttendanceCorrection` was added, owned by the module that understands the
+   payload, with the spine's `entityId` pointing at it.
+2. **`AuditLogEntry.ipAddress` is a required column** and an application has no request
+   behind it — the chain completes on somebody else's decision, possibly minutes later.
+   Following `payroll-schedule.service.ts`, the system path names itself
+   (`system/attendance-correction`) rather than passing an empty string. Found by the e2e:
+   the punch and the modification were written, the audit write then threw, and the handler's
+   catch swallowed it — so `appliedAt` was never stamped and the correction re-applied on
+   redelivery. Exactly the failure T074's idempotence requirement exists to prevent,
+   reached through a different door.
+
+### A deliberate deviation from T072, recorded rather than done quietly
+
+T072 said to reuse `ACTION_ATTENDANCE_EXCEPTION` rather than add a key, to avoid migrating
+live instances and slot mappings. **A distinct `ACTION_ATTENDANCE_CORRECTION` was used
+instead.**
+
+That reasoning holds for *renaming* a type and not for *adding* one:
+`seedDefaultsForCompany` is idempotent per chain, existing instances keep their type, and
+the new chain is additive rows. And reusing the key would have been actively wrong —
+`attendance-exceptions.service.ts` already handles `approval.completed` for that type and
+treats `entityId` as a **punch id**, while a correction's `entityId` is a
+`PendingAttendanceCorrection` id. Both handlers filter on `entityType` alone, so each would
+receive the other's completions and silently no-op. Relying on a `where` clause matching
+nothing is not isolation, and the day somebody tightens one of those clauses the two
+features corrupt each other's rows.
+
+### T077's answer: the bulk import is exempt
+
+Two consumers of `AttendanceAdminService.mark`, as the task predicted. The manual route now
+submits; **`attendance-import.service.ts` applies directly and is deliberately exempt from
+the chain.** A month's CSV for 150 employees is several thousand rows, and one chain item per
+row would create thousands of pending approvals nobody will ever walk through — an approval
+gate in name only. The import already has a human gate: the two-phase validate-then-commit
+flow, where a person reads the validation report before committing. Every imported row is
+still logged as a modification, because FR-012e requires the log whether or not approval was
+required.
+
+### Application is eventual, not synchronous — and the interface must respect it
+
+The spine emits `approval.completed` with `emit`, not `emitAsync`, deliberately: the event
+goes out after the decision's transaction commits and the spine does not wait for listeners.
+So `decide()` returning "approved" does **not** mean the attendance has changed yet. The e2e
+polls rather than asserting immediately, and web 016's Phase 8 tasks should not assume the
+day is updated the instant the final approval returns.
+
+### FR-012a, FR-012e and T080 needed no code
+
+The log was already written by code path rather than gated on the actor's role, so it covers
+every role including Super Admin. T080's append-only guarantee was verified rather than
+built — only `create`, `findMany` and `count` exist against the table — and
+`attendance-modification-log.spec.ts` now fails if an update, delete, upsert or raw write
+appears.
+
+### One extraction
+
+`actorNameOf` moved to `src/common/actor-name.ts`, shared with `ApprovalsService.namesFor`
+which already had the same fallback chain. The same actor appearing under two different names
+on two screens is exactly the confusion an audit trail exists to prevent.
 
 ## Phase 9: Amendment of 2026-09-29 — item 7, the set becomes data (FR-018a)
 

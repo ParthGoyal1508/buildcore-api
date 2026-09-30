@@ -118,6 +118,9 @@ function build(
     { record: jest.fn().mockResolvedValue(undefined) } as never,
     payrollSchedule as never,
     chains as never,
+    // 016 FR-012: the spine. These tests exercise `mark`, which applies directly; the
+    // submission path has its own coverage, so this only needs to satisfy the constructor.
+    { submit: jest.fn() } as never,
     events as never,
     configService as never,
   );
@@ -360,5 +363,84 @@ describe('AttendanceAdminService — the payroll-review lock (016 FR-016, FR-017
       'co-1',
       expect.any(Date),
     );
+  });
+});
+
+/**
+ * The FR-012d actor filter (016 T071).
+ *
+ * Asserted on the `where` clause the service builds rather than through the database,
+ * because what matters is that the new filter **composes** with the existing ones instead of
+ * replacing them — "what did this person change to this employee in September" is one
+ * question, and a filter that replaced the others would answer a different one.
+ */
+describe('AttendanceAdminService.modifications — the actor filter (FR-012d)', () => {
+  const capture = () => {
+    const seen: { where?: Record<string, unknown> }[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      employee: { findMany: async () => [{ id: 'emp-1' }, { id: 'emp-2' }] },
+      attendanceModification: {
+        findMany: async (args: { where?: Record<string, unknown> }) => {
+          seen.push(args);
+          return [];
+        },
+        count: async () => 0,
+      },
+      user: { findMany: async () => [] },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    return { prisma, seen };
+  };
+
+  const serviceFor = (prisma: unknown) =>
+    new AttendanceAdminService(
+      prisma as never,
+      { getPayrollLockDay: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { record: jest.fn() } as never,
+      { isPeriodUnderReview: jest.fn() } as never,
+      { resolveSlot: jest.fn() } as never,
+      { submit: jest.fn() } as never,
+      { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+    );
+
+  const caller = { userId: 'u-1', rls: { isSuperAdmin: true } } as never;
+
+  it('filters by actor when one is named', async () => {
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+    } as never);
+    expect(seen[0].where?.actorUserId).toBe('admin-7');
+  });
+
+  it('omits the clause entirely when no actor is named', async () => {
+    // Not `actorUserId: undefined`. An explicit undefined is a filter on nothing in some
+    // Prisma versions and a no-op in others, and the difference is an audit silently
+    // returning everything.
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {} as never);
+    expect('actorUserId' in (seen[0].where ?? {})).toBe(false);
+  });
+
+  it('composes with the employee and date filters rather than replacing them', async () => {
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+      employeeId: 'emp-1',
+      from: '2026-09-01',
+      to: '2026-09-30',
+    } as never);
+
+    const where = seen[0].where ?? {};
+    expect(where.actorUserId).toBe('admin-7');
+    expect(where.employeeId).toBe('emp-1');
+    expect(where.date).toBeDefined();
   });
 });

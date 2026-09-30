@@ -17,7 +17,9 @@ export class AttendanceImportDto {
   @IsNotEmpty()
   csv: string;
 
-  @ApiPropertyOptional({ description: 'Required only for a cross-company caller.' })
+  @ApiPropertyOptional({
+    description: 'Required only for a cross-company caller.',
+  })
   @IsOptional()
   @IsString()
   companyId?: string;

@@ -178,15 +178,27 @@ describe('summarise', () => {
   });
 
   it('flags a repeat late-comer at the configured threshold', () => {
-    expect(summarise([late(1), late(1), late(1)], 3).repeatLateComer).toBe(true);
+    expect(summarise([late(1), late(1), late(1)], 3).repeatLateComer).toBe(
+      true,
+    );
     expect(summarise([late(1), late(1)], 3).repeatLateComer).toBe(false);
   });
 
   it('counts the unmeasurable days separately from punctual ones', () => {
     const s = summarise(
       [
-        { marker: 'no_shift_assigned', lateMinutes: 0, earlyDepartureMinutes: 0, shortHours: 0 },
-        { marker: 'no_punch_times', lateMinutes: 0, earlyDepartureMinutes: 0, shortHours: 0 },
+        {
+          marker: 'no_shift_assigned',
+          lateMinutes: 0,
+          earlyDepartureMinutes: 0,
+          shortHours: 0,
+        },
+        {
+          marker: 'no_punch_times',
+          lateMinutes: 0,
+          earlyDepartureMinutes: 0,
+          shortHours: 0,
+        },
         late(0),
       ],
       3,

@@ -19,4 +19,7 @@ export class UpdateEmployeeDto extends PartialType(CreateEmployeeDto) {}
  * the same shape while the service re-validates the merged record — see
  * `EmployeesService.assertStatutoryConsistent`.
  */
-export class UpdateEmployeeBodyDto extends OmitType(UpdateEmployeeDto, [] as const) {}
+export class UpdateEmployeeBodyDto extends OmitType(
+  UpdateEmployeeDto,
+  [] as const,
+) {}

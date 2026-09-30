@@ -34,10 +34,7 @@ import {
 import { TransferEmployeeDto } from './dto/transfer-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesService, MaskedEmployee } from './employees.service';
-import {
-  PiiMaskingInterceptor,
-  RevealsPii,
-} from './pii-masking.interceptor';
+import { PiiMaskingInterceptor, RevealsPii } from './pii-masking.interceptor';
 
 /**
  * The HR admin employee master (005 US1).
@@ -98,7 +95,10 @@ export class EmployeesController {
 
   @Get(':id')
   @ApiOperation({ summary: 'One employee, PII masked' })
-  @ApiResponse({ status: 404, description: 'No such employee in this company.' })
+  @ApiResponse({
+    status: 404,
+    description: 'No such employee in this company.',
+  })
   async findOne(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,

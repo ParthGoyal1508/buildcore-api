@@ -18,6 +18,7 @@ import {
   zonedDayBounds,
 } from '../leave/leave-days';
 import { computeWorkedHours } from './worked-hours';
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 
 export type AttendanceStatus =
   | 'present'
@@ -35,6 +36,36 @@ export interface AttendanceDay {
   outTime: string | null;
   otHours: number | null;
   status: AttendanceStatus;
+  /**
+   * Who changed this day, and to what (016 FR-012c) — the client's *"it should also
+   * reflect in the attendance of the affected employee"*.
+   *
+   * A **property of the day**, not a notification: there is no dismiss, no seen state and
+   * nothing to clear. A record of somebody else altering your attendance that can be
+   * cleared is one that disappears the first time it is inconvenient.
+   *
+   * Empty for an unmodified day, so the field is always present and a client never has to
+   * distinguish absent from empty.
+   */
+  modifications: DayModification[];
+}
+
+/** One recorded change to one day, as the affected employee sees it (016 FR-012c). */
+export interface DayModification {
+  /**
+   * The actor's **name**, never their id. The requirement is that the employee can see who
+   * changed their attendance, and a cuid does not tell them that.
+   */
+  actorName: string;
+  at: string;
+  before: unknown;
+  after: unknown;
+  /**
+   * Free text, and worth knowing: it was written by an administrator who did not
+   * necessarily know the employee would read it (016 T069). No code change follows from
+   * that — it is recorded here once rather than discovered through a complaint.
+   */
+  reason: string | null;
 }
 
 export interface AttendanceMonth {
@@ -224,23 +255,34 @@ export class AttendanceHistoryService {
     const firstDate = toDateOnly(new Date(Date.UTC(year, month - 1, 1)));
     const lastDate = toDateOnly(new Date(Date.UTC(year, month, 0)));
 
-    const [weeklyOffDay, holidays, leaveDates, punches, shiftDurationHours] =
-      await Promise.all([
-        this.sites.getWeeklyOffDay(caller.rls, employee.siteId),
-        this.holidays.getHolidayCalendar(
-          caller.rls,
-          employee.companyId,
-          employee.siteId,
-        ),
-        this.leave.getApprovedLeaveDates(
-          caller.rls,
-          employee.id,
-          firstDate,
-          lastDate,
-        ),
-        this.punchesInRange(caller, employee.id, firstDate, lastDate),
-        this.referenceData.getShiftDurationHours(employee.shiftId),
-      ]);
+    const [
+      weeklyOffDay,
+      holidays,
+      leaveDates,
+      punches,
+      shiftDurationHours,
+      modificationsByDate,
+    ] = await Promise.all([
+      this.sites.getWeeklyOffDay(caller.rls, employee.siteId),
+      this.holidays.getHolidayCalendar(
+        caller.rls,
+        employee.companyId,
+        employee.siteId,
+      ),
+      this.leave.getApprovedLeaveDates(
+        caller.rls,
+        employee.id,
+        firstDate,
+        lastDate,
+      ),
+      this.punchesInRange(caller, employee.id, firstDate, lastDate),
+      this.referenceData.getShiftDurationHours(employee.shiftId),
+      // One query for the whole month (016 FR-012c, T065). Never one per day: the
+      // month is 28-31 days and `@@index([employeeId, date])` is already the access
+      // path, so per-day lookups would be the same N+1 this file's Risks note warns
+      // about for `statesOf`.
+      this.modificationsForRange(employee.id, firstDate, lastDate),
+    ]);
 
     const holidaySet = new Set(holidays);
     const punchesByDate = groupByCapturedDate(punches, this.timeZone);
@@ -274,10 +316,74 @@ export class AttendanceHistoryService {
           isOnApprovedLeave: leaveDates.has(date),
           hasPunch: dayPunches.length > 0,
         }),
+        // Always present, empty when nothing touched the day — so no client has to tell
+        // an absent field from an empty one.
+        modifications: modificationsByDate.get(date) ?? [],
       };
     });
 
     return { days };
+  }
+
+  /**
+   * Every recorded change to this employee's days in a range, grouped by date
+   * (016 FR-012c).
+   *
+   * Two queries, not one per day and not one per modification: the modifications, then the
+   * distinct actors. Runs as system rather than under the caller's context, because the
+   * caller here is the **employee** — `hr.AttendanceModification` has no RLS policy of its
+   * own and `shared.User` is another schema; what bounds the read is `employeeId`, which is
+   * resolved from the caller's own user id upstream and is not something they supply.
+   */
+  private async modificationsForRange(
+    employeeId: string,
+    firstDate: string,
+    lastDate: string,
+  ): Promise<Map<string, DayModification[]>> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.attendanceModification.findMany({
+          where: {
+            employeeId,
+            date: {
+              gte: parseDateOnly(firstDate),
+              lte: parseDateOnly(lastDate),
+            },
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+    );
+    if (rows.length === 0) return new Map();
+
+    const actors = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: [...new Set(rows.map((r) => r.actorUserId))] } },
+          select: ACTOR_NAME_SELECT,
+        }),
+    );
+    const names = new Map(actors.map((u) => [u.id, actorNameOf(u)]));
+
+    const byDate = new Map<string, DayModification[]>();
+    for (const row of rows) {
+      const key = toDateOnly(row.date);
+      const list = byDate.get(key) ?? [];
+      list.push({
+        // Falls back to the id only if the actor row has vanished entirely. A blank name
+        // would read as "nobody changed it", which is the opposite of the truth.
+        actorName: names.get(row.actorUserId) ?? row.actorUserId,
+        at: row.createdAt.toISOString(),
+        before: row.before,
+        after: row.after,
+        reason: row.reason,
+      });
+      byDate.set(key, list);
+    }
+    return byDate;
   }
 
   private async punchesInRange(

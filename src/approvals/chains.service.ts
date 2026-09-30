@@ -11,6 +11,7 @@ import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
 import {
+  ACTION_ATTENDANCE_CORRECTION,
   ACTION_ATTENDANCE_EXCEPTION,
   ACTION_PAYROLL_RUN,
   DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
@@ -221,6 +222,10 @@ export class ChainsService {
   ): Promise<void> {
     const seeds: [string, ChainLevelInput[]][] = [
       [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+      // 016 FR-012: the manual correction, same three-level shape as the exception it
+      // replaced as the spine's first consumer. A distinct action type — see the constant's
+      // comment for why reusing the exception key would have been wrong.
+      [ACTION_ATTENDANCE_CORRECTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
       [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
       // FR-018's remaining action types, each a director-only chain (T048). Seeded even
       // though no module submits into them yet: without the chain, feature 017's first

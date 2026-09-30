@@ -61,7 +61,9 @@ function build(txOverrides: Record<string, unknown> = {}) {
   } as never;
 
   const auditLog = { record: jest.fn().mockResolvedValue(undefined) };
-  const codes = { getNextEmployeeCode: jest.fn().mockResolvedValue('ACME-0007') };
+  const codes = {
+    getNextEmployeeCode: jest.fn().mockResolvedValue('ACME-0007'),
+  };
 
   const service = new EmployeesService(
     prisma,
@@ -103,7 +105,11 @@ describe('EmployeesService — statutory tab validation (T020)', () => {
   it('accepts a consistent statutory tab', async () => {
     const { service, employee } = build();
     employee.create.mockResolvedValue(
-      employeeRow({ pfApplicable: true, uan: '123456789012', pfNumber: 'PF-1' }),
+      employeeRow({
+        pfApplicable: true,
+        uan: '123456789012',
+        pfNumber: 'PF-1',
+      }),
     );
     await expect(
       service.create(CALLER, 'co-1', {
