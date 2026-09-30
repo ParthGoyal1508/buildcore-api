@@ -82,8 +82,44 @@ describe('Attendance correction through the chain (e2e)', () => {
   const userIds: string[] = [];
   const roleIds: string[] = [];
 
-  /** A date safely outside any payroll lock window. */
-  const CORRECTION_DATE = '2026-09-11';
+  /**
+   * Four distinct days that are genuinely outside the payroll lock window, whenever this runs.
+   *
+   * The first version of this named `2026-09-11` and called itself "safely outside any payroll
+   * lock window". It was, on the day it was written. `isPayrollLocked` locks last month once the
+   * current date reaches the lock day and locks anything older unconditionally — and this
+   * suite's company fixture uses `payrollLockDay: 1`, which locks last month from its first day.
+   * So the date aged into the lock and five tests here began failing on 1 October for no reason
+   * connected to the code they cover.
+   *
+   * The current month is always open, whatever the lock day, so that is the first choice. Early
+   * in a month there are not four days available yet, and the fallback is last month — which the
+   * raised lock day below keeps open until its final day.
+   *
+   * **Derived in the business timezone, not UTC**, because that is the clock the lock rule reads.
+   * Between 18:30 and 24:00 UTC, IST is already the next day, and on a month's last day it is
+   * already the next *month* — so a month chosen in UTC can be two months behind the rule's
+   * "today" rather than one, which `isPayrollLocked` refuses whatever the lock day says.
+   */
+  const CORRECTION_DATES = (() => {
+    // `en-CA` renders as YYYY-MM-DD, the shape the rest of this suite speaks.
+    const [year, month, day] = new Date()
+      .toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+      .split('-')
+      .map(Number);
+    const useCurrentMonth = day >= 5;
+    const base = new Date(
+      Date.UTC(year, useCurrentMonth ? month - 1 : month - 2, 1),
+    );
+    const chosen = `${base.getUTCFullYear()}-${String(
+      base.getUTCMonth() + 1,
+    ).padStart(2, '0')}`;
+    return [1, 2, 3, 4].map(
+      (dayOfMonth) => `${chosen}-${String(dayOfMonth).padStart(2, '0')}`,
+    );
+  })();
+
+  const CORRECTION_DATE = CORRECTION_DATES[0];
 
   const makeUser = async (label: string, roleId: string | null) => {
     const user = await sys.user.create({
@@ -133,8 +169,9 @@ describe('Attendance correction through the chain (e2e)', () => {
       data: {
         name: `${PREFIX} Correction Constructions`,
         shortCode: unique('C').slice(0, 10),
-        // Day 1, so the lock window never covers a mid-month date under test.
-        payrollLockDay: 1,
+        // 31, not 1. Nothing here tests the payroll lock, and a lock day of 1 locks last month
+        // from its first day — which is what aged the fixed dates above into a refusal.
+        payrollLockDay: 31,
         pfEmployerRate: 12,
         esicEmployerRate: 3.25,
         gratuityRate: 4.81,
@@ -306,7 +343,7 @@ describe('Attendance correction through the chain (e2e)', () => {
   });
 
   it('applies the correction only once every level has approved', async () => {
-    const date = '2026-09-12';
+    const date = CORRECTION_DATES[1];
     const { approvalInstanceId } = await submit(date);
 
     await decide(
@@ -345,16 +382,20 @@ describe('Attendance correction through the chain (e2e)', () => {
   it('the affected employee sees who changed their day, by name', async () => {
     // The client's own sentence — "it should also reflect in the attendance of the affected
     // employee" — as one assertion.
+    // The month and year are taken from the date the previous test corrected, rather than
+    // named again — two places naming the same month is how one of them goes stale.
+    const corrected = CORRECTION_DATES[1];
+    const [correctedYear, correctedMonth] = corrected.split('-');
     const month = await history.getMonthForEmployee(
       {
         userId: employeeUserId,
         rls: { isSuperAdmin: false, companyId },
       } as never,
       { id: employeeId, siteId, shiftId, companyId },
-      9,
-      2026,
+      Number(correctedMonth),
+      Number(correctedYear),
     );
-    const day = month.days.find((d) => d.date === '2026-09-12');
+    const day = month.days.find((d) => d.date === corrected);
 
     expect(day?.modifications.length).toBeGreaterThan(0);
     expect(day?.modifications[0].actorName).toContain('Admin');
@@ -362,7 +403,7 @@ describe('Attendance correction through the chain (e2e)', () => {
   });
 
   it('a rejected correction leaves no modification and no punch', async () => {
-    const date = '2026-09-13';
+    const date = CORRECTION_DATES[2];
     const { approvalInstanceId } = await submit(date);
 
     await decide(
@@ -382,7 +423,7 @@ describe('Attendance correction through the chain (e2e)', () => {
   });
 
   it('applying the same completion twice writes once', async () => {
-    const date = '2026-09-14';
+    const date = CORRECTION_DATES[3];
     const { approvalInstanceId } = await submit(date);
     for (const [u, r] of [
       [siteUserId, siteRoleId],

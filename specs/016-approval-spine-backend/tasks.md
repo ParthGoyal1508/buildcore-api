@@ -1195,6 +1195,33 @@ immediately, subject to the payroll lock.
   story rather than the original punch-exception one. The story text changed on 2026-09-16; the tasks
   above are the only place that change becomes code.
 
+### Phase 8a: what T077 missed (added 2026-10-01)
+
+T077 asked for **every** consumer of `POST /attendance` to be found before this shipped. It was read
+as every consumer *inside this repository* — the import service was found, and the browser was not.
+`attendance-table.tsx` submitted the correction, closed its dialog, refetched the list and showed the
+unchanged figures with no explanation, which reads as a save that silently failed. Nothing errored;
+the request returned 201.
+
+Fixing the screen needed one thing the API did not offer: a way to know a correction is outstanding
+after the response that submitted it is gone. Without it the marker lasts until the first refresh, a
+second administrator sees nothing, and the obvious next move is to submit the correction again.
+
+- [X] T083a Add `pendingCorrection` to `DailyAttendanceRow` in
+  `src/hr/attendance/attendance-admin.service.ts` — submitted-at and the level now deciding, or
+  `null`. Resolve it through `ApprovalService.statesOf`, the batch form the spine's contract requires
+  of a list, so a new column on a screen does not add an N+1 against the approval tables.
+- [X] T083b Report nothing for a correction whose chain has **already completed**. Application is
+  eventual — the spine announces completion and the write lands on a later tick — so `appliedAt` is
+  still null for a moment after the decision is in. "Awaiting approval" then is accurate about the row
+  and wrong about the decision, and would send an administrator to approve what is already approved.
+- [X] T083c Keep it off the paths that do not need it. The dashboard widget and the attendance report
+  read the same list without a viewer and render no corrections; the viewer argument is optional, so
+  they neither pay for the lookup nor change behaviour.
+- [X] T083d Unit tests for all four: the marker appears on the right day, the batch form is used
+  once, a completed chain reports nothing, the oldest wins when a day carries two, and a caller
+  without a viewer gets `null`.
+
 ### Notes on this phase
 
 **What did not change, deliberately.** The `AttendanceModification` table, its columns, and the write

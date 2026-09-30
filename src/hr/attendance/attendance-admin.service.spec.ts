@@ -45,6 +45,10 @@ function build(
     underReview?: boolean;
     /** 016: the role id the `hr` chain slot resolves to, or null when unmapped. */
     hrRoleId?: string | null;
+    /** 016 FR-012: unapplied correction rows the daily list should mark. */
+    pendingCorrections?: unknown[];
+    /** What the spine reports for those corrections, keyed by correction id. */
+    correctionStates?: [string, unknown][];
   } = {},
 ) {
   const employee = {
@@ -63,12 +67,19 @@ function build(
     findFirst: jest.fn().mockResolvedValue(null),
   };
   const attendanceModification = { create: jest.fn(), findMany: jest.fn() };
+  const pendingAttendanceCorrection = {
+    findMany: jest.fn().mockResolvedValue(options.pendingCorrections ?? []),
+    create: jest.fn(),
+    update: jest.fn(),
+    findUnique: jest.fn(),
+  };
   const prisma = {
     $transaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
       cb({
         employee,
         punchRecord,
         attendanceModification,
+        pendingAttendanceCorrection,
         $executeRaw: jest.fn().mockResolvedValue(undefined),
       }),
     ),
@@ -102,6 +113,12 @@ function build(
   const chains = {
     resolveSlot: jest.fn().mockResolvedValue(options.hrRoleId ?? null),
   };
+  const approvals = {
+    submit: jest.fn(),
+    statesOf: jest
+      .fn()
+      .mockResolvedValue(new Map(options.correctionStates ?? [])),
+  };
   const events = {
     emit: jest.fn(),
     // 016 uses `emitAsync` so the edit is not reported done while the approvals it voids
@@ -119,8 +136,9 @@ function build(
     payrollSchedule as never,
     chains as never,
     // 016 FR-012: the spine. These tests exercise `mark`, which applies directly; the
-    // submission path has its own coverage, so this only needs to satisfy the constructor.
-    { submit: jest.fn() } as never,
+    // submission path has its own coverage. `statesOf` is the batch form the daily list must
+    // use — a double that answered per row would let an N+1 through unnoticed.
+    approvals as never,
     events as never,
     configService as never,
   );
@@ -129,10 +147,12 @@ function build(
     service,
     employee,
     punchRecord,
+    pendingAttendanceCorrection,
     companies,
     attendanceHistory,
     payrollSchedule,
     chains,
+    approvals,
     events,
   };
 }
@@ -442,5 +462,162 @@ describe('AttendanceAdminService.modifications — the actor filter (FR-012d)', 
     expect(where.actorUserId).toBe('admin-7');
     expect(where.employeeId).toBe('emp-1');
     expect(where.date).toBeDefined();
+  });
+});
+
+/**
+ * An outstanding correction is reported on the day it was asked for (016 FR-012, web T050).
+ *
+ * The defect this closes is not a wrong figure, it is a **missing** one. Corrections travel a
+ * chain, so `POST /attendance` changes nothing when it is called; an administrator who saved
+ * one then refetched this list saw the old values and no explanation, which reads exactly like
+ * a save that silently failed — and a second administrator saw nothing either, so the obvious
+ * next move was to submit it again.
+ */
+describe('AttendanceAdminService — outstanding corrections on the daily list', () => {
+  const VIEWER = {
+    id: 'user-1',
+    companyId: 'co-1',
+    permissions: [],
+    grants: [],
+    roleIds: [],
+    roleNames: [],
+  } as never;
+
+  const correction = (over: Record<string, unknown> = {}) => ({
+    id: 'corr-1',
+    employeeId: 'emp-1',
+    createdAt: new Date('2026-09-08T04:00:00.000Z'),
+    ...over,
+  });
+
+  const pendingState = (over: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    levelLabel: 'HR',
+    ...over,
+  });
+
+  beforeEach(() =>
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-08T06:00:00.000Z')),
+  );
+  afterEach(() => jest.useRealTimers());
+
+  it('marks the employee-day a correction is outstanding for', async () => {
+    const { service } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState()]],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection).toEqual({
+      submittedAt: new Date('2026-09-08T04:00:00.000Z'),
+      levelLabel: 'HR',
+    });
+    // And only that employee's day — emp-2 has nothing outstanding.
+    expect(rows[1].pendingCorrection).toBeNull();
+  });
+
+  it('reads the chain state in one batch, not once per row', async () => {
+    // The spine's contract requires the batch form from any list. Calling `stateOf` per row
+    // would work and would add an N+1 against the approval tables from this screen.
+    const { service, approvals } = build({
+      pendingCorrections: [
+        correction(),
+        correction({ id: 'corr-2', employeeId: 'emp-2' }),
+      ],
+      correctionStates: [
+        ['corr-1', pendingState()],
+        ['corr-2', pendingState({ levelLabel: 'Director' })],
+      ],
+    });
+
+    await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(approvals.statesOf).toHaveBeenCalledTimes(1);
+    expect(approvals.statesOf.mock.calls[0][1]).toEqual(['corr-1', 'corr-2']);
+  });
+
+  it('does not report a correction whose chain has already finished', async () => {
+    // Application is eventual: the spine announces completion and the write lands a moment
+    // later, so there is a window where `appliedAt` is still null and the decision is in.
+    // Reporting "awaiting approval" then would be accurate about the row and wrong about
+    // the decision — and would tell an administrator to go and approve something already
+    // approved.
+    const { service } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState({ state: 'approved' })]],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection).toBeNull();
+  });
+
+  it('reports the oldest when a day carries more than one', async () => {
+    const { service } = build({
+      pendingCorrections: [
+        correction({ id: 'corr-old' }),
+        correction({ id: 'corr-new' }),
+      ],
+      correctionStates: [
+        ['corr-old', pendingState({ levelLabel: 'Site / Employer' })],
+        ['corr-new', pendingState({ levelLabel: 'HR' })],
+      ],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection?.levelLabel).toBe('Site / Employer');
+  });
+
+  it('asks nothing of the spine when no correction is outstanding', async () => {
+    const { service, approvals } = build();
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(approvals.statesOf).not.toHaveBeenCalled();
+    expect(rows.every((r) => r.pendingCorrection === null)).toBe(true);
+  });
+
+  it('leaves the marker null for a caller with no viewer', async () => {
+    // The dashboard widget and the attendance report read this list without a browser behind
+    // them. Neither renders corrections, and neither should pay for resolving them.
+    const { service, pendingAttendanceCorrection } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState()]],
+    });
+
+    const rows = await service.daily(CALLER, 'co-1', {
+      date: '2026-09-08',
+    } as never);
+
+    expect(pendingAttendanceCorrection.findMany).not.toHaveBeenCalled();
+    expect(rows[0].pendingCorrection).toBeNull();
   });
 });

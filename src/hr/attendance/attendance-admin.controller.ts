@@ -64,6 +64,9 @@ export class AttendanceAdminController {
       callerFrom(user, request),
       this.companyOf(user, companyId),
       query,
+      // Passed so each row can report an outstanding correction. The spine decides what a
+      // given viewer may be told about a chain, so it needs the viewer and not just a company.
+      user,
     );
   }
 

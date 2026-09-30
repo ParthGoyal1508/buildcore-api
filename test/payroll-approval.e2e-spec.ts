@@ -33,6 +33,26 @@ import { PayrollScheduleService } from '../src/payroll/runs/payroll-schedule.ser
 const PREFIX = 'E2EPA';
 const unique = (s: string) => `${PREFIX}${s}${Date.now() % 100000}`;
 
+/**
+ * Today's calendar date **in the business timezone**, which is the only clock the payroll lock
+ * rule reads.
+ *
+ * Deriving a period in UTC instead is a mistake with a five-and-a-half-hour window and a
+ * once-a-month consequence: between 18:30 and 24:00 UTC, IST is already tomorrow, and on the last
+ * day of a month it is already *next month*. A period computed in UTC then lands two months
+ * before the rule's "today" rather than one, and `isPayrollLocked` refuses anything two months
+ * back whatever the lock day says. That is how the first attempt at this fix still failed —
+ * correct on the 15th, wrong at 01:30 IST on the 1st.
+ */
+function businessToday(): { year: number; month: number; day: number } {
+  // `en-CA` renders as YYYY-MM-DD, which is the shape the rest of this suite speaks.
+  const [year, month, day] = new Date()
+    .toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+    .split('-')
+    .map(Number);
+  return { year, month, day };
+}
+
 describe('Payroll approval chain (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -104,8 +124,35 @@ describe('Payroll approval chain (e2e)', () => {
 
   /** The period the scheduler will draw up, given `whenItFires` below. */
   let period: string;
-  /** Fixed so the test does not change behaviour depending on the day it runs. */
-  const whenItFires = new Date('2026-08-31T19:00:00Z'); // 1 Sep 00:30 IST
+  /**
+   * 00:30 IST on the first of the **current** month, so the scheduler draws up last month.
+   *
+   * This was a fixed instant — `2026-08-31T19:00:00Z` — with a comment saying it was fixed so
+   * the test would not change behaviour depending on the day it runs. It achieved the reverse.
+   * Pinning the fixture while the clock moves means the gap between them grows, and the day the
+   * gap passed two months `isPayrollLocked` began refusing every attendance edit in the suite:
+   * its rule is that anything two or more months back is locked whatever the lock day says. Nine
+   * tests across two files failed on 1 October having passed on 30 September, for no reason
+   * connected to the code.
+   *
+   * Derived from `now` instead, the period under test is always *last* month — which the
+   * fixture's `payrollLockDay: 31` keeps open, and which is the case the scheduler actually
+   * handles in production.
+   */
+  const whenItFires = (() => {
+    const { year, month } = businessToday();
+    // Day 0 of this month is the last day of the previous one; 19:00 UTC is 00:30 IST next day.
+    return new Date(Date.UTC(year, month - 1, 0, 19, 0, 0));
+  })();
+
+  /** `YYYY-MM` for the month before `whenItFires` fires — what the scheduler will draw. */
+  const periodItDraws = (() => {
+    const { year, month } = businessToday();
+    const previous = new Date(Date.UTC(year, month - 2, 1));
+    return `${previous.getUTCFullYear()}-${String(
+      previous.getUTCMonth() + 1,
+    ).padStart(2, '0')}`;
+  })();
 
   const asUser = (id: string, holds: string[]): AuthenticatedUser =>
     ({
@@ -290,7 +337,7 @@ describe('Payroll approval chain (e2e)', () => {
       Permission.PAYROLL,
     ]);
 
-    period = '2026-08';
+    period = periodItDraws;
   }, 90_000);
 
   afterAll(async () => {

@@ -29,6 +29,7 @@ import {
 } from '../../approvals/approvals.service';
 import { ACTION_ATTENDANCE_CORRECTION } from '../../approvals/default-chains';
 import { ChainsService } from '../../approvals/chains.service';
+import type { AuthenticatedUser } from '../../auth/authenticated-user';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   HrPayrollConfig,
@@ -83,6 +84,23 @@ export interface DailyAttendanceRow {
   adminEdited: boolean;
   remarks: string | null;
   hasException: boolean;
+  /**
+   * A correction asked for on this employee-day and not yet applied (016 FR-012, web T050).
+   *
+   * **Why the list carries it at all.** Since corrections travel a chain, `POST /attendance`
+   * changes nothing at the moment it is called — so a screen that refetches this list after a
+   * submission shows the old figures and no explanation, which reads as a save that failed.
+   * Worse, a second administrator sees nothing either, and submits the same correction again.
+   *
+   * `null` means no correction is outstanding. It says nothing about who may decide it: that
+   * belongs to the approval surface, and duplicating the answer here would be a second source
+   * of truth about authority.
+   */
+  pendingCorrection: {
+    submittedAt: Date;
+    /** The level deciding now, from the spine. Null once the chain has finished. */
+    levelLabel: string | null;
+  } | null;
 }
 
 /**
@@ -257,11 +275,20 @@ export class AttendanceAdminService {
     }
   }
 
-  /** Attendance for one date, optionally narrowed to a site. */
+  /**
+   * Attendance for one date, optionally narrowed to a site.
+   *
+   * `viewer` is optional because two callers do not have one and do not need it — the
+   * dashboard widget counting present employees and the attendance report both read this
+   * list without a browser behind them, and neither renders outstanding corrections. Passing
+   * it is what turns on `pendingCorrection`; omitting it leaves every row's marker `null`
+   * rather than failing, so an existing caller is unaffected by this addition.
+   */
   async daily(
     caller: Caller,
     companyId: string,
     query: DailyAttendanceQueryDto,
+    viewer?: AuthenticatedUser,
   ): Promise<DailyAttendanceRow[]> {
     this.assertNotFuture(query.date);
     const date = new Date(`${query.date}T00:00:00.000Z`);
@@ -312,6 +339,14 @@ export class AttendanceAdminService {
       (employeeId) => (byEmployee.get(employeeId)?.length ?? 0) > 0,
     );
 
+    const pendingByEmployee = await this.pendingCorrectionsFor(
+      caller,
+      companyId,
+      date,
+      employees.map((e) => e.id),
+      viewer,
+    );
+
     return employees.map((e) => {
       const rows = byEmployee.get(e.id) ?? [];
       const inPunch = rows.find((r) => r.type === PunchType.in);
@@ -337,8 +372,76 @@ export class AttendanceAdminService {
             r.faceMatchResult === 'exception' ||
             r.geofenceResult === 'exception',
         ),
+        pendingCorrection: pendingByEmployee.get(e.id) ?? null,
       };
     });
+  }
+
+  /**
+   * Outstanding corrections for a date, keyed by employee.
+   *
+   * **Two queries for the whole page, not two per row.** The correction rows come back in one
+   * `findMany`, and their chain states in one `statesOf` — which is the batch form the spine's
+   * contract requires a list to use, precisely so that adding a column to a list does not add
+   * an N+1 against the approval tables.
+   *
+   * An employee with more than one outstanding correction for the same day reports the
+   * **oldest**, because that is the one a decision will act on first, and because reporting
+   * "some correction is pending" without saying which would be the less useful half of the
+   * answer. Ordering is explicit rather than left to the database.
+   */
+  private async pendingCorrectionsFor(
+    caller: Caller,
+    companyId: string,
+    date: Date,
+    employeeIds: string[],
+    viewer?: AuthenticatedUser,
+  ): Promise<Map<string, { submittedAt: Date; levelLabel: string | null }>> {
+    const result = new Map<
+      string,
+      { submittedAt: Date; levelLabel: string | null }
+    >();
+    if (!viewer || employeeIds.length === 0) return result;
+
+    const pending = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.pendingAttendanceCorrection.findMany({
+        where: {
+          companyId,
+          date,
+          employeeId: { in: employeeIds },
+          appliedAt: null,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          employeeId: true,
+          createdAt: true,
+        },
+      }),
+    );
+    if (pending.length === 0) return result;
+
+    const states = await this.approvals.statesOf(
+      ACTION_ATTENDANCE_CORRECTION,
+      pending.map((p) => p.id),
+      viewer,
+    );
+
+    for (const correction of pending) {
+      // Oldest wins: the list is ordered ascending and the first write for an employee stands.
+      if (result.has(correction.employeeId)) continue;
+      const state = states.get(correction.id);
+      // A correction whose chain has already finished is not outstanding, whatever
+      // `appliedAt` says — the application is eventual, so there is a moment where the
+      // decision is in and the write has not landed. Reporting it as pending then would be
+      // accurate about the row and wrong about the decision.
+      if (state && state.state !== 'pending') continue;
+      result.set(correction.employeeId, {
+        submittedAt: correction.createdAt,
+        levelLabel: state?.levelLabel ?? null,
+      });
+    }
+    return result;
   }
 
   /**
