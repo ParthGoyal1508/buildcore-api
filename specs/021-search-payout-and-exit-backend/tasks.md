@@ -272,54 +272,54 @@ The clearance is **derived**, not stored. Only waivers are stored. A stored chec
 copy of custody, stale the moment an asset came back through the asset register — which is exactly the
 path FR-014c requires to satisfy an item without a second action (plan D14).
 
-- [ ] T061 [US4] Add `model ExitClearanceWaiver` in `hr` — `companyId`, `exitRecordId`, `itemKind`,
+- [X] T061 [US4] Add `model ExitClearanceWaiver` in `hr` — `companyId`, `exitRecordId`, `itemKind`,
   `itemRef`, `reason String`, `waivedByUserId`, `waivedAt`. `@@unique([exitRecordId, itemKind, itemRef])`.
-- [ ] T062 [US4] RLS with an explicit `WITH CHECK`; migration carries the `set_config` line if it has any
+- [X] T062 [US4] RLS with an explicit `WITH CHECK`; migration carries the `set_config` line if it has any
   data statement.
-- [ ] T063 [US4] Require a reason with a **minimum length**. A mandatory field satisfied by a space is
+- [X] T063 [US4] Require a reason with a **minimum length**. A mandatory field satisfied by a space is
   not a reason, and this one writes off company money.
-- [ ] T064 [US4] Compute the checklist from where each obligation already lives — open recoverable kit,
+- [X] T064 [US4] Compute the checklist from where each obligation already lives — open recoverable kit,
   outstanding `SalaryAdvance`, open reimbursements, the account's state — with waivers overlaid. Store no
   obligation.
-- [ ] T065 [US4] **Asset custody through the assets module's service, never a join.** `ExitRecord` is in
+- [X] T065 [US4] **Asset custody through the assets module's service, never a join.** `ExitRecord` is in
   `hr` and `AssetAllocation` is in `assets`; Principle I forbids the join. Query allocations naming the
   employee as custodian with `status` not closed (FR-014a).
-- [ ] T066 [US4] Report per allocation: the asset, the project or site, the quantity where more than one
+- [X] T066 [US4] Report per allocation: the asset, the project or site, the quantity where more than one
   unit is held, and `expectedReturnDate` (FR-014a).
-- [ ] T067 [US4] Exclude allocations with **no custodian named** (FR-014d). An asset held by a project is
+- [X] T067 [US4] Exclude allocations with **no custodian named** (FR-014d). An asset held by a project is
   the project's obligation, not a departing person's.
-- [ ] T068 [US4] Recompute at read time (FR-014e). This is not an extra requirement — it is what deriving
+- [X] T068 [US4] Recompute at read time (FR-014e). This is not an extra requirement — it is what deriving
   means, and it is what catches an allocation opened after the exit was initiated.
-- [ ] T069 [US4] Block final settlement on any outstanding unwaived item, including an open allocation
+- [X] T069 [US4] Block final settlement on any outstanding unwaived item, including an open allocation
   (FR-015, FR-014b), naming every blocking item.
-- [ ] T070 [US4] A waiver MUST NOT mark an allocation returned or closed (FR-014c). The asset register
+- [X] T070 [US4] A waiver MUST NOT mark an allocation returned or closed (FR-014c). The asset register
   stays the sole owner of custody; a waiver records that the company stopped chasing it.
-- [ ] T071 [US4] Include pending salary, notice recovery, advances, reimbursements and deductions in the
+- [X] T071 [US4] Include pending salary, notice recovery, advances, reimbursements and deductions in the
   settlement with the final payable (FR-018).
-- [ ] T072 [US4] List every asset the employee held on the settlement summary with its outcome —
+- [X] T072 [US4] List every asset the employee held on the settlement summary with its outcome —
   returned, or waived with author and reason — whether or not it blocked (FR-018a).
-- [ ] T073 [US4] **Recover no asset value** (FR-018b), and leave a comment at the settlement computation
+- [X] T073 [US4] **Recover no asset value** (FR-018b), and leave a comment at the settlement computation
   saying no valuation rule exists. The next reader should find a decision, not conclude something was
   forgotten.
-- [ ] T074 [P] [US4] e2e: an employee with an open allocation is refused settlement naming the asset;
+- [X] T074 [P] [US4] e2e: an employee with an open allocation is refused settlement naming the asset;
   the allocation is closed **through the asset register**; the clearance then reads satisfied with no
   action taken in this feature.
-- [ ] T075 [P] [US4] Unit test: waiving an asset item leaves `AssetAllocation.status` open and
+- [X] T075 [P] [US4] Unit test: waiving an asset item leaves `AssetAllocation.status` open and
   `actualReturnDate` null.
-- [ ] T076 [P] [US4] Unit test: an allocation with a null custodian never appears on any checklist.
-- [ ] T077 [P] [US4] Unit test: an allocation created after the exit was initiated appears on the next
+- [X] T076 [P] [US4] Unit test: an allocation with a null custodian never appears on any checklist.
+- [X] T077 [P] [US4] Unit test: an allocation created after the exit was initiated appears on the next
   read.
-- [ ] T078 [P] [US4] Unit test: a bulk allocation reads as outstanding until closed, with the quantity
+- [X] T078 [P] [US4] Unit test: a bulk allocation reads as outstanding until closed, with the quantity
   stated — partial return is not a state the asset register holds and this must not pretend otherwise.
-- [ ] T079 [US4] Waiver authority: until the client answers, require the same permission as final
+- [X] T079 [US4] Waiver authority: until the client answers, require the same permission as final
   settlement — the narrowest defensible reading. Record it as an assumption in the spec, not as the
   answer.
 
 ## Phase 8: Access revocation on exit (FR-017)
 
-- [ ] T080 [US4] Revoke the exiting employee's account on exit completion and record the revocation.
-- [ ] T081 [US4] Do **not** delete history (the spec's assumption). Revocation is an account operation.
-- [ ] T082 [P] [US4] e2e: sign-in fails after exit completion, and the employee's attendance and payroll
+- [X] T080 [US4] Revoke the exiting employee's account on exit completion and record the revocation.
+- [X] T081 [US4] Do **not** delete history (the spec's assumption). Revocation is an account operation.
+- [X] T082 [P] [US4] e2e: sign-in fails after exit completion, and the employee's attendance and payroll
   history is still readable by those permitted (SC-007).
 
 ## Verification for phases 4-8
@@ -342,3 +342,56 @@ Phases 1-3 (search) are independent of all of it.
 **Phase 7.** It closes bugs.md item 10 including the asset gap that was absent from this specification
 altogether, and it needs no client answer. Phase 4 is next and is blocked only on a question with a safe
 default (T042).
+
+## Phase 7-8 implementation record, 2026-09-30
+
+**T061-T082 complete.** `bugs.md` item 10 is closed on the backend, including the asset gap that
+was absent from this specification entirely until 2026-09-29.
+
+### FR-017 needed no code
+
+Access revocation on exit was **already built**. `ExitService.deactivateAfterSettlement`
+deactivates the employee, deactivates the account, and revokes every issued refresh token — with
+a comment already explaining why every token and not just the current one. T080-T082 were
+verification, not work.
+
+### A module cycle forced the registry pattern
+
+The plan said asset custody would be read "through the assets module's service". `AssetsModule`
+**already imports `HrModule`**, so `HrModule` importing it back would be a cycle spanning five
+modules. `ExitCustodyRegistry` is the answer this repository already uses for exactly this
+(`ProjectSourcesRegistry`, `SearchSourcesRegistry`): the dependency points one way and the data
+flows back.
+
+That brought a consequence worth more than the inconvenience. A source that never registers means
+feature 012 is not deployed, and **a clearance reporting no assets in that case would be lying** —
+the lie letting somebody leave with a laptop. So `unavailableSources` names it and settlement is
+refused: the safe answer when part of the question went unanswered is "assume yes". Neither plan
+nor tasks anticipated that distinction; it fell out of the pattern.
+
+### The gate sits where the settlement is produced
+
+`FnfService.process`, not where it is paid. A settlement that exists is a figure somebody will act
+on, and refusing it later means refusing a number already quoted to the leaver.
+
+### What a waiver does and does not do
+
+It records that the company stopped chasing an obligation, with a name and a reason against the
+decision. It does **not** mark the obligation discharged (FR-014c): an asset waived here stays
+open in the asset register, because marking it returned would put a false fact in the table that
+owns the truth. There is a unit test asserting the waiver write touches nothing else.
+
+Re-waiving records the newer reason rather than refusing — somebody correcting a reason should not
+have to delete evidence to do it.
+
+### FR-018b is a decision, not an omission
+
+No asset value is deducted from the payable, and the reasoning is at the computation:
+three valuation rules give three figures, the client has chosen none, and a deduction computed
+from an unstated rule is worse than none. `assetValueRecovered: null` is stated on the response
+rather than left to be inferred from an absence.
+
+### Still open
+
+Waiver authority is the client's decision. Until they answer it requires `EMPLOYEES`, the same as
+the rest of the surface — the narrowest defensible reading, recorded as an assumption.

@@ -1371,6 +1371,38 @@ attendance. A rejected correction stays visible as an approval instance, which i
 where it belongs.'
 }
 
+Table ExitClearanceWaiver {
+  id String [pk]
+  companyId String [not null]
+  exitRecordId String [not null]
+  exitRecord ExitRecord [not null]
+  itemKind String [not null, note: 'Which kind of obligation — asset custody, recoverable kit, an advance, a reimbursement.']
+  itemRef String [not null, note: 'The obligation\'s own id in its owning module, so a waiver points at exactly one thing.']
+  reason String [not null, note: 'Required, and length-validated in the DTO. A mandatory field satisfied by a space is not a
+reason, and this one writes off company money.']
+  waivedByUserId String [not null]
+  waivedAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (exitRecordId, itemKind, itemRef) [unique]
+  }
+
+  Note: 'A waived exit-clearance obligation (021 FR-014b, FR-016, plan D14).
+
+**The only thing this feature stores.** The clearance itself is *derived* — open asset
+allocations, unreturned recoverable kit, outstanding advances, open reimbursements, the
+account\'s state — read fresh every time it is asked for.
+
+A stored checklist would be a second copy of custody, stale the moment an asset came back
+through the asset register. FR-014c requires a return there to satisfy the item here without
+a second action, and deriving is what makes "returned in the asset module" and "satisfied
+here" the same fact rather than two facts somebody has to keep in step. FR-014e\'s "recompute
+at read time" is therefore not an extra requirement — it is what deriving means.
+
+A waiver does **not** mark the underlying obligation discharged (FR-014c). It records that
+the company stopped chasing it, with a name against the decision.'
+}
+
 Table AttendanceModification {
   id String [pk]
   employeeId String [not null]
@@ -1402,6 +1434,7 @@ Table ExitRecord {
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   employee Employee [not null]
+  clearanceWaivers ExitClearanceWaiver [not null, note: '021 FR-016: obligations waived on this exit.']
 
   Note: 'Employee offboarding record (US11). The F&F settlement itself is a normal
 PayrollRun flagged `isFnf`, linked here.'
@@ -4509,6 +4542,8 @@ Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
 
 Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
+
+Ref: ExitClearanceWaiver.exitRecordId > ExitRecord.id [delete: Cascade]
 
 Ref: AttendanceModification.employeeId > Employee.id [delete: Cascade]
 

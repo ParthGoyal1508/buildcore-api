@@ -79,7 +79,12 @@ export class FnfController {
     description:
       'Pending salary pro-rated to the last working day, earned-leave ' +
       'encashment, and loan recovery. Returns warnings worth seeing before ' +
-      'processing an irreversible run.',
+      'processing an irreversible run.\n\n' +
+      'Since 021 FR-018a it also lists **every asset the leaver held**, each marked ' +
+      "returned or waived with the waiver's author and reason — whether or not it blocked " +
+      'the settlement. No asset value is deducted from the payable (FR-018b): three ' +
+      'valuation rules give three figures and the client has chosen none, so a waiver ' +
+      'records the write-off instead.',
   })
   @ApiResponse({ status: 400, description: 'No exit initiated.' })
   async computeFnf(
@@ -87,7 +92,9 @@ export class FnfController {
     @Req() request: Request,
     @Param('employeeId') employeeId: string,
   ) {
-    return this.fnf.compute(callerFrom(user, request), employeeId);
+    // 021 FR-018a: the summary now carries the leaver's assets and their outcome, so the one
+    // screen somebody reads before settling shows what physical property is outstanding.
+    return this.fnf.settlementSummary(callerFrom(user, request), employeeId);
   }
 
   @Post('fnf/process')

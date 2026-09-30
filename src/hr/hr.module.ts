@@ -37,6 +37,9 @@ import { PunchService } from './punch/punch.service';
 import { ReimbursementController } from './reimbursements/reimbursement.controller';
 import { ReimbursementService } from './reimbursements/reimbursement.service';
 import { EmployeeSearchSource } from './employees/employee-search.source';
+import { ExitClearanceController } from './offboarding/exit-clearance.controller';
+import { ExitClearanceService } from './offboarding/exit-clearance.service';
+import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
 
 /**
  * The `hr` module: the employee-facing My Workspace surface.
@@ -69,6 +72,7 @@ import { EmployeeSearchSource } from './employees/employee-search.source';
     forwardRef(() => PayrollModule),
   ],
   controllers: [
+    ExitClearanceController,
     EmployeesController,
     AttendanceAdminController,
     AttendanceImportController,
@@ -85,6 +89,8 @@ import { EmployeeSearchSource } from './employees/employee-search.source';
     ReimbursementController,
   ],
   providers: [
+    ExitCustodyRegistry,
+    ExitClearanceService,
     // 021 US1 — see ProjectSearchSource.
     EmployeeSearchSource,
     AttendanceExceptionsService,
@@ -112,6 +118,7 @@ import { EmployeeSearchSource } from './employees/employee-search.source';
   // features can ask "which dates was this employee on approved leave" without
   // reaching into `hr.LeaveApplication` themselves.
   exports: [
+    ExitCustodyRegistry,
     EmployeesService,
     EmployeeDocumentsService,
     AttendanceAdminService,

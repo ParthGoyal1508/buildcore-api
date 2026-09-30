@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import {
   AssetAllocationStatus,
@@ -14,9 +15,14 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { ExitCustodyRegistry } from '../../hr/offboarding/exit-custody.registry';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
-import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { assertTransition, AVAILABLE_STATUSES } from '../asset-status';
 import { AssetsRefsService } from '../assets-refs.service';
@@ -87,8 +93,9 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  *    a second copy of it in the transfer receipt is exactly how the two would drift.
  */
 @Injectable()
-export class AllocationService {
+export class AllocationService implements OnModuleInit {
   constructor(
+    private readonly exitCustody: ExitCustodyRegistry,
     private readonly prisma: PrismaService,
     private readonly refs: AssetsRefsService,
     private readonly stock: AssetStockService,
@@ -159,6 +166,17 @@ export class AllocationService {
         createdAt: row.createdAt,
       };
     });
+  }
+
+  /**
+   * Announces this module to the exit clearance (021 FR-014a).
+   *
+   * Registration rather than `HrModule` importing this one: this module already imports
+   * `HrModule`, and closing the loop would make the dependency a cycle. See
+   * `ExitCustodyRegistry`.
+   */
+  onModuleInit(): void {
+    this.exitCustody.register(this);
   }
 
   async findAll(
@@ -574,5 +592,60 @@ export class AllocationService {
 
     const [row] = await this.decorate(caller, [updated]);
     return row;
+  }
+  /**
+   * Assets still in one employee's custody (021 FR-014a, FR-014d, FR-014e).
+   *
+   * Exists so that `hr`'s exit clearance can ask **this module** rather than joining into
+   * `assets` — `ExitRecord` is in `hr` and `AssetAllocation` is in `assets`, and Principle I
+   * forbids a query spanning them. The same shape as every other cross-schema read in this
+   * repository.
+   *
+   * Only allocations naming this employee as custodian, and only ones not closed. An allocation
+   * with **no custodian** is the project's obligation and never appears here (FR-014d) — an asset
+   * held by a site is not a departing person's to return.
+   *
+   * Read fresh on every call, which is FR-014e: an allocation opened after the exit was initiated
+   * is caught rather than missed by a snapshot taken earlier.
+   */
+  async openCustodyFor(
+    ctx: RlsContext,
+    companyId: string,
+    employeeId: string,
+  ): Promise<
+    {
+      allocationId: string;
+      assetId: string;
+      assetName: string;
+      assetCode: string | null;
+      projectId: string;
+      siteId: string;
+      quantity: number;
+      expectedReturnDate: Date;
+    }[]
+  > {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.assetAllocation.findMany({
+        where: {
+          companyId,
+          custodianEmployeeId: employeeId,
+          status: AssetAllocationStatus.open,
+          deletedAt: null,
+        },
+        include: { asset: { select: { name: true, assetCode: true } } },
+        orderBy: { expectedReturnDate: 'asc' },
+      }),
+    );
+
+    return rows.map((row) => ({
+      allocationId: row.id,
+      assetId: row.assetId,
+      assetName: row.asset.name,
+      assetCode: row.asset.assetCode,
+      projectId: row.projectId,
+      siteId: row.siteId,
+      quantity: Number(row.quantity),
+      expectedReturnDate: row.expectedReturnDate,
+    }));
   }
 }
