@@ -25,6 +25,7 @@ import { Permission } from '@prisma/client';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import { SelfService } from '../common/decorators/route-access.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { rlsContextFor } from '../common/prisma/rls-context';
@@ -53,6 +54,12 @@ import { ReassignApprovalDto } from './dto/reassign-approval.dto';
  * The settings endpoints are the exception, and for a different reason: defining a chain
  * is not approving anything, so it is guarded by `SETTINGS` like every other
  * configuration screen.
+ *
+ * Which is why the queue, decide, resubmit and history routes carry `@SelfService()`
+ * (019 FR-005). Before Phase 3 they were authorised by saying nothing, and saying nothing
+ * became a refusal — so the marker is how "the service decides this per item" is stated
+ * out loud rather than inferred from an absent decorator. It claims no permission area,
+ * exactly as before; `ApprovalService` still resolves the caller's authority per row.
  */
 @ApiTags('Approvals')
 @ApiBearerAuth()
@@ -74,6 +81,7 @@ export class ApprovalsController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Get('queue')
+  @SelfService()
   @ApiOperation({
     summary:
       'Everything awaiting a decision from the caller, across every module',
@@ -94,6 +102,7 @@ export class ApprovalsController {
   }
 
   @Get('queue/count')
+  @SelfService()
   @ApiOperation({
     summary: 'How many items await the caller, for the navigation badge',
     description:
@@ -314,6 +323,7 @@ export class ApprovalsController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Post(':instanceId/decide')
+  @SelfService()
   @ApiOperation({
     summary: 'Record one decision on one item',
     description:
@@ -365,6 +375,7 @@ export class ApprovalsController {
   }
 
   @Post(':entityType/:entityId/resubmit')
+  @SelfService()
   @ApiOperation({
     summary: 'Send a returned item back up its chain, as a new round',
     description:
@@ -390,6 +401,7 @@ export class ApprovalsController {
   }
 
   @Get(':entityType/:entityId/history')
+  @SelfService()
   @ApiOperation({
     summary: 'The full decision history for one item, oldest first',
     description:

@@ -42,6 +42,31 @@ describe('Payroll approval chain (e2e)', () => {
   let bankSheet: BankSheetService;
   let http: () => request.SuperTest<request.Test>;
 
+  /**
+   * Waits for a consequence that arrives on a later tick, and fails loudly if it never does.
+   *
+   * Used only where the system is genuinely asynchronous — the approval spine emits
+   * completion fire-and-forget, so what a decision causes is not done when `decide` returns.
+   * A fixed sleep would be either flaky or slow; polling to a deadline is neither, and a
+   * timeout here is a real failure rather than a slow machine, because the work is in-process.
+   */
+  const eventually = async <T>(
+    probe: () => Promise<T | null>,
+    timeoutMs = 10_000,
+  ): Promise<T> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const result = await probe();
+      if (result !== null) return result;
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Expected consequence did not arrive within ${timeoutMs}ms.`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  };
+
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const sys: any = new Proxy(
     {},
@@ -380,7 +405,23 @@ describe('Payroll approval chain (e2e)', () => {
     expect(error.response.message).toContain('HR Office');
   }, 60_000);
 
-  it('scenario 4 — HR may edit, and doing so voids the approvals and restarts the chain', async () => {
+  /**
+   * FR-016 and FR-017 together, as they behave once corrections travel a chain of their own
+   * (016 Phase 8).
+   *
+   * **What changed, and why the assertion moved.** `POST /hr/attendance` used to apply the
+   * edit on the spot, so the payroll chain restarted the moment HR pressed save. It now
+   * raises the correction into its own Site → HR → Director chain, which means that at
+   * submission time *the attendance has not changed* — and so the approvers' figures still
+   * hold, and voiding their approvals then would be wrong. A correction that is later
+   * rejected must not have cost a payroll run its approvals.
+   *
+   * The void still happens; it happens at the moment it becomes true, which is application.
+   * That is what the second half of this test pins down, and it is the property that
+   * actually protects the money: no run reaches a bank sheet on figures that have since
+   * been corrected.
+   */
+  it('scenario 4 — a correction voids the approvals when it is applied, not when it is asked for', async () => {
     const run = await runForPeriod();
 
     const before = await approvals.stateOfSystem(
@@ -390,18 +431,56 @@ describe('Payroll approval chain (e2e)', () => {
     );
     expect(before.currentPosition).toBe(2); // the site in-charge approved above
 
-    await http()
+    const submitted = await http()
       .post('/hr/attendance')
       .set(auth(hrUser.token))
       .send({ employeeId, date: `${period}-12`, inTime: '09:05' })
       .expect(201);
 
-    // The listener runs in-process, so the chain has already restarted.
-    const after = await approvals.stateOfSystem(
+    // Pending, not applied — so the run's approvers have nothing to re-approve yet.
+    const whilePending = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
       run.id,
       companyId,
     );
+    expect(whilePending.currentPosition).toBe(2);
+    expect(whilePending.instanceId).toBe(before.instanceId);
+
+    // Now walk the correction's own chain to completion. Its instance id comes from the
+    // submission response — the route answers with the item it raised, which is the only
+    // handle a caller has on a correction that has not been applied yet.
+    const correctionInstanceId = submitted.body.approvalInstanceId;
+    expect(correctionInstanceId).toBeTruthy();
+    for (const [userId, roleId] of [
+      [siteUser.userId, siteRoleId],
+      [hrUser.userId, hrRoleId],
+      [directorUser.userId, finalRoleId],
+    ] as const) {
+      await approvals.decide(
+        {
+          instanceId: correctionInstanceId,
+          action: ApprovalDecisionAction.approve,
+        },
+        asUser(userId, [roleId]),
+        '127.0.0.1',
+      );
+    }
+
+    // **Eventual, and deliberately awaited here rather than assumed.** The spine announces
+    // completion fire-and-forget, so a correction is applied — and the payroll chain voided —
+    // on a later tick than the decision that approved it. The old version of this test could
+    // assert immediately because the edit and the void happened inside the request; now they
+    // do not, and a test that read the state once would pass or fail on timing.
+    const after = await eventually(async () => {
+      const state = await approvals.stateOfSystem(
+        ACTION_PAYROLL_RUN,
+        run.id,
+        companyId,
+      );
+      // The restart is a new instance, which is the signal that the void has landed.
+      if (state.instanceId === before.instanceId) return null;
+      return state;
+    });
     expect(after.state).toBe('pending');
     // Back to level 1: the approval already given was to figures that no longer hold.
     expect(after.currentPosition).toBe(1);

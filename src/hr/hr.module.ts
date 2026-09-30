@@ -139,6 +139,10 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     // Exported for 004's Biometric Re-enrolment Requests notification, which lists
     // pending requests through the same service that owns them (Principle I).
     FaceEnrolmentService,
+    // Exported for `payroll`, whose F&F settlement is refused while a clearance item
+    // is outstanding (021 FR-014a). `payroll` asks this service rather than reading
+    // `hr.ExitClearanceWaiver` or the asset register itself — Principle I.
+    ExitClearanceService,
   ],
 })
 export class HrModule {}

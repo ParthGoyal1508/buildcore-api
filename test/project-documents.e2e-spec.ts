@@ -359,10 +359,17 @@ describe('Project documents (e2e)', () => {
     const row = list.body.items.find(
       (p: { id: string }) => p.id === projectIds[0],
     );
+    // `required`/`present`/`missingTypeIds` continue to mean *mandatory* — the figures the
+    // interface has always shown — so the advisory kind does not make a complete project look
+    // incomplete (017 FR-009a). It is reported alongside, under its own names, because
+    // "one advisory kind outstanding" is worth showing and must not be shown as a shortfall.
     expect(row.documentReadiness).toEqual({
       required: 1,
       present: 1,
       missingTypeIds: [],
+      advisoryRequired: 1,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: [typeIdByCode.get('WORK_ORDER')],
     });
   });
 
