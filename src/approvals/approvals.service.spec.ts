@@ -125,6 +125,14 @@ function harness(
   let decisionSeq = 0;
 
   const prisma = createPrismaMock({
+    // 016 FR-018a: the gate now asks `shared.DirectorFinalAction` before falling back to
+    // configuration. Null here means "no company has configured this action type", so the
+    // config list governs — which is exactly the behaviour these tests were written to
+    // assert, unchanged by the table's arrival.
+    directorFinalAction: {
+      findUnique: jest.fn(async () => null),
+      findMany: jest.fn(async () => []),
+    },
     approvalInstance: {
       findUnique: jest.fn(async () => ({ ...state })),
       findFirst: jest.fn(async () => ({ ...state })),

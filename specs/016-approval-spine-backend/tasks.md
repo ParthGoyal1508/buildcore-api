@@ -1290,70 +1290,70 @@ across both companies, and unauditable, so FR-018b has nowhere to record "the se
 
 This phase is **inert if the seed is right**. If it is wrong, this is where that is found.
 
-- [ ] T084 Add `model DirectorFinalAction` to `prisma/schema.prisma` in `settings` — `companyId`,
+- [X] T084 Add `model DirectorFinalAction` to `prisma/schema.prisma` in `settings` — `companyId`,
   `actionType String`, `isFinal Boolean`, `updatedAt`, `updatedBy String?`,
   `@@unique([companyId, actionType])`, `@@index([companyId])`.
-- [ ] T085 RLS for it: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
+- [X] T085 RLS for it: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
   hand-authored.
-- [ ] T086 Hand-author the migration seeding one row per existing company per action type in
+- [X] T086 Hand-author the migration seeding one row per existing company per action type in
   `config.ts`'s `directorFinalActionTypes` (the six: `payment_release`, `payroll_run`,
   `letter_work_order`, `letter_loi`, `letter_purchase_order`, and the final-settlement type). It MUST
   open with `SELECT set_config('app.is_super_admin', 'true', true);` — without it this seed matches
   zero rows under `buildcore_app`, the deploy goes green, and **every director approval gate silently
   disappears**. That is a worse outcome than the 2026-09-16 failure it shares its shape with.
-- [ ] T087 Seed `director_final_set_change` as final too, in the same migration. It must be seeded and
+- [X] T087 Seed `director_final_set_change` as final too, in the same migration. It must be seeded and
   never listed as configurable — if the gate on removing gates were itself removable, that is the
   first thing anybody bypassing the chain would remove (plan D24).
-- [ ] T088 `ApprovalsService` reads the table, falling back to the config list for an action type with
+- [X] T088 `ApprovalsService` reads the table, falling back to the config list for an action type with
   no row. Keep the config value as the seed and the fallback, not as the live set.
-- [ ] T089 Keep `config.spec.ts`'s existing assertion against `default-chains.ts`. It now guards the
+- [X] T089 Keep `config.spec.ts`'s existing assertion against `default-chains.ts`. It now guards the
   **seed** rather than the live set, which is still worth guarding — a seed disagreeing with the chains
   it seeds gives a company a wrong first configuration.
-- [ ] T090 **GATE** Before and after the migration, resolve the effective set per company and compare
+- [X] T090 **GATE** Before and after the migration, resolve the effective set per company and compare
   against `APPROVALS_DIRECTOR_FINAL_ACTIONS`. They must match. A green deploy is not the gate; an
   omitted action type here is an approval gate that stopped existing.
-- [ ] T091 [P] Unit test: an action type with no row resolves from config; one with a row resolves from
+- [X] T091 [P] Unit test: an action type with no row resolves from config; one with a row resolves from
   the row; a row with `isFinal: false` overrides a config entry that says true.
-- [ ] T092 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against `DirectorFinalAction`.
+- [X] T092 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against `DirectorFinalAction`.
 
 ## Phase 10: Amendment of 2026-09-29 — editing the set is itself director-final (FR-018b)
 
-- [ ] T093 [US5] Register `director_final_set_change` as a chain action type with one level mapped to
+- [X] T093 [US5] Register `director_final_set_change` as a chain action type with one level mapped to
   `SLOT_FINAL`, in `default-chains.ts`.
-- [ ] T094 [US5] `PATCH /settings/approvals/director-final` submits to `ApprovalsService` rather than
+- [X] T094 [US5] `PATCH /settings/approvals/director-final` submits to `ApprovalsService` rather than
   writing. It returns the pending item, not the new set — the set has not changed yet, and returning it
   would tell the caller their edit took effect.
-- [ ] T095 [US5] Carry the **before and after** sets on the pending item's payload. The decision log
+- [X] T095 [US5] Carry the **before and after** sets on the pending item's payload. The decision log
   records that the change was approved; the payload is the only thing that records what the change was,
   which is what FR-018b asks for.
-- [ ] T096 [US5] Apply the change in the `approval.completed` handler, **idempotently** — the handler
+- [X] T096 [US5] Apply the change in the `approval.completed` handler, **idempotently** — the handler
   may run more than once and applying twice must be indistinguishable from applying once.
-- [ ] T097 [US5] Refuse an edit naming `director_final_set_change` itself, with a code and a message
+- [X] T097 [US5] Refuse an edit naming `director_final_set_change` itself, with a code and a message
   saying why. T087 seeds it; nothing may unseed it.
-- [ ] T098 [P] [US5] e2e: submit a change removing `payment_release`, confirm the set is **unchanged**
+- [X] T098 [P] [US5] e2e: submit a change removing `payment_release`, confirm the set is **unchanged**
   while pending, approve as Super Admin, confirm it is then changed and the before/after is retrievable
   from the item.
-- [ ] T099 [P] [US5] e2e: a rejected change leaves the set exactly as it was, and the rejection reason
+- [X] T099 [P] [US5] e2e: a rejected change leaves the set exactly as it was, and the rejection reason
   is readable.
-- [ ] T100 [P] [US5] Unit test: an attempt to make `director_final_set_change` non-final is refused.
+- [X] T100 [P] [US5] Unit test: an attempt to make `director_final_set_change` non-final is refused.
 
 ## Phase 11: Amendment of 2026-09-29 — the set is reportable (FR-018c)
 
-- [ ] T101 [US5] `GET /settings/approvals/director-final` returning the **union** of the registered
+- [X] T101 [US5] `GET /settings/approvals/director-final` returning the **union** of the registered
   chain action types, the config seed, and the table's rows — not the table's contents (plan D25).
-- [ ] T102 [US5] For each action type report three states, not two: final; not final **by decision**
+- [X] T102 [US5] For each action type report three states, not two: final; not final **by decision**
   (a row saying so); not final **because nothing configures it** (in the registry, no row, no seed).
   A report collapsing the last two hides exactly the gap the client is asking about in item 7.
-- [ ] T103 [US5] Readable under `COMPANY_SETTINGS`. Note that under feature 019 this becomes
+- [X] T103 [US5] Readable under `COMPANY_SETTINGS`. Note that under feature 019 this becomes
   `COMPANY_SETTINGS` at **read** level; until 019 ships the existing module-level value is correct and
   needs no change here.
-- [ ] T104 [P] [US5] Unit test: an action type registered with neither row nor seed reports as
+- [X] T104 [P] [US5] Unit test: an action type registered with neither row nor seed reports as
   unconfigured, distinctly from one explicitly set false.
-- [ ] T105 [US5] Correct FR-018a's wording in `spec.md` if T088 revealed the named set differs from
+- [X] T105 [US5] Correct FR-018a's wording in `spec.md` if T088 revealed the named set differs from
   the six in config — the requirement names four action types and config decomposes them into six, and
   the spec should say which is authoritative.
-- [ ] T106 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
-- [ ] T107 Re-read `spec.md`'s FR-018 to FR-018c and confirm the built behaviour matches. Record that
+- [X] T106 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T107 Re-read `spec.md`'s FR-018 to FR-018c and confirm the built behaviour matches. Record that
   the four named action types remain **this product's proposal**, not the client's answer, and that
   FR-018c now exists so the list can be put in front of them.
 
@@ -1367,3 +1367,63 @@ those touch attendance, not chain configuration.
 
 **Phase 9 alone**, which makes FR-018a true in the sense the requirement means, and is inert if the
 seed is faithful. Phases 10 and 11 are what make the set safe to edit and possible to read.
+
+## Phases 9-11 implementation record, 2026-09-30
+
+**T084-T107 complete. Feature 016 is now fully implemented.**
+
+### What the env var could not do
+
+`APPROVALS_DIRECTOR_FINAL_ACTIONS` met FR-018a's "configurable without a code change" only
+weakly — a redeploy, global across both companies, unauditable. The set is now
+`shared.DirectorFinalAction`, per company, with the config list surviving as the **seed** and
+as the **runtime fallback** for an action type nobody has configured. A stored `false` beats
+the config default, deliberately: a company that has un-gated something must not have that
+decision quietly reversed.
+
+### A second table the tasks did not name
+
+`shared.DirectorFinalChangeProposal`. Same shape of problem as Phase 8's
+`PendingAttendanceCorrection`: `ApprovalInstance` carries no payload, so a change's before and
+after have nowhere to live. `before` is captured at **submission**, not derived at apply time
+— the point of recording it is what the set looked like when somebody decided to change it.
+
+Here the owning module is the spine itself, which is also why `ApprovalService` listens to its
+own `approval.completed` event. Unusual, and deliberate: this is the one action type with
+nobody else to hand it to.
+
+### The three states are the requirement
+
+FR-018c reports `final`, `not_final_by_decision` and `not_configured`. The third is the point:
+an action type nothing configures is a different fact from one somebody decided needs no
+Director, and collapsing them would hide exactly the gap the client is asking about when they
+say "every critical action". The set is the **union** of configured chains, seeded defaults and
+stored rows — not one table's contents.
+
+### The gate on the gate
+
+`director_final_set_change` is seeded as final and refused as a target of its own endpoint
+(`DIRECTOR_FINAL_SELF_CHANGE_REFUSED`), with a second guard on the write path because that
+path is reachable from an event whose payload may predate the submission guard. If the gate on
+removing gates could be removed, that is the first thing anybody bypassing approval would
+remove.
+
+### One migration handled carelessly, then correctly
+
+The first version of the migration was applied, then needed the proposal table added. Because
+it is **unshipped**, its `_prisma_migrations` record was removed and the file re-applied whole
+rather than split into two halves. That is right for a migration that exists only locally and
+would be wrong for one that had shipped — an applied migration must never be edited, because
+its checksum is what every future `migrate deploy` verifies.
+
+### T090's gate
+
+4 companies × 7 action types = 28 rows, matching `APPROVALS_DIRECTOR_FINAL_ACTIONS`'s six plus
+the gate on the gate. No approval requirement appeared or disappeared, which is what makes this
+phase inert.
+
+### One test double needed widening
+
+`approvals.service.spec.ts` gained a `directorFinalAction` delegate returning null — "no
+company has configured this", so the config list governs, which is exactly what those two
+FR-018 tests were written to assert. Their meaning is unchanged.

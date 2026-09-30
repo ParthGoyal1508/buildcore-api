@@ -12,8 +12,14 @@ import {
   Put,
   Query,
   UseGuards,
+  Patch,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -30,6 +36,8 @@ import {
   PutSlotMappingDto,
   UpsertApprovalChainDto,
 } from './dto/approval-chain.dto';
+import { UpdateDirectorFinalSetDto } from './dto/director-final.dto';
+import { resolveCompanyId } from '../settings/company-scope';
 import { DecideApprovalDto } from './dto/decide-approval.dto';
 import { ReassignApprovalDto } from './dto/reassign-approval.dto';
 
@@ -110,6 +118,64 @@ export class ApprovalsController {
   })
   async listChains(@UserEntity() caller: AuthenticatedUser) {
     return this.chains.listChains(rlsContextFor(caller), caller.companyId);
+  }
+
+  @Get('director-final')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Which actions require the Director’s final approval (FR-018c)',
+    description:
+      'Every action type the system knows of, with **three** states rather than two: ' +
+      '`final`; `not_final_by_decision`, where somebody decided it needs no Director; ' +
+      'and `not_configured`, where nothing says either way. Collapsing the last two ' +
+      'would hide exactly the gap the client is asking about when they ask for "every ' +
+      'critical action".\n\n' +
+      'The set is the union of the chains configured for this company, the shipped ' +
+      'defaults, and any stored decision — not the contents of one table.',
+  })
+  async directorFinalSet(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('companyId') companyId?: string,
+  ) {
+    const resolved = resolveCompanyId(caller, companyId);
+    const [entries, pending] = await Promise.all([
+      this.approvals.directorFinalSet(resolved),
+      this.approvals.pendingDirectorFinalChange(resolved),
+    ]);
+    // The mark in force and the change proposed, together. The screen has to show both, and
+    // fetching them separately means a first paint that is right about one and wrong about
+    // the other.
+    return { entries, pending };
+  }
+
+  @Patch('director-final')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Propose a change to the director-final set (FR-018b)',
+    description:
+      '**Submitted for the Director’s approval, not saved.** Nothing changes until the ' +
+      'chain completes; the response is the pending approval item and the set still in ' +
+      'force is unchanged. Whoever could edit this set directly could remove payment ' +
+      'release from it and then release a payment, which is why the edit is itself gated.\n\n' +
+      'The approval requirement on *this* action cannot be changed — refused with ' +
+      '`DIRECTOR_FINAL_SELF_CHANGE_REFUSED`.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Either a change is already pending for this company, or the request tried to ' +
+      'change the gate on changing the set.',
+  })
+  async updateDirectorFinalSet(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: UpdateDirectorFinalSetDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.approvals.submitDirectorFinalChange(
+      resolveCompanyId(caller, companyId),
+      dto.changes,
+      caller,
+    );
   }
 
   @Post('chains')

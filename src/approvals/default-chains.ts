@@ -69,6 +69,15 @@ export const ACTION_PAYMENT_RELEASE = 'payment_release';
 export const ACTION_LETTER_WORK_ORDER = 'letter_work_order';
 export const ACTION_LETTER_LOI = 'letter_loi';
 export const ACTION_LETTER_PURCHASE_ORDER = 'letter_purchase_order';
+/**
+ * Changing which action types the Director must approve (016 FR-018b).
+ *
+ * Itself director-final, seeded that way by migration and **never offered as configurable**.
+ * If the gate on removing gates could be removed, that is the first thing anybody bypassing
+ * the chain would remove.
+ */
+export const ACTION_DIRECTOR_FINAL_SET_CHANGE = 'director_final_set_change';
+
 /** Full and final settlement on exit, including any waived recoveries (FR-018.4). */
 export const ACTION_FINAL_SETTLEMENT = 'final_settlement';
 
@@ -139,6 +148,7 @@ export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
  * Site Incharge and HR levels the client asked for.
  */
 export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
+  ACTION_DIRECTOR_FINAL_SET_CHANGE,
   ACTION_PAYMENT_RELEASE,
   ACTION_LETTER_WORK_ORDER,
   ACTION_LETTER_LOI,

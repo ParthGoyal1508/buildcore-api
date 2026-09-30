@@ -435,6 +435,12 @@ model Company {
   issuedLetters IssuedLetter[]
 
   @@schema("settings")
+
+  /// 016 FR-018a: which action types this company requires the Director to approve.
+  directorFinalActions DirectorFinalAction[]
+
+  /// 016 FR-018b: proposed changes to this company's director-final set.
+  directorFinalChangeProposals DirectorFinalChangeProposal[]
 }
 
 enum CompanyStatus {
@@ -3498,6 +3504,71 @@ model ApprovalLevel {
 
 /// Binds a slot to one of a company's own roles. The table that lets two companies
 /// staff the same chain shape differently.
+/// Whether one action type needs the Director's final approval, per company
+/// (016 FR-018a, FR-018b, FR-018c).
+///
+/// **Why this is a table and not configuration.** It used to be
+/// `APPROVALS_DIRECTOR_FINAL_ACTIONS`, an environment variable read once at construction.
+/// That satisfied "configurable without a code change" only in its weakest sense: it needed
+/// a redeploy, it was global across both of the client's companies, and it was unauditable —
+/// so FR-018b's requirement to record "the set before and after" had nowhere to live, and
+/// FR-018c's requirement to report the set had nothing to report from.
+///
+/// The config list survives as the **seed** for a company's first rows and as the fallback
+/// for an action type nobody has configured yet. Keeping it as the fallback matters: an
+/// action type registered by a later feature must have a defined answer before anybody
+/// configures it, and the safe answer is the one the client already accepted.
+model DirectorFinalAction {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The chain action type, matching `ApprovalChain.actionType`. A free-text column rather
+  /// than an enum for the same reason `slotKey` is: a feature that adds an action type must
+  /// not need a migration of this table to describe it.
+  actionType String
+
+  isFinal Boolean
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@unique([companyId, actionType])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// A proposed change to the director-final set, awaiting the Director (016 FR-018b).
+///
+/// Exists for the same reason `hr.PendingAttendanceCorrection` does: `ApprovalInstance`
+/// carries no payload by design, so a change's before and after have to live in a table the
+/// owning module controls. Here the owning module is the spine itself, which is why this row
+/// sits in `shared` beside it — the spine is allowed to know about its own settings.
+///
+/// `before` and `after` are maps of actionType to boolean. `before` is captured at submission
+/// rather than derived at apply time: the point of recording it is what the set looked like
+/// when somebody decided to change it, and re-deriving it later would show what it looked
+/// like after whatever else happened in between.
+model DirectorFinalChangeProposal {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Not a relation: kept as a bare id so this row survives its instance being pruned, and
+  /// so the proposal can be read without joining the spine's own tables.
+  approvalInstanceId String @unique
+
+  proposedBy String
+  before     Json
+  after      Json
+
+  appliedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([companyId, appliedAt])
+  @@schema("shared")
+}
+
 model RoleSlotMapping {
   id String @id @default(cuid())
 
