@@ -330,6 +330,19 @@ export interface DocumentsConfig {
    */
   expiryReminderLeadDays: number;
   /**
+   * How long a document staged for a project that was never created is kept, in hours
+   * (017 FR-009d).
+   *
+   * A window rather than an immediate delete, because staging and creating are two requests and a
+   * person may fill a long form between them. A window rather than forever, because a file uploaded
+   * for a project nobody went on to create is a blob in storage with no owner and no reader.
+   *
+   * 24 hours: long enough to survive an interrupted afternoon, short enough that abandoned uploads
+   * do not accumulate. Configuration because "how long is an interrupted afternoon" is a business
+   * judgement rather than a developer's.
+   */
+  stagedDocumentRetentionHours: number;
+  /**
    * How long a *superseded* version of a restricted kind is kept before it is purged,
    * row and blob (017 FR-006a).
    *

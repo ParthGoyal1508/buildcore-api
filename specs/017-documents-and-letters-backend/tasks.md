@@ -576,112 +576,112 @@ can use is untestable. The staging table sits between them.
 
 ### The missing upload and list path (plan D9, FR-008a)
 
-- [ ] T106 [US2] Add `POST /projects/:projectId/documents` to
+- [X] T106 [US2] Add `POST /projects/:projectId/documents` to
   `src/projects/documents/project-documents.controller.ts` under `Permission.PROJECTS` — multipart,
   one file. Register it **after** `projects/document-requirements` and mind `GET /projects/:id`: this
   is the third path under the route-order trap Phase 4 already documents, and `projects.module.ts`
   carries the note.
-- [ ] T107 [US2] `ProjectDocumentsService.upload` writes a `ProjectDocument`, bytes through
+- [X] T107 [US2] `ProjectDocumentsService.upload` writes a `ProjectDocument`, bytes through
   `src/common/storage/` unchanged. `documentTypeId` **optional** on the request: supplied files
   against a required kind, omitted files supplementary — which is already what null means on the
   column, so this adds no vocabulary.
-- [ ] T108 [P] [US2] Unit test: a document with no `documentTypeId` is accepted and stored as
+- [X] T108 [P] [US2] Unit test: a document with no `documentTypeId` is accepted and stored as
   supplementary. This is US2 acceptance scenario 5, which has never been executable because nothing
   created a `ProjectDocument`.
-- [ ] T109 [US2] Add `GET /projects/:projectId/documents` returning **every** document on the
+- [X] T109 [US2] Add `GET /projects/:projectId/documents` returning **every** document on the
   project — required and supplementary alike (FR-008a). Do **not** filter by
   `documentTypeId: { in: required }`: that is precisely the filter that made supplementary company
   documents invisible and produced amendment D1. The same mistake is available here.
-- [ ] T110 [P] [US2] Unit test for T109 asserting a supplementary document is in the list. Name it so
+- [X] T110 [P] [US2] Unit test for T109 asserting a supplementary document is in the list. Name it so
   its purpose survives: this is the D1 regression, one screen over.
-- [ ] T111 [P] [US2] Extend `test/project-documents.e2e-spec.ts`: upload against a required kind,
+- [X] T111 [P] [US2] Extend `test/project-documents.e2e-spec.ts`: upload against a required kind,
   confirm readiness shrinks; upload with no type, confirm it appears in the list and does **not**
   change the readiness figure.
-- [ ] T112 [US2] Rewrite the `documentTypeId` doc comment on `ProjectDocument` in
+- [X] T112 [US2] Rewrite the `documentTypeId` doc comment on `ProjectDocument` in
   `prisma/schema.prisma` if it still implies nothing writes the column.
 
 ### `StagedProjectDocument` (plan D10, research §8)
 
-- [ ] T113 [US2] Add `StagedProjectDocument` to `prisma/schema.prisma` in the `projects` schema per
+- [X] T113 [US2] Add `StagedProjectDocument` to `prisma/schema.prisma` in the `projects` schema per
   data-model.md: `companyId`, `documentTypeId?`, `documentType`, `fileRef`, `filePath?`,
   `uploadedBy`, `createdAt`, `@@index([companyId, createdAt])`.
-- [ ] T114 [US2] Migration: create the table plus `ENABLE` + `FORCE` RLS and a `tenant_isolation`
+- [X] T114 [US2] Migration: create the table plus `ENABLE` + `FORCE` RLS and a `tenant_isolation`
   policy in hand-authored SQL — never in `schema.prisma`. Additive, so no backfill.
-- [ ] T115 [P] [US2] RLS proof with the `NOSUPERUSER NOBYPASSRLS` probe role, following 016 and the
+- [X] T115 [P] [US2] RLS proof with the `NOSUPERUSER NOBYPASSRLS` probe role, following 016 and the
   other tables in this feature. A policy asserted rather than proved is the failure this repo already
   decided not to repeat.
-- [ ] T116 [US2] `POST /projects/document-uploads` under `Permission.PROJECTS` (FR-009b) returning
+- [X] T116 [US2] `POST /projects/document-uploads` under `Permission.PROJECTS` (FR-009b) returning
   `stagedDocumentId`, recording `uploadedBy` from the caller.
-- [ ] T117 [US2] Staging window in configuration, not a literal (Principle III), beside this
+- [X] T117 [US2] Staging window in configuration, not a literal (Principle III), beside this
   feature's reminder lead time. Then the sweep: delete rows older than the window **with their
   blobs** (FR-009d). Decide here whether it is a new scheduled rule or a case on the existing reminder
   sweep — research's open item; cheap either way, and the task list is the place it was deferred to.
 
 ### The creation gate (plan D11, FR-009, FR-009a, FR-009e)
 
-- [ ] T118 [US2] `ProjectDocumentsService.assertMandatoryKindsSatisfied(ctx, companyId, stagedIds)`
+- [X] T118 [US2] `ProjectDocumentsService.assertMandatoryKindsSatisfied(ctx, companyId, stagedIds)`
   per contracts Part 1. Refuses with `PROJECT_DOCUMENTS_MANDATORY_MISSING` naming each missing kind's
   **label**, never its id — a refusal naming internal identifiers is one the reader cannot act on,
   which is the same argument that produced FR-007a.
-- [ ] T119 [US2] `CreateProjectDto` gains `stagedDocumentIds: string[]`, validated. `ProjectsService`
+- [X] T119 [US2] `CreateProjectDto` gains `stagedDocumentIds: string[]`, validated. `ProjectsService`
   already injects `ProjectDocumentsService` for readiness (`projects.service.ts:166`), so this adds no
   dependency and no cross-schema query.
-- [ ] T120 [US2] `ProjectsService.create` calls T118 **before** writing anything, then converts staged
+- [X] T120 [US2] `ProjectsService.create` calls T118 **before** writing anything, then converts staged
   rows to `ProjectDocument` rows and deletes them **inside the same transaction** as the `Project`
   insert (FR-009e). A failed creation must strand neither a project nor a staged row, and must not
   consume a reference that then cannot be retried.
-- [ ] T121 [US2] Enforce the authorisation of a staged reference (FR-009c, plan D10a): `create`
+- [X] T121 [US2] Enforce the authorisation of a staged reference (FR-009c, plan D10a): `create`
   refuses a `stagedDocumentId` whose `uploadedBy` is not the calling user, with
   `PROJECT_STAGED_DOCUMENT_UNKNOWN` — **the same code as a nonexistent id**, so the refusal does not
   confirm that another user's staged document exists. `uploadedBy` becomes an authorisation input
   here, not just attribution; the schema comment must say so, because a column read for access control
   needs different care from one read for display.
-- [ ] T122 [P] [US2] Unit test for T121 — the security test of this amendment: user B cannot consume
+- [X] T122 [P] [US2] Unit test for T121 — the security test of this amendment: user B cannot consume
   user A's staged reference, and cannot distinguish that refusal from a nonexistent id. Add the
   cross-company case.
-- [ ] T123 [US2] FR-007d: refuse marking a kind mandatory while the company has no document type for
+- [X] T123 [US2] FR-007d: refuse marking a kind mandatory while the company has no document type for
   it, code `PROJECT_DOCUMENT_KIND_NOT_DEFINED`, with the type definable in place via the existing
   `POST kinds/:code` (T102). The PUT already refuses an unknown type; this is the same refusal at a
   different strength.
-- [ ] T123a [P] [US2] **FR-007c's permission separation**, which had no task until
+- [X] T123a [P] [US2] **FR-007c's permission separation**, which had no task until
   `/speckit-analyze` found it (finding C1). Assert that a caller holding `PROJECTS` but **not**
   `SETTINGS` — a Project Manager who may upload a project's documents — is refused when changing the
   required set or a kind's mandatory marking. This is US2 acceptance scenario 8, and it is the
   assertion standing between the gated party and their own gate. Letter-suffixed to avoid renumbering,
   following T013a and T026a/b.
-- [ ] T124 [P] [US2] e2e for the gate, following quickstart pass 8: refuse a creation with a mandatory
+- [X] T124 [P] [US2] e2e for the gate, following quickstart pass 8: refuse a creation with a mandatory
   kind unattached and **assert no project row exists afterwards** — a gate that refuses the response
   while writing the row is the failure this asserts against. Then stage, create, and confirm the
   project exists, the document is attached, and the staged row is gone.
-- [ ] T125 [US2] Confirm the gate holds on every path that writes a project, not only the route
+- [X] T125 [US2] Confirm the gate holds on every path that writes a project, not only the route
   (spec Assumptions, SC-002a). Enumerate the paths — `prisma/seed.ts`, any script, any test helper —
   and state in the task's closing note which were found, so the list is auditable rather than assumed.
 
 ### The advisory split (plan D12, FR-007b)
 
-- [ ] T126 [US2] `ProjectDocumentReadiness` gains `advisoryRequired`, `advisoryPresent`,
+- [X] T126 [US2] `ProjectDocumentReadiness` gains `advisoryRequired`, `advisoryPresent`,
   `advisoryMissingTypeIds`. The existing `required`/`present`/`missingTypeIds` keep counting the
   mandatory set **and only** the mandatory set — that figure is already rendered on the portfolio list
   and must not move.
-- [ ] T127 [US2] `mandatoryTypeIdsFor` already selects `isMandatory` per row, so both partitions come
+- [X] T127 [US2] `mandatoryTypeIdsFor` already selects `isMandatory` per row, so both partitions come
   from the query it already runs. Keep it **one statement** for the whole page: research §4 and the
   existing query-count assertion both depend on it.
-- [ ] T128 [P] [US2] Unit test: advisory kinds appear in the advisory fields and do **not** change
+- [X] T128 [P] [US2] Unit test: advisory kinds appear in the advisory fields and do **not** change
   `required` or `present`; and the query count is still one at 50 projects. The query count is the
   property that would rot silently.
-- [ ] T129 [US2] Rewrite the `isMandatory` doc comment in `prisma/schema.prisma`. It currently reads
+- [X] T129 [US2] Rewrite the `isMandatory` doc comment in `prisma/schema.prisma`. It currently reads
   *"FR-009 lets a project exist before its papers are complete; readiness is reported, never enforced
   at creation"* — which FR-009's reversal makes **false**. Also rewrite the `isMandatory` description
   in `dto/project-document-requirement.dto.ts`, which says an optional kind counts toward nothing;
   after T126 it counts toward the advisory figures.
-- [ ] T130 [US2] Update the `@Put()` and `@Get()` `@ApiOperation` descriptions in
+- [X] T130 [US2] Update the `@Put()` and `@Get()` `@ApiOperation` descriptions in
   `project-documents.controller.ts`. The PUT currently states *"Configuring requirements never blocks
   project creation (FR-009): readiness is reported, not enforced"* — the opposite of what it now does.
   Stale API documentation on the route that implements the reversal is worse than none.
 
 ### Verification
 
-- [ ] T131 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T131 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
   Baseline to beat: 933 unit / 90 suites, 445 e2e / 22 suites.
 - [ ] T132 Walk `checklists/staging-gate.md` and record, per item, whether the requirement it
   questions is now answered. Do **not** tick the boxes — that file is reviewer-owned. CHK043–CHK046
@@ -704,3 +704,57 @@ accepts a draft project, T113–T117 and T121 are the first things to delete.
 **T121 is the security task of this amendment.** A staged reference is a bearer token for stored bytes
 with no project to authorise it against. It was missed in the first pass of the plan and found by the
 requirements-quality review, which is the reason that review happened.
+
+## Phase 13 implementation record, 2026-09-30
+
+**T106-T131 complete.** T132 is reviewer work on `checklists/staging-gate.md` and is not mine to
+tick. `bugs.md` item 3 is closed on the backend.
+
+### The phase was shaped as the tasks predicted
+
+`isMandatory` already existed and needed **no migration**. What did not exist was any endpoint that
+created a `ProjectDocument` — the model was read by readiness and written by nothing, so FR-008's
+"which documents does this project hold" had only one possible answer. The gate was the small part.
+
+### A boundary violation I caught in my own first draft
+
+`labelsForTypeIds` and `assertTypeExists` queried `settings.DocumentType` directly. That is the
+table this module may not read — the same reason `documentTypeId` is a bare string here rather than a
+foreign key (Principle I). Both now go through `DocumentTypesService.listForCompany`, as the rest of
+the file already did. Caught reading the diff, not by a test, which is worth noting: no test would
+have failed.
+
+### T112 needed no change
+
+The `documentTypeId` comment does **not** imply nothing writes the column — it explains why the
+column exists and why it is nullable, both still true. The task's condition did not apply.
+
+### T125's audit: three writers, one deliberate bypass
+
+`ProjectsService.create` (gated), its controller (which calls that service), and
+`prisma/seed-demo.ts`, which writes through Prisma directly. The seeder is correct to bypass: it
+builds a fixture rather than acting for a user, and requiring it to stage a document for every
+mandatory kind would make the seed depend on the configuration it exists to describe. The reasoning
+is now a comment at that line, so a fourth writer must either use the service or say why not.
+
+### The staged-upload authorisation
+
+`uploadedBy` is checked on use, not merely recorded, and all three failure modes — nonexistent id,
+another user's id, another company's id — give **the same code**. A distinct "forbidden" would
+confirm the other user's staged document exists, which is exactly what FR-009c forbids. There is a
+test asserting the two refusals are indistinguishable in both code and status, because that is the
+half that is easy to get wrong.
+
+### A test double that would have proved the opposite of the code
+
+The requirement double in `project-document-gate.spec.ts` initially ignored its `where` clause. The
+gate asks only for `isMandatory: true`, so a double returning everything made an advisory kind look
+like it blocked a creation — and the test asserting advisory kinds *don't* block was failing against
+correct code. The double now honours the clause.
+
+### Three comments that stated the opposite of the code
+
+`isMandatory` in `schema.prisma`, the `@Put()` description, and the `isMandatory` DTO description all
+asserted the pre-reversal rule. They were tasks rather than cleanup for a reason: a comment stating
+the opposite of the code is how the next reader is misled, and all three sat on the routes that
+implement the reversal.

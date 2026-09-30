@@ -190,6 +190,20 @@ export class ProjectsService {
   ): Promise<Project> {
     const targetCompanyId = this.targetCompanyOf(caller, companyId);
 
+    // 017 FR-009, FR-009a, FR-009c. **Before anything is written.** The gate refuses a creation
+    // whose mandatory kinds are not all attached, naming each missing kind's label, and refuses a
+    // staged reference the caller may not use. Both checks live in one call so they cannot be
+    // applied apart.
+    //
+    // Returns the staged rows to convert, so the check and the conversion cannot disagree about
+    // which references were accepted.
+    const stagedDocuments = await this.documents.assertMandatoryKindsSatisfied(
+      rlsContextFor(caller),
+      targetCompanyId,
+      dto.stagedDocumentIds ?? [],
+      caller.id,
+    );
+
     const created = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -217,7 +231,7 @@ export class ProjectsService {
             PROJECT_CODE_INFIX,
           ));
 
-        return tx.project.create({
+        const project = await tx.project.create({
           data: {
             companyId: targetCompanyId,
             code,
@@ -245,6 +259,32 @@ export class ProjectsService {
             description: dto.description ?? null,
           },
         });
+
+        // FR-009e. The conversion and the deletion happen **inside the same transaction** as the
+        // project insert, so a failure strands neither a project without its papers nor a staged
+        // row that has already been consumed. A reference that cannot be retried is as bad as one
+        // that was silently ignored.
+        if (stagedDocuments.length > 0) {
+          await tx.projectDocument.createMany({
+            data: stagedDocuments.map((staged) => ({
+              companyId: targetCompanyId,
+              projectId: project.id,
+              documentType: staged.documentType,
+              documentTypeId: staged.documentTypeId,
+              fileRef: staged.fileRef,
+              filePath: staged.filePath,
+              uploadedByUserId: caller.id,
+            })),
+          });
+          // The blobs are **not** moved or re-uploaded: `fileRef` carries over, so the staged row's
+          // deletion must not delete the object it points at. The sweep only removes blobs for rows
+          // it also deletes, and a consumed row is gone before the sweep ever sees it.
+          await tx.stagedProjectDocument.deleteMany({
+            where: { id: { in: stagedDocuments.map((staged) => staged.id) } },
+          });
+        }
+
+        return project;
       },
     );
 

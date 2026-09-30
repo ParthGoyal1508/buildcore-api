@@ -1821,6 +1821,18 @@ async function main() {
     }
 
     const projects = [];
+    // 017 FR-009's mandatory-document gate is **deliberately bypassed here** (T125).
+    //
+    // The gate lives in `ProjectsService.create`, and this script writes through Prisma directly.
+    // That is correct for a demo seeder: it is building a fixture, not acting for a user, and
+    // requiring it to stage a document for every mandatory kind of every demo project would make
+    // the seed depend on a company's configuration to produce data that configuration then
+    // describes.
+    //
+    // It is also the **only** path that bypasses the gate. The audit for T125 found three writers
+    // of a `Project`: this one, `ProjectsService.create` (gated), and its controller (which calls
+    // that service). If a fourth appears, it must either go through the service or say here why it
+    // does not.
     for (const p of spec.projects) {
       projects.push(
         await prisma.project.create({

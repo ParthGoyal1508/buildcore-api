@@ -70,8 +70,17 @@ export class ProjectDocumentsController {
     description:
       'Replaces rather than merges — the required set is a set, and removing a kind ' +
       'has no other honest expression. Refuses a type this company does not have, code ' +
-      '`PROJECT_DOCUMENT_TYPE_UNKNOWN`. Configuring requirements never blocks project ' +
-      'creation (FR-009): readiness is reported, not enforced.',
+      '`PROJECT_DOCUMENT_TYPE_UNKNOWN`.\n\n' +
+      '**Reversed on 2026-09-16.** This used to say configuring requirements never blocks ' +
+      'project creation. It does now: a kind marked **mandatory** refuses creation until a ' +
+      'document is attached, naming every missing kind and creating nothing (FR-009). An ' +
+      '**advisory** kind is reported outstanding and blocks nothing.\n\n' +
+      'A kind cannot be marked mandatory while this company has no document type for it, code ' +
+      '`PROJECT_DOCUMENT_KIND_NOT_DEFINED` — a mandatory kind nobody can file against would ' +
+      'refuse every creation with no way to comply. Define it in place with ' +
+      '`POST kinds/:code`.\n\n' +
+      '`SETTINGS`, not `PROJECTS`: a Project Manager may file a project’s documents and may ' +
+      'not move the gate they are filing against (FR-007c).',
   })
   async set(
     @UserEntity() caller: AuthenticatedUser,

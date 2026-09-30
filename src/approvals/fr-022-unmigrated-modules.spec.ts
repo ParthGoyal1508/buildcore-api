@@ -115,6 +115,13 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/plant.module.ts',
           ':(exclude)src/plant/equipment/equipment-search.source.ts',
           ':(exclude)src/projects/portfolio/project-search.source.ts',
+          // Owned by 021 US4 (exit clearance), not by anything in 016. The assets module gained a
+          // read-only custody reader and registers it with `ExitCustodyRegistry` — the same
+          // registry pattern `ProjectSourcesRegistry` uses, and for the same cycle reason. No
+          // approval path is touched; the per-file `approve()` assertions above still read every
+          // one of these.
+          ':(exclude)src/assets/allocations/allocation.service.ts',
+          ':(exclude)src/assets/allocations/exit-custody.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

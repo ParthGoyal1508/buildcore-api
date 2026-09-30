@@ -14,6 +14,7 @@ import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
+import { ProjectDocumentUploadController } from './documents/project-document-upload.controller';
 
 /**
  * The `projects` module.
@@ -40,6 +41,10 @@ import { SitesService } from './sites/sites.service';
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
+    // 017 FR-008a, FR-009b. Registered before ProjectsController for the route-order reason
+    // the note below gives: `projects/document-uploads` is a literal segment that
+    // `GET /projects/:id` would otherwise swallow.
+    ProjectDocumentUploadController,
     ProjectDocumentsController,
     ClientsController,
     SitesController,

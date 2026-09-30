@@ -924,6 +924,36 @@ Table ProjectBudget {
 against actuals sourced live from the owning modules — never stored here.'
 }
 
+Table StagedProjectDocument {
+  id String [pk]
+  companyId String [not null]
+  documentTypeId String [note: 'Null for a supplementary document — the same meaning it has on `ProjectDocument`.']
+  documentType String [not null, note: 'The kind\'s label as the uploader saw it, kept so a refusal can name the kind even if the
+type is renamed or removed between staging and creation.']
+  fileRef String [not null]
+  filePath String
+  uploadedBy String [not null, note: 'Who staged it. Checked on use, not merely recorded — see the note above.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A file attached to a project, stored as an object-storage reference rather than
+bytes — same pattern as `hr.EmployeeDocument`.
+A document uploaded **before** the project it belongs to exists (017 FR-009b, plan D10).
+
+**This table is the cost of the word "cannot".** FR-009 says a project is not created while a
+mandatory kind has no document attached — so the documents have to exist before the project
+does, and there is nowhere to hang them. A row here is a file in escrow: uploaded, attributed,
+and waiting for the creation that will either consume it or leave it to be swept.
+
+`uploadedBy` is an **authorisation input**, not attribution (FR-009c, plan D10a). Project
+creation refuses a staged id whose `uploadedBy` is not the calling user, and refuses it with the
+same error code as a nonexistent id — so the refusal cannot be used to discover that another
+user\'s staged document exists. A column read for access control needs more care than one read
+for display, which is why this is said here rather than left to the service.
+
+Rows are swept with their blobs after the staging window (FR-009d). A file uploaded for a
+project nobody went on to create must not sit in storage indefinitely.'
+}
+
 Table ProjectDocument {
   id String [pk]
   companyId String [not null]
@@ -947,9 +977,6 @@ required kind is accepted and filed as supplementary, and null is what
   remark String
   uploadedByUserId String [not null, note: '`shared.User.id`. Bare id — see the schema-level note above.']
   uploadedAt DateTime [default: `now()`, not null]
-
-  Note: 'A file attached to a project, stored as an object-storage reference rather than
-bytes — same pattern as `hr.EmployeeDocument`.'
 }
 
 Table ProjectDocumentRequirement {

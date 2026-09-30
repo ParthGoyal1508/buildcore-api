@@ -25,9 +25,15 @@ export class ProjectDocumentRequirementDto {
   @ApiPropertyOptional({
     default: true,
     description:
-      'Only mandatory requirements count toward readiness. A project short of an ' +
-      'optional paper is not unready — if optional kinds counted, the flag would ' +
-      'change nothing anywhere and would be worth deleting.',
+      'A **mandatory** kind refuses project creation until a document is attached (FR-009). ' +
+      'An **advisory** kind is reported outstanding and blocks nothing.\n\n' +
+      'Named by consequence rather than as "required" and "optional": optional describes a ' +
+      'kind by what it is not, and hides that the two now differ in effect rather than only ' +
+      'in emphasis.\n\n' +
+      'Both are reported, in separate figures — the mandatory counts are what the portfolio ' +
+      'list renders, and advisory kinds are counted beside them rather than inside them ' +
+      '(FR-007b). This used to say optional kinds count toward nothing; since the advisory ' +
+      'split they count toward the advisory figures.',
   })
   @IsOptional()
   @IsBoolean()

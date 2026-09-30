@@ -1762,6 +1762,44 @@ model ProjectBudget {
 
 /// A file attached to a project, stored as an object-storage reference rather than
 /// bytes — same pattern as `hr.EmployeeDocument`.
+/// A document uploaded **before** the project it belongs to exists (017 FR-009b, plan D10).
+///
+/// **This table is the cost of the word "cannot".** FR-009 says a project is not created while a
+/// mandatory kind has no document attached — so the documents have to exist before the project
+/// does, and there is nowhere to hang them. A row here is a file in escrow: uploaded, attributed,
+/// and waiting for the creation that will either consume it or leave it to be swept.
+///
+/// `uploadedBy` is an **authorisation input**, not attribution (FR-009c, plan D10a). Project
+/// creation refuses a staged id whose `uploadedBy` is not the calling user, and refuses it with the
+/// same error code as a nonexistent id — so the refusal cannot be used to discover that another
+/// user's staged document exists. A column read for access control needs more care than one read
+/// for display, which is why this is said here rather than left to the service.
+///
+/// Rows are swept with their blobs after the staging window (FR-009d). A file uploaded for a
+/// project nobody went on to create must not sit in storage indefinitely.
+model StagedProjectDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Null for a supplementary document — the same meaning it has on `ProjectDocument`.
+  documentTypeId String?
+
+  /// The kind's label as the uploader saw it, kept so a refusal can name the kind even if the
+  /// type is renamed or removed between staging and creation.
+  documentType String
+
+  fileRef  String
+  filePath String?
+
+  /// Who staged it. Checked on use, not merely recorded — see the note above.
+  uploadedBy String
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@schema("projects")
+}
+
 model ProjectDocument {
   id        String @id @default(cuid())
   companyId String
@@ -1817,8 +1855,20 @@ model ProjectDocumentRequirement {
   /// like an oversight and is not.
   documentTypeId String
 
-  /// FR-009 lets a project exist before its papers are complete; readiness is reported,
-  /// never enforced at creation.
+  /// Whether a project **cannot be created** without a document of this kind (017 FR-007b,
+  /// FR-009).
+  ///
+  /// **Reversed on 2026-09-16.** This comment used to read "FR-009 lets a project exist before its
+  /// papers are complete; readiness is reported, never enforced at creation" — which the client's
+  /// bug review item 3 made false. A mandatory kind now refuses the creation, naming every missing
+  /// kind, and creating nothing.
+  ///
+  /// An **advisory** kind (false) is reported outstanding and blocks nothing. The two are counted
+  /// separately in `ProjectDocumentReadiness` rather than together, so a reader can tell "we cannot
+  /// start this project" from "we are still chasing paperwork".
+  ///
+  /// A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
+  /// that would refuse every creation with no way to comply.
   isMandatory Boolean @default(true)
 
   createdAt DateTime @default(now())

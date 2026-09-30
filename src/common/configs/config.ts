@@ -347,6 +347,10 @@ const config: Config = {
   },
 
   documents: {
+    stagedDocumentRetentionHours: numberFromEnv(
+      process.env.DOCUMENTS_STAGED_RETENTION_HOURS,
+      24,
+    ),
     // `??` not `||`: an explicitly empty env value must be distinguishable from unset,
     // the same reasoning as the approvals block below.
     expiryReminderLeadDays: Number(
