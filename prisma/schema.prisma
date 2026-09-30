@@ -175,6 +175,39 @@ model Role {
 /// of a global table cannot be tenant-scoped, and a policy here that looked like one would
 /// be worse than none — it would read as isolation to the next person while enforcing
 /// nothing.
+/// A refused request, recorded (019 FR-003).
+///
+/// `heldLevel` is the column that earns this table. A refusal with `heldLevel = read` against
+/// a required `write` is an **interface** that offered a control it should have hidden —
+/// FR-004's failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
+/// reaching for a module they hold nothing in, which is a security signal. Without this column
+/// the two are the same row, and the only thing anybody could do with the log is count it.
+model PermissionRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  userId String
+  method String
+
+  /// The route **template**, never the resolved URL. A resolved URL carries record ids, and a
+  /// security log quietly accumulating them becomes a store of personal data nobody
+  /// classified as one.
+  path String
+
+  requiredPermission Permission
+  requiredLevel      AccessLevel
+
+  /// The level actually held for that area. **Null means the area was not held at all** —
+  /// which is a different event from holding it at the wrong level.
+  heldLevel AccessLevel?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, userId])
+  @@schema("settings")
+}
+
 model RolePermission {
   id String @id @default(cuid())
 

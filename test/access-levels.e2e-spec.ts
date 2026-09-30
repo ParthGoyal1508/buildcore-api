@@ -140,6 +140,7 @@ describe('Access levels (e2e)', () => {
   });
 
   afterAll(async () => {
+    await sys.permissionRefusal.deleteMany({ where: { companyId } });
     await sys.userRole.deleteMany({ where: { userId: { in: userIds } } });
     await sys.refreshToken.deleteMany({
       where: { accountId: { in: userIds } },
@@ -205,6 +206,44 @@ describe('Access levels (e2e)', () => {
     expect(res.body.grants).toEqual([
       { permission: 'PROJECTS', level: 'read' },
     ]);
+  });
+
+  it('records the refusal, with the level actually held (FR-003)', async () => {
+    await http()
+      .post('/projects')
+      .set(auth(readOnlyToken))
+      .send({ name: `${PREFIX} logged` })
+      .expect(403);
+
+    // Fire-and-forget, so give the write a moment: a refusal must not be slower than an
+    // acceptance, which is its own small oracle.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const rows = await sys.permissionRefusal.findMany({
+      where: { companyId, requiredPermission: 'PROJECTS' },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].requiredLevel).toBe('write');
+    // Read-against-write is an interface offering a control it should have hidden. Null
+    // would be somebody reaching for a module they hold nothing in.
+    expect(rows[0].heldLevel).toBe('read');
+    // The route template, never a resolved URL carrying record ids.
+    expect(rows[0].path).not.toMatch(/[0-9a-f]{20,}/);
+  });
+
+  it('still serves the self-service surfaces after the guard fails closed (FR-005)', async () => {
+    // The assertion is **not 403**, not 200. These users hold no `Employee` row, so
+    // `/my/leave` answers 404 from the service — which is itself the proof the guard let it
+    // through. A 403 here would mean an @SelfService() marker is missing and 22 routes of
+    // self-service have just been taken from every employee: a worse outage than the hole
+    // Phase 3 closes.
+    const leave = await http().get('/my/leave').set(auth(readOnlyToken));
+    expect(leave.status).not.toBe(403);
+
+    // `/users/me` needs no employee record, so this one is a real 200.
+    await http().get('/users/me').set(auth(readOnlyToken)).expect(200);
   });
 
   it('keeps a GET a read even when it carries a body', async () => {

@@ -6,6 +6,10 @@ import { AuthenticatedUser, Grant } from '../../auth/authenticated-user';
 import { levelForMethod } from '../access-levels';
 import { ACCESS_LEVEL_KEY } from '../decorators/access-level.decorator';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import {
+  PUBLIC_KEY,
+  SELF_SERVICE_KEY,
+} from '../decorators/route-access.decorator';
 import { PermissionsGuard } from './permissions.guard';
 
 /**
@@ -26,14 +30,16 @@ function contextFor(
   required: Permission[] | undefined,
   user: Partial<AuthenticatedUser> | undefined,
   overrideLevel?: AccessLevel,
+  declared?: { selfService?: boolean; publicRoute?: boolean },
 ): { guard: PermissionsGuard; context: ExecutionContext } {
   const reflector = {
-    getAllAndOverride: (key: string) =>
-      key === PERMISSIONS_KEY
-        ? required
-        : key === ACCESS_LEVEL_KEY
-        ? overrideLevel
-        : undefined,
+    getAllAndOverride: (key: string) => {
+      if (key === PERMISSIONS_KEY) return required;
+      if (key === ACCESS_LEVEL_KEY) return overrideLevel;
+      if (key === SELF_SERVICE_KEY) return declared?.selfService;
+      if (key === PUBLIC_KEY) return declared?.publicRoute;
+      return undefined;
+    },
   } as unknown as Reflector;
 
   const context = {
@@ -150,12 +156,83 @@ describe('PermissionsGuard — levels', () => {
     expect(guard.canActivate(context)).toBe(true);
   });
 
-  it('still admits a route with no @RequirePermissions', () => {
-    // Unchanged in Phase 2 on purpose. Phase 3 makes this fail closed behind an explicit
-    // `@SelfService()`; changing the level model and the default together would make a
-    // failure impossible to attribute.
+  it('refuses a route that declares nothing at all (Phase 3, FR-005)', () => {
+    // Changed by Phase 3, exactly as the Phase 2 version of this test said it would be.
+    // Before: no decorator meant "authenticated only", which was right for the `/my/*`
+    // surfaces and indistinguishable from an oversight everywhere else. Now the correct
+    // cases say so and the rest fail closed — so a controller added next year is protected
+    // because the guard defaults to refusing, not because somebody remembered.
     const { guard, context } = contextFor('POST', undefined, readOnly);
+    try {
+      guard.canActivate(context);
+      throw new Error('expected a ForbiddenException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect(
+        ((error as ForbiddenException).getResponse() as { code: string }).code,
+      ).toBe('ROUTE_ACCESS_UNDECLARED');
+    }
+  });
+
+  it('admits a route that declares @SelfService()', () => {
+    // The `/my/*` surfaces: authorisation is "this row is yours", enforced in the service.
+    // A permission would be wrong — every employee would need it, so it would grant nothing.
+    const { guard, context } = contextFor(
+      'POST',
+      undefined,
+      readOnly,
+      undefined,
+      {
+        selfService: true,
+      },
+    );
     expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('admits a route that declares @PublicRoute()', () => {
+    const { guard, context } = contextFor(
+      'GET',
+      undefined,
+      undefined,
+      undefined,
+      {
+        publicRoute: true,
+      },
+    );
+    expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('records a refusal, and a failing recorder does not turn a 403 into a 500', () => {
+    // FR-003. The caller was correctly refused either way, and the difference between those
+    // two responses is the difference between a working system and an apparently broken one.
+    const recorded: unknown[] = [];
+    const reflector = {
+      getAllAndOverride: (key: string) =>
+        key === PERMISSIONS_KEY ? [Permission.MACHINERY] : undefined,
+    } as unknown as Reflector;
+    const guard = new PermissionsGuard(reflector, {
+      record: (input: unknown) => {
+        recorded.push(input);
+        throw new Error('recorder is down');
+      },
+    } as never);
+    const context = {
+      getHandler: () => () => undefined,
+      getClass: () => class {},
+      switchToHttp: () => ({
+        getRequest: () => ({
+          user: { ...readOnly, id: 'u-1', companyId: 'co-1' },
+          method: 'POST',
+        }),
+      }),
+    } as unknown as ExecutionContext;
+
+    expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      requiredLevel: AccessLevel.write,
+      heldLevel: AccessLevel.read,
+    });
   });
 
   it('refuses when there is no authenticated user', () => {

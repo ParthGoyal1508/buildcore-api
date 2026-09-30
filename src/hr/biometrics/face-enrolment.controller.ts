@@ -26,6 +26,7 @@ import {
   RequestReEnrolmentDto,
 } from './dto/re-enrolment.dto';
 import { FaceEnrolmentService } from './face-enrolment.service';
+import { SelfService } from '../../common/decorators/route-access.decorator';
 
 /**
  * The caller's own face enrolment.
@@ -37,6 +38,12 @@ import { FaceEnrolmentService } from './face-enrolment.service';
 @ApiTags('My Workspace')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// 019 FR-005: authorised by ownership, not by a permission — this is an employee's own face enrolment,
+// resolved from the caller's own user id in the service. Every employee would need
+// such a permission, so it would grant nothing; what matters is that the row is
+// theirs. Declared rather than left as an absence, so the guard can refuse a route
+// that says nothing at all.
+@SelfService()
 @Controller('my/face-enrol')
 export class FaceEnrolmentController {
   constructor(private readonly faceEnrolment: FaceEnrolmentService) {}

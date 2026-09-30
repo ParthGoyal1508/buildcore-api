@@ -118,7 +118,12 @@ export class PayrollEngineService {
     const exceptions: { employeeId: string; reason: string }[] = [];
 
     for (const employee of employees) {
-      const attendance = await this.attendanceFor(caller, employee, month, year);
+      const attendance = await this.attendanceFor(
+        caller,
+        employee,
+        month,
+        year,
+      );
       const loanEmi = await this.currentCycleEmi(caller, employee.id, period);
       // Approved claims the admin chose to settle through payroll rather than
       // directly. Rejected, draft and withdrawn claims can never appear here
@@ -215,9 +220,7 @@ export class PayrollEngineService {
         // employee that is not salary, and they must not enter the PF/ESIC/PT
         // bases — which is why they are added here, after those were computed
         // from the salary structure, rather than passed into the engine.
-        specialAllowance: r2(
-          figures.specialAllowance + reimbursement.total,
-        ),
+        specialAllowance: r2(figures.specialAllowance + reimbursement.total),
         employeePf: figures.employeePf,
         employeeEsic: figures.employeeEsic,
         professionalTax: figures.professionalTax,
@@ -257,7 +260,9 @@ export class PayrollEngineService {
       // Replace rather than merge: a regeneration is a fresh answer to the same
       // question, and leaving a stale line for an employee who has since been
       // deactivated would quietly pay them.
-      await tx.payrollLineItem.deleteMany({ where: { payrollRunId: created.id } });
+      await tx.payrollLineItem.deleteMany({
+        where: { payrollRunId: created.id },
+      });
       if (lines.length > 0) {
         await tx.payrollLineItem.createMany({
           data: lines.map((l) => ({ ...l, payrollRunId: created.id })),
@@ -301,11 +306,7 @@ export class PayrollEngineService {
    * entries the run deducted. Processed → Paid records disbursement. Neither
    * transition is reversible, and no other pair is permitted.
    */
-  async setStatus(
-    caller: Caller,
-    runId: string,
-    target: PayrollRunStatus,
-  ) {
+  async setStatus(caller: Caller, runId: string, target: PayrollRunStatus) {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({ where: { id: runId } }),
     );
@@ -322,24 +323,28 @@ export class PayrollEngineService {
       );
     }
 
-    const updated = await withRlsContext(this.prisma, caller.rls, async (tx) => {
-      const next = await tx.payrollRun.update({
-        where: { id: runId },
-        data: {
-          status: target,
-          ...(target === PayrollRunStatus.processed
-            ? { processedAt: new Date() }
-            : { paidAt: new Date() }),
-        },
-      });
+    const updated = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const next = await tx.payrollRun.update({
+          where: { id: runId },
+          data: {
+            status: target,
+            ...(target === PayrollRunStatus.processed
+              ? { processedAt: new Date() }
+              : { paidAt: new Date() }),
+          },
+        });
 
-      if (target === PayrollRunStatus.processed) {
-        await this.settleLoanSchedule(tx, runId, run.period);
-        await this.materialiseSalarySlips(tx, runId, run.period);
-        await this.settleReimbursements(tx, runId);
-      }
-      return next;
-    });
+        if (target === PayrollRunStatus.processed) {
+          await this.settleLoanSchedule(tx, runId, run.period);
+          await this.materialiseSalarySlips(tx, runId, run.period);
+          await this.settleReimbursements(tx, runId);
+        }
+        return next;
+      },
+    );
 
     await this.auditLog.record({
       entityType: AuditEntityType.PAYROLL_RUN,
@@ -409,7 +414,12 @@ export class PayrollEngineService {
    */
   private async attendanceFor(
     caller: Caller,
-    employee: { id: string; siteId: string; shiftId: string; companyId: string },
+    employee: {
+      id: string;
+      siteId: string;
+      shiftId: string;
+      companyId: string;
+    },
     month: number,
     year: number,
   ): Promise<AttendanceInput> {
@@ -459,7 +469,9 @@ export class PayrollEngineService {
       tx.loanScheduleEntry.findMany({
         where: {
           month: period,
-          status: { in: [LoanScheduleStatus.upcoming, LoanScheduleStatus.overdue] },
+          status: {
+            in: [LoanScheduleStatus.upcoming, LoanScheduleStatus.overdue],
+          },
           loan: { employeeId, status: LoanStatus.active },
         },
       }),
@@ -540,7 +552,9 @@ export class PayrollEngineService {
     const entries = await tx.loanScheduleEntry.findMany({
       where: {
         month: period,
-        status: { in: [LoanScheduleStatus.upcoming, LoanScheduleStatus.overdue] },
+        status: {
+          in: [LoanScheduleStatus.upcoming, LoanScheduleStatus.overdue],
+        },
         loan: { status: LoanStatus.active },
       },
       select: { id: true, loanId: true },

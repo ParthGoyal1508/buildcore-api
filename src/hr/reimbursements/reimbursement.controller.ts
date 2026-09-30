@@ -25,6 +25,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { callerFrom } from '../caller-context';
 import { ClaimQueryDto, CreateClaimDto, UpdateClaimDto } from './dto/claim.dto';
 import { ReimbursementService } from './reimbursement.service';
+import { SelfService } from '../../common/decorators/route-access.decorator';
 
 /**
  * The employee's own reimbursement claims (US8).
@@ -36,6 +37,12 @@ import { ReimbursementService } from './reimbursement.service';
 @ApiTags('My Workspace')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// 019 FR-005: authorised by ownership, not by a permission — this is an employee's own reimbursement claims,
+// resolved from the caller's own user id in the service. Every employee would need
+// such a permission, so it would grant nothing; what matters is that the row is
+// theirs. Declared rather than left as an absence, so the guard can refuse a route
+// that says nothing at all.
+@SelfService()
 @Controller('my/reimbursements')
 export class ReimbursementController {
   constructor(private readonly reimbursements: ReimbursementService) {}

@@ -22,7 +22,10 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
-import { InitiateExitDto, ProcessFnfDto } from '../../hr/offboarding/dto/exit.dto';
+import {
+  InitiateExitDto,
+  ProcessFnfDto,
+} from '../../hr/offboarding/dto/exit.dto';
 import { ExitService } from '../../hr/offboarding/exit.service';
 import { FnfService } from './fnf.service';
 

@@ -113,10 +113,7 @@ export function validateSlabs(slabs: TaxSlabBand[]): string | null {
  * raise in month 7 raises the remaining five deductions rather than leaving a
  * shortfall for March.
  */
-export function computeTds(
-  input: TdsInput,
-  slabs: TaxSlabBand[],
-): TdsResult {
+export function computeTds(input: TdsInput, slabs: TaxSlabBand[]): TdsResult {
   const {
     earnedToDate,
     currentMonthGross,
@@ -137,9 +134,7 @@ export function computeTds(
   if (!hasPan) {
     // Flat penal rate on gross, ignoring slabs and declarations entirely — that is
     // the point of the penalty, and applying deductions would soften it.
-    const annualLiability = r2(
-      (projectedAnnualGross * noPanRatePercent) / 100,
-    );
+    const annualLiability = r2((projectedAnnualGross * noPanRatePercent) / 100);
     const remaining = Math.max(annualLiability - deductedToDate, 0);
     return {
       projectedAnnualGross,

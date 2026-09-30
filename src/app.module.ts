@@ -13,6 +13,7 @@ import { AssetsModule } from './assets/assets.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { LettersModule } from './letters/letters.module';
 import { SearchModule } from './search/search.module';
+import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -89,6 +90,10 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // registers itself with its registry on init, so the import order of the four owning
     // modules cannot matter. The module itself owns no tables — see its doc comment.
     SearchModule,
+    // 019 FR-003's recorder. Global, because PermissionsGuard is declared per-controller
+    // across every module and resolves its dependencies from whichever module owns the
+    // controller — see the module's own comment.
+    PermissionRefusalModule,
   ],
   controllers: [AppController],
   providers: [

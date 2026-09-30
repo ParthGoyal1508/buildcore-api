@@ -72,7 +72,9 @@ export class DeclarationLineDto {
   @Min(0)
   declaredAmount: number;
 
-  @ApiPropertyOptional({ description: 'Object-storage reference for the proof.' })
+  @ApiPropertyOptional({
+    description: 'Object-storage reference for the proof.',
+  })
   @IsOptional()
   @IsString()
   proofRef?: string;

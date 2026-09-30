@@ -8,10 +8,15 @@ import { UsersService } from './users.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { UserResponseDto } from './dto/user-response.dto';
+import { SelfService } from '../common/decorators/route-access.decorator';
 
 @ApiTags('users')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// 019 FR-005: self-service — the caller's own profile and password, resolved from
+// their own token. A permission would be wrong: every employee would need it, so it
+// would grant nothing.
+@SelfService()
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}

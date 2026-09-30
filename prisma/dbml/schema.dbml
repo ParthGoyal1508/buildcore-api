@@ -82,20 +82,19 @@ company), so Principle IV\'s per-tenant isolation requirement doesn\'t apply her
 actually *holds* a role) is the tenant-scoped side, and is RLS-protected.'
 }
 
-Table RolePermission {
+Table PermissionRefusal {
   id String [pk]
-  roleId String [not null]
-  role Role [not null]
-  permission Permission [not null, note: 'The area. The existing 34-value enum, unchanged — areas are already granular enough
-for the client\'s Note 22, since `LOGBOOK` and `FUEL` are already distinct from
-`MACHINERY` (019 research §2).']
-  level AccessLevel [not null]
+  companyId String [not null]
+  userId String [not null]
+  method String [not null]
+  path String [not null, note: 'The route **template**, never the resolved URL. A resolved URL carries record ids, and a
+security log quietly accumulating them becomes a store of personal data nobody
+classified as one.']
+  requiredPermission Permission [not null]
+  requiredLevel AccessLevel [not null]
+  heldLevel AccessLevel [note: 'The level actually held for that area. **Null means the area was not held at all** —
+which is a different event from holding it at the wrong level.']
   createdAt DateTime [default: `now()`, not null]
-  createdBy String
-
-  indexes {
-    (roleId, permission, level) [unique]
-  }
 
   Note: 'One grant: a role may do `level` to `permission` (019 FR-001, FR-002).
 
@@ -110,7 +109,30 @@ queryable by area.
 tenant data (hence `UserRole` is RLS\'d) while the role\'s own definition is not. A child
 of a global table cannot be tenant-scoped, and a policy here that looked like one would
 be worse than none — it would read as isolation to the next person while enforcing
-nothing.'
+nothing.
+A refused request, recorded (019 FR-003).
+
+`heldLevel` is the column that earns this table. A refusal with `heldLevel = read` against
+a required `write` is an **interface** that offered a control it should have hidden —
+FR-004\'s failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
+reaching for a module they hold nothing in, which is a security signal. Without this column
+the two are the same row, and the only thing anybody could do with the log is count it.'
+}
+
+Table RolePermission {
+  id String [pk]
+  roleId String [not null]
+  role Role [not null]
+  permission Permission [not null, note: 'The area. The existing 34-value enum, unchanged — areas are already granular enough
+for the client\'s Note 22, since `LOGBOOK` and `FUEL` are already distinct from
+`MACHINERY` (019 research §2).']
+  level AccessLevel [not null]
+  createdAt DateTime [default: `now()`, not null]
+  createdBy String
+
+  indexes {
+    (roleId, permission, level) [unique]
+  }
 }
 
 Table UserRole {

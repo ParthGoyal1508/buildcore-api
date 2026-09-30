@@ -77,7 +77,8 @@ export class PayrollRegisterService {
       const e = byId.get(l.employeeId);
       if (!e) continue;
 
-      if (filters.departmentId && e.departmentId !== filters.departmentId) continue;
+      if (filters.departmentId && e.departmentId !== filters.departmentId)
+        continue;
       if (filters.siteId && e.siteId !== filters.siteId) continue;
       // Project filter reads the line's own projectId (FR-046/FR-060) — the
       // project the cost was attributed to, which may differ from where the
@@ -137,11 +138,10 @@ export class PayrollRegisterService {
     // FR-058: the register must agree with the run it came from. Only checked
     // when unfiltered — a filtered view is legitimately a subset, and comparing
     // it to the whole run would produce a false alarm every time.
-    const filtered =
-      Boolean(filters.departmentId || filters.projectId || filters.siteId);
-    const runNetTotal = r2(
-      run.lineItems.reduce((a, l) => a + n(l.netPay), 0),
+    const filtered = Boolean(
+      filters.departmentId || filters.projectId || filters.siteId,
     );
+    const runNetTotal = r2(run.lineItems.reduce((a, l) => a + n(l.netPay), 0));
     const reconciliation =
       !filtered && Math.abs(totals.netPay - runNetTotal) > 0.01
         ? {
@@ -217,7 +217,11 @@ export class PayrollRegisterService {
   async exportRegister(
     caller: Caller,
     runId: string,
-    filters: { departmentId?: string; projectId?: string; siteId?: string } = {},
+    filters: {
+      departmentId?: string;
+      projectId?: string;
+      siteId?: string;
+    } = {},
   ): Promise<{ buffer: Buffer; filename: string }> {
     const register = await this.salaryRegister(caller, runId, filters);
 
@@ -256,9 +260,20 @@ export class PayrollRegisterService {
     totals.font = { bold: true };
 
     for (const key of [
-      'basic', 'hra', 'conveyance', 'siteAllowance', 'specialAllowance',
-      'otWages', 'gross', 'employeePf', 'employeeEsic', 'professionalTax',
-      'tds', 'loanEmi', 'totalDeductions', 'netPay',
+      'basic',
+      'hra',
+      'conveyance',
+      'siteAllowance',
+      'specialAllowance',
+      'otWages',
+      'gross',
+      'employeePf',
+      'employeeEsic',
+      'professionalTax',
+      'tds',
+      'loanEmi',
+      'totalDeductions',
+      'netPay',
     ]) {
       sheet.getColumn(key).numFmt = '#,##0.00';
     }

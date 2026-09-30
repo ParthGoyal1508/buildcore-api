@@ -168,39 +168,94 @@ run.
 
 ## Phase 3: Close the unguarded hole (FR-005, FR-007)
 
-- [ ] T029 Add `@SelfService()` and `@Public()` decorators. `@SelfService()` declares a route
+- [X] T029 Add `@SelfService()` and `@Public()` decorators. `@SelfService()` declares a route
   authorised by record ownership rather than permission; `@Public()` declares no authentication at
   all.
-- [ ] T030 [P] Apply `@SelfService()` to the six `/my/*` controllers — `hr/punch` (4 routes),
+- [X] T030 [P] Apply `@SelfService()` to the six `/my/*` controllers — `hr/punch` (4 routes),
   `hr/leave` (4), `hr/reimbursements` (6), `hr/biometrics/face-enrolment` (5), `payroll/salary` (3).
   22 routes. These are correct as they are; the decorator makes them **declared** rather than
   inferred from an absence.
-- [ ] T031 [P] Apply `@Public()` to `app.controller.ts`'s health route.
-- [ ] T032 Give `users.controller.ts` (3 routes) and `account-creation/invites` (2) real permissions.
+- [X] T031 [P] Apply `@Public()` to `app.controller.ts`'s health route.
+- [X] T032 Give `users.controller.ts` (3 routes) and `account-creation/invites` (2) real permissions.
   These are the genuinely unguarded ones. Choose the value from the existing enum — `USER_MANAGEMENT`
   for both, unless reading the handlers says otherwise — and record the reasoning beside the task.
-- [ ] T033 Make the guard **fail closed**: a route declaring none of `@RequirePermissions`,
+- [X] T033 Make the guard **fail closed**: a route declaring none of `@RequirePermissions`,
   `@SelfService` or `@Public` is refused. This is what turns FR-005 from a promise into a property.
-- [ ] T034 [P] Unit test: a controller declaring nothing is refused. Add a fixture controller in the
+- [X] T034 [P] Unit test: a controller declaring nothing is refused. Add a fixture controller in the
   test rather than a throwaway in `src/`.
-- [ ] T035 [P] e2e: every `/my/*` route still returns 200 for an ordinary employee. If this fails,
+- [X] T035 [P] e2e: every `/my/*` route still returns 200 for an ordinary employee. If this fails,
   T030 missed a controller and 22 routes of self-service have just been taken from every employee —
   which is a worse outage than the hole this phase closes.
-- [ ] T036 Add `model PermissionRefusal` per the data model, with RLS and the `heldLevel` nullable
+- [X] T036 Add `model PermissionRefusal` per the data model, with RLS and the `heldLevel` nullable
   column, plus its migration with the `set_config` line.
-- [ ] T037 Record a refusal from the guard — caller, method, **route template not resolved URL**,
+- [X] T037 Record a refusal from the guard — caller, method, **route template not resolved URL**,
   required area, required level, held level.
-- [ ] T038 [P] Unit test: `path` is the template. A test asserting the resolved URL would enshrine
+- [X] T038 [P] Unit test: `path` is the template. A test asserting the resolved URL would enshrine
   the PII leak the data model exists to avoid.
-- [ ] T039 `GET /settings/permission-refusals` under `USER_MANAGEMENT` at read, filterable by user,
+- [X] T039 `GET /settings/permission-refusals` under `USER_MANAGEMENT` at read, filterable by user,
   area and date range.
-- [ ] T040 [P] Add the 180-day retention sweep to the existing cron pattern, with a test that it
+- [X] T040 [P] Add the 180-day retention sweep to the existing cron pattern, with a test that it
   deletes beyond the window and nothing inside it.
-- [ ] T041 Update the role DTOs to accept `{ permission, level }[]`, validated per element.
-- [ ] T042 Refuse **write without read** at role definition time, 422 `WRITE_WITHOUT_READ`, naming the
+- [X] T041 Update the role DTOs to accept `{ permission, level }[]`, validated per element.
+- [X] T042 Refuse **write without read** at role definition time, 422 `WRITE_WITHOUT_READ`, naming the
   areas. The spec left this open as an edge case; the plan closes it. Record the decision in the
   spec's Clarifications so the client can disagree.
-- [ ] T043 [P] Unit test for T042, and for a role created with read only being accepted.
+- [X] T043 [P] Unit test for T042, and for a role created with read only being accepted.
+
+## Phase 3 implementation record, 2026-09-30
+
+**T029-T043 complete.** Phases 1-3 done; 4-7 remain.
+
+### FR-005's hole was smaller than the spec said, and the fix is different
+
+The plan described six unguarded routes. **Reading all 101 controllers, there was no hole.**
+Every one is authorised; the ten carrying no `PermissionsGuard` each authorise elsewhere and
+say so: `app` (health, public), `letters` (per *kind*, in the service — a work order and a
+relieving letter are not the same authority), `search` (per *register*, in the registry),
+`users` and the five `/my/*` controllers (record ownership), and
+`account-creation/invites` (the invite token *is* the credential — there is no account yet,
+which is why both routes are rate-limited).
+
+**My earlier claim that `users` and `invites` were "genuinely unguarded" was wrong.** Reading
+their routes: `users` serves the caller's own profile and password, and `invites` is
+token-credentialed with no `JwtAuthGuard` by design and its own comment explaining why.
+Neither wanted `USER_MANAGEMENT`, which T032 had assumed.
+
+So what was actually wrong is that **being correct and being forgotten looked identical**. A
+new controller could join that list by saying nothing. Two things now prevent it:
+
+1. `@SelfService()` and `@PublicRoute()` make the category explicit, and the guard refuses a
+   route declaring none of the three (`ROUTE_ACCESS_UNDECLARED`).
+2. `route-access-coverage.spec.ts`, which is the **durable** half — the guard change only binds
+   where `PermissionsGuard` is declared, and 10 controllers do not declare it. The test covers
+   all 101 and was verified by adding a bare controller: it failed naming the file, and passed
+   on removal.
+
+### A defect my own test caught
+
+The guard called `refusals.record(...)` unwrapped, and I had written in the comment that a
+failing recorder must not turn a 403 into a 500. A **synchronous** throw escaped and did
+exactly that. The service happens to swallow its own write failures, but the guard must not
+depend on that. Now wrapped, with the test that found it.
+
+### Decisions recorded
+
+- **Write without read is refused** at role-definition time, 422 `WRITE_WITHOUT_READ`. The spec
+  left this open; a role that may change records it cannot see can neither find what to change
+  nor see what it changed.
+- **Absent `grants` means read + write**, so no existing caller of the role endpoints changes
+  meaning, and an area the grants say nothing about keeps its default — the absence of a level
+  is not a decision to remove one.
+- **The array and the rows are written in one statement.** `Role.permissions` is on its way out
+  but is still what the rest of the codebase reads; a role whose two shapes disagreed would
+  grant one thing to the guard and another to every service-level check.
+- **Retention is 180 days**, swept at 3:20am — offset from the refresh-token cleanup so the two
+  do not contend for the pool. A security log with no stated lifetime is how a small table
+  becomes an incident, and every refused request writes a row.
+- **`PermissionRefusalModule` is `@Global`**, because `PermissionsGuard` is declared on 91
+  controllers across every module and Nest resolves a guard's dependencies from the module
+  owning the controller. The alternative was adding a provider to 91 modules, and the one
+  somebody missed would be a route whose refusals silently went unrecorded.
 
 ## Phase 4: Company selection (FR-008 to FR-013)
 

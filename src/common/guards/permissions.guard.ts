@@ -11,6 +11,11 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { levelForMethod } from '../access-levels';
 import { ACCESS_LEVEL_KEY } from '../decorators/access-level.decorator';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import { PermissionRefusalService } from './permission-refusal.service';
+import {
+  PUBLIC_KEY,
+  SELF_SERVICE_KEY,
+} from '../decorators/route-access.decorator';
 
 /**
  * Reads `@RequirePermissions(...)` and compares it against the caller's grants — the
@@ -34,15 +39,50 @@ import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
  */
 @Injectable()
 export class PermissionsGuard implements CanActivate {
-  constructor(private readonly reflector: Reflector) {}
+  constructor(
+    private readonly reflector: Reflector,
+    /**
+     * Optional, so a hand-built guard in a unit test needs no recorder. FR-003 asks that
+     * refusals be recorded; it does not ask that the guard refuse to work without somewhere
+     * to record them.
+     */
+    private readonly refusals?: PermissionRefusalService,
+  ) {}
 
   canActivate(context: ExecutionContext): boolean {
     const required = this.reflector.getAllAndOverride<Permission[]>(
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
+
     if (!required || required.length === 0) {
-      return true;
+      // 019 FR-005, Phase 3. An undeclared route now **fails closed**.
+      //
+      // Before this, no decorator meant "authenticated only", which is correct for the
+      // `/my/*` surfaces and indistinguishable from an oversight everywhere else. Those
+      // surfaces now say so with `@SelfService()`, the health check says so with
+      // `@PublicRoute()`, and anything declaring neither is refused — so a controller added
+      // next year is protected because the guard defaults to refusing, not because somebody
+      // remembered.
+      const declared =
+        this.reflector.getAllAndOverride<boolean>(SELF_SERVICE_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ]) ||
+        this.reflector.getAllAndOverride<boolean>(PUBLIC_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ]);
+
+      if (declared) return true;
+
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'ROUTE_ACCESS_UNDECLARED',
+        message:
+          'This route declares no access requirement. It must carry ' +
+          '@RequirePermissions(...), @SelfService() or @PublicRoute().',
+      });
     }
 
     const request = context.switchToHttp().getRequest<{
@@ -87,6 +127,34 @@ export class PermissionsGuard implements CanActivate {
     const holdsArea = required.some((permission) =>
       user.grants.some((grant) => grant.permission === permission),
     );
+    // FR-003. Fire-and-forget: the decision is already made, and a 403 must not become a 500
+    // because a log write failed.
+    //
+    // Wrapped, and not because `record` is expected to throw — it swallows its own write
+    // failures. The guard must not *depend* on that: a recorder that threw synchronously
+    // (a bad injection, a future refactor) would turn every refusal into a 500, which is the
+    // difference between a working system and an apparently broken one. Caught by the unit
+    // test rather than by review.
+    try {
+      this.refusals?.record({
+        companyId: user.companyId,
+        userId: user.id,
+        method: request.method ?? 'GET',
+        // The route template, never the resolved URL — a resolved URL carries record ids,
+        // and a security log accumulating them becomes a store of personal data nobody
+        // classified.
+        path: routeTemplate(context),
+        requiredPermission: required[0],
+        requiredLevel: level,
+        heldLevel: holdsArea
+          ? user.grants.find((g) => required.includes(g.permission))?.level ??
+            null
+          : null,
+      });
+    } catch {
+      // Nothing to do: the refusal below is the response, and it is unaffected.
+    }
+
     throw new ForbiddenException({
       statusCode: 403,
       code: holdsArea
@@ -98,4 +166,28 @@ export class PermissionsGuard implements CanActivate {
       required: { permission: required, level },
     });
   }
+}
+
+/**
+ * The route's declared path, assembled from controller and handler metadata.
+ *
+ * Nest does not hand a guard the matched route pattern, so it is rebuilt from the same
+ * metadata the router used. Falling back to class and handler **names** rather than to the
+ * request URL is deliberate: the fallback must never be the thing this function exists to
+ * avoid recording.
+ */
+function routeTemplate(context: ExecutionContext): string {
+  const controllerPath =
+    Reflect.getMetadata('path', context.getClass()) ?? context.getClass().name;
+  const handlerPath =
+    Reflect.getMetadata('path', context.getHandler()) ??
+    context.getHandler().name;
+  const suffix =
+    typeof handlerPath === 'string' && handlerPath !== '/'
+      ? `/${handlerPath}`
+      : '';
+  return `/${String(controllerPath).replace(/^\/+/, '')}${suffix}`.replace(
+    /\/+$/,
+    '',
+  );
 }
