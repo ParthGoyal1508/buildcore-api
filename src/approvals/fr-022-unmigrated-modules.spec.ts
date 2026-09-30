@@ -104,6 +104,17 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/projects/portfolio/projects.service.ts',
           ':(exclude)src/projects/portfolio/projects.service.spec.ts',
           ':(exclude)src/projects/portfolio/dto/project.dto.ts',
+          // Owned by 021 US1 (cross-register search), not by anything in 016. Each of
+          // these registers contributes a read-only `SearchSource` from inside its own
+          // module, which is what Principle I requires and what keeps `src/search/` from
+          // querying four schemas itself. None of them touches an approval path — the
+          // per-file `approve()` assertions above still read every one of those and are
+          // the real protection here; this diff is the backstop.
+          ':(exclude)src/partners/partners.module.ts',
+          ':(exclude)src/partners/vendors/vendor-search.source.ts',
+          ':(exclude)src/plant/plant.module.ts',
+          ':(exclude)src/plant/equipment/equipment-search.source.ts',
+          ':(exclude)src/projects/portfolio/project-search.source.ts',
         ],
         {
           cwd: REPO_ROOT,

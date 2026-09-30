@@ -26,6 +26,8 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../caller-context';
 import { AttendanceImportService } from './attendance-import.service';
 import { AttendanceImportDto } from './dto/import-row.dto';
+import { AccessLevel } from '@prisma/client';
+import { RequireLevel } from '../../common/decorators/access-level.decorator';
 
 /**
  * Bulk attendance import (005 US13).
@@ -61,6 +63,10 @@ export class AttendanceImportController {
   }
 
   @Post('validate')
+  // 019 T014: a POST that reads. It checks a file and imports nothing, so refusing it to a
+  // read-only role would refuse a legitimate read — the one direction the verb→level rule
+  // gets wrong.
+  @RequireLevel(AccessLevel.read)
   @ApiOperation({
     summary: 'Check a file without importing anything',
     description:

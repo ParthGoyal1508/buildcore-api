@@ -105,11 +105,17 @@ their own company and is re-recorded; it never widens what RLS permits.
 Three steps rather than one so that a rollback of Phase 2 is a code revert with no data loss. The
 column is the rollback.
 
-### `settings.CompanySettings` — one field added
+### `settings.Company` — one field added
 
 | Field | Type | Notes |
 |---|---|---|
 | `hideCashTransactions` | `Boolean @default(false)` | FR-014. Default false: a display control that arrives switched on would hide figures nobody asked to hide |
+
+Corrected 2026-09-30, during implementation: this document and the plan both said
+`CompanySettings`. **There is no such table** — the company's tunables, including
+`labourCashDenominations`, live on `settings.Company` itself. Caught by the migration
+failing with `42P01` rather than by review, and the migration rolled back cleanly because
+Prisma wraps each file in a transaction.
 
 Who may change it (FR-016) is `COMPANY_SETTINGS` at `write` level, and every change is recorded
 through the existing audit-log service rather than a new table — the service already carries actor and
@@ -120,7 +126,7 @@ time, which is exactly what FR-016 asks for.
 - `Permission` — all 34 values, no addition, rename or removal. Areas are already granular enough for
   Note 22 (research §2).
 - Every `tenant_isolation` policy on every existing table. Company isolation stays where it is.
-- `CompanySettings.labourCashDenominations` — configuration, not a cash transaction (research §4).
+- `Company.labourCashDenominations` — configuration, not a cash transaction (research §4).
 
 ## Migration notes
 

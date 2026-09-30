@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { AccessLevel, Permission } from '@prisma/client';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 
 export class UserResponseDto {
@@ -30,6 +30,21 @@ export class UserResponseDto {
   @ApiProperty({ enum: Permission, isArray: true })
   permissions: Permission[];
 
+  /**
+   * The same areas, each with the level it is held at (019 FR-001).
+   *
+   * **Additive, not a replacement.** `permissions` above keeps its meaning — the areas
+   * held at some level — so a client reading it as a flat list of strings is unaffected.
+   * That is deliberate: a breaking shape change here would break every screen at once,
+   * and the level is only needed by the parts of an interface that decide whether to
+   * render a control (FR-004).
+   */
+  @ApiProperty({
+    isArray: true,
+    description: 'Area and level pairs. Additive; `permissions` is unchanged.',
+  })
+  grants: { permission: Permission; level: AccessLevel }[];
+
   // Deliberately omits `password` — this is the boundary that keeps the
   // hash out of every API response, since Prisma's User type carries it.
   static fromEntity(user: AuthenticatedUser): UserResponseDto {
@@ -43,6 +58,7 @@ export class UserResponseDto {
       lastname,
       roleNames,
       permissions,
+      grants,
     } = user;
     return {
       id,
@@ -54,6 +70,7 @@ export class UserResponseDto {
       lastname,
       roleNames,
       permissions,
+      grants: grants ?? [],
     };
   }
 }

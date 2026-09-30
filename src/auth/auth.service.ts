@@ -291,7 +291,15 @@ export class AuthService {
       (tx) =>
         tx.user.findUnique({
           where: { id: userId },
-          include: { userRoles: { include: { role: true } } },
+          // `rolePermissions` rides along in a query that already runs on every request
+          // (jwt.strategy.ts re-validates rather than trusting the token's claims), so
+          // 019's level model costs no extra round trip — which is what settles T019's
+          // "resolve at token issue or per request?" without a measurement.
+          include: {
+            userRoles: {
+              include: { role: { include: { rolePermissions: true } } },
+            },
+          },
         }),
     );
     return user ? toAuthenticatedUser(user) : null;

@@ -129,15 +129,27 @@ enum UserStatus {
 /// — every authenticated user can read what a role grants. UserRole (who
 /// actually *holds* a role) is the tenant-scoped side, and is RLS-protected.
 model Role {
-  id          String       @id @default(cuid())
-  name        String       @unique
+  id   String @id @default(cuid())
+  name String @unique
+
+  /// **Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
+  /// the client's Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
+  /// switches the guard over; kept through that cutover on purpose, so a rollback of
+  /// Phase 2 is a code revert with no data loss. A later migration drops it once a release
+  /// has proved the new path.
+  ///
+  /// Do not write to it and do not read it in new code. `scripts/access-matrix.ts` reads
+  /// both shapes and is what proves the two agree (FR-006, SC-002).
   permissions Permission[]
+
+  /// One row per area and level (019 FR-001, FR-002). See `RolePermission`.
+  rolePermissions RolePermission[]
   /// True only for the seeded Super Admin role — blocks rename/permission-change/
   /// delete (002-settings-backend FR-008; enforced there once it owns role editing —
   /// this feature only ever reads roles, it doesn't expose role management).
-  isProtected Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  isProtected     Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   userRoles UserRole[]
 
@@ -146,6 +158,41 @@ model Role {
   /// since the alternative is a level that resolves to nothing.
   roleSlotMappings RoleSlotMapping[]
 
+  @@schema("settings")
+}
+
+/// One grant: a role may do `level` to `permission` (019 FR-001, FR-002).
+///
+/// Replaces `Role.permissions`, the scalar list, which could not carry a level. The
+/// alternative was doubling the `Permission` enum into `*_READ`/`*_WRITE` pairs — rejected
+/// because 34 values become 68, every one of the 116 `@RequirePermissions(...)`
+/// declarations would have to name which it meant, and a role's grants would stop being
+/// queryable by area.
+///
+/// **No `companyId`, and no RLS — deliberately.** `Role` itself carries neither: migration
+/// `20260828170000_role_permission_model` records the reasoning, that who *holds* a role is
+/// tenant data (hence `UserRole` is RLS'd) while the role's own definition is not. A child
+/// of a global table cannot be tenant-scoped, and a policy here that looked like one would
+/// be worse than none — it would read as isolation to the next person while enforcing
+/// nothing.
+model RolePermission {
+  id String @id @default(cuid())
+
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  /// The area. The existing 34-value enum, unchanged — areas are already granular enough
+  /// for the client's Note 22, since `LOGBOOK` and `FUEL` are already distinct from
+  /// `MACHINERY` (019 research §2).
+  permission Permission
+  level      AccessLevel
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  /// A grant is present or absent, never duplicated.
+  @@unique([roleId, permission, level])
+  @@index([roleId])
   @@schema("settings")
 }
 
@@ -165,6 +212,19 @@ model UserRole {
 
   @@unique([userId, roleId])
   @@index([userId])
+  @@schema("settings")
+}
+
+/// How much of an area a grant confers (019 FR-001).
+///
+/// Two values, deliberately. A third (`approve`) was considered and rejected: this system
+/// already expresses approval as separate `Permission` values — `INVENTORY_APPROVE`,
+/// `LABOUR_APPROVE`, `RECRUITMENT_APPROVE`, `ASSETS_APPROVE` — and a level duplicating
+/// them would give two ways to say one thing with nothing stating which wins.
+enum AccessLevel {
+  read
+  write
+
   @@schema("settings")
 }
 
@@ -314,6 +374,17 @@ model Company {
   /// so this is not a literal inside the denomination service — Principle III.
   labourCashDenominations Int[] @default([500, 200, 100, 50, 20, 10, 5, 1])
 
+  /// Hides cash amounts and cash transactions across the application (019 FR-014).
+  ///
+  /// A **display** control, never a data operation — FR-017 is explicit that nothing is
+  /// deleted or altered while it is on. Default false: a display control that arrived
+  /// switched on would hide figures nobody asked to hide.
+  ///
+  /// Note that `labourCashDenominations` above is deliberately NOT hidden by this. It
+  /// looks like cash and is not — it is configuration, and hiding it would break the
+  /// payment-sheet builder while concealing nothing anybody wanted concealed.
+  hideCashTransactions Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -359,8 +430,8 @@ model Company {
   companyDocuments  CompanyDocument[]
 
   // 017 letters (T026, T052).
-  letterKinds LetterKind[]
-  signatories Signatory[]
+  letterKinds   LetterKind[]
+  signatories   Signatory[]
   issuedLetters IssuedLetter[]
 
   @@schema("settings")
@@ -507,9 +578,9 @@ model LetterKind {
   label String
 
   /// FR-016: whether a signature is applied at issue.
-  requiresSignature Boolean @default(false)
+  requiresSignature  Boolean @default(false)
   /// FR-015a: true for work order, LOI and purchase order — the three that commit money.
-  requiresApproval  Boolean @default(false)
+  requiresApproval   Boolean @default(false)
   /// The 016 action type to gate on. Must equal a constant exported from
   /// `src/approvals/default-chains.ts`; a unit test asserts that rather than trusting
   /// two files to stay in step.
