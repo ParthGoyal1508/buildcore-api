@@ -15,6 +15,8 @@ import { EquipmentDocTypesController } from './doc-types/equipment-doc-types.con
 import { EquipmentController } from './equipment/equipment.controller';
 import { EquipmentService } from './equipment/equipment.service';
 import { FuelController } from './fuel/fuel.controller';
+import { FuelExceptionsController } from './fuel-exceptions/fuel-exceptions.controller';
+import { FuelExceptionsService } from './fuel-exceptions/fuel-exceptions.service';
 import { FuelService } from './fuel/fuel.service';
 import { HireBillsController } from './hire-bills/hire-bills.controller';
 import { HireBillsService } from './hire-bills/hire-bills.service';
@@ -70,6 +72,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     InventoryModule,
   ],
   controllers: [
+    FuelExceptionsController,
     EquipmentCategoriesController,
     EquipmentDocTypesController,
     HireRatesController,
@@ -90,6 +93,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     EquipmentService,
     LogbookService,
     FuelService,
+    FuelExceptionsService,
     ServiceScheduleService,
     MaintenanceService,
     HireBillsService,

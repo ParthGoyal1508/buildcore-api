@@ -2723,8 +2723,88 @@ Table FuelEntry {
 §3): a later edit to the category\'s benchmark must not retroactively rewrite
 what was flagged, or unflag, months of history.']
   varianceAlert Boolean [not null, default: false]
+  varianceException FuelVarianceException [note: '020 FR-001: the review raised against this reading, once somebody raises one.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+}
+
+Table FuelVarianceException {
+  id String [pk]
+  companyId String [not null]
+  fuelEntryId String [unique, not null]
+  fuelEntry FuelEntry [not null]
+  status FuelExceptionStatus [not null, default: 'open']
+  attribution FuelAttribution [note: 'Who bears the cost. **Nullable, and deliberately without a default** (plan D27): a default
+would decide, quietly and at scale, who pays for fuel nobody can account for. It is set only
+when somebody confirms the exception, and `neither` is an explicit choice rather than an
+absence.']
+  operatorEmployeeId String [note: 'Required when `attribution` is `operator` and the machine had more than one in the period
+(FR-009). **Never inferred from the logbook** — the requirement says named explicitly, and
+inferring is how the wrong person\'s wages get docked.']
+  reviewedByUserId String
+  reviewedAt DateTime
+  reason String [note: 'Why. Required to dismiss (FR-008): a dismissal nobody has to justify is how an exception
+register becomes a list everybody clears without reading.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  hireBillDeduction HireBillDeduction [note: '020 Phase 6. Exclusive by construction — see `FuelAttribution`.']
+  operatorRecovery OperatorFuelRecovery
+
+  Note: 'What a reviewer decided about a machine that burned more fuel than its benchmark
+(020 FR-001 to FR-009).
+
+**Detection is untouched by this table** (FR-017). `Equipment.fuelBenchmark`,
+`FuelEntry.variancePercent` and `FuelEntry.varianceAlert` keep computing exactly as they did;
+what is added is the review that turns an alert nobody must act on into a decision with a name
+against it. Raising an exception is deliberately *not* done inside the detector — coupling the
+two would mean a change to either could silently alter the other.'
+}
+
+Table HireBillDeduction {
+  id String [pk]
+  companyId String [not null]
+  hireBillId String [not null]
+  hireBill HireBill [not null]
+  fuelVarianceExceptionId String [unique, not null, note: 'One exception cannot be recovered twice from a bill. Structural, not a convention.']
+  fuelVarianceException FuelVarianceException [not null]
+  amount Decimal [not null]
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Fuel burned beyond benchmark, recovered from the hirer\'s next bill (020 FR-003, FR-004).
+
+`netPayable` on the bill is **recomputed** from gross, TDS and the sum of deductions rather than
+decremented in place (plan D28). A vendor disputing a bill is owed the arithmetic, and a net
+reduced by an `UPDATE` cannot produce it.'
+}
+
+Table OperatorFuelRecovery {
+  id String [pk]
+  companyId String [not null]
+  fuelVarianceExceptionId String [unique, not null]
+  fuelVarianceException FuelVarianceException [not null]
+  employeeId String [not null, note: '→ `hr.Employee`. Not a relation: `plant` does not reach into `hr`\'s schema (Principle I).']
+  amount Decimal [not null]
+  status OperatorRecoveryStatus [not null, default: 'pending_approval']
+  approvalItemId String [note: 'The approval spine\'s item. Null only before submission.']
+  appliedPayrollLineItemId String [note: 'Set when the approved recovery reaches a payroll line, and what makes application idempotent:
+a second `approval.completed` for the same recovery finds this already set and does nothing.']
+  reversedAt DateTime
+  reversedByUserId String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Fuel burned beyond benchmark, recovered from the operator\'s salary (020 FR-005 to FR-007, FR-010).
+
+**No path to a payroll line except through an approved item** (FR-006). The gate is the approval
+spine, not a check inside the payroll service — the difference is whether a second caller can
+bypass it.
+
+Settles through `SalaryAdvance`\'s recovery machinery, which already handles instalments and a
+recovery exceeding the month\'s net. It is **not** an advance, and is named as a fuel recovery on
+the payslip: this is a recovery for loss, not money lent (FR-007).'
 }
 
 Table ServiceSchedule {
@@ -2798,6 +2878,7 @@ logbook entry is corrected afterwards.']
   paymentReference String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+  fuelDeductions HireBillDeduction [not null, note: '020 FR-003: fuel recovered from this bill.']
 }
 
 Table SparePart {
@@ -3907,6 +3988,7 @@ Enum AuditEntityType {
   EQUIPMENT_DOCUMENT
   LOGBOOK_ENTRY
   FUEL_ENTRY
+  FUEL_VARIANCE_EXCEPTION
   SERVICE_SCHEDULE
   MAINTENANCE_JOB
   HIRE_BILL
@@ -4357,6 +4439,26 @@ Enum ServiceBillPaymentStatus {
   paid
 }
 
+Enum FuelExceptionStatus {
+  open
+  confirmed
+  dismissed
+}
+
+Enum OperatorRecoveryStatus {
+  pending_approval
+  approved
+  applied
+  rejected
+  reversed
+}
+
+Enum FuelAttribution {
+  hirer
+  operator
+  neither
+}
+
 Enum EngagementType {
   direct
   contractor
@@ -4758,6 +4860,14 @@ Ref: EquipmentDocument.equipmentId > Equipment.id [delete: Cascade]
 Ref: LogbookEntry.equipmentId > Equipment.id [delete: Cascade]
 
 Ref: FuelEntry.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: FuelVarianceException.fuelEntryId - FuelEntry.id [delete: Cascade]
+
+Ref: HireBillDeduction.hireBillId > HireBill.id [delete: Cascade]
+
+Ref: HireBillDeduction.fuelVarianceExceptionId - FuelVarianceException.id [delete: Cascade]
+
+Ref: OperatorFuelRecovery.fuelVarianceExceptionId - FuelVarianceException.id [delete: Cascade]
 
 Ref: ServiceSchedule.equipmentId > Equipment.id [delete: Cascade]
 

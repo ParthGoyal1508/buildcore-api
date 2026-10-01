@@ -276,7 +276,7 @@ the decision is still cheap to reverse. T016 is the task that delivers the numbe
 clearest statement of the behaviour being inverted, and a comment asserting the opposite of the code
 is worse than no comment.
 
-## Phase 5: The fuel exception becomes reviewable (FR-001, FR-002, FR-008, FR-009)
+## Phase 5: The fuel exception becomes reviewable (FR-001, FR-002, FR-008, FR-009) ✅ implemented 2026-10-01
 
 Detection is already built and this phase does not touch it — `Equipment.fuelBenchmark`,
 `FuelEntry.variancePercent` and `FuelEntry.varianceAlert` stay exactly as they are (FR-017). What is
@@ -284,36 +284,51 @@ added is the review that turns an alert nobody must act on into a decision with 
 
 This phase moves no money.
 
-- [ ] T041 [US1] Add `model FuelVarianceException` to `prisma/schema.prisma` in `plant` —
+- [X] T041 [US1] Added `model FuelVarianceException` to `prisma/schema.prisma` in `plant` —
   `companyId`, `fuelEntryId` (→ `FuelEntry`), `status`, `attribution`, `operatorEmployeeId String?`,
   `reviewedByUserId String?`, `reviewedAt`, `reason String?`, timestamps.
   `@@unique([fuelEntryId])` — one alert raises one exception, and a second row for the same reading
   would be two reviews of one fact.
-- [ ] T042 [US1] Add `enum FuelExceptionStatus { open confirmed dismissed }` and
+- [X] T042 [US1] Added `enum FuelExceptionStatus { open confirmed dismissed }` and
   `enum FuelAttribution { hirer operator neither }`, both in `plant`.
-- [ ] T043 [US1] `attribution` is **nullable until confirmed and has no default** (plan D27). A default
+- [X] T043 [US1] `attribution` is **nullable until confirmed and has no default** (plan D27). A default
   would decide, quietly and at scale, who pays for fuel nobody can account for.
-- [ ] T044 [US1] RLS: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
+- [X] T044 [US1] RLS: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
   hand-authored. Migration opens with `SELECT set_config('app.is_super_admin', 'true', true);` if it
   carries any data statement.
-- [ ] T045 [US1] Raise an `open` exception from an existing `varianceAlert` — on read, or by a sweep
+- [X] T045 [US1] A sweep, `raiseOutstanding`, idempotent by the unique index and using
+  `skipDuplicates` so two concurrent sweeps cannot both decide a row is missing. Raises an `open`
+  exception from an existing `varianceAlert` — on read, or by a sweep
   over alerts without one. Do **not** change the code that sets `varianceAlert`; FR-017 keeps detection
   untouched, and a raise inside the detector would couple the two.
-- [ ] T046 [US1] `GET /plant/fuel/exceptions` showing actual average, benchmark, variance percent and
+- [X] T046 [US1] `GET /plant/fuel/exceptions` showing actual average, benchmark, variance percent and
   the machine, per FR-001.
-- [ ] T047 [US1] `PATCH /plant/fuel/exceptions/:id` to confirm with an attribution, or dismiss with a
+- [X] T047 [US1] `PATCH /plant/fuel/exceptions/:id` to confirm with an attribution, or dismiss with a
   reason. Refuse a confirmation with no attribution named (FR-002) and a dismissal with no reason
   (FR-008).
-- [ ] T048 [US1] Require `operatorEmployeeId` explicitly when attributing to the operator and the
+- [X] T048 [US1] Requires `operatorEmployeeId` explicitly when attributing to the operator and the
   machine had more than one in the period (FR-009). Do not infer the operator from the logbook — the
   requirement says named explicitly, and inferring is how the wrong person's wages get docked.
-- [ ] T049 [P] [US1] Unit test: confirming without an attribution is refused; dismissing without a
+- [X] T049 [P] [US1] Unit test: confirming without an attribution is refused; dismissing without a
   reason is refused.
-- [ ] T050 [P] [US1] Unit test: a machine with two operators in the period refuses a confirmation that
+- [X] T050 [P] [US1] Unit test: a machine with two operators in the period refuses a confirmation that
   does not name one.
-- [ ] T051 [P] [US1] Unit test: `varianceAlert` and `variancePercent` are unchanged by every path in
-  this phase (FR-017).
-- [ ] T052 [P] [US1] Probe test with `NOSUPERUSER NOBYPASSRLS`.
+- [X] T051 [P] [US1] Unit test: `varianceAlert` and `variancePercent` are unchanged by every path in
+  this phase (FR-017). Asserted by spying on the `fuelEntry` delegate across **all three** reviewing
+  paths rather than checking one — a service that could rewrite the reading could make its own
+  justification disappear.
+- [X] T051a [US1] **Not in the plan**: `AuditEntityType` gained `FUEL_VARIANCE_EXCEPTION`, in its own
+  migration because `ALTER TYPE ... ADD VALUE` and a use of the new value cannot share a transaction.
+  The activity-log bucket guard then failed, exactly as designed — a new entity type must be placed in
+  a bucket — and it is bucketed with `machinery`, so a reader following a machine sees the alert and
+  the decision about it together.
+- [X] T051b [US1] Three refusals beyond the two the tasks named, each a figure somebody would
+  otherwise owe without anyone deciding they owe it: a whitespace-only dismissal reason, a hirer
+  attribution on an **owned** machine (FR-004 — there is no hirer to deduct from), and re-reviewing an
+  exception somebody has already decided.
+- [ ] T052 [P] [US1] **Not run** — probe test with `NOSUPERUSER NOBYPASSRLS`. Same limitation as
+  T031: everything local runs as a Postgres superuser, which is exempt from policies
+  unconditionally, so the policy is verified to exist and be forced but not to deny anything.
 
 ## Phase 6: Consequence — the hire bill and the operator's salary (FR-003 to FR-007, FR-010)
 
