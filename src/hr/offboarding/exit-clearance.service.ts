@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { ExitCustodyRegistry } from './exit-custody.registry';
 
@@ -35,6 +36,19 @@ export interface ClearanceItem {
   waiver: {
     reason: string;
     waivedByUserId: string;
+    /**
+     * Who waived it, as a person reads it (021 FR-016).
+     *
+     * The id alone is not enough: FR-016 requires the waiver to **display its author**, and
+     * a screen handed only a cuid either renders the cuid or invents its own lookup. Resolved
+     * here through `actorNameOf`, the same chain `ApprovalsService.namesFor` and 016's
+     * attendance-modification view use, so the same person cannot appear under two names on
+     * two screens.
+     *
+     * Added 2026-10-01 while building the clearance screen, which could not satisfy FR-016
+     * without it.
+     */
+    waivedByName: string;
     waivedAt: Date;
   } | null;
 }
@@ -109,6 +123,12 @@ export class ExitClearanceService {
       ),
     ]);
 
+    // One query for every waiver's author rather than one per item. A clearance with six
+    // waivers would otherwise be six round trips for a column.
+    const waiverNames = await this.namesFor(
+      waivers.map((w) => w.waivedByUserId),
+    );
+
     const waiverFor = (kind: ClearanceKind, ref: string) => {
       const found = waivers.find(
         (w) => w.itemKind === kind && w.itemRef === ref,
@@ -117,6 +137,11 @@ export class ExitClearanceService {
         ? {
             reason: found.reason,
             waivedByUserId: found.waivedByUserId,
+            // Falls back to the id rather than to a blank or an em dash. A waiver whose
+            // author's row has gone is still a waiver somebody made, and an unreadable
+            // identifier is more honest than a dash where a person belongs.
+            waivedByName:
+              waiverNames.get(found.waivedByUserId) ?? found.waivedByUserId,
             waivedAt: found.waivedAt,
           }
         : null;
@@ -174,6 +199,27 @@ export class ExitClearanceService {
         custodySource !== null &&
         items.every((item) => !item.outstanding || item.waiver !== null),
     };
+  }
+
+  /**
+   * Resolves waiver authors to names (FR-016).
+   *
+   * `isSuperAdmin: true` on the context, as `ApprovalsService.namesFor` does and for the same
+   * reason: `User` is a `shared` table, and a deactivated author must still be nameable —
+   * history that cannot say who acted is not history, and a waiver is precisely the decision
+   * somebody will later want attributed.
+   */
+  private async namesFor(userIds: string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(userIds)];
+    if (unique.length === 0) return new Map();
+
+    const rows = await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.user.findMany({
+        where: { id: { in: unique } },
+        select: ACTOR_NAME_SELECT,
+      }),
+    );
+    return new Map(rows.map((user) => [user.id, actorNameOf(user)]));
   }
 
   /**

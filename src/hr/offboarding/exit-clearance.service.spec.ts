@@ -15,6 +15,7 @@ describe('ExitClearanceService', () => {
     recoverableKitIds?: string[];
     advances?: Record<string, unknown>[];
     waivers?: Record<string, unknown>[];
+    users?: Record<string, unknown>[];
     noCustodySource?: boolean;
   }) => {
     const waiverWrites: Record<string, unknown>[] = [];
@@ -36,6 +37,9 @@ describe('ExitClearanceService', () => {
           (opts.recoverableKitIds ?? []).map((id) => ({ id })),
       },
       salaryAdvance: { findMany: async () => opts.advances ?? [] },
+      // Waiver authors, for FR-016's "display its author". Defaults to empty so the
+      // name falls back to the id — the case where the author's row has gone.
+      user: { findMany: async () => opts.users ?? [] },
     };
     const prisma = {
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
@@ -210,5 +214,62 @@ describe('ExitClearanceService', () => {
     await expect(
       service.assertSettleable(ctx, 'co-1', 'emp-1'),
     ).resolves.toBeUndefined();
+  });
+
+  describe('a waiver names its author (FR-016)', () => {
+    it('resolves the author through the shared name chain', async () => {
+      const { service } = build({
+        assets: [allocation()],
+        waivers: [
+          {
+            itemKind: CLEARANCE_KIND.asset,
+            itemRef: 'alloc-1',
+            reason: 'Written off — not worth pursuing',
+            waivedByUserId: 'user-7',
+            waivedAt: new Date('2026-09-30T00:00:00.000Z'),
+          },
+        ],
+        users: [
+          {
+            id: 'user-7',
+            displayName: null,
+            firstname: 'Asha',
+            lastname: 'Rao',
+            username: 'asha',
+            email: 'asha@example.com',
+          },
+        ],
+      });
+
+      const clearance = await service.forEmployee(ctx, 'co-1', 'emp-1');
+
+      // Not the username and not the email: `actorNameOf` prefers a real name, and this
+      // asserts the clearance uses that shared chain rather than picking a field itself —
+      // the same actor must not appear under two names on two screens.
+      expect(clearance.items[0].waiver?.waivedByName).toBe('Asha Rao');
+    });
+
+    it('falls back to the id when the author row has gone, never to a blank', async () => {
+      const { service } = build({
+        assets: [allocation()],
+        waivers: [
+          {
+            itemKind: CLEARANCE_KIND.asset,
+            itemRef: 'alloc-1',
+            reason: 'Written off — not worth pursuing',
+            waivedByUserId: 'user-gone',
+            waivedAt: new Date('2026-09-30T00:00:00.000Z'),
+          },
+        ],
+        users: [],
+      });
+
+      const clearance = await service.forEmployee(ctx, 'co-1', 'emp-1');
+
+      // An unreadable identifier is more honest than a dash where a person belongs: the
+      // decision was still made by somebody, and a blank invites the reader to conclude
+      // nobody is accountable for it.
+      expect(clearance.items[0].waiver?.waivedByName).toBe('user-gone');
+    });
   });
 });
