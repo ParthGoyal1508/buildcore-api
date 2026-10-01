@@ -530,13 +530,25 @@ required kind that has no type and upload against it.
 
 ### FR-007a — the requirement surface reports what may be required (2026-09-16, second amendment)
 
-- [ ] T098 [US2] Move the declared-kind creation into
+- [X] T098 [US2] Move the declared-kind creation into
   `DocumentTypesService.defineDeclaredKind(ctx, companyId, kind, actor)` — it owns
   `settings.DocumentType`. Takes an already-resolved `RequiredDocumentKind` and does **no code-set
   validation of its own**; each caller validates against the set it is entitled to (plan D8).
-- [ ] T099 [US2] `CompanyDocumentsService.defineRequiredKind` delegates to it, still resolving
+
+  **Already built; verified 2026-10-01 rather than re-done.** `DocumentTypesService.defineDeclaredKind`
+  exists with exactly this signature, takes an already-resolved `RequiredDocumentKind`, and validates
+  no code set of its own — confirmed by reading it, not by the comment claiming it.
+
+- [X] T099 [US2] `CompanyDocumentsService.defineRequiredKind` delegates to it, still resolving
   against `REQUIRED_COMPANY_DOCUMENT_KINDS`. Its existing refusal test must pass **unchanged** — if
   it needs editing, the permission boundary moved and that is the bug.
+
+  **Already built; verified 2026-10-01.** `CompanyDocumentsService.defineRequiredKind` resolves
+  against `REQUIRED_COMPANY_DOCUMENT_KINDS` and delegates. The condition this task set is the
+  interesting part and it holds: the existing refusal test at
+  `company-documents.service.spec.ts:451` passes **unedited**, so the permission boundary did not
+  move — which is what the task said would be the bug.
+
 - [X] T100 [US2] `listRequirements` returns `availableTypes`, filtered to `company | both` from the
   `scope` already on the rows it fetches. Do NOT add a scope filter to `listForCompany`: `hr`
   resolves employee document types through it and would silently lose rows (plan D5).
