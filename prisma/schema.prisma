@@ -509,8 +509,6 @@ model Company {
   signatories   Signatory[]
   issuedLetters IssuedLetter[]
 
-  @@schema("settings")
-
   /// 016 FR-018a: which action types this company requires the Director to approve.
   directorFinalActions DirectorFinalAction[]
 
@@ -519,6 +517,8 @@ model Company {
 
   /// 019 FR-008: users currently working in this company.
   userCompanySelections UserCompanySelection[]
+
+  @@schema("settings")
 }
 
 enum CompanyStatus {
@@ -2011,30 +2011,33 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  faceEnrolment           FaceEnrolment?
-  reEnrolmentRequests     ReEnrolmentRequest[]
-  punchRecords            PunchRecord[]
-  leaveBalances           LeaveBalance[]
-  leaveApplications       LeaveApplication[]
-  reimbursementClaims     ReimbursementClaim[]
-  salarySlips             SalarySlip[]
-  documents               EmployeeDocument[]
-  transfers               EmployeeTransfer[]
-  attendanceModifications AttendanceModification[]
+  faceEnrolment                FaceEnrolment?
+  reEnrolmentRequests          ReEnrolmentRequest[]
+  punchRecords                 PunchRecord[]
+  leaveBalances                LeaveBalance[]
+  leaveApplications            LeaveApplication[]
+  reimbursementClaims          ReimbursementClaim[]
+  salarySlips                  SalarySlip[]
+  documents                    EmployeeDocument[]
+  transfers                    EmployeeTransfer[]
+  attendanceModifications      AttendanceModification[]
   pendingAttendanceCorrections PendingAttendanceCorrection[]
-  exitRecords             ExitRecord[]
-  payrollLineItems        PayrollLineItem[]
-  loans                   Loan[]
-  taxDeclarations         TaxDeclaration[]
-  salaryAdvances          SalaryAdvance[]
+  exitRecords                  ExitRecord[]
+  payrollLineItems             PayrollLineItem[]
+  loans                        Loan[]
+  taxDeclarations              TaxDeclaration[]
+  salaryAdvances               SalaryAdvance[]
+
+  /// 020 FR-013c: punches refused for this employee.
+  punchRefusals PunchRefusal[]
+
+  /// 020 FR-011: which location this employee's punches validate against, and its history.
+  locationAssignments EmployeeLocationAssignment[]
 
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([siteId])
   @@schema("hr")
-
-  /// 020 FR-013c: punches refused for this employee.
-  punchRefusals PunchRefusal[]
 }
 
 /// Exactly one row per employee. A completed re-enrolment replaces `descriptor`,
@@ -2616,6 +2619,53 @@ model PunchRefusal {
   @@schema("hr")
 }
 
+/// Which location an employee's punches validate against, and the history of that decision
+/// (020 FR-011, FR-014, FR-016).
+///
+/// **Layered over the site fence, never replacing it.** An employee with no row here is validated
+/// against their site's geofence exactly as before — which is every employee on the day this ships,
+/// so introducing the table refuses nobody. That fallback is FR-016 and is the whole reason this can
+/// be deployed without a backfill.
+///
+/// **Append-only.** `assign()` writes a new row and never updates a prior one, so a transfer six
+/// months ago is still explicable: the row that was in force then is still there, with who decided it
+/// and when it took effect.
+model EmployeeLocationAssignment {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// The site whose fence applies. Null **only** when `isMobile` — see the check constraint.
+  siteId String?
+
+  /// FR-014's exemption, and it lives here rather than on `Employee` on purpose: exempting somebody
+  /// from location validation is a dated, attributable act, not a property of the person. On
+  /// `Employee` it would be a boolean somebody flipped with no record of when or why.
+  ///
+  /// **Location only.** A mobile employee is refused for a face mismatch exactly as anyone else is —
+  /// mobility says where a person legitimately works, and the face check says who is holding the
+  /// phone (Clarifications, 2026-09-16).
+  isMobile Boolean @default(false)
+
+  /// Resolution keys on this, and on the punch's **day** rather than the request time, so an
+  /// offline-queued punch validates against the assignment in force when it was taken.
+  effectiveFrom DateTime @db.Date
+
+  /// FR-011's author. A `User` id — the person who decided, not the employee.
+  assignedByUserId String
+
+  /// Why, where stated. A mobile exemption without one is unreviewable.
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  /// The resolution query's access path, and the only way this table is read on the punch path.
+  @@index([employeeId, effectiveFrom])
+  @@schema("hr")
+}
+
 model PendingAttendanceCorrection {
   id        String @id @default(cuid())
   companyId String
@@ -2739,11 +2789,11 @@ model ExitRecord {
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  @@index([employeeId])
-  @@schema("hr")
-
   /// 021 FR-016: obligations waived on this exit.
   clearanceWaivers ExitClearanceWaiver[]
+
+  @@index([employeeId])
+  @@schema("hr")
 }
 
 enum TaxDeclarationStatus {

@@ -84,12 +84,21 @@ describe('PunchService', () => {
       dayPunches?: { id: string; type: PunchType }[];
       enrolled?: boolean;
       enrolmentStatus?: FaceEnrolmentStatus;
+      /**
+       * The per-employee location assignment in force (020 FR-011, FR-014).
+       *
+       * Undefined — the default — means **no assignment**, which is every employee the day this
+       * ships and the fallback FR-016 requires. Tests that do not set it therefore keep
+       * exercising the site fence.
+       */
+      assignment?: { siteId: string | null; isMobile: boolean };
     } = {},
   ) => {
     const {
       dayPunches = [],
       enrolled = true,
       enrolmentStatus = FaceEnrolmentStatus.enrolled,
+      assignment,
     } = opts;
     biometrics = new FakeBiometrics();
 
@@ -133,6 +142,11 @@ describe('PunchService', () => {
       // 020 FR-013c. Phase 2 records would-be refusals while still accepting the punch, so these
       // tests' outcomes are unchanged — the double only needs to absorb the call.
       { record: jest.fn().mockResolvedValue(undefined) } as never,
+      // 020 FR-016. No assignment is the state every employee is in on the day this ships, so
+      // the default double returns null and these tests continue to exercise the site fence —
+      // which is the fallback, and the case that would break attendance company-wide if it
+      // regressed. `assignment` below overrides it for the exemption tests.
+      { inForceOn: jest.fn().mockResolvedValue(assignment ?? null) } as never,
       prisma as never,
       { requireByUserId: jest.fn().mockResolvedValue(employee) } as never,
       // Mandatory-document gate (005 US2): satisfied by default here so these
@@ -317,6 +331,66 @@ describe('PunchService', () => {
 
       expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
       expect(created[0].exceptionResolution).toBe(ExceptionResolution.pending);
+    });
+
+    /**
+     * 020 Phase 4 — the per-employee assignment (FR-011, FR-014, FR-016).
+     *
+     * The first of these is the one that matters most on release day: **no** employee carries an
+     * assignment when this ships, so if the fallback regressed, every punch in the company would
+     * start failing at once.
+     */
+    describe('per-employee location assignment', () => {
+      it('falls back to the site fence when the employee has no assignment', async () => {
+        // `build()` with no `assignment` is exactly the state of the database the morning this
+        // deploys. The punch is inside the site fence and must read as clean.
+        const { service } = build();
+        const result = await service.submitPunch(caller, punchDto());
+
+        expect(result.geofenceResult).toBe(GeofenceResult.in_range);
+      });
+
+      it('still refuses an out-of-fence punch when there is no assignment', async () => {
+        // The other half of the fallback: "no assignment" must mean today's behaviour, not
+        // "no validation". A test asserting only the clean case would pass if the fence had
+        // been switched off entirely.
+        const { service } = build();
+        const result = await service.submitPunch(
+          caller,
+          punchDto({ latitude: SITE.latitude + 0.05 }),
+        );
+
+        expect(result.geofenceResult).toBe(GeofenceResult.exception);
+      });
+
+      it('does not refuse a mobile employee for being outside the fence', async () => {
+        const { service } = build({
+          assignment: { siteId: null, isMobile: true },
+        });
+        const result = await service.submitPunch(
+          caller,
+          punchDto({ latitude: SITE.latitude + 0.05 }),
+        );
+
+        expect(result.geofenceResult).toBe(GeofenceResult.in_range);
+      });
+
+      it('refuses a mobile employee for a face mismatch exactly as anyone else', async () => {
+        // FR-014 as clarified 2026-09-16. The exemption covers **where** someone works, not
+        // **who** they are — and the one-line implementation of "exempt from validation" is the
+        // version that gets this wrong, which is the whole reason this test exists.
+        const { service } = build({
+          assignment: { siteId: null, isMobile: true },
+        });
+        biometrics.next = Float32Array.from(
+          { length: FACE_DESCRIPTOR_LENGTH },
+          () => 5,
+        );
+        const result = await service.submitPunch(caller, punchDto());
+
+        expect(result.geofenceResult).toBe(GeofenceResult.in_range);
+        expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+      });
     });
 
     it('records an out-of-geofence punch as an exception', async () => {

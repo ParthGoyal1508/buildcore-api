@@ -185,35 +185,48 @@ is not a biometric.
 
 ---
 
-## Phase 4: Per-employee assignment (FR-011, FR-014, FR-016)
+## Phase 4: Per-employee assignment (FR-011, FR-014, FR-016) ✅ implemented 2026-10-01
 
 Independent of phases 1–3.
 
-- [ ] T030 Add `EmployeeLocationAssignment` to `prisma/schema.prisma` in `hr` per data-model.md, with
+- [X] T030 Added `EmployeeLocationAssignment` to `prisma/schema.prisma` in `hr` per data-model.md, with
   the check constraint `siteId IS NOT NULL OR isMobile` — an assignment naming no site and claiming no
   exemption validates nothing, and the reader who meets it cannot tell which it was.
-- [ ] T031 Migration plus RLS policy and probe-role proof.
-- [ ] T032 `EmployeeLocationAssignmentsService.inForceOn(ctx, employeeId, day)` — the row with the
+- [X] T031 Migration `20261001120000_employee_location_assignment`, applied. RLS verified present in
+  the database: `relrowsecurity` and `relforcerowsecurity` both true, policy `tenant_isolation`
+  created, and the check constraint reads `CHECK (("siteId" IS NOT NULL) OR "isMobile")`.
+  **The probe-role half is not discharged**: the local `prisma` role is a Postgres superuser and so
+  bypasses RLS unconditionally, which means no local query can prove the policy *denies* anything.
+  What is proven is that the policy objects exist and are forced; the denial itself needs a
+  non-superuser role and is left open below.
+- [X] T032 `LocationAssignmentsService.inForceOn(ctx, employeeId, day)` — the row with the
   greatest `effectiveFrom` at or before the punch's **day**, not the request time, so an
   offline-queued punch validates against the assignment in force when it was taken.
-- [ ] T033 `assign()` appends and never mutates a prior row, recording author and effective date
+- [X] T033 `assign()` appends and never mutates a prior row, recording author and effective date
   (FR-011). `isMobile` lives on the assignment, not on `Employee`, so exempting someone is itself a
   dated attributable act.
-- [ ] T034 Wire resolution into `punch.service.ts`: an assignment's site fence when one exists,
+- [X] T034 Wired into `punch.service.ts`: an assignment's site fence when one exists,
   otherwise the employee's site fence exactly as today (FR-016).
-- [ ] T035 [P] Unit test: no assignment falls back to the site fence. **Run it against a database
+- [X] T035 [P] Unit test: no assignment falls back to the site fence — **and a second one** asserting
+  an out-of-fence punch is still refused without an assignment. The first alone would pass if the
+  fence had been switched off entirely, which is the regression it is meant to catch. **Run it against a database
   where no assignment exists** — that is the state every employee is in on the day this ships, and the
   case that would break attendance company-wide.
-- [ ] T036 Decide and record what happens when an employee has no assignment **and** their site has no
-  geofence configured (`checklists/refusal.md` CHK035). FR-016 falls back to the site fence; a site
-  without one is unaddressed.
-- [ ] T036a [P] Unit test: a **mobile** employee is not refused for location but **is** refused for a
+- [X] T036 **Answered by the schema: the state cannot exist.** `Site.latitude`, `Site.longitude` and
+  `Site.geofenceRadiusMeters` are all non-nullable (`schema.prisma` ~line 1295), so a site without a
+  geofence is not representable and `getGeofence` has no null case to handle. CHK035 asks what happens
+  in a state the database forbids. Recorded rather than answered with an invented fallback — a
+  defensive branch for an impossible state is untestable and reads as though the state were possible.
+  **If sites ever gain optional geofences this becomes a real question again**, and this note is what
+  should make that visible.
+- [X] T036a [P] Unit test: a **mobile** employee is not refused for location but **is** refused for a
   face mismatch (FR-014, as clarified 2026-09-16 — finding U1). The exemption covers where someone
   works, not who they are, and the one-line implementation of "exempt from validation" is the version
   that gets this wrong.
-- [ ] T037 `GET /employees/:id/location-assignments` and `PUT /employees/:id/location-assignment`
-  under `Permission.EMPLOYEES`.
-- [ ] T038 [P] e2e per quickstart pass 6: assignment history decides across an effective-date
+- [X] T037 `GET` and `PUT /hr/employees/:employeeId/location-assignments` under
+  `Permission.EMPLOYEES`. One path for both: the write appends, so there is no single assignment to
+  address and nothing for a singular route to mean.
+- [ ] T038 [P] **Not run.** e2e per quickstart pass 6: assignment history decides across an effective-date
   boundary, including an offline punch queued before a transfer and synced after it; a mobile employee
   is not refused for location and the exemption names who granted it.
 
@@ -221,7 +234,12 @@ Independent of phases 1–3.
 
 ## Verification
 
-- [ ] T039 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T039 `npx tsc --noEmit` clean; `npm test` **1118 passing across 107 suites**, up 4 from the
+  tests added here. `npm run test:e2e` not run for this phase — see T038 and T041.
+- [ ] T041 **Open from T031**: prove the RLS policy *denies* a cross-company read of this table from a
+  non-superuser role. Everything local runs as a superuser, which Postgres exempts from policies
+  unconditionally, so the guarantee is currently asserted by the policy's existence rather than by its
+  behaviour. `scripts/provision-app-role.sql` creates the `buildcore_app` role this needs.
 - [ ] T040 Walk `checklists/refusal.md` and record, per item, whether the requirement it questions is
   now answered. **Do not tick the boxes** — that file is reviewer-owned. CHK001–CHK005 are answered by
   FR-013a's enumeration and FR-013d, built by T022–T023.

@@ -1128,6 +1128,7 @@ last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.'
   taxDeclarations TaxDeclaration [not null]
   salaryAdvances SalaryAdvance [not null]
   punchRefusals PunchRefusal [not null, note: '020 FR-013c: punches refused for this employee.']
+  locationAssignments EmployeeLocationAssignment [not null, note: '020 FR-011: which location this employee\'s punches validate against, and its history.']
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -1413,6 +1414,38 @@ number is not a biometric.
 This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
 punch at all — which is the point — so without this the refusal would leave no trace anywhere and
 a worker wrongly refused would have nothing to appeal to.'
+}
+
+Table EmployeeLocationAssignment {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  siteId String [note: 'The site whose fence applies. Null **only** when `isMobile` — see the check constraint.']
+  isMobile Boolean [not null, default: false, note: 'FR-014\'s exemption, and it lives here rather than on `Employee` on purpose: exempting somebody
+from location validation is a dated, attributable act, not a property of the person. On
+`Employee` it would be a boolean somebody flipped with no record of when or why.
+
+**Location only.** A mobile employee is refused for a face mismatch exactly as anyone else is —
+mobility says where a person legitimately works, and the face check says who is holding the
+phone (Clarifications, 2026-09-16).']
+  effectiveFrom DateTime [not null, note: 'Resolution keys on this, and on the punch\'s **day** rather than the request time, so an
+offline-queued punch validates against the assignment in force when it was taken.']
+  assignedByUserId String [not null, note: 'FR-011\'s author. A `User` id — the person who decided, not the employee.']
+  reason String [note: 'Why, where stated. A mobile exemption without one is unreviewable.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'Which location an employee\'s punches validate against, and the history of that decision
+(020 FR-011, FR-014, FR-016).
+
+**Layered over the site fence, never replacing it.** An employee with no row here is validated
+against their site\'s geofence exactly as before — which is every employee on the day this ships,
+so introducing the table refuses nobody. That fallback is FR-016 and is the whole reason this can
+be deployed without a backfill.
+
+**Append-only.** `assign()` writes a new row and never updates a prior one, so a transfer six
+months ago is still explicable: the row that was in force then is still there, with who decided it
+and when it took effect.'
 }
 
 Table PendingAttendanceCorrection {
@@ -4611,6 +4644,8 @@ Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
 
 Ref: PunchRefusal.employeeId > Employee.id [delete: Cascade]
+
+Ref: EmployeeLocationAssignment.employeeId > Employee.id [delete: Cascade]
 
 Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
 

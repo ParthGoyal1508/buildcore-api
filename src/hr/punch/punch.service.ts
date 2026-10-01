@@ -42,6 +42,7 @@ import type { Caller } from '../biometrics/face-enrolment.service';
 import { EmployeeDocumentsService } from '../employees/documents/employee-documents.service';
 import { EmployeesService } from '../employees/employees.service';
 import { SubmitPunchDto } from './dto/punch.dto';
+import { LocationAssignmentsService } from '../location-assignments/location-assignments.service';
 import { checkGeofence } from './geofence.util';
 import { PunchRefusalsService } from './punch-refusals.service';
 import { isPayrollLocked } from './payroll-lock';
@@ -110,6 +111,7 @@ export class PunchService {
 
   constructor(
     private readonly punchRefusals: PunchRefusalsService,
+    private readonly assignments: LocationAssignmentsService,
     private readonly prisma: PrismaService,
     private readonly employees: EmployeesService,
     private readonly employeeDocuments: EmployeeDocumentsService,
@@ -277,7 +279,29 @@ export class PunchService {
       faceMatchDistance = match.distance;
     }
 
-    const geofence = await this.sites.getGeofence(caller.rls, employee.siteId);
+    // The calendar day this punch counts for — the employee's, not the server's (FR-018a).
+    // Computed **here**, before the fence is resolved, because 020 FR-016's per-employee
+    // assignment is keyed on the day the punch was *taken*: an offline punch arriving after a
+    // transfer must validate against the assignment in force when the worker punched, not the
+    // one in force when their phone reconnected.
+    const punchDay = zonedDateOnly(capturedAt, this.settingsTimeZone);
+
+    // 020 FR-011, FR-016. No assignment → the employee's own site fence, exactly as before.
+    // That is every employee on the day this ships, which is why this table can be introduced
+    // with no backfill and refuse nobody.
+    const assignment = await this.assignments.inForceOn(
+      caller.rls,
+      employee.id,
+      punchDay,
+    );
+
+    // A mobile assignment carries no site (the check constraint enforces that), so the fence
+    // still resolves from the employee's own site. It is fetched for its **distance**, which is
+    // evidence worth recording, and then not allowed to refuse anything — see `geofenceResult`.
+    const geofence = await this.sites.getGeofence(
+      caller.rls,
+      assignment?.siteId ?? employee.siteId,
+    );
 
     // 020 FR-012b. Read per request in the same call that already read the payroll lock day, so a
     // Super Admin raising the threshold takes effect on the next punch with no restart — which is
@@ -304,8 +328,20 @@ export class PunchService {
       },
       geofence,
     );
+    /**
+     * 020 FR-014: a mobile employee is exempt from **location** validation.
+     *
+     * Exempt from being outside the fence *and* from being unlocatable — both are facts about
+     * where the phone is, which is precisely what mobility makes irrelevant.
+     *
+     * **Not exempt from the face check.** The two answer different questions: mobility says where
+     * a person legitimately works, the face check says who is holding the phone, and nothing about
+     * working across sites makes an impersonated punch acceptable (Clarifications, 2026-09-16).
+     * The one-line implementation of "exempt from validation" is the version that gets this wrong,
+     * which is why `faceMatchResult` is untouched here and a test asserts it.
+     */
     const geofenceResult =
-      withinGeofence && !unlocatable
+      assignment?.isMobile || (withinGeofence && !unlocatable)
         ? GeofenceResult.in_range
         : GeofenceResult.exception;
 
@@ -349,10 +385,8 @@ export class PunchService {
       'image/jpeg',
     );
 
-    // The calendar day this punch counts for — the employee's, not the server's
-    // (FR-018a). Stamped here rather than derived on read so the FR-008c index has
-    // an immutable column to constrain.
-    const punchDay = zonedDateOnly(capturedAt, this.settingsTimeZone);
+    // Stamped rather than derived on read, so the FR-008c index has an immutable column to
+    // constrain. `punchDay` itself is computed further up, where the geofence resolution needs it.
     const punchDate = parseDateOnly(punchDay);
 
     // --- Gate 4 + write: one punch-in and one punch-out that day (FR-008). ---
