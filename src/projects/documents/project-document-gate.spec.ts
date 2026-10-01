@@ -14,6 +14,14 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
     requirements?: { documentTypeId: string; isMandatory: boolean }[];
     types?: { id: string; name: string }[];
     documents?: Record<string, unknown>[];
+    /** Who the uploader ids resolve to (web T077). */
+    users?: {
+      id: string;
+      firstname: string | null;
+      lastname: string | null;
+    }[];
+    /** Bytes the storage double hands back for a download. */
+    file?: Buffer;
   }) => {
     const writes: Record<string, unknown>[] = [];
     const tx = {
@@ -32,6 +40,27 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
           return { id: 'doc-new', ...args.data };
         },
         findMany: async () => opts.documents ?? [],
+        findFirst: async (args?: {
+          where?: { id?: string; projectId?: string };
+        }) =>
+          (opts.documents ?? []).find(
+            (d) =>
+              d.id === args?.where?.id &&
+              // The project is part of the lookup, not decoration: a document id from another
+              // project must not resolve. A double ignoring it would pass a test for the
+              // opposite of the code.
+              (args?.where?.projectId === undefined ||
+                d.projectId === args?.where?.projectId),
+          ) ?? null,
+      },
+      user: {
+        findMany: async () =>
+          (opts.users ?? []).map((u) => ({
+            ...u,
+            displayName: null,
+            username: null,
+            email: null,
+          })),
       },
       projectDocumentRequirement: {
         // Honours the `where` clause, because the gate's correctness depends on it: it asks only
@@ -53,7 +82,11 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
       prisma as never,
       { listForCompany: async () => opts.types ?? [] } as never,
       { record: jest.fn() } as never,
-      { put: async () => 'ref-1', deleteMany: jest.fn() } as never,
+      {
+        put: async () => 'ref-1',
+        get: async () => opts.file ?? Buffer.from('bytes'),
+        deleteMany: jest.fn(),
+      } as never,
       { get: () => ({ stagedDocumentRetentionHours: 24 }) } as never,
     );
     return { service, writes };
@@ -116,6 +149,83 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
       });
       const list = await service.listForProject(ctx, CO, 'p-1');
       expect(list.map((d: { id: string }) => d.id)).toEqual(['d-1', 'd-2']);
+    });
+
+    it('names who filed each document rather than reporting their id', async () => {
+      // A list of a project's papers reading "filed by cmuoe9b7l00q5v8…" answers half the
+      // question it was asked.
+      const { service } = harness({
+        documents: [
+          { id: 'd-1', documentTypeId: 'dt-loi', uploadedByUserId: 'user-a' },
+        ],
+        users: [{ id: 'user-a', firstname: 'Deepak', lastname: 'Nair' }],
+      });
+
+      const list = await service.listForProject(ctx, CO, 'p-1');
+
+      expect(list[0].uploadedByName).toBe('Deepak Nair');
+    });
+
+    it('leaves the name null rather than guessing when the user has gone', async () => {
+      const { service } = harness({
+        documents: [
+          { id: 'd-1', documentTypeId: null, uploadedByUserId: 'user-gone' },
+        ],
+        users: [],
+      });
+
+      const list = await service.listForProject(ctx, CO, 'p-1');
+
+      // Null, not the id: unlike an audit trail, this list's purpose is the documents, and a
+      // cuid in the "filed by" column is noise rather than a fallback worth having.
+      expect(list[0].uploadedByName).toBeNull();
+    });
+
+    it('asks nothing of the user table for an empty project', async () => {
+      const { service } = harness({ documents: [] });
+
+      await expect(service.listForProject(ctx, CO, 'p-1')).resolves.toEqual([]);
+    });
+  });
+
+  describe('downloadForProject (FR-008a, web T077)', () => {
+    it('returns the bytes with a filename built from the kind', async () => {
+      const { service } = harness({
+        documents: [
+          {
+            id: 'd-1',
+            projectId: 'p-1',
+            documentType: 'Work Order',
+            fileRef: 'ref-1',
+          },
+        ],
+        file: Buffer.from('pdf-bytes'),
+      });
+
+      const result = await service.downloadForProject(ctx, CO, 'p-1', 'd-1');
+
+      expect(result.data.toString()).toBe('pdf-bytes');
+      // Sanitised: the label is user-supplied free text and ends up in a header.
+      expect(result.filename).toBe('Work-Order-d-1');
+    });
+
+    it('refuses a document id belonging to another project', async () => {
+      // The reason the project is part of the lookup. Without it, any document id in the
+      // company would download through any project's URL.
+      const { service } = harness({
+        documents: [
+          {
+            id: 'd-1',
+            projectId: 'p-OTHER',
+            documentType: 'LOI',
+            fileRef: 'r',
+          },
+        ],
+      });
+
+      await expect(
+        service.downloadForProject(ctx, CO, 'p-1', 'd-1'),
+      ).rejects.toMatchObject({ status: 404 });
     });
   });
 

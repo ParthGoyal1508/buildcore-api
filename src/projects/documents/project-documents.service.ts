@@ -1,8 +1,13 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
@@ -563,12 +568,77 @@ export class ProjectDocumentsService {
    * the only one.
    */
   async listForProject(ctx: RlsContext, companyId: string, projectId: string) {
-    return withRlsContext(this.prisma, ctx, (tx) =>
+    const documents = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.projectDocument.findMany({
         where: { companyId, projectId },
         orderBy: { uploadedAt: 'desc' },
       }),
     );
+    if (documents.length === 0)
+      return documents.map((d) => ({ ...d, uploadedByName: null }));
+
+    // Who filed it, by name (web T077). `uploadedByUserId` is a bare id, and a list of a
+    // project's papers reading "filed by cmuoe9b7l00q5v8…" answers half the question it was
+    // asked. One query for the page's distinct uploaders, not one per row.
+    const names = await this.actorNames([
+      ...new Set(documents.map((d) => d.uploadedByUserId)),
+    ]);
+    return documents.map((document) => ({
+      ...document,
+      uploadedByName: names.get(document.uploadedByUserId) ?? null,
+    }));
+  }
+
+  /**
+   * Retrieves one project document's bytes (FR-008a, web T077).
+   *
+   * **Scoped by project as well as by id.** A document id alone would be enough for the row the
+   * caller is looking at, but passing the project through means a mismatched pair cannot resolve
+   * — so a document id guessed or copied from another project is a 404 rather than a download.
+   *
+   * No audit entry, unlike `CompanyDocumentsService.download`. That asymmetry is deliberate and
+   * worth writing down: company documents have restricted kinds whose *retrieval* is the thing
+   * worth knowing about, and FR-024 says so. Project documents carry no restriction vocabulary,
+   * so there is nothing here an auditor would be reading the log for. If project kinds ever gain
+   * restriction, this is the method that must gain the entry.
+   */
+  async downloadForProject(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    documentId: string,
+  ): Promise<{ data: Buffer; filename: string }> {
+    const document = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocument.findFirst({
+        where: { id: documentId, projectId, companyId },
+      }),
+    );
+    if (!document) throw new NotFoundException('Document not found.');
+
+    const data = await this.storage.get(document.fileRef);
+    return {
+      // The free-text label, not the id: this is what a person sees in their downloads folder.
+      // Sanitised because it is user-supplied and ends up in a header.
+      filename: `${document.documentType.replace(/[^A-Za-z0-9._-]+/g, '-')}-${
+        document.id
+      }`,
+      data,
+    };
+  }
+
+  /** User ids to display names, in one query. */
+  private async actorNames(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const users = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: ids } },
+          select: ACTOR_NAME_SELECT,
+        }),
+    );
+    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
   }
 
   /**

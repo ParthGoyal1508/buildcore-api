@@ -5,10 +5,12 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -105,6 +107,34 @@ export class ProjectDocumentUploadController {
       },
       caller.id,
     );
+  }
+
+  @Get('projects/:projectId/documents/:documentId/download')
+  @ApiOperation({
+    summary: 'Retrieve one project document’s file (FR-008a)',
+    description:
+      'Scoped by **project as well as id**: a mismatched pair does not resolve, so a document ' +
+      'id copied from another project is a 404 rather than a download.\n\n' +
+      'Unlike the company-documents equivalent this writes no audit entry, because project ' +
+      'kinds carry no restriction vocabulary and there is nothing here an auditor reads the log ' +
+      'for. If they ever gain one, this route gains the entry.',
+  })
+  async download(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('projectId') projectId: string,
+    @Param('documentId') documentId: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { data, filename } = await this.documents.downloadForProject(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      documentId,
+    );
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(data);
   }
 
   @Get('projects/:projectId/documents')
