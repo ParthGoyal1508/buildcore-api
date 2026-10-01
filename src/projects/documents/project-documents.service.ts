@@ -764,6 +764,15 @@ export class ProjectDocumentsService {
         missingKinds: missing.map(
           (m) => labels.get(m.documentTypeId) ?? m.documentTypeId,
         ),
+        // The machine-readable half of the same refusal (web T072).
+        //
+        // `missingKinds` above is for a person to read and must stay labels — FR-009a is explicit
+        // that a refusal naming internal identifiers is one the reader cannot act on. But a form
+        // has to put each name *on the control it refers to*, and matching a display label back to
+        // a control means string-matching two names that are only incidentally equal: two kinds
+        // may legitimately share a name, and a rename breaks the match silently. The ids make that
+        // exact; they are additive, and nothing is expected to render them.
+        missingTypeIds: missing.map((m) => m.documentTypeId),
       });
     }
 

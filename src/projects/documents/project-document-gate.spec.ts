@@ -256,6 +256,24 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
       expect(resolved[0].fileRef).toBe('ref-1');
     });
 
+    it('carries the missing kinds as ids as well as labels', async () => {
+      // The labels are what a person reads; the ids are what a form puts the message *on*.
+      // Matching a control by its display name means string-matching two names that are only
+      // incidentally equal — two kinds may share a name, and a rename breaks it silently.
+      const { service } = harness({
+        requirements: [{ documentTypeId: 'dt-loi', isMandatory: true }],
+        types: [{ id: 'dt-loi', name: 'Letter of Intent' }],
+        staged: [],
+      });
+
+      const refusal = await service
+        .assertMandatoryKindsSatisfied(ctx, CO, [], 'user-a')
+        .catch((e) => e.response);
+
+      expect(refusal.missingTypeIds).toEqual(['dt-loi']);
+      expect(refusal.missingKinds).toEqual(['Letter of Intent']);
+    });
+
     it('refuses a creation with a mandatory kind unattached, naming the LABEL', async () => {
       // Never the id. A refusal naming internal identifiers is one the reader cannot act on, which
       // is the same argument that produced FR-007a.
