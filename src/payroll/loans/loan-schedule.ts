@@ -27,7 +27,10 @@ export function nextPeriod(period: string): string {
 
 /** The `YYYY-MM` a date falls in. */
 export function periodOf(date: Date): string {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(
+    2,
+    '0',
+  )}`;
 }
 
 /**

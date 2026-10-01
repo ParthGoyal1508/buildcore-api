@@ -23,9 +23,41 @@ export const PROJECT_DOCUMENT_TYPE_UNKNOWN = 'PROJECT_DOCUMENT_TYPE_UNKNOWN';
  * eight — which live behind `COMPANY_SETTINGS` — or arbitrary document-type creation,
  * which lives behind `EMPLOYEES`.
  */
+/**
+ * A creation was refused because a mandatory kind had no document attached (017 FR-009).
+ *
+ * The message names every missing kind's **label**, never its id: a refusal naming internal
+ * identifiers is one the reader cannot act on, which is the same argument that produced FR-007a.
+ */
+export const PROJECT_DOCUMENTS_MANDATORY_MISSING =
+  'PROJECT_DOCUMENTS_MANDATORY_MISSING';
+
+/**
+ * A staged document id was not usable (017 FR-009c, plan D10a).
+ *
+ * **Deliberately the same code for three different situations**: the id does not exist, it belongs
+ * to another user, or it belongs to another company. Distinguishing them would let a caller probe
+ * for other people's staged uploads — "this one is forbidden" confirms it exists. The refusal says
+ * only that the reference is not usable by this caller.
+ */
+export const PROJECT_STAGED_DOCUMENT_UNKNOWN =
+  'PROJECT_STAGED_DOCUMENT_UNKNOWN';
+
+/**
+ * A kind cannot be marked mandatory while the company has no document type for it (017 FR-007d).
+ *
+ * The same refusal the PUT already gives for an unknown type, at a different strength: a mandatory
+ * kind nobody can file against would block every project creation with no way to comply.
+ */
+export const PROJECT_DOCUMENT_KIND_NOT_DEFINED =
+  'PROJECT_DOCUMENT_KIND_NOT_DEFINED';
+
 export const PROJECT_DOCUMENT_KIND_NOT_REQUIRED =
   'PROJECT_DOCUMENT_KIND_NOT_REQUIRED';
 
 export type ProjectDocumentErrorCode =
   | typeof PROJECT_DOCUMENT_TYPE_UNKNOWN
+  | typeof PROJECT_DOCUMENTS_MANDATORY_MISSING
+  | typeof PROJECT_STAGED_DOCUMENT_UNKNOWN
+  | typeof PROJECT_DOCUMENT_KIND_NOT_DEFINED
   | typeof PROJECT_DOCUMENT_KIND_NOT_REQUIRED;

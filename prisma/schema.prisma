@@ -129,15 +129,27 @@ enum UserStatus {
 /// — every authenticated user can read what a role grants. UserRole (who
 /// actually *holds* a role) is the tenant-scoped side, and is RLS-protected.
 model Role {
-  id          String       @id @default(cuid())
-  name        String       @unique
+  id   String @id @default(cuid())
+  name String @unique
+
+  /// **Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
+  /// the client's Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
+  /// switches the guard over; kept through that cutover on purpose, so a rollback of
+  /// Phase 2 is a code revert with no data loss. A later migration drops it once a release
+  /// has proved the new path.
+  ///
+  /// Do not write to it and do not read it in new code. `scripts/access-matrix.ts` reads
+  /// both shapes and is what proves the two agree (FR-006, SC-002).
   permissions Permission[]
+
+  /// One row per area and level (019 FR-001, FR-002). See `RolePermission`.
+  rolePermissions RolePermission[]
   /// True only for the seeded Super Admin role — blocks rename/permission-change/
   /// delete (002-settings-backend FR-008; enforced there once it owns role editing —
   /// this feature only ever reads roles, it doesn't expose role management).
-  isProtected Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  isProtected     Boolean          @default(false)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   userRoles UserRole[]
 
@@ -146,6 +158,100 @@ model Role {
   /// since the alternative is a level that resolves to nothing.
   roleSlotMappings RoleSlotMapping[]
 
+  @@schema("settings")
+}
+
+/// One grant: a role may do `level` to `permission` (019 FR-001, FR-002).
+///
+/// Replaces `Role.permissions`, the scalar list, which could not carry a level. The
+/// alternative was doubling the `Permission` enum into `*_READ`/`*_WRITE` pairs — rejected
+/// because 34 values become 68, every one of the 116 `@RequirePermissions(...)`
+/// declarations would have to name which it meant, and a role's grants would stop being
+/// queryable by area.
+///
+/// **No `companyId`, and no RLS — deliberately.** `Role` itself carries neither: migration
+/// `20260828170000_role_permission_model` records the reasoning, that who *holds* a role is
+/// tenant data (hence `UserRole` is RLS'd) while the role's own definition is not. A child
+/// of a global table cannot be tenant-scoped, and a policy here that looked like one would
+/// be worse than none — it would read as isolation to the next person while enforcing
+/// nothing.
+/// A refused request, recorded (019 FR-003).
+///
+/// `heldLevel` is the column that earns this table. A refusal with `heldLevel = read` against
+/// a required `write` is an **interface** that offered a control it should have hidden —
+/// FR-004's failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
+/// reaching for a module they hold nothing in, which is a security signal. Without this column
+/// the two are the same row, and the only thing anybody could do with the log is count it.
+/// Which company a user is currently working in (019 FR-008 to FR-013).
+///
+/// **Stored server-side, not carried in the token.** FR-011 requires the selection to survive
+/// a browser restart, and access tokens here are short-lived — a JWT claim would not survive
+/// one. A cookie would make the selection a client assertion about authorisation scope, which
+/// is the one thing it must never be.
+///
+/// `userId` is the primary key, so two selections for one user are **unrepresentable** rather
+/// than merely prevented.
+///
+/// The selection is not authorisation. It is validated against the user's accessible companies
+/// on every read, not only on write: the spec's own edge case is cross-company access being
+/// revoked while the other company is selected, and a stored selection trusted at read time is
+/// how that becomes a cross-tenant read.
+model UserCompanySelection {
+  userId String @id
+
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@schema("settings")
+}
+
+model PermissionRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  userId String
+  method String
+
+  /// The route **template**, never the resolved URL. A resolved URL carries record ids, and a
+  /// security log quietly accumulating them becomes a store of personal data nobody
+  /// classified as one.
+  path String
+
+  requiredPermission Permission
+  requiredLevel      AccessLevel
+
+  /// The level actually held for that area. **Null means the area was not held at all** —
+  /// which is a different event from holding it at the wrong level.
+  heldLevel AccessLevel?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, userId])
+  @@schema("settings")
+}
+
+model RolePermission {
+  id String @id @default(cuid())
+
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  /// The area. The existing 34-value enum, unchanged — areas are already granular enough
+  /// for the client's Note 22, since `LOGBOOK` and `FUEL` are already distinct from
+  /// `MACHINERY` (019 research §2).
+  permission Permission
+  level      AccessLevel
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  /// A grant is present or absent, never duplicated.
+  @@unique([roleId, permission, level])
+  @@index([roleId])
   @@schema("settings")
 }
 
@@ -165,6 +271,19 @@ model UserRole {
 
   @@unique([userId, roleId])
   @@index([userId])
+  @@schema("settings")
+}
+
+/// How much of an area a grant confers (019 FR-001).
+///
+/// Two values, deliberately. A third (`approve`) was considered and rejected: this system
+/// already expresses approval as separate `Permission` values — `INVENTORY_APPROVE`,
+/// `LABOUR_APPROVE`, `RECRUITMENT_APPROVE`, `ASSETS_APPROVE` — and a level duplicating
+/// them would give two ways to say one thing with nothing stating which wins.
+enum AccessLevel {
+  read
+  write
+
   @@schema("settings")
 }
 
@@ -314,6 +433,33 @@ model Company {
   /// so this is not a literal inside the denomination service — Principle III.
   labourCashDenominations Int[] @default([500, 200, 100, 50, 20, 10, 5, 1])
 
+  /// The worst GPS accuracy a punch may report and still be located, in metres
+  /// (020 FR-012b).
+  ///
+  /// The client asked for this in those words — "configurable from the settings by super admin" —
+  /// and an environment variable does not satisfy it: it needs a redeploy and it is the same for
+  /// both companies.
+  ///
+  /// **Nullable rather than defaulted in the database.** Null means "this company has not decided",
+  /// which is a different fact from "this company chose 50" — and only the first should follow a
+  /// change to the product default. A column defaulted to 50 makes every company look as though it
+  /// had made a decision nobody made.
+  ///
+  /// Deliberately **not** feature 013's `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
+  /// different surface, different tolerance. Merging them means tuning one to fix the other.
+  punchAccuracyMaxMetres Int?
+
+  /// Hides cash amounts and cash transactions across the application (019 FR-014).
+  ///
+  /// A **display** control, never a data operation — FR-017 is explicit that nothing is
+  /// deleted or altered while it is on. Default false: a display control that arrived
+  /// switched on would hide figures nobody asked to hide.
+  ///
+  /// Note that `labourCashDenominations` above is deliberately NOT hidden by this. It
+  /// looks like cash and is not — it is configuration, and hiding it would break the
+  /// payment-sheet builder while concealing nothing anybody wanted concealed.
+  hideCashTransactions Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -359,11 +505,20 @@ model Company {
   companyDocuments  CompanyDocument[]
 
   // 017 letters (T026, T052).
-  letterKinds LetterKind[]
-  signatories Signatory[]
+  letterKinds   LetterKind[]
+  signatories   Signatory[]
   issuedLetters IssuedLetter[]
 
   @@schema("settings")
+
+  /// 016 FR-018a: which action types this company requires the Director to approve.
+  directorFinalActions DirectorFinalAction[]
+
+  /// 016 FR-018b: proposed changes to this company's director-final set.
+  directorFinalChangeProposals DirectorFinalChangeProposal[]
+
+  /// 019 FR-008: users currently working in this company.
+  userCompanySelections UserCompanySelection[]
 }
 
 enum CompanyStatus {
@@ -507,9 +662,9 @@ model LetterKind {
   label String
 
   /// FR-016: whether a signature is applied at issue.
-  requiresSignature Boolean @default(false)
+  requiresSignature  Boolean @default(false)
   /// FR-015a: true for work order, LOI and purchase order — the three that commit money.
-  requiresApproval  Boolean @default(false)
+  requiresApproval   Boolean @default(false)
   /// The 016 action type to gate on. Must equal a constant exported from
   /// `src/approvals/default-chains.ts`; a unit test asserts that rather than trusting
   /// two files to stay in step.
@@ -1623,6 +1778,44 @@ model ProjectBudget {
 
 /// A file attached to a project, stored as an object-storage reference rather than
 /// bytes — same pattern as `hr.EmployeeDocument`.
+/// A document uploaded **before** the project it belongs to exists (017 FR-009b, plan D10).
+///
+/// **This table is the cost of the word "cannot".** FR-009 says a project is not created while a
+/// mandatory kind has no document attached — so the documents have to exist before the project
+/// does, and there is nowhere to hang them. A row here is a file in escrow: uploaded, attributed,
+/// and waiting for the creation that will either consume it or leave it to be swept.
+///
+/// `uploadedBy` is an **authorisation input**, not attribution (FR-009c, plan D10a). Project
+/// creation refuses a staged id whose `uploadedBy` is not the calling user, and refuses it with the
+/// same error code as a nonexistent id — so the refusal cannot be used to discover that another
+/// user's staged document exists. A column read for access control needs more care than one read
+/// for display, which is why this is said here rather than left to the service.
+///
+/// Rows are swept with their blobs after the staging window (FR-009d). A file uploaded for a
+/// project nobody went on to create must not sit in storage indefinitely.
+model StagedProjectDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// Null for a supplementary document — the same meaning it has on `ProjectDocument`.
+  documentTypeId String?
+
+  /// The kind's label as the uploader saw it, kept so a refusal can name the kind even if the
+  /// type is renamed or removed between staging and creation.
+  documentType String
+
+  fileRef  String
+  filePath String?
+
+  /// Who staged it. Checked on use, not merely recorded — see the note above.
+  uploadedBy String
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@schema("projects")
+}
+
 model ProjectDocument {
   id        String @id @default(cuid())
   companyId String
@@ -1678,8 +1871,20 @@ model ProjectDocumentRequirement {
   /// like an oversight and is not.
   documentTypeId String
 
-  /// FR-009 lets a project exist before its papers are complete; readiness is reported,
-  /// never enforced at creation.
+  /// Whether a project **cannot be created** without a document of this kind (017 FR-007b,
+  /// FR-009).
+  ///
+  /// **Reversed on 2026-09-16.** This comment used to read "FR-009 lets a project exist before its
+  /// papers are complete; readiness is reported, never enforced at creation" — which the client's
+  /// bug review item 3 made false. A mandatory kind now refuses the creation, naming every missing
+  /// kind, and creating nothing.
+  ///
+  /// An **advisory** kind (false) is reported outstanding and blocks nothing. The two are counted
+  /// separately in `ProjectDocumentReadiness` rather than together, so a reader can tell "we cannot
+  /// start this project" from "we are still chasing paperwork".
+  ///
+  /// A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
+  /// that would refuse every creation with no way to comply.
   isMandatory Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -1816,6 +2021,7 @@ model Employee {
   documents               EmployeeDocument[]
   transfers               EmployeeTransfer[]
   attendanceModifications AttendanceModification[]
+  pendingAttendanceCorrections PendingAttendanceCorrection[]
   exitRecords             ExitRecord[]
   payrollLineItems        PayrollLineItem[]
   loans                   Loan[]
@@ -1826,6 +2032,9 @@ model Employee {
   @@index([companyId])
   @@index([siteId])
   @@schema("hr")
+
+  /// 020 FR-013c: punches refused for this employee.
+  punchRefusals PunchRefusal[]
 }
 
 /// Exactly one row per employee. A completed re-enrolment replaces `descriptor`,
@@ -2329,6 +2538,154 @@ model HolidaySite {
 }
 
 /// Append-only audit of every manual attendance edit (FR-010). Never updated.
+/// A manual attendance correction that has been submitted and not yet applied
+/// (016 FR-012, plan D15).
+///
+/// **Why this table exists at all.** The correction enters the approval chain, so its
+/// intended values have to survive between submission and the chain completing — and the
+/// spine cannot hold them. `ApprovalInstance` carries no payload by design: it stores an
+/// opaque `(entityType, entityId)` pair and never dereferences it, which is what lets the
+/// spine know nothing about the modules it serves (016 research §1). So the payload lives
+/// here, in `hr`, owned by the module that understands it, and the spine's `entityId`
+/// points at a row in this table.
+///
+/// Neither the plan nor the task list named this table; it was found during
+/// implementation on 2026-09-30, because "submit to ApprovalsService and return the
+/// pending instance" has nowhere to keep the correction otherwise.
+///
+/// Rows are **not** the audit trail. `AttendanceModification` is, and it is written only
+/// when a correction is applied (FR-012b, plan D15) — a rejected correction modified
+/// nothing, and logging it as a modification would make the log disagree with the
+/// attendance. A rejected correction stays visible as an approval instance, which is
+/// where it belongs.
+/// Why a punch was, or would have been, refused (020 FR-013c).
+enum PunchRefusalReason {
+  /// Located, and outside the assigned fence.
+  outside_geofence
+  /// The GPS fix was worse than the company's threshold, so the punch could not be located at all
+  /// — a different fact from being located somewhere wrong, and the reason the two are separate
+  /// values rather than one.
+  unlocatable
+  /// The photo did not match the enrolled face closely enough.
+  face_mismatch
+  /// No face was detectable in the photo.
+  no_face_detected
+
+  @@schema("hr")
+}
+
+/// A punch that was refused, or in Phase 2 would have been (020 FR-013c).
+///
+/// **Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
+/// system could not establish whose face it is — retaining an unattributed biometric against a named
+/// employee is worse than the exception record it replaces, and the photo would be evidence of
+/// nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
+/// number is not a biometric.
+///
+/// This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
+/// punch at all — which is the point — so without this the refusal would leave no trace anywhere and
+/// a worker wrongly refused would have nothing to appeal to.
+model PunchRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  type PunchType
+
+  reason PunchRefusalReason
+
+  /// Where they were, and how far from the fence. Evidence, so it is the **real** distance rather
+  /// than one adjusted by the accuracy allowance.
+  latitude       Decimal  @db.Decimal(10, 7)
+  longitude      Decimal  @db.Decimal(10, 7)
+  distanceMeters Decimal? @db.Decimal(12, 2)
+  accuracyMeters Int?
+
+  /// The face-match distance, when a comparison happened at all. A number, not a biometric.
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  /// When the punch was taken, and when it reached the server — a refused offline punch may arrive
+  /// long after the moment it describes.
+  capturedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, employeeId, capturedAt])
+  @@schema("hr")
+}
+
+model PendingAttendanceCorrection {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  date DateTime @db.Date
+
+  /// The `MarkAttendanceDto` as submitted — times, status override, remarks. Stored whole
+  /// rather than as columns: this is a payload in transit, and mirroring the DTO's fields
+  /// here would mean a schema change every time the DTO grew a field.
+  payload Json
+
+  /// Who submitted it. Becomes `AttendanceModification.actorUserId` on apply, so the
+  /// employee sees the person who asked for the change and not the person who approved it.
+  submittedByUserId String
+
+  /// The spine instance governing it. Not a relation: `ApprovalInstance` is in `shared`
+  /// and this table is in `hr`, and a foreign key across that boundary is the coupling
+  /// Principle I forbids.
+  approvalInstanceId String @unique
+
+  appliedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, employeeId, date])
+  @@schema("hr")
+}
+
+/// A waived exit-clearance obligation (021 FR-014b, FR-016, plan D14).
+///
+/// **The only thing this feature stores.** The clearance itself is *derived* — open asset
+/// allocations, unreturned recoverable kit, outstanding advances, open reimbursements, the
+/// account's state — read fresh every time it is asked for.
+///
+/// A stored checklist would be a second copy of custody, stale the moment an asset came back
+/// through the asset register. FR-014c requires a return there to satisfy the item here without
+/// a second action, and deriving is what makes "returned in the asset module" and "satisfied
+/// here" the same fact rather than two facts somebody has to keep in step. FR-014e's "recompute
+/// at read time" is therefore not an extra requirement — it is what deriving means.
+///
+/// A waiver does **not** mark the underlying obligation discharged (FR-014c). It records that
+/// the company stopped chasing it, with a name against the decision.
+model ExitClearanceWaiver {
+  id        String @id @default(cuid())
+  companyId String
+
+  exitRecordId String
+  exitRecord   ExitRecord @relation(fields: [exitRecordId], references: [id], onDelete: Cascade)
+
+  /// Which kind of obligation — asset custody, recoverable kit, an advance, a reimbursement.
+  itemKind String
+
+  /// The obligation's own id in its owning module, so a waiver points at exactly one thing.
+  itemRef String
+
+  /// Required, and length-validated in the DTO. A mandatory field satisfied by a space is not a
+  /// reason, and this one writes off company money.
+  reason String
+
+  waivedByUserId String
+  waivedAt       DateTime @default(now())
+
+  @@unique([exitRecordId, itemKind, itemRef])
+  @@index([companyId])
+  @@schema("hr")
+}
+
 model AttendanceModification {
   id         String @id @default(cuid())
   employeeId String
@@ -2340,6 +2697,15 @@ model AttendanceModification {
   reason      String?
   createdAt   DateTime @default(now())
 
+  /// **The one honest caveat on FR-012b's "immutable and not deletable"** (016 T081).
+  ///
+  /// `onDelete: Cascade` means hard-deleting an employee deletes their modification
+  /// history with them, which sits awkwardly beside a requirement calling the log
+  /// append-only. It is left as a cascade deliberately: breaking it would strand rows
+  /// against an employee who no longer exists, which is worse than losing them with her.
+  /// Soft-delete is this product's norm and no live path hard-deletes an employee, so
+  /// nothing reaches this today — but "append-only" should not be read as "survives
+  /// everything", and this is where that is written down.
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([employeeId, date])
@@ -2375,6 +2741,9 @@ model ExitRecord {
 
   @@index([employeeId])
   @@schema("hr")
+
+  /// 021 FR-016: obligations waived on this exit.
+  clearanceWaivers ExitClearanceWaiver[]
 }
 
 enum TaxDeclarationStatus {
@@ -3366,6 +3735,71 @@ model ApprovalLevel {
 
 /// Binds a slot to one of a company's own roles. The table that lets two companies
 /// staff the same chain shape differently.
+/// Whether one action type needs the Director's final approval, per company
+/// (016 FR-018a, FR-018b, FR-018c).
+///
+/// **Why this is a table and not configuration.** It used to be
+/// `APPROVALS_DIRECTOR_FINAL_ACTIONS`, an environment variable read once at construction.
+/// That satisfied "configurable without a code change" only in its weakest sense: it needed
+/// a redeploy, it was global across both of the client's companies, and it was unauditable —
+/// so FR-018b's requirement to record "the set before and after" had nowhere to live, and
+/// FR-018c's requirement to report the set had nothing to report from.
+///
+/// The config list survives as the **seed** for a company's first rows and as the fallback
+/// for an action type nobody has configured yet. Keeping it as the fallback matters: an
+/// action type registered by a later feature must have a defined answer before anybody
+/// configures it, and the safe answer is the one the client already accepted.
+model DirectorFinalAction {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// The chain action type, matching `ApprovalChain.actionType`. A free-text column rather
+  /// than an enum for the same reason `slotKey` is: a feature that adds an action type must
+  /// not need a migration of this table to describe it.
+  actionType String
+
+  isFinal Boolean
+
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@unique([companyId, actionType])
+  @@index([companyId])
+  @@schema("shared")
+}
+
+/// A proposed change to the director-final set, awaiting the Director (016 FR-018b).
+///
+/// Exists for the same reason `hr.PendingAttendanceCorrection` does: `ApprovalInstance`
+/// carries no payload by design, so a change's before and after have to live in a table the
+/// owning module controls. Here the owning module is the spine itself, which is why this row
+/// sits in `shared` beside it — the spine is allowed to know about its own settings.
+///
+/// `before` and `after` are maps of actionType to boolean. `before` is captured at submission
+/// rather than derived at apply time: the point of recording it is what the set looked like
+/// when somebody decided to change it, and re-deriving it later would show what it looked
+/// like after whatever else happened in between.
+model DirectorFinalChangeProposal {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Not a relation: kept as a bare id so this row survives its instance being pruned, and
+  /// so the proposal can be read without joining the spine's own tables.
+  approvalInstanceId String @unique
+
+  proposedBy String
+  before     Json
+  after      Json
+
+  appliedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([companyId, appliedAt])
+  @@schema("shared")
+}
+
 model RoleSlotMapping {
   id String @id @default(cuid())
 

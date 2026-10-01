@@ -1,12 +1,23 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { StorageService } from '../../common/storage/storage.service';
 import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
 import {
+  PROJECT_DOCUMENTS_MANDATORY_MISSING,
+  PROJECT_DOCUMENT_KIND_NOT_DEFINED,
+  PROJECT_STAGED_DOCUMENT_UNKNOWN,
   PROJECT_DOCUMENT_KIND_NOT_REQUIRED,
   PROJECT_DOCUMENT_TYPE_UNKNOWN,
 } from './project-document-error-codes';
@@ -58,18 +69,45 @@ export interface ProjectDocumentRequirementSet {
 
 /** How far one project is from fully papered (FR-008). */
 export interface ProjectDocumentReadiness {
+  /**
+   * The **mandatory** set, and only the mandatory set (017 FR-007b).
+   *
+   * These three figures are already rendered on the portfolio list, so they must not move when the
+   * advisory split arrives: a "3 of 5" that silently started counting advisory kinds would change
+   * every project's reported readiness without anybody asking for it.
+   */
   required: number;
   present: number;
   missingTypeIds: string[];
+  /**
+   * The advisory set, reported separately (FR-007b).
+   *
+   * An advisory kind is reported outstanding and never blocks creation. Counting it beside the
+   * mandatory figures rather than inside them is what lets a reader tell "we cannot start this
+   * project" from "we are still chasing paperwork".
+   */
+  advisoryRequired: number;
+  advisoryPresent: number;
+  advisoryMissingTypeIds: string[];
 }
 
 @Injectable()
 export class ProjectDocumentsService {
+  /** 017 FR-009d's window, from configuration rather than a literal (Principle III). */
+  private readonly retentionHours: number;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly documentTypes: DocumentTypesService,
     private readonly audit: AuditLogService,
-  ) {}
+    private readonly storage: StorageService,
+    configService: ConfigService,
+  ) {
+    this.retentionHours =
+      configService.get<DocumentsConfig>(
+        'documents',
+      ).stagedDocumentRetentionHours;
+  }
 
   /**
    * The required set for this company, with names (FR-007).
@@ -245,6 +283,28 @@ export class ProjectDocumentsService {
       });
     }
 
+    // FR-007d. A kind cannot be marked **mandatory** while the company has no document type for
+    // it: that would block every project creation with no way for anybody to comply, and the person
+    // hitting the wall would be a Project Manager who cannot fix it. The same refusal the unknown
+    // check above gives, at a different strength — and the type is definable in place through
+    // `POST kinds/:code`, so the remedy is one call away rather than a settings expedition.
+    const undefinedMandatory = dto.requirements
+      .filter((r) => r.isMandatory !== false)
+      .map((r) => r.documentTypeId)
+      .filter((id) => !known.has(id));
+    if (undefinedMandatory.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PROJECT_DOCUMENT_KIND_NOT_DEFINED,
+        message:
+          `These kinds cannot be mandatory because this company has no document type for ` +
+          `them: ${undefinedMandatory.join(
+            ', ',
+          )}. Define the type first — a mandatory kind ` +
+          `nobody can file against would refuse every project creation with no way to comply.`,
+      });
+    }
+
     // Deduplicated before writing rather than relying on the unique index to reject the
     // call: a set sent with one kind twice is a client mistake, not a conflict worth
     // failing a whole configuration over.
@@ -306,16 +366,24 @@ export class ProjectDocumentsService {
     companyId: string,
     projectIds: string[],
   ): Promise<Map<string, ProjectDocumentReadiness>> {
+    const empty = {
+      required: 0,
+      present: 0,
+      missingTypeIds: [] as string[],
+      advisoryRequired: 0,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: [] as string[],
+    };
     const readiness = new Map<string, ProjectDocumentReadiness>(
-      projectIds.map((id) => [
-        id,
-        { required: 0, present: 0, missingTypeIds: [] },
-      ]),
+      projectIds.map((id) => [id, { ...empty }]),
     );
     if (projectIds.length === 0) return readiness;
 
-    const required = await this.mandatoryTypeIdsFor(ctx, companyId);
-    if (required.length === 0) return readiness;
+    const { mandatory: required, advisory } = await this.partitionedTypeIdsFor(
+      ctx,
+      companyId,
+    );
+    if (required.length === 0 && advisory.length === 0) return readiness;
 
     // One statement for the whole page. `documentTypeId: { in: required }` bounds the
     // result at projects × required kinds however many documents a project holds, and
@@ -325,7 +393,8 @@ export class ProjectDocumentsService {
         where: {
           companyId,
           projectId: { in: projectIds },
-          documentTypeId: { in: required },
+          // Both partitions in one predicate, so the page still costs one query (T127).
+          documentTypeId: { in: [...required, ...advisory] },
         },
         select: { projectId: true, documentTypeId: true },
         distinct: ['projectId', 'documentTypeId'],
@@ -343,10 +412,15 @@ export class ProjectDocumentsService {
     for (const projectId of projectIds) {
       const has = heldBy.get(projectId) ?? new Set<string>();
       const missingTypeIds = required.filter((id) => !has.has(id));
+      const advisoryMissingTypeIds = advisory.filter((id) => !has.has(id));
       readiness.set(projectId, {
+        // Mandatory only, unchanged. This figure is already on the portfolio list.
         required: required.length,
         present: required.length - missingTypeIds.length,
         missingTypeIds,
+        advisoryRequired: advisory.length,
+        advisoryPresent: advisory.length - advisoryMissingTypeIds.length,
+        advisoryMissingTypeIds,
       });
     }
     return readiness;
@@ -363,7 +437,14 @@ export class ProjectDocumentsService {
   ): Promise<ProjectDocumentReadiness> {
     const map = await this.readinessFor(ctx, companyId, [projectId]);
     return (
-      map.get(projectId) ?? { required: 0, present: 0, missingTypeIds: [] }
+      map.get(projectId) ?? {
+        required: 0,
+        present: 0,
+        missingTypeIds: [],
+        advisoryRequired: 0,
+        advisoryPresent: 0,
+        advisoryMissingTypeIds: [],
+      }
     );
   }
 
@@ -378,6 +459,21 @@ export class ProjectDocumentsService {
     ctx: RlsContext,
     companyId: string,
   ): Promise<string[]> {
+    return (await this.partitionedTypeIdsFor(ctx, companyId)).mandatory;
+  }
+
+  /**
+   * Both partitions of the required set, from the **one** query the mandatory resolver already ran
+   * (017 FR-007b, T127).
+   *
+   * One statement for the whole page matters here and is asserted by a test: readiness is computed
+   * for every project on the portfolio list, and a second query per partition would double that
+   * cost for a figure the reader sees beside the first.
+   */
+  private async partitionedTypeIdsFor(
+    ctx: RlsContext,
+    companyId: string,
+  ): Promise<{ mandatory: string[]; advisory: string[] }> {
     const configured = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.projectDocumentRequirement.findMany({
         where: { companyId },
@@ -389,17 +485,370 @@ export class ProjectDocumentsService {
     // company that deliberately marked every requirement optional has configured
     // something, and overriding that with the defaults would undo their decision.
     if (configured.length > 0) {
-      return configured
-        .filter((r) => r.isMandatory)
-        .map((r) => r.documentTypeId);
+      return {
+        mandatory: configured
+          .filter((r) => r.isMandatory)
+          .map((r) => r.documentTypeId),
+        advisory: configured
+          .filter((r) => !r.isMandatory)
+          .map((r) => r.documentTypeId),
+      };
     }
 
     const types = await this.documentTypes.listForCompany(companyId);
     const wanted = new Set(
       REQUIRED_PROJECT_DOCUMENT_KINDS.map((k) => k.code.toUpperCase()),
     );
-    return types
-      .filter((t) => wanted.has(t.code.toUpperCase()))
-      .map((t) => t.id);
+    // The shipped defaults are all mandatory: they are the kinds the client named as required, and
+    // a default that arrived advisory would gate nothing on a company that has configured nothing.
+    return {
+      mandatory: types
+        .filter((t) => wanted.has(t.code.toUpperCase()))
+        .map((t) => t.id),
+      advisory: [],
+    };
+  }
+  // ───────────────────────────────────────────────────────────────────────────
+  // The upload path (017 FR-008a, FR-009b to FR-009e). Added by Phase 13.
+  //
+  // Until this existed, `ProjectDocument` was read by `readinessFor` and **written by nothing**.
+  // The gate FR-009 describes was the small part; the path it gates is the part that was missing.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Files a document against an existing project (FR-008a).
+   *
+   * `documentTypeId` is optional: supplied, the document answers a required kind; omitted, it is
+   * supplementary. That is already what null means on the column, so this adds no vocabulary.
+   */
+  async upload(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    input: {
+      documentTypeId?: string;
+      documentType: string;
+      data: Buffer;
+      contentType: string;
+      remark?: string;
+    },
+    actorUserId: string,
+  ) {
+    if (input.documentTypeId) {
+      await this.assertTypeExists(ctx, companyId, input.documentTypeId);
+    }
+
+    const fileRef = await this.storage.put(
+      `project-documents/${companyId}`,
+      input.data,
+      input.contentType,
+    );
+
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocument.create({
+        data: {
+          companyId,
+          projectId,
+          documentType: input.documentType,
+          documentTypeId: input.documentTypeId ?? null,
+          fileRef,
+          remark: input.remark ?? null,
+          uploadedByUserId: actorUserId,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Every document filed against a project — required and supplementary alike (FR-008a).
+   *
+   * **Deliberately unfiltered by `documentTypeId`.** Filtering to the required set is exactly what
+   * made supplementary company documents invisible and produced this feature's amendment D1, and
+   * the same mistake is available here. Readiness is one view of a project's papers; it must not be
+   * the only one.
+   */
+  async listForProject(ctx: RlsContext, companyId: string, projectId: string) {
+    const documents = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocument.findMany({
+        where: { companyId, projectId },
+        orderBy: { uploadedAt: 'desc' },
+      }),
+    );
+    if (documents.length === 0)
+      return documents.map((d) => ({ ...d, uploadedByName: null }));
+
+    // Who filed it, by name (web T077). `uploadedByUserId` is a bare id, and a list of a
+    // project's papers reading "filed by cmuoe9b7l00q5v8…" answers half the question it was
+    // asked. One query for the page's distinct uploaders, not one per row.
+    const names = await this.actorNames([
+      ...new Set(documents.map((d) => d.uploadedByUserId)),
+    ]);
+    return documents.map((document) => ({
+      ...document,
+      uploadedByName: names.get(document.uploadedByUserId) ?? null,
+    }));
+  }
+
+  /**
+   * Retrieves one project document's bytes (FR-008a, web T077).
+   *
+   * **Scoped by project as well as by id.** A document id alone would be enough for the row the
+   * caller is looking at, but passing the project through means a mismatched pair cannot resolve
+   * — so a document id guessed or copied from another project is a 404 rather than a download.
+   *
+   * No audit entry, unlike `CompanyDocumentsService.download`. That asymmetry is deliberate and
+   * worth writing down: company documents have restricted kinds whose *retrieval* is the thing
+   * worth knowing about, and FR-024 says so. Project documents carry no restriction vocabulary,
+   * so there is nothing here an auditor would be reading the log for. If project kinds ever gain
+   * restriction, this is the method that must gain the entry.
+   */
+  async downloadForProject(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    documentId: string,
+  ): Promise<{ data: Buffer; filename: string }> {
+    const document = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocument.findFirst({
+        where: { id: documentId, projectId, companyId },
+      }),
+    );
+    if (!document) throw new NotFoundException('Document not found.');
+
+    const data = await this.storage.get(document.fileRef);
+    return {
+      // The free-text label, not the id: this is what a person sees in their downloads folder.
+      // Sanitised because it is user-supplied and ends up in a header.
+      filename: `${document.documentType.replace(/[^A-Za-z0-9._-]+/g, '-')}-${
+        document.id
+      }`,
+      data,
+    };
+  }
+
+  /** User ids to display names, in one query. */
+  private async actorNames(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const users = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: ids } },
+          select: ACTOR_NAME_SELECT,
+        }),
+    );
+    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
+  }
+
+  /**
+   * Stages a document before its project exists (FR-009b).
+   *
+   * Records `uploadedBy` from the caller, which project creation checks rather than merely
+   * displays — see the schema comment.
+   */
+  async stage(
+    ctx: RlsContext,
+    companyId: string,
+    input: {
+      documentTypeId?: string;
+      documentType: string;
+      data: Buffer;
+      contentType: string;
+    },
+    actorUserId: string,
+  ): Promise<{ stagedDocumentId: string }> {
+    if (input.documentTypeId) {
+      await this.assertTypeExists(ctx, companyId, input.documentTypeId);
+    }
+
+    const fileRef = await this.storage.put(
+      `project-documents-staged/${companyId}`,
+      input.data,
+      input.contentType,
+    );
+
+    const staged = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.stagedProjectDocument.create({
+        data: {
+          companyId,
+          documentTypeId: input.documentTypeId ?? null,
+          documentType: input.documentType,
+          fileRef,
+          uploadedBy: actorUserId,
+        },
+      }),
+    );
+    return { stagedDocumentId: staged.id };
+  }
+
+  /**
+   * Refuses a project creation whose mandatory kinds are not all attached (FR-009, FR-009a).
+   *
+   * Names every missing kind's **label**, never its id: a refusal naming internal identifiers is
+   * one the reader cannot act on.
+   *
+   * Also resolves the staged rows the creation will consume, and refuses any the caller may not use
+   * (FR-009c) — done here rather than in the caller so the two checks cannot be applied apart.
+   */
+  async assertMandatoryKindsSatisfied(
+    ctx: RlsContext,
+    companyId: string,
+    stagedIds: string[],
+    actorUserId: string,
+  ): Promise<
+    {
+      id: string;
+      documentTypeId: string | null;
+      documentType: string;
+      fileRef: string;
+      filePath: string | null;
+    }[]
+  > {
+    const staged = stagedIds.length
+      ? await withRlsContext(this.prisma, ctx, (tx) =>
+          tx.stagedProjectDocument.findMany({
+            where: { companyId, id: { in: stagedIds } },
+          }),
+        )
+      : [];
+
+    // FR-009c. Every id must exist, belong to this company, and have been staged by this caller —
+    // and all three failures give the SAME code, so a refusal cannot be used to discover that
+    // somebody else's staged document exists.
+    const usable = new Map(
+      staged
+        .filter((row) => row.uploadedBy === actorUserId)
+        .map((row) => [row.id, row]),
+    );
+    const unusable = stagedIds.filter((id) => !usable.has(id));
+    if (unusable.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PROJECT_STAGED_DOCUMENT_UNKNOWN,
+        message:
+          `${unusable.length} staged document reference(s) are not usable by this caller. ` +
+          `A reference can only be used by the person who uploaded it, and only once.`,
+      });
+    }
+
+    const requirements = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.projectDocumentRequirement.findMany({
+        where: { companyId, isMandatory: true },
+      }),
+    );
+
+    const attached = new Set(
+      [...usable.values()]
+        .map((row) => row.documentTypeId)
+        .filter(Boolean) as string[],
+    );
+    const missing = requirements.filter(
+      (requirement) => !attached.has(requirement.documentTypeId),
+    );
+
+    if (missing.length > 0) {
+      const labels = await this.labelsForTypeIds(
+        ctx,
+        companyId,
+        missing.map((m) => m.documentTypeId),
+      );
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PROJECT_DOCUMENTS_MANDATORY_MISSING,
+        message:
+          `This project cannot be created until a document is attached for every mandatory ` +
+          `kind. Missing: ${missing
+            .map((m) => labels.get(m.documentTypeId) ?? m.documentTypeId)
+            .join(', ')}.`,
+        missingKinds: missing.map(
+          (m) => labels.get(m.documentTypeId) ?? m.documentTypeId,
+        ),
+        // The machine-readable half of the same refusal (web T072).
+        //
+        // `missingKinds` above is for a person to read and must stay labels — FR-009a is explicit
+        // that a refusal naming internal identifiers is one the reader cannot act on. But a form
+        // has to put each name *on the control it refers to*, and matching a display label back to
+        // a control means string-matching two names that are only incidentally equal: two kinds
+        // may legitimately share a name, and a rename breaks the match silently. The ids make that
+        // exact; they are additive, and nothing is expected to render them.
+        missingTypeIds: missing.map((m) => m.documentTypeId),
+      });
+    }
+
+    return [...usable.values()].map((row) => ({
+      id: row.id,
+      documentTypeId: row.documentTypeId,
+      documentType: row.documentType,
+      fileRef: row.fileRef,
+      filePath: row.filePath,
+    }));
+  }
+
+  /**
+   * Deletes staged documents past the retention window, **with their blobs** (FR-009d).
+   *
+   * The blob first would risk a row pointing at nothing; the row first would risk an orphan blob.
+   * Rows are read, then deleted, then blobs removed — an orphaned blob is a wasted object and an
+   * orphaned row is a broken reference, so the cheaper failure is chosen deliberately.
+   */
+  async sweepStaged(now = new Date()): Promise<number> {
+    const hours = this.retentionHours;
+    const cutoff = new Date(now.getTime() - hours * 60 * 60 * 1000);
+
+    const stale = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.stagedProjectDocument.findMany({
+          where: { createdAt: { lt: cutoff } },
+          select: { id: true, fileRef: true },
+        }),
+    );
+    if (stale.length === 0) return 0;
+
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.stagedProjectDocument.deleteMany({
+        where: { id: { in: stale.map((row) => row.id) } },
+      }),
+    );
+    await this.storage.deleteMany(stale.map((row) => row.fileRef));
+    return stale.length;
+  }
+
+  /**
+   * The kinds' human labels, for a refusal a reader can act on.
+   *
+   * Through `DocumentTypesService`, not a query: `DocumentType` lives in `settings` and this module
+   * may not read it (Principle I) — the same reason `documentTypeId` is a bare string here rather
+   * than a foreign key. Caught in review of this method's first draft, which queried it directly.
+   */
+  private async labelsForTypeIds(
+    _ctx: RlsContext,
+    companyId: string,
+    typeIds: string[],
+  ): Promise<Map<string, string>> {
+    const wanted = new Set(typeIds);
+    const types = await this.documentTypes.listForCompany(companyId);
+    return new Map(
+      types
+        .filter((type) => wanted.has(type.id))
+        .map((type) => [type.id, type.name]),
+    );
+  }
+
+  private async assertTypeExists(
+    _ctx: RlsContext,
+    companyId: string,
+    documentTypeId: string,
+  ): Promise<void> {
+    const types = await this.documentTypes.listForCompany(companyId);
+    if (!types.some((type) => type.id === documentTypeId)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PROJECT_DOCUMENT_TYPE_UNKNOWN,
+        message: 'That document type does not exist for this company.',
+      });
+    }
   }
 }

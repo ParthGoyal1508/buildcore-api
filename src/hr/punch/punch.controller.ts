@@ -30,10 +30,17 @@ import {
   SubmitPunchDto,
 } from './dto/punch.dto';
 import { PunchService } from './punch.service';
+import { SelfService } from '../../common/decorators/route-access.decorator';
 
 @ApiTags('My Workspace')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+// 019 FR-005: authorised by ownership, not by a permission — this is an employee's own punches and history,
+// resolved from the caller's own user id in the service. Every employee would need
+// such a permission, so it would grant nothing; what matters is that the row is
+// theirs. Declared rather than left as an absence, so the guard can refuse a route
+// that says nothing at all.
+@SelfService()
 @Controller('my/punch')
 export class PunchController {
   constructor(

@@ -3,11 +3,12 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   AuditAction,
   AuditEntityType,
@@ -15,10 +16,21 @@ import {
   PunchSource,
   PunchType,
 } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { randomUUID } from 'crypto';
+
 import { SLOT_HR } from '../../approvals/approval-slots';
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalCompletedEvent,
+  ApprovalService,
+} from '../../approvals/approvals.service';
+import { ACTION_ATTENDANCE_CORRECTION } from '../../approvals/default-chains';
 import { ChainsService } from '../../approvals/chains.service';
+import type { AuthenticatedUser } from '../../auth/authenticated-user';
+import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type {
   HrPayrollConfig,
@@ -73,6 +85,23 @@ export interface DailyAttendanceRow {
   adminEdited: boolean;
   remarks: string | null;
   hasException: boolean;
+  /**
+   * A correction asked for on this employee-day and not yet applied (016 FR-012, web T050).
+   *
+   * **Why the list carries it at all.** Since corrections travel a chain, `POST /attendance`
+   * changes nothing at the moment it is called — so a screen that refetches this list after a
+   * submission shows the old figures and no explanation, which reads as a save that failed.
+   * Worse, a second administrator sees nothing either, and submits the same correction again.
+   *
+   * `null` means no correction is outstanding. It says nothing about who may decide it: that
+   * belongs to the approval surface, and duplicating the answer here would be a second source
+   * of truth about authority.
+   */
+  pendingCorrection: {
+    submittedAt: Date;
+    /** The level deciding now, from the spine. Null once the chain has finished. */
+    levelLabel: string | null;
+  } | null;
 }
 
 /**
@@ -90,6 +119,8 @@ export class AttendanceAdminService {
   private readonly timeZone: string;
   private readonly hrPayroll: HrPayrollConfig;
 
+  private readonly logger = new Logger(AttendanceAdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly companies: CompaniesService,
@@ -105,6 +136,9 @@ export class AttendanceAdminService {
     // 016 FR-016: which role *is* HR is answered by the chain's slot mapping, not by a
     // permission — there is deliberately no HR permission to check.
     private readonly chains: ChainsService,
+    // 016 FR-012: a manual correction enters the chain rather than taking effect in one
+    // step. `hr` submits and listens; it never reads a spine table (Principle I).
+    private readonly approvals: ApprovalService,
     private readonly events: EventEmitter2,
     configService: ConfigService,
   ) {
@@ -136,109 +170,18 @@ export class AttendanceAdminService {
   }
 
   /** FR-071 / FR-072 as a rejection; see `isFutureDate` for the rule itself. */
-  private assertNotFuture(date: string): void {
-    if (this.isFutureDate(date)) {
-      throw new BadRequestException(
-        'That date is in the future. Attendance can only be viewed or recorded up to today.',
-      );
-    }
-  }
-
-  /** Attendance for one date, optionally narrowed to a site. */
-  async daily(
-    caller: Caller,
-    companyId: string,
-    query: DailyAttendanceQueryDto,
-  ): Promise<DailyAttendanceRow[]> {
-    this.assertNotFuture(query.date);
-    const date = new Date(`${query.date}T00:00:00.000Z`);
-
-    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.findMany({
-        where: {
-          companyId,
-          isActive: true,
-          ...(query.siteId ? { siteId: query.siteId } : {}),
-        },
-        select: {
-          id: true,
-          employeeCode: true,
-          firstName: true,
-          lastName: true,
-          siteId: true,
-        },
-        orderBy: { employeeCode: 'asc' },
-      }),
-    );
-    if (employees.length === 0) return [];
-
-    const punches = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.punchRecord.findMany({
-        where: {
-          employeeId: { in: employees.map((e) => e.id) },
-          punchDate: date,
-        },
-        orderBy: { capturedAt: 'asc' },
-      }),
-    );
-
-    const byEmployee = new Map<string, typeof punches>();
-    for (const p of punches) {
-      const list = byEmployee.get(p.employeeId) ?? [];
-      list.push(p);
-      byEmployee.set(p.employeeId, list);
-    }
-
-    // The same rule the employee's own history screen and payroll read, applied
-    // here rather than reimplemented (FR-069).
-    const statuses = await this.attendanceHistory.statusesForDate(
-      caller,
-      companyId,
-      employees,
-      query.date,
-      (employeeId) => (byEmployee.get(employeeId)?.length ?? 0) > 0,
-    );
-
-    return employees.map((e) => {
-      const rows = byEmployee.get(e.id) ?? [];
-      const inPunch = rows.find((r) => r.type === PunchType.in);
-      const outPunch = rows.find((r) => r.type === PunchType.out);
-      return {
-        employeeId: e.id,
-        employeeCode: e.employeeCode,
-        name: [e.firstName, e.lastName].filter(Boolean).join(' ').trim(),
-        siteId: e.siteId,
-        inTime: this.timeOf(inPunch?.capturedAt),
-        outTime: this.timeOf(outPunch?.capturedAt),
-        // An explicit override outranks the derivation: an admin who marked
-        // someone absent on a day a punch exists for meant it (FR-070).
-        status:
-          (inPunch?.statusOverride as AttendanceStatus | undefined) ??
-          statuses.get(e.id) ??
-          'absent',
-        statusOverride: inPunch?.statusOverride ?? null,
-        adminEdited: rows.some((r) => r.adminEdited),
-        remarks: inPunch?.remarks ?? outPunch?.remarks ?? null,
-        hasException: rows.some(
-          (r) =>
-            r.faceMatchResult === 'exception' ||
-            r.geofenceResult === 'exception',
-        ),
-      };
-    });
-  }
-
   /**
-   * Creates or corrects an employee's attendance for a day.
+   * Every gate a manual correction must pass, applied at **submission** (016 T076).
    *
-   * Gated on the same two rules the self-service path obeys — the payroll lock and
-   * the mandatory-document check — because an admin route that bypassed them would
-   * make both trivially avoidable.
+   * Factored out of `mark` so submission and application cannot disagree about what is
+   * allowed. Checking at submission rather than at apply is what stops a reviewer approving
+   * a correction that then fails: a date in a locked payroll period should be refused to
+   * the person typing it, while they are still looking at the screen.
    */
-  async mark(
+  private async validateCorrection(
     caller: Caller,
     dto: MarkAttendanceDto,
-  ): Promise<{ employeeId: string; date: string }> {
+  ): Promise<{ id: string; companyId: string; name?: string | null }> {
     if (!dto.inTime && !dto.outTime && !dto.statusOverride) {
       throw new BadRequestException(
         'Provide at least one of inTime, outTime or statusOverride.',
@@ -305,6 +248,370 @@ export class AttendanceAdminService {
     await this.employeeDocuments.assertMandatoryDocsComplete(
       employee.id,
       employee.companyId,
+    );
+
+    return employee;
+  }
+
+  /** The employee a correction belongs to, with no gate applied. */
+  private async requireEmployee(
+    caller: Caller,
+    employeeId: string,
+  ): Promise<{ id: string; companyId: string }> {
+    const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: employeeId },
+        select: { id: true, companyId: true },
+      }),
+    );
+    if (!employee) throw new NotFoundException('Employee not found');
+    return employee;
+  }
+
+  private assertNotFuture(date: string): void {
+    if (this.isFutureDate(date)) {
+      throw new BadRequestException(
+        'That date is in the future. Attendance can only be viewed or recorded up to today.',
+      );
+    }
+  }
+
+  /**
+   * Attendance for one date, optionally narrowed to a site.
+   *
+   * `viewer` is optional because two callers do not have one and do not need it — the
+   * dashboard widget counting present employees and the attendance report both read this
+   * list without a browser behind them, and neither renders outstanding corrections. Passing
+   * it is what turns on `pendingCorrection`; omitting it leaves every row's marker `null`
+   * rather than failing, so an existing caller is unaffected by this addition.
+   */
+  async daily(
+    caller: Caller,
+    companyId: string,
+    query: DailyAttendanceQueryDto,
+    viewer?: AuthenticatedUser,
+  ): Promise<DailyAttendanceRow[]> {
+    this.assertNotFuture(query.date);
+    const date = new Date(`${query.date}T00:00:00.000Z`);
+
+    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findMany({
+        where: {
+          companyId,
+          isActive: true,
+          ...(query.siteId ? { siteId: query.siteId } : {}),
+        },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+          siteId: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+      }),
+    );
+    if (employees.length === 0) return [];
+
+    const punches = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.punchRecord.findMany({
+        where: {
+          employeeId: { in: employees.map((e) => e.id) },
+          punchDate: date,
+        },
+        orderBy: { capturedAt: 'asc' },
+      }),
+    );
+
+    const byEmployee = new Map<string, typeof punches>();
+    for (const p of punches) {
+      const list = byEmployee.get(p.employeeId) ?? [];
+      list.push(p);
+      byEmployee.set(p.employeeId, list);
+    }
+
+    // The same rule the employee's own history screen and payroll read, applied
+    // here rather than reimplemented (FR-069).
+    const statuses = await this.attendanceHistory.statusesForDate(
+      caller,
+      companyId,
+      employees,
+      query.date,
+      (employeeId) => (byEmployee.get(employeeId)?.length ?? 0) > 0,
+    );
+
+    const pendingByEmployee = await this.pendingCorrectionsFor(
+      caller,
+      companyId,
+      date,
+      employees.map((e) => e.id),
+      viewer,
+    );
+
+    return employees.map((e) => {
+      const rows = byEmployee.get(e.id) ?? [];
+      const inPunch = rows.find((r) => r.type === PunchType.in);
+      const outPunch = rows.find((r) => r.type === PunchType.out);
+      return {
+        employeeId: e.id,
+        employeeCode: e.employeeCode,
+        name: [e.firstName, e.lastName].filter(Boolean).join(' ').trim(),
+        siteId: e.siteId,
+        inTime: this.timeOf(inPunch?.capturedAt),
+        outTime: this.timeOf(outPunch?.capturedAt),
+        // An explicit override outranks the derivation: an admin who marked
+        // someone absent on a day a punch exists for meant it (FR-070).
+        status:
+          (inPunch?.statusOverride as AttendanceStatus | undefined) ??
+          statuses.get(e.id) ??
+          'absent',
+        statusOverride: inPunch?.statusOverride ?? null,
+        adminEdited: rows.some((r) => r.adminEdited),
+        remarks: inPunch?.remarks ?? outPunch?.remarks ?? null,
+        hasException: rows.some(
+          (r) =>
+            r.faceMatchResult === 'exception' ||
+            r.geofenceResult === 'exception',
+        ),
+        pendingCorrection: pendingByEmployee.get(e.id) ?? null,
+      };
+    });
+  }
+
+  /**
+   * Outstanding corrections for a date, keyed by employee.
+   *
+   * **Two queries for the whole page, not two per row.** The correction rows come back in one
+   * `findMany`, and their chain states in one `statesOf` — which is the batch form the spine's
+   * contract requires a list to use, precisely so that adding a column to a list does not add
+   * an N+1 against the approval tables.
+   *
+   * An employee with more than one outstanding correction for the same day reports the
+   * **oldest**, because that is the one a decision will act on first, and because reporting
+   * "some correction is pending" without saying which would be the less useful half of the
+   * answer. Ordering is explicit rather than left to the database.
+   */
+  private async pendingCorrectionsFor(
+    caller: Caller,
+    companyId: string,
+    date: Date,
+    employeeIds: string[],
+    viewer?: AuthenticatedUser,
+  ): Promise<Map<string, { submittedAt: Date; levelLabel: string | null }>> {
+    const result = new Map<
+      string,
+      { submittedAt: Date; levelLabel: string | null }
+    >();
+    if (!viewer || employeeIds.length === 0) return result;
+
+    const pending = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.pendingAttendanceCorrection.findMany({
+        where: {
+          companyId,
+          date,
+          employeeId: { in: employeeIds },
+          appliedAt: null,
+        },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          id: true,
+          employeeId: true,
+          createdAt: true,
+        },
+      }),
+    );
+    if (pending.length === 0) return result;
+
+    const states = await this.approvals.statesOf(
+      ACTION_ATTENDANCE_CORRECTION,
+      pending.map((p) => p.id),
+      viewer,
+    );
+
+    for (const correction of pending) {
+      // Oldest wins: the list is ordered ascending and the first write for an employee stands.
+      if (result.has(correction.employeeId)) continue;
+      const state = states.get(correction.id);
+      // A correction whose chain has already finished is not outstanding, whatever
+      // `appliedAt` says — the application is eventual, so there is a moment where the
+      // decision is in and the write has not landed. Reporting it as pending then would be
+      // accurate about the row and wrong about the decision.
+      if (state && state.state !== 'pending') continue;
+      result.set(correction.employeeId, {
+        submittedAt: correction.createdAt,
+        levelLabel: state?.levelLabel ?? null,
+      });
+    }
+    return result;
+  }
+
+  /**
+   * Creates or corrects an employee's attendance for a day.
+   *
+   * Gated on the same two rules the self-service path obeys — the payroll lock and
+   * the mandatory-document check — because an admin route that bypassed them would
+   * make both trivially avoidable.
+   */
+  /**
+   * Submits a manual correction into the approval chain (016 FR-012, plan D15).
+   *
+   * **This is what `POST /attendance` now calls.** The path and the DTO are unchanged;
+   * what changed is what comes back — a pending approval instance rather than an applied
+   * row. Until the chain completes, the attendance is untouched, and the employee's own
+   * view shows nothing (FR-009c on the web side depends on that being true here).
+   *
+   * Every gate `mark` applies is applied **here, at submission**, not deferred to apply
+   * time. Validating at submission is what stops a reviewer approving something that will
+   * then fail: a correction into a locked payroll period should be refused to the person
+   * who typed it, while they are still looking at the screen, not three approvals later.
+   *
+   * The payroll lock and the chain are **independent** gates and both remain (FR-016,
+   * T076). An HR correction during payroll review passes the first and still enters the
+   * second; neither subsumes the other.
+   */
+  async submitCorrection(
+    caller: Caller,
+    dto: MarkAttendanceDto,
+  ): Promise<{ approvalInstanceId: string; state: string }> {
+    const employee = await this.validateCorrection(caller, dto);
+
+    // Generated here rather than by the database, so the spine can be given a real
+    // entityId at submit while the row it points at is written immediately afterwards. The
+    // alternative — submit, create, then retarget — would need a new spine method for the
+    // retarget, and the spine's whole point is that modules do not reach into it.
+    const correctionId = randomUUID();
+
+    const instance = await this.approvals.submit({
+      companyId: employee.companyId,
+      actionType: ACTION_ATTENDANCE_CORRECTION,
+      entityType: ACTION_ATTENDANCE_CORRECTION,
+      entityId: correctionId,
+      originatorUserId: caller.userId,
+      subject: `${employee.name ?? employee.id} — ${
+        dto.date
+      }, manual attendance correction`,
+      href: `/hr/attendance?employeeId=${dto.employeeId}&date=${dto.date}`,
+      viewPermission: Permission.ATTENDANCE,
+    });
+
+    // If this fails after the submit succeeded, the result is an approval instance whose
+    // entity does not exist. `onApprovalCompleted` finds nothing and returns, so nothing is
+    // applied on the strength of a missing correction, and the reconciliation sweep reports
+    // the orphan. That is the right failure: an item nobody can approve into effect.
+    await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.pendingAttendanceCorrection.create({
+        data: {
+          id: correctionId,
+          companyId: employee.companyId,
+          employeeId: dto.employeeId,
+          date: new Date(`${dto.date}T00:00:00.000Z`),
+          payload: dto as unknown as Prisma.InputJsonValue,
+          submittedByUserId: caller.userId,
+          approvalInstanceId: instance.instanceId,
+        },
+      }),
+    );
+
+    return { approvalInstanceId: instance.instanceId, state: instance.state };
+  }
+
+  /**
+   * Applies a correction whose chain has completed (016 FR-012, T074).
+   *
+   * **Idempotent**, because it will be redelivered: the event bus offers no once-only
+   * guarantee and a decision can reach completion through more than one path. `appliedAt`
+   * is the guard — a row already stamped is skipped, so applying the same event twice
+   * writes once.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_ATTENDANCE_CORRECTION) return;
+
+    try {
+      const pending = await withRlsContext(
+        this.prisma,
+        { isSuperAdmin: true },
+        (tx) =>
+          tx.pendingAttendanceCorrection.findUnique({
+            where: { approvalInstanceId: event.instanceId },
+          }),
+      );
+      if (!pending || pending.appliedAt) return;
+
+      const dto = pending.payload as unknown as MarkAttendanceDto;
+      await this.mark(
+        {
+          userId: pending.submittedByUserId,
+          roleIds: [],
+          // `AuditLogEntry.ipAddress` is a required column and there is no request behind
+          // an application: the chain completed on somebody else's decision, possibly
+          // minutes later. Following `payroll-schedule.service.ts`'s convention of naming
+          // the system path rather than passing an empty string, so the audit row says what
+          // actually caused it.
+          ipAddress: 'system/attendance-correction',
+          rls: { isSuperAdmin: false, companyId: pending.companyId },
+        } as Caller,
+        dto,
+        { skipGates: true },
+      );
+
+      await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.pendingAttendanceCorrection.update({
+          where: { id: pending.id },
+          data: { appliedAt: new Date() },
+        }),
+      );
+    } catch (error) {
+      // A handler that throws takes nothing with it — the decision is already committed
+      // and the spine is authoritative — so this is logged rather than rethrown, and the
+      // drift is what the reconciliation sweep exists to report. Same reasoning as
+      // `attendance-exceptions.service.ts`.
+      this.logger.error(
+        `Approval ${event.instanceId} completed but its attendance correction could ` +
+          `not be applied: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
+  /**
+   * Applies a correction immediately, writing the `AttendanceModification` row.
+   *
+   * **Two callers, and the difference matters** (016 T077):
+   *
+   * 1. `onApprovalCompleted` above, once a chain has finished. Gates were already checked
+   *    at submission, so it passes `skipGates`.
+   * 2. `attendance-import.service.ts`'s commit, which is **deliberately exempt from the
+   *    chain**. A month's CSV for 150 employees is several thousand rows; raising a chain
+   *    item per row would create thousands of pending approvals that nobody will ever walk
+   *    through, and the import already has its own human gate — the two-phase
+   *    validate-then-commit flow, where a person reads the validation report before
+   *    committing. That review is the approval. Every imported row is still logged as a
+   *    modification (FR-012a, FR-012e: the log does not depend on whether approval was
+   *    required), so the audit and the employee's own view are complete either way.
+   *
+   * It is no longer reachable from `POST /attendance` — that route submits instead.
+   */
+  async mark(
+    caller: Caller,
+    dto: MarkAttendanceDto,
+    options: { skipGates?: boolean } = {},
+  ): Promise<{ employeeId: string; date: string }> {
+    const employee = options.skipGates
+      ? await this.requireEmployee(caller, dto.employeeId)
+      : await this.validateCorrection(caller, dto);
+
+    const date = new Date(`${dto.date}T00:00:00.000Z`);
+
+    // 016 FR-017's trigger. Recomputed here rather than passed down from the gate, because
+    // an application arriving through the chain is a *later* moment than its submission and
+    // a run may have entered review in between — which is precisely when the approvers'
+    // figures need voiding.
+    const underReview = await this.payrollSchedule.isPeriodUnderReview(
+      employee.companyId,
+      date,
     );
 
     const before = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -422,6 +729,10 @@ export class AttendanceAdminService {
 
     const where: Prisma.AttendanceModificationWhereInput = {
       employeeId: query.employeeId ?? { in: employees.map((e) => e.id) },
+      // 016 FR-012d. Spread as an optional key rather than `actorUserId: query.actorUserId`
+      // — an explicit `undefined` would be a filter on nothing in some Prisma versions and
+      // a no-op in others, and the difference is an audit silently returning everything.
+      ...(query.actorUserId ? { actorUserId: query.actorUserId } : {}),
       ...(query.from || query.to
         ? {
             date: {
@@ -447,7 +758,81 @@ export class AttendanceAdminService {
         ]),
     );
 
-    return { items, total, page, pageSize };
+    // 016 FR-012d, web T055. Names resolved **here**, not in the browser: the requirement is
+    // that an audit says who made a change, and a cuid does not say that. Resolved in one query
+    // for the page's distinct actors rather than one per row.
+    const actorIds = [
+      ...new Set(items.map((item) => item.actorUserId).filter(Boolean)),
+    ] as string[];
+    const names = await this.actorNamesFor(actorIds);
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        // Falls back to the id only when the user row has gone entirely. A blank would read as
+        // "nobody changed this", which is the opposite of what the row records.
+        actorName: item.actorUserId
+          ? names.get(item.actorUserId) ?? item.actorUserId
+          : null,
+      })),
+      total,
+      page,
+      pageSize,
+      // Who the filter may name (web T053).
+      //
+      // **Deliberately unaffected by `actorUserId`.** Deriving the options from the filtered rows
+      // would leave a dropdown holding one entry — the person already selected — and no way back
+      // to the others. It is also not "every user": an audit filter offering people who have never
+      // touched attendance is a list nobody can use. So it is the distinct actors across the same
+      // employee and date scope, which is the set that can actually return rows.
+      actors: await this.modificationActors(caller, companyId, query, where),
+    };
+  }
+
+  /** Distinct actors within a modifications query's scope, ignoring its actor filter. */
+  private async modificationActors(
+    caller: Caller,
+    companyId: string,
+    query: ModificationsQueryDto,
+    where: Prisma.AttendanceModificationWhereInput,
+  ): Promise<{ id: string; name: string }[]> {
+    // Copied and stripped rather than destructured: the discarded half would be an unused
+    // binding, and the intent — "the same scope, without the actor clause" — reads better said.
+    const scope: Prisma.AttendanceModificationWhereInput = { ...where };
+    delete scope.actorUserId;
+    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.attendanceModification.findMany({
+        where: scope,
+        distinct: ['actorUserId'],
+        select: { actorUserId: true },
+      }),
+    );
+    const ids = rows.map((r) => r.actorUserId).filter(Boolean) as string[];
+    const names = await this.actorNamesFor(ids);
+    return ids
+      .map((id) => ({ id, name: names.get(id) ?? id }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * User ids to display names, in one query.
+   *
+   * Runs as system because `shared.User` is another schema and the ids being resolved were read
+   * from rows the caller's own context already bounded — so there is nothing further for RLS to
+   * decide here, and reaching for it would only fail.
+   */
+  private async actorNamesFor(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const users = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: ids } },
+          select: ACTOR_NAME_SELECT,
+        }),
+    );
+    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
   }
 
   /** Punches flagged as a face-match or geofence exception and not yet resolved. */

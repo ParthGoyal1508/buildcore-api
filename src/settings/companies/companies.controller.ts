@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   UseGuards,
+  Put,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -30,6 +31,7 @@ import { CompaniesService } from './companies.service';
 import { CompanyResponseDto } from './dto/company-response.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
 
 @ApiTags('settings/companies')
 @ApiBearerAuth()
@@ -90,6 +92,29 @@ export class CompaniesController {
   ): Promise<CompanyResponseDto> {
     return CompanyResponseDto.fromEntity(
       await this.companiesService.create(caller, dto, ipAddress),
+    );
+  }
+
+  @Put(':id/punch-accuracy')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Set the acceptable GPS accuracy for a punch (020 FR-012b)',
+    description:
+      'The client asked for this in these words — "configurable from the settings by super ' +
+      'admin". `COMPANY_SETTINGS`, which Super Admin holds by definition.\n\n' +
+      'Takes effect on the **next punch**, with no restart: the value is read per request in the ' +
+      'same call that already reads the payroll lock day.\n\n' +
+      "Send `null` to clear the company's decision and return it to the product default. That is " +
+      "a different act from setting it to the default's current value — a cleared company follows " +
+      'the default if it ever changes, and a company that chose 50 does not.',
+  })
+  async setPunchAccuracy(
+    @Param('id') id: string,
+    @Body() dto: SetPunchAccuracyDto,
+  ) {
+    return this.companiesService.setPunchAccuracyMaxMetres(
+      id,
+      dto.punchAccuracyMaxMetres ?? null,
     );
   }
 

@@ -67,7 +67,9 @@ describe('validateSlabs', () => {
       { lowerBound: 0, upperBound: 400000, ratePercent: 0 },
       { lowerBound: 300000, upperBound: null, ratePercent: 5 },
     ];
-    expect(validateSlabs(overlapping)).toMatch(/Overlap between 300000 and 400000/);
+    expect(validateSlabs(overlapping)).toMatch(
+      /Overlap between 300000 and 400000/,
+    );
   });
 
   it('requires the set to start at zero', () => {
@@ -152,9 +154,7 @@ describe('computeTds', () => {
     expect(r.projectedAnnualGross).toBe(1200000);
     expect(r.taxableIncome).toBe(1150000); // less standard deduction
     expect(r.annualLiability).toBe(taxForIncome(1150000, SLABS));
-    expect(r.monthlyTds).toBe(
-      Math.round((r.annualLiability / 12) * 100) / 100,
-    );
+    expect(r.monthlyTds).toBe(Math.round((r.annualLiability / 12) * 100) / 100);
   });
 
   it('reduces taxable income by capped declarations', () => {

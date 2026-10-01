@@ -101,6 +101,37 @@ template.
 
 ---
 
+## Pass 8 — the creation gate actually refuses (added 2026-09-16, FR-009)
+
+Configure one required kind mandatory and one advisory. Attempt `POST /projects` with no staged
+documents and confirm it is refused with `PROJECT_DOCUMENTS_MANDATORY_MISSING` naming the mandatory
+kind's **label**, and — the part worth asserting separately — that **no project row exists
+afterwards**. A gate that refuses the response while writing the row is the failure this pass is for.
+
+Then stage a document of the mandatory kind, create again, and confirm the project exists, the
+document is attached to it, the staged row is gone, and the advisory kind reports outstanding rather
+than blocking.
+
+Finally attempt the creation through any other path that writes a project — a seed, a script, a test
+helper — and confirm the refusal holds there too. The specification's assumption is explicit that the
+gate is server-side, and a gate only the form respects is not one.
+
+## Pass 9 — documents are visible where the project is (FR-008a)
+
+Upload one document against a required kind and one with no `documentTypeId` at all, then
+`GET /projects/:projectId/documents` and confirm **both** come back. The supplementary one is the
+case that regressed on the company side (amendment D1) and was the whole subject of that
+clarification; the same filter mistake is available here and this is the assertion that catches it.
+
+## Pass 10 — advisory kinds did not move the shipped figure
+
+Read `?include=documentReadiness` for a company with advisory kinds configured and confirm
+`required` and `present` count the mandatory set only, while `advisoryRequired` and
+`advisoryMissingTypeIds` carry the rest. Then confirm the query count is still one at 50 projects —
+the property research §4 protects, and the one that would rot silently.
+
+---
+
 ## What these passes cannot cover
 
 - **Whether the client meant an image.** Pass 7 proves the image is frozen correctly; it cannot prove

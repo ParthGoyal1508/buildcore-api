@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PunchType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
@@ -14,6 +14,7 @@ import {
   Max,
   MaxLength,
   Min,
+  IsNumber,
 } from 'class-validator';
 
 export class SubmitPunchDto {
@@ -35,6 +36,22 @@ export class SubmitPunchDto {
   @ApiProperty({ example: 72.8777 })
   @IsLongitude()
   longitude: number;
+
+  @ApiPropertyOptional({
+    description:
+      'The GPS accuracy radius the device reported, in metres (020 FR-012a). A punch is judged ' +
+      'inside its fence when the distance is within `radius + accuracy`, so a worker standing ' +
+      "legitimately at a site with a poor fix is not refused for the device's uncertainty.\n\n" +
+      '**Omit it and nothing changes** — every client shipped today omits this field and gets ' +
+      "exactly today's verdict. Bounded deliberately: an accuracy of a billion metres would " +
+      'otherwise accept every punch on Earth.',
+    example: 25,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  @Max(10_000)
+  accuracyMeters?: number;
 
   @ApiProperty({
     description:

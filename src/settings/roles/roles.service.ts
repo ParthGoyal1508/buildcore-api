@@ -3,8 +3,17 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  BadRequestException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
-import { AuditAction, AuditEntityType, Prisma, Role } from '@prisma/client';
+import {
+  AccessLevel,
+  AuditAction,
+  AuditEntityType,
+  Permission,
+  Prisma,
+  Role,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -46,6 +55,89 @@ export class RolesService {
     return this.prisma.role.findUnique({ where: { id } });
   }
 
+  /**
+   * The `RolePermission` rows a request implies (019 FR-001, FR-002, T041, T042).
+   *
+   * **No `grants` means read + write on every area named** — which is what holding a
+   * permission has always meant, and what the Phase 1 backfill gave every existing role. So an
+   * administrator who names no levels gets today's behaviour and no existing caller of these
+   * endpoints changes meaning.
+   *
+   * **Write without read is refused** (T042). The specification left this open as an edge case;
+   * refusing is the answer, because a role that may change records it cannot see can neither
+   * find what to change nor see what it changed. Definition time is the cheap place to say so —
+   * the alternative is discovering it when somebody's screen is empty and their saves succeed.
+   */
+  private grantRowsFor(dto: {
+    permissions?: Permission[];
+    grants?: { permission: Permission; level: AccessLevel }[];
+  }): { permission: Permission; level: AccessLevel }[] {
+    const areas = dto.permissions ?? [];
+    if (!dto.grants || dto.grants.length === 0) {
+      return areas.flatMap((permission) => [
+        { permission, level: AccessLevel.read },
+        { permission, level: AccessLevel.write },
+      ]);
+    }
+
+    const unknown = dto.grants
+      .map((g) => g.permission)
+      .filter((p) => !areas.includes(p));
+    if (unknown.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'GRANT_AREA_NOT_LISTED',
+        message:
+          `Every area given a level must also appear in "permissions": ` +
+          `${[...new Set(unknown)].join(
+            ', ',
+          )}. That list stays the set of areas the role ` +
+          `touches, so the two cannot disagree.`,
+      });
+    }
+
+    const byArea = new Map<Permission, Set<AccessLevel>>();
+    for (const grant of dto.grants) {
+      const levels = byArea.get(grant.permission) ?? new Set<AccessLevel>();
+      levels.add(grant.level);
+      byArea.set(grant.permission, levels);
+    }
+
+    const writeOnly = [...byArea.entries()]
+      .filter(
+        ([, levels]) =>
+          levels.has(AccessLevel.write) && !levels.has(AccessLevel.read),
+      )
+      .map(([permission]) => permission);
+    if (writeOnly.length > 0) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        code: 'WRITE_WITHOUT_READ',
+        message:
+          `These areas were given write access without read: ${writeOnly.join(
+            ', ',
+          )}. ` +
+          `A role that may change records it cannot see can neither find what to change ` +
+          `nor see what it changed.`,
+      });
+    }
+
+    // An area in `permissions` that `grants` says nothing about keeps the default, rather than
+    // silently becoming no access — the absence of a level is not a decision to remove one.
+    const rows = [...byArea.entries()].flatMap(([permission, levels]) =>
+      [...levels].map((level) => ({ permission, level })),
+    );
+    for (const permission of areas) {
+      if (!byArea.has(permission)) {
+        rows.push(
+          { permission, level: AccessLevel.read },
+          { permission, level: AccessLevel.write },
+        );
+      }
+    }
+    return rows;
+  }
+
   async create(
     caller: AuthenticatedUser,
     dto: CreateRoleDto,
@@ -57,9 +149,20 @@ export class RolesService {
       throw new ConflictException(`A role named "${name}" already exists`);
     }
 
+    const grantRows = this.grantRowsFor(dto);
+
     // Custom roles are never protected — only the seeded Super Admin row is.
     const created = await this.prisma.role.create({
-      data: { name, permissions: dto.permissions, isProtected: false },
+      data: {
+        name,
+        permissions: dto.permissions,
+        isProtected: false,
+        // Both shapes written together, in one statement. `Role.permissions` is on its way
+        // out (019 Phase 1) but is still what the rest of the codebase reads, so the two must
+        // never be written apart — a role whose array and rows disagreed would grant one thing
+        // to the guard and another to every service-level check.
+        rolePermissions: { create: grantRows },
+      },
     });
 
     await this.auditLog.record({
@@ -92,11 +195,20 @@ export class RolesService {
       }
     }
 
+    // Replace rather than merge: a level removed from the request must be removed from the
+    // role, and a merge would make un-granting impossible through this endpoint.
+    const grantRows = dto.permissions
+      ? this.grantRowsFor({ permissions: dto.permissions, grants: dto.grants })
+      : null;
+
     const updated = await this.prisma.role.update({
       where: { id },
       data: {
         ...(name ? { name } : {}),
         ...(dto.permissions ? { permissions: dto.permissions } : {}),
+        ...(grantRows
+          ? { rolePermissions: { deleteMany: {}, create: grantRows } }
+          : {}),
       },
     });
 

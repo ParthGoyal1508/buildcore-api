@@ -34,6 +34,10 @@ import { SignatoriesService } from './signatories/signatories.service';
 import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
 import { LetterKindsService } from './letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from './letter-templates/letter-templates.service';
+import { PermissionRefusalsController } from './permission-refusals/permission-refusals.controller';
+import { CashVisibilityController } from './company-selection/cash-visibility.controller';
+import { CompanySelectionController } from './company-selection/company-selection.controller';
+import { CompanySelectionService } from './company-selection/company-selection.service';
 
 /**
  * The `settings` module: companies, roles, user administration, and the four
@@ -52,6 +56,9 @@ import { LetterTemplatesService } from './letter-templates/letter-templates.serv
   // `ChainsService` rather than by writing to the spine's tables from here.
   imports: [UsersModule, ApprovalsModule],
   controllers: [
+    CashVisibilityController,
+    CompanySelectionController,
+    PermissionRefusalsController,
     LetterKindsController,
     SignatoriesController,
     ReimbursementCategoriesController,

@@ -44,7 +44,9 @@ export class CreateEmployeeDto {
   @IsNotEmpty()
   siteId: string;
 
-  @ApiProperty({ description: 'Shift whose duration overtime is computed against.' })
+  @ApiProperty({
+    description: 'Shift whose duration overtime is computed against.',
+  })
   @IsString()
   @IsNotEmpty()
   shiftId: string;
@@ -84,7 +86,9 @@ export class CreateEmployeeDto {
   @IsEnum(MaritalStatus)
   maritalStatus?: MaritalStatus;
 
-  @ApiPropertyOptional({ description: 'Object-storage reference for the photo.' })
+  @ApiPropertyOptional({
+    description: 'Object-storage reference for the photo.',
+  })
   @IsOptional()
   @IsString()
   photoRef?: string;
@@ -139,7 +143,9 @@ export class CreateEmployeeDto {
   @Max(24)
   hoursPerDay?: number;
 
-  @ApiPropertyOptional({ description: 'Required when calculationMode is `daily`.' })
+  @ApiPropertyOptional({
+    description: 'Required when calculationMode is `daily`.',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -187,7 +193,9 @@ export class CreateEmployeeDto {
   @IsBoolean()
   esicUpperLimit?: boolean;
 
-  @ApiPropertyOptional({ description: '12-digit UAN. Required when PF applies.' })
+  @ApiPropertyOptional({
+    description: '12-digit UAN. Required when PF applies.',
+  })
   @ValidateIf((o: CreateEmployeeDto) => o.pfApplicable === true)
   @IsString()
   @Matches(/^\d{12}$/, { message: 'uan must be exactly 12 digits' })
@@ -429,7 +437,9 @@ export class CreateEmployeeDto {
 
 /** Query filters for the employee list (US1: search/department/site/status). */
 export class ListEmployeesQueryDto {
-  @ApiPropertyOptional({ description: 'Matches employee code, first or last name.' })
+  @ApiPropertyOptional({
+    description: 'Matches employee code, first or last name.',
+  })
   @IsOptional()
   @IsString()
   search?: string;

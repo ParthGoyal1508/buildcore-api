@@ -9,7 +9,10 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { ChainsService } from '../../approvals/chains.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
-import type { SettingsConfig } from '../../common/configs/config.interface';
+import type {
+  SettingsConfig,
+  WorkspaceConfig,
+} from '../../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { AssetCategoriesService } from '../asset-masters/asset-categories.service';
 import { AssetDocTypesService } from '../asset-masters/asset-doc-types.service';
@@ -65,6 +68,60 @@ export class CompaniesService {
       throw new NotFoundException('Company not found');
     }
     return company.payrollLockDay;
+  }
+
+  /**
+   * The worst GPS accuracy a punch may report and still be located, in metres (020 FR-012b).
+   *
+   * Resolves the company's own value against the configured default, so **no caller knows the
+   * fallback exists**. That matters more than it sounds: a caller that had to handle null would end
+   * up with the default written into it, and then there would be two places the number lives.
+   *
+   * Exported for `hr` for the same reason `getPayrollLockDay` is — Principle I forbids that module
+   * reading `settings.Company`.
+   */
+  async getPunchAccuracyMaxMetres(companyId: string): Promise<number> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { punchAccuracyMaxMetres: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    // Null means "has not decided", which is why the column is nullable — so it follows the product
+    // default rather than freezing whatever the default was on the day the row was created.
+    return (
+      company.punchAccuracyMaxMetres ??
+      this.configService.get<WorkspaceConfig>('workspace')
+        .punchAccuracyMaxMetresDefault
+    );
+  }
+
+  /**
+   * Sets it (020 FR-012b, T008).
+   *
+   * `null` clears the company's decision and returns it to the product default, which is a
+   * different act from setting it to 50 — see the column's comment.
+   */
+  async setPunchAccuracyMaxMetres(
+    companyId: string,
+    metres: number | null,
+  ): Promise<{ punchAccuracyMaxMetres: number | null; effective: number }> {
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: { punchAccuracyMaxMetres: metres },
+      }),
+    );
+    return {
+      punchAccuracyMaxMetres: metres,
+      effective: await this.getPunchAccuracyMaxMetres(companyId),
+    };
   }
 
   /**

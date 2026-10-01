@@ -33,7 +33,9 @@ const COMPANY: CompanyPayrollRates = {
   otMultiplier: 2,
 };
 
-const employee = (over: Partial<EmployeePayrollInput> = {}): EmployeePayrollInput => ({
+const employee = (
+  over: Partial<EmployeePayrollInput> = {},
+): EmployeePayrollInput => ({
   employeeId: 'emp-1',
   projectId: null,
   basic: 20000,
@@ -86,7 +88,9 @@ describe('professionalTaxFor', () => {
 
   it('treats a slab ceiling as inclusive', () => {
     expect(professionalTaxFor(7500, STATUTORY.professionalTaxSlabs)).toBe(0);
-    expect(professionalTaxFor(7500.01, STATUTORY.professionalTaxSlabs)).toBe(175);
+    expect(professionalTaxFor(7500.01, STATUTORY.professionalTaxSlabs)).toBe(
+      175,
+    );
   });
 
   it('uses the middle band', () => {
@@ -94,7 +98,9 @@ describe('professionalTaxFor', () => {
   });
 
   it('falls into the open-ended band for a high gross', () => {
-    expect(professionalTaxFor(500000, STATUTORY.professionalTaxSlabs)).toBe(200);
+    expect(professionalTaxFor(500000, STATUTORY.professionalTaxSlabs)).toBe(
+      200,
+    );
   });
 });
 
@@ -205,7 +211,14 @@ describe('computePayrollLine — provident fund', () => {
 
 describe('computePayrollLine — ESIC', () => {
   it('applies on gross when eligible', () => {
-    const r = run({ esicApplicable: true, basic: 8000, hra: 2000, conveyanceAllowance: 0, siteAllowance: 0, specialAllowance: 0 });
+    const r = run({
+      esicApplicable: true,
+      basic: 8000,
+      hra: 2000,
+      conveyanceAllowance: 0,
+      siteAllowance: 0,
+      specialAllowance: 0,
+    });
     expect(r.gross).toBe(10000);
     expect(r.employeeEsic).toBe(75); // 0.75%
     expect(r.employerEsic).toBe(325); // 3.25%
@@ -272,7 +285,12 @@ describe('computePayrollLine — employer costs', () => {
 describe('computePayrollLine — a fully worked example', () => {
   it('reconciles every figure end to end', () => {
     const r = run(
-      { esicApplicable: true, esicUpperLimit: true, tds: 1000, loanEmiDeduction: 1500 },
+      {
+        esicApplicable: true,
+        esicUpperLimit: true,
+        tds: 1000,
+        loanEmiDeduction: 1500,
+      },
       { payableDays: 26, lopDays: 4, otHours: 12 },
     );
 

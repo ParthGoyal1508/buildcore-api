@@ -180,7 +180,9 @@ export class LoansService {
         data: {
           status: LoanStatus.closed,
           remarks: reason
-            ? `${loan.remarks ? `${loan.remarks}\n` : ''}Closed early: ${reason}`
+            ? `${
+                loan.remarks ? `${loan.remarks}\n` : ''
+              }Closed early: ${reason}`
             : loan.remarks,
         },
       });

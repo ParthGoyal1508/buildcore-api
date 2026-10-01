@@ -12,13 +12,20 @@ import {
   Put,
   Query,
   UseGuards,
+  Patch,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
+import { SelfService } from '../common/decorators/route-access.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { rlsContextFor } from '../common/prisma/rls-context';
@@ -30,6 +37,8 @@ import {
   PutSlotMappingDto,
   UpsertApprovalChainDto,
 } from './dto/approval-chain.dto';
+import { UpdateDirectorFinalSetDto } from './dto/director-final.dto';
+import { resolveCompanyId } from '../settings/company-scope';
 import { DecideApprovalDto } from './dto/decide-approval.dto';
 import { ReassignApprovalDto } from './dto/reassign-approval.dto';
 
@@ -45,6 +54,12 @@ import { ReassignApprovalDto } from './dto/reassign-approval.dto';
  * The settings endpoints are the exception, and for a different reason: defining a chain
  * is not approving anything, so it is guarded by `SETTINGS` like every other
  * configuration screen.
+ *
+ * Which is why the queue, decide, resubmit and history routes carry `@SelfService()`
+ * (019 FR-005). Before Phase 3 they were authorised by saying nothing, and saying nothing
+ * became a refusal — so the marker is how "the service decides this per item" is stated
+ * out loud rather than inferred from an absent decorator. It claims no permission area,
+ * exactly as before; `ApprovalService` still resolves the caller's authority per row.
  */
 @ApiTags('Approvals')
 @ApiBearerAuth()
@@ -66,6 +81,7 @@ export class ApprovalsController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Get('queue')
+  @SelfService()
   @ApiOperation({
     summary:
       'Everything awaiting a decision from the caller, across every module',
@@ -86,6 +102,7 @@ export class ApprovalsController {
   }
 
   @Get('queue/count')
+  @SelfService()
   @ApiOperation({
     summary: 'How many items await the caller, for the navigation badge',
     description:
@@ -110,6 +127,64 @@ export class ApprovalsController {
   })
   async listChains(@UserEntity() caller: AuthenticatedUser) {
     return this.chains.listChains(rlsContextFor(caller), caller.companyId);
+  }
+
+  @Get('director-final')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Which actions require the Director’s final approval (FR-018c)',
+    description:
+      'Every action type the system knows of, with **three** states rather than two: ' +
+      '`final`; `not_final_by_decision`, where somebody decided it needs no Director; ' +
+      'and `not_configured`, where nothing says either way. Collapsing the last two ' +
+      'would hide exactly the gap the client is asking about when they ask for "every ' +
+      'critical action".\n\n' +
+      'The set is the union of the chains configured for this company, the shipped ' +
+      'defaults, and any stored decision — not the contents of one table.',
+  })
+  async directorFinalSet(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('companyId') companyId?: string,
+  ) {
+    const resolved = resolveCompanyId(caller, companyId);
+    const [entries, pending] = await Promise.all([
+      this.approvals.directorFinalSet(resolved),
+      this.approvals.pendingDirectorFinalChange(resolved),
+    ]);
+    // The mark in force and the change proposed, together. The screen has to show both, and
+    // fetching them separately means a first paint that is right about one and wrong about
+    // the other.
+    return { entries, pending };
+  }
+
+  @Patch('director-final')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Propose a change to the director-final set (FR-018b)',
+    description:
+      '**Submitted for the Director’s approval, not saved.** Nothing changes until the ' +
+      'chain completes; the response is the pending approval item and the set still in ' +
+      'force is unchanged. Whoever could edit this set directly could remove payment ' +
+      'release from it and then release a payment, which is why the edit is itself gated.\n\n' +
+      'The approval requirement on *this* action cannot be changed — refused with ' +
+      '`DIRECTOR_FINAL_SELF_CHANGE_REFUSED`.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Either a change is already pending for this company, or the request tried to ' +
+      'change the gate on changing the set.',
+  })
+  async updateDirectorFinalSet(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: UpdateDirectorFinalSetDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.approvals.submitDirectorFinalChange(
+      resolveCompanyId(caller, companyId),
+      dto.changes,
+      caller,
+    );
   }
 
   @Post('chains')
@@ -248,6 +323,7 @@ export class ApprovalsController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Post(':instanceId/decide')
+  @SelfService()
   @ApiOperation({
     summary: 'Record one decision on one item',
     description:
@@ -299,6 +375,7 @@ export class ApprovalsController {
   }
 
   @Post(':entityType/:entityId/resubmit')
+  @SelfService()
   @ApiOperation({
     summary: 'Send a returned item back up its chain, as a new round',
     description:
@@ -324,6 +401,7 @@ export class ApprovalsController {
   }
 
   @Get(':entityType/:entityId/history')
+  @SelfService()
   @ApiOperation({
     summary: 'The full decision history for one item, oldest first',
     description:

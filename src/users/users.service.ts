@@ -42,6 +42,7 @@ export class UsersService {
     return {
       ...updated,
       permissions: caller.permissions,
+      grants: caller.grants,
       roleNames: caller.roleNames,
       roleIds: caller.roleIds,
     };
@@ -101,6 +102,7 @@ export class UsersService {
     return {
       ...updated,
       permissions: caller.permissions,
+      grants: caller.grants,
       roleNames: caller.roleNames,
       roleIds: caller.roleIds,
     };

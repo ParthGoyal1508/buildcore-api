@@ -79,7 +79,15 @@ function harness(
   const audit: any = { record: jest.fn().mockResolvedValue(undefined) };
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
-  const service = new ProjectDocumentsService(prisma, documentTypes, audit);
+  const service = new ProjectDocumentsService(
+    prisma,
+    documentTypes,
+    audit,
+    // 017 Phase 13 added the upload path. These tests exercise requirements and readiness, so the
+    // storage and configuration doubles only need to satisfy the constructor.
+    { put: jest.fn(), deleteMany: jest.fn() } as never,
+    { get: () => ({ stagedDocumentRetentionHours: 24 }) } as never,
+  );
   return { service, calls, tx, documentTypes, audit };
 }
 
@@ -138,11 +146,17 @@ describe('ProjectDocumentsService.readinessFor (FR-008, T021, T024)', () => {
       required: 3,
       present: 1,
       missingTypeIds: ['dt-wo', 'dt-ins'],
+      advisoryRequired: 0,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: [],
     });
     expect(readiness.get('p-2')).toEqual({
       required: 3,
       present: 0,
       missingTypeIds: REQUIRED_IDS,
+      advisoryRequired: 0,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: [],
     });
   });
 
@@ -160,6 +174,9 @@ describe('ProjectDocumentsService.readinessFor (FR-008, T021, T024)', () => {
       required: 3,
       present: 3,
       missingTypeIds: [],
+      advisoryRequired: 0,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: [],
     });
   });
 
@@ -174,13 +191,42 @@ describe('ProjectDocumentsService.readinessFor (FR-008, T021, T024)', () => {
 
     const readiness = await service.readinessFor(ctx, COMPANY, ['p-1']);
 
-    // A project short of an optional paper is not unready. If optional kinds counted,
-    // `isMandatory` would change nothing anywhere and would be worth deleting.
+    // A project short of an advisory paper is not unready. The mandatory figures are what the
+    // portfolio list renders, and 017 Phase 13's advisory split must not move them — if it did,
+    // every project's reported readiness would change without anybody asking.
     expect(readiness.get('p-1')).toEqual({
       required: 1,
       present: 1,
       missingTypeIds: [],
+      // Reported beside the mandatory figures, never inside them (FR-007b). This is what lets a
+      // reader tell "we cannot start this project" from "we are still chasing paperwork".
+      advisoryRequired: 1,
+      advisoryPresent: 0,
+      advisoryMissingTypeIds: ['dt-optional'],
     });
+  });
+
+  it('costs one document query however many partitions exist (T127)', async () => {
+    // The property that would rot silently. Readiness is computed for every project on the
+    // portfolio list, so a second query per partition would double that cost for a figure the
+    // reader sees beside the first.
+    const { service, calls } = harness({
+      requirements: [
+        { documentTypeId: 'dt-loi', isMandatory: true },
+        { documentTypeId: 'dt-optional', isMandatory: false },
+      ],
+      documents: [{ projectId: 'p-1', documentTypeId: 'dt-loi' }],
+    });
+
+    await service.readinessFor(
+      ctx,
+      COMPANY,
+      Array.from({ length: 50 }, (_unused, i) => `p-${i}`),
+    );
+
+    expect(calls.filter((c) => c === 'projectDocument.findMany').length).toBe(
+      1,
+    );
   });
 
   it('falls back to the shipped set when nothing is configured', async () => {

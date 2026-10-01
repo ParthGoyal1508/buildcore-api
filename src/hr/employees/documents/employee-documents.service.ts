@@ -55,7 +55,8 @@ export function classifyExpiry(
   );
 
   if (days < 0) return { state: 'expired', daysToExpiry: days };
-  if (days <= warningDays) return { state: 'expiring_soon', daysToExpiry: days };
+  if (days <= warningDays)
+    return { state: 'expiring_soon', daysToExpiry: days };
   return { state: 'valid', daysToExpiry: days };
 }
 
@@ -111,9 +112,7 @@ export class EmployeeDocumentsService {
     // Settings, so a company that stops requiring a number does not need a code
     // change here.
     if (type.needsNumber && !dto.documentNumber?.trim()) {
-      throw new BadRequestException(
-        `${type.name} requires a document number.`,
-      );
+      throw new BadRequestException(`${type.name} requires a document number.`);
     }
     if (type.hasExpiry && !dto.expiresAt) {
       throw new BadRequestException(`${type.name} requires an expiry date.`);
@@ -224,8 +223,9 @@ export class EmployeeDocumentsService {
       employee.companyId,
       rows.map((r) => r.documentTypeId),
     );
-    const mandatoryTotal = types.filter((t) => t.isMandatory && t.isActive)
-      .length;
+    const mandatoryTotal = types.filter(
+      (t) => t.isMandatory && t.isActive,
+    ).length;
 
     return {
       documents: rows.map((r) => this.toView(r, byId.get(r.documentTypeId))),
@@ -275,9 +275,7 @@ export class EmployeeDocumentsService {
     const types = await this.documentTypes.listForCompany(companyId);
     const type = types.find((t) => t.id === documentTypeId);
     if (!type) {
-      throw new NotFoundException(
-        'Document type not found for this company.',
-      );
+      throw new NotFoundException('Document type not found for this company.');
     }
     return type;
   }
@@ -303,7 +301,9 @@ export class EmployeeDocumentsService {
       documentTypeName: type?.name ?? 'Unknown document type',
       isMandatory: type?.isMandatory ?? false,
       documentNumber: row.documentNumber,
-      expiresAt: row.expiresAt ? row.expiresAt.toISOString().slice(0, 10) : null,
+      expiresAt: row.expiresAt
+        ? row.expiresAt.toISOString().slice(0, 10)
+        : null,
       expiryState: state,
       daysToExpiry,
       uploadedAt: row.uploadedAt,

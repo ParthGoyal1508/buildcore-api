@@ -45,6 +45,10 @@ function build(
     underReview?: boolean;
     /** 016: the role id the `hr` chain slot resolves to, or null when unmapped. */
     hrRoleId?: string | null;
+    /** 016 FR-012: unapplied correction rows the daily list should mark. */
+    pendingCorrections?: unknown[];
+    /** What the spine reports for those corrections, keyed by correction id. */
+    correctionStates?: [string, unknown][];
   } = {},
 ) {
   const employee = {
@@ -63,12 +67,19 @@ function build(
     findFirst: jest.fn().mockResolvedValue(null),
   };
   const attendanceModification = { create: jest.fn(), findMany: jest.fn() };
+  const pendingAttendanceCorrection = {
+    findMany: jest.fn().mockResolvedValue(options.pendingCorrections ?? []),
+    create: jest.fn(),
+    update: jest.fn(),
+    findUnique: jest.fn(),
+  };
   const prisma = {
     $transaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
       cb({
         employee,
         punchRecord,
         attendanceModification,
+        pendingAttendanceCorrection,
         $executeRaw: jest.fn().mockResolvedValue(undefined),
       }),
     ),
@@ -102,6 +113,12 @@ function build(
   const chains = {
     resolveSlot: jest.fn().mockResolvedValue(options.hrRoleId ?? null),
   };
+  const approvals = {
+    submit: jest.fn(),
+    statesOf: jest
+      .fn()
+      .mockResolvedValue(new Map(options.correctionStates ?? [])),
+  };
   const events = {
     emit: jest.fn(),
     // 016 uses `emitAsync` so the edit is not reported done while the approvals it voids
@@ -118,6 +135,10 @@ function build(
     { record: jest.fn().mockResolvedValue(undefined) } as never,
     payrollSchedule as never,
     chains as never,
+    // 016 FR-012: the spine. These tests exercise `mark`, which applies directly; the
+    // submission path has its own coverage. `statesOf` is the batch form the daily list must
+    // use — a double that answered per row would let an N+1 through unnoticed.
+    approvals as never,
     events as never,
     configService as never,
   );
@@ -126,10 +147,12 @@ function build(
     service,
     employee,
     punchRecord,
+    pendingAttendanceCorrection,
     companies,
     attendanceHistory,
     payrollSchedule,
     chains,
+    approvals,
     events,
   };
 }
@@ -360,5 +383,349 @@ describe('AttendanceAdminService — the payroll-review lock (016 FR-016, FR-017
       'co-1',
       expect.any(Date),
     );
+  });
+});
+
+/**
+ * The FR-012d actor filter (016 T071).
+ *
+ * Asserted on the `where` clause the service builds rather than through the database,
+ * because what matters is that the new filter **composes** with the existing ones instead of
+ * replacing them — "what did this person change to this employee in September" is one
+ * question, and a filter that replaced the others would answer a different one.
+ */
+describe('AttendanceAdminService.modifications — the actor filter (FR-012d)', () => {
+  const capture = () => {
+    const seen: { where?: Record<string, unknown> }[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      employee: { findMany: async () => [{ id: 'emp-1' }, { id: 'emp-2' }] },
+      attendanceModification: {
+        findMany: async (args: { where?: Record<string, unknown> }) => {
+          seen.push(args);
+          return [];
+        },
+        count: async () => 0,
+      },
+      user: { findMany: async () => [] },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    return { prisma, seen };
+  };
+
+  const serviceFor = (prisma: unknown) =>
+    new AttendanceAdminService(
+      prisma as never,
+      { getPayrollLockDay: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { record: jest.fn() } as never,
+      { isPeriodUnderReview: jest.fn() } as never,
+      { resolveSlot: jest.fn() } as never,
+      { submit: jest.fn() } as never,
+      { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+    );
+
+  const caller = { userId: 'u-1', rls: { isSuperAdmin: true } } as never;
+
+  it('filters by actor when one is named', async () => {
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+    } as never);
+    expect(seen[0].where?.actorUserId).toBe('admin-7');
+  });
+
+  it('omits the clause entirely when no actor is named', async () => {
+    // Not `actorUserId: undefined`. An explicit undefined is a filter on nothing in some
+    // Prisma versions and a no-op in others, and the difference is an audit silently
+    // returning everything.
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {} as never);
+    expect('actorUserId' in (seen[0].where ?? {})).toBe(false);
+  });
+
+  it('composes with the employee and date filters rather than replacing them', async () => {
+    const { prisma, seen } = capture();
+    await serviceFor(prisma).modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+      employeeId: 'emp-1',
+      from: '2026-09-01',
+      to: '2026-09-30',
+    } as never);
+
+    const where = seen[0].where ?? {};
+    expect(where.actorUserId).toBe('admin-7');
+    expect(where.employeeId).toBe('emp-1');
+    expect(where.date).toBeDefined();
+  });
+});
+
+/**
+ * An outstanding correction is reported on the day it was asked for (016 FR-012, web T050).
+ *
+ * The defect this closes is not a wrong figure, it is a **missing** one. Corrections travel a
+ * chain, so `POST /attendance` changes nothing when it is called; an administrator who saved
+ * one then refetched this list saw the old values and no explanation, which reads exactly like
+ * a save that silently failed — and a second administrator saw nothing either, so the obvious
+ * next move was to submit it again.
+ */
+describe('AttendanceAdminService — outstanding corrections on the daily list', () => {
+  const VIEWER = {
+    id: 'user-1',
+    companyId: 'co-1',
+    permissions: [],
+    grants: [],
+    roleIds: [],
+    roleNames: [],
+  } as never;
+
+  const correction = (over: Record<string, unknown> = {}) => ({
+    id: 'corr-1',
+    employeeId: 'emp-1',
+    createdAt: new Date('2026-09-08T04:00:00.000Z'),
+    ...over,
+  });
+
+  const pendingState = (over: Record<string, unknown> = {}) => ({
+    state: 'pending',
+    levelLabel: 'HR',
+    ...over,
+  });
+
+  beforeEach(() =>
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-08T06:00:00.000Z')),
+  );
+  afterEach(() => jest.useRealTimers());
+
+  it('marks the employee-day a correction is outstanding for', async () => {
+    const { service } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState()]],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection).toEqual({
+      submittedAt: new Date('2026-09-08T04:00:00.000Z'),
+      levelLabel: 'HR',
+    });
+    // And only that employee's day — emp-2 has nothing outstanding.
+    expect(rows[1].pendingCorrection).toBeNull();
+  });
+
+  it('reads the chain state in one batch, not once per row', async () => {
+    // The spine's contract requires the batch form from any list. Calling `stateOf` per row
+    // would work and would add an N+1 against the approval tables from this screen.
+    const { service, approvals } = build({
+      pendingCorrections: [
+        correction(),
+        correction({ id: 'corr-2', employeeId: 'emp-2' }),
+      ],
+      correctionStates: [
+        ['corr-1', pendingState()],
+        ['corr-2', pendingState({ levelLabel: 'Director' })],
+      ],
+    });
+
+    await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(approvals.statesOf).toHaveBeenCalledTimes(1);
+    expect(approvals.statesOf.mock.calls[0][1]).toEqual(['corr-1', 'corr-2']);
+  });
+
+  it('does not report a correction whose chain has already finished', async () => {
+    // Application is eventual: the spine announces completion and the write lands a moment
+    // later, so there is a window where `appliedAt` is still null and the decision is in.
+    // Reporting "awaiting approval" then would be accurate about the row and wrong about
+    // the decision — and would tell an administrator to go and approve something already
+    // approved.
+    const { service } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState({ state: 'approved' })]],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection).toBeNull();
+  });
+
+  it('reports the oldest when a day carries more than one', async () => {
+    const { service } = build({
+      pendingCorrections: [
+        correction({ id: 'corr-old' }),
+        correction({ id: 'corr-new' }),
+      ],
+      correctionStates: [
+        ['corr-old', pendingState({ levelLabel: 'Site / Employer' })],
+        ['corr-new', pendingState({ levelLabel: 'HR' })],
+      ],
+    });
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(rows[0].pendingCorrection?.levelLabel).toBe('Site / Employer');
+  });
+
+  it('asks nothing of the spine when no correction is outstanding', async () => {
+    const { service, approvals } = build();
+
+    const rows = await service.daily(
+      CALLER,
+      'co-1',
+      { date: '2026-09-08' } as never,
+      VIEWER,
+    );
+
+    expect(approvals.statesOf).not.toHaveBeenCalled();
+    expect(rows.every((r) => r.pendingCorrection === null)).toBe(true);
+  });
+
+  it('leaves the marker null for a caller with no viewer', async () => {
+    // The dashboard widget and the attendance report read this list without a browser behind
+    // them. Neither renders corrections, and neither should pay for resolving them.
+    const { service, pendingAttendanceCorrection } = build({
+      pendingCorrections: [correction()],
+      correctionStates: [['corr-1', pendingState()]],
+    });
+
+    const rows = await service.daily(CALLER, 'co-1', {
+      date: '2026-09-08',
+    } as never);
+
+    expect(pendingAttendanceCorrection.findMany).not.toHaveBeenCalled();
+    expect(rows[0].pendingCorrection).toBeNull();
+  });
+});
+
+/**
+ * The audit says **who**, by name (016 FR-012d, web T055).
+ *
+ * An audit trail rendering `cmuoe9b7l00q5v8x58gmyytpz` where a person's name belongs is an audit
+ * nobody can read, and resolving the name in the browser would mean one request per row.
+ */
+describe('AttendanceAdminService.modifications — naming the actor', () => {
+  const build = (
+    rows: { id: string; actorUserId: string | null }[],
+    users: { id: string; firstname: string | null; lastname: string | null }[],
+  ) => {
+    const seen: { where?: Record<string, unknown>; distinct?: unknown }[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      employee: { findMany: async () => [{ id: 'emp-1' }] },
+      attendanceModification: {
+        findMany: async (args: {
+          where?: Record<string, unknown>;
+          distinct?: unknown;
+        }) => {
+          seen.push(args);
+          // The distinct call is the options list; the other is the page itself.
+          return args.distinct ? rows : rows;
+        },
+        count: async () => rows.length,
+      },
+      user: {
+        findMany: async () =>
+          users.map((u) => ({ ...u, email: null, username: null })),
+      },
+    };
+    const service = new AttendanceAdminService(
+      {
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      } as never,
+      { getPayrollLockDay: jest.fn() } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { record: jest.fn() } as never,
+      { isPeriodUnderReview: jest.fn() } as never,
+      { resolveSlot: jest.fn() } as never,
+      { submit: jest.fn() } as never,
+      { emit: jest.fn(), emitAsync: jest.fn() } as never,
+      { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+    );
+    return { service, seen };
+  };
+
+  const caller = { userId: 'u-1', rls: { isSuperAdmin: true } } as never;
+
+  it('carries the actor name on every row', async () => {
+    const { service } = build(
+      [{ id: 'mod-1', actorUserId: 'admin-7' }],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items[0].actorName).toBe('Anita Reddy');
+  });
+
+  it('falls back to the id rather than a blank when the user is gone', async () => {
+    // A blank would read as "nobody changed this", which is the opposite of what the row records.
+    const { service } = build([{ id: 'mod-1', actorUserId: 'admin-gone' }], []);
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items[0].actorName).toBe('admin-gone');
+  });
+
+  it('offers the filter options from the unfiltered scope', async () => {
+    // Deriving them from the filtered rows would leave the dropdown holding only the person
+    // already selected, with no way back to anybody else.
+    const { service, seen } = build(
+      [{ id: 'mod-1', actorUserId: 'admin-7' }],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {
+      actorUserId: 'admin-7',
+    } as never);
+
+    const optionsQuery = seen.find((call) => call.distinct);
+    expect(optionsQuery?.where?.actorUserId).toBeUndefined();
+    expect(result.actors).toEqual([{ id: 'admin-7', name: 'Anita Reddy' }]);
+  });
+
+  it('resolves names in one query however many rows share an actor', async () => {
+    const { service } = build(
+      [
+        { id: 'mod-1', actorUserId: 'admin-7' },
+        { id: 'mod-2', actorUserId: 'admin-7' },
+        { id: 'mod-3', actorUserId: 'admin-7' },
+      ],
+      [{ id: 'admin-7', firstname: 'Anita', lastname: 'Reddy' }],
+    );
+
+    const result = await service.modifications(caller, 'co-1', {} as never);
+
+    expect(result.items.map((i) => i.actorName)).toEqual([
+      'Anita Reddy',
+      'Anita Reddy',
+      'Anita Reddy',
+    ]);
   });
 });

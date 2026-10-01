@@ -36,6 +36,11 @@ import { PunchController } from './punch/punch.controller';
 import { PunchService } from './punch/punch.service';
 import { ReimbursementController } from './reimbursements/reimbursement.controller';
 import { ReimbursementService } from './reimbursements/reimbursement.service';
+import { EmployeeSearchSource } from './employees/employee-search.source';
+import { ExitClearanceController } from './offboarding/exit-clearance.controller';
+import { ExitClearanceService } from './offboarding/exit-clearance.service';
+import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
+import { PunchRefusalsService } from './punch/punch-refusals.service';
 
 /**
  * The `hr` module: the employee-facing My Workspace surface.
@@ -68,6 +73,7 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     forwardRef(() => PayrollModule),
   ],
   controllers: [
+    ExitClearanceController,
     EmployeesController,
     AttendanceAdminController,
     AttendanceImportController,
@@ -84,6 +90,11 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     ReimbursementController,
   ],
   providers: [
+    PunchRefusalsService,
+    ExitCustodyRegistry,
+    ExitClearanceService,
+    // 021 US1 — see ProjectSearchSource.
+    EmployeeSearchSource,
     AttendanceExceptionsService,
     // Answers the approval spine's reconciliation sweep about `hr`'s own punches (T052).
     // Registered by being listed here and decorated; nothing in `src/approvals/` changes.
@@ -109,6 +120,7 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
   // features can ask "which dates was this employee on approved leave" without
   // reaching into `hr.LeaveApplication` themselves.
   exports: [
+    ExitCustodyRegistry,
     EmployeesService,
     EmployeeDocumentsService,
     AttendanceAdminService,
@@ -127,6 +139,10 @@ import { ReimbursementService } from './reimbursements/reimbursement.service';
     // Exported for 004's Biometric Re-enrolment Requests notification, which lists
     // pending requests through the same service that owns them (Principle I).
     FaceEnrolmentService,
+    // Exported for `payroll`, whose F&F settlement is refused while a clearance item
+    // is outstanding (021 FR-014a). `payroll` asks this service rather than reading
+    // `hr.ExitClearanceWaiver` or the asset register itself — Principle I.
+    ExitClearanceService,
   ],
 })
 export class HrModule {}

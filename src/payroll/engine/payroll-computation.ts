@@ -102,7 +102,8 @@ export function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-const pct = (amount: number, percent: number) => round2((amount * percent) / 100);
+const pct = (amount: number, percent: number) =>
+  round2((amount * percent) / 100);
 
 /**
  * Professional tax for a monthly gross.
@@ -160,7 +161,12 @@ export function computePayrollLine(
   const otWages = round2(hourlyRate * otHours * company.otMultiplier);
 
   const gross = round2(
-    basic + hra + conveyanceAllowance + siteAllowance + specialAllowance + otWages,
+    basic +
+      hra +
+      conveyanceAllowance +
+      siteAllowance +
+      specialAllowance +
+      otWages,
   );
 
   // ── PF ────────────────────────────────────────────────────────────────────

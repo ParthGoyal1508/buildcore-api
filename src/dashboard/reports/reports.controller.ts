@@ -23,6 +23,8 @@ import { RunReportDto } from './dto/run-report.dto';
 import { ExportJobService } from './export/export-job.service';
 import type { ReportData } from './report.types';
 import { ReportsService } from './reports.service';
+import { AccessLevel } from '@prisma/client';
+import { RequireLevel } from '../../common/decorators/access-level.decorator';
 
 /**
  * Reports & export (feature 004, US7). Report runs and metadata sit behind the
@@ -63,6 +65,12 @@ export class ReportsController {
   }
 
   @Post(':type/export')
+  // 019 T014: a POST that reads. Exporting a report is seeing its data — the verb is a
+  // POST only because the filter set will not fit in a query string. It may record an
+  // export job for the async path, but that row is bookkeeping about a read, not the
+  // thing being authorised; a role that may view a report may take it away with them,
+  // which is also why 019 FR-015 applies cash hiding to exports.
+  @RequireLevel(AccessLevel.read)
   @ApiOperation({
     summary: 'Export a report to PDF or Excel',
     description:

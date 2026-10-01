@@ -12,6 +12,10 @@ import { AccountCreationModule } from './account-creation/account-creation.modul
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { LettersModule } from './letters/letters.module';
+import { SearchModule } from './search/search.module';
+import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
+import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
+import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { InventoryModule } from './inventory/inventory.module';
@@ -83,10 +87,30 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // rather than at the first module migration.
     ApprovalsModule,
     LettersModule,
+    // 021 US1's cross-register search (`bugs.md` item 4). Listed **before** nothing in
+    // particular and after everything on purpose: it is `@Global`, and each register
+    // registers itself with its registry on init, so the import order of the four owning
+    // modules cannot matter. The module itself owns no tables — see its doc comment.
+    SearchModule,
+    // 019 FR-003's recorder. Global, because PermissionsGuard is declared per-controller
+    // across every module and resolves its dependencies from whichever module owns the
+    // controller — see the module's own comment.
+    PermissionRefusalModule,
+    // 019 FR-008's selection resolver. Global for the same structural reason — the JWT
+    // strategy needs it and sits below SettingsModule, so it cannot import upward.
+    CompanySelectionModule,
   ],
   controllers: [AppController],
   providers: [
     AppService,
+    {
+      // 019 FR-014, FR-015. Global, because "across the application" is the requirement: a
+      // per-controller interceptor would be right on the modules somebody remembered and
+      // silently absent on the rest, and the failure mode is a figure appearing on a screen
+      // somebody was told would hide it.
+      provide: APP_INTERCEPTOR,
+      useClass: CashVisibilityInterceptor,
+    },
     {
       // Global so a route that never considers the forced-change rule is refused
       // rather than silently exempt (010 FR-017a). An interceptor rather than a

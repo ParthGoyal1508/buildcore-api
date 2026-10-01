@@ -22,6 +22,28 @@ export const ACTION_ATTENDANCE_EXCEPTION = 'attendance_exception';
  */
 export const ACTION_ATTENDANCE_EXCEPTION_LEGACY = 'attendance_exception_legacy';
 
+/**
+ * The key a **manual attendance correction** enters its chain under (016 FR-012, T072).
+ *
+ * ## A deliberate deviation from T072, recorded rather than done quietly
+ *
+ * T072 said to reuse `ACTION_ATTENDANCE_EXCEPTION` rather than introduce a key, to avoid
+ * migrating live instances and slot mappings. That reasoning is sound for *renaming* a
+ * type and does not apply to *adding* one — `seedDefaultsForCompany` is idempotent per
+ * chain, existing instances keep their type, and the new chain is additive rows.
+ *
+ * Reusing the key would have been actively wrong. `attendance-exceptions.service.ts`
+ * already handles `approval.completed` for `ACTION_ATTENDANCE_EXCEPTION` and treats
+ * `entityId` as a **punch id**; a correction's `entityId` is a
+ * `PendingAttendanceCorrection` id. Both handlers filter on `entityType` alone, so each
+ * would receive the other's completions and silently no-op — relying on a `where` clause
+ * matching nothing is not isolation, and the day somebody loosens one of those clauses the
+ * two features corrupt each other's rows.
+ *
+ * Same three-level shape as the exception chain, so a company staffs its approvers once.
+ */
+export const ACTION_ATTENDANCE_CORRECTION = 'attendance_correction';
+
 /** The key a payroll run enters its chain under (spec FR-013, FR-015). */
 export const ACTION_PAYROLL_RUN = 'payroll_run';
 
@@ -47,6 +69,15 @@ export const ACTION_PAYMENT_RELEASE = 'payment_release';
 export const ACTION_LETTER_WORK_ORDER = 'letter_work_order';
 export const ACTION_LETTER_LOI = 'letter_loi';
 export const ACTION_LETTER_PURCHASE_ORDER = 'letter_purchase_order';
+/**
+ * Changing which action types the Director must approve (016 FR-018b).
+ *
+ * Itself director-final, seeded that way by migration and **never offered as configurable**.
+ * If the gate on removing gates could be removed, that is the first thing anybody bypassing
+ * the chain would remove.
+ */
+export const ACTION_DIRECTOR_FINAL_SET_CHANGE = 'director_final_set_change';
+
 /** Full and final settlement on exit, including any waived recoveries (FR-018.4). */
 export const ACTION_FINAL_SETTLEMENT = 'final_settlement';
 
@@ -117,6 +148,7 @@ export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
  * Site Incharge and HR levels the client asked for.
  */
 export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
+  ACTION_DIRECTOR_FINAL_SET_CHANGE,
   ACTION_PAYMENT_RELEASE,
   ACTION_LETTER_WORK_ORDER,
   ACTION_LETTER_LOI,

@@ -54,8 +54,23 @@ is why the count assertion in `company-documents.service.spec.ts` still holds.
 ```ts
 /** Readiness for MANY projects at once (FR-008). ONE query. Never call this per row. */
 readinessFor(companyId: string, projectIds: string[]): Promise<
-  Map<string, { required: number; present: number; missingTypeIds: string[] }>
+  Map<string, {
+    // Mandatory kinds only. Unchanged by the 2026-09-16 amendment — this is the
+    // figure already rendered on the portfolio list and it must not move.
+    required: number; present: number; missingTypeIds: string[];
+    // Added 2026-09-16 (FR-007b): the advisory half, reported outstanding, never blocking.
+    advisoryRequired: number; advisoryPresent: number; advisoryMissingTypeIds: string[];
+  }>
 >;
+
+/**
+ * The creation gate (FR-009), added 2026-09-16. Called by `ProjectsService.create`
+ * BEFORE any project row is written. Throws with every missing kind's LABEL — never
+ * its id, which the person reading the refusal cannot act on.
+ */
+assertMandatoryKindsSatisfied(
+  ctx: RlsContext, companyId: string, stagedDocumentIds: string[],
+): Promise<void>;
 ```
 
 The batch form is the contract. A single-project form may exist beside it, but the project **list**
@@ -119,6 +134,24 @@ document types without the permission that guards them.
 | `GET` | `/projects/document-requirements` | `PROJECTS` | The configured required kinds |
 | `PUT` | `/projects/document-requirements` | `SETTINGS` | Configure them |
 | `GET` | `/projects?include=documentReadiness` | `PROJECTS` | Readiness **in the list** — one query (FR-008) |
+| `POST` | `/projects/document-requirements/kinds/:code` | `SETTINGS` | Materialise a declared kind in place (FR-007a) |
+
+### Project documents — added 2026-09-16 (bug 3)
+
+No endpoint created a `ProjectDocument` before this amendment; the model was read by readiness and
+written by nothing. These are that missing path, plus the staging FR-009's gate needs.
+
+| Method | Path | Guard | Notes |
+|---|---|---|---|
+| `POST` | `/projects/:projectId/documents` | `PROJECTS` | Multipart, one file. `documentTypeId` omitted = supplementary (FR-007's scenario 5) |
+| `GET` | `/projects/:projectId/documents` | `PROJECTS` | Every document on the project, required and supplementary alike (**FR-008a**) |
+| `POST` | `/projects/document-uploads` | `PROJECTS` | Multipart. Stages a file before the project exists; returns `stagedDocumentId` |
+| `POST` | `/projects` | `PROJECTS` | **Changed**: `CreateProjectDto` gains `stagedDocumentIds`. Refused when a mandatory kind is unattached (FR-009) |
+
+> Registration order matters here as it already does for `document-requirements`:
+> `POST /projects/document-uploads` must be registered before `GET /projects/:id`, or Nest answers it
+> with "project document-uploads not found". `projects.module.ts` already carries that note and an
+> e2e that proves it; this adds a second path under the same rule.
 
 ### Letter kinds, templates, signatories
 
@@ -155,6 +188,9 @@ contract 015 established with `SESSION_EXPIRED` and 016 extended.
 | `LETTER_KIND_IN_USE` | FR-022: issued letters still reference this kind |
 | `LETTER_SUBJECT_AMBIGUOUS` | Both addressing forms supplied, or neither |
 | `APPROVAL_NOT_COMPLETE` | **Reused from 016 unchanged.** Not a new code — the gate is 016's and so is its vocabulary |
+| `PROJECT_DOCUMENTS_MANDATORY_MISSING` | FR-009: project creation refused; names every missing mandatory kind's label |
+| `PROJECT_DOCUMENT_KIND_NOT_DEFINED` | FR-007d: a kind cannot be marked mandatory while the company has no document type for it |
+| `PROJECT_STAGED_DOCUMENT_UNKNOWN` | A `stagedDocumentId` that does not exist, belongs to another company, **belongs to another user** (FR-009c), or has already been swept. One code for all four on purpose — a distinct code would confirm that somebody else's staged document exists |
 
 ---
 

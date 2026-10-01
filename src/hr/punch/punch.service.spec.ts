@@ -130,6 +130,9 @@ describe('PunchService', () => {
 
     const approvals = { submit: jest.fn().mockResolvedValue(undefined) };
     const service = new PunchService(
+      // 020 FR-013c. Phase 2 records would-be refusals while still accepting the punch, so these
+      // tests' outcomes are unchanged — the double only needs to absorb the call.
+      { record: jest.fn().mockResolvedValue(undefined) } as never,
       prisma as never,
       { requireByUserId: jest.fn().mockResolvedValue(employee) } as never,
       // Mandatory-document gate (005 US2): satisfied by default here so these
@@ -139,7 +142,12 @@ describe('PunchService', () => {
         assertMandatoryDocsComplete: jest.fn().mockResolvedValue(undefined),
       } as never,
       { getGeofence: jest.fn().mockResolvedValue(SITE) } as never,
-      { getPayrollLockDay: jest.fn().mockResolvedValue(7) } as never,
+      {
+        getPayrollLockDay: jest.fn().mockResolvedValue(7),
+        // 020 FR-012b. 50 is the product default; these tests send no `accuracyMeters`, so the
+        // threshold is not reached and their verdicts are unchanged by its arrival.
+        getPunchAccuracyMaxMetres: jest.fn().mockResolvedValue(50),
+      } as never,
       biometrics,
       { compressPunchPhoto: jest.fn(async (b: Buffer) => b) } as never,
       { put: jest.fn().mockResolvedValue('punch/ref-1') } as never,

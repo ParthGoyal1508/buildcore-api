@@ -54,14 +54,28 @@ async function main() {
     where: { userId: user.id },
     select: { role: { select: { name: true, permissions: true } } },
   });
-  const employee = await prisma.employee.findFirst({ where: { userId: user.id } });
+  const employee = await prisma.employee.findFirst({
+    where: { userId: user.id },
+  });
 
   console.log('--- STATE BEFORE ---');
   console.log('account:', { email: user.email, companyId: user.companyId });
-  console.log('companies:', companies.map((c) => `${c.name} (${c.shortCode})`));
-  console.log('sites:', sites.map((s) => s.name));
-  console.log('shifts:', shifts.map((s) => s.name));
-  console.log('roles:', roles.map((r) => r.role.name));
+  console.log(
+    'companies:',
+    companies.map((c) => `${c.name} (${c.shortCode})`),
+  );
+  console.log(
+    'sites:',
+    sites.map((s) => s.name),
+  );
+  console.log(
+    'shifts:',
+    shifts.map((s) => s.name),
+  );
+  console.log(
+    'roles:',
+    roles.map((r) => r.role.name),
+  );
   console.log('employee:', employee ? employee.employeeCode : 'none');
 
   // ------------------------------------------------------------------- company
@@ -141,14 +155,20 @@ async function main() {
   if (hasWorkspace) {
     console.log('role: already carries MY_WORKSPACE, left alone');
   } else {
-    const siteUser = await prisma.role.findUnique({ where: { name: 'Site User' } });
+    const siteUser = await prisma.role.findUnique({
+      where: { name: 'Site User' },
+    });
     if (!siteUser) {
-      throw new Error('No "Site User" role in this database — aborting role grant.');
+      throw new Error(
+        'No "Site User" role in this database — aborting role grant.',
+      );
     }
     await prisma.userRole.create({
       data: { userId: user.id, roleId: siteUser.id },
     });
-    console.log('granted role: Site User (DASHBOARD + MY_WORKSPACE + ATTENDANCE)');
+    console.log(
+      'granted role: Site User (DASHBOARD + MY_WORKSPACE + ATTENDANCE)',
+    );
   }
 
   // ------------------------------------------------------------------ employee
@@ -175,7 +195,9 @@ async function main() {
       WHERE "companyId" = ${company.id}
       RETURNING "lastNumber"
     `;
-    const employeeCode = `${company.shortCode}-${String(rows[0].lastNumber).padStart(4, '0')}`;
+    const employeeCode = `${company.shortCode}-${String(
+      rows[0].lastNumber,
+    ).padStart(4, '0')}`;
     await prisma.employee.create({
       data: {
         userId: user.id,

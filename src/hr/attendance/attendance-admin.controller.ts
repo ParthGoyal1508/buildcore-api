@@ -64,16 +64,31 @@ export class AttendanceAdminController {
       callerFrom(user, request),
       this.companyOf(user, companyId),
       query,
+      // Passed so each row can report an outstanding correction. The spine decides what a
+      // given viewer may be told about a chain, so it needs the viewer and not just a company.
+      user,
     );
   }
 
   @Post()
   @ApiOperation({
-    summary: 'Mark or correct one employee-day',
+    summary: 'Submit a correction to one employee-day for approval',
     description:
       'Subject to the same payroll lock and mandatory-document rules the ' +
       'self-service punch obeys — an admin route that bypassed them would make ' +
-      'both trivially avoidable. Every edit appends a Modifications audit row.',
+      'both trivially avoidable.\n\n' +
+      '**Behaviour changed by 016 FR-012.** This used to apply the correction ' +
+      'immediately. It now enters the Site / Employer → HR → Director chain and ' +
+      'returns the pending approval instance; the attendance is unchanged until the ' +
+      'chain completes, and the Modifications row is written on apply rather than on ' +
+      'submit — a rejected correction modified nothing. The path and the request body ' +
+      'are unchanged; only the response is different.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'No active approval chain is configured for attendance corrections in this ' +
+      'company. A configuration gap, not a permissions problem.',
   })
   @ApiResponse({ status: 423, description: 'Payroll period already locked.' })
   @ApiResponse({
@@ -85,7 +100,7 @@ export class AttendanceAdminController {
     @Req() request: Request,
     @Body() dto: MarkAttendanceDto,
   ) {
-    return this.attendance.mark(callerFrom(user, request), dto);
+    return this.attendance.submitCorrection(callerFrom(user, request), dto);
   }
 
   @Get('exceptions')

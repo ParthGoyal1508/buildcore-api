@@ -51,7 +51,9 @@ export class HolidaysController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'The holiday calendar, filterable by range and site' })
+  @ApiOperation({
+    summary: 'The holiday calendar, filterable by range and site',
+  })
   async list(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,

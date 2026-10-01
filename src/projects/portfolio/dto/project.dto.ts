@@ -16,6 +16,8 @@ import {
   IsString,
   MaxLength,
   Min,
+  IsArray,
+  ArrayMaxSize,
 } from 'class-validator';
 
 /**
@@ -27,6 +29,30 @@ import {
  * external reference to them.
  */
 export class CreateProjectDto {
+  /**
+   * Documents staged for this project, by `stagedDocumentId` (017 FR-009, FR-009a).
+   *
+   * **Creation is refused while any mandatory kind has no document among these** — the client's
+   * "Project Managers cannot create a project without them". The refusal names every missing kind
+   * and creates nothing.
+   *
+   * Each reference may be used by the person who staged it and only once. A reference belonging to
+   * somebody else is refused with the same code as a nonexistent one, so the refusal cannot be used
+   * to discover another user's staged document.
+   */
+  @ApiPropertyOptional({
+    isArray: true,
+    type: String,
+    description:
+      'Staged document ids, from POST /projects/document-uploads. Creation is refused while a ' +
+      'mandatory kind has none.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  stagedDocumentIds?: string[];
+
   @ApiPropertyOptional({
     description:
       'Omit to allocate the next code in the company PROJECTS series (e.g. ACME-PRJ-0001).',

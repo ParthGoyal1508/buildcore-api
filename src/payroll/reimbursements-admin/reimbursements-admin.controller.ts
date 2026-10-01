@@ -102,7 +102,8 @@ export class ReimbursementsAdminController {
   @Patch(':id/reject')
   @ApiOperation({
     summary: 'Reject a submitted claim',
-    description: 'Remarks are required — a rejection with no reason is not one.',
+    description:
+      'Remarks are required — a rejection with no reason is not one.',
   })
   async reject(
     @UserEntity() user: AuthenticatedUser,

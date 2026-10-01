@@ -16,7 +16,9 @@ import {
 } from 'class-validator';
 
 export class ApproveClaimDto {
-  @ApiPropertyOptional({ description: 'Optional note recorded with the approval.' })
+  @ApiPropertyOptional({
+    description: 'Optional note recorded with the approval.',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(500)

@@ -23,6 +23,7 @@ import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import { SalaryAdvancesService } from '../advances/salary-advances.service';
 import { computePayrollLine } from '../engine/payroll-computation';
+import { ExitClearanceService } from '../../hr/offboarding/exit-clearance.service';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -64,6 +65,7 @@ export class FnfService {
   private readonly hrPayroll: HrPayrollConfig;
 
   constructor(
+    private readonly clearance: ExitClearanceService,
     private readonly prisma: PrismaService,
     private readonly companies: CompaniesService,
     private readonly advances: SalaryAdvancesService,
@@ -71,6 +73,44 @@ export class FnfService {
     configService: ConfigService,
   ) {
     this.hrPayroll = configService.get<HrPayrollConfig>('hrPayroll');
+  }
+
+  /**
+   * The settlement summary, with the leaver's assets and their outcome (021 FR-018a, FR-018b).
+   *
+   * Every asset the employee held appears — **whether or not it blocked the settlement** — each
+   * marked returned or waived with the waiver's author and reason. FR-018a is the client's item 10
+   * read literally; FR-014b is what makes it act.
+   *
+   * **No asset value is recovered from the final payable** (FR-018b). That is a decision, not an
+   * omission: original cost, depreciated book value and replacement cost give three different
+   * figures, the client has chosen none, and a deduction computed from an unstated rule is worse
+   * than none. A waiver records the write-off with a name against it. If you are reading this
+   * looking for where the valuation went — it was never specified. See 021 spec, "Needing the
+   * client's decision".
+   */
+  async settlementSummary(caller: Caller, employeeId: string) {
+    const { employee } = await this.requireExit(caller, employeeId);
+    const [computed, clearance] = await Promise.all([
+      this.compute(caller, employeeId),
+      this.clearance.forEmployee(caller.rls, employee.companyId, employeeId),
+    ]);
+
+    return {
+      ...computed,
+      assets: clearance.items
+        .filter((item) => item.kind === 'asset_custody')
+        .map((item) => ({
+          label: item.label,
+          detail: item.detail,
+          outcome: item.waiver ? ('waived' as const) : ('outstanding' as const),
+          waivedBy: item.waiver?.waivedByUserId ?? null,
+          waiverReason: item.waiver?.reason ?? null,
+        })),
+      clearanceSettleable: clearance.settleable,
+      // Stated on the response rather than left to be inferred from the absence of a deduction.
+      assetValueRecovered: null as null,
+    };
   }
 
   /** Computes the settlement without writing anything. */
@@ -220,6 +260,18 @@ export class FnfService {
         'This exit already has an F&F run; it cannot be settled twice.',
       );
     }
+
+    // 021 FR-015, FR-014b. The clearance gate, applied where the settlement is *produced*
+    // rather than where it is paid: a settlement that exists is a figure somebody will act on,
+    // and refusing it afterwards means refusing a number already quoted to the leaver.
+    //
+    // Throws naming every blocking item — a refusal saying only "something is outstanding"
+    // sends somebody hunting through a screen they have already read.
+    await this.clearance.assertSettleable(
+      caller.rls,
+      employee.companyId,
+      employeeId,
+    );
 
     const computed = await this.compute(caller, employeeId);
     const period = periodOverride ?? computed.period;

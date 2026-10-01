@@ -95,7 +95,9 @@ async function nextEmployeeCode(
 async function main() {
   const shortCode = process.env.COMPANY_SHORT_CODE;
   if (!shortCode) {
-    throw new Error('COMPANY_SHORT_CODE is required (e.g. DEMO locally, BCD in production)');
+    throw new Error(
+      'COMPANY_SHORT_CODE is required (e.g. DEMO locally, BCD in production)',
+    );
   }
 
   // The same RLS bypass src/common/prisma/rls-context.ts sets for system-level
@@ -104,10 +106,16 @@ async function main() {
 
   const company = await prisma.company.findFirst({ where: { shortCode } });
   if (!company) {
-    throw new Error(`No company with short code "${shortCode}" in this database.`);
+    throw new Error(
+      `No company with short code "${shortCode}" in this database.`,
+    );
   }
-  const site = await prisma.site.findFirst({ where: { companyId: company.id } });
-  const shift = await prisma.shift.findFirst({ where: { companyId: company.id } });
+  const site = await prisma.site.findFirst({
+    where: { companyId: company.id },
+  });
+  const shift = await prisma.shift.findFirst({
+    where: { companyId: company.id },
+  });
   if (!site || !shift) {
     throw new Error(
       `Company ${company.name} needs both a Site and a Shift before employees can be attached.`,
@@ -152,7 +160,9 @@ async function main() {
       where: { userId: user.id, roleId: role.id },
     });
     if (!hasRole) {
-      await prisma.userRole.create({ data: { userId: user.id, roleId: role.id } });
+      await prisma.userRole.create({
+        data: { userId: user.id, roleId: role.id },
+      });
     }
 
     const existingEmployee = await prisma.employee.findFirst({
@@ -200,8 +210,9 @@ async function main() {
   console.log('\nLeave balances per account (days):');
   for (const b of LEAVE_BALANCES) {
     console.log(
-      `  ${b.leaveType.padEnd(7)} opening ${b.opening}, accrued ${b.accrued}, ` +
-        `used ${b.used} -> balance ${b.opening + b.accrued - b.used}`,
+      `  ${b.leaveType.padEnd(7)} opening ${b.opening}, accrued ${
+        b.accrued
+      }, ` + `used ${b.used} -> balance ${b.opening + b.accrued - b.used}`,
     );
   }
   console.log('\n--- DONE (no rows deleted) ---');

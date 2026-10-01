@@ -6,12 +6,13 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   ApprovalDecisionAction,
   AuditAction,
   AuditEntityType,
   Prisma,
+  Permission,
 } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from 'nestjs-prisma';
@@ -49,6 +50,8 @@ import {
   TakeEffectGate,
 } from './approval.types';
 import { ChainsService } from './chains.service';
+import { actorNameOf } from '../common/actor-name';
+import { ACTION_DIRECTOR_FINAL_SET_CHANGE } from './default-chains';
 
 /** The event a module listens for to learn its item finished the chain (T013). */
 export const APPROVAL_COMPLETED_EVENT = 'approval.completed';
@@ -93,6 +96,14 @@ export class ApprovalService {
   /**
    * Action types that must be approved before they take effect even when nothing is
    * configured (FR-018a). Read once at construction — it is policy, not per-request state.
+   */
+  /**
+   * The **seed and fallback** for the director-final set, not the live answer (FR-018a).
+   *
+   * Since 016 Phase 9 the live answer is `shared.DirectorFinalAction`, per company. This
+   * list is what a company is seeded with, and what governs an action type no company has a
+   * row for — a type registered by a later feature must have a defined answer before anybody
+   * configures it, and the safe answer is the one the client already accepted.
    */
   private readonly directorFinalActionTypes: string[];
 
@@ -670,7 +681,7 @@ export class ApprovalService {
     };
 
     if (!instance) {
-      if (!this.directorFinalActionTypes.includes(input.actionType)) {
+      if (!(await this.isDirectorFinal(input.companyId, input.actionType))) {
         return clear;
       }
       return {
@@ -1105,6 +1116,335 @@ export class ApprovalService {
   }
 
   /** Display names for a set of user ids, resolved once. */
+  /**
+   * Whether this company requires the Director's final approval for this action type
+   * (FR-018a).
+   *
+   * The stored row wins, including when it says **false** — a company that has deliberately
+   * un-gated something must not have the config default override that decision. Only the
+   * absence of a row falls back to config.
+   */
+  async isDirectorFinal(
+    companyId: string,
+    actionType: string,
+  ): Promise<boolean> {
+    const row = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.directorFinalAction.findUnique({
+          where: { companyId_actionType: { companyId, actionType } },
+          select: { isFinal: true },
+        }),
+    );
+    if (row) return row.isFinal;
+    return this.directorFinalActionTypes.includes(actionType);
+  }
+
+  /**
+   * The full director-final set for a company (FR-018c) — every action type the system knows
+   * of, and for each whether the Director must approve it.
+   *
+   * **Three states, not two**, and the third is the point of the requirement. An action type
+   * that is `not_final` because somebody decided so is a different fact from one that is
+   * not final because nothing configures it at all, and a report collapsing them would hide
+   * exactly the gap the client is asking about when they say "every critical action".
+   *
+   * "Every action type the system knows of" is the union of three sources, not the table's
+   * contents: the chains actually configured for this company, the seeded defaults, and any
+   * stored row. A type in none of the three does not exist.
+   */
+  async directorFinalSet(companyId: string): Promise<
+    {
+      actionType: string;
+      state: 'final' | 'not_final_by_decision' | 'not_configured';
+      isFinal: boolean;
+      updatedAt: Date | null;
+      updatedBy: string | null;
+      /**
+       * Who decided it, by name (web T061, T064).
+       *
+       * Alongside `updatedBy` rather than replacing it: the id still identifies the account, and
+       * a surface that wants to link to it should not have to parse a display name back. What a
+       * settings screen must never render is the id — "changed by cmuoe9b7l00q5v8..." tells a
+       * client nothing about who chose that their payments need a Director.
+       */
+      updatedByName: string | null;
+    }[]
+  > {
+    const ctx: RlsContext = { isSuperAdmin: false, companyId };
+
+    const [rows, chains] = await Promise.all([
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.directorFinalAction.findMany({ where: { companyId } }),
+      ),
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.approvalChain.findMany({
+          where: { companyId },
+          select: { actionType: true },
+          distinct: ['actionType'],
+        }),
+      ),
+    ]);
+
+    const names = await this.namesFor(
+      rows.map((r) => r.updatedBy).filter((id): id is string => !!id),
+    );
+
+    const byType = new Map(rows.map((r) => [r.actionType, r]));
+    const known = new Set<string>([
+      ...rows.map((r) => r.actionType),
+      ...chains.map((c) => c.actionType),
+      ...this.directorFinalActionTypes,
+    ]);
+
+    return [...known].sort().map((actionType) => {
+      const row = byType.get(actionType);
+      if (row) {
+        return {
+          actionType,
+          state: row.isFinal
+            ? ('final' as const)
+            : ('not_final_by_decision' as const),
+          isFinal: row.isFinal,
+          updatedAt: row.updatedAt,
+          updatedBy: row.updatedBy,
+          updatedByName: row.updatedBy
+            ? names.get(row.updatedBy) ?? row.updatedBy
+            : null,
+        };
+      }
+      const seeded = this.directorFinalActionTypes.includes(actionType);
+      return {
+        actionType,
+        // A seeded default is a decision this product made and the client accepted, so it
+        // reports as `final`. Only a type with neither a row nor a seed is unconfigured —
+        // nobody has said anything about it, which is the gap worth surfacing.
+        state: seeded ? ('final' as const) : ('not_configured' as const),
+        isFinal: seeded,
+        updatedAt: null,
+        updatedBy: null,
+        updatedByName: null,
+      };
+    });
+  }
+
+  /**
+   * Submits a change to the director-final set for the Director's approval (FR-018b).
+   *
+   * **Returns the pending item, not the new set.** Returning the set would tell the caller
+   * their edit took effect, and it has not — nothing changes until the chain completes. The
+   * before and after both travel on the pending item, because the spine's decision log
+   * records *that* a change was approved and the payload is the only thing that records
+   * *what* the change was.
+   */
+  async submitDirectorFinalChange(
+    companyId: string,
+    changes: { actionType: string; isFinal: boolean }[],
+    caller: AuthenticatedUser,
+  ): Promise<{ instanceId: string; state: string }> {
+    const attemptsSelfChange = changes.some(
+      (c) => c.actionType === ACTION_DIRECTOR_FINAL_SET_CHANGE,
+    );
+    if (attemptsSelfChange) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'DIRECTOR_FINAL_SELF_CHANGE_REFUSED',
+        message:
+          'The approval requirement on changing this set cannot itself be changed. It is ' +
+          'the gate that makes every other entry meaningful, and a gate that can remove ' +
+          'itself is the first thing anybody bypassing approval would remove.',
+      });
+    }
+
+    const before = await this.directorFinalSet(companyId);
+    const beforeByType = new Map(before.map((e) => [e.actionType, e.isFinal]));
+
+    // Stored as the payload on a row this module owns, keyed by the instance, for the same
+    // reason 016's attendance correction needed one: the spine holds no payload by design.
+    const instance = await this.submit({
+      companyId,
+      actionType: ACTION_DIRECTOR_FINAL_SET_CHANGE,
+      entityType: ACTION_DIRECTOR_FINAL_SET_CHANGE,
+      // One live change at a time per company. The partial unique index on
+      // (entityType, entityId) then refuses a second proposal while one is pending, which is
+      // what stops two people submitting contradictory edits to the same set.
+      entityId: companyId,
+      originatorUserId: caller.id,
+      subject: `Director approval requirements — ${changes.length} change(s) proposed`,
+      href: '/settings/approvals/director-final',
+      viewPermission: Permission.COMPANY_SETTINGS,
+    });
+
+    await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.directorFinalChangeProposal.create({
+          data: {
+            companyId,
+            approvalInstanceId: instance.instanceId,
+            proposedBy: caller.id,
+            before: Object.fromEntries(beforeByType) as Prisma.InputJsonValue,
+            after: Object.fromEntries(
+              changes.map((c) => [c.actionType, c.isFinal]),
+            ) as Prisma.InputJsonValue,
+          },
+        }),
+    );
+
+    return { instanceId: instance.instanceId, state: instance.state };
+  }
+
+  /**
+   * The change pending for this company, if any (FR-019 on the web side).
+   *
+   * Visible to every reader of the settings surface, so two people do not submit the same
+   * edit — and so the screen can show what governs today beside what has been proposed.
+   */
+  async pendingDirectorFinalChange(companyId: string): Promise<{
+    instanceId: string;
+    proposedBy: string;
+    /** Who proposed it, by name (web T065): two people must not submit the same edit. */
+    proposedByName: string;
+    before: unknown;
+    after: unknown;
+    createdAt: Date;
+  } | null> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.directorFinalChangeProposal.findMany({
+          where: { companyId, appliedAt: null },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        }),
+    );
+    const row = rows[0];
+    if (!row) return null;
+
+    const instance = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.approvalInstance.findUnique({
+          where: { id: row.approvalInstanceId },
+          select: { state: true },
+        }),
+    );
+    // A proposal whose instance is no longer pending was rejected or returned; it is not a
+    // pending change and must not be shown as one.
+    if (!instance || instance.state !== 'pending') return null;
+
+    const names = await this.namesFor([row.proposedBy]);
+    return {
+      instanceId: row.approvalInstanceId,
+      proposedBy: row.proposedBy,
+      proposedByName: names.get(row.proposedBy) ?? row.proposedBy,
+      before: row.before,
+      after: row.after,
+      createdAt: row.createdAt,
+    };
+  }
+
+  /**
+   * Applies an approved change to the set (FR-018b).
+   *
+   * Called from the `approval.completed` handler, never directly from a request — the whole
+   * point is that the edit does not take effect until the Director has approved it.
+   * Idempotent: an upsert to the same value twice is indistinguishable from once.
+   */
+  async applyDirectorFinalChange(
+    companyId: string,
+    changes: { actionType: string; isFinal: boolean }[],
+    updatedBy: string | null,
+  ): Promise<void> {
+    await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        for (const change of changes) {
+          if (change.actionType === ACTION_DIRECTOR_FINAL_SET_CHANGE) {
+            // Refused here as well as at submission. A second guard on the write path
+            // matters because this method is reachable from an event handler, and an event
+            // can carry a payload built before the submission guard existed.
+            continue;
+          }
+          await tx.directorFinalAction.upsert({
+            where: {
+              companyId_actionType: {
+                companyId,
+                actionType: change.actionType,
+              },
+            },
+            create: {
+              companyId,
+              actionType: change.actionType,
+              isFinal: change.isFinal,
+              updatedBy,
+            },
+            update: { isFinal: change.isFinal, updatedBy },
+          });
+        }
+      },
+    );
+  }
+
+  /**
+   * Applies a director-final change once its own chain has completed (FR-018b, T096).
+   *
+   * **Idempotent**, because it will be redelivered: the event bus offers no once-only
+   * guarantee. `appliedAt` is the guard — a proposal already stamped is skipped, and the
+   * upsert underneath would be harmless anyway since it writes the same values.
+   *
+   * The spine listening to its own event is unusual and deliberate: this is the one action
+   * type whose owning module *is* the spine, so there is nobody else to hand it to.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onDirectorFinalChangeCompleted(
+    event: ApprovalCompletedEvent,
+  ): Promise<void> {
+    if (event.entityType !== ACTION_DIRECTOR_FINAL_SET_CHANGE) return;
+
+    try {
+      const proposal = await withRlsContext(
+        this.prisma,
+        { isSuperAdmin: true },
+        (tx) =>
+          tx.directorFinalChangeProposal.findUnique({
+            where: { approvalInstanceId: event.instanceId },
+          }),
+      );
+      if (!proposal || proposal.appliedAt) return;
+
+      const after = proposal.after as Record<string, boolean>;
+      await this.applyDirectorFinalChange(
+        event.companyId,
+        Object.entries(after).map(([actionType, isFinal]) => ({
+          actionType,
+          isFinal,
+        })),
+        proposal.proposedBy,
+      );
+
+      await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.directorFinalChangeProposal.update({
+          where: { id: proposal.id },
+          data: { appliedAt: new Date() },
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        `Approval ${event.instanceId} completed but the director-final change could ` +
+          `not be applied: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        error instanceof Error ? error.stack : undefined,
+      );
+    }
+  }
+
   private async namesFor(userIds: string[]): Promise<Map<string, string>> {
     const unique = [...new Set(userIds)];
     if (unique.length === 0) return new Map();
@@ -1128,15 +1468,11 @@ export class ApprovalService {
 
     // Deactivated users are included deliberately (FR-008): history that cannot name who
     // acted is not history. `User` is a `shared` table, the same schema as the spine.
-    return new Map(
-      rows.map((u) => [
-        u.id,
-        u.displayName?.trim() ||
-          [u.firstname, u.lastname].filter(Boolean).join(' ').trim() ||
-          u.username ||
-          u.email,
-      ]),
-    );
+    //
+    // The fallback chain itself lives in `src/common/actor-name.ts`, shared with 016's
+    // attendance-modification view — the same actor must not appear under two different
+    // names on two screens.
+    return new Map(rows.map((u) => [u.id, actorNameOf(u)]));
   }
 
   /**

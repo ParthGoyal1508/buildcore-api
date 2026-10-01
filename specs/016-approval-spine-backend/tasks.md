@@ -1088,3 +1088,389 @@ it, so in the feed a refusal is indistinguishable from any other `hr` UPDATE —
 export carries `entity` and the `changes` payload. SC-007 says "retrievable", and it is,
 so this is not a 016 gap. It is an observation about feature 004's surface and belongs to
 whoever owns that contract, not to a feature quietly widening someone else's response.
+
+---
+
+## Phase 8: Amendment of 2026-09-16 — client bug review, bug 2 (FR-012, FR-012a–e)
+
+Phases 1–7 are complete. This phase exists because feature 020's punch-refusal decision of
+2026-09-16 removed the spine's first consumer: User Story 1 was built on routing refused punches
+through the chain, and under 020 FR-013 a refused punch records nothing. US1 is **re-aimed at the
+manual correction** rather than retired. Plan D14–D16.
+
+The survey found bug 2's logging half already built. `hr.AttendanceModification` carries
+`employeeId`, `date`, `actorUserId`, `before`, `after`, `reason`, `createdAt`, and
+`attendance-admin.service.ts:324` writes one inside every edit transaction — the import path reaches
+it through the same service rather than around it. **FR-012a and FR-012e need no work**, including
+for Super Admin, because the log is written by code path and not gated on the actor's role.
+
+Order matters: T064–T069 (the employee's view) and T070–T071 (the actor filter) are independent of
+the spine and can ship immediately. T072–T077 changes a shipped route's behaviour and is the
+invasive part.
+
+### FR-012c — the employee can see who changed their day (plan D14)
+
+The real work of bug 2. There is no `my/attendance` controller; the employee's own view is
+`GET /my/punch/history` (`punch.controller.ts:91`), which returns `AttendanceMonth` — every date with
+its computed status, and nothing about how that status came to be.
+
+- [X] T064 [US3] Extend `AttendanceMonth`'s per-day shape in `src/hr/attendance/` with
+  `modifications: Array<{ actorName, at, before, after, reason }>` per contracts Part 3. Additive, so
+  the web schema takes it with `.default([])` and a client deployed ahead of the server renders
+  today's view.
+- [X] T065 [US3] `AttendanceHistoryService.getMonthHistory` resolves them in **one** query for the
+  whole month from `hr.AttendanceModification`, joined in memory against the days it already builds.
+  Never per day — `@@index([employeeId, date])` is already the access path, and this is the same N+1
+  the Risks table names for `statesOf`.
+- [X] T066 [US3] Resolve `actorUserId` to the actor's **name**, not the id. The requirement is that
+  the employee can see who changed their attendance, and a cuid does not tell them that. Same argument
+  as 017's FR-009 refusal naming labels.
+- [X] T067 [P] [US3] Unit test: a modified day carries its actor's name, time, before, after and
+  reason; an unmodified day carries an empty array; and the month costs one modification query
+  regardless of how many days were modified.
+- [X] T068 [P] [US3] e2e: an admin corrects an employee-day, then the **employee's own** history shows
+  the modification with the actor's name. This is the client's sentence — *"it should also reflect in
+  the attendance of the affected employee"* — as one assertion.
+- [X] T069 [US3] Note in the task's closing comment that `reason` is free text written by an
+  administrator who did not know the employee would read it. No code change; it is a consequence worth
+  recording once rather than discovering through a complaint.
+
+### FR-012d — the audit can ask what one person changed (plan D16)
+
+- [X] T070 [US3] Add `actorUserId?` to `ModificationsQueryDto` in
+  `src/hr/attendance/dto/mark-attendance.dto.ts` with a validator, and the matching `where` clause in
+  `AttendanceAdminService.modifications`. One field and one clause; an audit that cannot ask "what did
+  this person change" answers the wrong half of the question.
+- [X] T071 [P] [US3] Unit test for the filter, including that it composes with the existing
+  `employeeId` and date-range filters rather than replacing them.
+
+### FR-012 — the correction enters the chain (plan D15)
+
+**Behaviour change on a shipped route.** `POST /attendance` currently applies a correction
+immediately, subject to the payroll lock.
+
+- [X] T072 [US1] Register a chain action for the manual attendance correction, reusing the existing
+  `ACTION_ATTENDANCE_EXCEPTION` key in `src/approvals/default-chains.ts` rather than renaming it.
+  Renaming means migrating live instances and slot mappings for a vocabulary improvement; the key
+  becomes slightly inaccurate and that is the cheaper error. Record the mismatch in a comment so it
+  reads as a decision.
+- [X] T073 [US1] `AttendanceAdminService.mark` submits to `ApprovalsService` and returns the pending
+  instance instead of the applied row. The path and the DTO are unchanged; what changes is what comes
+  back.
+- [X] T074 [US1] Move the write into the `approval.completed` handler, which must be **idempotent** —
+  the Risks table's "two writes, one boundary" already requires this of every consumer.
+- [X] T075 [US1] Write the `AttendanceModification` row **on apply, not on submit**. A rejected
+  correction modified nothing, and logging it as a modification would make the log disagree with the
+  attendance. A rejected correction lives as an approval instance, which is correct.
+- [X] T076 [US1] Keep the payroll lock (FR-016) and the chain as **independent** gates. An HR
+  correction during payroll review passes the first and still enters the second; neither subsumes the
+  other.
+- [X] T077 **CRITICAL** [US1] Find every consumer of `POST /attendance` and of
+  `AttendanceAdminService.mark` before this ships. The import commit path
+  (`attendance-import.service.ts`) is the one that will be missed — it calls the **service**, not the
+  route, and its own comment says the Modifications audit applies to it. Decide explicitly whether a
+  bulk import raises one chain item per row or is exempt, and say which in the task's closing note. An
+  import that silently creates a thousand pending approvals is a different product.
+- [X] T078 [P] [US1] e2e: raise a correction for a day with no accepted punch, walk it through all
+  three levels, and confirm the attendance shows the correct state and actor after each — and that the
+  affected employee can see the modification once applied (US1 acceptance scenario 3a).
+- [X] T079 [P] [US1] Unit test: a **rejected** correction leaves no `AttendanceModification` row and
+  the day is not counted present.
+
+### FR-012b — the log's immutability, and its one honest caveat
+
+- [X] T080 [US3] Confirm no route deletes or updates an `AttendanceModification`, and add none. The
+  requirement holds by construction for every path a user has; this task is to verify that and record
+  it, not to build anything.
+- [X] T081 [US3] Record the caveat in `prisma/schema.prisma` beside the model:
+  `employee Employee @relation(..., onDelete: Cascade)` means hard-deleting an employee deletes their
+  modification history, which sits awkwardly beside "immutable and not deletable". Soft-delete is the
+  norm so no live path reaches it. **Do not change the cascade** — breaking it strands rows against a
+  deleted employee, which is worse. A comment, so "append-only" is not read as "survives everything".
+
+### Verification
+
+- [X] T082 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T083 Re-read `spec.md`'s User Story 1 and confirm the built behaviour matches the re-aimed
+  story rather than the original punch-exception one. The story text changed on 2026-09-16; the tasks
+  above are the only place that change becomes code.
+
+### Phase 8a: what T077 missed (added 2026-10-01)
+
+T077 asked for **every** consumer of `POST /attendance` to be found before this shipped. It was read
+as every consumer *inside this repository* — the import service was found, and the browser was not.
+`attendance-table.tsx` submitted the correction, closed its dialog, refetched the list and showed the
+unchanged figures with no explanation, which reads as a save that silently failed. Nothing errored;
+the request returned 201.
+
+Fixing the screen needed one thing the API did not offer: a way to know a correction is outstanding
+after the response that submitted it is gone. Without it the marker lasts until the first refresh, a
+second administrator sees nothing, and the obvious next move is to submit the correction again.
+
+- [X] T083a Add `pendingCorrection` to `DailyAttendanceRow` in
+  `src/hr/attendance/attendance-admin.service.ts` — submitted-at and the level now deciding, or
+  `null`. Resolve it through `ApprovalService.statesOf`, the batch form the spine's contract requires
+  of a list, so a new column on a screen does not add an N+1 against the approval tables.
+- [X] T083b Report nothing for a correction whose chain has **already completed**. Application is
+  eventual — the spine announces completion and the write lands on a later tick — so `appliedAt` is
+  still null for a moment after the decision is in. "Awaiting approval" then is accurate about the row
+  and wrong about the decision, and would send an administrator to approve what is already approved.
+- [X] T083c Keep it off the paths that do not need it. The dashboard widget and the attendance report
+  read the same list without a viewer and render no corrections; the viewer argument is optional, so
+  they neither pay for the lookup nor change behaviour.
+- [X] T083d Unit tests for all four: the marker appears on the right day, the batch form is used
+  once, a completed chain reports nothing, the oldest wins when a day carries two, and a caller
+  without a viewer gets `null`.
+
+### Phase 8b: what T070 left half-built (added 2026-10-01)
+
+T070 added `actorUserId` to `ModificationsQueryDto` — the filter's *input*. Nothing added its
+output: the endpoint returned raw rows, so the trail carried a cuid where the audit's whole point is
+a name, and there was no way for a filter control to know which people to offer. A web screen could
+have resolved names itself at one request per row; T055 forbids exactly that, and rightly.
+
+- [X] T083e Resolve `actorName` on every row of `AttendanceAdminService.modifications`, in one
+  query for the page's distinct actors. Fall back to the id only when the user row has gone —
+  a blank reads as "nobody changed this", which is the opposite of what the row records.
+- [X] T083f Return `actors`: the distinct actors within the same employee and date scope,
+  **ignoring the actor filter itself**. Deriving them from the filtered rows would leave a dropdown
+  holding only the person already selected, with no way back to anyone else. Not "every user"
+  either — an audit filter offering people who have never touched attendance cannot be used.
+- [X] T083g Extract the id-to-name lookup as `actorNamesFor`, shared by both of the above, and run
+  it as system: `shared.User` is another schema, and the ids were read from rows the caller's own
+  context already bounded.
+- [X] T083h Unit tests: the name reaches every row, a vanished user falls back to the id, the
+  options come from the unfiltered scope, and one actor across many rows costs one lookup.
+
+### Notes on this phase
+
+**What did not change, deliberately.** The `AttendanceModification` table, its columns, and the write
+at `attendance-admin.service.ts:324`. Bug 2's logging half is built; this phase adds a reader (T064–T068),
+a filter (T070) and a caveat (T081) — not a store. The attendance exception queue's machinery also
+stays: 020 removes its input, not its mechanism, and the history it renders predates the refusal
+decision and is real.
+
+**T077 is the risk of this phase.** Everything else is additive. Changing what `POST /attendance`
+returns is not, and the import path calls the service directly — so the compiler will not find it.
+
+**The residual risk the client accepted.** Under 020's refusal there is no unreviewed exception to
+become a paid day, but there is a manual correction standing on a supervisor's assertion. The chain
+(T072–T079) and the employee-visible log (T064–T068) are the controls chosen against it. That is why
+this phase is two halves of one bug rather than two unrelated pieces of work.
+
+## Phase 8 implementation record, 2026-09-30
+
+**T064-T083 complete.** Phases 1-8 are now done; 9-11 remain.
+
+### Two things the plan and tasks did not name
+
+1. **A pending correction needed a table.** T073 says "submit to `ApprovalsService` and
+   return the pending instance", but the spine holds no payload by design — it stores an
+   opaque `(entityType, entityId)` pair and never dereferences it. So the correction's
+   intended values had nowhere to live between submission and completion.
+   `hr.PendingAttendanceCorrection` was added, owned by the module that understands the
+   payload, with the spine's `entityId` pointing at it.
+2. **`AuditLogEntry.ipAddress` is a required column** and an application has no request
+   behind it — the chain completes on somebody else's decision, possibly minutes later.
+   Following `payroll-schedule.service.ts`, the system path names itself
+   (`system/attendance-correction`) rather than passing an empty string. Found by the e2e:
+   the punch and the modification were written, the audit write then threw, and the handler's
+   catch swallowed it — so `appliedAt` was never stamped and the correction re-applied on
+   redelivery. Exactly the failure T074's idempotence requirement exists to prevent,
+   reached through a different door.
+
+### A deliberate deviation from T072, recorded rather than done quietly
+
+T072 said to reuse `ACTION_ATTENDANCE_EXCEPTION` rather than add a key, to avoid migrating
+live instances and slot mappings. **A distinct `ACTION_ATTENDANCE_CORRECTION` was used
+instead.**
+
+That reasoning holds for *renaming* a type and not for *adding* one:
+`seedDefaultsForCompany` is idempotent per chain, existing instances keep their type, and
+the new chain is additive rows. And reusing the key would have been actively wrong —
+`attendance-exceptions.service.ts` already handles `approval.completed` for that type and
+treats `entityId` as a **punch id**, while a correction's `entityId` is a
+`PendingAttendanceCorrection` id. Both handlers filter on `entityType` alone, so each would
+receive the other's completions and silently no-op. Relying on a `where` clause matching
+nothing is not isolation, and the day somebody tightens one of those clauses the two
+features corrupt each other's rows.
+
+### T077's answer: the bulk import is exempt
+
+Two consumers of `AttendanceAdminService.mark`, as the task predicted. The manual route now
+submits; **`attendance-import.service.ts` applies directly and is deliberately exempt from
+the chain.** A month's CSV for 150 employees is several thousand rows, and one chain item per
+row would create thousands of pending approvals nobody will ever walk through — an approval
+gate in name only. The import already has a human gate: the two-phase validate-then-commit
+flow, where a person reads the validation report before committing. Every imported row is
+still logged as a modification, because FR-012e requires the log whether or not approval was
+required.
+
+### Application is eventual, not synchronous — and the interface must respect it
+
+The spine emits `approval.completed` with `emit`, not `emitAsync`, deliberately: the event
+goes out after the decision's transaction commits and the spine does not wait for listeners.
+So `decide()` returning "approved" does **not** mean the attendance has changed yet. The e2e
+polls rather than asserting immediately, and web 016's Phase 8 tasks should not assume the
+day is updated the instant the final approval returns.
+
+### FR-012a, FR-012e and T080 needed no code
+
+The log was already written by code path rather than gated on the actor's role, so it covers
+every role including Super Admin. T080's append-only guarantee was verified rather than
+built — only `create`, `findMany` and `count` exist against the table — and
+`attendance-modification-log.spec.ts` now fails if an update, delete, upsert or raw write
+appears.
+
+### One extraction
+
+`actorNameOf` moved to `src/common/actor-name.ts`, shared with `ApprovalsService.namesFor`
+which already had the same fallback chain. The same actor appearing under two different names
+on two screens is exactly the confusion an audit trail exists to prevent.
+
+## Phase 9: Amendment of 2026-09-29 — item 7, the set becomes data (FR-018a)
+
+Confirmed direction, 2026-09-30: the director-final set becomes a **per-company table**, seeded from
+the existing config list, which stays as the fallback. Today it is
+`process.env.APPROVALS_DIRECTOR_FINAL_ACTIONS` read at `approvals.service.ts:107` — a redeploy, global
+across both companies, and unauditable, so FR-018b has nowhere to record "the set before and after".
+
+This phase is **inert if the seed is right**. If it is wrong, this is where that is found.
+
+- [X] T084 Add `model DirectorFinalAction` to `prisma/schema.prisma` in `settings` — `companyId`,
+  `actionType String`, `isFinal Boolean`, `updatedAt`, `updatedBy String?`,
+  `@@unique([companyId, actionType])`, `@@index([companyId])`.
+- [X] T085 RLS for it: `ENABLE` + `FORCE`, `tenant_isolation` with an explicit `WITH CHECK`,
+  hand-authored.
+- [X] T086 Hand-author the migration seeding one row per existing company per action type in
+  `config.ts`'s `directorFinalActionTypes` (the six: `payment_release`, `payroll_run`,
+  `letter_work_order`, `letter_loi`, `letter_purchase_order`, and the final-settlement type). It MUST
+  open with `SELECT set_config('app.is_super_admin', 'true', true);` — without it this seed matches
+  zero rows under `buildcore_app`, the deploy goes green, and **every director approval gate silently
+  disappears**. That is a worse outcome than the 2026-09-16 failure it shares its shape with.
+- [X] T087 Seed `director_final_set_change` as final too, in the same migration. It must be seeded and
+  never listed as configurable — if the gate on removing gates were itself removable, that is the
+  first thing anybody bypassing the chain would remove (plan D24).
+- [X] T088 `ApprovalsService` reads the table, falling back to the config list for an action type with
+  no row. Keep the config value as the seed and the fallback, not as the live set.
+- [X] T089 Keep `config.spec.ts`'s existing assertion against `default-chains.ts`. It now guards the
+  **seed** rather than the live set, which is still worth guarding — a seed disagreeing with the chains
+  it seeds gives a company a wrong first configuration.
+- [X] T090 **GATE** Before and after the migration, resolve the effective set per company and compare
+  against `APPROVALS_DIRECTOR_FINAL_ACTIONS`. They must match. A green deploy is not the gate; an
+  omitted action type here is an approval gate that stopped existing.
+- [X] T091 [P] Unit test: an action type with no row resolves from config; one with a row resolves from
+  the row; a row with `isFinal: false` overrides a config entry that says true.
+- [X] T092 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against `DirectorFinalAction`.
+
+## Phase 10: Amendment of 2026-09-29 — editing the set is itself director-final (FR-018b)
+
+- [X] T093 [US5] Register `director_final_set_change` as a chain action type with one level mapped to
+  `SLOT_FINAL`, in `default-chains.ts`.
+- [X] T094 [US5] `PATCH /settings/approvals/director-final` submits to `ApprovalsService` rather than
+  writing. It returns the pending item, not the new set — the set has not changed yet, and returning it
+  would tell the caller their edit took effect.
+- [X] T095 [US5] Carry the **before and after** sets on the pending item's payload. The decision log
+  records that the change was approved; the payload is the only thing that records what the change was,
+  which is what FR-018b asks for.
+- [X] T096 [US5] Apply the change in the `approval.completed` handler, **idempotently** — the handler
+  may run more than once and applying twice must be indistinguishable from applying once.
+- [X] T097 [US5] Refuse an edit naming `director_final_set_change` itself, with a code and a message
+  saying why. T087 seeds it; nothing may unseed it.
+- [X] T098 [P] [US5] e2e: submit a change removing `payment_release`, confirm the set is **unchanged**
+  while pending, approve as Super Admin, confirm it is then changed and the before/after is retrievable
+  from the item.
+- [X] T099 [P] [US5] e2e: a rejected change leaves the set exactly as it was, and the rejection reason
+  is readable.
+- [X] T100 [P] [US5] Unit test: an attempt to make `director_final_set_change` non-final is refused.
+
+## Phase 11: Amendment of 2026-09-29 — the set is reportable (FR-018c)
+
+- [X] T101 [US5] `GET /settings/approvals/director-final` returning the **union** of the registered
+  chain action types, the config seed, and the table's rows — not the table's contents (plan D25).
+- [X] T102 [US5] For each action type report three states, not two: final; not final **by decision**
+  (a row saying so); not final **because nothing configures it** (in the registry, no row, no seed).
+  A report collapsing the last two hides exactly the gap the client is asking about in item 7.
+- [X] T103 [US5] Readable under `COMPANY_SETTINGS`. Note that under feature 019 this becomes
+  `COMPANY_SETTINGS` at **read** level; until 019 ships the existing module-level value is correct and
+  needs no change here.
+- [X] T104 [P] [US5] Unit test: an action type registered with neither row nor seed reports as
+  unconfigured, distinctly from one explicitly set false.
+- [X] T105 [US5] Correct FR-018a's wording in `spec.md` if T088 revealed the named set differs from
+  the six in config — the requirement names four action types and config decomposes them into six, and
+  the spec should say which is authoritative.
+- [X] T106 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T107 Re-read `spec.md`'s FR-018 to FR-018c and confirm the built behaviour matches. Record that
+  the four named action types remain **this product's proposal**, not the client's answer, and that
+  FR-018c now exists so the list can be put in front of them.
+
+### Dependencies for phases 9-11
+
+Phase 9 → 10 → 11, strictly. Phase 10 cannot gate an edit to a set that is not yet a set, and Phase 11
+reports a union that Phase 9 defines. None of the three depends on Phase 8's outstanding 20 tasks —
+those touch attendance, not chain configuration.
+
+### MVP for this amendment
+
+**Phase 9 alone**, which makes FR-018a true in the sense the requirement means, and is inert if the
+seed is faithful. Phases 10 and 11 are what make the set safe to edit and possible to read.
+
+## Phases 9-11 implementation record, 2026-09-30
+
+**T084-T107 complete. Feature 016 is now fully implemented.**
+
+### What the env var could not do
+
+`APPROVALS_DIRECTOR_FINAL_ACTIONS` met FR-018a's "configurable without a code change" only
+weakly — a redeploy, global across both companies, unauditable. The set is now
+`shared.DirectorFinalAction`, per company, with the config list surviving as the **seed** and
+as the **runtime fallback** for an action type nobody has configured. A stored `false` beats
+the config default, deliberately: a company that has un-gated something must not have that
+decision quietly reversed.
+
+### A second table the tasks did not name
+
+`shared.DirectorFinalChangeProposal`. Same shape of problem as Phase 8's
+`PendingAttendanceCorrection`: `ApprovalInstance` carries no payload, so a change's before and
+after have nowhere to live. `before` is captured at **submission**, not derived at apply time
+— the point of recording it is what the set looked like when somebody decided to change it.
+
+Here the owning module is the spine itself, which is also why `ApprovalService` listens to its
+own `approval.completed` event. Unusual, and deliberate: this is the one action type with
+nobody else to hand it to.
+
+### The three states are the requirement
+
+FR-018c reports `final`, `not_final_by_decision` and `not_configured`. The third is the point:
+an action type nothing configures is a different fact from one somebody decided needs no
+Director, and collapsing them would hide exactly the gap the client is asking about when they
+say "every critical action". The set is the **union** of configured chains, seeded defaults and
+stored rows — not one table's contents.
+
+### The gate on the gate
+
+`director_final_set_change` is seeded as final and refused as a target of its own endpoint
+(`DIRECTOR_FINAL_SELF_CHANGE_REFUSED`), with a second guard on the write path because that
+path is reachable from an event whose payload may predate the submission guard. If the gate on
+removing gates could be removed, that is the first thing anybody bypassing approval would
+remove.
+
+### One migration handled carelessly, then correctly
+
+The first version of the migration was applied, then needed the proposal table added. Because
+it is **unshipped**, its `_prisma_migrations` record was removed and the file re-applied whole
+rather than split into two halves. That is right for a migration that exists only locally and
+would be wrong for one that had shipped — an applied migration must never be edited, because
+its checksum is what every future `migrate deploy` verifies.
+
+### T090's gate
+
+4 companies × 7 action types = 28 rows, matching `APPROVALS_DIRECTOR_FINAL_ACTIONS`'s six plus
+the gate on the gate. No approval requirement appeared or disappeared, which is what makes this
+phase inert.
+
+### One test double needed widening
+
+`approvals.service.spec.ts` gained a `directorFinalAction` delegate returning null — "no
+company has configured this", so the config list governs, which is exactly what those two
+FR-018 tests were written to assert. Their meaning is unchanged.

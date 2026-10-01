@@ -13,6 +13,7 @@ export interface Config {
   documents: DocumentsConfig;
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
+  search: SearchConfig;
 }
 
 /**
@@ -281,6 +282,44 @@ export interface ApprovalsConfig {
   directorFinalActionTypes: string[];
 }
 
+/**
+ * 021 US1 — cross-register search tunables.
+ *
+ * All three are policy values rather than developer choices, which is why none of them is
+ * a literal in `SearchSourcesRegistry` or in any of the four `SearchSource`
+ * implementations (Principle III). The cap values in particular are the honest answer to
+ * the spec's "a search that would match thousands" edge case: they are admitted through
+ * `truncated`, not hidden.
+ */
+export interface SearchConfig {
+  /**
+   * Shortest term the endpoint will accept (021 FR-003, contract Part 3).
+   *
+   * Three characters, because the name match compiles to `ILIKE '%term%'` and a
+   * two-character term matches most of every register — which is slow *and* useless. A
+   * shorter term is a 400 rather than an empty result, so the interface can say "keep
+   * typing" instead of "nothing matched"; those are different facts and a client cannot
+   * distinguish them from an empty list.
+   */
+  minTermLength: number;
+  /**
+   * Longest term accepted, bounding the work a single request can ask for.
+   */
+  maxTermLength: number;
+  /**
+   * How many results one register may contribute before its contribution is truncated.
+   *
+   * Passed to each `SearchSource` as a parameter rather than read by each of them, so
+   * four implementations cannot disagree about the cap (contract Part 1).
+   */
+  perRegisterLimit: number;
+  /**
+   * How many results the merged response may carry. Reached after ranking, so an
+   * exact-code match is never the row that gets cut (021 FR-001b).
+   */
+  totalLimit: number;
+}
+
 /** 017 — company and project document handling. */
 export interface DocumentsConfig {
   /**
@@ -290,6 +329,19 @@ export interface DocumentsConfig {
    * warning, and because the right number is a business call rather than a developer's.
    */
   expiryReminderLeadDays: number;
+  /**
+   * How long a document staged for a project that was never created is kept, in hours
+   * (017 FR-009d).
+   *
+   * A window rather than an immediate delete, because staging and creating are two requests and a
+   * person may fill a long form between them. A window rather than forever, because a file uploaded
+   * for a project nobody went on to create is a blob in storage with no owner and no reader.
+   *
+   * 24 hours: long enough to survive an interrupted afternoon, short enough that abandoned uploads
+   * do not accumulate. Configuration because "how long is an interrupted afternoon" is a business
+   * judgement rather than a developer's.
+   */
+  stagedDocumentRetentionHours: number;
   /**
    * How long a *superseded* version of a restricted kind is kept before it is purged,
    * row and blob (017 FR-006a).
@@ -388,6 +440,18 @@ export interface HrPayrollConfig {
 }
 
 export interface WorkspaceConfig {
+  /**
+   * The product default for the worst GPS accuracy a punch may report and still be located, in
+   * metres (020 FR-012b).
+   *
+   * The **fallback**, not the answer: a company that has set `punchAccuracyMaxMetres` overrides it,
+   * and a company that has not gets this. 50 metres because that is roughly what a phone reports
+   * indoors or under cover, which is where a site office often is.
+   *
+   * Deliberately separate from feature 013's labour GPS tolerance. Same units, different surface —
+   * merging them means tuning one to fix the other.
+   */
+  punchAccuracyMaxMetresDefault: number;
   faceMatch: {
     /**
      * Maximum Euclidean distance between two 128-float face descriptors for a punch
@@ -404,6 +468,46 @@ export interface WorkspaceConfig {
      */
     minEnrolmentPhotos: number;
     maxEnrolmentPhotos: number;
+    /**
+     * Which detector finds the face before landmarks and the descriptor are
+     * computed. `tiny` is `tinyFaceDetector`; `ssd` is `ssdMobilenetv1`.
+     *
+     * Measured on 2026-09-17 against a 640×480 punch-sized frame, same machine:
+     *
+     * | detector      | process RSS | inference | event-loop block |
+     * |---------------|-------------|-----------|------------------|
+     * | `ssd`         | 399 MB      | 221–232ms | 228ms            |
+     * | `tiny` @320   | 239 MB      | 29–36ms   | 35ms             |
+     *
+     * `tiny` is the default because the blocking figure is the one that decides
+     * whether an attendance peak works: WASM inference runs on the main thread, so
+     * for its duration the API answers nothing else. At 228ms a 150-punch burst is
+     * roughly 34 seconds of aggregate stall; at 35ms it is about five.
+     *
+     * The trade is detection sensitivity — `tiny` is worse at *finding* a small,
+     * angled or badly lit face. Landmarks and the descriptor are unchanged, so this
+     * cannot cause a false *match*; it causes a miss, and under 020 FR-013 a miss is
+     * a refused punch and a lost day. Env-overridable in both directions so a
+     * deployment finding too many misses can return to `ssd` without a release.
+     */
+    detector: 'tiny' | 'ssd';
+    /**
+     * Input square the `tiny` detector resizes the frame to. One of 128, 160, 224,
+     * 320, 416, 512, 608 — larger finds smaller faces and costs more. Ignored when
+     * `detector` is `ssd`. 320 measured 29–36ms against 416's 49–56ms with no
+     * accuracy difference worth the latency on a punch selfie, where the face fills
+     * much of the frame.
+     */
+    tinyInputSize: number;
+    /**
+     * Whether to load the models during application startup instead of on the first
+     * punch. True on a long-lived instance: the load is ~40–90ms plus the WASM heap
+     * allocation, and paying it at boot puts it where nobody is waiting — and
+     * surfaces an out-of-memory at startup rather than mid-punch. False keeps the
+     * original lazy behaviour, which is right where deploys are frequent and punches
+     * rare.
+     */
+    preloadModels: boolean;
   };
   offlineQueue: {
     /**

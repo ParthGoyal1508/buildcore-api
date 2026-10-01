@@ -19,6 +19,7 @@ import { VendorCategoriesController } from './vendor-categories/vendor-categorie
 import { PartnerVendorCategoriesService } from './vendor-categories/vendor-categories.service';
 import { VendorsController } from './vendors/vendors.controller';
 import { VendorsService } from './vendors/vendors.service';
+import { VendorSearchSource } from './vendors/vendor-search.source';
 
 /**
  * The `partners` module: vendors, the contractor compliance vault, monthly PF/ESIC
@@ -45,6 +46,8 @@ import { VendorsService } from './vendors/vendors.service';
     BOCWController,
   ],
   providers: [
+    // 021 US1 — see ProjectSearchSource.
+    VendorSearchSource,
     PartnersService,
     VendorsService,
     PartnerVendorCategoriesService,

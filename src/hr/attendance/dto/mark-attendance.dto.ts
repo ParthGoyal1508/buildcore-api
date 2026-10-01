@@ -76,6 +76,19 @@ export class ModificationsQueryDto {
   @IsString()
   employeeId?: string;
 
+  /**
+   * Narrow the audit to changes made by one person (016 FR-012d).
+   *
+   * Composes with `employeeId` and the date range rather than replacing them, so
+   * "what did this person change to this employee in September" is one question.
+   */
+  @ApiPropertyOptional({
+    description: 'Only changes made by this user.',
+  })
+  @IsOptional()
+  @IsString()
+  actorUserId?: string;
+
   @ApiPropertyOptional({ example: '2026-09-01' })
   @IsOptional()
   @IsDateString()

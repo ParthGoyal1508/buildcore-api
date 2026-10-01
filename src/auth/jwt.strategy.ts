@@ -6,11 +6,15 @@ import { AuthService } from './auth.service';
 import { JwtDto } from './dto/jwt.dto';
 import { AuthenticatedUser } from './authenticated-user';
 import { SecurityConfig } from '../common/configs/config.interface';
+import { CompanySelectionService } from '../settings/company-selection/company-selection.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     private readonly authService: AuthService,
+    // 019 FR-008: resolved once per request here rather than in every service that scopes by
+    // company — see `validate` below.
+    private readonly companySelection: CompanySelectionService,
     readonly configService: ConfigService,
   ) {
     super({
@@ -33,6 +37,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     if (!user || user.status !== 'active') {
       throw new UnauthorizedException();
     }
+
+    // 019 FR-008, FR-010. Resolved here, once, so every `rlsContextFor(caller)` and
+    // `resolveCompanyId(caller, ...)` in the codebase respects the selection without any of
+    // them changing. Doing it per-service would mean every one of them had to remember.
+    //
+    // Re-validated on every request rather than trusted because it is stored: the spec's own
+    // edge case is cross-company access being revoked while the other company is selected, and
+    // a stored selection honoured at read time is how that becomes a cross-tenant read.
+    user.selectedCompanyId = await this.companySelection.resolve(user);
     return user;
   }
 }

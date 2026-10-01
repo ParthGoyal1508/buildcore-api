@@ -274,9 +274,7 @@ export class ReimbursementsAdminService {
       approved: [ReimbursementClaimStatus.paid],
     };
     if (!(allowed[from] ?? []).includes(to)) {
-      throw new ConflictException(
-        `A ${from} claim cannot become ${to}.`,
-      );
+      throw new ConflictException(`A ${from} claim cannot become ${to}.`);
     }
   }
 

@@ -243,7 +243,11 @@ export class TdsService {
     },
     period: string,
     currentMonthGross: number,
-  ): Promise<{ tds: number; noPanRateApplied: boolean; slabsMissing: boolean }> {
+  ): Promise<{
+    tds: number;
+    noPanRateApplied: boolean;
+    slabsMissing: boolean;
+  }> {
     const [yearStr, monthStr] = period.split('-');
     const year = Number(yearStr);
     const month = Number(monthStr);

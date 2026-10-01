@@ -224,6 +224,10 @@ const config: Config = {
     timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata',
   },
   workspace: {
+    punchAccuracyMaxMetresDefault: numberFromEnv(
+      process.env.WORKSPACE_PUNCH_ACCURACY_MAX_METRES,
+      50,
+    ),
     faceMatch: {
       // face-api's own documented default, and the threshold its published accuracy
       // numbers are quoted at (research.md §2). Env-overridable because the right
@@ -232,6 +236,32 @@ const config: Config = {
       distanceThreshold: numberFromEnv(
         process.env.WORKSPACE_FACE_MATCH_DISTANCE_THRESHOLD,
         0.6,
+      ),
+      // Swapped from `ssdMobilenetv1` to `tinyFaceDetector` on 2026-09-17 after
+      // measuring both. The number that decided it is not inference time but
+      // event-loop blocking: tfjs-wasm runs on the main thread, so while a punch is
+      // verified this process answers nothing else. `ssd` blocked for 228ms per
+      // punch against `tiny`'s 35ms — roughly 34 seconds of aggregate stall for a
+      // 150-punch burst versus five. Process RSS also fell 399 MB → 239 MB, which is
+      // the difference between fitting a 512 MB instance and not.
+      //
+      // Only the detector changed. Landmarks and the descriptor net are untouched,
+      // so this cannot produce a false match — it can only fail to find a face, and
+      // under 020 FR-013 that costs the worker a day. Overridable in both directions
+      // for exactly that reason.
+      detector: (process.env.WORKSPACE_FACE_DETECTOR === 'ssd'
+        ? 'ssd'
+        : 'tiny') as 'tiny' | 'ssd',
+      tinyInputSize: numberFromEnv(
+        process.env.WORKSPACE_FACE_TINY_INPUT_SIZE,
+        320,
+      ),
+      // On by default: the instance is long-lived now that it does not suspend, so
+      // the model load belongs at boot where nobody is waiting on it. It also makes
+      // an out-of-memory a startup failure rather than a mid-punch one.
+      preloadModels: booleanFromEnv(
+        process.env.WORKSPACE_PRELOAD_FACE_MODELS,
+        true,
       ),
       minEnrolmentPhotos: numberFromEnv(
         process.env.WORKSPACE_MIN_ENROLMENT_PHOTOS,
@@ -321,6 +351,10 @@ const config: Config = {
   },
 
   documents: {
+    stagedDocumentRetentionHours: numberFromEnv(
+      process.env.DOCUMENTS_STAGED_RETENTION_HOURS,
+      24,
+    ),
     // `??` not `||`: an explicitly empty env value must be distinguishable from unset,
     // the same reasoning as the approvals block below.
     expiryReminderLeadDays: Number(
@@ -332,6 +366,16 @@ const config: Config = {
     restrictedRetentionDays: Number(
       process.env.DOCUMENTS_RESTRICTED_RETENTION_DAYS ?? 90,
     ),
+  },
+
+  search: {
+    // Three, for the reason in the interface: `ILIKE '%ab%'` matches most of every
+    // register. Overridable because the right floor depends on how long this client's
+    // codes actually are, which a developer cannot know.
+    minTermLength: numberFromEnv(process.env.SEARCH_MIN_TERM_LENGTH, 3),
+    maxTermLength: numberFromEnv(process.env.SEARCH_MAX_TERM_LENGTH, 100),
+    perRegisterLimit: numberFromEnv(process.env.SEARCH_PER_REGISTER_LIMIT, 10),
+    totalLimit: numberFromEnv(process.env.SEARCH_TOTAL_LIMIT, 30),
   },
 
   approvals: {

@@ -34,9 +34,15 @@ export function companyScope(
     // selector), and sees every company when they don't.
     return requested ? { companyId: requested } : {};
   }
-  // Everyone else is pinned to their own company and `requested` is ignored
+  // Everyone else is pinned to **the context's** company and `requested` is ignored
   // outright — a query parameter must never widen a caller's scope.
-  return { companyId: caller.companyId ?? NO_COMPANY };
+  //
+  // `ctx.companyId`, not `caller.companyId`: since 019 FR-010 a cross-company caller who has
+  // selected a company arrives here with `isSuperAdmin` false and the *selected* company on the
+  // context. Reading the caller's own field would scope them to the company their account
+  // belongs to and silently ignore the switcher — which is how this was first written, and what
+  // the e2e caught.
+  return { companyId: ctx.companyId ?? caller.companyId ?? NO_COMPANY };
 }
 
 /**
@@ -54,7 +60,10 @@ export function assertInScope(
   if (ctx.isSuperAdmin) {
     return;
   }
-  if (row.companyId !== caller.companyId) {
+  // `ctx.companyId` for the same reason as the two helpers above: a selected company narrows the
+  // caller, and comparing against their own field would let them open a row from the company
+  // their account belongs to while they are working in the other one.
+  if (row.companyId !== (ctx.companyId ?? caller.companyId)) {
     throw new NotFoundException(`${label} not found`);
   }
 }
@@ -91,8 +100,12 @@ export function resolveCompanyId(
     }
     return companyId;
   }
-  if (!caller.companyId) {
+  // `ctx.companyId` first, for the reason `companyScope` above gives: a cross-company caller who
+  // has selected a company arrives with `isSuperAdmin` false and the selected company on the
+  // context, and reading the caller's own field would ignore the switcher.
+  const effective = ctx.companyId ?? caller.companyId;
+  if (!effective) {
     throw new BadRequestException('Caller has no company assigned.');
   }
-  return caller.companyId;
+  return effective;
 }

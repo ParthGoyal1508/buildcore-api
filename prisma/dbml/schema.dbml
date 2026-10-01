@@ -50,7 +50,15 @@ value must not lock a real user out over missing metadata.']
 Table Role {
   id String [pk]
   name String [unique, not null]
-  permissions Permission[] [not null]
+  permissions Permission[] [not null, note: '**Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
+the client\'s Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
+switches the guard over; kept through that cutover on purpose, so a rollback of
+Phase 2 is a code revert with no data loss. A later migration drops it once a release
+has proved the new path.
+
+Do not write to it and do not read it in new code. `scripts/access-matrix.ts` reads
+both shapes and is what proves the two agree (FR-006, SC-002).']
+  rolePermissions RolePermission [not null, note: 'One row per area and level (019 FR-001, FR-002). See `RolePermission`.']
   isProtected Boolean [not null, default: false, note: 'True only for the seeded Super Admin role — blocks rename/permission-change/
 delete (002-settings-backend FR-008; enforced there once it owns role editing —
 this feature only ever reads roles, it doesn\'t expose role management).']
@@ -72,6 +80,80 @@ shared across every company (one system-wide "Super Admin" role, not one per
 company), so Principle IV\'s per-tenant isolation requirement doesn\'t apply here
 — every authenticated user can read what a role grants. UserRole (who
 actually *holds* a role) is the tenant-scoped side, and is RLS-protected.'
+}
+
+Table UserCompanySelection {
+  userId String [pk]
+  companyId String [not null]
+  company Company [not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One grant: a role may do `level` to `permission` (019 FR-001, FR-002).
+
+Replaces `Role.permissions`, the scalar list, which could not carry a level. The
+alternative was doubling the `Permission` enum into `*_READ`/`*_WRITE` pairs — rejected
+because 34 values become 68, every one of the 116 `@RequirePermissions(...)`
+declarations would have to name which it meant, and a role\'s grants would stop being
+queryable by area.
+
+**No `companyId`, and no RLS — deliberately.** `Role` itself carries neither: migration
+`20260828170000_role_permission_model` records the reasoning, that who *holds* a role is
+tenant data (hence `UserRole` is RLS\'d) while the role\'s own definition is not. A child
+of a global table cannot be tenant-scoped, and a policy here that looked like one would
+be worse than none — it would read as isolation to the next person while enforcing
+nothing.
+A refused request, recorded (019 FR-003).
+
+`heldLevel` is the column that earns this table. A refusal with `heldLevel = read` against
+a required `write` is an **interface** that offered a control it should have hidden —
+FR-004\'s failure mode, and a bug report. A refusal with `heldLevel = null` is somebody
+reaching for a module they hold nothing in, which is a security signal. Without this column
+the two are the same row, and the only thing anybody could do with the log is count it.
+Which company a user is currently working in (019 FR-008 to FR-013).
+
+**Stored server-side, not carried in the token.** FR-011 requires the selection to survive
+a browser restart, and access tokens here are short-lived — a JWT claim would not survive
+one. A cookie would make the selection a client assertion about authorisation scope, which
+is the one thing it must never be.
+
+`userId` is the primary key, so two selections for one user are **unrepresentable** rather
+than merely prevented.
+
+The selection is not authorisation. It is validated against the user\'s accessible companies
+on every read, not only on write: the spec\'s own edge case is cross-company access being
+revoked while the other company is selected, and a stored selection trusted at read time is
+how that becomes a cross-tenant read.'
+}
+
+Table PermissionRefusal {
+  id String [pk]
+  companyId String [not null]
+  userId String [not null]
+  method String [not null]
+  path String [not null, note: 'The route **template**, never the resolved URL. A resolved URL carries record ids, and a
+security log quietly accumulating them becomes a store of personal data nobody
+classified as one.']
+  requiredPermission Permission [not null]
+  requiredLevel AccessLevel [not null]
+  heldLevel AccessLevel [note: 'The level actually held for that area. **Null means the area was not held at all** —
+which is a different event from holding it at the wrong level.']
+  createdAt DateTime [default: `now()`, not null]
+}
+
+Table RolePermission {
+  id String [pk]
+  roleId String [not null]
+  role Role [not null]
+  permission Permission [not null, note: 'The area. The existing 34-value enum, unchanged — areas are already granular enough
+for the client\'s Note 22, since `LOGBOOK` and `FUEL` are already distinct from
+`MACHINERY` (019 research §2).']
+  level AccessLevel [not null]
+  createdAt DateTime [default: `now()`, not null]
+  createdBy String
+
+  indexes {
+    (roleId, permission, level) [unique]
+  }
 }
 
 Table UserRole {
@@ -137,6 +219,29 @@ default. Company-configurable rather than a literal — Constitution Principle I
 (013 FR-027), descending. Company-configurable because the notes in circulation
 change by legislation (the ₹2000 note\'s withdrawal being the recent example),
 so this is not a literal inside the denomination service — Principle III.']
+  punchAccuracyMaxMetres Int [note: 'The worst GPS accuracy a punch may report and still be located, in metres
+(020 FR-012b).
+
+The client asked for this in those words — "configurable from the settings by super admin" —
+and an environment variable does not satisfy it: it needs a redeploy and it is the same for
+both companies.
+
+**Nullable rather than defaulted in the database.** Null means "this company has not decided",
+which is a different fact from "this company chose 50" — and only the first should follow a
+change to the product default. A column defaulted to 50 makes every company look as though it
+had made a decision nobody made.
+
+Deliberately **not** feature 013\'s `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
+different surface, different tolerance. Merging them means tuning one to fix the other.']
+  hideCashTransactions Boolean [not null, default: false, note: 'Hides cash amounts and cash transactions across the application (019 FR-014).
+
+A **display** control, never a data operation — FR-017 is explicit that nothing is
+deleted or altered while it is on. Default false: a display control that arrived
+switched on would hide figures nobody asked to hide.
+
+Note that `labourCashDenominations` above is deliberately NOT hidden by this. It
+looks like cash and is not — it is configuration, and hiding it would break the
+payment-sheet builder while concealing nothing anybody wanted concealed.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   departments Department [not null]
@@ -170,6 +275,9 @@ so this is not a literal inside the denomination service — Principle III.']
   letterKinds LetterKind [not null]
   signatories Signatory [not null]
   issuedLetters IssuedLetter [not null]
+  directorFinalActions DirectorFinalAction [not null, note: '016 FR-018a: which action types this company requires the Director to approve.']
+  directorFinalChangeProposals DirectorFinalChangeProposal [not null, note: '016 FR-018b: proposed changes to this company\'s director-final set.']
+  userCompanySelections UserCompanySelection [not null, note: '019 FR-008: users currently working in this company.']
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -830,6 +938,36 @@ Table ProjectBudget {
 against actuals sourced live from the owning modules — never stored here.'
 }
 
+Table StagedProjectDocument {
+  id String [pk]
+  companyId String [not null]
+  documentTypeId String [note: 'Null for a supplementary document — the same meaning it has on `ProjectDocument`.']
+  documentType String [not null, note: 'The kind\'s label as the uploader saw it, kept so a refusal can name the kind even if the
+type is renamed or removed between staging and creation.']
+  fileRef String [not null]
+  filePath String
+  uploadedBy String [not null, note: 'Who staged it. Checked on use, not merely recorded — see the note above.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A file attached to a project, stored as an object-storage reference rather than
+bytes — same pattern as `hr.EmployeeDocument`.
+A document uploaded **before** the project it belongs to exists (017 FR-009b, plan D10).
+
+**This table is the cost of the word "cannot".** FR-009 says a project is not created while a
+mandatory kind has no document attached — so the documents have to exist before the project
+does, and there is nowhere to hang them. A row here is a file in escrow: uploaded, attributed,
+and waiting for the creation that will either consume it or leave it to be swept.
+
+`uploadedBy` is an **authorisation input**, not attribution (FR-009c, plan D10a). Project
+creation refuses a staged id whose `uploadedBy` is not the calling user, and refuses it with the
+same error code as a nonexistent id — so the refusal cannot be used to discover that another
+user\'s staged document exists. A column read for access control needs more care than one read
+for display, which is why this is said here rather than left to the service.
+
+Rows are swept with their blobs after the staging window (FR-009d). A file uploaded for a
+project nobody went on to create must not sit in storage indefinitely.'
+}
+
 Table ProjectDocument {
   id String [pk]
   companyId String [not null]
@@ -853,9 +991,6 @@ required kind is accepted and filed as supplementary, and null is what
   remark String
   uploadedByUserId String [not null, note: '`shared.User.id`. Bare id — see the schema-level note above.']
   uploadedAt DateTime [default: `now()`, not null]
-
-  Note: 'A file attached to a project, stored as an object-storage reference rather than
-bytes — same pattern as `hr.EmployeeDocument`.'
 }
 
 Table ProjectDocumentRequirement {
@@ -868,8 +1003,20 @@ display is a cross-schema read and Principle I forbids that outright. The projec
 module receives type names from the settings module through an exported service
 method and joins them in memory. Written down because the missing relation looks
 like an oversight and is not.']
-  isMandatory Boolean [not null, default: true, note: 'FR-009 lets a project exist before its papers are complete; readiness is reported,
-never enforced at creation.']
+  isMandatory Boolean [not null, default: true, note: 'Whether a project **cannot be created** without a document of this kind (017 FR-007b,
+FR-009).
+
+**Reversed on 2026-09-16.** This comment used to read "FR-009 lets a project exist before its
+papers are complete; readiness is reported, never enforced at creation" — which the client\'s
+bug review item 3 made false. A mandatory kind now refuses the creation, naming every missing
+kind, and creating nothing.
+
+An **advisory** kind (false) is reported outstanding and blocks nothing. The two are counted
+separately in `ProjectDocumentReadiness` rather than together, so a reader can tell "we cannot
+start this project" from "we are still chasing paperwork".
+
+A kind cannot be marked mandatory while the company has no document type for it (FR-007d):
+that would refuse every creation with no way to comply.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -974,11 +1121,13 @@ last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.'
   documents EmployeeDocument [not null]
   transfers EmployeeTransfer [not null]
   attendanceModifications AttendanceModification [not null]
+  pendingAttendanceCorrections PendingAttendanceCorrection [not null]
   exitRecords ExitRecord [not null]
   payrollLineItems PayrollLineItem [not null]
   loans Loan [not null]
   taxDeclarations TaxDeclaration [not null]
   salaryAdvances SalaryAdvance [not null]
+  punchRefusals PunchRefusal [not null, note: '020 FR-013c: punches refused for this employee.']
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -1236,6 +1385,86 @@ Table HolidaySite {
   }
 }
 
+Table PunchRefusal {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  type PunchType [not null]
+  reason PunchRefusalReason [not null]
+  latitude Decimal [not null, note: 'Where they were, and how far from the fence. Evidence, so it is the **real** distance rather
+than one adjusted by the accuracy allowance.']
+  longitude Decimal [not null]
+  distanceMeters Decimal
+  accuracyMeters Int
+  faceMatchDistance Decimal [note: 'The face-match distance, when a comparison happened at all. A number, not a biometric.']
+  capturedAt DateTime [not null, note: 'When the punch was taken, and when it reached the server — a refused offline punch may arrive
+long after the moment it describes.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A punch that was refused, or in Phase 2 would have been (020 FR-013c).
+
+**Deliberately no photo column** (plan D20, research §4). A face-mismatch refusal means the
+system could not establish whose face it is — retaining an unattributed biometric against a named
+employee is worse than the exception record it replaces, and the photo would be evidence of
+nothing except that somebody stood in front of a camera. `faceMatchDistance` is kept, because a
+number is not a biometric.
+
+This table is how a refused punch stays visible to somebody. Under FR-013a the day reads as no
+punch at all — which is the point — so without this the refusal would leave no trace anywhere and
+a worker wrongly refused would have nothing to appeal to.'
+}
+
+Table PendingAttendanceCorrection {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  date DateTime [not null]
+  payload Json [not null, note: 'The `MarkAttendanceDto` as submitted — times, status override, remarks. Stored whole
+rather than as columns: this is a payload in transit, and mirroring the DTO\'s fields
+here would mean a schema change every time the DTO grew a field.']
+  submittedByUserId String [not null, note: 'Who submitted it. Becomes `AttendanceModification.actorUserId` on apply, so the
+employee sees the person who asked for the change and not the person who approved it.']
+  approvalInstanceId String [unique, not null, note: 'The spine instance governing it. Not a relation: `ApprovalInstance` is in `shared`
+and this table is in `hr`, and a foreign key across that boundary is the coupling
+Principle I forbids.']
+  appliedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+}
+
+Table ExitClearanceWaiver {
+  id String [pk]
+  companyId String [not null]
+  exitRecordId String [not null]
+  exitRecord ExitRecord [not null]
+  itemKind String [not null, note: 'Which kind of obligation — asset custody, recoverable kit, an advance, a reimbursement.']
+  itemRef String [not null, note: 'The obligation\'s own id in its owning module, so a waiver points at exactly one thing.']
+  reason String [not null, note: 'Required, and length-validated in the DTO. A mandatory field satisfied by a space is not a
+reason, and this one writes off company money.']
+  waivedByUserId String [not null]
+  waivedAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (exitRecordId, itemKind, itemRef) [unique]
+  }
+
+  Note: 'A waived exit-clearance obligation (021 FR-014b, FR-016, plan D14).
+
+**The only thing this feature stores.** The clearance itself is *derived* — open asset
+allocations, unreturned recoverable kit, outstanding advances, open reimbursements, the
+account\'s state — read fresh every time it is asked for.
+
+A stored checklist would be a second copy of custody, stale the moment an asset came back
+through the asset register. FR-014c requires a return there to satisfy the item here without
+a second action, and deriving is what makes "returned in the asset module" and "satisfied
+here" the same fact rather than two facts somebody has to keep in step. FR-014e\'s "recompute
+at read time" is therefore not an extra requirement — it is what deriving means.
+
+A waiver does **not** mark the underlying obligation discharged (FR-014c). It records that
+the company stopped chasing it, with a name against the decision.'
+}
+
 Table AttendanceModification {
   id String [pk]
   employeeId String [not null]
@@ -1245,9 +1474,15 @@ Table AttendanceModification {
   after Json [not null]
   reason String
   createdAt DateTime [default: `now()`, not null]
-  employee Employee [not null]
+  employee Employee [not null, note: '**The one honest caveat on FR-012b\'s "immutable and not deletable"** (016 T081).
 
-  Note: 'Append-only audit of every manual attendance edit (FR-010). Never updated.'
+`onDelete: Cascade` means hard-deleting an employee deletes their modification
+history with them, which sits awkwardly beside a requirement calling the log
+append-only. It is left as a cascade deliberately: breaking it would strand rows
+against an employee who no longer exists, which is worse than losing them with her.
+Soft-delete is this product\'s norm and no live path hard-deletes an employee, so
+nothing reaches this today — but "append-only" should not be read as "survives
+everything", and this is where that is written down.']
 }
 
 Table ExitRecord {
@@ -1261,6 +1496,7 @@ Table ExitRecord {
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   employee Employee [not null]
+  clearanceWaivers ExitClearanceWaiver [not null, note: '021 FR-016: obligations waived on this exit.']
 
   Note: 'Employee offboarding record (US11). The F&F settlement itself is a normal
 PayrollRun flagged `isFnf`, linked here.'
@@ -1847,6 +2083,64 @@ raw key.']
   Note: 'One step of a chain.'
 }
 
+Table DirectorFinalAction {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  actionType String [not null, note: 'The chain action type, matching `ApprovalChain.actionType`. A free-text column rather
+than an enum for the same reason `slotKey` is: a feature that adds an action type must
+not need a migration of this table to describe it.']
+  isFinal Boolean [not null]
+  updatedAt DateTime [not null]
+  updatedBy String
+
+  indexes {
+    (companyId, actionType) [unique]
+  }
+
+  Note: 'Binds a slot to one of a company\'s own roles. The table that lets two companies
+staff the same chain shape differently.
+Whether one action type needs the Director\'s final approval, per company
+(016 FR-018a, FR-018b, FR-018c).
+
+**Why this is a table and not configuration.** It used to be
+`APPROVALS_DIRECTOR_FINAL_ACTIONS`, an environment variable read once at construction.
+That satisfied "configurable without a code change" only in its weakest sense: it needed
+a redeploy, it was global across both of the client\'s companies, and it was unauditable —
+so FR-018b\'s requirement to record "the set before and after" had nowhere to live, and
+FR-018c\'s requirement to report the set had nothing to report from.
+
+The config list survives as the **seed** for a company\'s first rows and as the fallback
+for an action type nobody has configured yet. Keeping it as the fallback matters: an
+action type registered by a later feature must have a defined answer before anybody
+configures it, and the safe answer is the one the client already accepted.'
+}
+
+Table DirectorFinalChangeProposal {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  approvalInstanceId String [unique, not null, note: 'Not a relation: kept as a bare id so this row survives its instance being pruned, and
+so the proposal can be read without joining the spine\'s own tables.']
+  proposedBy String [not null]
+  before Json [not null]
+  after Json [not null]
+  appliedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A proposed change to the director-final set, awaiting the Director (016 FR-018b).
+
+Exists for the same reason `hr.PendingAttendanceCorrection` does: `ApprovalInstance`
+carries no payload by design, so a change\'s before and after have to live in a table the
+owning module controls. Here the owning module is the spine itself, which is why this row
+sits in `shared` beside it — the spine is allowed to know about its own settings.
+
+`before` and `after` are maps of actionType to boolean. `before` is captured at submission
+rather than derived at apply time: the point of recording it is what the set looked like
+when somebody decided to change it, and re-deriving it later would show what it looked
+like after whatever else happened in between.'
+}
+
 Table RoleSlotMapping {
   id String [pk]
   companyId String [not null]
@@ -1860,9 +2154,6 @@ Table RoleSlotMapping {
   indexes {
     (companyId, slotKey) [unique]
   }
-
-  Note: 'Binds a slot to one of a company\'s own roles. The table that lets two companies
-staff the same chain shape differently.'
 }
 
 Table ApprovalInstance {
@@ -3440,6 +3731,11 @@ Enum UserStatus {
   deactivated
 }
 
+Enum AccessLevel {
+  read
+  write
+}
+
 Enum Permission {
   DASHBOARD
   EMPLOYEES
@@ -3804,6 +4100,13 @@ Enum HolidayType {
   national
   regional
   company
+}
+
+Enum PunchRefusalReason {
+  outside_geofence
+  unlocatable
+  face_mismatch
+  no_face_detected
 }
 
 Enum ExitReason {
@@ -4221,6 +4524,10 @@ Enum ResignationStatus {
   withdrawn
 }
 
+Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]
+
+Ref: RolePermission.roleId > Role.id [delete: Cascade]
+
 Ref: UserRole.userId > User.id
 
 Ref: UserRole.roleId > Role.id
@@ -4303,6 +4610,12 @@ Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 
 Ref: HolidaySite.holidayId > Holiday.id [delete: Cascade]
 
+Ref: PunchRefusal.employeeId > Employee.id [delete: Cascade]
+
+Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
+
+Ref: ExitClearanceWaiver.exitRecordId > ExitRecord.id [delete: Cascade]
+
 Ref: AttendanceModification.employeeId > Employee.id [delete: Cascade]
 
 Ref: ExitRecord.employeeId > Employee.id [delete: Cascade]
@@ -4354,6 +4667,10 @@ Ref: ApprovalChain.companyId > Company.id [delete: Cascade]
 Ref: ApprovalLevel.chainId > ApprovalChain.id [delete: Cascade]
 
 Ref: ApprovalLevel.companyId > Company.id [delete: Cascade]
+
+Ref: DirectorFinalAction.companyId > Company.id [delete: Cascade]
+
+Ref: DirectorFinalChangeProposal.companyId > Company.id [delete: Cascade]
 
 Ref: RoleSlotMapping.companyId > Company.id [delete: Cascade]
 
