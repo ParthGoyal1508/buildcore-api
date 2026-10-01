@@ -92,6 +92,15 @@ describe('PunchService', () => {
        * exercising the site fence.
        */
       assignment?: { siteId: string | null; isMobile: boolean };
+      /**
+       * Whether the company refuses a failing punch rather than flagging it (020 FR-013).
+       *
+       * Default false, matching every company's database default, so the existing tests below keep
+       * asserting the flagged behaviour they were written for. The refusal tests pass `true`
+       * explicitly — a dormant code path is untested in production until the day somebody switches
+       * it on, so the flag must never be what decides whether these tests exercise it.
+       */
+      enforced?: boolean;
     } = {},
   ) => {
     const {
@@ -99,6 +108,7 @@ describe('PunchService', () => {
       enrolled = true,
       enrolmentStatus = FaceEnrolmentStatus.enrolled,
       assignment,
+      enforced = false,
     } = opts;
     biometrics = new FakeBiometrics();
 
@@ -138,10 +148,14 @@ describe('PunchService', () => {
     prisma.tx.$queryRaw = jest.fn().mockResolvedValue(dayPunches);
 
     const approvals = { submit: jest.fn().mockResolvedValue(undefined) };
+    // Held in named consts rather than inlined, because the refusal tests assert on *whether these
+    // were called* — FR-013's requirement is about ordering, not about the thrown status.
+    const refusals = { record: jest.fn().mockResolvedValue(undefined) };
+    const storage = { put: jest.fn().mockResolvedValue('punch/ref-1') };
     const service = new PunchService(
       // 020 FR-013c. Phase 2 records would-be refusals while still accepting the punch, so these
       // tests' outcomes are unchanged — the double only needs to absorb the call.
-      { record: jest.fn().mockResolvedValue(undefined) } as never,
+      refusals as never,
       // 020 FR-016. No assignment is the state every employee is in on the day this ships, so
       // the default double returns null and these tests continue to exercise the site fence —
       // which is the fallback, and the case that would break attendance company-wide if it
@@ -161,10 +175,11 @@ describe('PunchService', () => {
         // 020 FR-012b. 50 is the product default; these tests send no `accuracyMeters`, so the
         // threshold is not reached and their verdicts are unchanged by its arrival.
         getPunchAccuracyMaxMetres: jest.fn().mockResolvedValue(50),
+        isPunchBlockEnforced: jest.fn().mockResolvedValue(enforced),
       } as never,
       biometrics,
       { compressPunchPhoto: jest.fn(async (b: Buffer) => b) } as never,
-      { put: jest.fn().mockResolvedValue('punch/ref-1') } as never,
+      storage as never,
       { record: jest.fn().mockResolvedValue(undefined) } as never,
       // 016: a flagged punch is submitted into an approval chain. Resolved here so the
       // existing biometric/geofence assertions are unaffected; the submission itself is
@@ -186,7 +201,7 @@ describe('PunchService', () => {
               },
       } as never,
     );
-    return { service, prisma, created, approvals };
+    return { service, prisma, created, approvals, refusals, storage };
   };
 
   const punchDto = (overrides: Record<string, unknown> = {}) =>
@@ -390,6 +405,200 @@ describe('PunchService', () => {
 
         expect(result.geofenceResult).toBe(GeofenceResult.in_range);
         expect(result.faceMatchResult).toBe(FaceMatchResult.exception);
+      });
+    });
+
+    /**
+     * 020 Phase 3 — the inversion (FR-013, FR-013d, FR-015).
+     *
+     * Every test here passes `enforced: true` rather than relying on a default, because the
+     * behaviour under test ships switched off. If the flag were what decided whether these ran,
+     * the refusal path would be unexercised until the day a client turned it on.
+     */
+    describe('the hard refusal, where a company has switched it on', () => {
+      const FAR = { latitude: SITE.latitude + 0.05 };
+
+      it('refuses an out-of-fence punch with PUNCH_REFUSED_LOCATION', async () => {
+        const { service } = build({ enforced: true });
+
+        await expect(
+          service.submitPunch(caller, punchDto(FAR)),
+        ).rejects.toMatchObject({
+          status: 422,
+          response: { code: 'PUNCH_REFUSED_LOCATION' },
+        });
+      });
+
+      it('distinguishes an unlocatable punch from one outside the fence', async () => {
+        // The distinction FR-013b exists for. Collapsing these two into one code tells a worker
+        // standing in exactly the right place to go somewhere else — so this asserts the code, not
+        // merely that something was refused.
+        const { service } = build({ enforced: true });
+
+        await expect(
+          service.submitPunch(caller, punchDto({ accuracyMeters: 500 })),
+        ).rejects.toMatchObject({
+          status: 422,
+          response: { code: 'PUNCH_REFUSED_UNLOCATABLE' },
+        });
+      });
+
+      it('refuses a face mismatch and an undetectable face with the same code', async () => {
+        // FR-012c. One code, because the advice is identical — retake the photo — and two reasons,
+        // because the pattern worth detecting differs. Both halves asserted in one test, since the
+        // requirement is precisely that they agree.
+        const mismatch = build({ enforced: true });
+        biometrics.next = Float32Array.from(
+          { length: FACE_DESCRIPTOR_LENGTH },
+          () => 5,
+        );
+        await expect(
+          mismatch.service.submitPunch(caller, punchDto()),
+        ).rejects.toMatchObject({
+          status: 422,
+          response: { code: 'PUNCH_REFUSED_FACE', reason: 'face_mismatch' },
+        });
+
+        const undetectable = build({ enforced: true });
+        biometrics.next = null;
+        await expect(
+          undetectable.service.submitPunch(caller, punchDto()),
+        ).rejects.toMatchObject({
+          status: 422,
+          response: { code: 'PUNCH_REFUSED_FACE', reason: 'no_face_detected' },
+        });
+      });
+
+      it('writes no attendance row and no photo when it refuses', async () => {
+        /**
+         * **FR-013d, asserted structurally.** This is what makes the seven-reader audit in T022
+         * finite rather than perpetual: payroll, the admin daily and monthly views, the employee's
+         * own history, the cost roll-ups, leave accrual, shift compliance and the attendance export
+         * all reach attendance through `PunchRecord`, so a day with no row reads as a day with no
+         * punch in every one of them — including the reader somebody writes next year without being
+         * told refusals exist.
+         *
+         * The photo matters as much as the row. `storage.put` happens before the day lock, so a
+         * refusal thrown one line later would leave a blob whose only referent was the row that was
+         * never created — an orphan nothing can collect, because nothing knows it is there.
+         */
+        const { service, created, storage, prisma } = build({ enforced: true });
+
+        await expect(
+          service.submitPunch(caller, punchDto(FAR)),
+        ).rejects.toBeDefined();
+
+        expect(created).toHaveLength(0);
+        expect(prisma.tx.punchRecord.create).not.toHaveBeenCalled();
+        expect(storage.put).not.toHaveBeenCalled();
+      });
+
+      it('logs the refusal before refusing, so the attempt leaves a trace', async () => {
+        // The log is not a consolation prize — under FR-013d it is the *only* evidence the attempt
+        // happened. A refusal thrown before the log would erase the event entirely, leaving a
+        // wrongly-refused worker nothing to appeal to.
+        const { service, refusals } = build({ enforced: true });
+
+        await expect(
+          service.submitPunch(caller, punchDto(FAR)),
+        ).rejects.toBeDefined();
+
+        expect(refusals.record).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            employeeId: 'emp-1',
+            reason: 'outside_geofence',
+          }),
+        );
+      });
+
+      it('submits nothing to the approval chain', async () => {
+        // A refused punch is not an exception for anybody to review, because there is nothing to
+        // review — the punch does not exist. Submitting one would put an item in a queue that can
+        // never be approved into anything.
+        const { service, approvals } = build({ enforced: true });
+
+        await expect(
+          service.submitPunch(caller, punchDto(FAR)),
+        ).rejects.toBeDefined();
+
+        expect(approvals.submit).not.toHaveBeenCalled();
+      });
+
+      it('reports the payroll lock, not the refusal, when both apply', async () => {
+        // checklists/refusal.md CHK037. The lock is checked first and deliberately stays first:
+        // "that period is closed" is permanent and actionable, where a refusal invites a retry that
+        // will never succeed. A 423 here rather than a 422.
+        const { service, refusals } = build({ enforced: true });
+        const lastPeriod = new Date();
+        lastPeriod.setUTCMonth(lastPeriod.getUTCMonth() - 2);
+
+        await expect(
+          service.submitPunch(
+            caller,
+            punchDto({ ...FAR, capturedAt: lastPeriod.toISOString() }),
+          ),
+        ).rejects.toMatchObject({ status: 423 });
+
+        // And no refusal is logged, because no validation ran. The rate must not count punches
+        // that were turned away for an unrelated reason.
+        expect(refusals.record).not.toHaveBeenCalled();
+      });
+
+      it('leaves an unenrolled employee a 400, not a refusal', async () => {
+        // checklists/refusal.md CHK036, decided here. A missing enrolment is a prerequisite nobody
+        // has met, not a check that failed: the remedy is to enrol, not to retake a photo or move.
+        // Logging it as a refusal would also inflate the refusal rate with a setup problem, and
+        // that rate is the number the client's decision rests on.
+        const { service, refusals } = build({
+          enforced: true,
+          enrolled: false,
+        });
+
+        await expect(
+          service.submitPunch(caller, punchDto()),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(refusals.record).not.toHaveBeenCalled();
+      });
+
+      it('still accepts the same punch while the company has it switched off', async () => {
+        // The flag's other direction, and the reason the default is false: nothing changes for a
+        // company that has not been asked. Without this test the whole phase could ship inverted
+        // for everybody and every assertion above would still pass.
+        const { service, created } = build();
+
+        const result = await service.submitPunch(caller, punchDto(FAR));
+
+        expect(result.geofenceResult).toBe(GeofenceResult.exception);
+        expect(created).toHaveLength(1);
+      });
+
+      it('records the refusal even while switched off, so the rate is measurable', async () => {
+        const { service, refusals } = build();
+
+        await service.submitPunch(caller, punchDto(FAR));
+
+        expect(refusals.record).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ reason: 'outside_geofence' }),
+        );
+      });
+
+      it('reports location rather than face when a punch fails both', async () => {
+        // checklists/refusal.md CHK032. One reason has to be chosen; location is the one the worker
+        // can usually act on from where they stand, since a retaken photo at the wrong site fails
+        // again on the fence.
+        const { service } = build({ enforced: true });
+        biometrics.next = Float32Array.from(
+          { length: FACE_DESCRIPTOR_LENGTH },
+          () => 5,
+        );
+
+        await expect(
+          service.submitPunch(caller, punchDto(FAR)),
+        ).rejects.toMatchObject({
+          response: { code: 'PUNCH_REFUSED_LOCATION' },
+        });
       });
     });
 

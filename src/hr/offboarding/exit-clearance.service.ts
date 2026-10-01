@@ -213,11 +213,14 @@ export class ExitClearanceService {
     const unique = [...new Set(userIds)];
     if (unique.length === 0) return new Map();
 
-    const rows = await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
-      tx.user.findMany({
-        where: { id: { in: unique } },
-        select: ACTOR_NAME_SELECT,
-      }),
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: { id: { in: unique } },
+          select: ACTOR_NAME_SELECT,
+        }),
     );
     return new Map(rows.map((user) => [user.id, actorNameOf(user)]));
   }

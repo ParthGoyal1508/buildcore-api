@@ -15,11 +15,12 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { AccessLevel, Permission } from '@prisma/client';
 import type { Request } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { RequireLevel } from '../../common/decorators/access-level.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -30,6 +31,8 @@ import {
   MarkAttendanceDto,
   ModificationsQueryDto,
 } from './dto/mark-attendance.dto';
+import { RefusalsQueryDto } from './dto/refusals-query.dto';
+import { PunchRefusalsService } from '../punch/punch-refusals.service';
 
 /** Admin attendance administration (005 US3). */
 @ApiTags('HR — Attendance')
@@ -38,7 +41,10 @@ import {
 @RequirePermissions(Permission.ATTENDANCE)
 @Controller('hr/attendance')
 export class AttendanceAdminController {
-  constructor(private readonly attendance: AttendanceAdminService) {}
+  constructor(
+    private readonly attendance: AttendanceAdminService,
+    private readonly refusals: PunchRefusalsService,
+  ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
     const companyId = user.companyId ?? requested;
@@ -201,6 +207,40 @@ export class AttendanceAdminController {
       callerFrom(user, request),
       this.companyOf(user, companyId),
       query,
+    );
+  }
+
+  @Get('refusals')
+  @RequireLevel(AccessLevel.write)
+  @ApiOperation({
+    summary: 'Punches that were refused, or would have been (020 FR-013c)',
+    description:
+      'A **log**, not a queue. Nothing here can be resolved, approved, dismissed or promoted into ' +
+      'attendance, and that is the requirement rather than an omission: a refused punch was never ' +
+      'recorded, so there is nothing to approve. The way a wrongly refused day gets fixed is a ' +
+      'manual attendance correction, which goes through its own review.\n\n' +
+      'Needs **write** on attendance, not read. Whoever can read a daily attendance sheet can see ' +
+      'everybody in their company; this surface carries where a named person physically was and ' +
+      'how well their face matched, which is a narrower audience than "can read attendance".\n\n' +
+      'The same shape whether or not the hard block is switched on. While it is off these are ' +
+      'punches that were accepted and would have been refused, which is what makes the before and ' +
+      'after directly comparable.',
+  })
+  async refusalLog(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query() query: RefusalsQueryDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.refusals.list(
+      callerFrom(user, request).rls,
+      this.companyOf(user, companyId),
+      {
+        employeeId: query.employeeId,
+        reason: query.reason,
+        from: query.from ? new Date(query.from) : undefined,
+        to: query.to ? new Date(query.to) : undefined,
+      },
     );
   }
 }

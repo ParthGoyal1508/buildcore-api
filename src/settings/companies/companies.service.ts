@@ -125,6 +125,54 @@ export class CompaniesService {
   }
 
   /**
+   * Whether this company refuses a punch that fails validation, rather than flagging it (020 FR-013).
+   *
+   * Read per request alongside the accuracy threshold, so switching it takes effect on the next
+   * punch with no restart. That is not a convenience here: the whole reason this is a company
+   * setting rather than a deploy is that the client's answer should be reversible within minutes of
+   * seeing what it does.
+   *
+   * Exported for `hr` on the same terms as `getPayrollLockDay` — Principle I forbids that module
+   * reading `settings.Company` itself.
+   */
+  async isPunchBlockEnforced(companyId: string): Promise<boolean> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { punchBlockEnforced: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company.punchBlockEnforced;
+  }
+
+  /**
+   * Switches the hard refusal on or off for one company (020 FR-013).
+   *
+   * Boolean and not nullable, unlike `punchAccuracyMaxMetres` next to it. There is no third state
+   * worth modelling: "this company has not decided" and "this company does not refuse punches" lead
+   * to identical behaviour, and a nullable flag would invite a product default that silently started
+   * refusing punches for every company that had never been asked.
+   */
+  async setPunchBlockEnforced(
+    companyId: string,
+    enforced: boolean,
+  ): Promise<{ punchBlockEnforced: boolean }> {
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: { punchBlockEnforced: enforced },
+      }),
+    );
+    return { punchBlockEnforced: enforced };
+  }
+
+  /**
    * The companies the caller can see — their own one, or every active company for a
    * Super Admin (004 US6). Backs the Group Dashboard's per-company cards and Group
    * Total. Scope is enforced by RLS: an ordinary caller's context filters to their

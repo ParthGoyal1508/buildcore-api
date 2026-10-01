@@ -233,6 +233,23 @@ had made a decision nobody made.
 
 Deliberately **not** feature 013\'s `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
 different surface, different tolerance. Merging them means tuning one to fix the other.']
+  punchBlockEnforced Boolean [not null, default: false, note: 'Whether a punch that fails location or face validation is **refused** rather than recorded as
+an exception for an admin (020 FR-013).
+
+**Default false, and that is the point.** The client accepted the hard block\'s cost without
+knowing how often it would fire, and `PunchRefusal` is accumulating that figure right now while
+punches are still being accepted. Shipping the inversion switched on would spend the only
+moment at which their decision is cheap to reverse — so the code ships and the behaviour does
+not, and the answer they give becomes a settings change rather than a release.
+
+It also keeps the decision cheap in **both** directions afterwards. One company can be switched
+on, watched for a fortnight against its own refusal log, and switched off again without a
+deploy.
+
+What a flag cannot do is make the branch safe by never running. A dormant path is untested in
+production until the day somebody turns it on, which is why every test of the refusal path runs
+with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
+The flag decides whose punches are refused, never whether the code is exercised.']
   hideCashTransactions Boolean [not null, default: false, note: 'Hides cash amounts and cash transactions across the application (019 FR-014).
 
 A **display** control, never a data operation — FR-017 is explicit that nothing is

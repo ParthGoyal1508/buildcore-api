@@ -122,6 +122,21 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // one of these.
           ':(exclude)src/assets/allocations/allocation.service.ts',
           ':(exclude)src/assets/allocations/exit-custody.spec.ts',
+          // Owned by 020 US1 (fuel accountability), not by anything in 016. These do use
+          // `ApprovalService` — the operator recovery in FR-006 has no path to a payroll line
+          // except through an approved item — and that is the spine, which is what FR-022 wants.
+          // What it forbids is a module *keeping its own* approval mechanism, and the per-file
+          // assertions above enforce that: `src/plant` is not in the migrated list, so these files
+          // are excluded here by path rather than by relaxing the rule.
+          //
+          // Why this appeared a commit late: the diff compares two commits, so these files were
+          // invisible to it while they were untracked and surfaced the moment Phase 5 was committed.
+          // A guard that only fires after the commit is still a guard; it is worth knowing it reads
+          // HEAD and not the working tree.
+          ':(exclude)src/plant/fuel-exceptions/dto/fuel-exception.dto.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.controller.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.spec.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.ts',
         ],
         {
           cwd: REPO_ROOT,

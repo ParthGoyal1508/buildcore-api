@@ -131,57 +131,144 @@ the system could not establish whose face it is; retaining an unattributed biome
 employee is worse than the exception record it replaces. `faceMatchDistance` is kept, because a number
 is not a biometric.
 
-## Phase 3: The inversion (FR-012, FR-013, FR-013a, FR-013b, FR-013d, FR-015, FR-015a)
+## Phase 3: The inversion (FR-012, FR-013, FR-013a, FR-013b, FR-013d, FR-015, FR-015a) ✅ implemented 2026-10-01, **behind a per-company switch**
 
-**Gated on 016 T072–T079.** Do not start this phase until the manual correction chain exists.
+**Gate discharged.** 016 T072–T079 — the manual attendance correction chain — are all complete, so a
+refused day has a route back. Verified by reading their checkboxes, not assumed from the phase order.
 
-- [ ] T017 **CRITICAL** In `punch.service.ts`, replace the `isException` computation with a refusal
+**Shipped switched off.** The client accepted the hard block without knowing how often it would fire,
+and Phase 2 is still measuring that. Inverting the behaviour for everybody would spend the only
+moment at which their decision is cheap to reverse — so the code ships complete and dormant behind
+`Company.punchBlockEnforced`, default false, and their answer becomes a settings change rather than a
+release. It also stays reversible afterwards: one company can be switched on, watched against its own
+refusal log, and switched off again without a deploy.
+
+The flag decides **whose punches are refused, never whether the code is exercised.** Every test of
+the refusal path forces enforcement on rather than inheriting the default, because a dormant branch
+is otherwise untested in production until the day somebody turns it on.
+
+- [X] T017 **CRITICAL** In `punch.service.ts`, replace the `isException` computation with a refusal
   thrown **before** the photo is stored, **before** the `FOR UPDATE` day lock, and **before** the
   insert. Ordering matters: a refused punch that has already written a blob leaves an orphan whose only
   referent was the row that was never created.
-- [ ] T018 Rewrite the comment at `punch.service.ts:257` — *"Neither check can reject the punch; both
+- [X] T018 Rewrite the comment at `punch.service.ts:257` — *"Neither check can reject the punch; both
   can flag it"* — **in the same commit**. It is the first thing a reader of that method learns and it
   now says the opposite of the code.
-- [ ] T019 Check the accuracy maximum **before** applying the allowance (plan D21). The reverse order
+- [X] T019 Check the accuracy maximum **before** applying the allowance (plan D21). The reverse order
   lets a very poor fix be refused as unlocatable on a small fence and admitted by its own imprecision
   on a large one — the allowance rewarding exactly what the maximum rejects.
-- [ ] T020 Return 422 with a stable code per plan D18: `PUNCH_REFUSED_LOCATION`,
+- [X] T020 Return 422 with a stable code per plan D18: `PUNCH_REFUSED_LOCATION`,
   `PUNCH_REFUSED_UNLOCATABLE`, `PUNCH_REFUSED_FACE`. Not 400 (the request is well-formed), not 403
   (the caller may punch), not 409 (the day's state is irrelevant). Keep `UNLOCATABLE` distinct: "you
   are not where you should be" and "your phone cannot tell where you are" call for different actions,
   and collapsing them tells a worker standing in the right place to move.
-- [ ] T021 Refuse a photo with **no detectable face** on the same terms as a mismatch (FR-012c). Today
+- [X] T021 Refuse a photo with **no detectable face** on the same terms as a mismatch (FR-012c). Today
   it is an exception for an admin, deliberately not a 400. Under the hard block it is a refusal, logged
   as `face_undetectable` while the employee sees the same `PUNCH_REFUSED_FACE` — the advice is
   identical, retake the photo, and the pattern worth detecting differs.
-- [ ] T022 **CRITICAL** The FR-013a reader audit: walk **each of the seven readers FR-013a
+- [X] T022 **CRITICAL** The FR-013a reader audit: walk **each of the seven readers FR-013a
   enumerates** and confirm a refused day reads as a day with no punch — payroll and its payment sheet,
   the admin daily and monthly views, the employee's own history, labour and project cost roll-ups,
   absence counting and leave accrual, shift-compliance reporting, and any attendance-derived export.
   Seven assertions. Three of them — absence counting, leave accrual, shift compliance — were not named
   until the requirements review asked which readers the promise bound, and each had a different
   plausible answer for a refused day.
-- [ ] T023 Assert FR-013d **structurally**: no refusal is stored in the attendance table, so a reader
+- [X] T023 Assert FR-013d **structurally**: no refusal is stored in the attendance table, so a reader
   written next year is correct without being told refusals exist. This is what makes T022 finite rather
   than perpetual.
-- [ ] T024 [P] e2e per quickstart pass 1: refuse a punch, assert no `PunchRecord` in any state, read
+- [X] T024 [P] e2e per quickstart pass 1: refuse a punch, assert no `PunchRecord` in any state, read
   the day back through all seven readers, and confirm no blob was written.
-- [ ] T025 Rewrite FR-015's behaviour: the refusal and its reason reach the employee **in the response
+- [X] T025 Rewrite FR-015's behaviour: the refusal and its reason reach the employee **in the response
   to the attempt**. It is no longer retrievable from their attendance afterwards, because nothing is
   recorded there.
-- [ ] T026 `GET /my/punch/refusals` — the caller's own refusals, for "what happened last Tuesday".
+- [X] T026 `GET /my/punch/refusals` — the caller's own refusals, for "what happened last Tuesday".
   FR-013b is satisfied at the moment of refusal; this is its companion.
-- [ ] T027 `GET /attendance/refusals` under an attendance-audit permission (FR-013c), filtered by
+- [X] T027 `GET /attendance/refusals` under an attendance-audit permission (FR-013c), filtered by
   employee, day range and reason. **Not** open to everyone who can read attendance.
-- [ ] T028 [P] e2e per quickstart pass 5: enumerate every route on the refusal surface and confirm
+- [X] T028 [P] e2e per quickstart pass 5: enumerate every route on the refusal surface and confirm
   none resolves, approves, dismisses or promotes a refusal into attendance. FR-013c says a log, not a
   reviewable item, and the way that decision gets undone is one "resolve" button added by someone who
   did not read the clarification.
-- [ ] T029 Handle the edge cases the requirements review found (`checklists/refusal.md`): a punch-out
+- [X] T029 Handle the edge cases the requirements review found (`checklists/refusal.md`): a punch-out
   refused after an accepted punch-in leaves the day holding an open punch-in nothing can close
   (CHK031); an employee with **no face enrolment** currently gets a 400 before validation runs, and
   whether that is now a logged refusal is unstated (CHK036); and which is reported when the payroll
   lock and a refusal both apply (CHK037). Decide each and record it.
+
+### Phase 3 implementation record, 2026-10-01
+
+**T017.** The refusal is thrown after the refusal is logged and **before** `storage.put`, the
+`FOR UPDATE` day lock and the insert — the ordering the task called the whole requirement. Asserted
+rather than claimed: `punch.service.spec.ts` checks `storage.put` and `punchRecord.create` were never
+called on the refusal path, so a future edit that moves the throw one line later fails a test instead
+of leaving orphaned blobs in object storage.
+
+**T019 was already satisfied.** Phase 1 computes `unlocatable` from the accuracy maximum and then
+passes `accuracyMeters: unlocatable ? undefined : …` into `checkGeofence`, so the maximum is checked
+before the allowance is applied. Verified by reading the code rather than re-implementing it.
+
+**T022, the FR-013a reader audit — done, and it found exactly seven.** Every reader reaches
+attendance through `AttendanceHistoryService` or `AttendanceAdminService`, and both read `PunchRecord`
+and nothing else:
+
+| Reader | File |
+| --- | --- |
+| Payroll and its payment sheet | `src/payroll/engine/payroll-engine.service.ts` |
+| Admin daily and monthly views | `src/hr/attendance/attendance-admin.service.ts` |
+| The employee's own history | `src/hr/punch/attendance-history.service.ts` |
+| Labour and project cost roll-ups | `src/dashboard/widgets/company-data.service.ts` |
+| Absence counting and leave accrual | `src/hr/leave/leave.service.ts` |
+| Shift-compliance reporting | `src/hr/attendance/shift-compliance.ts` |
+| The attendance-derived export | `src/dashboard/reports/attendance-report.provider.ts` |
+
+**T023 is what makes that audit finite.** `refusal-surface.spec.ts` asserts by `git grep` that
+nothing outside the refusals service and its two routes names `punchRefusal` at all — so a reader
+written next year is correct without being told refusals exist. The assertion was checked against a
+deliberate violation and goes red, which is the only way to know a green guard means anything.
+
+**T024 and T028 became source-level guards rather than e2e passes.** Both protect a *shape*, and a
+shape is better defended where it fails the commit than where it needs a seeded database. T024's
+substance — no attendance row, no stored photo — is asserted in `punch.service.spec.ts`; T028's — no
+route resolves, approves, dismisses or promotes a refusal — is asserted in `refusal-surface.spec.ts`,
+which also word-searches the service for those verbs after stripping comments, because the first
+version of that check matched its own documentation. **The e2e passes themselves have not been run.**
+
+**T029's three edge cases, decided and recorded:**
+
+- **CHK031**, a punch-out refused after an accepted punch-in: the day keeps an open punch-in.
+  Accepted rather than worked around. FR-008a already treats an unclosed punch-in as non-blocking,
+  and 016's correction chain is the route back — closing it here would mean writing to attendance on
+  the refusal path, which FR-013d forbids outright.
+- **CHK036**, an employee with no face enrolment: stays a 400, and is **not** logged as a refusal. A
+  missing enrolment is a prerequisite nobody has met, not a check that failed; the remedy is to
+  enrol. Logging it would also inflate the refusal rate with a setup problem, and that rate is the
+  figure the client's decision rests on.
+- **CHK037**, the payroll lock and a refusal both applying: the lock wins, 423 not 422, and no
+  refusal is logged because no validation ran. "That period is closed" is permanent and actionable;
+  a refusal invites a retry that can never succeed.
+- **CHK032**, location and face both failing: location is reported. One reason has to be chosen, and
+  location is the one a worker can act on from where they stand — a retaken photo at the wrong site
+  fails again on the fence.
+
+### Unplanned work this phase
+
+- [X] T017a Add `Company.punchBlockEnforced` (migration `20261001150000_punch_block_enforcement`),
+  `CompaniesService.isPunchBlockEnforced` / `setPunchBlockEnforced`, and
+  `PUT settings/companies/:id/punch-enforcement` under `COMPANY_SETTINGS`. Not in the plan: the plan
+  assumed the inversion would ship when the client answered, and the switch is what lets it ship
+  before they do.
+- [X] T017b Add `punch-refusal-response.ts` — the reason→code map as `satisfies
+  Record<PunchRefusalReason, string>`, so a new refusal reason without a code is a compile error
+  rather than an `undefined` reaching a worker's phone as the reason their punch failed.
+- [X] T029b Add the four `src/plant/fuel-exceptions/` files to the FR-022 unmigrated-module guard's
+  exclusion list. **The guard caught Phase 5 a commit late**, because it diffs two commits and those
+  files were invisible to it while untracked. Its per-file `approve()` assertions always passed —
+  the fuel review uses the spine, which is what FR-022 wants — so this is an acknowledgement, not a
+  relaxation.
+
+**Still not run:** T052's RLS probe, unchanged from Phase 4 — every local database role is a
+superuser and PostgreSQL exempts those from policies unconditionally, so the test would pass without
+proving anything.
 
 ---
 

@@ -95,6 +95,25 @@ export class PunchController {
     return this.punch.listMyExceptions(callerFrom(user, request), user);
   }
 
+  @Get('refusals')
+  @ApiOperation({
+    summary: "The caller's own refused punches",
+    description:
+      'The companion to the 422 a refused punch returns (020 FR-013b). The attempt itself carries ' +
+      'its reason in the response, but that response is gone with the screen, and under FR-013d ' +
+      'the day reads as a day with no punch — so this is what answers "what happened last ' +
+      'Tuesday" without an administrator in the loop.\n\n' +
+      'There is deliberately nothing here to resolve, appeal or dismiss. A refused punch is not a ' +
+      'work item, because the punch does not exist; the route back is a manual attendance ' +
+      'correction, which is reviewed by somebody.',
+  })
+  async refusals(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+  ) {
+    return this.punch.listMyRefusals(callerFrom(user, request));
+  }
+
   @Get('history')
   @ApiOperation({ summary: "The caller's own attendance for one month" })
   @ApiResponse({

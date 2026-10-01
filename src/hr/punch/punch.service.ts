@@ -45,6 +45,7 @@ import { SubmitPunchDto } from './dto/punch.dto';
 import { LocationAssignmentsService } from '../location-assignments/location-assignments.service';
 import { checkGeofence } from './geofence.util';
 import { PunchRefusalsService } from './punch-refusals.service';
+import { punchRefusedException } from './punch-refusal-response';
 import { isPayrollLocked } from './payroll-lock';
 
 const PUNCH_NAMESPACE = 'punch';
@@ -259,7 +260,13 @@ export class PunchService {
       receivedAt.getTime() - capturedAt.getTime() >
       this.workspace.offlineQueue.clockSkewToleranceMinutes * 60_000;
 
-    // --- Verification. Neither check can reject the punch; both can flag it. ---
+    // --- Verification. Either check can refuse the punch outright, where the company has
+    //     switched the block on; otherwise either can flag it (020 FR-013).
+    //
+    // This comment used to read "Neither check can reject the punch; both can flag it", which was
+    // true for a year and is the first thing a reader of this method learns. It is rewritten in the
+    // same commit as the refusal, because a comment that survives the change it describes is worse
+    // than no comment: it is believed. ---
     const photoBytes = decodePhotoPayload(dto.photo, 'Punch photo');
     const compressed = await this.images.compressPunchPhoto(photoBytes);
 
@@ -349,27 +356,45 @@ export class PunchService {
       faceMatchResult === FaceMatchResult.exception ||
       geofenceResult === GeofenceResult.exception;
 
-    // 020 FR-013c, Phase 2. **The punch is still accepted** — this records what *would* have been
-    // refused once FR-013's hard block is switched on, so the client can see how often that block
-    // would fire before it does. They accepted its cost without that number; producing it while the
-    // decision is still reversible is the obligation this phase discharges (T016).
+    // The reason is computed from the checks rather than inferred later from the distance, because
+    // "could not be located" and "located outside the fence" are different facts that a distance
+    // alone cannot distinguish.
     //
-    // Awaited but non-throwing: an accepted punch must not become a 500 because a log write failed.
-    if (isException) {
+    // **Location before face** when both fail (checklists/refusal.md CHK032). One reason has to be
+    // chosen, and location is the one the worker can usually act on from where they are standing;
+    // a retaken photo at the wrong site fails again on the fence. The refusal row carries only this
+    // reason, so the ordering is a reporting decision rather than a cosmetic one — recorded here
+    // because nothing else in the code states it.
+    const refusalReason = !isException
+      ? null
+      : unlocatable
+      ? PunchRefusalReason.unlocatable
+      : geofenceResult === GeofenceResult.exception
+      ? PunchRefusalReason.outside_geofence
+      : candidate === null
+      ? // FR-012c. An undetectable face is refused on the same terms as a mismatch, and logged
+        // apart from it. Before the block this was deliberately an exception rather than a 400 —
+        // the worker is presumably standing there regardless — and under the block it becomes a
+        // refusal for the same reason: it is a failed check, not a malformed request.
+        PunchRefusalReason.no_face_detected
+      : PunchRefusalReason.face_mismatch;
+
+    // 020 FR-013c. Recorded whether or not the block is on, and in the same shape either way.
+    //
+    // While `punchBlockEnforced` is false the punch is **still accepted** and this is the measured
+    // rate at which the block would fire — the figure the client is owed before it does. Once it is
+    // true this is the only trace the attempt happened at all, because FR-013d writes nothing to
+    // attendance. One table serving both is what makes a fortnight of would-be refusals directly
+    // comparable with a fortnight of real ones.
+    //
+    // Awaited but non-throwing: neither an accepted punch nor a considered refusal may become a 500
+    // because a log write failed.
+    if (refusalReason) {
       await this.punchRefusals.record(caller.rls, {
         companyId: employee.companyId,
         employeeId: employee.id,
         type: dto.type,
-        // The reason is computed from the checks rather than inferred later from the distance,
-        // because "could not be located" and "located outside the fence" are different facts that a
-        // distance alone cannot distinguish.
-        reason: unlocatable
-          ? PunchRefusalReason.unlocatable
-          : geofenceResult === GeofenceResult.exception
-          ? PunchRefusalReason.outside_geofence
-          : candidate === null
-          ? PunchRefusalReason.no_face_detected
-          : PunchRefusalReason.face_mismatch,
+        reason: refusalReason,
         latitude: dto.latitude,
         longitude: dto.longitude,
         distanceMeters,
@@ -377,6 +402,34 @@ export class PunchService {
         faceMatchDistance,
         capturedAt,
       });
+    }
+
+    /**
+     * 020 FR-013. The inversion, where the company has switched it on.
+     *
+     * **Thrown here and not a line later.** Everything that follows this point writes something:
+     * the photo goes to object storage, then the day is locked `FOR UPDATE`, then the row is
+     * inserted. A refusal thrown after the `put` leaves a blob in storage whose only referent was
+     * the row that was never created — an orphan nothing will ever collect, because nothing knows
+     * it exists. Ordering is the whole requirement; the condition is the easy part.
+     *
+     * Read per company and per request, so the client's answer is a settings change rather than a
+     * release, and reversible the same way. Read **after** the refusal has been logged, so turning
+     * the block on does not change what is measured — only who is turned away.
+     *
+     * A refused punch-out can leave the day holding a punch-in nothing will close
+     * (checklists/refusal.md CHK031). That is accepted rather than worked around: FR-008a already
+     * treats an unclosed punch-in as non-blocking, and feature 016's manual correction chain is the
+     * route back. Closing it automatically here would mean writing to attendance on the refusal
+     * path, which FR-013d forbids outright.
+     */
+    if (refusalReason) {
+      const enforced = await this.companies.isPunchBlockEnforced(
+        employee.companyId,
+      );
+      if (enforced) {
+        throw punchRefusedException(refusalReason);
+      }
     }
 
     const photoRef = await this.storage.put(
@@ -600,6 +653,21 @@ export class PunchService {
    * Scoped to the caller's own employee record, never to a parameter: an employee id in
    * the query string is the obvious way to make this read anybody's attendance.
    */
+  /**
+   * The caller's own refused punches (020 FR-013b, T026).
+   *
+   * Deliberately no employee-id parameter, on the same terms as `listMyExceptions` — the route is
+   * self-service, so the only employee it can mean is the caller's own, resolved from their user id
+   * rather than accepted from the request.
+   */
+  async listMyRefusals(caller: Caller) {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    return this.punchRefusals.forEmployee(caller.rls, employee.id);
+  }
+
   async listMyExceptions(
     caller: Caller,
     viewer: AuthenticatedUser,
