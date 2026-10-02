@@ -24,6 +24,41 @@ Multi-company is already real in the data — every record is company-scoped, RL
 `CROSS_COMPANY_ACCESS` exists for users who span both — but **the web application has no way to
 switch between companies**, so the client's two companies cannot both be worked in.
 
+## Clarifications
+
+### Session 2026-10-02
+
+The two cash questions, open since this specification was written and the last thing holding item 16.
+
+- Q: With cash hidden, may cash still be entered? → A: **Hide the figures, and block entry — but as
+  two controls, not one.** The client's answer to the first question was "hide and block"; the answer
+  to the follow-up was that blocking cannot ride on the company-wide setting. So display stays
+  governed by `hideCashTransactions`, and entry is governed by a new `CASH_ENTRY` permission.
+- Q: Why not one setting doing both? → A: **Because the setting is company-wide.** A setting that
+  blocked entry would stop every cashier in the company from paying labour while it was on. In
+  practice that makes it a switch somebody flips before a visitor arrives and flips back after, which
+  protects nothing. Two controls let a cashier keep working while an office viewer sees neither the
+  figure nor the controls.
+- Q: Which screens count as cash? → A: **Vendor and supplier payments, and labour cash payouts** —
+  and not salaries, payslips or employee advances.
+
+  **This answer cannot be implemented as given, and the fault is in how it was asked.** Both cash
+  markers in *this* specification were already resolved during the web half's planning, against
+  shipped code, and this specification was never updated — so the question was put to the client as
+  open when it was not. The shipped product holds **no screen list at all**: a figure is hidden when
+  its own row's `paymentMode` names a cash mode, plus `denominationBreakup`, which is hidden
+  unconditionally. A screen-level rule is a different mechanism, not a longer list.
+
+  Consequences of the mismatch, each needing a decision rather than an assumption: a salary **paid in
+  cash** is hidden today, which the answer says it should not be; a vendor payment **paid by bank
+  transfer** is not hidden, which the answer says it should be; and the denomination breakup is hidden
+  from everyone including the cashier who counts notes against it.
+
+  **Resolved in a second round the same day.** The per-row rule stays and acquires no screen list
+  (FR-017c); the cash-paid salary divergence is accepted knowingly; and the denomination breakup
+  becomes visible to `CASH_ENTRY` holders only (FR-017d). So of the three cash answers, exactly one
+  changes hiding — the breakup — and the rest of the work is the entry permission.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - A site operator can enter readings and nothing else (Priority: P1)
@@ -155,6 +190,26 @@ and remains usable; turn it off and confirm they return.
   change with actor and time.
 - **FR-017**: System MUST NOT delete or alter cash data when hiding is on; hiding is a display
   control, not a data operation.
+- **FR-017a**: System MUST treat hiding and entry as **two separate controls**. `hideCashTransactions`
+  stays company-wide and governs display only. Whether a caller may still *enter* cash is governed by
+  a permission, not by the setting. One control cannot do both: the setting is company-wide, so a
+  setting that blocked entry would stop every site cashier in the company from paying labour for as
+  long as it was on — which makes it a switch nobody can leave on, and therefore no protection.
+- **FR-017b**: System MUST gate cash entry on a `CASH_ENTRY` permission, so a site cashier keeps
+  working while an office viewer sees neither the figures nor the controls that produce them.
+- **FR-017c**: System MUST continue to decide hiding **per row, from that row's own payment mode**, and
+  MUST NOT acquire a screen list. Confirmed on 2026-10-02 after the mismatch above was put to the
+  client: a figure is hidden where the money actually moved in cash, wherever that figure appears. A
+  screen list was offered and declined — it is a second rule over the same setting, and the half that
+  goes stale when somebody adds a screen.
+
+  Consequence the client accepted explicitly: **a salary genuinely paid in cash stays hidden**, and a
+  vendor payment made by bank transfer stays visible. Their screen answer was "hide vendor and labour
+  payouts, not salaries", and the per-row rule delivers that in every case except a cash-paid salary.
+- **FR-017d**: System MUST show the labour payment sheet's note-denomination breakup to a caller
+  holding `CASH_ENTRY`, and MUST hide it from everyone else. It is hidden from everyone today, the
+  cashier counting notes against it included — which conceals nothing from anybody it was meant to
+  conceal from while making the screen's purpose unreachable. This is the one change hiding needs.
 
 ### Non-Functional Requirements
 
@@ -204,13 +259,13 @@ and remains usable; turn it off and confirm they return.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: with cash hiding on, may cash still be entered?]** The note says hide *"all
-  cash transaction and entry"*, which may mean hide the entries or prevent entry. These are different
-  features: one is a display control, the other stops site cash disbursement working. FR-014 assumes
-  display only until the client says otherwise.
-- **[NEEDS CLARIFICATION: which screens count as "cash"?]** Labour payment sheets are cash by nature —
-  hiding their amounts may leave a screen that cannot be used. The client should name what must
-  disappear and what may remain.
-- **[NEEDS CLARIFICATION: how should existing roles map to read/write?]** The safe default is that
-  every current module permission becomes read+write, preserving today's behaviour exactly. That is
-  assumed in FR-006, but it means no role gets tighter until somebody deliberately tightens it.
+*The cash questions were answered on 2026-10-02 — see Clarifications. They are now FR-017a to
+FR-017d.*
+
+- **[ASSUMED, NOT ASKED: how should existing roles map to read/write?]** Every current module
+  permission became read+write, preserving today's behaviour exactly (FR-006), and that is what
+  shipped. It was deliberately **not** put to the client on 2026-10-02: the alternative — tightening
+  roles by default — would remove access somebody has today without anyone deciding which access, and
+  there is no answer to that question that is safe to guess. The consequence of the default is stated
+  plainly instead: **no role gets tighter until somebody deliberately tightens it**, and the role
+  editor that makes tightening possible is the remaining work.

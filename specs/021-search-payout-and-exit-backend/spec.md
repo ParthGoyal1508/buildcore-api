@@ -28,6 +28,27 @@ to quickly find projects."*
 - Q: Does a name match rank differently from a code match? → A: **An exact code match ranks first.** A code is unambiguous and someone who typed one knows exactly what they want; a name match is a guess the system is helping with. Beyond that single rule, ordering is not specified here.
 - Q: Does searching by name widen what a user can see? → A: **No.** FR-002's company and permission scoping is applied to results regardless of which field matched. A name is not a weaker key than a code for authorisation purposes — it is only a second way to arrive at the same record, and a record the caller may not view stays invisible either way.
 
+### Session 2026-10-02
+
+The last items on this feature's open list.
+
+- Q: Who may waive an outstanding item on an exit clearance? → A: **HR proposes, the Director
+  countersigns.** The waiver becomes a reviewable item on the existing approval spine, matching the
+  authority that already governs final settlement. This supersedes the shipped behaviour, which
+  required only write access on Employees — a placeholder, and wider than a write-off of company money
+  deserves.
+- Q: Does an exit therefore wait on an approval whenever something is outstanding? → A: **Yes, and that
+  cost was accepted.** The alternatives were a single named Director, which stalls exits whenever they
+  are away and invites account sharing, and a dedicated permission, which is more machinery than the
+  spine already standing.
+- Q: Is the value of an unreturned asset recovered from the final payable? → A: **No, by decision
+  rather than by default.** Original cost, depreciated book value and replacement cost were each
+  offered and declined. The waiver records the write-off with a name and a reason; no rupee figure is
+  involved.
+- Q: And the bank transaction sheet? → A: **Still open; the client is supplying a real file.** A
+  configurable column mapping was offered as a way to begin without one and declined in favour of
+  waiting. Nothing is built against a guessed layout.
+
 ### Session 2026-09-29
 
 Raised against the client's re-stated requirement list, item 10, whose second bullet — *"Support for
@@ -329,17 +350,29 @@ settlement is blocked until both are resolved or waived.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: should salary slips be emailed automatically, or on an explicit action?]**
-  The client asks *"Please check this"*, which reads as an open question rather than a decision.
-  Automatic delivery on payment is assumed; an explicit send is safer if runs are sometimes corrected
-  after being marked paid.
-- **[NEEDS CLARIFICATION: which bank, and what transaction sheet format?]** FR-008 and FR-009 cannot
-  be built without a real sample file.
-- **[NEEDS CLARIFICATION: may an exit complete with a waived recovery, and who may waive?]** A waiver
-  writes off company money. The authority for it should sit with the same person who holds final
-  approval elsewhere, but the client should confirm.
-- **[NEEDS CLARIFICATION: how is an unreturned asset valued, if its cost is ever to be recovered?]**
-  FR-018b deliberately recovers nothing, because original cost, depreciated book value and
-  replacement cost give three different figures and the client has chosen none. Until that is
-  answered, an unreturned asset is written off through a waiver with a name against it. This does not
-  block anything in this feature.
+- **RESOLVED 2026-10-01: an explicit action, not automatic delivery.** Decided while planning the web
+  half and recorded there; this entry corrects the drift, because the answer sat in one repository's
+  specification while the other still called it open. A run can be corrected after being marked paid,
+  and an automatic send puts the wrong figure in somebody's inbox where it cannot be recalled.
+- **STILL OPEN, and the client is supplying it (2026-10-02).** FR-008 and FR-009 need a real sample
+  sheet; the client has undertaken to provide both this and a real BOQ as files. A configurable column
+  mapping was offered as a way to start without them and **declined in favour of waiting** — so
+  nothing here is built against a guessed layout. That is the safer order: a sheet the bank rejects is
+  discovered on payment day.
+
+  The design intent is recorded so the files become test cases rather than a specification: column
+  order, headers and date format belong in settings, not in code, so a bank changing its layout is a
+  configuration change.
+- **RESOLVED 2026-10-02: HR proposes, the Director countersigns.** A waiver becomes a reviewable item
+  on the existing approval spine rather than a unilateral act. The authority therefore matches final
+  settlement itself, which is already director-final.
+
+  This **supersedes what shipped**: the waiver currently requires write access on Employees, which was
+  a placeholder I chose, and it is wider than a write-off of company money deserves. The change is
+  wiring an existing mechanism, not new machinery — but it does mean an exit with something
+  outstanding now waits on an approval, which is the cost the client accepted.
+- **RESOLVED 2026-10-02: nothing is recovered, and that is now a decision rather than a default.**
+  FR-018b recovers no money for an unreturned asset; the waiver records the write-off with a name and
+  a reason against it. Original cost, depreciated book value and replacement cost were each offered
+  and each declined. Worth stating positively: this is no longer "pending a valuation rule" — the
+  client was asked and chose not to recover.

@@ -58,6 +58,23 @@ The first half is specified in feature 020; it changes what this feature's User 
 - Q: What does "reflect in the attendance of the affected employee" mean — a notification, or something on the record? → A: **On the record, in the employee's own view.** The employee opening their own attendance sees that the day was modified, by whom, when, and from what to what. It is not a notification that can be missed or cleared; it is a property of the day, permanent and visible for as long as the record is.
 - Q: Does an employee see the reason a modification was made? → A: **Yes, where one was stated.** Withholding the reason from the person whose pay it changes would leave them able to see that something happened to their attendance and unable to find out why, which is worse than not showing it at all.
 
+### Session 2026-10-02
+
+The two items left open on 2026-09-29, both answered.
+
+- Q: Are the four director-final actions confirmed, widened, or replaced? → A: **The four are
+  confirmed.** Payment release, payroll run approval, money-committing letters, final settlement on
+  exit. The broad reading was put with the argument against it — a Director gate on every write ends
+  in a shared Director account, and "critical" cannot be tested because nothing defines it — and
+  declined. The set stays configurable, so additions are settings, not a release.
+- Q: Is Principle VI amended for item 22's full mobile portal? → A: **No. Desktop-first stands, and two
+  screens join the mobile-critical list** — the approvals queue, and site attendance review and
+  corrections. A MINOR amendment adding named screens, not a MAJOR one widening the rule.
+- Q: Why those two and not others? → A: **Each has somebody who cannot be at a desk.** A Director
+  approving a payment release, and a site incharge fixing a day the punch refusal turned away. The
+  other candidates offered — plant logbook and fuel entry, material indents and inventory issue — were
+  not chosen, so they stay desktop with the 320px breakage floor.
+
 ### Session 2026-09-29
 
 Raised against the client's re-stated requirement list, item 7: *"Every critical action across the
@@ -498,24 +515,34 @@ All three markers raised when this specification was written were answered on 20
 recorded under Clarifications above. The client's re-stated requirement list re-opened three,
 reviewed on 2026-09-29:
 
-- **[NEEDS CLARIFICATION: which action types are director-final?]** *(item 7)* FR-018 names four as
-  this product's proposal. The client has twice asked for the broad reading — "every final work"
-  (Note 8) and "every critical action" (item 7) — and has not been shown a list to accept or amend.
-  FR-018c exists so that list can be produced and put in front of them. **Not blocking**: the four
-  named are buildable now, and FR-018a makes changing the set a configuration change rather than a
-  rewrite.
-- **[NEEDS CLARIFICATION: which of the nine roles are "Site Incharge" and "HR Office"?]** *(item 6)*
-  Neither exists among the roles this system has. FR-016 — only HR may edit attendance during a
-  payroll review — cannot be built without the answer, because naming the wrong role either locks out
-  the people doing the work or grants the right to people who should not have it. **Blocking for
-  FR-016 and for US2's chain**; nothing else in this feature waits on it.
-- **[NEEDS CLARIFICATION: is buildcore-web's Principle VI to be amended?]** *(item 22)* The client
-  asks that the whole admin portal work on Android and iOS. buildcore-web's Principle VI closes the
-  mobile-critical list to punch, attendance viewing and leave, and is NON-NEGOTIABLE — no feature
-  specification can amend it, and the v2.1.0 amendment already moved every other screen's breakage
-  floor to 320px, which may or may not be what the client means by "fully functional". Reviewed on
-  2026-09-29 and **deliberately left for a separate decision**: widening the principle is a MAJOR
-  version bump affecting all six web features and every one shipped before them, which is not a
+- **RESOLVED 2026-10-02: the four named actions are confirmed.** Payment release, payroll run
+  approval, money-committing letters (work order, LOI, purchase order), and final settlement on exit.
+  The broad reading — "every critical action" — was put to the client with the argument against it and
+  declined. FR-018a keeps the set configurable, so additions are a settings change rather than a
+  release.
+- **RESOLVED by the 2026-09-13 session, and restated here because it was still listed as open.**
+  Neither role is named in code: a chain level references a **configurable role slot**, and each
+  company maps a slot to whichever of its own roles fills it. So FR-016 is buildable and built — what
+  it reads is "the role mapped to the HR slot", not a literal.
+
+  What remains is **one settings entry by the client, not development**: until the slots are mapped,
+  the chain has no role to route to. This is the only item on the list whose remaining work is data
+  entry, and it is worth distinguishing from the ones that need code.
+- **RESOLVED 2026-10-02: Principle VI stands, and the mobile-critical list grows by two.** The client
+  chose to keep desktop-first rather than amend the principle, and named the additional screens that
+  must work properly on a phone: **the approvals queue**, and **site attendance review and
+  corrections**. Both are additions to the mobile-critical list — a MINOR amendment to Principle VI —
+  not a widening of the rule.
+
+  The approvals queue is the one that earns its place twice over: items 7 and 21 put a Director in the
+  path of payment releases and payroll runs, and a Director who can only approve at a desk is the
+  reason approvals sit for days. Attendance review pairs with the punch refusal — the person who has
+  to fix a wrongly refused day is standing on a site.
+
+  *Superseded context, kept because it explains why this took three reviews:* the question was whether
+  to widen Principle VI wholesale. Reviewed on 2026-09-29 and left for a separate decision, because
+  widening the principle is a MAJOR version bump affecting all six web features and every one shipped
+  before them, which is not a
   side effect a bug batch should have. NFR-002 here states the 320px floor and nothing stronger.
 
 Two items are deliberately deferred to planning rather than left as open questions, because they
