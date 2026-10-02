@@ -11,6 +11,8 @@ import { ProjectLockGuard } from './guards/project-lock.guard';
 import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSearchSource } from './portfolio/project-search.source';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
+import { ClientBillsController } from './billing/client-bills.controller';
+import { ClientBillsService } from './billing/client-bills.service';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
@@ -41,6 +43,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
+    // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
+    // "reconciliation against BOQ amounts and quantities" answerable at all.
+    ClientBillsController,
     // 017 FR-008a, FR-009b. Registered before ProjectsController for the route-order reason
     // the note below gives: `projects/document-uploads` is a literal segment that
     // `GET /projects/:id` would otherwise swallow.
@@ -58,6 +63,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     SitesService,
     ProjectsService,
     ProjectDocumentsService,
+    ClientBillsService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other

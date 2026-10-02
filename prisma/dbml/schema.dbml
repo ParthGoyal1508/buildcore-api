@@ -796,6 +796,21 @@ caller omits it, so two concurrent creates can never collide.']
   location String
   contractValue Decimal [not null, note: 'Decimal, not Float: this is money, and it is the denominator of every margin
 percentage the P&L reports.']
+  quotedPercentage Decimal [not null, default: 0, note: 'The **quoted percentage** above or below the BOQ\'s own total (018 FR-002a, added 2026-10-02).
+
+Read off `docs/BOQ_794578.xls`, which the client supplied and which is a government e-tender
+**"Percentage BoQ"**: the bidder does not quote per line. They quote one percentage against the
+schedule of rates, and the file\'s own footer shows it — `Total in Figures` 2,99,61,506.78
+becoming `Quoted Rate in Figures` 3,06,98,559.85 at `Excess (+) 0.0246`.
+
+**A bill priced from the line rate alone under-bills by exactly this percentage, on every line.**
+On that file that is ₹7.37 lakh on a ₹3 crore project — invisible per line and material in total,
+which is the worst shape a billing error can take. Stored on the project because it applies to
+the whole award, not per line.
+
+A fraction, not a percentage: `0.0246` is +2.46%, matching the file. Signed, because the same
+column carries a `Less (-)` quote. Default 0 means "at par", which is both the common case and
+the safe one — it prices from the schedule exactly.']
   startDate DateTime [not null]
   expectedEndDate DateTime
   status ProjectStatus [not null, default: 'planning']
@@ -818,6 +833,7 @@ name. Bare id — see the schema-level note above.']
   dailyWorkReports DailyWorkReport [not null]
   revenues Revenue [not null]
   raBills RABill [not null]
+  clientBills ClientBill [not null]
   workOrders WorkOrder [not null]
   budgets ProjectBudget [not null]
   documents ProjectDocument [not null]
@@ -865,7 +881,21 @@ Table BOQTaskItem {
   perDayQty Decimal [not null]
   doneQty Decimal [not null, default: 0]
   isEstimate Boolean [not null, default: false]
+  rate Decimal [not null, default: 0, note: 'The line\'s rate, which FR-002 prices a bill from (018 research §1) — `bugs.md` item 11.
+
+**Default 0, and that is not laziness.** The table is populated, so a required column cannot be
+added to it — and of the two ways to be wrong, a zero rate is *visibly* wrong on a bill while a
+guessed one is invisibly wrong. Billing refuses a line whose rate is still 0 with
+`BOQ_RATE_MISSING` rather than billing it at nothing.']
+  isVariation Boolean [not null, default: false, note: 'Whether this line is a variation rather than original scope (FR-015a).
+
+Carried on the line rather than inferred from a date, because a variation agreed in week two and
+a scope item added by a late correction look identical by timestamp and are different facts to
+a client.']
+  variationRef String [note: 'The variation order this line came in under, where there is one.']
   dwrTasks DWRTask [not null]
+  clientBillLines ClientBillLine [not null]
+  awardLines WorkOrderBOQItem [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -969,6 +999,20 @@ Table RABill {
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
   rejectionRemark String
+  workOrderId String [note: 'The work order this bill measures against. Nullable for bills raised before 018 — their `amount`
+is the only figure they ever had, and inventing an award to attach them to would be a fiction.']
+  workOrder WorkOrder
+  grossAmount Decimal [not null, default: 0, note: '**Gross, the three deductions, and net — each visible in its own right** (FR-008).
+
+Not one net figure. A subcontractor disputing a payment asks which deduction accounts for the
+difference, and a single `netPayable` cannot answer. Equally important for the P&L: retention is
+the company\'s money withheld and an advance recovery is money already paid, so **neither is a
+project cost** — a summary that treated net as spend would understate the project.']
+  retentionAmount Decimal [not null, default: 0]
+  advanceRecovery Decimal [not null, default: 0]
+  otherDeductions Decimal [not null, default: 0]
+  netPayable Decimal [not null, default: 0]
+  lines RABillLine [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -990,10 +1034,138 @@ schema-level note above.']
   labourAmount Decimal [not null, default: 0]
   materialAmount Decimal [not null, default: 0]
   status WorkOrderStatus [not null, default: 'draft']
+  retentionPercent Decimal [not null, default: 0, note: 'Retention withheld per RA bill, as a fraction. FR-008\'s first deduction.']
+  awardLines WorkOrderBOQItem [not null]
+  raBills RABill [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
   Note: 'Work subcontracted on a project.'
+}
+
+Table ClientBill {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  billNumber String [not null]
+  description String
+  billingDate DateTime [not null]
+  quotedPercentage Decimal [not null, default: 0, note: 'The **quoted percentage frozen at composition**, alongside each line\'s frozen rate.
+
+The project\'s own percentage can be corrected; a submitted bill must keep the one it was priced
+at, for the same reason its lines keep theirs. A bill whose total moved after it went to the
+client is a bill nobody can reconcile against the payment that came back.']
+  grossAmount Decimal [not null, default: 0, note: 'Gross of the lines, after the quoted percentage. Stored because a submitted bill is a document.']
+  retentionAmount Decimal [not null, default: 0, note: 'Retention withheld by the client. **Not a project cost** — it is the client\'s money held back.']
+  netAmount Decimal [not null, default: 0, note: 'Gross less retention and any other deduction. What the client is asked to pay.']
+  certifiedAmount Decimal [note: 'What the client **certified**, which can be less than what was billed (FR-005).
+
+Null until certification. Kept **alongside** the billed figures and never instead of them: the
+variance between the two is the thing a project manager chases, and overwriting the billed
+amount with the certified one erases the fact that there was a shortfall.']
+  certifiedAt DateTime
+  status ClientBillStatus [not null, default: 'draft']
+  submittedAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  lines ClientBillLine [not null]
+
+  indexes {
+    (projectId, billNumber) [unique]
+  }
+
+  Note: 'A bill raised **to the client**, measured against the project\'s BOQ (018 US1) — `bugs.md` item 11.
+
+## Why its lines exist at all
+
+`RABill` already held a single `amount`. Note 12\'s complaint is precisely that: a bill that is one
+figure cannot be reconciled against a BOQ, so nobody could say what had been billed of which item,
+and "support reconciliation against BOQ work order amounts and quantities" was unanswerable.
+
+## Cumulative quantity is never stored here
+
+How much of a BOQ line has been billed to date is an **aggregate over the lines** (research §3).
+A stored counter is a second copy of a derivable fact, and the two disagree the first time a bill
+is deleted, corrected, or raised concurrently — at which point the over-scope check is wrong in
+whichever direction nobody notices.'
+}
+
+Table ClientBillLine {
+  id String [pk]
+  companyId String [not null]
+  clientBillId String [not null]
+  clientBill ClientBill [not null]
+  boqTaskItemId String [not null, note: 'The BOQ line this measures. A bare id: `BOQTaskItem` is in this schema, but the relation is kept
+so a deleted BOQ line cannot orphan a billed figure.']
+  boqTaskItem BOQTaskItem [not null]
+  quantity Decimal [not null, note: 'Quantity billed **on this bill**. Cumulative is an aggregate — see `ClientBill`.']
+  rate Decimal [not null, note: '**The BOQ rate frozen onto the line at composition** (FR-002).
+
+This is the assertion the whole feature turns on: revise the BOQ rate afterwards and a submitted
+bill does not move. A bill is a document that was sent; a rate table is a current opinion, and
+reading the second to render the first makes every historical bill a lie that changes shape.']
+  amount Decimal [not null, note: '`quantity × rate × (1 + quotedPercentage)`. Stored for the same reason the rate is frozen.']
+  exceedsScope Boolean [not null, default: false, note: 'Whether this line takes the BOQ item past its scope quantity (FR-003).
+
+**A flag, not a refusal, at composition.** Over-measurement happens on real sites and is often
+correct; refusing it at entry means the measurement never gets recorded anywhere. The refusal is
+at *submit*, and only without a reason.']
+  overScopeReason String [note: 'Why the over-measurement is justified. Required to submit a bill carrying one.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (clientBillId, boqTaskItemId) [unique]
+  }
+
+  Note: 'One BOQ line as billed on one client bill.'
+}
+
+Table WorkOrderBOQItem {
+  id String [pk]
+  companyId String [not null]
+  workOrderId String [not null]
+  workOrder WorkOrder [not null]
+  boqTaskItemId String [note: 'The client-side BOQ line this work corresponds to, where it corresponds to one. Nullable: a
+subcontract can cover work the client\'s BOQ itemises differently, and forcing a match would make
+somebody invent one.']
+  boqTaskItem BOQTaskItem
+  description String [not null]
+  unit String [not null]
+  awardedQty Decimal [not null, note: 'Awarded quantity. What `remaining` on a measured bill is counted down from.']
+  rate Decimal [not null, note: 'The subcontractor\'s rate.']
+  billLines RABillLine [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A line of the **award** to a subcontractor — their rate, not the client\'s (018 US2).
+
+Separate from `BOQTaskItem` because the two are different numbers for the same work: the client\'s
+BOQ rate is revenue and the subcontractor\'s awarded rate is cost, and the margin between them is
+the thing item 11\'s P&L exists to show. Holding one column and calling it "the rate" would make
+that margin unrepresentable.'
+}
+
+Table RABillLine {
+  id String [pk]
+  companyId String [not null]
+  raBillId String [not null]
+  raBill RABill [not null]
+  workOrderBoqItemId String [not null]
+  workOrderBoqItem WorkOrderBOQItem [not null]
+  quantity Decimal [not null, note: 'Measured **this period**. To-date and remaining are aggregates over these rows, for the reason
+`ClientBill` gives: a stored counter is a second copy that disagrees after the first correction.']
+  rate Decimal [not null, note: 'The awarded rate, frozen onto the line. Same reasoning as `ClientBillLine.rate`.']
+  amount Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (raBillId, workOrderBoqItemId) [unique]
+  }
+
+  Note: 'One awarded line as measured on one RA bill (FR-007).'
 }
 
 Table ProjectBudget {
@@ -4371,6 +4543,12 @@ Enum ProjectBudgetCategory {
   overheads
 }
 
+Enum ClientBillStatus {
+  draft
+  submitted
+  certified
+}
+
 Enum FaceEnrolmentStatus {
   not_enrolled
   enrolled
@@ -4998,7 +5176,23 @@ Ref: Revenue.projectId > Project.id [delete: Cascade]
 
 Ref: RABill.projectId > Project.id [delete: Cascade]
 
+Ref: RABill.workOrderId > WorkOrder.id [delete: Set Null]
+
 Ref: WorkOrder.projectId > Project.id [delete: Cascade]
+
+Ref: ClientBill.projectId > Project.id [delete: Cascade]
+
+Ref: ClientBillLine.clientBillId > ClientBill.id [delete: Cascade]
+
+Ref: ClientBillLine.boqTaskItemId > BOQTaskItem.id [delete: Restrict]
+
+Ref: WorkOrderBOQItem.workOrderId > WorkOrder.id [delete: Cascade]
+
+Ref: WorkOrderBOQItem.boqTaskItemId > BOQTaskItem.id [delete: Set Null]
+
+Ref: RABillLine.raBillId > RABill.id [delete: Cascade]
+
+Ref: RABillLine.workOrderBoqItemId > WorkOrderBOQItem.id [delete: Restrict]
 
 Ref: ProjectBudget.projectId > Project.id [delete: Cascade]
 
