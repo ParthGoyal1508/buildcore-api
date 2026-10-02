@@ -82,6 +82,47 @@ export interface ProjectCostSource {
 }
 
 /**
+ * A batched cost source built from a module's existing per-project method.
+ *
+ * **It loops, and that is a deliberate, local, reversible choice.** The interface is batched
+ * because a per-project *contract* makes the group view an N+1 that no registrant can fix (T025).
+ * A registrant that loops behind a batched contract is a different thing: the consumer asks once,
+ * and whichever module wants to replace the loop with one query can, without anybody else
+ * changing a line.
+ *
+ * Why not batch them all today: `getMachineryCostByProject` sums four components — verified hire
+ * bills, apportioned depreciation, spare parts net of reversals, verified service bills — and it is
+ * the shipped, tested figure the project detail page already serves. A second, batched
+ * implementation of it would be a second machinery cost in the product, and the first time the two
+ * disagreed nobody would know which was right. Looping the tested one is the honest trade until
+ * somebody needs the group view across hundreds of projects.
+ *
+ * Failures stay inside the per-project method, which logs and returns 0 by design — a project that
+ * cannot be computed must not take the other fifty-nine down with it.
+ */
+export function costSourceFromPerProject(
+  category: ProjectCostSource['category'],
+  perProject: (
+    projectId: string,
+    companyId: string,
+    range: { from: Date; to: Date },
+  ) => Promise<number>,
+): ProjectCostSource {
+  return {
+    category,
+    async costsByProject(projectIds, companyId, range) {
+      const entries = await Promise.all(
+        projectIds.map(
+          async (projectId) =>
+            [projectId, await perProject(projectId, companyId, range)] as const,
+        ),
+      );
+      return new Map(entries);
+    },
+  };
+}
+
+/**
  * Where the modules that feed a project page announce themselves.
  *
  * The obvious wiring — `ProjectsModule` importing `PlantModule` and

@@ -72,17 +72,60 @@ convenience would throw that away.
 
 - [x] T025 Extend `ProjectSourcesRegistry` with `ProjectCostSource`, **batched by projectIds**
       (contract Part 1) — a per-project signature makes the group view an N+1 no registrant can fix
-- [ ] T026 **NOT DONE** [P] Register labour's source from `LabourModule`
-- [ ] T027 **NOT DONE** [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
+- [x] T026 [P] Register labour's source from `LabourModule`
+- [x] T027 [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
       returned material (spec edge case)
-- [ ] T028 **NOT DONE** [P] Register plant's source from `PlantModule`
+- [x] T028 [P] Register plant's source from `PlantModule`
 - [x] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
 - [x] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
       008's precedent)
 - [ ] T031 **NOT DONE** Implement the drill-down: every figure lists its source records (FR-012)
-- [ ] T032 **NOT DONE** Reconcile the labour figure to approved payment sheets (FR-013)
+- [x] T032 Reconcile the labour figure to approved payment sheets (FR-013)
 - [x] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
 - [ ] T034 **NOT DONE** e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
+
+### T026-T028 and T032 implementation record, 2026-10-02
+
+**The P&L now has four of its five registry-backed categories, verified at runtime** — booting the
+app and reading `registeredCostCategories()` reports `fuel, labour, machinery, materials`.
+`overheads` remains unavailable and should: no module owns it, so there is nothing to register and
+the P&L is right to say it cannot ask.
+
+**Labour's source is the payment sheets, not the muster** (T026, T032). `LabourService`'s existing
+`getLabourCostByProject()` prices the approved *muster*, re-resolving each day's rate;
+`MonthlyWageRollupService.costsByProject()` reads what the sheets *recorded*. Both are defensible and
+they are **not the same figure** — the muster is what was worked, the sheet is what was approved for
+payment — and FR-013 says the P&L's monthly labour cost must reconcile to the approved payment
+sheets. So the sheets are what the P&L reads.
+
+T032 is therefore satisfied **by construction rather than by a reconciliation report**: the cost
+source and the roll-up view share `lineShare()`, the one function that decides where a straddling
+sheet's line belongs, and a test asserts the two agree to the paisa on the straddling fixture. Two
+implementations of an apportionment rule is two answers, and the second one written is always the one
+nobody checks.
+
+It is **gross, not net**: a deduction is money recovered from the worker, not money the project did
+not spend. Reading `netPayable` would understate labour by every advance instalment recovered in the
+period, which is the same mistake `bill-totals.ts` refuses to make with an RA bill's retention.
+
+**Plant and inventory loop behind the batched contract, deliberately** (T027, T028).
+`costSourceFromPerProject()` holds that decision in one documented place. The batched *contract* is
+what T025 was for — a per-project signature makes the group view an N+1 no registrant can fix — and a
+registrant that loops behind a batched contract is a different thing: the consumer asks once, and
+whichever module needs to replace the loop with one query can, without anybody else changing a line.
+What was not done is rewriting `getMachineryCostByProject`, which sums verified hire bills,
+apportioned depreciation, spare parts net of reversals and verified service bills, and is the shipped
+figure the project detail page already serves. A second batched implementation of it would be a
+second machinery cost in the product, and the first time the two disagreed nobody would know which
+was right.
+
+**Negative material is not clamped** (T027). A credit note for material sent back is a negative
+amount, `materialCostForSites` aggregates it as such, and there is no `Math.max(0, ...)` anywhere on
+the path. Asserted, because the clamp is the thing somebody adds later believing it to be defensive.
+
+**A project that cannot be computed is omitted, never zeroed.** Labour's source returns an empty map
+on failure rather than a map of zeros: a zero is indistinguishable from a month with no labour, and a
+project whose wages are invisible looks like a project running under budget.
 
 ## Phase 6: Variations ⚠️ RESTS ON AN ASSUMPTION
 

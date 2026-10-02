@@ -2,7 +2,10 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from 'nestjs-prisma';
 
 import { withRlsContext } from '../common/prisma/rls-context';
-import { ProjectSourcesRegistry } from '../projects/portfolio/project-sources.registry';
+import {
+  ProjectSourcesRegistry,
+  costSourceFromPerProject,
+} from '../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { MONTHS_PER_YEAR } from './constants/plant.constants';
 
@@ -47,6 +50,21 @@ export class PlantService implements OnModuleInit {
    */
   onModuleInit(): void {
     this.sources.registerMachinerySource(this);
+    // 018 T028. Two categories, because `plant` accounts for two: a machine's cost of ownership
+    // and the diesel it burns are budgeted separately and overrun separately, and a single figure
+    // would hide which. Registering them is what moves the P&L's machinery and fuel lines out of
+    // `unavailableCategories` — until a module registers, the P&L correctly refuses to call them
+    // zero.
+    this.sources.registerCostSource(
+      costSourceFromPerProject('machinery', (projectId, companyId, range) =>
+        this.getMachineryCostByProject(projectId, companyId, range),
+      ),
+    );
+    this.sources.registerCostSource(
+      costSourceFromPerProject('fuel', (projectId, companyId, range) =>
+        this.getFuelCostByProject(projectId, companyId, range),
+      ),
+    );
   }
 
   /** True once this module can answer, so a P&L can distinguish "no machinery cost"

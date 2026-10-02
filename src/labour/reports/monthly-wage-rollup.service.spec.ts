@@ -24,6 +24,7 @@ const day = (iso: string) => new Date(`${iso}T00:00:00.000Z`);
 
 interface SheetFixture {
   id: string;
+  projectId?: string;
   periodFrom: string;
   periodTo: string;
   engagementType?: 'direct' | 'contractor';
@@ -56,13 +57,16 @@ function build(opts: {
   workers?: { id: string; labourCode: string; fullName: string }[];
 }) {
   const musterCalls: unknown[] = [];
+  const sheetCalls: unknown[] = [];
 
   const tx = {
     $executeRaw: async () => 0,
     labourPaymentSheet: {
-      findMany: async () =>
-        opts.sheets.map((sheet) => ({
+      findMany: async (args: unknown) => {
+        sheetCalls.push(args);
+        return opts.sheets.map((sheet) => ({
           id: sheet.id,
+          projectId: sheet.projectId ?? 'p-1',
           periodFrom: day(sheet.periodFrom),
           periodTo: day(sheet.periodTo),
           engagementType: sheet.engagementType ?? 'direct',
@@ -80,7 +84,8 @@ function build(opts: {
             deductions: line.deductions ?? [],
             netPayable: dec(line.netPayable),
           })),
-        })),
+        }));
+      },
     },
     musterLine: {
       findMany: async (args: {
@@ -119,9 +124,20 @@ function build(opts: {
     }),
   };
 
+  const registered: unknown[] = [];
+  const registry = {
+    registerCostSource: (source: unknown) => registered.push(source),
+  };
+
   return {
-    service: new MonthlyWageRollupService(prisma as never, projects as never),
+    service: new MonthlyWageRollupService(
+      prisma as never,
+      projects as never,
+      registry as never,
+    ),
     musterCalls,
+    sheetCalls,
+    registered,
   };
 }
 
@@ -721,5 +737,144 @@ describe('deductions are read from the sheet, not inferred', () => {
     expect(sumDeductions(null)).toBe(0);
     expect(sumDeductions({})).toBe(0);
     expect(sumDeductions([{ label: 'no amount' }])).toBe(0);
+  });
+});
+
+describe('labour registers the P&L’s labour cost, and it reconciles (T026, T032, FR-013)', () => {
+  it('announces itself as the labour cost source on init', () => {
+    const { service, registered } = build({ sheets: [] });
+
+    service.onModuleInit();
+
+    expect(registered).toEqual([service]);
+    expect(service.category).toBe('labour');
+  });
+
+  it('returns the same figure the roll-up shows, to the paisa', async () => {
+    // This is FR-013: the P&L's monthly labour cost must reconcile to the approved payment sheets.
+    // It reconciles **by construction** — both paths share `lineShare()` — and this is the test
+    // that keeps it that way, because two implementations of an apportionment rule is two answers
+    // and the second one written is always the one nobody checks.
+    const { monthStart, monthEnd } = monthBounds(2026, 8);
+
+    const view = await rollup(build(straddlingFixture).service, 2026, 8);
+    const costs = await build(straddlingFixture).service.costsByProject(
+      ['p-1'],
+      'co-1',
+      { from: monthStart, to: monthEnd },
+    );
+
+    expect(costs.get('p-1')).toBe(view.grossTotal);
+    expect(costs.get('p-1')).toBe(3400);
+  });
+
+  it('reports gross, not net — a deduction is money recovered, not money unspent', async () => {
+    const { monthStart, monthEnd } = monthBounds(2026, 9);
+    const fixture = {
+      sheets: [
+        {
+          id: 'sheet-sep',
+          periodFrom: '2026-09-01',
+          periodTo: '2026-09-15',
+          grossTotal: 6000,
+          deductionTotal: 1000,
+          netTotal: 5000,
+          lines: [
+            {
+              workerId: 'w-1',
+              daysWorked: 10,
+              resolvedRate: 600,
+              grossWage: 6000,
+              deductions: [{ type: 'advance', amount: 1000, label: 'Advance' }],
+              netPayable: 5000,
+            },
+          ],
+        },
+      ] satisfies SheetFixture[],
+    };
+
+    const costs = await build(fixture).service.costsByProject(['p-1'], 'co-1', {
+      from: monthStart,
+      to: monthEnd,
+    });
+
+    expect(costs.get('p-1')).toBe(6000);
+  });
+
+  it('asks for every named project in one query, not one each', async () => {
+    const { monthStart, monthEnd } = monthBounds(2026, 9);
+    const { service, sheetCalls } = build({
+      sheets: [
+        {
+          id: 'sheet-a',
+          projectId: 'p-1',
+          periodFrom: '2026-09-01',
+          periodTo: '2026-09-30',
+          grossTotal: 6000,
+          deductionTotal: 0,
+          netTotal: 6000,
+          lines: [
+            {
+              workerId: 'w-1',
+              daysWorked: 10,
+              resolvedRate: 600,
+              grossWage: 6000,
+              netPayable: 6000,
+            },
+          ],
+        },
+        {
+          id: 'sheet-b',
+          projectId: 'p-2',
+          periodFrom: '2026-09-01',
+          periodTo: '2026-09-30',
+          grossTotal: 3000,
+          deductionTotal: 0,
+          netTotal: 3000,
+          lines: [
+            {
+              workerId: 'w-2',
+              daysWorked: 5,
+              resolvedRate: 600,
+              grossWage: 3000,
+              netPayable: 3000,
+            },
+          ],
+        },
+      ],
+    });
+
+    const costs = await service.costsByProject(['p-1', 'p-2', 'p-3'], 'co-1', {
+      from: monthStart,
+      to: monthEnd,
+    });
+
+    expect(sheetCalls).toHaveLength(1);
+    expect(costs.get('p-1')).toBe(6000);
+    expect(costs.get('p-2')).toBe(3000);
+    // Asked, and there is none — which is a different fact from a category nobody could ask about,
+    // and the P&L distinguishes them.
+    expect(costs.get('p-3')).toBe(0);
+  });
+
+  it('returns nothing at all when the query fails, so no project is reported as zero', async () => {
+    const service = new MonthlyWageRollupService(
+      {
+        $transaction: async () => {
+          throw new Error('labour is down');
+        },
+      } as never,
+      {} as never,
+      { registerCostSource: () => undefined } as never,
+    );
+
+    const costs = await service.costsByProject(['p-1'], 'co-1', {
+      from: new Date('2026-09-01T00:00:00.000Z'),
+      to: new Date('2026-09-30T23:59:59.999Z'),
+    });
+
+    // Empty, not `{p-1: 0}`. A zero here is indistinguishable from a month with no labour, and a
+    // project whose wages are invisible looks like a project running under budget.
+    expect(costs.size).toBe(0);
   });
 });

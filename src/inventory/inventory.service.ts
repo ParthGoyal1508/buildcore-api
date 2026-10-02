@@ -7,7 +7,10 @@ import {
   rlsContextFor,
   withRlsContext,
 } from '../common/prisma/rls-context';
-import { ProjectSourcesRegistry } from '../projects/portfolio/project-sources.registry';
+import {
+  ProjectSourcesRegistry,
+  costSourceFromPerProject,
+} from '../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { ItemsService } from '../settings/item-masters/items.service';
 import { companyScope } from '../settings/company-scope';
@@ -54,6 +57,16 @@ export class InventoryService implements OnModuleInit {
    * why registration rather than an import back. */
   onModuleInit(): void {
     this.sources.registerMaterialsSource(this);
+    // 018 T027. `materialCostForSites` aggregates `Purchase.amount` and is **not clamped at
+    // zero**, which is the whole of what the spec's returned-material edge case needs: a credit
+    // note for material sent back is a negative amount, and a `Math.max(0, ...)` anywhere on this
+    // path would report the return as if it had never happened while the stock ledger says
+    // otherwise. There is deliberately no clamp here either.
+    this.sources.registerCostSource(
+      costSourceFromPerProject('materials', (projectId, companyId, range) =>
+        this.getMaterialCostByProject(projectId, companyId, range),
+      ),
+    );
   }
 
   /** True once this module can answer, so a P&L can distinguish "no material cost"

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import {
   EngagementType,
   MusterStatus,
@@ -10,6 +10,10 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  ProjectSourcesRegistry,
+  type ProjectCostSource,
+} from '../../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { companyScope } from '../../settings/company-scope';
 import { dayFractionOf, roundMoney } from '../payment-sheets/wage-calc.util';
@@ -159,11 +163,132 @@ export interface ProjectMonthlyWageRollup {
  * through this exported service, the way FR-033's labour cost already travels.
  */
 @Injectable()
-export class MonthlyWageRollupService {
+export class MonthlyWageRollupService
+  implements OnModuleInit, ProjectCostSource
+{
+  private readonly logger = new Logger(MonthlyWageRollupService.name);
+
+  /** This service accounts for the P&L's labour category (018 T026). */
+  readonly category = 'labour' as const;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
+    private readonly sources: ProjectSourcesRegistry,
   ) {}
+
+  /**
+   * Announces labour's cost source to the project P&L (T026).
+   *
+   * Registration rather than `ProjectsModule` importing `LabourModule`: that module is already
+   * imported *by* this one, and closing the loop would make the dependency a cycle. See
+   * `ProjectSourcesRegistry`.
+   *
+   * **This service and not `LabourService`.** `LabourService.getLabourCostByProject()` prices the
+   * approved muster, re-resolving each day's rate; this one reads what the payment sheets actually
+   * recorded. Both are defensible figures and they are **not the same figure** — the muster is what
+   * was worked, the sheet is what was approved for payment. FR-013 requires the P&L's monthly labour
+   * cost reconcile to the approved payment sheets, so the sheets are what the P&L must read, and
+   * reading them through the same code the roll-up uses is what makes the drill-down add up to the
+   * total rather than nearly add up to it.
+   */
+  onModuleInit(): void {
+    this.sources.registerCostSource(this);
+  }
+
+  /**
+   * The P&L's labour cost for several projects at once (T026, FR-010, FR-013).
+   *
+   * Batched in one query over every named project's overlapping sheets, then apportioned exactly as
+   * `rollupFor` apportions — the two share `lineShare()`, so the drill-down and the total cannot
+   * drift apart.
+   *
+   * **Gross, not net.** A deduction is money recovered from the worker, not money the project did
+   * not spend: a P&L reading `netPayable` would understate labour by every advance instalment
+   * recovered in the period, and the error would grow with the project. `bill-totals.ts` makes the
+   * same call about an RA bill's retention, for the same reason.
+   *
+   * A project that cannot be computed is **omitted from the map** rather than returned as zero. The
+   * P&L reports a category with no source as unavailable; a project with no entry is the same fact
+   * one level down, and a zero here would be indistinguishable from a month with no labour.
+   */
+  async costsByProject(
+    projectIds: string[],
+    companyId: string,
+    range: { from: Date; to: Date },
+  ): Promise<Map<string, number>> {
+    const ctx = { isSuperAdmin: false, companyId };
+    const totals = new Map<string, number>();
+    if (projectIds.length === 0) return totals;
+
+    try {
+      const sheets = await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.labourPaymentSheet.findMany({
+          where: {
+            companyId,
+            projectId: { in: projectIds },
+            deletedAt: null,
+            periodFrom: { lte: range.to },
+            periodTo: { gte: range.from },
+          },
+          include: { lines: true },
+        }),
+      );
+
+      const counted = sheets.filter((sheet) =>
+        COUNTED_SHEET_STATUSES.includes(sheet.status),
+      );
+      for (const projectId of projectIds) totals.set(projectId, 0);
+
+      // Only the sheets crossing a range boundary need the muster, and only those projects.
+      const straddling = counted.filter(
+        (sheet) => sheet.periodFrom < range.from || sheet.periodTo > range.to,
+      );
+      const musterDays = new Map<string, Map<string, MusterDays>>();
+      for (const projectId of new Set(straddling.map((s) => s.projectId))) {
+        const forProject = await this.musterDaysBySheet(
+          ctx,
+          projectId,
+          straddling.filter((sheet) => sheet.projectId === projectId),
+          range.from,
+          range.to,
+        );
+        for (const [sheetId, days] of forProject) musterDays.set(sheetId, days);
+      }
+
+      for (const sheet of counted) {
+        const apportioned =
+          sheet.periodFrom < range.from || sheet.periodTo > range.to;
+        const perWorker = musterDays.get(sheet.id);
+        let gross = totals.get(sheet.projectId) ?? 0;
+        for (const line of sheet.lines) {
+          const { share } = lineShare(
+            apportioned,
+            line.daysWorked.toNumber(),
+            perWorker?.get(line.workerId),
+            sheet.periodTo <= range.to,
+          );
+          if (share === 0) continue;
+          gross = roundMoney(
+            gross + roundMoney(line.grossWage.toNumber() * share),
+          );
+        }
+        totals.set(sheet.projectId, gross);
+      }
+      return totals;
+    } catch (error) {
+      // Logged and dropped, not thrown: a P&L that renders every other cost line is more useful
+      // than one that fails outright, and the P&L says which categories it could not ask.
+      this.logger.warn(
+        `Labour cost could not be computed for ${
+          projectIds.length
+        } project(s): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return new Map();
+    }
+  }
 
   async rollupFor(
     caller: AuthenticatedUser,
@@ -231,27 +356,20 @@ export class MonthlyWageRollupService {
 
       for (const line of sheet.lines) {
         const recordedDays = line.daysWorked.toNumber();
-        let share = 1;
-        let daysThisMonth = recordedDays;
-        let lineApportioned = false;
+        const placement = lineShare(
+          apportioned,
+          recordedDays,
+          perWorker.get(line.workerId),
+          periodEndsInMonth,
+        );
+        const share = placement.share;
+        const daysThisMonth = placement.daysInRange;
+        const lineApportioned = apportioned;
 
         if (apportioned) {
-          lineApportioned = true;
-          const days = perWorker.get(line.workerId);
-          if (days && days.inPeriod > 0) {
-            share = days.inMonth / days.inPeriod;
-            daysThisMonth = days.inMonth;
-            daysInMonth += days.inMonth;
-            daysInPeriod += days.inPeriod;
-          } else {
-            // No approved muster day to apportion on. Placed whole in the month the period ends
-            // in — see the class comment; the alternative loses the wage from both months.
-            placedByPeriodEnd += 1;
-            share = periodEndsInMonth ? 1 : 0;
-            daysThisMonth = periodEndsInMonth ? recordedDays : 0;
-            daysInPeriod += recordedDays;
-            if (periodEndsInMonth) daysInMonth += recordedDays;
-          }
+          daysInMonth += placement.daysInRange;
+          daysInPeriod += placement.daysInPeriod;
+          if (placement.placedByPeriodEnd) placedByPeriodEnd += 1;
         }
 
         if (share === 0) continue;
@@ -514,6 +632,59 @@ export function monthBounds(
     // `Date.UTC(y, m, 0)` is the last day of month `m`, which is why the month index is not
     // decremented here. The last millisecond, so a muster dated the 31st is inside the month.
     monthEnd: new Date(Date.UTC(year, month, 0, 23, 59, 59, 999)),
+  };
+}
+
+/**
+ * Where one payment-sheet line's figures belong, as a fraction of the line.
+ *
+ * Shared by the roll-up view and the P&L's batched cost source so the drill-down and the total
+ * cannot drift apart — two implementations of an apportionment rule is two answers, and the second
+ * one to be written is always the one nobody checks.
+ *
+ * Three cases:
+ *
+ * 1. The sheet is wholly inside the range: the whole line, exactly, with no ratio and so no
+ *    rounding step for anybody to disagree about.
+ * 2. The muster can answer: days worked inside the range over days worked across the period
+ *    (plan D12).
+ * 3. The muster cannot answer — no approved muster day for this worker in the period: the whole
+ *    line, placed in the range that contains the sheet's end, and flagged. Pro-rating by calendar
+ *    days would invent the figure D12 refuses; attributing nothing would lose the wage from both
+ *    sides of the boundary, which is worse because the total then stops reconciling to the sheet.
+ */
+export function lineShare(
+  apportioned: boolean,
+  recordedDays: number,
+  days: MusterDays | undefined,
+  rangeContainsPeriodEnd: boolean,
+): {
+  share: number;
+  daysInRange: number;
+  daysInPeriod: number;
+  placedByPeriodEnd: boolean;
+} {
+  if (!apportioned) {
+    return {
+      share: 1,
+      daysInRange: recordedDays,
+      daysInPeriod: recordedDays,
+      placedByPeriodEnd: false,
+    };
+  }
+  if (days && days.inPeriod > 0) {
+    return {
+      share: days.inMonth / days.inPeriod,
+      daysInRange: days.inMonth,
+      daysInPeriod: days.inPeriod,
+      placedByPeriodEnd: false,
+    };
+  }
+  return {
+    share: rangeContainsPeriodEnd ? 1 : 0,
+    daysInRange: rangeContainsPeriodEnd ? recordedDays : 0,
+    daysInPeriod: recordedDays,
+    placedByPeriodEnd: true,
   };
 }
 
