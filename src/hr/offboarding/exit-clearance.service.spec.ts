@@ -18,6 +18,8 @@ describe('ExitClearanceService', () => {
     users?: Record<string, unknown>[];
     /** A pending proposal for the `approval.completed` handler to find (021 Phase 8). */
     proposal?: Record<string, unknown> | null;
+    /** Open or refused proposals `forEmployee` should report, so a pending waiver reads as pending. */
+    openProposals?: Record<string, unknown>[];
     /**
      * What the spine says about that proposal's instance — used both for the rejection path (T089)
      * and to name the countersigner (T090). Read through `ApprovalService`, never by querying the
@@ -60,6 +62,9 @@ describe('ExitClearanceService', () => {
           return { id: 'prop-1', ...(args.data as Record<string, unknown>) };
         },
         findFirst: async () => (livePending ? opts.proposal ?? null : null),
+        // `forEmployee` reads open and refused proposals so the screen can show a pending waiver as
+        // pending rather than as cleared (Phase 8).
+        findMany: async () => opts.openProposals ?? [],
         updateMany: async () => {
           // What `settleStaleProposal` does to a proposal whose approval was rejected: it stops
           // being live, so the next `create` succeeds.
@@ -328,6 +333,84 @@ describe('ExitClearanceService', () => {
       expect(approvals.submit).toHaveBeenCalled();
       // And still no waiver: the rejected one did not quietly clear the item on its way out.
       expect(waiverWrites).toEqual([]);
+    });
+  });
+
+  describe('the screen can tell pending from cleared (T050, T051)', () => {
+    it('reports a pending proposal without reporting a waiver', async () => {
+      // The distinction the whole phase rests on. A screen that read a proposal as a waiver would
+      // show an exit as clearable that is not.
+      const { service } = build({
+        assets: [allocation()],
+        openProposals: [
+          {
+            itemKind: CLEARANCE_KIND.asset,
+            itemRef: 'alloc-1',
+            status: 'pending',
+            reason: 'Written off — asset lost on site',
+            proposedByUserId: 'u-1',
+            proposedAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+        ],
+      });
+
+      const clearance = await service.forEmployee(ctx, 'co-1', 'emp-1');
+
+      expect(clearance.items[0].waiver).toBeNull();
+      expect(clearance.items[0].proposal).toMatchObject({ status: 'pending' });
+      // And the item still blocks settlement, which is the consequence that matters.
+      expect(clearance.settleable).toBe(false);
+    });
+
+    it('reports a rejected proposal rather than dropping it', async () => {
+      // Silence after a rejection reads as success, and the person who asked needs to see the answer
+      // was no.
+      const { service } = build({
+        assets: [allocation()],
+        openProposals: [
+          {
+            itemKind: CLEARANCE_KIND.asset,
+            itemRef: 'alloc-1',
+            status: 'rejected',
+            reason: 'Not enough evidence of the loss',
+            proposedByUserId: 'u-1',
+            proposedAt: new Date('2026-10-02T00:00:00.000Z'),
+          },
+        ],
+      });
+
+      const clearance = await service.forEmployee(ctx, 'co-1', 'emp-1');
+
+      expect(clearance.items[0].proposal).toMatchObject({ status: 'rejected' });
+      expect(clearance.settleable).toBe(false);
+    });
+
+    it('names the countersigner separately from the proposer', async () => {
+      const { service } = build({
+        assets: [allocation()],
+        waivers: [
+          {
+            itemKind: CLEARANCE_KIND.asset,
+            itemRef: 'alloc-1',
+            reason: 'Written off',
+            waivedByUserId: 'u-1',
+            waivedAt: new Date('2026-10-02T00:00:00.000Z'),
+            approvedByUserId: 'dir-1',
+            approvedAt: new Date('2026-10-02T01:00:00.000Z'),
+          },
+        ],
+        users: [
+          { id: 'u-1', firstname: 'Asha', lastname: 'Pawar' },
+          { id: 'dir-1', firstname: 'R', lastname: 'Director' },
+        ],
+      });
+
+      const clearance = await service.forEmployee(ctx, 'co-1', 'emp-1');
+
+      expect(clearance.items[0].waiver).toMatchObject({
+        waivedByName: 'Asha Pawar',
+        approvedByName: 'R Director',
+      });
     });
   });
 

@@ -80,6 +80,31 @@ export interface ClearanceItem {
      */
     waivedByName: string;
     waivedAt: Date;
+    /**
+     * Who countersigned, as a person reads it (FR-016, Phase 8).
+     *
+     * Null for a waiver applied before the countersignature existed. Shown as a *separate* name
+     * from `waivedByName` on purpose: "HR waived this" and "HR asked and the Director agreed" are
+     * different facts about who is answerable for the money.
+     */
+    approvedByName: string | null;
+    approvedAt: Date | null;
+  } | null;
+  /**
+   * A waiver **proposed and not yet decided**, or one that was rejected (FR-016, Phase 8).
+   *
+   * Separate from `waiver`, and the screen must read it as separate: until the Director decides, the
+   * obligation is still outstanding and the item is still blocking a settlement. A screen that
+   * rendered a proposal as a waiver would show an exit as clearable that is not.
+   *
+   * A **rejected** proposal is reported here rather than dropped. Silence after a rejection reads as
+   * success, and the person who asked needs to see that the answer was no.
+   */
+  proposal: {
+    status: 'pending' | 'rejected';
+    reason: string;
+    proposedByName: string;
+    proposedAt: Date;
   } | null;
 }
 
@@ -141,7 +166,7 @@ export class ExitClearanceService {
 
     const custodySource = this.custody.source();
 
-    const [assets, kit, advances, waivers] = await Promise.all([
+    const [assets, kit, advances, waivers, proposals] = await Promise.all([
       custodySource
         ? custodySource.openCustodyFor(ctx, companyId, employeeId)
         : Promise.resolve([]),
@@ -152,13 +177,35 @@ export class ExitClearanceService {
           where: { exitRecordId: exitRecord.id },
         }),
       ),
+      // Proposals that are still open or were refused. An approved one has become a waiver and is
+      // read above; carrying it here too would give the screen two places to look for one fact.
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.exitClearanceWaiverProposal.findMany({
+          where: {
+            exitRecordId: exitRecord.id,
+            status: {
+              in: [
+                WAIVER_PROPOSAL_STATUS.pending,
+                WAIVER_PROPOSAL_STATUS.rejected,
+              ],
+            },
+          },
+          orderBy: { proposedAt: 'desc' },
+        }),
+      ),
     ]);
 
     // One query for every waiver's author rather than one per item. A clearance with six
     // waivers would otherwise be six round trips for a column.
-    const waiverNames = await this.namesFor(
-      waivers.map((w) => w.waivedByUserId),
-    );
+    const waiverNames = await this.namesFor([
+      ...waivers.map((w) => w.waivedByUserId),
+      // The countersigners and the proposers in the same lookup. A clearance with six waivers would
+      // otherwise be eighteen round trips for three columns.
+      ...waivers
+        .map((w) => w.approvedByUserId)
+        .filter((id): id is string => id !== null),
+      ...proposals.map((p) => p.proposedByUserId),
+    ]);
 
     const waiverFor = (kind: ClearanceKind, ref: string) => {
       const found = waivers.find(
@@ -174,8 +221,34 @@ export class ExitClearanceService {
             waivedByName:
               waiverNames.get(found.waivedByUserId) ?? found.waivedByUserId,
             waivedAt: found.waivedAt,
+            approvedByName: found.approvedByUserId
+              ? waiverNames.get(found.approvedByUserId) ??
+                found.approvedByUserId
+              : null,
+            approvedAt: found.approvedAt,
           }
         : null;
+    };
+
+    /**
+     * The most recent undecided or refused proposal for an obligation.
+     *
+     * Most recent, because a rejected proposal can be followed by a new one — and if both exist the
+     * live one is what the screen must show. `orderBy: proposedAt desc` above is what makes `find`
+     * return it.
+     */
+    const proposalFor = (kind: ClearanceKind, ref: string) => {
+      const found = proposals.find(
+        (p) => p.itemKind === kind && p.itemRef === ref,
+      );
+      if (!found) return null;
+      return {
+        status: found.status as 'pending' | 'rejected',
+        reason: found.reason,
+        proposedByName:
+          waiverNames.get(found.proposedByUserId) ?? found.proposedByUserId,
+        proposedAt: found.proposedAt,
+      };
     };
 
     const items: ClearanceItem[] = [
@@ -194,6 +267,7 @@ export class ExitClearanceService {
           `, due ${asset.expectedReturnDate.toISOString().slice(0, 10)}`,
         outstanding: true,
         waiver: waiverFor(CLEARANCE_KIND.asset, asset.allocationId),
+        proposal: proposalFor(CLEARANCE_KIND.asset, asset.allocationId),
       })),
       ...kit.map((item) => ({
         kind: CLEARANCE_KIND.kit,
@@ -202,6 +276,7 @@ export class ExitClearanceService {
         detail: null,
         outstanding: true,
         waiver: waiverFor(CLEARANCE_KIND.kit, item.ref),
+        proposal: proposalFor(CLEARANCE_KIND.kit, item.ref),
       })),
       ...advances.map((advance) => ({
         kind: CLEARANCE_KIND.advance,
@@ -210,6 +285,7 @@ export class ExitClearanceService {
         detail: `Balance ${advance.balance}`,
         outstanding: true,
         waiver: waiverFor(CLEARANCE_KIND.advance, advance.ref),
+        proposal: proposalFor(CLEARANCE_KIND.advance, advance.ref),
       })),
     ];
 
