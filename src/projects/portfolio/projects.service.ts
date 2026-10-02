@@ -756,6 +756,28 @@ export class ProjectsService {
   }
 
   /**
+   * A project's identity — code and name — for another module labelling a report or an export
+   * (018 FR-010a, FR-011a).
+   *
+   * `findOne()` exists and is the wrong tool here: it assembles a full project detail with its
+   * sites, BOQ and budget, and a caller that only needs a heading would pull all of it. Returns
+   * `null` for an unknown id rather than throwing, the contract `getActivityById()` set — the
+   * caller is labelling something, not validating access, and the roll-up it headings is already
+   * scoped by company.
+   */
+  async getProjectIdentityById(
+    projectId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<{ id: string; code: string; name: string } | null> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findFirst({
+        where: { id: projectId },
+        select: { id: true, code: true, name: true },
+      }),
+    );
+  }
+
+  /**
    * A BOQ task group — what the master PRD calls an "Activity" — for another
    * module validating a reference to one (009 FR-019, research.md §13).
    *

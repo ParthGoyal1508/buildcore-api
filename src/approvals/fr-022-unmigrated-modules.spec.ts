@@ -161,6 +161,25 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/projects/billing',
           // The module and the two files 018 changed in place.
           ':(exclude)src/projects/projects.module.ts',
+          // Owned by 018 Phase 5 (the project P&L) and its cost-source registry. **This one was
+          // added a commit late**: Phase 5 was committed with the billing exclusion above
+          // pre-empted and these forgotten, so this check went red on the next run and the suite
+          // was reported clean when it was not. Recorded rather than quietly fixed — the guard did
+          // its job, and the lesson is that pre-empting one path is not pre-empting the commit.
+          //
+          // Nothing here calls `ApprovalService`; the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          ':(exclude)src/projects/pnl',
+          ':(exclude)src/projects/portfolio/project-sources.registry.ts',
+          // Owned by 018 Phase 10 (`bugs.md` item 14): the per-project monthly wage roll-up. It is
+          // a read path over `labour`'s payment sheets that stores nothing and approves nothing —
+          // the payment sheet's own `approve()` is untouched, and the per-file assertion above
+          // still reads it. Added *before* the commit.
+          ':(exclude)src/labour/labour.module.ts',
+          ':(exclude)src/labour/reports/labour-reports.controller.ts',
+          ':(exclude)src/labour/reports/dto/monthly-wage-rollup.dto.ts',
+          ':(exclude)src/labour/reports/monthly-wage-rollup.service.ts',
+          ':(exclude)src/labour/reports/monthly-wage-rollup.service.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

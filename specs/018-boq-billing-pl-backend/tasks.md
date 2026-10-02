@@ -150,38 +150,75 @@ answer differs — which is exactly why they are separable.
 exist — `labour.LabourPaymentSheet` and `labour.PaymentSheetLine` — which is why item 14's amendment is
 two phases and no schema change. Most of what the client asked for was already built; see plan D12.
 
-- [ ] T056 [US3] Add a validated query DTO for the roll-up — `projectId`, `year`, `month`, with bounded
+- [x] T056 [US3] Add a validated query DTO for the roll-up — `projectId`, `year`, `month`, with bounded
   month and year (Principle II). A month outside 1-12 or a year outside a sane range is a 400, not a
   query that returns nothing and looks like an empty month.
-- [ ] T057 [US3] Resolve every `LabourPaymentSheet` **overlapping** the calendar month for the project:
+- [x] T057 [US3] Resolve every `LabourPaymentSheet` **overlapping** the calendar month for the project:
   `periodFrom <= monthEnd AND periodTo >= monthStart`. Not `periodFrom` within the month — a fortnightly
   sheet starting on the 28th belongs to two months and would be missed by a containment test.
-- [ ] T058 [US3] Apportion a straddling sheet **on days worked inside the month**, from the muster dates
+- [x] T058 [US3] Apportion a straddling sheet **on days worked inside the month**, from the muster dates
   behind each `PaymentSheetLine`, not on elapsed calendar days. A worker who worked four days of a
   fortnight all in the first week is not half-attributable to each month, and a labour figure that
   disagrees with the muster is worse than a coarse one (plan D12).
-- [ ] T059 [US3] Itemise per worker: days worked in the month, `resolvedRate`, gross and net. Read the
+- [x] T059 [US3] Itemise per worker: days worked in the month, `resolvedRate`, gross and net. Read the
   figures as the sheet recorded them — **recompute nothing** (FR-010b). There is exactly one place a
   wage is computed and this is not it.
-- [ ] T060 [US3] State the apportionment **on the response**, per sheet apportioned — which sheet, its
+- [x] T060 [US3] State the apportionment **on the response**, per sheet apportioned — which sheet, its
   period, and the days attributed to this month. FR-010a requires this; a figure the reader cannot
   account for is what this feature exists to remove.
-- [ ] T061 [US3] Reach `labour`'s tables through the labour module's service, never a cross-schema join
+- [x] T061 [US3] Reach `labour`'s tables through the labour module's service, never a cross-schema join
   from `projects` (Principle I). FR-013's existing reconciliation already takes this route; follow it
   rather than opening a second one.
-- [ ] T062 [P] [US3] Unit test: a sheet wholly inside the month contributes its full figures.
-- [ ] T063 [P] [US3] Unit test: a sheet straddling the month boundary contributes only the days inside
+- [x] T062 [P] [US3] Unit test: a sheet wholly inside the month contributes its full figures.
+- [x] T063 [P] [US3] Unit test: a sheet straddling the month boundary contributes only the days inside
   it, and the response says how it was apportioned. This is the test that earns the phase.
-- [ ] T064 [P] [US3] Unit test: the apportioned sum equals FR-013's monthly labour figure **to the
+- [x] T064 [P] [US3] Unit test: the apportioned sum equals FR-013's monthly labour figure **to the
   rupee**. This is SC-007, and it is the assertion that catches an apportionment rule that is merely
   plausible.
-- [ ] T065 [P] [US3] Unit test: a month whose labour was engaged entirely through a contractor returns
+- [x] T065 [P] [US3] Unit test: a month whose labour was engaged entirely through a contractor returns
   the sheet's totals with the engagement type stated and no per-worker disbursement list — the spec's
   edge case. An empty list here must not render as a broken screen.
-- [ ] T066 [P] [US3] Unit test: a sheet corrected and re-approved changes the roll-up on the next read,
+- [x] T066 [P] [US3] Unit test: a sheet corrected and re-approved changes the roll-up on the next read,
   because nothing is stored (FR-010b).
-- [ ] T067 [US3] Confirm no table was added in this phase. If one was, D13's reasoning was overridden
+- [x] T067 [US3] Confirm no table was added in this phase. If one was, D13's reasoning was overridden
   somewhere and a second figure for the same wage now exists.
+
+### Phase 10 implementation record, 2026-10-02
+
+**`GET labour/reports/monthly-wage-rollup`**, in `src/labour/reports/monthly-wage-rollup.service.ts`,
+exported from `LabourModule` so `projects` can reach it for FR-013 without a cross-schema join
+(T061). 27 unit tests. No migration, as D13 requires — T067 is now a test rather than a promise: the
+spec scans the service source for any Prisma write and the migrations directory for any table of its
+own.
+
+Three forks were resolved here rather than asked about, and each is stated because a later reader
+would otherwise have to guess:
+
+1. **A line the muster cannot place.** D12 apportions on muster days. A line with *no* approved
+   muster day in the period — a hand-built sheet, or a muster withdrawn after the sheet was generated
+   — has no basis to apportion on. Calendar pro-rating is what D12 refuses; attributing nothing would
+   lose the wage from **both** months, which is worse, because the month then stops reconciling to the
+   sheet and nothing says why. Such a line is placed whole in the month containing the sheet's
+   `periodTo`, counted in `apportionment.placedByPeriodEnd`, and named in the apportionment note. Two
+   tests cover it.
+2. **A contractor sheet is not itemised.** The spec's edge case says a contractor sheet is the
+   contractor's basis of payment, not a disbursement to the people named on it, so `workers` carries
+   directly engaged labour only and `workersNote` says so. The money stays in `grossTotal` and in
+   `byEngagement`, so a mixed month still reconciles — asserted.
+3. **Permission.** `PROJECT_FINANCIALS` **or** `REPORTS`, declared on the handler rather than
+   inherited from the controller's `REPORTS`. It is the P&L's labour drill-down, so a project-finance
+   reader must see it; and the payment register already shows a `REPORTS` holder every one of these
+   lines, so including `REPORTS` widens nobody's reach.
+
+**`monthBounds()` duplicates `periodRange()`'s arithmetic deliberately** rather than importing it:
+`labour` must not take a dependency on `projects/pnl` (Principle I), and a six-line date helper is a
+cheaper duplicate than an inverted module edge. A test asserts the two agree across five months
+including a leap February, so SC-008's "exactly" is checked rather than assumed.
+
+**A regression found, not introduced.** `fr-022-unmigrated-modules.spec.ts` was red at the Phase 5
+commit: the billing exclusion was pre-empted and `src/projects/pnl` was not, so the guard fired on
+the next run and the suite had been reported clean when it was not. Fixed here, with the reason
+recorded in that spec rather than silently patched.
 
 ## Phase 11: Amendment of 2026-09-29 — the monthly position export (FR-011a)
 
