@@ -35,4 +35,19 @@ export const BILLING_ERRORS = {
   exceedsAward: 'RA_BILL_EXCEEDS_AWARD',
   /** Certifying more than was billed. The client cannot certify work nobody claimed. */
   certifiedExceedsBilled: 'CERTIFIED_EXCEEDS_BILLED',
+  /**
+   * Revising a bill's quantities without saying why (FR-009, FR-016).
+   *
+   * A certified bill going round again costs somebody a second decision, and "why" is the first
+   * thing they will ask. Required rather than encouraged, because an optional field on this path is
+   * an empty field.
+   */
+  revisionReasonRequired: 'RA_BILL_REVISION_REASON_REQUIRED',
+  /**
+   * Revising a pre-018 bill that has no work-order award behind it.
+   *
+   * Those bills have `amount` and nothing else — no lines, no award, no rate. Inventing an award to
+   * re-measure against would be a fiction, so the refusal says to raise a new bill instead.
+   */
+  awardRequired: 'RA_BILL_HAS_NO_AWARD',
 } as const;

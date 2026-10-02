@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { HrModule } from '../hr/hr.module';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
@@ -41,7 +42,11 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
  * which Principle I forbids outright.
  */
 @Module({
-  imports: [SettingsModule, forwardRef(() => HrModule)],
+  // `ApprovalsModule` for 018 Phase 4 (FR-009): an RA bill's certification is the 016 spine's, and
+  // revising a certified bill's quantities raises a fresh instance rather than editing a completed
+  // decision. `src/projects` keeps no approval mechanism of its own — `fr-022-unmigrated-modules`
+  // still asserts that per file.
+  imports: [SettingsModule, ApprovalsModule, forwardRef(() => HrModule)],
   // `ProjectDocumentsController` is FIRST on purpose. Nest matches routes in
   // registration order, and its path `/projects/document-requirements` is a literal
   // that `ProjectsController`'s `GET /projects/:id` would otherwise swallow — the

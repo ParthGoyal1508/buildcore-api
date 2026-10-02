@@ -107,7 +107,17 @@ function build(opts: {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
 
-  return { service: new RaBillsService(prisma as never), created };
+  const approvals = {
+    submit: jest.fn(async () => ({ id: 'ai-1' })),
+    abandon: jest.fn(async () => undefined),
+    stateOfSystem: jest.fn(async () => null),
+  };
+
+  return {
+    service: new RaBillsService(prisma as never, approvals as never),
+    created,
+    approvals,
+  };
 }
 
 const ctx = { isSuperAdmin: true } as never;

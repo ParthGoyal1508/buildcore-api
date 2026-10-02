@@ -999,6 +999,13 @@ Table RABill {
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
   rejectionRemark String
+  revisionCount Int [not null, default: 0, note: 'How many times this bill\'s quantities were revised **after** it was certified (018 FR-009).
+
+Kept as a count rather than left to be reconstructed from the audit trail: "this bill has been
+round three times" is what a reader wants, and counting approval instances by hand to find out
+is how a reader stops asking.']
+  lastRevisedAt DateTime [note: 'FR-016 for the edit, which nothing recorded before Phase 4.']
+  lastRevisedByUserId String
   workOrderId String [note: 'The work order this bill measures against. Nullable for bills raised before 018 — their `amount`
 is the only figure they ever had, and inventing an award to attach them to would be a fiction.']
   workOrder WorkOrder

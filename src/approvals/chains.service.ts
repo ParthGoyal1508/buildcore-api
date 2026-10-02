@@ -19,6 +19,7 @@ import {
   DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
   DEFAULT_DIRECTOR_FINAL_LEVELS,
   DEFAULT_PAYROLL_RUN_LEVELS,
+  ACTION_RA_BILL,
   DIRECTOR_FINAL_SEEDED_ACTIONS,
 } from './default-chains';
 
@@ -238,6 +239,11 @@ export class ChainsService {
       // Seeded for every company: without the chain, the first recovery raised anywhere would be
       // refused as a configuration fault, and the remedy would be a settings visit per company.
       [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+      // 018 FR-009: certifying a subcontractor's RA bill. One Director level by default — the
+      // minimum gate that makes "editing a certified bill sends it round again" mean anything.
+      // Listed here rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries
+      // a policy claim about what the client confirmed and an RA bill is not on it.
+      [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
       // FR-018's remaining action types, each a director-only chain (T048). Seeded even
       // though no module submits into them yet: without the chain, feature 017's first
       // work order would be refused as a configuration fault in every company at once,

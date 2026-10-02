@@ -112,6 +112,20 @@ export const ACTION_OPERATOR_FUEL_RECOVERY = 'operator_fuel_recovery';
 export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
 
 /**
+ * Certifying a subcontractor's RA bill (018 FR-009, Phase 4).
+ *
+ * **Deliberately not added to `DIRECTOR_FINAL_SEEDED_ACTIONS` below**, even though its default chain
+ * is one Director level. That list carries a policy claim — the actions the client confirmed require
+ * the Director's final word — and an RA bill is not on it. The one-level default here is the minimum
+ * gate that makes FR-009 mean something, not an assertion about who the client wants signing.
+ *
+ * A longer chain is a settings change, per company, through the existing endpoints. What is *not*
+ * configurable, and is the whole of FR-009, is that editing a certified bill's quantities sends it
+ * round again.
+ */
+export const ACTION_RA_BILL = 'ra_bill';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these

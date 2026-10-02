@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -24,7 +25,11 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { RaBillsService } from './ra-bills.service';
-import { ComposeRaBillDto, SetAwardDto } from './dto/ra-bill.dto';
+import {
+  ComposeRaBillDto,
+  ReviseRaBillDto,
+  SetAwardDto,
+} from './dto/ra-bill.dto';
 
 /**
  * Subcontractor bills measured against the award (018 US2) — `bugs.md` item 12.
@@ -38,6 +43,64 @@ import { ComposeRaBillDto, SetAwardDto } from './dto/ra-bill.dto';
 @Controller('projects/ra-bills')
 export class RaBillsController {
   constructor(private readonly bills: RaBillsService) {}
+
+  @Post(':id/submit')
+  @ApiOperation({
+    summary: 'Send a measured bill for certification (FR-009’s precondition)',
+    description:
+      'The bill enters the `ra_bill` approval chain and becomes `submitted`. **Nothing is certified ' +
+      'here** — the 016 spine decides, and the bill becomes `approved` when the chain completes.\n\n' +
+      'The spine is asked **before** the bill’s status is written. A bill flipped to submitted with ' +
+      'no instance behind it waits on nobody, sits in no queue, and looks to its author exactly like ' +
+      'one that was submitted.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      '`BILL_NOT_DRAFT`, or `APPROVAL_CHAIN_NOT_CONFIGURED` when no chain is defined for this ' +
+      'company — a configuration gap, not a permissions problem.',
+  })
+  async submitForCertification(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    // No `companyId` parameter: the company comes from the bill, which the caller's RLS context
+    // already scoped. Taking it from the query would be a second answer to a question already
+    // settled, and the only way the two could differ is the wrong one winning.
+    return this.bills.submitForCertification(rlsContextFor(caller), caller, id);
+  }
+
+  @Patch(':id/lines')
+  @ApiOperation({
+    summary:
+      'Revise the measured quantities, invalidating any approval (FR-009)',
+    description:
+      'A **completed approval is never touched.** 016’s chain records what was approved, and editing ' +
+      'quantities under a completed decision would leave the approver’s name against numbers they ' +
+      'never saw. So the old instance stays as history and a new one is raised; a still-pending ' +
+      'instance is abandoned, so nobody is left deciding a version that has been replaced.\n\n' +
+      'The spine is asked **before** anything is written. If the chain cannot be reached, this ' +
+      'refuses and the bill keeps both its quantities and its certification — because the other ' +
+      'order produces a bill that reads as certified against numbers nobody signed.\n\n' +
+      'Send the whole line set, not a patch: a bill’s totals and its over-measurement check are ' +
+      'properties of all its lines together.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      '`RA_BILL_REVISION_REASON_REQUIRED`, `BILL_HAS_NO_LINES`, or `RA_BILL_EXCEEDS_AWARD`.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: '`RA_BILL_HAS_NO_AWARD` for a bill raised before 018.',
+  })
+  async revise(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ReviseRaBillDto,
+  ) {
+    return this.bills.revise(rlsContextFor(caller), caller, id, dto);
+  }
 
   @Put('awards/:workOrderId')
   @ApiOperation({

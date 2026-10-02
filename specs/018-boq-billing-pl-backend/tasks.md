@@ -61,12 +61,67 @@ convenience would throw that away.
 
 ## Phase 4: Approval invalidation (FR-009)
 
-- [ ] T021 On a quantity edit to an approved RA bill, abandon the 016 instance and raise a new one
+- [x] T021 On a quantity edit to an approved RA bill, abandon the 016 instance and raise a new one
       through the spine. **Do not mutate the completed approval** (research §6)
-- [ ] T022 Refuse the edit outright if the spine cannot be reached — an un-approved edit that looks
+- [x] T022 Refuse the edit outright if the spine cannot be reached — an un-approved edit that looks
       approved is the failure mode
-- [ ] T023 [P] Unit-test both paths
-- [ ] T024 e2e: approve, edit, confirm the prior approval did not survive
+- [x] T023 [P] Unit-test both paths
+- [ ] T024 **NOT RUN** e2e: approve, edit, confirm the prior approval did not survive
+
+### Phase 4 implementation record, 2026-10-03
+
+**The phase was larger than its four tasks implied, and that is worth saying first.** T021 assumes an
+RA bill has an approval to invalidate. It did not: `RaBillStatus` carried `submitted` and `approved`
+and `RABill` carried `approvedByUserId`, but **nothing in the product set any of them** — there was no
+submit endpoint, no chain and no decision handler. So Phase 4 built the certification path as well as
+the invalidation, because FR-009 is not testable without it.
+
+What landed:
+
+- `ACTION_RA_BILL` in the spine's action types, with a **one-level Director chain** seeded for new
+  companies and backfilled for existing ones (migration `20261003120000_ra_bill_approval`).
+  Deliberately **not** added to `DIRECTOR_FINAL_SEEDED_ACTIONS`: that list carries a policy claim
+  about what the client confirmed, and an RA bill is not on it. One level is the minimum gate that
+  makes FR-009 mean anything, and a longer chain is a settings change per company.
+- `POST projects/ra-bills/:id/submit` — enters the chain; the bill becomes `submitted`.
+- `@OnEvent(approval.completed)` — the only place a bill becomes `approved`, guarded on it still
+  being `submitted` so a redelivered event or a revision raced against a completion cannot
+  re-certify changed quantities. The approver is read back through `ApprovalService.stateOfSystem()`,
+  never from `shared.ApprovalDecision` (Principle I; `spine-boundary.spec.ts` enforces it).
+- `PATCH projects/ra-bills/:id/lines` — the FR-009 path.
+- `revisionCount`, `lastRevisedAt`, `lastRevisedByUserId` on `RABill`. FR-016 asks for the actor and
+  time of every *edit*, which nothing recorded before.
+
+**T021, the completed approval.** `ApprovalService.abandon()` returns early on a non-live instance —
+by the spine's own design — so calling it is a deliberate no-op on a completed approval and is what
+closes a still-*pending* one. Research §6's words are "abandon the existing instance and raise a new
+one", and the completed instance staying exactly as it is, as history, is what §6's own reasoning
+asks for: a recorded decision must not come to describe a bill that no longer exists.
+
+**T022, the ordering.** The spine is asked **before** anything is written, so a chain that cannot be
+reached leaves the bill with both its quantities and its certification. If the write then fails, the
+fresh instance is abandoned — which leaves, at worst, a visible pending approval on an unchanged
+bill, rather than an invisible lie about a certified one. The same ordering is used on submit, where
+a bill flipped to `submitted` with no instance behind it would wait on nobody, sit in no queue, and
+look to its author exactly like one that was submitted.
+
+**A subtle one, caught by writing the test.** A revision must leave the bill **out of its own
+to-date figure**. Without that, the bill's existing quantities count as previously billed, and
+reducing a quantity on a fully-measured award is refused for exceeding the award it is reducing.
+`measuredToDate` gained an `excludeBillId`, and the test asserts the exclusion reaches the query
+rather than asserting a figure that would pass either way.
+
+**`priceLines` was extracted from `compose` rather than written twice.** Two of the three things it
+does are easy to get subtly wrong on a second attempt — the over-measurement refusal and the
+retention base — and a revision that priced differently from a composition would be a bill whose
+total changed for no reason anybody could point at.
+
+**A reason is required on a revision**, not encouraged: an optional field on this path is an empty
+field, and a certified bill going round again costs somebody a second decision.
+
+**T024 NOT RUN.** The e2e needs a seeded company with a mapped `final` approval slot, a work order
+with an award, and a bill carried through a real decision. 16 unit tests cover both T021 and T022
+paths, including the two orderings that would fail silently.
 
 ## Phase 5: The project P&L (US3)
 

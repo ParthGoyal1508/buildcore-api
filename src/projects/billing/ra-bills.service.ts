@@ -4,9 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, RaBillStatus } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
+import { Permission, Prisma, RaBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_RA_BILL } from '../../approvals/default-chains';
+import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
@@ -27,6 +35,15 @@ export interface MeasureLineInput {
   workOrderBoqItemId: string;
   /** Measured **this period**. To-date and remaining are aggregates. */
   quantity: number;
+}
+
+/** A revision to a bill's measured quantities (FR-009). */
+export interface ReviseRaBillInput {
+  lines: MeasureLineInput[];
+  advanceRecovery?: number;
+  otherDeductions?: number;
+  /** Why the quantities changed. Required — see `revise`. */
+  reason: string;
 }
 
 export interface ComposeRaBillInput {
@@ -105,7 +122,10 @@ export interface RaBillView {
  */
 @Injectable()
 export class RaBillsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly approvals: ApprovalService,
+  ) {}
 
   /**
    * Captures or replaces the award lines on a work order (FR-006).
@@ -194,84 +214,11 @@ export class RaBillsService {
     }
 
     const created = await withRlsContext(this.prisma, ctx, async (tx) => {
-      const workOrder = await tx.workOrder.findFirst({
-        where: { id: input.workOrderId },
-        select: { id: true, retentionPercent: true },
+      const { priced, totals } = await this.priceLines(tx, input.workOrderId, {
+        lines: input.lines,
+        advanceRecovery: input.advanceRecovery,
+        otherDeductions: input.otherDeductions,
       });
-      if (!workOrder) throw new NotFoundException('Work order not found');
-
-      const award = await tx.workOrderBOQItem.findMany({
-        where: {
-          id: { in: input.lines.map((line) => line.workOrderBoqItemId) },
-          workOrderId: input.workOrderId,
-        },
-      });
-      if (award.length !== input.lines.length) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: BILLING_ERRORS.boqRequired,
-          message:
-            'Some measured lines are not on this work order’s award. A bill can only measure work the ' +
-            'order awarded.',
-        });
-      }
-      const awardById = new Map(award.map((item) => [item.id, item]));
-      const toDate = await this.measuredToDate(
-        tx,
-        input.lines.map((line) => line.workOrderBoqItemId),
-      );
-
-      const priced = input.lines.map((line) => {
-        const item = awardById.get(
-          line.workOrderBoqItemId,
-        ) as (typeof award)[0];
-        return {
-          line,
-          item,
-          totals: lineTotals({
-            quantity: line.quantity,
-            // The awarded rate, frozen onto the bill line — same reasoning as a client bill's.
-            rate: item.rate.toNumber(),
-            previouslyBilledQty: toDate.get(item.id) ?? 0,
-            scopeQty: item.awardedQty.toNumber(),
-          }),
-        };
-      });
-
-      // Over-measurement against an **award** is refused, unlike against a client BOQ.
-      //
-      // The asymmetry is deliberate and it is about who is owed what. Over-measuring a client BOQ is a
-      // claim the client can reject; over-measuring an award is the company agreeing to pay for work it
-      // never ordered, and there is nobody downstream to catch it. A variation to the award is the
-      // route, which is why the refusal names it.
-      const over = priced.filter((p) => p.totals.exceedsScope);
-      if (over.length > 0) {
-        throw new BadRequestException({
-          statusCode: 400,
-          code: BILLING_ERRORS.exceedsAward,
-          message:
-            `These lines measure more than the work order awarded: ${over
-              .map((p) => p.item.description)
-              .join(
-                '; ',
-              )}. Raise a variation to the award first — paying above an award is the ` +
-            `company agreeing to work it never ordered, and there is nobody downstream to catch it.`,
-        });
-      }
-
-      const grossOnly = billTotals(priced.map((p) => p.totals));
-      const retention = retentionOn(
-        grossOnly.gross,
-        workOrder.retentionPercent.toNumber(),
-      );
-      const totals = billTotals(
-        priced.map((p) => p.totals),
-        {
-          retention,
-          advanceRecovery: input.advanceRecovery,
-          other: input.otherDeductions,
-        },
-      );
 
       return tx.rABill.create({
         data: {
@@ -305,6 +252,374 @@ export class RaBillsService {
     });
 
     return this.view(ctx, created.id);
+  }
+
+  /**
+   * Sends a bill for certification (018 Phase 4, FR-009's precondition).
+   *
+   * The bill becomes `submitted` and enters the `ra_bill` chain. **Nothing is approved here** — the
+   * spine decides, and `onApprovalCompleted` below is what marks the bill certified.
+   *
+   * Order matters: the spine is asked **first**, and the bill's own status is written only once the
+   * instance exists. A bill flipped to `submitted` with no instance behind it is a bill waiting on
+   * nobody, sitting in no queue, that looks to its author as though it were submitted — the exact
+   * silent failure T022 is about, arriving on the happy path instead of the error path.
+   */
+  async submitForCertification(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    billId: string,
+  ): Promise<RaBillView> {
+    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABill.findFirst({
+        where: { id: billId },
+        select: {
+          id: true,
+          companyId: true,
+          status: true,
+          billNumber: true,
+          projectId: true,
+        },
+      }),
+    );
+    if (!bill) throw new NotFoundException('RA bill not found');
+    if (bill.status !== RaBillStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.notDraft,
+        message:
+          `This bill is already ${bill.status}. A bill out of draft is either waiting on somebody ` +
+          `or certified; revising its quantities is the way to change it.`,
+      });
+    }
+
+    await this.approvals.submit({
+      companyId: bill.companyId,
+      actionType: ACTION_RA_BILL,
+      entityType: ACTION_RA_BILL,
+      entityId: bill.id,
+      originatorUserId: caller.id,
+      subject: `RA bill ${bill.billNumber}`,
+      href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+      viewPermission: Permission.PROJECT_FINANCIALS,
+    });
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABill.update({
+        where: { id: bill.id },
+        data: {
+          status: RaBillStatus.submitted,
+          submittedAt: new Date(),
+        },
+      }),
+    );
+    return this.view(ctx, bill.id);
+  }
+
+  /**
+   * Revises a bill's measured quantities, invalidating any approval it had (FR-009, research §6).
+   *
+   * ## A completed approval is never touched
+   *
+   * 016's chain records *what was approved*. Editing quantities under a completed approval would
+   * leave a recorded decision describing a bill that no longer exists — the approver's name against
+   * numbers they never saw. So the completed instance stays exactly as it is, as history, and a
+   * **new** one is raised. `ApprovalService.abandon()` is still called first and is a deliberate
+   * no-op on a completed instance by the spine's own design; it is what closes a *pending* one, so
+   * nobody is left deciding a version that has been replaced.
+   *
+   * ## The spine is asked before anything is written
+   *
+   * T022. If the chain is unreachable or unconfigured, this throws and **nothing has changed** — the
+   * bill keeps its quantities and its certification. The failure mode to design against is the other
+   * order: quantities edited, approval invalidation lost, and a bill that reads as certified against
+   * numbers nobody signed. If the write then fails, the fresh instance is abandoned, which leaves at
+   * worst a visible pending approval on an unchanged bill rather than an invisible lie about a
+   * certified one.
+   *
+   * ## A reason is required
+   *
+   * FR-016 asks for the actor and time of every edit. A certified bill going round again costs
+   * somebody a second decision, and "why" is the first thing they will ask.
+   */
+  async revise(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    billId: string,
+    input: ReviseRaBillInput,
+  ): Promise<RaBillView> {
+    if (input.lines.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.noLines,
+        message: 'A measured bill needs at least one line.',
+      });
+    }
+    if (!input.reason?.trim()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.revisionReasonRequired,
+        message:
+          'Say why the quantities changed. A certified bill going round again costs somebody a ' +
+          'second decision, and “why” is the first thing they will ask.',
+      });
+    }
+
+    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABill.findFirst({
+        where: { id: billId },
+        select: {
+          id: true,
+          companyId: true,
+          status: true,
+          billNumber: true,
+          projectId: true,
+          workOrderId: true,
+          revisionCount: true,
+        },
+      }),
+    );
+    if (!bill) throw new NotFoundException('RA bill not found');
+    if (!bill.workOrderId) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.awardRequired,
+        message:
+          'This bill predates work-order awards and has no award to measure against, so its ' +
+          'quantities cannot be revised here. Raise a new bill against the award instead.',
+      });
+    }
+
+    const wasDecided = bill.status !== RaBillStatus.draft;
+
+    if (wasDecided) {
+      // Closes a *pending* instance so nobody is left deciding a superseded version. A completed
+      // one is untouched — the spine ignores a non-live instance, which is the behaviour research §6
+      // depends on rather than a coincidence.
+      await this.approvals.abandon(
+        ACTION_RA_BILL,
+        bill.id,
+        bill.companyId,
+        `Quantities revised: ${input.reason.trim()}`,
+      );
+
+      // Asked before anything is written. A throw here leaves the bill exactly as it was.
+      await this.approvals.submit({
+        companyId: bill.companyId,
+        actionType: ACTION_RA_BILL,
+        entityType: ACTION_RA_BILL,
+        entityId: bill.id,
+        originatorUserId: caller.id,
+        subject: `RA bill ${bill.billNumber} (revised)`,
+        href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+        viewPermission: Permission.PROJECT_FINANCIALS,
+      });
+    }
+
+    try {
+      await withRlsContext(this.prisma, ctx, async (tx) => {
+        const { priced, totals } = await this.priceLines(
+          tx,
+          bill.workOrderId as string,
+          {
+            lines: input.lines,
+            advanceRecovery: input.advanceRecovery,
+            otherDeductions: input.otherDeductions,
+            excludeBillId: bill.id,
+          },
+        );
+
+        await tx.rABillLine.deleteMany({ where: { raBillId: bill.id } });
+        await tx.rABill.update({
+          where: { id: bill.id },
+          data: {
+            amount: totals.gross,
+            grossAmount: totals.gross,
+            retentionAmount: totals.retention,
+            advanceRecovery: totals.advanceRecovery,
+            otherDeductions: totals.otherDeductions,
+            netPayable: totals.net,
+            // Back to `submitted` when it had been decided, because it is waiting on the new
+            // instance; a revised draft stays a draft.
+            status: wasDecided ? RaBillStatus.submitted : RaBillStatus.draft,
+            // Cleared, not kept. A certification naming an approver against quantities they never
+            // saw is the precise thing FR-009 exists to prevent, and leaving these set would leave
+            // the screen saying exactly that.
+            approvedByUserId: null,
+            approvedAt: null,
+            submittedAt: wasDecided ? new Date() : null,
+            revisionCount: wasDecided
+              ? bill.revisionCount + 1
+              : bill.revisionCount,
+            lastRevisedAt: new Date(),
+            lastRevisedByUserId: caller.id,
+            rejectionRemark: null,
+            lines: {
+              create: priced.map(({ line, item, totals: lineAmount }) => ({
+                companyId: bill.companyId,
+                workOrderBoqItemId: item.id,
+                quantity: line.quantity,
+                rate: item.rate,
+                amount: lineAmount.amount,
+              })),
+            },
+          },
+        });
+      });
+    } catch (error) {
+      if (wasDecided) {
+        // The instance was raised and the edit did not land. Close it rather than leaving somebody
+        // asked to certify a revision that does not exist.
+        await this.approvals.abandon(
+          ACTION_RA_BILL,
+          bill.id,
+          bill.companyId,
+          'The revision that raised this approval failed to save.',
+        );
+      }
+      throw error;
+    }
+
+    return this.view(ctx, bill.id);
+  }
+
+  /**
+   * Marks a bill certified when its chain completes (FR-009, FR-016).
+   *
+   * The spine announces completion and never calls back, so this is the only place a bill becomes
+   * `approved`. Guarded on the bill still being `submitted`: a second delivery of the same event is
+   * a normal thing for an event bus to do, and a revision raced against a completion must not
+   * re-certify quantities that have since changed.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_RA_BILL) return;
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: event.companyId,
+    };
+
+    // Who signed, read back through the spine rather than queried from its tables — `projects` must
+    // not read `shared.ApprovalDecision` (Principle I, and `spine-boundary.spec.ts` enforces it).
+    const state = await this.approvals.stateOfSystem(
+      ACTION_RA_BILL,
+      event.entityId,
+      event.companyId,
+    );
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABill.updateMany({
+        where: { id: event.entityId, status: RaBillStatus.submitted },
+        data: {
+          status: RaBillStatus.approved,
+          approvedAt: new Date(),
+          approvedByUserId: state?.latestDecision?.actorUserId ?? null,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Prices a set of measured lines against the award and totals them.
+   *
+   * Shared by `compose` and `revise` rather than written twice. Two of the three things it does are
+   * easy to get subtly wrong on the second attempt — the over-measurement refusal and the retention
+   * base — and a revision that priced differently from a composition would be a bill whose total
+   * changed for no reason anybody could point at.
+   *
+   * `excludeBillId` is what makes a revision possible at all: without it, the bill's own existing
+   * quantities count as previously-billed and every revision looks like an over-measurement of
+   * itself.
+   */
+  private async priceLines(
+    tx: Prisma.TransactionClient,
+    workOrderId: string,
+    input: {
+      lines: MeasureLineInput[];
+      advanceRecovery?: number;
+      otherDeductions?: number;
+      excludeBillId?: string;
+    },
+  ) {
+    const workOrder = await tx.workOrder.findFirst({
+      where: { id: workOrderId },
+      select: { id: true, retentionPercent: true },
+    });
+    if (!workOrder) throw new NotFoundException('Work order not found');
+
+    const award = await tx.workOrderBOQItem.findMany({
+      where: {
+        id: { in: input.lines.map((line) => line.workOrderBoqItemId) },
+        workOrderId,
+      },
+    });
+    if (award.length !== input.lines.length) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.boqRequired,
+        message:
+          'Some measured lines are not on this work order’s award. A bill can only measure work the ' +
+          'order awarded.',
+      });
+    }
+    const awardById = new Map(award.map((item) => [item.id, item]));
+    const toDate = await this.measuredToDate(
+      tx,
+      input.lines.map((line) => line.workOrderBoqItemId),
+      input.excludeBillId ? { excludeBillId: input.excludeBillId } : undefined,
+    );
+
+    const priced = input.lines.map((line) => {
+      const item = awardById.get(line.workOrderBoqItemId) as (typeof award)[0];
+      return {
+        line,
+        item,
+        totals: lineTotals({
+          quantity: line.quantity,
+          // The awarded rate, frozen onto the bill line — same reasoning as a client bill's.
+          rate: item.rate.toNumber(),
+          previouslyBilledQty: toDate.get(item.id) ?? 0,
+          scopeQty: item.awardedQty.toNumber(),
+        }),
+      };
+    });
+
+    // Over-measurement against an **award** is refused, unlike against a client BOQ.
+    //
+    // The asymmetry is deliberate and it is about who is owed what. Over-measuring a client BOQ is a
+    // claim the client can reject; over-measuring an award is the company agreeing to pay for work it
+    // never ordered, and there is nobody downstream to catch it. A variation to the award is the
+    // route, which is why the refusal names it.
+    const over = priced.filter((p) => p.totals.exceedsScope);
+    if (over.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.exceedsAward,
+        message:
+          `These lines measure more than the work order awarded: ${over
+            .map((p) => p.item.description)
+            .join(
+              '; ',
+            )}. Raise a variation to the award first — paying above an award is the ` +
+          `company agreeing to work it never ordered, and there is nobody downstream to catch it.`,
+      });
+    }
+
+    const grossOnly = billTotals(priced.map((p) => p.totals));
+    const retention = retentionOn(
+      grossOnly.gross,
+      workOrder.retentionPercent.toNumber(),
+    );
+    const totals = billTotals(
+      priced.map((p) => p.totals),
+      {
+        retention,
+        advanceRecovery: input.advanceRecovery,
+        other: input.otherDeductions,
+      },
+    );
+
+    return { workOrder, priced, totals };
   }
 
   /** One bill, with this-period / to-date / remaining per line (FR-007). */
@@ -377,13 +692,27 @@ export class RaBillsService {
   private async measuredToDate(
     tx: Prisma.TransactionClient,
     awardItemIds: string[],
-    options?: { upToBillDate?: Date; includeBillId?: string },
+    options?: {
+      upToBillDate?: Date;
+      includeBillId?: string;
+      /**
+       * The bill being revised, left out of its own to-date figure (FR-009).
+       *
+       * Without this a revision measures itself: the bill's existing lines count as previously
+       * billed, and reducing a quantity on a fully-measured award would be refused for exceeding
+       * the award it is reducing.
+       */
+      excludeBillId?: string;
+    },
   ): Promise<Map<string, number>> {
     if (awardItemIds.length === 0) return new Map();
     const grouped = await tx.rABillLine.groupBy({
       by: ['workOrderBoqItemId'],
       where: {
         workOrderBoqItemId: { in: awardItemIds },
+        ...(options?.excludeBillId
+          ? { raBillId: { not: options.excludeBillId } }
+          : {}),
         OR: [
           {
             raBill: {

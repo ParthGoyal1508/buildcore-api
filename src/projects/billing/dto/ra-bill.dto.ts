@@ -132,3 +132,44 @@ export class ComposeRaBillDto {
   @Min(0)
   otherDeductions?: number;
 }
+
+/**
+ * A revision to a bill's measured quantities (018 FR-009).
+ *
+ * The whole line set, not a patch: a bill's totals and its over-measurement check are properties of
+ * all its lines together, and a per-line patch would have to recompute both from a mixture of new
+ * and stored values. Sending the set makes "what is this bill now" unambiguous.
+ */
+export class ReviseRaBillDto {
+  @ApiProperty({ type: [MeasureLineDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MeasureLineDto)
+  lines: MeasureLineDto[];
+
+  @ApiProperty({
+    description:
+      'Why the quantities changed. **Required**: a certified bill going round again costs somebody a ' +
+      'second decision, and “why” is the first thing they will ask.',
+    example:
+      'Re-measured after joint survey on 3 Oct; excavation 40 Cum not 48.',
+  })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  advanceRecovery?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  otherDeductions?: number;
+}
