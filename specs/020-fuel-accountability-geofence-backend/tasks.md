@@ -461,22 +461,42 @@ This is where a figure first moves. It is gated on feature 016's chain, which is
 - [ ] T067 [P] [US1] Unit test: reversing a recovery after the underlying reading is corrected leaves the
   reversal recorded and the payroll line adjusted.
 
-## Phase 7: The recovery cap ⚠️ RESTS ON AN UNANSWERED CLIENT QUESTION
+## Phase 7: The recovery cap ✅ UNBLOCKED 2026-10-02
 
-Do not start until the client gives the cap on operator salary recovery. It is the one open
-`[NEEDS CLARIFICATION]` in this spec and belongs to User Story 2.
+The client answered on 2026-10-02: **half of that month's wages, and the ceiling is shared with every
+other deduction on the line.** Excess carries forward. Spec FR-007a to FR-007c.
 
-Building phase 6 uncapped first is safe **only because FR-006 holds** — nothing reaches payroll without
-approval, so an unreasonable recovery is refused by a person before it is deducted from one. That is the
-specific reason this ordering is acceptable here and would not be elsewhere (plan D30).
+**The shared ceiling is the whole difficulty, and the reason T068 is not a settings field.** A rule that
+capped the fuel recovery alone at 50% would pass its own test while letting the payslip's combined
+deductions exceed the statutory limit — each rule satisfied, the law broken. So the check is on the
+*sum* at apply time, where every other deduction on that line is finally known, and the raise-time
+check can only ever be advisory.
 
-- [ ] T068 [US2] Add the cap as a stored company setting with a config default, following D19's
-  precedent for the accuracy maximum in this same feature.
-- [ ] T069 [US2] Refuse a recovery above the cap at raise time, naming the cap in the refusal. Refusing
-  at raise rather than at apply means the reviewer never approves something that cannot be applied.
-- [ ] T070 [P] [US2] Unit test: a recovery at the cap is accepted, one above it refused.
-- [ ] T071 [US2] Update the spec's Clarifications with the client's answer and the date, and remove the
-  marker.
+- [ ] T068 [US2] Add the ceiling as a stored company setting with a config default — `50` — following
+  D19's precedent for the accuracy maximum in this same feature. A percentage, not a rupee figure, and
+  bounded at 50 so a configuration mistake cannot exceed the statutory limit rather than merely being
+  unlikely to.
+- [ ] T069 [US2] **CRITICAL** Apply the ceiling to the **sum of every deduction on the payroll line**,
+  not to the fuel recovery in isolation. Read the line's existing deductions, add the pending recovery,
+  and reduce the recovery to whatever headroom remains. A test must prove a line already carrying a 40%
+  advance takes only 10% of fuel recovery, because that is the case a per-deduction cap gets wrong while
+  looking correct.
+- [ ] T069a [US2] Warn at **raise** time when the recovery looks likely to exceed the headroom, and
+  refuse nothing there. Raise-time is too early to know: other deductions can be added to the line
+  afterwards, so a refusal then is a guess, and the reviewer would be told a figure is impossible that
+  is actually fine.
+- [ ] T070 [P] [US2] Unit tests: a recovery inside the headroom applies in full; one above it is reduced
+  to the headroom and the remainder carried; a line with no headroom at all carries the whole recovery
+  and deducts nothing.
+- [ ] T070a [US2] Carry the unrecovered balance to the next period (FR-007b) and apply it there on the
+  same terms, so a carried balance is subject to the ceiling again rather than exempt from it.
+- [ ] T070b [US2] **Never clear a carried balance by exceeding the ceiling, and never expire it**
+  (FR-007c). Both are ways software disposes of an inconvenient balance, and both are worse than showing
+  it. A balance that has carried for several periods must remain visible and attributable.
+- [ ] T070c [P] [US2] Unit test: a balance that cannot be recovered for three consecutive periods is
+  still present, still the right figure, and has not been deducted past the ceiling to clear it.
+- [ ] T071 [US2] ✅ Done 2026-10-02 — the spec's Clarifications carry the client's answer and the marker
+  is removed.
 
 ## Verification for phases 5-7
 

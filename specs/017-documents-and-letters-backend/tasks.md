@@ -770,3 +770,42 @@ correct code. The double now honours the clause.
 asserted the pre-reversal rule. They were tasks rather than cleanup for a reason: a comment stating
 the opposite of the code is how the next reader is misled, and all three sat on the routes that
 implement the reversal.
+
+---
+
+## Phase 10: A letter kind declares its own fields (added 2026-10-02, FR-011b, FR-011c)
+
+Closes the gap found on 1 October: FR-011 lets a company define a letter kind without a developer, and
+FR-012 renders variable details — yet the list of usable fields is fixed in code and keyed to the five
+original letter types, so a kind the client defines gets an **empty** field list and the template editor
+then refuses to save a template using any field at all. Both requirements were satisfied and together
+they still produced nothing usable.
+
+**Smaller than it first looked.** `buildcore-web`'s FR-014 already requires "define a new letter kind,
+**its variable fields** and its fixed terms". The requirement existed; only this half was missing. So
+this is the api catching up to a contract already written, not new scope invented on both sides.
+
+- [ ] T133 Add `LetterKindField` — the fields one kind's templates may use. Keyed to the kind, not to
+      the shipped `LetterType` enum, which is the coupling that caused this.
+- [ ] T134 Each field names **where its value comes from** (FR-011c): the record type and the path within
+      it. A field that is only a label is a placeholder that renders blank, and a blank in a signed
+      letter is indistinguishable from a deliberate omission.
+- [ ] T135 Seed the five shipped letter types' existing field lists into the new table in the migration,
+      so nothing that renders today starts rendering differently. **The backfill is the risk of this
+      phase** — every live template references these fields by name, and a seed that renames or drops one
+      breaks letters already issued.
+- [ ] T136 **CRITICAL** Validate a template against **its own kind's** declaration on save, and refuse a
+      reference to a field the kind does not declare. The alternative offered to the client — one shared
+      list for every kind — was declined precisely because it would offer exit-settlement fields in an
+      offer letter's editor.
+- [ ] T137 Refuse at render too, not only at save (FR-011c). A template saved before a field was removed
+      from its kind would otherwise render a blank where a salary should be.
+- [ ] T138 [P] Unit test: a template using a field its kind declares saves; the same template under a
+      kind that does not declare it is refused, naming the field.
+- [ ] T139 [P] Unit test: every shipped letter type renders exactly as before the migration. This is the
+      test that protects T135, and it is worth more than the four above it.
+- [ ] T140 [P] Unit test: a company-defined kind with declared fields renders them — the end-to-end
+      claim item 18 actually made, which nothing currently proves.
+- [ ] T141 Restricted-type handling is unchanged: a field drawing on regulated personal data (Aadhaar,
+      017 FR-024) stays refused by the template resolver whatever a kind declares. A kind must not be
+      able to declare its way past a PII gate.

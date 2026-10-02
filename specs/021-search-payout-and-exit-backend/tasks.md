@@ -395,3 +395,44 @@ rather than left to be inferred from an absence.
 
 Waiver authority is the client's decision. Until they answer it requires `EMPLOYEES`, the same as
 the rest of the surface — the narrowest defensible reading, recorded as an assumption.
+
+---
+
+## Phase 8: A waiver becomes a reviewable item (added 2026-10-02, FR-016)
+
+The client's answer: **HR proposes, the Director countersigns.** This **supersedes shipped behaviour** —
+the waiver currently needs only write access on Employees, which was a placeholder I chose while
+building, and is wider than a write-off of company money deserves.
+
+Wiring, not new machinery: the approval spine already carries final settlement, which is director-final
+already, so a waiver joins the chain that governs the thing it unblocks.
+
+- [ ] T086 Register a chain action for the clearance waiver in `default-chains.ts`, director-final,
+      alongside the final-settlement action it unblocks. Reusing the existing registration rather than
+      inventing a second approval path is what FR-022 of feature 016 requires of every module.
+- [ ] T087 **CRITICAL** `ExitClearanceService.waive()` submits to `ApprovalsService` and returns the
+      pending item. It must **not** write the waiver. Today it writes immediately; leaving the write
+      in place while adding a submission produces a waiver that is both applied and awaiting approval,
+      which is worse than either.
+- [ ] T088 Move the write into the `approval.completed` handler, idempotently — the same shape feature
+      016's T074 established for the attendance correction, and for the same reason: a handler that runs
+      twice must not write two waivers.
+- [ ] T089 A **rejected** waiver leaves the obligation outstanding and the settlement still blocked.
+      Assert it: the failure worth guarding is a rejection that silently clears the item anyway, which
+      looks like success to everybody except the company's balance sheet.
+- [ ] T090 Keep `waivedByName` (shipped 2026-10-01) pointing at **who proposed** it, and add the
+      approver separately. Collapsing the two loses the distinction the client's answer exists to
+      create — "HR waived this" and "HR asked and the Director agreed" are different facts.
+- [ ] T091 Refuse `waive()` outright for a caller who may not propose one. Write access on Employees is
+      no longer sufficient on its own; proposing is an HR act and the chain decides the rest.
+- [ ] T092 [P] e2e: an exit with an outstanding item cannot settle while the waiver is pending, settles
+      once it is approved, and stays blocked when it is rejected. The middle case is the one that proves
+      the wiring; the other two prove it did not open a hole.
+- [ ] T093 [P] Unit test: `waive()` writes no `ExitClearanceWaiver` row at submission time. The
+      structural assertion behind T087 — a test on behaviour would pass while the row was still written
+      by a path nobody looked at.
+- [ ] T094 Update `quickstart.md`'s clearance pass: the waiver step is now two steps with a named
+      approver between them, so a reader following it against the shipped build would otherwise be told
+      the screen is broken.
+
+**Cost the client accepted explicitly:** an exit with anything outstanding now waits on an approval.

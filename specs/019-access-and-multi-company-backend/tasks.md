@@ -419,3 +419,48 @@ payment. If the client wants the other reading, this phase is where it is built.
 **Phases 1-2.** That is FR-001, FR-003 and FR-006 — the read/write distinction, the refusal, and the
 proof nobody's access changed. It closes bugs.md item 19 on its own, and it is the only part of this
 feature the client described as impossible today.
+
+---
+
+## Phase 7: Cash entry becomes a permission (added 2026-10-02, FR-017a to FR-017d)
+
+The client's answer to the two cash questions. **Most of it is already built** — hiding stays exactly
+as it is, per row, with no screen list — so this phase is narrower than "block cash entry" sounds.
+
+Two of the three answers changed nothing. The per-row rule was confirmed against a screen list and
+kept. The salary carve-out the client asked for falls out of that rule already, except for a salary
+genuinely paid in cash, which stays hidden and which they accepted knowingly.
+
+- [ ] T073 Add `CASH_ENTRY` to the `Permission` enum with a migration. A new permission, not a reuse of
+      `COMPANY_SETTINGS`: who may change the hiding setting and who may take cash are different
+      questions about different people, and FR-012 already owns the first.
+- [ ] T074 **CRITICAL** Enumerate every write that records a cash payment and gate each on `CASH_ENTRY`.
+      This is the task that decides whether the feature works: a missed route is an unguarded way to
+      enter cash, and it will not show up in a test anybody thought to write. Start from
+      `CASH_MODE_FIELDS` and `CASH_ENUM_VALUES` in `src/common/cash/cash-surfaces.ts` — the constants the
+      interceptor already uses to find cash on the way out are the same ones that find it on the way in.
+- [ ] T075 Grant `CASH_ENTRY` to every role that can currently record a cash payment, in the same
+      migration that adds it. **Preserving today's behaviour is the requirement, not a convenience**: a
+      permission that defaults to nobody stops every site cashier in the company the moment it deploys,
+      which is the exact failure the two-control design existed to avoid.
+- [ ] T076 [P] Unit test: a caller without `CASH_ENTRY` is refused on a cash write and unaffected on a
+      bank-mode write. The second half matters more than the first — the permission must not become a
+      general payments gate.
+- [ ] T077 [P] A guard test in the shape of `cash-surfaces.spec.ts`: parse the routes that accept a
+      payment mode and fail when one accepts a cash mode without declaring `CASH_ENTRY`. T074 is a
+      one-time audit; this is what keeps it true, and without it the next cash route added is unguarded
+      by default.
+- [ ] T078 Stop hiding `denominationBreakup` unconditionally; show it to a caller holding `CASH_ENTRY`
+      and hide it from everyone else (FR-017d). The one change hiding itself needs. Hiding it from the
+      cashier counting notes against it conceals nothing from anybody it was meant to conceal from while
+      making the screen's purpose unreachable.
+- [ ] T079 [P] Unit test: the breakup is present for a `CASH_ENTRY` holder and absent otherwise, and
+      absent means **absent or null, never zero** — a zero denomination count reads as a real count of
+      no notes.
+- [ ] T080 Record the grant in the audit log with actor and time, on the same terms FR-012 requires for
+      changing the hiding setting. Granting somebody the right to take cash is at least as
+      consequential as hiding the figures.
+
+**Not in this phase, deliberately.** The per-row hiding rule (FR-017c) needs no work — it is built,
+and `cash-surfaces.spec.ts` already fails when a new cash payment mode appears that the constants do
+not name. Confirming a design is not a task.
