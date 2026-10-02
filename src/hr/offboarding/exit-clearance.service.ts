@@ -1,18 +1,48 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   OnboardingItemStatus,
   OnboardingItemType,
+  Permission,
   SalaryAdvanceStatus,
 } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  type ApprovalCompletedEvent,
+  ApprovalService,
+} from '../../approvals/approvals.service';
+import type { ApprovalInstanceView } from '../../approvals/approval.types';
+import { ACTION_EXIT_CLEARANCE_WAIVER } from '../../approvals/default-chains';
+import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { ExitCustodyRegistry } from './exit-custody.registry';
+
+/** A proposal's lifecycle, as this service records it. The spine owns the real one. */
+export const WAIVER_PROPOSAL_STATUS = {
+  pending: 'pending',
+  approved: 'approved',
+  rejected: 'rejected',
+} as const;
+
+/**
+ * Who may **propose** a waiver (021 FR-016, task T091).
+ *
+ * The client's answer was "HR, with a Director countersign". Write access on Employees — the
+ * placeholder this replaces — is held by more people than HR, and a write-off of company money is
+ * not something a site administrator should be able to put in front of the Director on their own.
+ * `PAYROLL` is the HR-office permission in this product: it is what gates the salary data a waived
+ * advance comes out of.
+ */
+export const WAIVER_PROPOSER_PERMISSIONS: Permission[] = [Permission.PAYROLL];
 
 /** The kinds of obligation a clearance can carry. Stable strings, because a waiver stores one. */
 export const CLEARANCE_KIND = {
@@ -89,6 +119,7 @@ export class ExitClearanceService {
     // Registered by the assets module on init, because importing it here would be a cycle —
     // see `ExitCustodyRegistry`.
     private readonly custody: ExitCustodyRegistry,
+    private readonly approvals: ApprovalService,
   ) {}
 
   async forEmployee(
@@ -226,19 +257,33 @@ export class ExitClearanceService {
   }
 
   /**
-   * Waives one obligation (FR-016).
+   * **Proposes** a waiver, and writes nothing (FR-016, Phase 8 — changed 2026-10-02).
    *
-   * **Does not discharge it** (FR-014c). An asset waived here stays open in the asset register,
-   * because a waiver records that the company stopped chasing the asset — not that it came back.
-   * Marking it returned would put a false fact in the register that owns the truth.
+   * **This supersedes shipped behaviour.** Until now `waive()` wrote the waiver immediately on
+   * write access to Employees — a placeholder, and wider than a write-off of company money
+   * deserves. The client's answer is HR proposes, the Director countersigns.
+   *
+   * No `ExitClearanceWaiver` row is written here, and that is the whole design rather than an
+   * implementation detail. The existence of such a row is what unblocks a final settlement, so a
+   * row written at proposal time would be a waiver that is simultaneously applied and awaiting
+   * approval — worse than either state, because the settlement would already be open while the
+   * Director's queue still showed a decision to make. `exit-clearance-waiver.spec.ts` asserts the
+   * absence structurally, because a behavioural test would pass while the row was still written by
+   * a path nobody looked at.
+   *
+   * **Does not discharge the obligation either** (FR-014c). An asset waived stays open in the asset
+   * register, because a waiver records that the company stopped chasing the asset — not that it
+   * came back. Marking it returned would put a false fact in the register that owns the truth.
    */
   async waive(
     ctx: RlsContext,
     companyId: string,
     employeeId: string,
     input: { kind: ClearanceKind; ref: string; reason: string },
-    waivedByUserId: string,
-  ): Promise<ExitClearance> {
+    caller: AuthenticatedUser,
+  ): Promise<{ clearance: ExitClearance; pending: ApprovalInstanceView }> {
+    this.assertMayPropose(caller);
+
     const clearance = await this.forEmployee(ctx, companyId, employeeId);
     const item = clearance.items.find(
       (i) => i.kind === input.kind && i.ref === input.ref,
@@ -248,31 +293,241 @@ export class ExitClearanceService {
         'That obligation is not on this exit’s clearance.',
       );
     }
+    // Already waived. Refused rather than re-proposed: re-waiving used to overwrite the reason,
+    // which was reasonable when one person decided it alone and is not now — the newer reason
+    // would replace one the Director had already agreed to.
+    if (item.waiver !== null) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'EXIT_WAIVER_ALREADY_APPROVED',
+        message:
+          'This obligation is already waived. A waiver that has been countersigned cannot be ' +
+          'replaced from here.',
+      });
+    }
 
-    await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.exitClearanceWaiver.upsert({
-        where: {
-          exitRecordId_itemKind_itemRef: {
+    await this.settleStaleProposal(ctx, clearance.exitRecordId, input);
+
+    const proposal = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.exitClearanceWaiverProposal
+        .create({
+          data: {
+            companyId,
             exitRecordId: clearance.exitRecordId,
             itemKind: input.kind,
             itemRef: input.ref,
+            reason: input.reason,
+            proposedByUserId: caller.id,
+            status: WAIVER_PROPOSAL_STATUS.pending,
+          },
+        })
+        .catch((error: { code?: string }) => {
+          // The unique index on (item, status) firing. One pending proposal per obligation: a
+          // second would put two items in the Director's queue for one decision.
+          if (error.code === 'P2002') {
+            throw new ConflictException({
+              statusCode: 409,
+              code: 'EXIT_WAIVER_ALREADY_PENDING',
+              message:
+                'A waiver for this obligation is already waiting for a countersignature.',
+            });
+          }
+          throw error;
+        }),
+    );
+
+    const pending = await this.approvals.submit({
+      companyId,
+      actionType: ACTION_EXIT_CLEARANCE_WAIVER,
+      entityType: ACTION_EXIT_CLEARANCE_WAIVER,
+      entityId: proposal.id,
+      originatorUserId: caller.id,
+      // What the Director's queue row says. The spine cannot read the item, so the subject has to
+      // carry the facts the decision turns on: what is being written off, and why.
+      subject: `Waive ${item.label} on exit — ${input.reason}`,
+      href: `/hr/employees/${employeeId}/exit`,
+      // `PAYROLL`, matching the permission that may propose one. A waiver's history names who
+      // asked for company money to be written off; that is not a thing to publish to every
+      // colleague who can read an employee record.
+      viewPermission: Permission.PAYROLL,
+    });
+
+    // The clearance is returned **unchanged** — still blocked. Returning a clearance that showed
+    // the item waived would be the screen lying about what just happened.
+    return { clearance, pending };
+  }
+
+  /**
+   * Marks a pending proposal whose approval was **rejected** as rejected, so a corrected one can be
+   * proposed (task T089).
+   *
+   * **The spine raises no event for a rejection** — only `approval.completed`, and only when the
+   * state reaches `approved`. That is the right design for the spine (a module that cared about
+   * every rejection would be a module watching the spine's internals), but it leaves this table's
+   * `status` as a cache of something only the spine knows.
+   *
+   * So the cache is reconciled at the one moment it matters: when somebody tries to propose again.
+   * Anywhere else and it would be a cron job keeping two copies of a fact in step, which is the
+   * thing `forEmployee` deliberately does not do for obligations.
+   *
+   * **A rejection still leaves the obligation outstanding and the settlement blocked.** Nothing here
+   * writes a waiver; it only frees the unique index so HR can come back with a better reason. The
+   * failure this guards against is the opposite one — a rejection that silently clears the item
+   * anyway, which looks like success to everybody except the company's balance sheet.
+   */
+  private async settleStaleProposal(
+    ctx: RlsContext,
+    exitRecordId: string,
+    input: { kind: ClearanceKind; ref: string },
+  ): Promise<void> {
+    const pending = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.exitClearanceWaiverProposal.findFirst({
+        where: {
+          exitRecordId,
+          itemKind: input.kind,
+          itemRef: input.ref,
+          status: WAIVER_PROPOSAL_STATUS.pending,
+        },
+      }),
+    );
+    if (!pending) return;
+
+    const state = await this.approvals.stateOfSystem(
+      ACTION_EXIT_CLEARANCE_WAIVER,
+      pending.id,
+      pending.companyId,
+    );
+    // Still in the chain, or there is no instance to read. Left alone — the caller gets the
+    // `EXIT_WAIVER_ALREADY_PENDING` refusal, which is the right answer while a Director still has
+    // the decision in front of them.
+    if (!state || (state.state !== 'rejected' && state.state !== 'abandoned')) {
+      return;
+    }
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.exitClearanceWaiverProposal.updateMany({
+        where: { id: pending.id, status: WAIVER_PROPOSAL_STATUS.pending },
+        data: { status: WAIVER_PROPOSAL_STATUS.rejected },
+      }),
+    );
+  }
+
+  /**
+   * T091. Proposing is an HR act; the chain decides the rest.
+   *
+   * Checked here and not only by a route decorator, because `waive()` is reachable from the
+   * clearance controller and will be reachable from the F&F flow next — a guard on one route is a
+   * guard on one route.
+   */
+  private assertMayPropose(caller: AuthenticatedUser): void {
+    const may = WAIVER_PROPOSER_PERMISSIONS.some((permission) =>
+      caller.permissions.includes(permission),
+    );
+    if (may) return;
+    throw new ForbiddenException({
+      statusCode: 403,
+      code: 'EXIT_WAIVER_NOT_PROPOSABLE',
+      message:
+        'Proposing a clearance waiver is an HR action. Write access to employee records is not ' +
+        'sufficient on its own, because a waiver writes off money the company is owed.',
+    });
+  }
+
+  /**
+   * Applies an approved waiver (FR-016, task T088).
+   *
+   * **Idempotent**, the shape 016's T074 established for the attendance correction and for the same
+   * reason: an event handler that runs twice must not write two waivers. The `upsert` and the
+   * `updateMany` guarded on `status: pending` together make a repeat run a no-op rather than a
+   * duplicate.
+   *
+   * A **rejected** waiver never reaches here, so the obligation stays outstanding and the
+   * settlement stays blocked — which is the correct behaviour by construction rather than by a
+   * branch somebody has to get right. `onApprovalRejected` only marks the proposal.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_EXIT_CLEARANCE_WAIVER) return;
+
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: event.companyId,
+    };
+
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const proposal = await tx.exitClearanceWaiverProposal.findFirst({
+        where: {
+          id: event.entityId,
+          status: WAIVER_PROPOSAL_STATUS.pending,
+        },
+      });
+      // Already applied, or rejected, or from another tenant. Nothing to do, and nothing to log
+      // as an error: a second delivery of the same event is a normal thing for an event bus to do.
+      if (!proposal) return;
+
+      const approver = await this.finalApproverOf(
+        proposal.id,
+        proposal.companyId,
+      );
+
+      await tx.exitClearanceWaiver.upsert({
+        where: {
+          exitRecordId_itemKind_itemRef: {
+            exitRecordId: proposal.exitRecordId,
+            itemKind: proposal.itemKind,
+            itemRef: proposal.itemRef,
           },
         },
         create: {
-          companyId,
-          exitRecordId: clearance.exitRecordId,
-          itemKind: input.kind,
-          itemRef: input.ref,
-          reason: input.reason,
-          waivedByUserId,
+          companyId: proposal.companyId,
+          exitRecordId: proposal.exitRecordId,
+          itemKind: proposal.itemKind,
+          itemRef: proposal.itemRef,
+          reason: proposal.reason,
+          // T090. `waivedByUserId` stays **who proposed**; the countersignature is its own column.
+          // "HR waived this" and "HR asked and the Director agreed" are different facts.
+          waivedByUserId: proposal.proposedByUserId,
+          approvedByUserId: approver,
+          approvedAt: new Date(),
         },
-        // Re-waiving records the newer reason and author rather than refusing. Somebody
-        // correcting a reason should not have to delete evidence to do it.
-        update: { reason: input.reason, waivedByUserId, waivedAt: new Date() },
-      }),
-    );
+        update: {
+          reason: proposal.reason,
+          waivedByUserId: proposal.proposedByUserId,
+          approvedByUserId: approver,
+          approvedAt: new Date(),
+        },
+      });
 
-    return this.forEmployee(ctx, companyId, employeeId);
+      await tx.exitClearanceWaiverProposal.updateMany({
+        where: { id: proposal.id, status: WAIVER_PROPOSAL_STATUS.pending },
+        data: { status: WAIVER_PROPOSAL_STATUS.approved },
+      });
+    });
+  }
+
+  /**
+   * Who countersigned, through `ApprovalService` and never by querying the spine.
+   *
+   * The first version read `shared.ApprovalDecision` directly from here, and
+   * `spine-boundary.spec.ts` refused it — correctly. The spine's tables are reachable only through
+   * its service (016 research §1), and the one-line convenience of a join is exactly how a boundary
+   * becomes imaginary.
+   *
+   * `latestDecision` on an instance whose state is `approved` **is** the countersignature: the
+   * chain is one level, and the decision that finished it is the last one recorded. Null is
+   * tolerated rather than fatal — the waiver has been approved either way, and failing to apply it
+   * because a name could not be resolved would be the worse outcome.
+   */
+  private async finalApproverOf(
+    proposalId: string,
+    companyId: string,
+  ): Promise<string | null> {
+    const state = await this.approvals.stateOfSystem(
+      ACTION_EXIT_CLEARANCE_WAIVER,
+      proposalId,
+      companyId,
+    );
+    return state?.latestDecision?.actorUserId ?? null;
   }
 
   /**

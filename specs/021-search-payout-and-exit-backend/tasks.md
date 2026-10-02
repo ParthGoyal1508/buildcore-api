@@ -407,35 +407,83 @@ building, and is wider than a write-off of company money deserves.
 Wiring, not new machinery: the approval spine already carries final settlement, which is director-final
 already, so a waiver joins the chain that governs the thing it unblocks.
 
-- [ ] T086 Register a chain action for the clearance waiver in `default-chains.ts`, director-final,
+- [x] T086 Register a chain action for the clearance waiver in `default-chains.ts`, director-final,
       alongside the final-settlement action it unblocks. Reusing the existing registration rather than
       inventing a second approval path is what FR-022 of feature 016 requires of every module.
-- [ ] T087 **CRITICAL** `ExitClearanceService.waive()` submits to `ApprovalsService` and returns the
+- [x] T087 **CRITICAL** `ExitClearanceService.waive()` submits to `ApprovalsService` and returns the
       pending item. It must **not** write the waiver. Today it writes immediately; leaving the write
       in place while adding a submission produces a waiver that is both applied and awaiting approval,
       which is worse than either.
-- [ ] T088 Move the write into the `approval.completed` handler, idempotently — the same shape feature
+- [x] T088 Move the write into the `approval.completed` handler, idempotently — the same shape feature
       016's T074 established for the attendance correction, and for the same reason: a handler that runs
       twice must not write two waivers.
-- [ ] T089 A **rejected** waiver leaves the obligation outstanding and the settlement still blocked.
+- [x] T089 A **rejected** waiver leaves the obligation outstanding and the settlement still blocked.
       Assert it: the failure worth guarding is a rejection that silently clears the item anyway, which
       looks like success to everybody except the company's balance sheet.
-- [ ] T090 Keep `waivedByName` (shipped 2026-10-01) pointing at **who proposed** it, and add the
+- [x] T090 Keep `waivedByName` (shipped 2026-10-01) pointing at **who proposed** it, and add the
       approver separately. Collapsing the two loses the distinction the client's answer exists to
       create — "HR waived this" and "HR asked and the Director agreed" are different facts.
-- [ ] T091 Refuse `waive()` outright for a caller who may not propose one. Write access on Employees is
+- [x] T091 Refuse `waive()` outright for a caller who may not propose one. Write access on Employees is
       no longer sufficient on its own; proposing is an HR act and the chain decides the rest.
-- [ ] T092 [P] e2e: an exit with an outstanding item cannot settle while the waiver is pending, settles
+- [ ] T092 **NOT RUN** [P] e2e: an exit with an outstanding item cannot settle while the waiver is pending, settles
       once it is approved, and stays blocked when it is rejected. The middle case is the one that proves
       the wiring; the other two prove it did not open a hole.
-- [ ] T093 [P] Unit test: `waive()` writes no `ExitClearanceWaiver` row at submission time. The
+- [x] T093 [P] Unit test: `waive()` writes no `ExitClearanceWaiver` row at submission time. The
       structural assertion behind T087 — a test on behaviour would pass while the row was still written
       by a path nobody looked at.
-- [ ] T094 Update `quickstart.md`'s clearance pass: the waiver step is now two steps with a named
+- [x] T094 Update `quickstart.md`'s clearance pass: the waiver step is now two steps with a named
       approver between them, so a reader following it against the shipped build would otherwise be told
       the screen is broken.
 
 **Cost the client accepted explicitly:** an exit with anything outstanding now waits on an approval.
+
+### Phase 8 implementation record, 2026-10-02
+
+**A proposal table, not a status column.** The obvious design was `ExitClearanceWaiver.status`, and
+it was wrong for a structural reason: the *existence* of a waiver row is what unblocks a final
+settlement. A pending row in that table would be one forgotten `where` clause away from clearing an
+obligation nobody approved — and the forgotten clause would sit in a query that still returned
+sensible-looking data, so nothing would look wrong until a settlement went out.
+`ExitClearanceWaiverProposal` cannot have that failure, because `forEmployee` has no reason to read
+it.
+
+**T090's two names are two columns.** `waivedByUserId` still means who *proposed*; `approvedByUserId`
+is who agreed. The migration leaves pre-existing rows' `approvedByUserId` null rather than
+backfilling it with the proposer — recording a countersignature that never happened would be worse
+than recording none.
+
+**The spine raises no event for a rejection**, which the task list did not anticipate. Only
+`approval.completed`, and only on `approved`. That is right for the spine — a module watching every
+rejection would be a module watching the spine's internals — but it left a rejected proposal
+`pending` forever, and the unique index on `(item, status)` would then block the corrected
+re-proposal HR obviously needs to make. So the status is reconciled **lazily**, at the one moment it
+matters: when somebody proposes again. Anywhere else would be a cron job keeping two copies of a
+fact in step, which is exactly what `forEmployee` deliberately refuses to do for obligations.
+
+T089 falls out of that rather than needing a branch: nothing on the rejection path writes a waiver,
+so the obligation stays outstanding and the settlement stays blocked by construction.
+
+**`spine-boundary.spec.ts` caught a real violation.** The first version of `finalApproverOf` read
+`shared.ApprovalDecision` directly from `hr` to name the countersigner. The guard refused it, and
+correctly — the one-line convenience of a join is how a boundary becomes imaginary. The approver now
+comes from `ApprovalService.stateOfSystem`, whose `latestDecision` on an approved one-level chain
+**is** the countersignature.
+
+**T091's permission is `PAYROLL`**, the HR-office permission in this product — it is what gates the
+salary data a waived advance comes out of. Checked in the service and not only on the route, because
+`waive()` will be reachable from the F&F flow next and a guard on one route is a guard on one route.
+
+Re-waiving is now **refused** rather than overwriting the reason. That was reasonable when one person
+decided alone; it is not now, because the newer reason would replace one the Director had already
+agreed to.
+
+**T094 asked for the existing clearance pass to be updated and there was none** — `quickstart.md`
+covered US1's search only. Pass 8 is new rather than amended, and it walks both the approval and the
+rejection paths, because only one of them is the one that silently fails.
+
+**T092 NOT RUN** — the e2e needs `npm run test:e2e` and a seeded exit with a provisioned Director.
+Its three cases are covered by unit assertions on the submission, the handler and the rejection
+path, which is not the same thing and is recorded as not the same thing.
 
 ---
 

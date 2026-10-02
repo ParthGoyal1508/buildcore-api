@@ -97,6 +97,21 @@ export const ACTION_FINAL_SETTLEMENT = 'final_settlement';
 export const ACTION_OPERATOR_FUEL_RECOVERY = 'operator_fuel_recovery';
 
 /**
+ * Waiving an outstanding obligation on an exit clearance (021 FR-016).
+ *
+ * **The client's answer was "HR, with a Director countersign"**, which is one approval level and not
+ * a chain: HR proposes by submitting, and the Director is the only approver. That is the same shape
+ * the director-final actions take, so it is seeded the same way — but it is a *countersignature on
+ * an HR act*, not a fifth entry in the four actions the client named as needing the Director's final
+ * word. See `DIRECTOR_FINAL_SEEDED_ACTIONS` below, where the two senses are separated.
+ *
+ * Registered beside `ACTION_FINAL_SETTLEMENT`, the action it unblocks. A waiver that had its own
+ * approval path would be a second way to authorise the same money, which is exactly what 016's
+ * FR-022 forbids each module from inventing.
+ */
+export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these
@@ -158,6 +173,12 @@ export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
 /**
  * The action types seeded with the director-only chain above.
  *
+ * **Two senses of "director-final" meet in this list, and keeping them apart matters.** The first
+ * six are the actions the client named as requiring the Director's final word — a policy answer,
+ * confirmed on 2026-10-02, and the reason `ACTION_OPERATOR_FUEL_RECOVERY` is deliberately *not*
+ * here. The last is an action whose default chain happens to be one Director level because that is
+ * what a countersignature is; adding it does not widen the confirmed policy set.
+ *
  * `payroll_run` is absent deliberately: it has its own three-level chain (Note 7), and
  * seeding order matters less than saying why — a one-level payroll chain would drop the
  * Site Incharge and HR levels the client asked for.
@@ -169,4 +190,7 @@ export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
   ACTION_LETTER_LOI,
   ACTION_LETTER_PURCHASE_ORDER,
   ACTION_FINAL_SETTLEMENT,
+  // HR proposes, the Director countersigns (021 FR-016). One level, because there is exactly one
+  // approver in that sentence.
+  ACTION_EXIT_CLEARANCE_WAIVER,
 ];

@@ -2777,8 +2777,62 @@ model ExitClearanceWaiver {
   waivedByUserId String
   waivedAt       DateTime @default(now())
 
+  /// Who countersigned the waiver (021 FR-016, Phase 8 — added 2026-10-02).
+  ///
+  /// **Separate from `waivedByUserId`, and the distinction is the point.** The client's answer was
+  /// "HR, with a Director countersign": `waivedByUserId` is who *proposed* the write-off, this is
+  /// who *agreed* to it. Collapsing the two would lose the fact the answer exists to create —
+  /// "HR waived this" and "HR asked and the Director agreed" are different statements about who
+  /// is answerable for the money.
+  ///
+  /// Nullable only for rows written before this phase, which were applied on HR's authority alone.
+  /// A waiver created from here always has one.
+  approvedByUserId String?
+  approvedAt       DateTime?
+
   @@unique([exitRecordId, itemKind, itemRef])
   @@index([companyId])
+  @@schema("hr")
+}
+
+/// A waiver somebody has **proposed** but nobody has countersigned yet (021 FR-016, Phase 8).
+///
+/// A table of its own rather than a status column on `ExitClearanceWaiver`, because the existence
+/// of a waiver row is what unblocks a final settlement. A pending proposal living in that table
+/// would be one forgotten `where` clause away from clearing an obligation nobody approved — and
+/// the forgotten clause would be in a query that still returned sensible-looking data, so nothing
+/// would look wrong until a settlement went out.
+///
+/// The approval spine stores only `(entityType, entityId)` and never dereferences it, so this row's
+/// id is what the pending item points at. The reason and the proposer live here and move to the
+/// waiver on approval.
+model ExitClearanceWaiverProposal {
+  id        String @id @default(cuid())
+  companyId String
+
+  exitRecordId String
+  exitRecord   ExitRecord @relation(fields: [exitRecordId], references: [id], onDelete: Cascade)
+
+  itemKind String
+  itemRef  String
+
+  /// Required, for the same reason the waiver's is: this writes off company money.
+  reason String
+
+  proposedByUserId String
+  proposedAt       DateTime @default(now())
+
+  /// `pending`, `approved` or `rejected`. A string rather than an enum: the spine owns the
+  /// lifecycle and this only records where it ended, so a new enum value would be a second place
+  /// to keep the same list correct.
+  status String @default("pending")
+
+  /// One live proposal per obligation. A second proposal for the same item while one is pending
+  /// would put two pending items in the Director's queue for one decision; the service refuses it
+  /// and this index is what makes the refusal true rather than likely.
+  @@unique([exitRecordId, itemKind, itemRef, status])
+  @@index([companyId])
+  @@index([status])
   @@schema("hr")
 }
 
@@ -2837,6 +2891,7 @@ model ExitRecord {
 
   /// 021 FR-016: obligations waived on this exit.
   clearanceWaivers ExitClearanceWaiver[]
+  waiverProposals  ExitClearanceWaiverProposal[]
 
   @@index([employeeId])
   @@schema("hr")

@@ -1505,6 +1505,17 @@ Table ExitClearanceWaiver {
 reason, and this one writes off company money.']
   waivedByUserId String [not null]
   waivedAt DateTime [default: `now()`, not null]
+  approvedByUserId String [note: 'Who countersigned the waiver (021 FR-016, Phase 8 — added 2026-10-02).
+
+**Separate from `waivedByUserId`, and the distinction is the point.** The client\'s answer was
+"HR, with a Director countersign": `waivedByUserId` is who *proposed* the write-off, this is
+who *agreed* to it. Collapsing the two would lose the fact the answer exists to create —
+"HR waived this" and "HR asked and the Director agreed" are different statements about who
+is answerable for the money.
+
+Nullable only for rows written before this phase, which were applied on HR\'s authority alone.
+A waiver created from here always has one.']
+  approvedAt DateTime
 
   indexes {
     (exitRecordId, itemKind, itemRef) [unique]
@@ -1524,6 +1535,37 @@ at read time" is therefore not an extra requirement — it is what deriving mean
 
 A waiver does **not** mark the underlying obligation discharged (FR-014c). It records that
 the company stopped chasing it, with a name against the decision.'
+}
+
+Table ExitClearanceWaiverProposal {
+  id String [pk]
+  companyId String [not null]
+  exitRecordId String [not null]
+  exitRecord ExitRecord [not null]
+  itemKind String [not null]
+  itemRef String [not null]
+  reason String [not null, note: 'Required, for the same reason the waiver\'s is: this writes off company money.']
+  proposedByUserId String [not null]
+  proposedAt DateTime [default: `now()`, not null]
+  status String [not null, default: 'pending', note: '`pending`, `approved` or `rejected`. A string rather than an enum: the spine owns the
+lifecycle and this only records where it ended, so a new enum value would be a second place
+to keep the same list correct.']
+
+  indexes {
+    (exitRecordId, itemKind, itemRef, status) [unique]
+  }
+
+  Note: 'A waiver somebody has **proposed** but nobody has countersigned yet (021 FR-016, Phase 8).
+
+A table of its own rather than a status column on `ExitClearanceWaiver`, because the existence
+of a waiver row is what unblocks a final settlement. A pending proposal living in that table
+would be one forgotten `where` clause away from clearing an obligation nobody approved — and
+the forgotten clause would be in a query that still returned sensible-looking data, so nothing
+would look wrong until a settlement went out.
+
+The approval spine stores only `(entityType, entityId)` and never dereferences it, so this row\'s
+id is what the pending item points at. The reason and the proposer live here and move to the
+waiver on approval.'
 }
 
 Table AttendanceModification {
@@ -1558,6 +1600,7 @@ Table ExitRecord {
   updatedAt DateTime [not null]
   employee Employee [not null]
   clearanceWaivers ExitClearanceWaiver [not null, note: '021 FR-016: obligations waived on this exit.']
+  waiverProposals ExitClearanceWaiverProposal [not null]
 
   Note: 'Employee offboarding record (US11). The F&F settlement itself is a normal
 PayrollRun flagged `isFnf`, linked here.'
@@ -4802,6 +4845,8 @@ Ref: EmployeeLocationAssignment.employeeId > Employee.id [delete: Cascade]
 Ref: PendingAttendanceCorrection.employeeId > Employee.id [delete: Cascade]
 
 Ref: ExitClearanceWaiver.exitRecordId > ExitRecord.id [delete: Cascade]
+
+Ref: ExitClearanceWaiverProposal.exitRecordId > ExitRecord.id [delete: Cascade]
 
 Ref: AttendanceModification.employeeId > Employee.id [delete: Cascade]
 
