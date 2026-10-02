@@ -29,6 +29,13 @@ export class CompanyResponseDto {
   @ApiProperty() bonusRate: number;
   /** Overtime pay multiplier (005 FR-014a) — a multiplier, not a percent. */
   @ApiProperty() otMultiplier: number;
+  /**
+   * The account the payroll transfer is debited from (021 FR-008a).
+   *
+   * Not masked, unlike an employee's: this is the company's own account, named on every cheque it
+   * writes, and the people who can read this endpoint are the people who sign them.
+   */
+  @ApiPropertyOptional() payrollDebitAccountNumber: string | null;
   @ApiProperty() createdAt: Date;
   @ApiProperty() updatedAt: Date;
 

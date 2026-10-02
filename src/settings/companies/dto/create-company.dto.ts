@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Matches,
   Max,
   Min,
@@ -168,4 +169,16 @@ export class CreateCompanyDto {
   @Min(1)
   @Max(10)
   otMultiplier?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'The company’s own account the payroll transfer is debited from (021 FR-008a). A **string**, ' +
+      'because an account number’s leading zero is part of it — the client’s own sample debits ' +
+      '`09310400000819`. The bank transfer sheet refuses to generate without this, since every row ' +
+      'names the account the money leaves from.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  payrollDebitAccountNumber?: string;
 }
