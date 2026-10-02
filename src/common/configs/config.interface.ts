@@ -9,6 +9,7 @@ export interface Config {
   email: EmailConfig;
   hrPayroll: HrPayrollConfig;
   payrollSchedule: PayrollScheduleConfig;
+  bankSheet: BankSheetConfig;
   approvals: ApprovalsConfig;
   documents: DocumentsConfig;
   recruitment: RecruitmentConfig;
@@ -255,6 +256,39 @@ export interface PayrollScheduleConfig {
    * UTC-scheduled run fires on the last evening of the previous month.
    */
   timeZone: string;
+}
+
+/**
+ * The bank transaction sheet's column layout (021 FR-008a to FR-008g).
+ *
+ * **A named profile in configuration, not literals in the exporter** (Principle III, plan D12). The
+ * format belongs to a bank, not to this product: the client's file —
+ * `docs/RING ROAD JULY SALARY.xls` — is one bank's upload template, and the next bank will have
+ * another. Column *names* and the two constant codes change without a release; which employee field
+ * fills each column does not, and stays in code.
+ *
+ * Every value here was read off the sample file rather than inferred, including the seven columns
+ * that are always empty. A parser counting columns rejects a sheet that omits a blank one.
+ */
+export interface BankSheetConfig {
+  /**
+   * The 16 column headers, in the sample's exact order.
+   *
+   * Order is the contract. The bank reads by position and the header row is there for a human,
+   * which is why this is one ordered list rather than a map.
+   */
+  columns: string[];
+  /** The value of `Message Type` and `Transaction Type Code` — both `NEFT` in the sample. */
+  messageType: string;
+  transactionTypeCode: string;
+  /**
+   * How `Value Date` is written, as a **text** cell.
+   *
+   * `DD/MM/YYYY`, and deliberately not a date cell: a real date is re-rendered by whatever locale
+   * opens the file, and `21/08/2026` read as month 21 is a rejected file. The format string is here
+   * so a bank wanting `YYYY-MM-DD` is a configuration change.
+   */
+  valueDateFormat: 'DD/MM/YYYY' | 'YYYY-MM-DD';
 }
 
 /**

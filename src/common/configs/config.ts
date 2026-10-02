@@ -350,6 +350,42 @@ const config: Config = {
       'Asia/Kolkata',
   },
 
+  /**
+   * 021 FR-008a to FR-008g. Read off `docs/RING ROAD JULY SALARY.xls`, not inferred.
+   *
+   * The seven `CUSTOM_DETAILS*`/`Remarks`/`Purpose Of Payment` columns are empty in every row of
+   * the sample and are emitted anyway: a parser counting columns rejects a sheet that omits a blank.
+   */
+  bankSheet: {
+    columns: (
+      process.env.BANK_SHEET_COLUMNS ||
+      [
+        'CUSTOM_DETAILS1',
+        'Value Date',
+        'Message Type',
+        'Debit Account No.',
+        'Beneficiary Name',
+        'Payment Amount',
+        // The sample's own label. Every value under it is an IFSC and none is a SWIFT code —
+        // see `BANK_SHEET_IFSC_COLUMN` in the exporter.
+        'Beneficiary Bank Swift Code / IFSC Code',
+        'Beneficiary Account No.',
+        'Transaction Type Code',
+        'CUSTOM_DETAILS2',
+        'CUSTOM_DETAILS3',
+        'CUSTOM_DETAILS4',
+        'CUSTOM_DETAILS5',
+        'CUSTOM_DETAILS6',
+        'Remarks',
+        'Purpose Of Payment',
+      ].join('|')
+    ).split('|'),
+    messageType: process.env.BANK_SHEET_MESSAGE_TYPE || 'NEFT',
+    transactionTypeCode: process.env.BANK_SHEET_TRANSACTION_TYPE || 'NEFT',
+    valueDateFormat: (process.env.BANK_SHEET_VALUE_DATE_FORMAT ||
+      'DD/MM/YYYY') as 'DD/MM/YYYY' | 'YYYY-MM-DD',
+  },
+
   documents: {
     stagedDocumentRetentionHours: numberFromEnv(
       process.env.DOCUMENTS_STAGED_RETENTION_HOURS,

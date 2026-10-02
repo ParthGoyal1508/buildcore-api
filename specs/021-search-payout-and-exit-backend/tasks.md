@@ -491,37 +491,116 @@ path, which is not the same thing and is recorded as not the same thing.
 
 `docs/RING ROAD JULY SALARY.xls` closes the last open question in this feature. FR-008a to FR-008g.
 
-- [ ] T095 [US3] Emit the 16 columns in the sample's exact order, **including the seven that are always
+- [x] T095 [US3] Emit the 16 columns in the sample's exact order, **including the seven that are always
       empty**. A parser counting columns rejects a sheet that omits blanks.
-- [ ] T096 **CRITICAL** [US3] Write every account number — beneficiary and debit — as a **text** cell.
+- [x] T096 **CRITICAL** [US3] Write every account number — beneficiary and debit — as a **text** cell.
       The sample is inconsistent: numeric except where a leading zero forced Excel's hand
       (`0060311000001404`, `05152122005693`, `05213211061311`). A numeric cell destroys the zero and
       the first anybody knows is a failed transfer on payment day. This is the task this phase exists
       for.
-- [ ] T097 [P] [US3] Unit test: an account number beginning with a zero survives a round trip through
+- [x] T097 [P] [US3] Unit test: an account number beginning with a zero survives a round trip through
       the generated file. Assert on the **bytes written**, not on the value passed in — the bug lives
       in the cell type, so a test that checks the input proves nothing.
-- [ ] T098 [US3] Write `Value Date` as the text `DD/MM/YYYY`. Not a date cell: a real date is
+- [x] T098 [US3] Write `Value Date` as the text `DD/MM/YYYY`. Not a date cell: a real date is
       re-rendered by the reader's locale, and `21/08/2026` read as month 21 is a rejected file.
-- [ ] T099 [US3] Put the **IFSC** in the column labelled "Beneficiary Bank Swift Code / IFSC Code".
+- [x] T099 [US3] Put the **IFSC** in the column labelled "Beneficiary Bank Swift Code / IFSC Code".
       Every value in the sample is an IFSC and none is a SWIFT code. Validate the IFSC shape (four
       letters, `0`, six alphanumerics) before export rather than after rejection.
-- [ ] T100 **CRITICAL** [US3] Source `Beneficiary Name` from a **bank account holder name** held against
+- [x] T100 **CRITICAL** [US3] Source `Beneficiary Name` from a **bank account holder name** held against
       the employee's bank details, not from the employee master. The sample's names are misspelled
       against any HR record because they match the beneficiary's own bank. If no such field exists this
       task includes adding it — and an export that silently falls back to the employee's name is worse
       than one that refuses, because the refusal happens before payment day.
-- [ ] T101 [P] [US3] Refuse to export a row whose bank account holder name is unset, naming the
+- [x] T101 [P] [US3] Refuse to export a row whose bank account holder name is unset, naming the
       employee. A blank beneficiary name is a transfer that fails at the bank.
-- [ ] T102 [US3] Header row and payment rows only. **No totals row** — the sample has none, and a total
+- [x] T102 [US3] Header row and payment rows only. **No totals row** — the sample has none, and a total
       appended to a file read row-by-row becomes a payment instruction.
-- [ ] T103 [P] [US3] e2e: generate a sheet for a seeded run and compare it cell-for-cell and
+- [ ] T103 **NOT RUN** [P] [US3] e2e: generate a sheet for a seeded run and compare it cell-for-cell and
       **cell-type-for-cell-type** against the sample's shape. The types are the contract here, not just
       the values.
-- [ ] T104 [US3] Payslip layout per `docs/NC0060_Payslip_Feb 2026.pdf`: company address block, the
+- [x] T104 [US3] Payslip layout per `docs/NC0060_Payslip_Feb 2026.pdf`: company address block, the
       two-column employee panel (bank, PAN, PF UAN, location, effective work days, LOP), earnings as
       **Full and Actual** side by side, deductions, totals, net pay in words, and the "system generated"
       line.
-- [ ] T105 [US3] **LOP proration is specified but unproven by the sample** — LOP is zero in it, so Full
+- [x] T105 [US3] **LOP proration is specified but unproven by the sample** — LOP is zero in it, so Full
       and Actual are identical throughout. Implement the proration and test it directly; do not treat
       the sample as evidence that the two columns agree.
+
+### Phase 9 implementation record, 2026-10-02
+
+Both client files read directly rather than taken on description — `xlrd` for the workbook, `pypdf`
+for the payslip — and both contradicted something.
+
+#### The bank sheet replaced a format we invented
+
+`BankSheetService` was emitting **seven columns of our own design with a bold TOTAL row**. Reasonable
+while the question was open, and wrong in three ways the sample settled at once:
+
+* **16 columns, seven of them always empty.** Emitted, because a parser counting columns rejects a
+  sheet that omits a blank.
+* **No totals row** (T102). A total appended to a file read row-by-row becomes a payment
+  instruction — for the sum of every other row, to whatever account is on it.
+* **Every account number as text** (T096). The sample is *inconsistent* here: numeric except where a
+  leading zero forced Excel's hand (`0060311000001404`, `05152122005693`, `05213211061311`). Being
+  consistent is the fix, because "text when it starts with a zero" is a rule somebody has to get
+  right every time.
+
+**Two fields had nowhere to come from, so T100 included adding them.**
+`Employee.bankAccountHolderName` is the name the *beneficiary's own bank* holds — in the sample these
+are misspelled against any HR record ("Arivnd", "Rosan") because that is what they are. A transfer is
+matched on the account number, but a name the bank does not recognise is a returned payment, and the
+export **refuses** the row rather than substituting the employee's name: a silent fallback moves that
+discovery to payment day. `Company.payrollDebitAccountNumber` is the account every row debits —
+`09310400000819` in the sample, leading zero included, which is why it is a text column.
+
+**Every assertion in the spec reads the bytes back out of the generated workbook.** The bug this
+phase exists to prevent lives in the *cell type*: a test on the value passed in would pass while the
+account number was written as a number and its zero destroyed on the way to disk. 17 tests, including
+the sample's own six IFSCs against the validator.
+
+The format itself is a **named profile in configuration** (Principle III, plan D12) — headers and the
+two NEFT codes, because the format belongs to a bank and the next bank will have another. Which
+employee field fills each column stays in code, as positions, because the bank reads by position.
+
+#### The payslip, and what the sample could not prove
+
+`docs/NC0060_Payslip_Feb 2026.pdf` adds a company address block, a two-column employee panel (bank,
+PAN, PF UAN, location, effective work days, LOP), earnings as **Full and Actual** side by side, and
+the "system generated" closing line. All built.
+
+**T105 was right to warn, and the warning was load-bearing.** LOP is zero in every row of the sample,
+so Full and Actual are identical all the way down it — the sample is **no evidence whatever** that
+the two columns agree. The proration is therefore tested against a fixture with 2.5 LOP days where
+they must not agree, and the fixture's comment says so, because the obvious next change is somebody
+"simplifying" it to match the sample.
+
+Three things fell out of building it:
+
+* **The Full figures had to be stored, not derived.** Deriving them from the employee master on read
+  would let next year's salary revision retroactively rewrite the Full column of a payslip already
+  issued — and the Actual figures are stored for exactly that reason, so deriving one half would make
+  one half of the table authoritative and the other not.
+* **No backfill, deliberately.** Slips issued before today have no record of their unprorated
+  entitlement. Copying the Actual figure across would assert "no LOP that month" on precisely the
+  slips where there might have been some, so the columns are nullable and the PDF prints an em dash.
+  Full equal to Actual is a real and common statement; it must not also be what "we do not know"
+  looks like.
+* **Overtime has no Full figure and never will.** It is hours worked, not an entitlement LOP can
+  reduce. Null, not a copy of the actual, which would assert a monthly overtime entitlement.
+
+The account number on the payslip is **masked**, unlike on the bank sheet. A bank needs the full
+number to move money; an employee already knows their own, and a payslip is emailed, forwarded and
+printed.
+
+The old centred layout is kept for a caller with no identity to supply — a half-drawn header block
+would be worse than the heading it replaces.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,253 tests across 116 suites**, Nest injector
+resolves. Two migrations.
+
+**T103 NOT RUN** — the e2e cell-for-cell comparison against the sample needs `npm run test:e2e` and a
+seeded run. Its substance is covered by the unit spec, which reads the generated bytes and asserts on
+cell *types*; that is the contract T103 names, verified without the seeded run rather than instead of
+it.

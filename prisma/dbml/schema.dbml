@@ -215,6 +215,15 @@ a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
 default. Company-configurable rather than a literal — Constitution Principle III.']
+  payrollDebitAccountNumber String [note: 'The company\'s own account the payroll transfer is debited from (021 FR-008a).
+
+A **string**, not a number, and the sample file is the argument: every value in the
+`Debit Account No.` column of `docs/RING ROAD JULY SALARY.xls` is `09310400000819` — an account
+number whose leading zero is part of it. Stored as text here so it cannot be lost before the
+export even looks at it.
+
+Nullable, and the export refuses rather than guesses. Not PII in the sense the employee\'s
+account is: this is the company\'s own account, named on every cheque it writes.']
   labourCashDenominations Int[] [not null, note: 'Currency note denominations used to compute a cash payment sheet\'s breakup
 (013 FR-027), descending. Company-configurable because the notes in circulation
 change by legislation (the ₹2000 note\'s withdrawal being the recent example),
@@ -1110,6 +1119,17 @@ last 4 by PiiMaskingInterceptor, unmasked only via the audited reveal-pii path.'
   bankBranch String
   bankAccountNumberEncrypted String [note: 'Regulated PII — see aadhaarEncrypted.']
   ifscCode String
+  bankAccountHolderName String [note: 'The name the **bank** holds against this account (021 FR-008e, task T100).
+
+Separate from the employee\'s own name, and that separation is the point rather than an
+oversight. In `docs/RING ROAD JULY SALARY.xls` the beneficiary names are misspelled against any
+HR record — "Arivnd", "Rosan" — because they are what the beneficiary\'s own bank has on file.
+A transfer is matched on the account number, but a name that disagrees with the bank\'s is what
+gets a payment returned, and the first anybody knows is on payment day.
+
+Nullable, and the bank export **refuses** a row where it is unset rather than falling back to
+the employee\'s name. A silent fallback is worse than a refusal: the refusal happens while
+somebody can still fix it.']
   mobile String
   alternateMobile String
   email String
@@ -1807,6 +1827,25 @@ service pairs them explicitly so the `draft` check can never be skipped.']
   earningSiteAllowance Decimal [not null]
   earningSpecialAllowance Decimal [not null]
   earningOt Decimal [not null]
+  fullEarningBasic Decimal [note: 'The **unprorated** monthly entitlement for each component (021 FR-008f, task T105).
+
+`docs/NC0060_Payslip_Feb 2026.pdf` prints earnings as two columns, Full and Actual: what the
+salary structure says per month, beside what LOP left of it. The `earning*` columns above are
+the Actual ones.
+
+**Stored, not derived from the employee master on read.** A salary revision next year would
+otherwise retroactively rewrite the Full column of a payslip already issued — and the figures
+above are stored for exactly that reason, so deriving these would make one half of the same
+table authoritative and the other half not.
+
+Nullable, and only because every slip issued before 2026-10-02 predates them. The PDF prints
+an em dash rather than repeating the Actual figure where they are null: Full equal to Actual
+means "no LOP this month", and a reader must not be unable to tell that from "we never
+recorded it".']
+  fullEarningHra Decimal
+  fullEarningConveyance Decimal
+  fullEarningSiteAllowance Decimal
+  fullEarningSpecialAllowance Decimal
   deductionPf Decimal [not null]
   deductionEsic Decimal [not null]
   deductionPt Decimal [not null]

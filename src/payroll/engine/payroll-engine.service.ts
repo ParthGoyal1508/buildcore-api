@@ -598,8 +598,38 @@ export class PayrollEngineService {
       where: { payrollRunId: runId },
     });
 
+    // 021 FR-008f (T105). The payslip prints each earning as Full beside Actual: the monthly
+    // entitlement beside what LOP left of it. `PayrollLineItem` holds only the prorated figures, so
+    // the entitlement comes from the salary structure — read **now**, at the moment the slip is
+    // written, and stored on it. Reading it when the slip is *displayed* would let next year's
+    // salary revision rewrite the Full column of a payslip already issued.
+    const structures = await tx.employee.findMany({
+      where: { id: { in: lines.map((l) => l.employeeId) } },
+      select: {
+        id: true,
+        basic: true,
+        hra: true,
+        conveyanceAllowance: true,
+        siteAllowance: true,
+        specialAllowance: true,
+      },
+    });
+    const structureOf = new Map(structures.map((e) => [e.id, e]));
+
     for (const l of lines) {
+      const full = structureOf.get(l.employeeId);
       const data = {
+        // Null when the employee's row has gone between the run and this write — rare, and an em
+        // dash on the payslip is the honest rendering of it.
+        fullEarningBasic: full?.basic ?? null,
+        fullEarningHra: full?.hra ?? null,
+        fullEarningConveyance: full?.conveyanceAllowance ?? null,
+        fullEarningSiteAllowance: full?.siteAllowance ?? null,
+        // Deliberately **not** `+ reimbursement.total`, unlike the Actual figure. A reimbursement
+        // rides in special allowance because it must not enter the PF/ESIC/PT bases; it is not part
+        // of a monthly entitlement, and printing it in the Full column would make the structure
+        // look like it changed.
+        fullEarningSpecialAllowance: full?.specialAllowance ?? null,
         monthDays: l.monthDays,
         payableDays: l.payableDays,
         lopDays: l.lopDays,
