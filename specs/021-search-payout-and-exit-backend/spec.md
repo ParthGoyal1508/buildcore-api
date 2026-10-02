@@ -28,6 +28,31 @@ to quickly find projects."*
 - Q: Does a name match rank differently from a code match? → A: **An exact code match ranks first.** A code is unambiguous and someone who typed one knows exactly what they want; a name match is a guess the system is helping with. Beyond that single rule, ordering is not specified here.
 - Q: Does searching by name widen what a user can see? → A: **No.** FR-002's company and permission scoping is applied to results regardless of which field matched. A name is not a weaker key than a code for authorisation purposes — it is only a second way to arrive at the same record, and a record the caller may not view stays invisible either way.
 
+### Session 2026-10-02, second round — the files arrived
+
+`docs/RING ROAD JULY SALARY.xls` and `docs/NC0060_Payslip_Feb 2026.pdf`.
+
+- Q: What does the bank sheet actually look like? → A: **16 fixed columns, 7 of them always empty**,
+  a NEFT run with one debit account and 23 beneficiary rows. Now FR-008a to FR-008g.
+- Q: Did waiting for it change anything, or was the configurable-mapping offer equivalent? → A: **It
+  changed three things a reasonable person would have got wrong.** Account numbers must be text, not
+  numbers, or leading zeros vanish — and the sample is itself inconsistent, numeric except where a
+  leading zero forced Excel's hand. The value date is a `DD/MM/YYYY` *string*, not a date cell. And the
+  column labelled "Swift Code" holds an IFSC. None of those is guessable from a column mapping.
+- Q: Where does the beneficiary name come from? → A: **The bank account, not the employee record.**
+  Several names in the sample are misspelled against any HR master (`Arivnd`, `Viashal`) because they
+  match what the beneficiary's own bank holds. An export using our spelling fails for the employees
+  whose records are most carefully kept, which is the opposite of the intuition.
+- Q: And the payslip PDF? → A: **A layout reference from another company**, not BuildCore data — it is
+  Next Creation Software's own payslip. Taken as the shape item 8 should produce: a company address
+  block, a two-column employee detail panel (bank, PAN, PF UAN, location, effective work days, LOP),
+  earnings as **Full and Actual** side by side, deductions, totals, net pay in words, and a "system
+  generated, does not require signature" line.
+- Q: Does it settle how loss-of-pay prorating is shown? → A: **No — LOP is zero in it**, so Full and
+  Actual are identical in every row and the proration the two columns exist for is unexercised. The
+  two-column shape is adopted; a sample with LOP above zero would be worth having before the
+  arithmetic is finalised. Recorded rather than assumed.
+
 ### Session 2026-10-02
 
 The last items on this feature's open list.
@@ -247,6 +272,33 @@ settlement is blocked until both are resolved or waived.
 - **FR-008**: Users MUST be able to upload a bank transaction sheet against a payroll run.
 - **FR-009**: System MUST match uploaded transaction lines to payroll lines and report unmatched
   lines and amount differences.
+- **FR-008a**: The bank sheet MUST emit exactly 16 columns in this order: `CUSTOM_DETAILS1`,
+  `Value Date`, `Message Type`, `Debit Account No.`, `Beneficiary Name`, `Payment Amount`,
+  `Beneficiary Bank Swift Code / IFSC Code`, `Beneficiary Account No.`, `Transaction Type Code`,
+  `CUSTOM_DETAILS2` … `CUSTOM_DETAILS6`, `Remarks`, `Purpose Of Payment`. Seven are always empty and
+  MUST still be present — a bank parser counting columns rejects a sheet that omits the blanks.
+- **FR-008b**: **Account numbers MUST be written as text, never as numbers.** The client's own sample
+  is inconsistent on this — some account numbers are numeric cells and some are text — and the ones
+  that are text are exactly the ones beginning with a zero: `0060311000001404`, `05152122005693`,
+  `05213211061311`. Excel was forced into text for those and left the rest numeric. Writing a numeric
+  cell destroys the leading zero, and the first anybody knows is a failed transfer on payment day.
+  This is the single most consequential line in this feature.
+- **FR-008c**: `Value Date` MUST be written as the **text** `DD/MM/YYYY`, not as a date cell. The
+  sample carries a string. A real date cell is re-rendered by the reader's locale, and `21/08/2026`
+  read as month 21 is a rejected file at best and the wrong date at worst.
+- **FR-008d**: The column labelled *Swift Code / IFSC Code* MUST carry the **IFSC**. Every value in the
+  sample is an IFSC (`SBIN0062263`, `HDFC0002533`); none is a SWIFT code. The label is the bank's and
+  cannot be corrected, so the requirement names what goes in it.
+- **FR-008e**: `Beneficiary Name` MUST come from the **bank account holder's name**, not from the
+  employee master. The sample's names are short and several are misspelled relative to any HR record
+  (`Arivnd`, `Viashal`, `Rosan`) because they match what the beneficiary's bank holds. A transfer is
+  validated against the account, so an export using our own spelling will fail for exactly the
+  employees whose records are tidiest.
+- **FR-008f**: The sheet MUST carry a header row and payment rows only — **no totals row**. The sample
+  has none, and a total appended to a file a parser reads row-by-row becomes a payment instruction.
+- **FR-008g**: `Message Type` and `Transaction Type Code` both carry the mode (`NEFT` in the sample)
+  and MUST both be emitted. The duplication is the bank's; collapsing it to one column changes the
+  column count FR-008a fixes.
 - **FR-010**: System MUST recover advances outstanding at the time the bank payment sheet is produced,
   including advances taken after the run was approved.
 - **FR-011**: System MUST show each recovery as a named line on the bank payment sheet.
@@ -354,15 +406,9 @@ settlement is blocked until both are resolved or waived.
   half and recorded there; this entry corrects the drift, because the answer sat in one repository's
   specification while the other still called it open. A run can be corrected after being marked paid,
   and an automatic send puts the wrong figure in somebody's inbox where it cannot be recalled.
-- **STILL OPEN, and the client is supplying it (2026-10-02).** FR-008 and FR-009 need a real sample
-  sheet; the client has undertaken to provide both this and a real BOQ as files. A configurable column
-  mapping was offered as a way to start without them and **declined in favour of waiting** — so
-  nothing here is built against a guessed layout. That is the safer order: a sheet the bank rejects is
-  discovered on payment day.
-
-  The design intent is recorded so the files become test cases rather than a specification: column
-  order, headers and date format belong in settings, not in code, so a bank changing its layout is a
-  configuration change.
+- **RESOLVED 2026-10-02: the sample arrived** — `docs/RING ROAD JULY SALARY.xls`, 23 payment rows of a
+  real NEFT run. The format is now FR-008a to FR-008g below. Waiting rather than guessing was the right
+  order: the file contradicts three things a sensible person would have assumed.
 - **RESOLVED 2026-10-02: HR proposes, the Director countersigns.** A waiver becomes a reviewable item
   on the existing approval spine rather than a unilateral act. The authority therefore matches final
   settlement itself, which is already director-final.

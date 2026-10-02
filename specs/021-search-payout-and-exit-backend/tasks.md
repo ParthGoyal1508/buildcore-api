@@ -436,3 +436,44 @@ already, so a waiver joins the chain that governs the thing it unblocks.
       the screen is broken.
 
 **Cost the client accepted explicitly:** an exit with anything outstanding now waits on an approval.
+
+---
+
+## Phase 9: The bank sheet and the payslip (added 2026-10-02, files received)
+
+`docs/RING ROAD JULY SALARY.xls` closes the last open question in this feature. FR-008a to FR-008g.
+
+- [ ] T095 [US3] Emit the 16 columns in the sample's exact order, **including the seven that are always
+      empty**. A parser counting columns rejects a sheet that omits blanks.
+- [ ] T096 **CRITICAL** [US3] Write every account number — beneficiary and debit — as a **text** cell.
+      The sample is inconsistent: numeric except where a leading zero forced Excel's hand
+      (`0060311000001404`, `05152122005693`, `05213211061311`). A numeric cell destroys the zero and
+      the first anybody knows is a failed transfer on payment day. This is the task this phase exists
+      for.
+- [ ] T097 [P] [US3] Unit test: an account number beginning with a zero survives a round trip through
+      the generated file. Assert on the **bytes written**, not on the value passed in — the bug lives
+      in the cell type, so a test that checks the input proves nothing.
+- [ ] T098 [US3] Write `Value Date` as the text `DD/MM/YYYY`. Not a date cell: a real date is
+      re-rendered by the reader's locale, and `21/08/2026` read as month 21 is a rejected file.
+- [ ] T099 [US3] Put the **IFSC** in the column labelled "Beneficiary Bank Swift Code / IFSC Code".
+      Every value in the sample is an IFSC and none is a SWIFT code. Validate the IFSC shape (four
+      letters, `0`, six alphanumerics) before export rather than after rejection.
+- [ ] T100 **CRITICAL** [US3] Source `Beneficiary Name` from a **bank account holder name** held against
+      the employee's bank details, not from the employee master. The sample's names are misspelled
+      against any HR record because they match the beneficiary's own bank. If no such field exists this
+      task includes adding it — and an export that silently falls back to the employee's name is worse
+      than one that refuses, because the refusal happens before payment day.
+- [ ] T101 [P] [US3] Refuse to export a row whose bank account holder name is unset, naming the
+      employee. A blank beneficiary name is a transfer that fails at the bank.
+- [ ] T102 [US3] Header row and payment rows only. **No totals row** — the sample has none, and a total
+      appended to a file read row-by-row becomes a payment instruction.
+- [ ] T103 [P] [US3] e2e: generate a sheet for a seeded run and compare it cell-for-cell and
+      **cell-type-for-cell-type** against the sample's shape. The types are the contract here, not just
+      the values.
+- [ ] T104 [US3] Payslip layout per `docs/NC0060_Payslip_Feb 2026.pdf`: company address block, the
+      two-column employee panel (bank, PAN, PF UAN, location, effective work days, LOP), earnings as
+      **Full and Actual** side by side, deductions, totals, net pay in words, and the "system generated"
+      line.
+- [ ] T105 [US3] **LOP proration is specified but unproven by the sample** — LOP is zero in it, so Full
+      and Actual are identical throughout. Implement the proration and test it directly; do not treat
+      the sample as evidence that the two columns agree.
