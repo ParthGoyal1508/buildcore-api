@@ -255,6 +255,92 @@ export class RaBillsService {
   }
 
   /**
+   * The award, with what has been measured against it, for the RA bill sheet (FR-007).
+   *
+   * The three quantities FR-007 asks for, before anybody types: awarded, measured to date, and
+   * remaining. A sheet that showed only the award would make the biller work out the remainder from
+   * a column they cannot see, which is the arithmetic this feature exists to remove.
+   *
+   * `excludeBillId` is for the revision sheet: the bill being revised must not count its own
+   * existing quantities as measured, or every revision looks like an over-measurement of itself.
+   */
+  async awardFor(
+    ctx: RlsContext,
+    workOrderId: string,
+    options: { excludeBillId?: string } = {},
+  ): Promise<{
+    workOrderId: string;
+    retentionPercent: number;
+    lines: RaBillLineView[];
+  }> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const workOrder = await tx.workOrder.findFirst({
+        where: { id: workOrderId },
+        select: { id: true, retentionPercent: true },
+      });
+      if (!workOrder) throw new NotFoundException('Work order not found');
+
+      const items = await tx.workOrderBOQItem.findMany({
+        where: { workOrderId },
+        orderBy: { createdAt: 'asc' },
+      });
+      const toDate = await this.measuredToDate(
+        tx,
+        items.map((item) => item.id),
+        options.excludeBillId
+          ? { excludeBillId: options.excludeBillId }
+          : undefined,
+      );
+
+      return {
+        workOrderId,
+        retentionPercent: workOrder.retentionPercent.toNumber(),
+        lines: items.map((item) => {
+          const awarded = item.awardedQty.toNumber();
+          const measured = toDate.get(item.id) ?? 0;
+          return {
+            id: item.id,
+            workOrderBoqItemId: item.id,
+            description: item.description,
+            unit: item.unit,
+            awardedQty: awarded,
+            // Nothing measured on *this* sheet yet — the biller is about to type it.
+            thisPeriodQty: 0,
+            toDateQty: measured,
+            // Negative where already over-measured. Reported, not clamped.
+            remainingQty: Math.round((awarded - measured) * 1000) / 1000,
+            rate: item.rate.toNumber(),
+            amount: 0,
+          };
+        }),
+      };
+    });
+  }
+
+  /**
+   * Every RA bill on a project, newest first.
+   *
+   * Sequential rather than `Promise.all`, matching `ClientBillsService.listForProject`: each `view`
+   * opens its own RLS transaction, and a hundred concurrent ones would exhaust the pool on a project
+   * with a long billing history.
+   */
+  async listForProject(
+    ctx: RlsContext,
+    projectId: string,
+  ): Promise<RaBillView[]> {
+    const bills = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABill.findMany({
+        where: { projectId },
+        orderBy: { billingDate: 'desc' },
+        select: { id: true },
+      }),
+    );
+    const out: RaBillView[] = [];
+    for (const bill of bills) out.push(await this.view(ctx, bill.id));
+    return out;
+  }
+
+  /**
    * Sends a bill for certification (018 Phase 4, FR-009's precondition).
    *
    * The bill becomes `submitted` and enters the `ra_bill` chain. **Nothing is approved here** — the

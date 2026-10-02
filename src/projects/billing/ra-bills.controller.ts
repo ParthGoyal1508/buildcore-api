@@ -44,6 +44,45 @@ import {
 export class RaBillsController {
   constructor(private readonly bills: RaBillsService) {}
 
+  @Get()
+  @ApiOperation({
+    summary: 'Every RA bill on a project, newest first',
+    description:
+      'Each bill carries its measured lines with the quantities FR-007 asks for — this period, to ' +
+      'date and remaining — as at its own billing date.',
+  })
+  async list(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('projectId') projectId: string,
+  ) {
+    return this.bills.listForProject(rlsContextFor(caller), projectId);
+  }
+
+  /**
+   * **Declared before `@Get(':id')`.** Nest matches in registration order, so with the
+   * parameterised route first this path would be answered as "RA bill awards not found" — which
+   * reads as a missing bill rather than as a route that never matched.
+   */
+  @Get('awards/:workOrderId')
+  @ApiOperation({
+    summary: 'The award with what has been measured against it (FR-007)',
+    description:
+      'Awarded, measured to date and remaining — **before** anybody types. A sheet showing only the ' +
+      'award would make the biller work out the remainder from a column they cannot see.\n\n' +
+      'Pass `excludeBillId` when loading the sheet to revise an existing bill: without it the bill ' +
+      'counts its own quantities as measured, and every revision looks like an over-measurement of ' +
+      'itself.',
+  })
+  async award(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('workOrderId') workOrderId: string,
+    @Query('excludeBillId') excludeBillId?: string,
+  ) {
+    return this.bills.awardFor(rlsContextFor(caller), workOrderId, {
+      excludeBillId,
+    });
+  }
+
   @Post(':id/submit')
   @ApiOperation({
     summary: 'Send a measured bill for certification (FR-009’s precondition)',
