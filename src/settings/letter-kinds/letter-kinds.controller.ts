@@ -11,7 +11,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -25,6 +30,8 @@ import {
   UpdateLetterKindDto,
 } from './dto/letter-kind.dto';
 import { LetterKindsService } from './letter-kinds.service';
+import { LetterKindFieldsService } from './letter-kind-fields.service';
+import { UpsertLetterKindFieldDto } from './dto/letter-kind-field.dto';
 import { resolveCompanyId } from '../company-scope';
 
 /**
@@ -41,7 +48,14 @@ import { resolveCompanyId } from '../company-scope';
 @RequirePermissions(Permission.SETTINGS)
 @Controller('letter-kinds')
 export class LetterKindsController {
-  constructor(private readonly kinds: LetterKindsService) {}
+  constructor(
+    private readonly kinds: LetterKindsService,
+    /**
+     * Trailing underscore because `fields` is also a route handler's name on this class, and the two
+     * would shadow each other. Renaming the handler would change the method name a reader greps for.
+     */
+    private readonly fields_: LetterKindFieldsService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -105,6 +119,67 @@ export class LetterKindsController {
       dto,
       { userId: caller.id, ipAddress },
     );
+  }
+
+  @Get(':id/fields')
+  @ApiOperation({
+    summary: 'The fields this kind’s templates may use (FR-011b)',
+    description:
+      'What the template editor offers. Each field names **where its value comes from**, because a ' +
+      'field that is only a label is a placeholder that renders blank — and a blank in a signed ' +
+      'letter is indistinguishable from a deliberate omission.',
+  })
+  async fields(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.fields_.fieldsFor(rlsContextFor(caller), id);
+  }
+
+  @Put(':id/fields/:token')
+  @ApiOperation({
+    summary: 'Declare or redefine one field on this kind (FR-011b, FR-011c)',
+    description:
+      'An upsert on the token, because editing a label or a source is the common case and a ' +
+      'delete-then-create would briefly leave saved templates referencing a field their kind did ' +
+      'not declare.\n\n' +
+      'A path naming regulated personal data is refused outright: **defining a kind does not grant ' +
+      'a way past FR-024.**',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'The path is missing, forbidden, or supplied for a `manual` field.',
+  })
+  async declareField(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('token') token: string,
+    @Body() dto: UpsertLetterKindFieldDto,
+  ) {
+    // The path's token wins over the body's, so a mismatched pair cannot create a field at one name
+    // while the caller believes they edited another.
+    return this.fields_.upsertField(rlsContextFor(caller), id, {
+      ...dto,
+      token,
+    });
+  }
+
+  @Delete(':id/fields/:token')
+  @HttpCode(204)
+  @ApiOperation({
+    summary: 'Withdraw a field from this kind',
+    description:
+      'Not refused while templates use it. An administrator tidying a kind should not be blocked by ' +
+      'a draft somebody abandoned — instead issuing refuses, naming the removed field, so the ' +
+      'failure lands on the person issuing rather than on the person tidying.',
+  })
+  async withdrawField(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('token') token: string,
+  ) {
+    await this.fields_.removeField(rlsContextFor(caller), id, token);
   }
 
   @Delete(':id')

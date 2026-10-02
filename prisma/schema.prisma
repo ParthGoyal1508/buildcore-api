@@ -731,6 +731,7 @@ model LetterKind {
 
   templates LetterTemplate[]
   letters   IssuedLetter[]
+  fields    LetterKindField[]
 
   /// Company-authored kinds are unique per company. Product-shipped ones (companyId
   /// NULL) need a SECOND, hand-authored partial unique index, because Postgres treats
@@ -738,6 +739,64 @@ model LetterKind {
   /// rows — see `LetterKind_shipped_key` in the migration.
   @@unique([companyId, key])
   @@index([companyId])
+  @@schema("settings")
+}
+
+/// One field a letter kind's templates may reference (017 FR-011b, FR-011c) — `bugs.md` item 18.
+///
+/// **Keyed to the kind, not to the shipped `LetterType` enum**, and that coupling is exactly what
+/// made item 18 half-work: FR-011 let an administrator define a letter kind, and `LETTER_TOKENS` was
+/// keyed by the five shipped enum values, so a kind the client defined got an **empty** field list.
+/// The template editor then refused every field it used. Both requirements were satisfied and
+/// together they produced nothing usable.
+///
+/// `buildcore-web`'s FR-014 already required "define a new letter kind, **its variable fields** and
+/// its fixed terms", so this table is the api catching up to a contract already written rather than
+/// new scope invented on both sides.
+model LetterKindField {
+  id String @id @default(cuid())
+
+  letterKindId String
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Cascade)
+
+  /// The `{{token}}` name, without braces. What a template references.
+  token String
+  /// What the template editor calls it. "Offered CTC", not `offeredCtc`.
+  label String
+
+  /// **Where the value comes from** (FR-011c).
+  ///
+  /// A field that is only a label is a placeholder that renders blank — and a blank in a signed
+  /// letter is indistinguishable from a deliberate omission, which is the failure this column exists
+  /// to prevent. `manual` is the honest exception: some terms are typed at issue time and have no
+  /// record behind them, and saying so is better than inventing a source.
+  sourceType LetterFieldSource
+  /// The path within the source record, dot-separated: `designation.name`, `basic`.
+  ///
+  /// Null only for `manual`, where there is no record to read. A `CHECK` in the migration enforces
+  /// that pairing rather than leaving it to every writer to remember.
+  sourcePath String?
+
+  /// Whether issuing without a value for this field is refused.
+  isRequired Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One declaration per token per kind.
+  @@unique([letterKindId, token])
+  @@index([letterKindId])
+  @@schema("settings")
+}
+
+enum LetterFieldSource {
+  employee
+  candidate
+  project
+  company
+  /// Typed at issue time. No record behind it, and `sourcePath` must be null.
+  manual
+
   @@schema("settings")
 }
 

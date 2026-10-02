@@ -420,6 +420,7 @@ two files to stay in step.']
   updatedAt DateTime [not null]
   templates LetterTemplate [not null]
   letters IssuedLetter [not null]
+  fields LetterKindField [not null]
 
   indexes {
     (companyId, key) [unique]
@@ -432,6 +433,43 @@ Replaces `enum LetterType`, which had five values and needed a migration for eac
 new one — directly contradicting FR-011, "define a new letter kind without a code
 change". A row is what makes both FR-011 and FR-022 (refuse deletion while letters
 reference it) structural rather than conventional.'
+}
+
+Table LetterKindField {
+  id String [pk]
+  letterKindId String [not null]
+  letterKind LetterKind [not null]
+  token String [not null, note: 'The `{{token}}` name, without braces. What a template references.']
+  label String [not null, note: 'What the template editor calls it. "Offered CTC", not `offeredCtc`.']
+  sourceType LetterFieldSource [not null, note: '**Where the value comes from** (FR-011c).
+
+A field that is only a label is a placeholder that renders blank — and a blank in a signed
+letter is indistinguishable from a deliberate omission, which is the failure this column exists
+to prevent. `manual` is the honest exception: some terms are typed at issue time and have no
+record behind them, and saying so is better than inventing a source.']
+  sourcePath String [note: 'The path within the source record, dot-separated: `designation.name`, `basic`.
+
+Null only for `manual`, where there is no record to read. A `CHECK` in the migration enforces
+that pairing rather than leaving it to every writer to remember.']
+  isRequired Boolean [not null, default: false, note: 'Whether issuing without a value for this field is refused.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (letterKindId, token) [unique]
+  }
+
+  Note: 'One field a letter kind\'s templates may reference (017 FR-011b, FR-011c) — `bugs.md` item 18.
+
+**Keyed to the kind, not to the shipped `LetterType` enum**, and that coupling is exactly what
+made item 18 half-work: FR-011 let an administrator define a letter kind, and `LETTER_TOKENS` was
+keyed by the five shipped enum values, so a kind the client defined got an **empty** field list.
+The template editor then refused every field it used. Both requirements were satisfied and
+together they produced nothing usable.
+
+`buildcore-web`\'s FR-014 already required "define a new letter kind, **its variable fields** and
+its fixed terms", so this table is the api catching up to a contract already written rather than
+new scope invented on both sides.'
 }
 
 Table Signatory {
@@ -4125,6 +4163,14 @@ Enum TaxRegime {
   new
 }
 
+Enum LetterFieldSource {
+  employee
+  candidate
+  project
+  company
+  manual
+}
+
 Enum DocumentTypeScope {
   employee
   company
@@ -4903,6 +4949,8 @@ Ref: Designation.companyId > Company.id [delete: Cascade]
 Ref: SkillCategory.companyId > Company.id [delete: Cascade]
 
 Ref: LetterKind.companyId > Company.id [delete: Cascade]
+
+Ref: LetterKindField.letterKindId > LetterKind.id [delete: Cascade]
 
 Ref: Signatory.companyId > Company.id [delete: Cascade]
 

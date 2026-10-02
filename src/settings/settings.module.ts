@@ -33,6 +33,7 @@ import { SignatoriesController } from './signatories/signatories.controller';
 import { SignatoriesService } from './signatories/signatories.service';
 import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
 import { LetterKindsService } from './letter-kinds/letter-kinds.service';
+import { LetterKindFieldsService } from './letter-kinds/letter-kind-fields.service';
 import { LetterTemplatesService } from './letter-templates/letter-templates.service';
 import { PermissionRefusalsController } from './permission-refusals/permission-refusals.controller';
 import { CashVisibilityController } from './company-selection/cash-visibility.controller';
@@ -89,6 +90,9 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     KitItemsService,
     LetterTemplatesService,
     LetterKindsService,
+    // 017 FR-011b (`bugs.md` item 18). A letter kind declares its own fields; the template editor
+    // and the renderer both validate against that declaration.
+    LetterKindFieldsService,
     SignatoriesService,
     // 017 FR-005. Discovered by the 004 reminder engine from this array — nothing in
     // `src/dashboard/` knows this rule exists.
@@ -102,6 +106,9 @@ import { CompanySelectionService } from './company-selection/company-selection.s
   ],
   exports: [
     RolesService,
+    // Exported for `recruitment`, whose letter renderer refuses a template referencing a field its
+    // kind no longer declares (017 FR-011c) — a service call, not a cross-module query.
+    LetterKindFieldsService,
     CompaniesService,
     EmployeeCodeService,
     DocumentTypesService,
