@@ -3930,6 +3930,7 @@ Enum Permission {
   RECRUITMENT_APPROVE
   ASSETS
   ASSETS_APPROVE
+  CASH_ENTRY
 }
 
 Enum CompanyStatus {

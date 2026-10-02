@@ -359,6 +359,17 @@ enum Permission {
   /// `_APPROVE` value in this enum is separate: authorising is not doing.
   ASSETS_APPROVE
 
+  /// Added by 019 Phase 7 (FR-017a, FR-017b). The right to *record* a payment in cash,
+  /// and to see a cash denomination breakup. Deliberately not a reuse of
+  /// `COMPANY_SETTINGS`: who may change the hiding setting and who may take cash are
+  /// different questions about different people, and FR-012 already owns the first.
+  ///
+  /// Granted to every role that could already record a cash payment, in the migration
+  /// that adds it — preserving today's behaviour is the requirement, not a convenience.
+  /// A permission that defaulted to nobody would stop every site cashier the moment it
+  /// deployed, which is the exact failure the two-control design existed to avoid.
+  CASH_ENTRY
+
   @@schema("settings")
 }
 

@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { Permission } from '@prisma/client';
+import { AccessLevel, Permission } from '@prisma/client';
 import { RolesService } from './roles.service';
 import { ASSIGNABLE_PERMISSIONS, CreateRoleDto } from './dto/create-role.dto';
 import { callerFor } from '../testing/prisma-mock';
@@ -17,7 +17,13 @@ function build(
   roleDelegate: Record<string, jest.Mock>,
   users: Record<string, jest.Mock> = {},
 ) {
-  const prisma = { role: roleDelegate };
+  const prisma = {
+    role: roleDelegate,
+    // 019 FR-017b: `update` reads the role's grants before replacing them, so the cash-entry
+    // audit entry can say what changed. Empty by default — a role holding no cash entry before
+    // or after produces no entry, which is what every existing test here expects.
+    rolePermission: { findMany: jest.fn().mockResolvedValue([]) },
+  };
   const auditLog = { record: jest.fn() };
   const usersService = {
     countByRoleId: jest.fn().mockResolvedValue(0),
@@ -94,6 +100,65 @@ describe('RolesService', () => {
           '127.0.0.1',
         ),
       ).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    /**
+     * 019 FR-017b, task T080. Granting somebody the right to take cash is at least as
+     * consequential as hiding the figures, and FR-012 requires an explicit record for the
+     * second — so finding the first should not mean diffing two thirty-element permission
+     * arrays across every role edit in the log.
+     */
+    it('records a separate audit entry when cash entry is granted', async () => {
+      const { service, auditLog } = build({
+        findUnique: jest.fn().mockResolvedValue(customRole),
+        update: jest.fn().mockResolvedValue(customRole),
+      });
+
+      await service.update(
+        callerFor('company-1'),
+        'role-x',
+        {
+          permissions: [Permission.CASH_ENTRY],
+          grants: [
+            { permission: Permission.CASH_ENTRY, level: AccessLevel.read },
+            { permission: Permission.CASH_ENTRY, level: AccessLevel.write },
+          ],
+        },
+        '127.0.0.1',
+      );
+
+      expect(auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityId: 'role-x',
+          accountId: 'caller-1',
+          // Spelled out, because `write` and `read` are different rights here — recording cash
+          // and seeing a denomination breakup — and "cash entry changed" would not say which.
+          changes: { cashEntry: { before: null, after: 'read,write' } },
+        }),
+      );
+    });
+
+    it('records nothing extra when cash entry did not change', async () => {
+      // An audit entry on every role edit that merely *mentions* cash entry would bury the
+      // handful that changed it.
+      const { service, auditLog } = build({
+        findUnique: jest.fn().mockResolvedValue(customRole),
+        update: jest.fn().mockResolvedValue(customRole),
+      });
+
+      await service.update(
+        callerFor('company-1'),
+        'role-x',
+        { permissions: [Permission.DASHBOARD] },
+        '127.0.0.1',
+      );
+
+      const cashEntries = auditLog.record.mock.calls.filter(
+        (call) =>
+          (call[0] as { changes?: { cashEntry?: unknown } }).changes
+            ?.cashEntry !== undefined,
+      );
+      expect(cashEntries).toEqual([]);
     });
 
     it('edits a non-protected role', async () => {

@@ -173,6 +173,13 @@ export class RolesService {
       companyId: caller.companyId,
       ipAddress,
     });
+    await this.recordCashEntryChange(
+      caller,
+      created.id,
+      [],
+      grantRows,
+      ipAddress,
+    );
     return { ...created, assignedUserCount: 0 };
   }
 
@@ -194,6 +201,15 @@ export class RolesService {
         throw new ConflictException(`A role named "${name}" already exists`);
       }
     }
+
+    // Read before the replace, so the cash-entry audit entry below can say what changed. One
+    // query, and only when the request actually replaces the grants.
+    const existingGrants = dto.permissions
+      ? await this.prisma.rolePermission.findMany({
+          where: { roleId: id },
+          select: { permission: true, level: true },
+        })
+      : [];
 
     // Replace rather than merge: a level removed from the request must be removed from the
     // role, and a merge would make un-granting impossible through this endpoint.
@@ -224,10 +240,65 @@ export class RolesService {
       companyId: caller.companyId,
       ipAddress,
     });
+    if (grantRows) {
+      await this.recordCashEntryChange(
+        caller,
+        id,
+        existingGrants,
+        grantRows,
+        ipAddress,
+      );
+    }
     return {
       ...updated,
       assignedUserCount: await this.usersService.countByRoleId(id),
     };
+  }
+
+  /**
+   * Records a change to who may take cash, separately from the role update that carried it
+   * (019 FR-017b, task T080).
+   *
+   * The role update is already audited with a before/after of the whole row, which is how every
+   * other permission change is accounted for and is not enough here. Granting somebody the right
+   * to take cash is at least as consequential as hiding the figures, and FR-012 requires an
+   * explicit record for the second — so finding the first should not mean diffing two
+   * thirty-element arrays across every role edit in the log.
+   *
+   * Written only when the grant actually changes. An audit entry on every role edit that merely
+   * *mentions* cash entry would bury the handful that changed it.
+   */
+  private async recordCashEntryChange(
+    caller: AuthenticatedUser,
+    roleId: string,
+    before: { permission: Permission; level: AccessLevel }[],
+    after: { permission: Permission; level: AccessLevel }[],
+    ipAddress: string,
+  ): Promise<void> {
+    const levelsOf = (rows: { permission: Permission; level: AccessLevel }[]) =>
+      rows
+        .filter((row) => row.permission === Permission.CASH_ENTRY)
+        .map((row) => row.level)
+        .sort()
+        .join(',');
+    const had = levelsOf(before);
+    const has = levelsOf(after);
+    if (had === has) return;
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.ROLE,
+      action: AuditAction.UPDATE,
+      entityId: roleId,
+      changes: {
+        // A fixed key, so this is one grep and not a diff. The levels are spelled out because
+        // `write` and `read` are different rights here — recording cash and seeing a
+        // denomination breakup — and "cash entry changed" would not say which was given.
+        cashEntry: { before: had || null, after: has || null },
+      } as unknown as Prisma.InputJsonValue,
+      accountId: caller.id,
+      companyId: caller.companyId,
+      ipAddress,
+    });
   }
 
   /**

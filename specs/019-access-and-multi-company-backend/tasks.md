@@ -431,36 +431,114 @@ Two of the three answers changed nothing. The per-row rule was confirmed against
 kept. The salary carve-out the client asked for falls out of that rule already, except for a salary
 genuinely paid in cash, which stays hidden and which they accepted knowingly.
 
-- [ ] T073 Add `CASH_ENTRY` to the `Permission` enum with a migration. A new permission, not a reuse of
+- [x] T073 Add `CASH_ENTRY` to the `Permission` enum with a migration. A new permission, not a reuse of
       `COMPANY_SETTINGS`: who may change the hiding setting and who may take cash are different
       questions about different people, and FR-012 already owns the first.
-- [ ] T074 **CRITICAL** Enumerate every write that records a cash payment and gate each on `CASH_ENTRY`.
+- [x] T074 **CRITICAL** Enumerate every write that records a cash payment and gate each on `CASH_ENTRY`.
       This is the task that decides whether the feature works: a missed route is an unguarded way to
       enter cash, and it will not show up in a test anybody thought to write. Start from
       `CASH_MODE_FIELDS` and `CASH_ENUM_VALUES` in `src/common/cash/cash-surfaces.ts` — the constants the
       interceptor already uses to find cash on the way out are the same ones that find it on the way in.
-- [ ] T075 Grant `CASH_ENTRY` to every role that can currently record a cash payment, in the same
+- [x] T075 Grant `CASH_ENTRY` to every role that can currently record a cash payment, in the same
       migration that adds it. **Preserving today's behaviour is the requirement, not a convenience**: a
       permission that defaults to nobody stops every site cashier in the company the moment it deploys,
       which is the exact failure the two-control design existed to avoid.
-- [ ] T076 [P] Unit test: a caller without `CASH_ENTRY` is refused on a cash write and unaffected on a
+- [x] T076 [P] Unit test: a caller without `CASH_ENTRY` is refused on a cash write and unaffected on a
       bank-mode write. The second half matters more than the first — the permission must not become a
       general payments gate.
-- [ ] T077 [P] A guard test in the shape of `cash-surfaces.spec.ts`: parse the routes that accept a
+- [x] T077 [P] A guard test in the shape of `cash-surfaces.spec.ts`: parse the routes that accept a
       payment mode and fail when one accepts a cash mode without declaring `CASH_ENTRY`. T074 is a
       one-time audit; this is what keeps it true, and without it the next cash route added is unguarded
       by default.
-- [ ] T078 Stop hiding `denominationBreakup` unconditionally; show it to a caller holding `CASH_ENTRY`
+- [x] T078 Stop hiding `denominationBreakup` unconditionally; show it to a caller holding `CASH_ENTRY`
       and hide it from everyone else (FR-017d). The one change hiding itself needs. Hiding it from the
       cashier counting notes against it conceals nothing from anybody it was meant to conceal from while
       making the screen's purpose unreachable.
-- [ ] T079 [P] Unit test: the breakup is present for a `CASH_ENTRY` holder and absent otherwise, and
+- [x] T079 [P] Unit test: the breakup is present for a `CASH_ENTRY` holder and absent otherwise, and
       absent means **absent or null, never zero** — a zero denomination count reads as a real count of
       no notes.
-- [ ] T080 Record the grant in the audit log with actor and time, on the same terms FR-012 requires for
+- [x] T080 Record the grant in the audit log with actor and time, on the same terms FR-012 requires for
       changing the hiding setting. Granting somebody the right to take cash is at least as
       consequential as hiding the figures.
 
 **Not in this phase, deliberately.** The per-row hiding rule (FR-017c) needs no work — it is built,
 and `cash-surfaces.spec.ts` already fails when a new cash payment mode appears that the constants do
 not name. Confirming a design is not a task.
+
+### Phase 7 implementation record, 2026-10-02
+
+**The gate finds cash in the request, not on a list of routes.** T074 asked for an enumeration of
+every cash write and a gate on each. The enumeration came back at **two** — `POST
+inventory/payments` and `PATCH labour/payment-sheets/lines/:lineId/disburse`, which are exactly the
+two surfaces the client named — and both take the payment mode as a *required* field, so a cash
+payment cannot be recorded without `paymentMode: 'cash'` arriving on the wire.
+
+That made a list the wrong shape for the job. The task itself says why: *"a missed route is an
+unguarded way to enter cash, and it will not show up in a test anybody thought to write."* A list of
+two is as prone to that as a list of twenty — it is the default that is wrong, not the length. So
+`CashEntryInterceptor` reads the request body using the same `CASH_MODE_FIELDS` and `isCashMode` the
+outbound interceptor uses to find cash on the way out, and a route that accepts `paymentMode` is
+gated the day it is written, by nobody's effort.
+
+**An interceptor and not a guard, which is not a style choice.** Global guards run before
+controller-level ones and `JwtAuthGuard` is declared per controller here, so a global guard would
+see no `request.user` and admit everything — invisibly, because admitting everything is what
+admitting looks like. `PasswordChangeInterceptor` carries the same note for the same reason.
+
+**Reads the raw body, before the validation pipe**, since pipes run after interceptors. That is the
+stronger position rather than an accident of ordering: a caller cannot evade the check by sending a
+shape no DTO declares.
+
+### Three things the task list did not anticipate
+
+**`CASH_ENTRY` needed two levels, not one.** T075 says grant it "to every role that can currently
+record a cash payment", which reads as a single `write` grant. `RolesService` refuses
+`WRITE_WITHOUT_READ`, so a write-only grant would have tripped that rule the next time anybody
+edited one of those roles through the interface — and the rule is right: being allowed to pay out
+notes while not allowed to see the breakup you are paying against is not a coherent grant. So the
+levels carry the split FR-017a and FR-017d were already describing separately — `write` records a
+cash payment, `read` sees a denomination breakup — and `mayEnterCash` and `maySeeCashBreakup` are
+two functions, not one with a flag.
+
+**A read that *filters* on cash is not cash entry.** `ListPaymentsDto` takes `paymentMode` as a
+filter. Without the level check at the top of the interceptor, a read-only clerk would have been
+refused the very list of cash payments FR-014 says they may see with the amounts hidden. The check
+is `AccessLevel.read`, so a `POST` search marked `@RequireLevel(read)` is also left alone.
+
+**`Role.permissions` had to be backfilled too.** The array is still what every service-level
+`permissions.includes(...)` reads, and `RolesService` writes the array and the grant rows together
+for that reason. A migration that wrote only the rows would have left the guard granting cash entry
+and a service check denying it.
+
+### T074's completeness, asserted rather than claimed
+
+`cash-entry-surface.spec.ts` asserts the condition that makes body inspection sufficient: **no
+source file writes a cash mode value of its own accord.** Every cash record therefore originates in
+a request, where the interceptor can see it. The day a service derives cash on the server — a sheet
+whose mode comes from its own type, an import defaulting to cash — that test fails and the route
+must declare `@RequiresCashEntry()`.
+
+The decorator is **deliberately unused today**, and that is the point: deleting it would leave the
+next such route silently unguarded. Verified the guard goes red by adding a file containing
+`paymentMode: 'cash'` — it failed naming the file, and passed on removal.
+
+### What T078 deliberately did not change
+
+The breakup becomes visible to a `CASH_ENTRY` holder **only when hiding is on at all**. The company
+setting stays the master control (FR-014); `CASH_ENTRY` decides who still sees the breakup once
+hiding is enabled, not who sees it when nobody asked for anything to be hidden. The `hideCash`
+argument defaults to hiding, so every existing caller keeps the old behaviour — a default of "show"
+would have silently published the breakup on every surface not yet updated.
+
+Amounts did **not** move with it. A cashier needs the breakup to pay out and needs no view of what
+every other cash payment in the company came to.
+
+### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,218 tests across 115 suites**, Nest
+injector resolves. Two migrations, the enum value alone in the first because PostgreSQL cannot add
+an enum value and use it in the same transaction.
+
+**T065 to T072 (the original Phase 7 verification list) remain NOT RUN** — they need `npm run
+test:e2e` and an RLS probe role, and the local `prisma` role is a superuser that bypasses policies.
+Unchanged by this phase.

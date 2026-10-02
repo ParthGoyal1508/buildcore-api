@@ -15,6 +15,7 @@ import { LettersModule } from './letters/letters.module';
 import { SearchModule } from './search/search.module';
 import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
+import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -119,6 +120,19 @@ import type { SecurityConfig } from './common/configs/config.interface';
       // `request.user` and allow everything.
       provide: APP_INTERCEPTOR,
       useClass: PasswordChangeInterceptor,
+    },
+    {
+      // 019 FR-017a, FR-017b. Global for the same reason as the visibility interceptor above —
+      // "every write that records cash" is the requirement, and a per-controller declaration
+      // would be present on the modules somebody remembered.
+      //
+      // An interceptor and not a guard, for the reason stated on `PasswordChangeInterceptor`:
+      // a global guard runs before the per-controller `JwtAuthGuard` and would see no
+      // `request.user`. Registered **last**, so a caller who must change their password is
+      // told that first — being refused for holding the wrong permission, when the real
+      // obstacle is an expired password, sends somebody to the wrong administrator.
+      provide: APP_INTERCEPTOR,
+      useClass: CashEntryInterceptor,
     },
   ],
 })
