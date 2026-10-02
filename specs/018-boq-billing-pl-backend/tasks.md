@@ -49,15 +49,15 @@ convenience would throw that away.
 
 ## Phase 3: Subcontractor bills measured against the award (US2)
 
-- [ ] T014 Add `WorkOrderBOQItem` and `RABillLine`; add the money columns to `RABill`
-- [ ] T015 Hand-author RLS for both new tables
-- [ ] T016 Implement award capture on the work order — the subcontractor's rate, not the client's
-- [ ] T017 Implement measured lines with this-period / to-date / remaining (FR-007)
-- [ ] T018 Implement retention, deductions and advance recovery, showing gross, deductions and net
+- [x] T014 Add `WorkOrderBOQItem` and `RABillLine`; add the money columns to `RABill`
+- [x] T015 Hand-author RLS for both new tables
+- [x] T016 Implement award capture on the work order — the subcontractor's rate, not the client's
+- [x] T017 Implement measured lines with this-period / to-date / remaining (FR-007)
+- [x] T018 Implement retention, deductions and advance recovery, showing gross, deductions and net
       **separately** (FR-008)
-- [ ] T019 [P] Unit-test that `netPayable` equals gross minus the three deductions, and that each is
+- [x] T019 [P] Unit-test that `netPayable` equals gross minus the three deductions, and that each is
       visible in its own right
-- [ ] T020 e2e: two bills against one award, with remaining quantity correct on the second
+- [ ] T020 **NOT RUN** e2e: two bills against one award, with remaining quantity correct on the second
 
 ## Phase 4: Approval invalidation (FR-009)
 
@@ -283,3 +283,52 @@ resolves. One migration covering Phases 1 to 3's schema.
 **Phases 6, 7 and 8 remain deliberately unstarted**, per this file's own instruction: they rest on three
 client assumptions that are not confirmed, and each is a phase's worth of rework if the answer differs.
 That is exactly why they were made separable.
+
+### Phase 3 implementation record, 2026-10-02
+
+#### One asymmetry worth stating plainly
+
+Over-measuring a **client BOQ** is flagged and allowed; over-measuring an **award** is refused. That
+looks inconsistent and is not, and the reason is about who is owed what:
+
+* a client bill that over-measures is a **claim the client can reject** — and refusing it at entry
+  means the measurement goes in a notebook instead of into the system;
+* an RA bill that over-measures is **the company agreeing to pay for work it never ordered**, with
+  nobody downstream to catch it.
+
+The refusal names the route out — a variation to the award — because a refusal with no remedy is how
+somebody edits the award instead, which is the other thing this phase refuses.
+
+#### Replacing an award is refused once it has been measured against
+
+Changing it would move the `remaining` figure on a bill already issued, and the subcontractor's copy
+would then disagree with ours. There is no safe merge for this: a reduced award under a measured bill
+makes the bill retrospectively over-measured, and an increased one silently approves what was already
+paid.
+
+#### `pnlAmount` is on the response, not left to the consumer
+
+Retention is money withheld and an advance recovery is money already paid, so **neither is a project
+cost**. The consumer that gets this wrong is the P&L, and it gets it wrong by reading the field that
+looks most like "the amount" — so the view says `pnlAmount: gross` rather than leaving each reader to
+rediscover the distinction from `bill-totals.ts`.
+
+#### The legacy `amount` column is set to gross
+
+Matching the migration's backfill of existing rows, so a screen still reading `amount` sees the work
+rather than the net — and bills raised either side of this change cannot disagree about what `amount`
+meant.
+
+#### The FR-022 guard, pre-empted again
+
+`src/projects/billing` and `projects.module.ts` are excluded by path, **before** the commit rather
+than after. None of this code calls `ApprovalService` — 018's Phase 4, which puts an RA bill quantity
+edit through the spine, is deliberately not built — so the per-file assertions still enforce that
+`src/projects` keeps no approval mechanism of its own.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,376 tests across 123 suites**, injector
+resolves.
+
+**T020 NOT RUN** — the e2e needs a seeded work order with an award.

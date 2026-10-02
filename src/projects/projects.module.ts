@@ -13,6 +13,8 @@ import { ProjectSearchSource } from './portfolio/project-search.source';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
 import { ClientBillsController } from './billing/client-bills.controller';
 import { ClientBillsService } from './billing/client-bills.service';
+import { RaBillsController } from './billing/ra-bills.controller';
+import { RaBillsService } from './billing/ra-bills.service';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
@@ -46,6 +48,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
     ClientBillsController,
+    // 018 US2 (`bugs.md` item 12). Subcontractor bills measured against the award, which is a separate
+    // set of rates from the client's BOQ — the margin between them is what the P&L shows.
+    RaBillsController,
     // 017 FR-008a, FR-009b. Registered before ProjectsController for the route-order reason
     // the note below gives: `projects/document-uploads` is a literal segment that
     // `GET /projects/:id` would otherwise swallow.
@@ -64,6 +69,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     ProjectsService,
     ProjectDocumentsService,
     ClientBillsService,
+    RaBillsService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other

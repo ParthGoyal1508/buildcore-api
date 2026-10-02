@@ -153,6 +153,14 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/plant.module.ts',
           ':(exclude)src/plant/fuel/fuel.service.ts',
           ':(exclude)src/plant/hire-bills/hire-bills.service.ts',
+          // Owned by 018 Phases 1 to 3 (`bugs.md` items 11 and 12): the BOQ gets a rate, and bills get
+          // lines. **None of this calls `ApprovalService`** — 018's Phase 4, which puts an RA bill
+          // quantity edit through the spine, is deliberately not built yet — so the per-file assertions
+          // above still enforce that `src/projects` keeps no approval mechanism of its own. Excluded by
+          // path only, and added *before* the commit, as the Phase 6 note below says to.
+          ':(exclude)src/projects/billing',
+          // The module and the two files 018 changed in place.
+          ':(exclude)src/projects/projects.module.ts',
         ],
         {
           cwd: REPO_ROOT,
