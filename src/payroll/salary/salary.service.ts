@@ -311,6 +311,22 @@ const nn = (value: { toNumber(): number } | null): number | null =>
 const sum = (...values: number[]): number =>
   Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
 
+/**
+ * A stored slip as the view every output is built from.
+ *
+ * Exported since 2026-10-02 so slip **delivery** uses it too (021 FR-005). Three code paths — the
+ * JSON endpoint, the PDF download and the emailed attachment — now read the same rows through the
+ * same mapper. Two independent mappings could still round or label a figure differently, and a
+ * payslip that disagrees with the screen is a wage dispute.
+ */
+export function slipViewFrom(
+  slip: SalarySlip,
+  employeeCode: string,
+  identity?: SlipIdentity,
+): SalarySlipView {
+  return toView(slip, employeeCode, identity);
+}
+
 function toView(
   slip: SalarySlip,
   employeeCode: string,

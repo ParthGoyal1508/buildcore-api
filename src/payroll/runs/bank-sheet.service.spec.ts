@@ -69,6 +69,8 @@ function build(opts: {
   employees?: EmployeeFixture[];
   netPay?: number[];
   debitAccount?: string | null;
+  /** Advances recovered from the transfer, keyed by employee (021 FR-010, FR-011). */
+  recoveries?: Record<string, { salaryAdvanceId: string; amount: number }[]>;
 }) {
   const employees = opts.employees ?? [employee()];
   const nets = opts.netPay ?? employees.map(() => 55000);
@@ -81,6 +83,8 @@ function build(opts: {
         companyId: 'co-1',
         period: '2026-07',
         isFnf: false,
+        generatedAt: new Date('2026-07-31T00:00:00.000Z'),
+        createdAt: new Date('2026-07-31T00:00:00.000Z'),
         lineItems: employees.map((e, index) => ({
           employeeId: e.id,
           netPay: { toNumber: () => nets[index] },
@@ -106,11 +110,41 @@ function build(opts: {
   };
   const schedule = { outstandingApproval: async () => null };
   const config = { get: () => FORMAT };
+  // 021 FR-010. Recovers nothing by default — these tests are about the file's shape, and a fixture
+  // that quietly reduced a transfer would make every amount assertion wrong for an unrelated reason.
+  const recoveries = {
+    apply: async (
+      _ctx: unknown,
+      _run: unknown,
+      lines: { employeeId: string; netPay: number }[],
+    ) =>
+      new Map(
+        lines.map((l) => [
+          l.employeeId,
+          {
+            employeeId: l.employeeId,
+            netPay: l.netPay,
+            recoveries: opts.recoveries?.[l.employeeId] ?? [],
+            recoveredTotal: (opts.recoveries?.[l.employeeId] ?? []).reduce(
+              (sum, r) => sum + r.amount,
+              0,
+            ),
+            transferAmount:
+              l.netPay -
+              (opts.recoveries?.[l.employeeId] ?? []).reduce(
+                (sum, r) => sum + r.amount,
+                0,
+              ),
+          },
+        ]),
+      ),
+  };
 
   return new BankSheetService(
     prisma as never,
     pii as never,
     schedule as never,
+    recoveries as never,
     config as never,
   );
 }
@@ -330,5 +364,82 @@ describe('IFSC_PATTERN', () => {
     expect(IFSC_PATTERN.test('SBIN1062263')).toBe(false);
     expect(IFSC_PATTERN.test('SBIN006226')).toBe(false);
     expect(IFSC_PATTERN.test('sbin0062263')).toBe(false);
+  });
+});
+
+/**
+ * Advances recovered from the **transfer** (021 FR-010, FR-011, task T046) — `bugs.md` item 9.
+ *
+ * The run's own figures stay as approved; the difference is a recovery. These assertions are on the
+ * generated file because that is where the distinction is visible to the person paying.
+ */
+describe('advance recoveries on the sheet', () => {
+  it('transfers net pay less the recovery, not net pay', async () => {
+    const { buffer } = await build({
+      netPay: [55000],
+      recoveries: { e1: [{ salaryAdvanceId: 'adv-1', amount: 5000 }] },
+    }).build(caller, 'run-1');
+    const { main } = await sheetOf(buffer);
+
+    expect(
+      main!.getRow(2).getCell(BANK_SHEET_COLUMN.paymentAmount + 1).value,
+    ).toBe(50000);
+  });
+
+  it('names each recovery on its own line', async () => {
+    // T046. One line per advance, not one per employee: two advances are two facts to account for,
+    // and a summed row leaves them indistinguishable from one larger advance.
+    const { buffer } = await build({
+      netPay: [55000],
+      recoveries: {
+        e1: [
+          { salaryAdvanceId: 'adv-1', amount: 5000 },
+          { salaryAdvanceId: 'adv-2', amount: 2500 },
+        ],
+      },
+    }).build(caller, 'run-1');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as never);
+    const recoverySheet = workbook.getWorksheet('Advance Recoveries');
+
+    expect(recoverySheet!.rowCount).toBe(3);
+    expect(recoverySheet!.getRow(2).getCell(5).value).toBe('adv-1');
+    expect(recoverySheet!.getRow(3).getCell(5).value).toBe('adv-2');
+  });
+
+  it('shows the approved net pay beside the transfer', async () => {
+    // "My transfer does not match my payslip" is the question this sheet answers before it is asked.
+    // Showing only the transfer would leave the difference unexplained in the file itself.
+    const { buffer } = await build({
+      netPay: [55000],
+      recoveries: { e1: [{ salaryAdvanceId: 'adv-1', amount: 5000 }] },
+    }).build(caller, 'run-1');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as never);
+    const row = workbook.getWorksheet('Advance Recoveries')!.getRow(2);
+
+    expect(row.getCell(3).value).toBe(55000);
+    expect(row.getCell(4).value).toBe(5000);
+    expect(row.getCell(6).value).toBe(50000);
+  });
+
+  it('leaves the bank template itself untouched by the recovery sheet', async () => {
+    // The recovery report is a third worksheet because the bank's template has no column for it and
+    // must not grow one. A parser reading Sheet1 by position never sees this.
+    const { buffer } = await build({
+      recoveries: { e1: [{ salaryAdvanceId: 'adv-1', amount: 5000 }] },
+    }).build(caller, 'run-1');
+    const { main } = await sheetOf(buffer);
+
+    expect(main!.getRow(1).cellCount).toBe(BANK_SHEET_COLUMN_COUNT);
+    expect(main!.rowCount).toBe(2);
+  });
+
+  it('writes no recovery lines when nothing was recovered', async () => {
+    const { buffer } = await build({}).build(caller, 'run-1');
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer as never);
+
+    expect(workbook.getWorksheet('Advance Recoveries')!.rowCount).toBe(1);
   });
 });

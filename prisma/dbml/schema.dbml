@@ -1884,6 +1884,69 @@ Every figure is `Decimal`, never `Float` — these are money, and binary roundin
 drift in a payslip is a wage dispute.'
 }
 
+Table SlipDelivery {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  employeeId String [not null]
+  address String [not null, note: 'The address **as sent**, stored rather than joined at read time.
+
+An employee whose email is corrected after a failure must not have the old failure read as
+though it went to the new address — which is exactly what a join would show, and exactly the
+reading that stops anybody retrying it.
+
+Personal data, which is why this table\'s RLS policy carries an explicit `WITH CHECK` and the
+read endpoint needs a payroll permission rather than merely being authenticated.']
+  status SlipDeliveryStatus [not null, default: 'pending']
+  failureReason String [note: 'The provider\'s own words where there are any. Stored so a retry decision can be made from the
+screen instead of from a log nobody has access to.']
+  sentAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (payrollRunId, employeeId) [unique]
+  }
+
+  Note: 'One attempt to email one employee their payslip (021 FR-005 to FR-007) — `bugs.md` item 8.
+
+**`@@unique([payrollRunId, employeeId])` is what makes the retry safe**, and it is the whole
+design. With it, a retry is an upsert per employee: running it twice sends once. Without it,
+"retry the failures" and "retry everything" differ only by the correctness of a filter, and the
+failure mode is 500 employees receiving a second copy of their salary slip — from a control
+somebody pressed because the first attempt looked incomplete.
+
+Keyed on the **employee**, not the address. Several employees at one site can share a mailbox,
+and each must get their own row and their own slip; de-duplicating by address would silently send
+one of them and mark the rest done.'
+}
+
+Table BankSheetRecovery {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  employeeId String [not null]
+  salaryAdvanceId String [not null]
+  amount Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (payrollRunId, salaryAdvanceId) [unique]
+  }
+
+  Note: 'An advance recovered from a **transfer**, not from the approved run (021 FR-010 to FR-013) —
+`bugs.md` item 9.
+
+**`@@unique([payrollRunId, salaryAdvanceId])` *is* FR-013** — "MUST NOT recover the same advance
+twice" — enforced by the database rather than by a check somebody has to remember in a code path
+that regenerates a bank sheet. Producing the sheet a second time recovers nothing further.
+
+The recovery adjusts the transfer and leaves the run\'s figures untouched. That is the point of
+item 9: an advance taken *between* approval and payment day must still come out of the money that
+actually moves, and an approved run is immutable.'
+}
+
 Table CodeSequence {
   id String [pk]
   companyId String [not null]
@@ -4389,6 +4452,13 @@ Enum LoanScheduleStatus {
   upcoming
   paid
   overdue
+}
+
+Enum SlipDeliveryStatus {
+  pending
+  sent
+  failed
+  undeliverable
 }
 
 Enum CodeSeriesType {

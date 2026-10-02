@@ -7,6 +7,7 @@ import {
   RenderedEmail,
   renderAccountLockedEmail,
   renderInviteEmail,
+  renderPayslipEmail,
 } from './email-templates';
 
 /**
@@ -47,7 +48,11 @@ export class ResendEmailAdapter extends EmailService {
     this.from = config.fromAddress;
   }
 
-  private async send(to: string, message: RenderedEmail): Promise<void> {
+  private async send(
+    to: string,
+    message: RenderedEmail,
+    attachments?: { filename: string; content: Buffer }[],
+  ): Promise<void> {
     // Resend's SDK reports failures in the response body rather than by throwing,
     // so a caller that only wrapped this in try/catch would treat every rejected
     // send as a success.
@@ -57,6 +62,7 @@ export class ResendEmailAdapter extends EmailService {
       subject: message.subject,
       text: message.text,
       html: message.html,
+      ...(attachments ? { attachments } : {}),
     });
     if (error) {
       // The recipient is logged; the message body is not, since an invite body
@@ -80,6 +86,19 @@ export class ResendEmailAdapter extends EmailService {
     unlockAt: Date;
   }): Promise<void> {
     await this.send(input.to, renderAccountLockedEmail(input));
+  }
+
+  async sendPayslipEmail(input: {
+    to: string;
+    employeeName: string;
+    periodLabel: string;
+    companyName: string;
+    pdf: Buffer;
+    filename: string;
+  }): Promise<void> {
+    await this.send(input.to, renderPayslipEmail(input), [
+      { filename: input.filename, content: input.pdf },
+    ]);
   }
 
   describe(): string {

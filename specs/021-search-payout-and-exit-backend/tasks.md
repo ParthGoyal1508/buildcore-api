@@ -191,57 +191,57 @@ notice will be a user.
 Email already exists — `src/shared/email/` with a Resend adapter, a console adapter and
 `email-templates.ts`. Nothing here builds email; it wires slips to it and records what happened.
 
-- [ ] T030 [US2] Add `model SlipDelivery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
+- [x] T030 [US2] Add `model SlipDelivery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
   `address String`, `status`, `failureReason String?`, `sentAt`, timestamps.
   `@@unique([payrollRunId, employeeId])`.
-- [ ] T031 [US2] That uniqueness constraint is what makes FR-006's retry safe: a retry becomes an upsert
+- [x] T031 [US2] That uniqueness constraint is what makes FR-006's retry safe: a retry becomes an upsert
   per employee, so running it twice sends once. Without it, "retry failures" and "retry everything"
   differ only by the correctness of a filter, and the failure mode is 500 employees receiving a second
   copy of their salary slip. Note this beside the model.
-- [ ] T032 [US2] Store `address` **as sent**, not joined at read time. An employee whose email is
+- [x] T032 [US2] Store `address` **as sent**, not joined at read time. An employee whose email is
   corrected after a failed send must not have the old failure read as though it went to the new address.
-- [ ] T033 [US2] RLS: `ENABLE` + `FORCE` with an explicit `WITH CHECK`. `address` is personal data —
+- [x] T033 [US2] RLS: `ENABLE` + `FORCE` with an explicit `WITH CHECK`. `address` is personal data —
   reading this table requires a payroll permission, not merely being authenticated.
-- [ ] T034 [US2] Send on a run being marked paid, **one employee at a time and independently**. A
+- [x] T034 [US2] Send on a run being marked paid, **one employee at a time and independently**. A
   rejection writes `status: failed` with its reason; it does not throw and abandon the run (NFR-003:
   500 employees, 15 minutes, failures isolated).
-- [ ] T035 [US2] Refuse delivery for a run that is not fully approved (FR-007), with a code naming the
+- [x] T035 [US2] Refuse delivery for a run that is not fully approved (FR-007), with a code naming the
   reason.
-- [ ] T036 [US2] `GET /payroll/runs/:id/slip-deliveries` reporting delivered, failed and undeliverable
+- [x] T036 [US2] `GET /payroll/runs/:id/slip-deliveries` reporting delivered, failed and undeliverable
   (FR-006).
-- [ ] T037 [US2] `POST /payroll/runs/:id/slip-deliveries/retry` resending **only** failures.
-- [ ] T038 [P] [US2] Unit test: one failing address does not stop the other 499.
-- [ ] T039 [P] [US2] Unit test: retry run twice sends once per failed employee, and never re-sends a
+- [x] T037 [US2] `POST /payroll/runs/:id/slip-deliveries/retry` resending **only** failures.
+- [x] T038 [P] [US2] Unit test: one failing address does not stop the other 499.
+- [x] T039 [P] [US2] Unit test: retry run twice sends once per failed employee, and never re-sends a
   success.
-- [ ] T040 [P] [US2] Unit test: several employees sharing one site mailbox each get their own row and
+- [x] T040 [P] [US2] Unit test: several employees sharing one site mailbox each get their own row and
   their own slip — the spec's edge case. Keying on the employee rather than the address is why this
   works, and this test is what stops somebody "de-duplicating" it later.
-- [ ] T041 [P] [US2] e2e: an unapproved run refuses delivery; approving it then permits delivery.
-- [ ] T042 [US2] **Resolve the open question before building a send trigger**: FR-005 assumes automatic
+- [ ] T041 **NOT RUN** [P] [US2] e2e: an unapproved run refuses delivery; approving it then permits delivery.
+- [x] T042 [US2] **Resolve the open question before building a send trigger**: FR-005 assumes automatic
   delivery on payment, and the client asked "please check this". If unanswered, build the explicit action
   and schedule the automatic trigger behind it — an explicit send can be automated later, while an
   automatic send that was wrong has already emailed 500 people.
 
 ## Phase 5: Advances settle against the transfer, not the approved run (FR-010 to FR-013)
 
-- [ ] T043 [US3] Add `model BankSheetRecovery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
+- [x] T043 [US3] Add `model BankSheetRecovery` in `payroll` — `companyId`, `payrollRunId`, `employeeId`,
   `salaryAdvanceId`, `amount`, timestamps. `@@unique([payrollRunId, salaryAdvanceId])`.
-- [ ] T044 [US3] That constraint **is** FR-013 ("MUST NOT recover the same advance twice"), enforced by
+- [x] T044 [US3] That constraint **is** FR-013 ("MUST NOT recover the same advance twice"), enforced by
   the database rather than by a check somebody has to remember. Note it beside the model.
-- [ ] T045 [US3] Recover advances outstanding at bank-sheet production, adjusting the **transfer** and
+- [x] T045 [US3] Recover advances outstanding at bank-sheet production, adjusting the **transfer** and
   leaving the approved run's figures untouched (FR-010, and the spec's own assumption). The run stays
   immutable; the difference is a recovery line.
-- [ ] T046 [US3] Show each recovery as a **named** line on the bank payment sheet (FR-011).
-- [ ] T047 [US3] Cap the recovery per employee at their net payable, carrying the remainder forward on
+- [x] T046 [US3] Show each recovery as a **named** line on the bank payment sheet (FR-011).
+- [x] T047 [US3] Cap the recovery per employee at their net payable, carrying the remainder forward on
   the advance (FR-012). Cap rather than refuse: an employee whose advance exceeds one month's net still
   gets paid something, and the advance settles over two months instead of producing a transfer the bank
   cannot execute.
-- [ ] T048 [P] [US3] Unit test: an advance larger than net pay recovers to zero transfer, never
+- [x] T048 [P] [US3] Unit test: an advance larger than net pay recovers to zero transfer, never
   negative, with the balance still outstanding.
-- [ ] T049 [P] [US3] Unit test: producing the sheet twice recovers once.
-- [ ] T050 [P] [US3] Unit test: an advance taken between approval and sheet production **is** recovered
+- [x] T049 [P] [US3] Unit test: producing the sheet twice recovers once.
+- [x] T050 [P] [US3] Unit test: an advance taken between approval and sheet production **is** recovered
   (SC-005) — this is the case item 9 exists for.
-- [ ] T051 [P] [US3] Unit test: the approved run's figures are byte-identical before and after sheet
+- [x] T051 [P] [US3] Unit test: the approved run's figures are byte-identical before and after sheet
   production.
 
 ## Phase 6: The transaction sheet ⚠️ THE FORMAT RESTS ON A FILE THE CLIENT HAS NOT SUPPLIED
@@ -604,3 +604,75 @@ resolves. Two migrations.
 seeded run. Its substance is covered by the unit spec, which reads the generated bytes and asserts on
 cell *types*; that is the contract T103 names, verified without the seeded run rather than instead of
 it.
+
+### Phases 4 and 5 implementation record, 2026-10-02
+
+Written **after** the Phase 9 commit, which claimed to close items 8 and 9 and did not. Phase 9
+closed item 8's payslip *layout* and the bank sheet's *format*; items 8 and 9 are delivery and
+settlement, which are these two phases. The overclaim is recorded here rather than quietly fixed.
+
+#### Delivery is an explicit action (T042)
+
+FR-005 reads as automatic delivery when a run is marked paid, and the client asked us to check that.
+Unanswered, so T042's instruction stands: build the explicit send. **An explicit send can be
+automated later behind the same method; an automatic send that was wrong has already emailed five
+hundred people their salary.** The scheduled trigger is deliberately not built.
+
+#### What makes the retry safe, in two halves
+
+`@@unique([payrollRunId, employeeId])` makes every write an upsert per employee — so a repeat is a
+no-op rather than a second email. And `retry` selects `status: failed` **as a query**, so a sent row
+is not merely skipped, it is not in the result set. Both halves matter: a filter applied to everybody
+would be one edit away from "send all", and the difference is twelve emails or five hundred. The test
+asserts on the query for that reason.
+
+`send` also skips anybody already sent to, because somebody will press it twice — the first press
+takes minutes for a full company and looks like it did nothing.
+
+#### Undeliverable is not a kind of failure
+
+A failure is retried; an undeliverable row has no address and would fail identically every time. Kept
+as separate statuses so a retry sweep cannot keep failing on the same employees forever, and so the
+screen can send somebody to find an address instead of pressing retry again.
+
+#### Item 9's restraint is the part worth reading
+
+The recovery touches **only advances the run could not have seen** — created after `generatedAt`. An
+advance the engine already recovered *partially* is left alone, and that is deliberate: the engine
+capped it because net pay could not absorb more, and taking the remainder out of the transfer would
+drive the transfer to zero and hand the employee nothing. That is exactly the outcome FR-012's cap
+exists to prevent, and reaching it by a different route would not make it lawful.
+
+A broader query — "anything still owed" — would look more thorough and would quietly undo a decision
+the engine made on purpose. The eligibility `where` is asserted on directly for that reason, rather
+than inferred from behaviour.
+
+`@@unique([payrollRunId, salaryAdvanceId])` **is** FR-013. Regenerating the sheet re-reads what was
+already recovered, counts it against the headroom, and writes nothing further. A concurrent duplicate
+is swallowed rather than raised: it means another request already did the thing FR-013 asks for.
+
+#### FR-011's named lines are a third worksheet
+
+The bank's template has no column for a recovery and must not grow one, so the recoveries go on
+`Advance Recoveries` alongside `Not Transferable` — one line per advance, not per employee, with the
+approved net pay beside the transfer. "My transfer does not match my payslip" is the question this
+answers before it is asked; a netted figure leaves it unanswerable from the file itself.
+
+#### Three code paths, one mapper
+
+`slipViewFrom` is now exported, so the JSON endpoint, the PDF download and the emailed attachment all
+read the same rows through the same mapping. Two independent mappings could still round or label a
+figure differently, and a payslip that disagrees with the screen is a wage dispute.
+
+The email carries the period and the company and **no figure**. A salary in a subject line is visible
+in a lock-screen preview and in whatever log the recipient's provider keeps; the slip is the
+attachment, which is what the client asked for.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,282 tests across 118 suites**, Nest injector
+resolves. One migration with both tables, each with `ENABLE` + `FORCE` RLS and an explicit
+`WITH CHECK` — `SlipDelivery.address` is personal data.
+
+**T041 NOT RUN** — the e2e that approves a run and then permits delivery. The refusal and the
+permission are both unit-asserted through the same `outstandingApproval` the bank sheet uses.

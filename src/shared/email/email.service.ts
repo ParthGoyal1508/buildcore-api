@@ -33,6 +33,27 @@ export abstract class EmailService {
     to: string;
     unlockAt: Date;
   }): Promise<void>;
+
+  /**
+   * Sends one employee their payslip for one period (021 FR-005) — `bugs.md` item 8.
+   *
+   * The PDF is passed in rendered rather than fetched here, for the reason the invite's URL is: the
+   * caller already holds the authoritative `SalarySlipView` and this transport has no business
+   * reading payroll. It also means a slip and its on-screen figures cannot diverge, since both come
+   * from the one object.
+   *
+   * Throws `EmailDeliveryError` on rejection, which the caller records per employee rather than
+   * letting it abandon the run — one bad address must not stop the other 499.
+   */
+  abstract sendPayslipEmail(input: {
+    to: string;
+    employeeName: string;
+    /** "February 2026", already worded — this transport does not format dates. */
+    periodLabel: string;
+    companyName: string;
+    pdf: Buffer;
+    filename: string;
+  }): Promise<void>;
 }
 
 /**

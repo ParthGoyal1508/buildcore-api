@@ -12,6 +12,7 @@ import type { BankSheetConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
+import { BankSheetRecoveryService } from './bank-sheet-recovery.service';
 import { PayrollScheduleService } from './payroll-schedule.service';
 
 /**
@@ -79,6 +80,11 @@ export class BankSheetService {
     private readonly prisma: PrismaService,
     private readonly pii: PiiCipherService,
     private readonly schedule: PayrollScheduleService,
+    /**
+     * 021 FR-010 to FR-013. Advances taken *after* the run was drawn up come out of the transfer,
+     * not out of the approved run — see the service's own comment.
+     */
+    private readonly recoveries: BankSheetRecoveryService,
     configService: ConfigService,
   ) {
     this.format = configService.get<BankSheetConfig>(
@@ -153,6 +159,25 @@ export class BankSheetService {
     const byId = new Map(employees.map((e) => [e.id, e]));
     const valueDate = this.valueDateFor(new Date());
 
+    // FR-010. Applied before a single row is written, because the figure on the row is the transfer
+    // and not the run's net pay. Idempotent — regenerating the sheet recovers nothing further, which
+    // is the database's `@@unique([payrollRunId, salaryAdvanceId])` doing the work rather than a
+    // check in this method.
+    const transfers = await this.recoveries.apply(
+      caller.rls,
+      {
+        id: run.id,
+        companyId: run.companyId,
+        // `generatedAt` where the run has one: that is when its figures were fixed, and an advance
+        // taken after it is an advance the run could not have recovered.
+        drawnUpAt: run.generatedAt ?? run.createdAt,
+      },
+      run.lineItems.map((l) => ({
+        employeeId: l.employeeId,
+        netPay: l.netPay.toNumber(),
+      })),
+    );
+
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
     const sheet = workbook.addWorksheet('Sheet1');
@@ -187,6 +212,25 @@ export class BankSheetService {
     ];
     unpayable.getRow(1).font = { bold: true };
 
+    /**
+     * FR-011. Each recovery as a **named line**, never a netted figure.
+     *
+     * A third worksheet, because the bank's template has no column for it and must not grow one.
+     * Without this sheet the only record of why a transfer is short of the payslip is a row in a
+     * table nobody looking at the file can see — and "my transfer does not match my payslip" is the
+     * question this is here to answer before it is asked.
+     */
+    const recoverySheet = workbook.addWorksheet('Advance Recoveries');
+    recoverySheet.columns = [
+      { header: 'Employee Code', key: 'code', width: 16 },
+      { header: 'Employee Name', key: 'name', width: 28 },
+      { header: 'Net Pay (as approved)', key: 'net', width: 20 },
+      { header: 'Advance Recovered', key: 'recovered', width: 18 },
+      { header: 'Advance Reference', key: 'advance', width: 28 },
+      { header: 'Amount Transferred', key: 'transfer', width: 20 },
+    ];
+    recoverySheet.getRow(1).font = { bold: true };
+
     for (const line of run.lineItems) {
       const employee = byId.get(line.employeeId);
       if (!employee) continue;
@@ -194,7 +238,10 @@ export class BankSheetService {
         .filter(Boolean)
         .join(' ')
         .trim();
-      const net = line.netPay.toNumber();
+      const transfer = transfers.get(employee.id);
+      // The **transfer**, not the run's net pay. They differ by whatever advances were recovered
+      // from it, and the run's own figure is left exactly as approved.
+      const net = transfer?.transferAmount ?? line.netPay.toNumber();
       const account = this.pii.decrypt(employee.bankAccountNumberEncrypted);
 
       const refusal = this.refusalFor({
@@ -232,6 +279,20 @@ export class BankSheetService {
         this.format.transactionTypeCode;
 
       sheet.addRow(row);
+
+      // One line per advance, not one per employee: an employee with two advances recovered has two
+      // facts to account for, and a single summed row leaves them indistinguishable from one larger
+      // advance.
+      for (const recovery of transfer?.recoveries ?? []) {
+        recoverySheet.addRow({
+          code: employee.employeeCode,
+          name,
+          net: transfer?.netPay ?? 0,
+          recovered: recovery.amount,
+          advance: recovery.salaryAdvanceId,
+          transfer: transfer?.transferAmount ?? 0,
+        });
+      }
     }
 
     // Header row and payment rows only (FR-008g). **No totals row** — see the class comment.
@@ -243,6 +304,9 @@ export class BankSheetService {
     sheet.getColumn(BANK_SHEET_COLUMN.valueDate + 1).numFmt = '@';
     sheet.getColumn(BANK_SHEET_COLUMN.paymentAmount + 1).numFmt = '#,##0.00';
     unpayable.getColumn('net').numFmt = '#,##0.00';
+    for (const key of ['net', 'recovered', 'transfer']) {
+      recoverySheet.getColumn(key).numFmt = '#,##0.00';
+    }
 
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     return {
