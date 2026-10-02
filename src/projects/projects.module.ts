@@ -15,6 +15,8 @@ import { ClientBillsController } from './billing/client-bills.controller';
 import { ClientBillsService } from './billing/client-bills.service';
 import { RaBillsController } from './billing/ra-bills.controller';
 import { RaBillsService } from './billing/ra-bills.service';
+import { ProjectPnlController } from './pnl/project-pnl.controller';
+import { ProjectPnlService } from './pnl/project-pnl.service';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
@@ -51,6 +53,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // 018 US2 (`bugs.md` item 12). Subcontractor bills measured against the award, which is a separate
     // set of rates from the client's BOQ — the margin between them is what the P&L shows.
     RaBillsController,
+    // 018 US3 (`bugs.md` item 11). The P&L and budget summary, reading every other module's costs
+    // through `ProjectSourcesRegistry` rather than by joining into their schemas.
+    ProjectPnlController,
     // 017 FR-008a, FR-009b. Registered before ProjectsController for the route-order reason
     // the note below gives: `projects/document-uploads` is a literal segment that
     // `GET /projects/:id` would otherwise swallow.
@@ -70,6 +75,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     ProjectDocumentsService,
     ClientBillsService,
     RaBillsService,
+    ProjectPnlService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other

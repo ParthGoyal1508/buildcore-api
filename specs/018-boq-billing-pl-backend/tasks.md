@@ -70,19 +70,19 @@ convenience would throw that away.
 
 ## Phase 5: The project P&L (US3)
 
-- [ ] T025 Extend `ProjectSourcesRegistry` with `ProjectCostSource`, **batched by projectIds**
+- [x] T025 Extend `ProjectSourcesRegistry` with `ProjectCostSource`, **batched by projectIds**
       (contract Part 1) — a per-project signature makes the group view an N+1 no registrant can fix
-- [ ] T026 [P] Register labour's source from `LabourModule`
-- [ ] T027 [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
+- [ ] T026 **NOT DONE** [P] Register labour's source from `LabourModule`
+- [ ] T027 **NOT DONE** [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
       returned material (spec edge case)
-- [ ] T028 [P] Register plant's source from `PlantModule`
-- [ ] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
-- [ ] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
+- [ ] T028 **NOT DONE** [P] Register plant's source from `PlantModule`
+- [x] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
+- [x] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
       008's precedent)
-- [ ] T031 Implement the drill-down: every figure lists its source records (FR-012)
-- [ ] T032 Reconcile the labour figure to approved payment sheets (FR-013)
-- [ ] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
-- [ ] T034 e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
+- [ ] T031 **NOT DONE** Implement the drill-down: every figure lists its source records (FR-012)
+- [ ] T032 **NOT DONE** Reconcile the labour figure to approved payment sheets (FR-013)
+- [x] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
+- [ ] T034 **NOT DONE** e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
 
 ## Phase 6: Variations ⚠️ RESTS ON AN ASSUMPTION
 
@@ -107,22 +107,22 @@ convenience would throw that away.
 
 ## Phase 9: The group view and verification
 
-- [ ] T046 Implement `groupSummary()` by calling `summaryFor()` and summing — **no second aggregate
+- [x] T046 Implement `groupSummary()` by calling `summaryFor()` and summing — **no second aggregate
       query** (research §7)
-- [ ] T047 Apply the visibility filter once, to the project set, so rows and total cannot disagree
-- [ ] T048 [P] Unit-test that the total equals the sum of the rows, and that an invisible project is
+- [x] T047 Apply the visibility filter once, to the project set, so rows and total cannot disagree
+- [x] T048 [P] Unit-test that the total equals the sum of the rows, and that an invisible project is
       absent from both
-- [ ] T049 Boundary test in `src/projects/pnl/pnl-boundary.spec.ts`, both directions, copying
+- [x] T049 Boundary test in `src/projects/pnl/pnl-boundary.spec.ts`, both directions, copying
       `src/letters/letters-boundary.spec.ts`: the P&L code must not query `labour`, `inventory` or
       `plant` tables, and no business module may query the billing tables
-- [ ] T050 Prove the boundary by breaking it in both directions and confirming T049 fails each time.
+- [x] T050 Prove the boundary by breaking it in both directions and confirming T049 fails each time.
       A guard that has never failed has not been shown to work
-- [ ] T051 RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
+- [ ] T051 **NOT DONE** RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
       `test/documents-rls.e2e-spec.ts`
-- [ ] T052 **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore. Without
+- [ ] T052 **NOT DONE** **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore. Without
       this an empty table and a working policy are indistinguishable
-- [ ] T053 Quickstart Passes 1–8
-- [ ] T054 Quickstart Pass 9 by hand: the group total must equal the sum of its rows **exactly**
+- [ ] T053 **NOT DONE** Quickstart Passes 1–8
+- [ ] T054 **NOT DONE** Quickstart Pass 9 by hand: the group total must equal the sum of its rows **exactly**
 - [ ] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
       numbers**; if something fails, say so with the output
 
@@ -332,3 +332,69 @@ edit through the spine, is deliberately not built — so the per-file assertions
 resolves.
 
 **T020 NOT RUN** — the e2e needs a seeded work order with an award.
+
+### Phase 5 and Phase 9 (partial) implementation record, 2026-10-02
+
+#### The line that matters most: a missing module is named, never zeroed
+
+FR-010, T033. A category with no registered cost source is listed in `unavailableCategories` **and
+excluded from the totals**. Counting it as zero is how a project looks profitable because half its
+costs are invisible — and nothing on the screen would say so.
+
+The row is still rendered, at zero, *beside* the unavailable list. A missing row reads as "this project
+has none of that"; a zero row plus a named gap is what lets a reader tell the two apart.
+
+#### Revenue and cost are both gross, and the response says what revenue counts
+
+An RA bill's retention is money withheld and its advance recovery is money already paid, so **neither
+is a cost**. A P&L reading `netPayable` would understate every project by the retention held across it,
+and the understatement grows with the project.
+
+The same reasoning puts revenue at billed gross — but a reader comparing that to the bank will find a
+gap, so `revenueNote` states what the figure counts. A figure somebody cannot reconcile is a figure
+they stop trusting, and then the whole screen goes with it.
+
+#### Two things the existing code shape forced
+
+**`ProjectCostSource` is batched by `projectIds`** (T025). The registry's existing
+`getMachineryCostByProject` and `getMaterialCostByProject` are per-project and predate this; a loop over
+them is what T025 calls an N+1 no registrant can fix. The new interface takes a list, and the test
+asserts the call count — ten for three projects across five categories and two date ranges, not thirty.
+
+**Subcontractor cost falls back to the pre-018 `amount`.** A bill raised before this feature has
+`grossAmount` 0 and an `amount` that is the only figure it ever had. Reading gross alone would silently
+drop every historical subcontractor cost from the P&L — and silently is the word that matters.
+
+#### The group total is the sum of the rows by construction
+
+Not a second aggregate query (research §7, T046). `summariesFor` produces the rows and the controller
+adds them up, so the figure a reader checks by hand is the figure returned. T047's visibility filter is
+applied by the caller naming the project set, which is the one place it can be applied once.
+
+#### T049 and T050: the guard was proven in both directions
+
+A `labourPaymentSheet` read added to the P&L service → red. A `clientBill` read added to
+`labour.module.ts` → red. Both restored → green. **The second direction matters as much as the first**:
+the moment `labour` reads `ClientBill` to work out what was billed, two modules compute revenue and the
+figures diverge — which is the defect `bill-totals.ts` exists to prevent, arriving by another route.
+
+The spec walks the **filesystem**, not `git ls-files`. `ls-files` omits files that are new and unstaged,
+which on the commit adding this test is every file it checks — and a guard that passes because it found
+nothing is worse than no guard.
+
+#### What is NOT done, and why
+
+* **T026, T027, T028** — labour, inventory and plant have not registered a batched `ProjectCostSource`.
+  The interface and the registry slot exist; each module must register itself, which is a change in
+  three other modules. Until they do, the P&L reports those categories as **unavailable**, which is the
+  honest state and exactly what FR-010 was written for.
+* **T031, T032** — the drill-down and the labour reconciliation. Both need the sources above.
+* **T034, T051 to T054** — e2e, the RLS probe, and the quickstart passes.
+* **Phase 4** (approval invalidation on an edited RA bill) — not started.
+* **Phases 6, 7, 8** — deliberately unstarted per this file's own instruction: three unconfirmed client
+  assumptions, each a phase's worth of rework if the answer differs.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,400 tests across 125 suites**, injector
+resolves.
