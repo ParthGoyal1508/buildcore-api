@@ -55,6 +55,34 @@ export class ClientBillsController {
     return this.bills.listForProject(rlsContextFor(caller), projectId);
   }
 
+  /**
+   * **Declared before `@Get(':id')` on purpose.** Nest matches routes in registration order, so with
+   * the parameterised route first this literal path would be answered as "bill boq not found" — a
+   * data problem to look at, when it is a routing one. The projects module header carries the same
+   * note about `/projects/document-requirements` for the same reason.
+   */
+  @Get('boq')
+  @ApiOperation({
+    summary:
+      'The project’s BOQ, priced and positioned, ready to measure (FR-001)',
+    description:
+      'Headings and their lines, because a BOQ is **two levels**: a heading carries no quantity and ' +
+      'no rate here, so a sheet cannot render it as a measured line of zero. The client’s own file ' +
+      'is 83 headings across 312 rows, and a flat list cannot represent it.\n\n' +
+      '**Two totals, not one.** `estimatedTotal` is the schedule at its own rates; `quotedTotal` is ' +
+      'that figure with the bidder’s percentage applied **once, to the total**. Applying it per line ' +
+      'gives a figure close enough to pass a glance and wrong by rounding — the worst available ' +
+      'outcome for a tender document.\n\n' +
+      '`unpriced` marks a line whose rate is still 0, so the sheet can say so **before** somebody ' +
+      'fills a column and meets `BOQ_RATE_MISSING` at submit.',
+  })
+  async boq(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('projectId') projectId: string,
+  ) {
+    return this.bills.billableBoq(rlsContextFor(caller), projectId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'One bill with its measured lines' })
   async view(@UserEntity() caller: AuthenticatedUser, @Param('id') id: string) {

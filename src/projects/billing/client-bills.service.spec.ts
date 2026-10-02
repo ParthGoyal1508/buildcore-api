@@ -415,3 +415,152 @@ describe('certification keeps both figures (FR-005)', () => {
     expect(view.certificationVariance).toBeNull();
   });
 });
+
+describe('the BOQ as the billing sheet needs it (FR-001, web T056-T058)', () => {
+  const boqFixture = {
+    quotedPercentage: 0.0246,
+    groups: [
+      {
+        id: 'g-12',
+        boqNo: '12',
+        name: 'Earthwork',
+        items: [
+          {
+            id: 'i-1',
+            boqNo: '12.01',
+            taskName: 'Excavation in ordinary soil',
+            unit: 'Cum',
+            scopeQty: 1000,
+            rate: 180.5,
+          },
+          {
+            id: 'i-2',
+            boqNo: '12.02',
+            taskName: 'Refilling',
+            unit: 'Cum',
+            // Unpriced: the column defaults to 0 because the table was already populated.
+            scopeQty: 400,
+            rate: 0,
+          },
+        ],
+      },
+    ],
+    billed: { 'i-1': 250 },
+  };
+
+  it('keeps the heading and its lines as two levels', async () => {
+    const { service } = buildBoq(boqFixture);
+
+    const boq = await service.billableBoq(ctx, 'p-1');
+
+    expect(boq.groups).toHaveLength(1);
+    expect(boq.groups[0]).toEqual(
+      expect.objectContaining({ boqNo: '12', name: 'Earthwork' }),
+    );
+    // A heading carries no quantity and no rate of its own, so a sheet cannot render it as a
+    // measured line of zero.
+    expect(boq.groups[0]).not.toHaveProperty('rate');
+    expect(boq.groups[0].items.map((item) => item.boqNo)).toEqual([
+      '12.01',
+      '12.02',
+    ]);
+  });
+
+  it('applies the quoted percentage once, to the total', async () => {
+    const { service } = buildBoq(boqFixture);
+
+    const boq = await service.billableBoq(ctx, 'p-1');
+
+    // 1000 × 180.50 = 180500; 400 × 0 = 0.
+    expect(boq.estimatedTotal).toBe(180500);
+    // × 1.0246. Applied per line and summed, this rounds differently and the grand total stops
+    // matching the tender document it came from.
+    expect(boq.quotedTotal).toBe(184940.3);
+    expect(boq.quotedPercentage).toBe(0.0246);
+  });
+
+  it('marks an unpriced line before anybody measures it', async () => {
+    const { service } = buildBoq(boqFixture);
+
+    const boq = await service.billableBoq(ctx, 'p-1');
+
+    expect(boq.groups[0].items[0].unpriced).toBe(false);
+    expect(boq.groups[0].items[1].unpriced).toBe(true);
+    expect(boq.unpricedCount).toBe(1);
+  });
+
+  it('carries what is already billed and what is left', async () => {
+    const { service } = buildBoq(boqFixture);
+
+    const boq = await service.billableBoq(ctx, 'p-1');
+
+    expect(boq.groups[0].items[0].previouslyBilledQty).toBe(250);
+    expect(boq.groups[0].items[0].remainingQty).toBe(750);
+  });
+
+  it('reports an over-measured line as negative rather than clamping it', async () => {
+    const { service } = buildBoq({
+      ...boqFixture,
+      billed: { 'i-1': 1100 },
+    });
+
+    const boq = await service.billableBoq(ctx, 'p-1');
+
+    expect(boq.groups[0].items[0].remainingQty).toBe(-100);
+  });
+});
+
+function buildBoq(opts: {
+  quotedPercentage: number;
+  groups: {
+    id: string;
+    boqNo: string;
+    name: string;
+    items: {
+      id: string;
+      boqNo: string;
+      taskName: string;
+      unit: string;
+      scopeQty: number;
+      rate: number;
+    }[];
+  }[];
+  billed?: Record<string, number>;
+}) {
+  const d = (value: number) => ({ toNumber: () => value });
+  const tx = {
+    $executeRaw: async () => 0,
+    project: {
+      findFirst: async () => ({
+        id: 'p-1',
+        quotedPercentage: d(opts.quotedPercentage),
+      }),
+    },
+    bOQTaskGroup: {
+      findMany: async () =>
+        opts.groups.map((group) => ({
+          id: group.id,
+          boqNo: group.boqNo,
+          name: group.name,
+          items: group.items.map((item) => ({
+            ...item,
+            scopeQty: d(item.scopeQty),
+            rate: d(item.rate),
+            isVariation: false,
+            variationRef: null,
+          })),
+        })),
+    },
+    clientBillLine: {
+      groupBy: async () =>
+        Object.entries(opts.billed ?? {}).map(([id, qty]) => ({
+          boqTaskItemId: id,
+          _sum: { quantity: d(qty) },
+        })),
+    },
+  };
+  const prisma = {
+    $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+  };
+  return { service: new ClientBillsService(prisma as never) };
+}

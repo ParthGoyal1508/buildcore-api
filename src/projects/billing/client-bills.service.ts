@@ -10,7 +10,7 @@ import { PrismaService } from 'nestjs-prisma';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
-import { billTotals, lineTotals, retentionOn } from './bill-totals';
+import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
 
 /** A line as the caller composes it. */
 export interface ComposeBillLineInput {
@@ -47,6 +47,57 @@ export interface ClientBillLineView {
   overScopeReason: string | null;
   isVariation: boolean;
   variationRef: string | null;
+}
+
+/** One BOQ line, priced and positioned, ready to be measured on a bill. */
+export interface BillableBoqItem {
+  id: string;
+  boqNo: string;
+  taskName: string;
+  unit: string;
+  scopeQty: number;
+  rate: number;
+  /**
+   * True when the rate is still 0 — "nobody has priced this", not "this is free".
+   *
+   * Said here so the sheet can mark the line before somebody measures it, rather than letting them
+   * fill a column and meet `BOQ_RATE_MISSING` at submit.
+   */
+  unpriced: boolean;
+  /** Measured on every bill that has left draft. */
+  previouslyBilledQty: number;
+  /** Scope less previously billed. Negative where the line is already over-measured. */
+  remainingQty: number;
+  isVariation: boolean;
+  variationRef: string | null;
+}
+
+/** A BOQ heading and the lines under it. */
+export interface BillableBoqGroup {
+  id: string;
+  boqNo: string;
+  name: string;
+  items: BillableBoqItem[];
+}
+
+/**
+ * A project's BOQ as the billing sheet needs it (018 FR-001).
+ *
+ * **Two totals, not one** (web T058). The estimated total is the schedule at its own rates; the
+ * quoted total is that figure with the bidder's percentage applied **once, to the total**. The
+ * client's own file carries both — ₹2,99,61,506.78 becoming ₹3,06,98,559.85 at 2.46% excess — and
+ * applying the percentage per line instead gives a figure close enough to pass a glance and wrong by
+ * rounding, which is the worst available outcome for a tender document.
+ */
+export interface BillableBoq {
+  projectId: string;
+  /** The bidder's quoted excess as a fraction — `0.0246` is 2.46%. */
+  quotedPercentage: number;
+  estimatedTotal: number;
+  quotedTotal: number;
+  groups: BillableBoqGroup[];
+  /** Lines with no rate yet. A bill cannot be composed from these (`BOQ_RATE_MISSING`). */
+  unpricedCount: number;
 }
 
 export interface ClientBillView {
@@ -372,6 +423,80 @@ export class ClientBillsService {
     const out: ClientBillView[] = [];
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
     return out;
+  }
+
+  /**
+   * The project's BOQ, priced and positioned, for the billing sheet (FR-001).
+   *
+   * Headings and their lines, because a BOQ is **two levels** and always was: `BOQTaskGroup` is the
+   * heading ("12 — Earthwork") and `BOQTaskItem` is the numbered sub-item ("12.01"). The client's own
+   * file is 83 headings across 312 rows, and a flat list cannot represent it. A heading carries no
+   * quantity and no rate here, so a sheet cannot render it as a measured line of zero.
+   *
+   * `previouslyBilledQty` comes from the same aggregate composition uses, so the remaining quantity a
+   * reader sees before measuring is the one the server will apply.
+   */
+  async billableBoq(ctx: RlsContext, projectId: string): Promise<BillableBoq> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const project = await tx.project.findFirst({
+        where: { id: projectId },
+        select: { id: true, quotedPercentage: true },
+      });
+      if (!project) throw new NotFoundException('Project not found');
+
+      const groups = await tx.bOQTaskGroup.findMany({
+        where: { projectId },
+        include: { items: { orderBy: { boqNo: 'asc' } } },
+        orderBy: { boqNo: 'asc' },
+      });
+
+      const allItemIds = groups.flatMap((group) =>
+        group.items.map((item) => item.id),
+      );
+      const previously = await this.previouslyBilled(tx, allItemIds);
+
+      let estimatedTotal = 0;
+      let unpricedCount = 0;
+      const shaped: BillableBoqGroup[] = groups.map((group) => ({
+        id: group.id,
+        boqNo: group.boqNo,
+        name: group.name,
+        items: group.items.map((item) => {
+          const scopeQty = item.scopeQty.toNumber();
+          const rate = item.rate.toNumber();
+          const billed = previously.get(item.id) ?? 0;
+          if (rate === 0) unpricedCount += 1;
+          estimatedTotal += scopeQty * rate;
+          return {
+            id: item.id,
+            boqNo: item.boqNo,
+            taskName: item.taskName,
+            unit: item.unit,
+            scopeQty,
+            rate,
+            unpriced: rate === 0,
+            previouslyBilledQty: billed,
+            // Negative where the line is already over-measured. Reported, not clamped — the same
+            // decision `bill-totals.ts` makes, for the same reason.
+            remainingQty: Math.round((scopeQty - billed) * 1000) / 1000,
+            isVariation: item.isVariation,
+            variationRef: item.variationRef,
+          };
+        }),
+      }));
+
+      const quotedPercentage = project.quotedPercentage.toNumber();
+      return {
+        projectId,
+        quotedPercentage,
+        estimatedTotal: money(estimatedTotal),
+        // The percentage applied **once, to the total**. Per line it rounds differently and the
+        // grand total stops matching the tender document it came from.
+        quotedTotal: money(estimatedTotal * (1 + quotedPercentage)),
+        groups: shaped,
+        unpricedCount,
+      };
+    });
   }
 
   /** One bill, with its lines and their cumulative position against the BOQ. */
