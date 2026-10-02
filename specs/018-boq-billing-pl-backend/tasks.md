@@ -222,25 +222,71 @@ recorded in that spec rather than silently patched.
 
 ## Phase 11: Amendment of 2026-09-29 — the monthly position export (FR-011a)
 
-- [ ] T068 [US3] Export the selected month's position — revenue billed, cost by category, budget and
+- [x] T068 [US3] Export the selected month's position — revenue billed, cost by category, budget and
   variance — in the repository's existing export format. Do not introduce a second export mechanism.
-- [ ] T069 [US3] Carry the project, the month, and the **date the export was produced**. The production
+- [x] T069 [US3] Carry the project, the month, and the **date the export was produced**. The production
   date is not decoration: the spec's edge case is a payment sheet reopened after a month was exported,
   and this is the only thing that distinguishes two exports of the same month. Without it the older
   document is indistinguishable from the current position and somebody quotes it to a client.
-- [ ] T070 [P] [US3] Unit test: the exported figures equal the screen's figures exactly (SC-008). Not
+- [x] T070 [P] [US3] Unit test: the exported figures equal the screen's figures exactly (SC-008). Not
   approximately — a client-facing document that disagrees with the system by a rounding step is the
   problem this asserts against.
-- [ ] T071 [P] [US3] Unit test: two exports of the same month taken either side of a sheet correction
+- [x] T071 [P] [US3] Unit test: two exports of the same month taken either side of a sheet correction
   carry different production dates and different figures.
-- [ ] T072 [US3] Respect feature 019's cash hiding if it has shipped: a hidden cash figure exports as
+- [x] T072 [US3] Respect feature 019's cash hiding if it has shipped: a hidden cash figure exports as
   marked-absent, never as zero. If 019 has not shipped, note here that this export will need revisiting
   when it does — an export that silently understates a total by every cash payment in it is worse than
   one that says a figure is hidden.
-- [ ] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`.
-- [ ] T074 Re-read `spec.md` FR-010a, FR-010b and FR-011a and confirm the built behaviour matches.
+- [x] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`.
+- [x] T074 Re-read `spec.md` FR-010a, FR-010b and FR-011a and confirm the built behaviour matches.
   Record in the traceability notes that item 14 was **largely already satisfied** by feature 013's
   payment sheets, and that this amendment added the calendar-month framing and the export only.
+
+### Phase 11 implementation record, 2026-10-02
+
+**`GET projects/pnl/export?projectId&period&format=pdf|excel`**, in
+`src/projects/pnl/position-export.service.ts`. 17 unit tests. It uses the repository's existing
+`renderReportPdf` / `renderReportExcel` / `formatMeta` over the same `ReportData` shape the
+dashboard's reports use (T068) — `ExportJobService`'s sync/async machinery is deliberately not used,
+because it exists for reports that run to tens of thousands of rows and one project's month is a
+dozen; queuing a twelve-row document and handing back a job to poll would be a second mechanism in
+everything but name.
+
+**The production instant is to the second, in the document and in the filename** (T069, D14). A date
+alone would not do it: two exports taken on the same day either side of a correction are exactly the
+pair the spec's edge case is about. It is a row rather than part of the title because
+`renderReportExcel` uses the title as the worksheet name, and the xlsx format rejects a colon in one
+— so a timestamped title would have failed at render time, in production, on a client-facing
+document.
+
+**T072 found a real hole, and it was not the one the task anticipated.** The task asks the export to
+respect 019's cash hiding. It cannot inherit it: `CashVisibilityInterceptor` shapes what a handler
+*returns*, and a document written through `@Res()` returns nothing, so **every file download in this
+product is outside that interceptor's reach by construction**. The rule is now read from one place —
+`cashHidingFor()`, extracted from the interceptor rather than copied — and applied in the export
+explicitly.
+
+Stated plainly so nobody overclaims: **no figure on this document is hidden today.** `hideCash` keys
+off a `paymentMode`/`mode` field on the row and a closed list of amount field names, and a P&L
+aggregate carries neither. What is live today is the other half of the same principle — a category
+whose module registered no cost source exports as `Not available`, never as the zero the P&L hands
+over — and that is tested. The hidden path is implemented, tested at the formatter, and will work the
+day an aggregate gains one of those field names.
+
+**No figure is re-rounded.** Cells are the served number at two decimal places, trailing paisa kept:
+a column where some cells carry two places and some carry one is the first thing a client queries,
+and the answer is always "the system is fine, the export is odd".
+
+### Item 14 traceability (T074)
+
+Re-read against FR-010a, FR-010b and FR-011a after building. **Item 14 was largely already satisfied
+by feature 013**: `LabourPaymentSheet` and `PaymentSheetLine` have given a per-project, per-worker
+wage register carrying days worked, the resolved rate, gross, deductions and net since 013 shipped,
+and FR-010 gave the monthly cost position. What the client asked for and did not have was the
+**calendar-month framing** — sheets cover the wage period their creator named, which under a
+fortnightly cycle is never a month — and a **document that can leave the system**. This amendment
+added those two things and nothing else. Recorded here because "item 14 is built" and "item 14 was
+mostly already built" lead to different conclusions about how much of `bugs.md` remains.
 
 ### Dependencies for phases 10-11
 

@@ -1,6 +1,14 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -9,6 +17,10 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
+import {
+  ProjectPositionExportService,
+  type PositionExportFormat,
+} from './position-export.service';
 import { ProjectPnlService } from './project-pnl.service';
 
 /**
@@ -20,7 +32,10 @@ import { ProjectPnlService } from './project-pnl.service';
 @RequirePermissions(Permission.PROJECT_FINANCIALS)
 @Controller('projects/pnl')
 export class ProjectPnlController {
-  constructor(private readonly pnl: ProjectPnlService) {}
+  constructor(
+    private readonly pnl: ProjectPnlService,
+    private readonly exports: ProjectPositionExportService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -48,6 +63,52 @@ export class ProjectPnlController {
       projectId,
       period,
     );
+  }
+
+  @Get('export')
+  @ApiOperation({
+    summary:
+      'The month’s position as a document that can be handed to a client (FR-011a)',
+    description:
+      'The same figures the screen is served, in the repository’s existing report formats — no ' +
+      'second export mechanism.\n\n' +
+      '**It carries the instant it was produced**, in the document and in the filename. The spec’s ' +
+      'edge case is a payment sheet reopened and re-approved after a month was exported, and the ' +
+      'production time is the only thing that lets two exports of the same month be told apart: ' +
+      'without it the older document is indistinguishable from the current position and somebody ' +
+      'quotes it to a client.\n\n' +
+      'A figure that is hidden by the company’s cash setting, or that belongs to a module which ' +
+      'registered no cost source, exports as **words** — `Hidden`, `Not available` — never as a ' +
+      'zero. A zero is a figure, and a spreadsheet summing the column cannot tell one from the other.',
+  })
+  async exportPosition(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('projectId') projectId: string,
+    @Query('period') period: string,
+    @Res() res: Response,
+    @Query('format') format?: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    const chosen = (format ?? 'pdf').toLowerCase();
+    if (chosen !== 'pdf' && chosen !== 'excel') {
+      throw new BadRequestException('format must be pdf or excel');
+    }
+
+    const document = await this.exports.export(
+      caller,
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      period,
+      chosen as PositionExportFormat,
+    );
+
+    res.setHeader('Content-Type', document.contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${document.filename}"`,
+    );
+    res.status(200).send(document.buffer);
   }
 
   @Get('group')

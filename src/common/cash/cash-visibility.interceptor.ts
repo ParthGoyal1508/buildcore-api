@@ -49,28 +49,48 @@ export class CashVisibilityInterceptor implements NestInterceptor {
       .switchToHttp()
       .getRequest<{ user?: AuthenticatedUser }>();
 
-    const companyId = user?.selectedCompanyId ?? user?.companyId ?? null;
-    if (!companyId) return next.handle();
+    const { hidden, maySeeBreakup } = await cashHidingFor(this.prisma, user);
+    if (!hidden) return next.handle();
 
-    const company = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.company.findUnique({
-          where: { id: companyId },
-          select: { hideCashTransactions: true },
-        }),
-    );
-    // Hiding off means nothing is hidden, the breakup included. The company setting is the
-    // master control (FR-014); `CASH_ENTRY` decides who still sees the breakup once it is on,
-    // not who sees it when nobody asked for anything to be hidden.
-    if (!company?.hideCashTransactions) return next.handle();
-
-    const maySeeBreakup = user ? maySeeCashBreakup(user) : false;
     return next
       .handle()
       .pipe(map((body) => hideCash(body, false, maySeeBreakup)));
   }
+}
+
+/**
+ * Whether this caller's company has asked for cash hidden, and whether they still see the breakup.
+ *
+ * Exported because **a response sent through `@Res()` never reaches this interceptor.** Nest's
+ * response-mapping pipe runs on what a handler returns, and a handler that writes to the raw
+ * response returns nothing — so every file download in this product is outside the interceptor's
+ * reach by construction. An export that silently understated a total by every cash payment in it
+ * would be worse than one that says a figure is hidden, so those surfaces ask this directly rather
+ * than each re-deriving the rule (Principle III).
+ */
+export async function cashHidingFor(
+  prisma: PrismaService,
+  user?: AuthenticatedUser,
+): Promise<{ hidden: boolean; maySeeBreakup: boolean }> {
+  const companyId = user?.selectedCompanyId ?? user?.companyId ?? null;
+  if (!companyId) return { hidden: false, maySeeBreakup: false };
+
+  const company = await withRlsContext(prisma, { isSuperAdmin: true }, (tx) =>
+    tx.company.findUnique({
+      where: { id: companyId },
+      select: { hideCashTransactions: true },
+    }),
+  );
+  // Hiding off means nothing is hidden, the breakup included. The company setting is the master
+  // control (FR-014); `CASH_ENTRY` decides who still sees the breakup once it is on, not who sees
+  // it when nobody asked for anything to be hidden.
+  if (!company?.hideCashTransactions) {
+    return { hidden: false, maySeeBreakup: false };
+  }
+  return {
+    hidden: true,
+    maySeeBreakup: user ? maySeeCashBreakup(user) : false,
+  };
 }
 
 /**
