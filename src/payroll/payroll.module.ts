@@ -22,6 +22,7 @@ import { PlantModule } from '../plant/plant.module';
 import { BankSheetRecoveryService } from './runs/bank-sheet-recovery.service';
 import { BankSheetService } from './runs/bank-sheet.service';
 import { SlipDeliveryService } from './runs/slip-delivery.service';
+import { TransactionSheetService } from './runs/transaction-sheet.service';
 import { PayrollRunsController } from './runs/payroll-runs.controller';
 import { PayrollScheduleCron } from './runs/payroll-schedule.cron';
 import { PayrollScheduleService } from './runs/payroll-schedule.service';
@@ -77,6 +78,8 @@ import { SalaryService } from './salary/salary.service';
     // 021 FR-005 to FR-007 (`bugs.md` item 8). Emailing employees their payslips, one at a time,
     // with failures isolated and a retry that cannot double-send.
     SlipDeliveryService,
+    // 021 FR-008 to FR-011. The bank's returned sheet, reconciled against the run.
+    TransactionSheetService,
     ChallansService,
     LoansService,
     FnfService,

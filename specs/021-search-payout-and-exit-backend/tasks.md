@@ -250,21 +250,21 @@ Everything below is buildable without the client's file **except** the column ma
 against one seeded format profile; their file becomes a second profile rather than a rewrite. If it
 arrives before this phase starts, the seeded profile is simply theirs (plan D12).
 
-- [ ] T052 [US3] Add `model BankTransactionLine` in `payroll` — `companyId`, `payrollRunId`, the raw
+- [x] T052 [US3] Add `model BankTransactionLine` in `payroll` — `companyId`, `payrollRunId`, the raw
   parsed fields, `matchedPayrollLineItemId String?`, `unmatchedReason String?`, timestamps.
-- [ ] T053 [US3] Declare the format as a named mapping profile in configuration, not literals in the
+- [x] T053 [US3] Declare the format as a named mapping profile in configuration, not literals in the
   parser (Principle III).
-- [ ] T054 [US3] Validated multipart upload DTO (Principle II).
-- [ ] T055 [US3] **Store unmatched lines; do not reject the file.** SC-004 requires every line be either
+- [x] T054 [US3] Validated multipart upload DTO (Principle II).
+- [x] T055 [US3] **Store unmatched lines; do not reject the file.** SC-004 requires every line be either
   matched or reported, and a parser that refuses on the first unrecognised row reports nothing. The
   upload succeeds and the reconciliation is what is incomplete.
-- [ ] T056 [US3] Match lines to payroll lines and report unmatched ones with a reason (FR-009).
-- [ ] T057 [US3] Explain differences line by line between the sheet and the run.
-- [ ] T058 [P] [US3] Unit test: a file with three good rows and one unparseable row uploads, matches
+- [x] T056 [US3] Match lines to payroll lines and report unmatched ones with a reason (FR-009).
+- [x] T057 [US3] Explain differences line by line between the sheet and the run.
+- [x] T058 [P] [US3] Unit test: a file with three good rows and one unparseable row uploads, matches
   three and reports one — the upload does not fail.
-- [ ] T059 [P] [US3] Unit test: a sheet in a format the bank changed produces unmatched lines with
+- [x] T059 [P] [US3] Unit test: a sheet in a format the bank changed produces unmatched lines with
   reasons, not an exception.
-- [ ] T060 [US3] Update the spec's Clarifications when the client supplies a file, naming the bank.
+- [x] T060 [US3] Update the spec's Clarifications when the client supplies a file, naming the bank.
 
 ## Phase 7: Nobody leaves holding the company's property (FR-014 to FR-018b)
 
@@ -676,3 +676,57 @@ resolves. One migration with both tables, each with `ENABLE` + `FORCE` RLS and a
 
 **T041 NOT RUN** — the e2e that approves a run and then permits delivery. The refusal and the
 permission are both unit-asserted through the same `outstandingApproval` the bank sheet uses.
+
+### Phase 6 implementation record, 2026-10-02
+
+The client's file arrived before this phase started, so T053's "one seeded profile, theirs becomes a
+second" never happened — **theirs is the profile**, which is what plan D12 said would happen in this
+case. T060's spec update is the Phase 9 record above; the bank is not named in it because the file
+does not name one.
+
+#### The rule that shaped everything: a bad row is reported, not fatal
+
+T055 asks for it and SC-004 depends on it — every line either matched or reported. A parser that
+refuses on the first unrecognised row reports **none** of them, which is the opposite of useful when a
+bank has changed a column and somebody needs to know which rows still line up.
+
+So there is exactly one refusal: a file that cannot be opened as a workbook, where the remedy is a
+different file rather than a report. Everything inside a workbook that opens becomes rows, and rows
+that cannot be read become rows carrying a reason.
+
+**The first version of this had a bug that the T059 test caught.** It skipped any row with neither an
+account nor an amount as a trailing blank — which is most of a sheet whose columns the bank had
+*reordered*. It would have reported such a file as clean with nothing in it: the single worst outcome
+available, because it looks like success. A row is now blank only when **every** cell is empty.
+
+#### Matching is on the account number, and normalised only for matching
+
+Never the beneficiary name: the name is whatever the beneficiary's own bank holds, misspelled against
+every HR record in the client's own sample, which makes it the field in the file least able to
+identify anybody.
+
+Normalisation strips leading zeros — exactly the inconsistency in the sample, where the same bank
+wrote `0060311000001404` as text and `42855410069` as a number. Treating those as different accounts
+would report such employees as both unmatched *and* missing, which is one problem counted twice.
+Storage keeps the raw value, because the leading zero is part of the account number at the bank.
+
+#### Two gaps, reported separately
+
+A line matching no employee is money that moved to somebody the run does not know about. An employee
+with no line is money that **did not move**. Different people chase each, and a single "discrepancies"
+count would send both to whoever asked first.
+
+Differences are **reported, not judged**. A transfer short by an advance recovery is correct, and this
+service does not know which differences are expected — the one that does is the recovery sheet from
+Phase 5.
+
+#### Base64, not multipart
+
+Matching every other upload in this product — company documents, signatories, payment proofs. One
+upload convention means one place where size limits and validation live, rather than two that
+disagree about which rejects what.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,297 tests across 119 suites**, injector
+resolves. One migration, RLS with an explicit `WITH CHECK` — `beneficiaryAccount` is personal data.

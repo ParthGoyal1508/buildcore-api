@@ -1947,6 +1947,33 @@ item 9: an advance taken *between* approval and payment day must still come out 
 actually moves, and an approved run is immutable.'
 }
 
+Table BankTransactionLine {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  rowNumber Int [not null, note: 'Where in the file this came from, so a reported problem can be pointed at.']
+  beneficiaryName String [note: 'The raw fields, exactly as the file gave them. Not normalised: matching normalises a copy, and
+storing the normalised form would lose the leading zero that is part of the account number.']
+  beneficiaryAccount String
+  ifsc String
+  amount Decimal
+  matchedPayrollLineItemId String [note: 'The payroll line this was matched to, or null.']
+  unmatchedReason String [note: 'Why it did not match, in words. Null when it did.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One line of the bank\'s own transaction sheet, as uploaded (021 FR-008 to FR-011).
+
+**Stored whether or not it matched** (task T055). SC-004 asks that every line be either matched or
+reported, and a parser that rejects the file on its first unrecognised row reports none of them.
+So an unreadable row is a row here with an `unmatchedReason`, not an exception — the upload
+succeeds and the *reconciliation* is what is incomplete.
+
+Replaced wholesale per run on each upload rather than appended to: a second upload is a correction
+of the first, and two sets of lines for one run would make "unmatched" a number nobody could
+interpret.'
+}
+
 Table CodeSequence {
   id String [pk]
   companyId String [not null]
