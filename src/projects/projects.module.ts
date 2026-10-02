@@ -18,6 +18,8 @@ import { RaBillsController } from './billing/ra-bills.controller';
 import { RaBillsService } from './billing/ra-bills.service';
 import { ProjectPnlController } from './pnl/project-pnl.controller';
 import { ProjectPnlService } from './pnl/project-pnl.service';
+import { WorkOrdersController } from './billing/work-orders.controller';
+import { WorkOrdersService } from './billing/work-orders.service';
 import { PnlDrillDownService } from './pnl/pnl-drill-down.service';
 import { ProjectPositionExportService } from './pnl/position-export.service';
 import { ProjectsService } from './portfolio/projects.service';
@@ -54,6 +56,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
+    WorkOrdersController,
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
     ClientBillsController,
@@ -82,6 +85,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     ProjectDocumentsService,
     ClientBillsService,
     RaBillsService,
+    // 018 US2. Feature 008 US6's surface, delivered in the smallest form that makes an RA bill
+    // reachable — nothing had ever written to the `WorkOrder` table. See the service comment.
+    WorkOrdersService,
     ProjectPnlService,
     // 018 FR-011a (`bugs.md` item 14): the month's position as a document, over the same
     // renderer the dashboard's reports use.
