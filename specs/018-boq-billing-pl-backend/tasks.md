@@ -25,27 +25,27 @@ convenience would throw that away.
 
 **Nothing else can start.** FR-002 prices from a rate that does not exist today (research §1).
 
-- [ ] T001 Add `rate Decimal @default(0)`, `isVariation Boolean @default(false)` and
+- [x] T001 Add `rate Decimal @default(0)`, `isVariation Boolean @default(false)` and
       `variationRef String?` to `BOQTaskItem`. Default 0 because the table is populated and a
       required column cannot be added to one — and because a zero rate is visibly wrong on a bill
       whereas a guessed rate is invisibly wrong
-- [ ] T002 [P] Expose rate on the BOQ CRUD surface and DTOs
-- [ ] T003 [P] Unit-test that a line with rate 0 is refused at billing with `BOQ_RATE_MISSING`,
+- [x] T002 [P] Expose rate on the BOQ CRUD surface and DTOs
+- [x] T003 [P] Unit-test that a line with rate 0 is refused at billing with `BOQ_RATE_MISSING`,
       not billed at zero
 
 ## Phase 2: Client bills with lines (US1)
 
-- [ ] T004 Add `ClientBill` and `ClientBillLine` per data-model.md
-- [ ] T005 Hand-author RLS for both — `ENABLE`, `FORCE`, `tenant_isolation`
-- [ ] T006 [P] DTOs for compose, submit and certify
-- [ ] T007 Implement `compose()` — prices from the BOQ rate and **freezes it onto the line**
-- [ ] T008 Implement cumulative billed quantity as an aggregate, never a stored counter (research §3)
-- [ ] T009 Implement the over-scope flag at composition and the refusal at submit (research §5)
-- [ ] T010 Refuse a bill on a project with no BOQ — `BOQ_REQUIRED`
-- [ ] T011 [P] Unit-test the frozen rate: revise the BOQ rate, assert the submitted bill is unchanged.
+- [x] T004 Add `ClientBill` and `ClientBillLine` per data-model.md
+- [x] T005 Hand-author RLS for both — `ENABLE`, `FORCE`, `tenant_isolation`
+- [x] T006 [P] DTOs for compose, submit and certify
+- [x] T007 Implement `compose()` — prices from the BOQ rate and **freezes it onto the line**
+- [x] T008 Implement cumulative billed quantity as an aggregate, never a stored counter (research §3)
+- [x] T009 Implement the over-scope flag at composition and the refusal at submit (research §5)
+- [x] T010 Refuse a bill on a project with no BOQ — `BOQ_REQUIRED`
+- [x] T011 [P] Unit-test the frozen rate: revise the BOQ rate, assert the submitted bill is unchanged.
       **This is the assertion the feature turns on**
-- [ ] T012 [P] Unit-test cumulative quantity across two bills
-- [ ] T013 e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit
+- [x] T012 [P] Unit-test cumulative quantity across two bills
+- [ ] T013 **NOT RUN** e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit
 
 ## Phase 3: Subcontractor bills measured against the award (US2)
 
@@ -216,3 +216,70 @@ the position comes from Phase 5. Neither depends on phases 6-8, which rest on cl
 **Phase 10.** The per-worker monthly view is the half of item 14 that nobody can currently assemble
 without opening several payment sheets and adding them up. The export is a convenience over a figure
 that is by then already correct.
+
+### Phases 1 and 2 implementation record, 2026-10-02
+
+#### The client's BOQ file contradicted the design, and that is the headline
+
+`docs/BOQ_794578.xls` arrived — the file this task list was "awaiting" — and it is not the
+per-line-priced schedule this feature assumed. It is a government e-tender **"Percentage BoQ"**: the
+bidder quotes **one percentage** against the schedule of rates rather than a rate per line. The file's
+own footer shows it: `Total in Figures` ₹2,99,61,506.78 becoming `Quoted Rate in Figures`
+₹3,06,98,559.85 at `Excess (+) 0.0246`.
+
+**A bill priced from the line rate alone under-bills by exactly that percentage, on every line.** On
+that file it is ₹7.37 lakh on a ₹3 crore project: invisible per line and material in total, which is
+the worst shape a billing error can take. `Project.quotedPercentage` is the fix, frozen onto each bill
+beside the frozen rates, and `bill-totals.spec.ts` asserts the gap as a *difference* rather than
+describing it in a comment.
+
+The percentage is applied **per line, not once at the total**. The two differ after rounding, and the
+per-line figure is what appears on the document a client reads — so the total has to be the sum of the
+printed lines rather than a separately-derived number a rupee away from them.
+
+#### What else the file settled
+
+* **311 item rows**, not 500. NFR-001's figure is confirmed as the right ballpark and conservatively
+  high, so no row virtualization is needed beyond what it already implies.
+* **Units are free text and inconsistent within one file** — `Cum` and `Cum.`, `Sqm`/`Sqm.`/`sqm`,
+  `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr`. A unit master would reject this file. Units stay a string.
+* The file carries a **second BOQ block at columns 238-242**, so an importer must not assume one
+  section. Not built in this phase; recorded because it is exactly the thing an importer assumes.
+
+#### bill-totals.ts exists because two definitions of "net" would not announce themselves
+
+The figures would simply differ slightly on two screens and each would look plausible. The file states
+the **four-way distinction** once: gross is the work; retention is a timing difference; an advance
+recovery is money already paid; net is what changes hands. `pnlAmount` is named separately from `gross`
+even though they are equal today, because "what did this bill do to the P&L" is the question a reader
+actually asks, and answering it with a field called `gross` invites the next person to reach for `net`.
+
+**A P&L that treats net as cost understates the project** by every rupee of retention held across it.
+That is the mistake this file exists to make unreachable by accident.
+
+#### Three decisions worth reading
+
+**The rate is frozen onto the line** (T011), the assertion the feature turns on. A bill is a document
+that was sent; a rate table is a current opinion. Rendering the first from the second makes every
+historical bill a lie that changes shape each time somebody corrects a rate.
+
+**Cumulative quantity is an aggregate, never a counter** (research §3). A counter diverges the first
+time a bill is deleted or two are composed concurrently, and the over-scope check is then wrong in
+whichever direction nobody notices. Draft bills are excluded, so two people composing bills
+simultaneously do not see each other's unfinished work as billed — and a bill's *own* lines are
+included in its own cumulative figure, or its column would read as though the bill had not happened.
+
+**Certification keeps both figures** (FR-005) and leaves cumulative billed quantity untouched. A
+shortfall is a dispute to pursue, not a correction to absorb; a system that silently reduced what was
+billed would lose the only record there was one, and the next bill would re-bill the same work.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,364 tests across 122 suites**, injector
+resolves. One migration covering Phases 1 to 3's schema.
+
+**T013 NOT RUN** — the e2e needs a seeded project with a priced BOQ.
+
+**Phases 6, 7 and 8 remain deliberately unstarted**, per this file's own instruction: they rest on three
+client assumptions that are not confirmed, and each is a phase's worth of rework if the answer differs.
+That is exactly why they were made separable.
