@@ -12,6 +12,7 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import {
   ProjectSourcesRegistry,
+  type ProjectCostRecord,
   type ProjectCostSource,
 } from '../../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
@@ -453,6 +454,90 @@ export class MonthlyWageRollupService
       draftSheetCount,
       note: NOTE,
     };
+  }
+
+  /**
+   * The sheets behind one project's labour figure, for the P&L drill-down (FR-012, T031).
+   *
+   * One record per contributing sheet, carrying **what the range took from it** rather than the
+   * sheet's own total — so the records sum to the figure they were opened from. A drill-down whose
+   * rows do not add up to the total is worse than no drill-down: it tells the reader the number is
+   * wrong without telling them how.
+   *
+   * The per-worker itemisation is not duplicated here. It is one request away at
+   * `labour/reports/monthly-wage-rollup`, and a second copy of it would be a second thing to keep
+   * in step.
+   */
+  async recordsByProject(
+    projectId: string,
+    companyId: string,
+    range: { from: Date; to: Date },
+  ): Promise<ProjectCostRecord[]> {
+    const ctx = { isSuperAdmin: false, companyId };
+    // Deliberately **not** wrapped in a try/catch, unlike `costsByProject` above. A failure there
+    // must not take the other cost lines down with it; a failure here is one person opening one
+    // figure, and the drill-down reports it as unreadable rather than handing back an empty list
+    // that reads as "this month had no wages".
+    const sheets = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.labourPaymentSheet.findMany({
+        where: {
+          companyId,
+          projectId,
+          deletedAt: null,
+          periodFrom: { lte: range.to },
+          periodTo: { gte: range.from },
+        },
+        include: { lines: true },
+        orderBy: { periodFrom: 'asc' },
+      }),
+    );
+
+    const records: ProjectCostRecord[] = [];
+    for (const sheet of sheets) {
+      if (!COUNTED_SHEET_STATUSES.includes(sheet.status)) continue;
+      const apportioned =
+        sheet.periodFrom < range.from || sheet.periodTo > range.to;
+      const perWorker = apportioned
+        ? (
+            await this.musterDaysBySheet(
+              ctx,
+              projectId,
+              [sheet],
+              range.from,
+              range.to,
+            )
+          ).get(sheet.id)
+        : undefined;
+
+      let gross = 0;
+      for (const line of sheet.lines) {
+        const { share } = lineShare(
+          apportioned,
+          line.daysWorked.toNumber(),
+          perWorker?.get(line.workerId),
+          sheet.periodTo <= range.to,
+        );
+        if (share === 0) continue;
+        gross = roundMoney(
+          gross + roundMoney(line.grossWage.toNumber() * share),
+        );
+      }
+      if (gross === 0) continue;
+
+      records.push({
+        id: sheet.id,
+        reference: `${sheet.engagementType} wages ${isoDate(
+          sheet.periodFrom,
+        )} to ${isoDate(sheet.periodTo)}`,
+        date: isoDate(sheet.periodTo),
+        amount: gross,
+        status: sheet.status,
+        description: apportioned
+          ? 'Apportioned on days worked inside the period'
+          : null,
+      });
+    }
+    return records;
   }
 
   /**

@@ -66,6 +66,24 @@ export interface ProjectMaterialsSource {
  * Returns a map so a project with no cost in the period is **absent rather than zero**, and the P&L
  * can tell "nothing spent" from "not asked".
  */
+/**
+ * One record behind a cost figure (018 FR-012).
+ *
+ * Deliberately shallow and uniform: the drill-down's job is to let a reader see *what* a total is
+ * made of and go and open it, not to re-render each module's own screen inside the P&L. `reference`
+ * is whatever that module's users call the thing — a bill number, a sheet's period — because an id
+ * is not something anybody can look up on a noticeboard.
+ */
+export interface ProjectCostRecord {
+  id: string;
+  reference: string;
+  /** `YYYY-MM-DD`. */
+  date: string;
+  amount: number;
+  status: string | null;
+  description: string | null;
+}
+
 export interface ProjectCostSource {
   /** Which budget category this source accounts for. One source per category. */
   readonly category:
@@ -79,6 +97,23 @@ export interface ProjectCostSource {
     companyId: string,
     range: { from: Date; to: Date },
   ): Promise<Map<string, number>>;
+  /**
+   * The records comprising one project's figure, for the drill-down (FR-012).
+   *
+   * **Optional, and the optionality is the point.** A source that cannot itemise its total declines
+   * to implement this, and the drill-down then reports "this module exposes a total only", naming
+   * it. The alternative — every source returning `[]` — makes "we cannot itemise this" and "there
+   * is nothing to itemise" the same answer, which is the identical mistake
+   * `unavailableCategories` exists to avoid one level up.
+   *
+   * Per-project rather than batched: a drill-down is opened on one figure, by one person, having
+   * already decided which project they are looking at.
+   */
+  recordsByProject?(
+    projectId: string,
+    companyId: string,
+    range: { from: Date; to: Date },
+  ): Promise<ProjectCostRecord[]>;
 }
 
 /**

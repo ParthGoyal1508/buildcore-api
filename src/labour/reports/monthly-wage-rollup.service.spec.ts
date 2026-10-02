@@ -878,3 +878,95 @@ describe('labour registers the P&L’s labour cost, and it reconciles (T026, T03
     expect(costs.size).toBe(0);
   });
 });
+
+describe('the labour drill-down adds up to the labour figure (T031, FR-012)', () => {
+  const august = () => {
+    const { monthStart, monthEnd } = monthBounds(2026, 8);
+    return { from: monthStart, to: monthEnd };
+  };
+
+  it('lists the contributing sheets and their records sum to the total', async () => {
+    const records = await build(straddlingFixture).service.recordsByProject(
+      'p-1',
+      'co-1',
+      august(),
+    );
+    const costs = await build(straddlingFixture).service.costsByProject(
+      ['p-1'],
+      'co-1',
+      august(),
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records.reduce((total, row) => total + row.amount, 0)).toBe(
+      costs.get('p-1'),
+    );
+    expect(records[0].amount).toBe(3400);
+  });
+
+  it('carries what the month took, not the sheet’s own total, and says it apportioned', async () => {
+    const records = await build(straddlingFixture).service.recordsByProject(
+      'p-1',
+      'co-1',
+      august(),
+    );
+
+    // The sheet's own gross is 6400. A record carrying that would not add up to the 3400 the
+    // summary shows, which is the whole failure mode a drill-down is supposed to remove.
+    expect(records[0].amount).not.toBe(6400);
+    expect(records[0].reference).toContain('2026-08-25 to 2026-09-07');
+    expect(records[0].description).toContain('Apportioned on days worked');
+  });
+
+  it('leaves a draft sheet out, exactly as the figure does', async () => {
+    const { monthStart, monthEnd } = monthBounds(2026, 9);
+    const fixture = {
+      sheets: [
+        {
+          id: 'sheet-draft',
+          periodFrom: '2026-09-01',
+          periodTo: '2026-09-15',
+          status: 'draft',
+          grossTotal: 6000,
+          deductionTotal: 0,
+          netTotal: 6000,
+          lines: [
+            {
+              workerId: 'w-1',
+              daysWorked: 10,
+              resolvedRate: 600,
+              grossWage: 6000,
+              netPayable: 6000,
+            },
+          ],
+        },
+      ] satisfies SheetFixture[],
+    };
+
+    const records = await build(fixture).service.recordsByProject(
+      'p-1',
+      'co-1',
+      { from: monthStart, to: monthEnd },
+    );
+
+    expect(records).toEqual([]);
+  });
+
+  it('surfaces a failure rather than returning an empty list', async () => {
+    // The opposite choice from `costsByProject`, deliberately: an empty list here would read as
+    // "this month had no wages", and the drill-down is one person opening one figure.
+    const service = new MonthlyWageRollupService(
+      {
+        $transaction: async () => {
+          throw new Error('labour is down');
+        },
+      } as never,
+      {} as never,
+      { registerCostSource: () => undefined } as never,
+    );
+
+    await expect(
+      service.recordsByProject('p-1', 'co-1', august()),
+    ).rejects.toThrow('labour is down');
+  });
+});

@@ -79,7 +79,7 @@ convenience would throw that away.
 - [x] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
 - [x] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
       008's precedent)
-- [ ] T031 **NOT DONE** Implement the drill-down: every figure lists its source records (FR-012)
+- [x] T031 Implement the drill-down: every figure lists its source records (FR-012)
 - [x] T032 Reconcile the labour figure to approved payment sheets (FR-013)
 - [x] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
 - [ ] T034 **NOT DONE** e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
@@ -126,6 +126,40 @@ the path. Asserted, because the clamp is the thing somebody adds later believing
 **A project that cannot be computed is omitted, never zeroed.** Labour's source returns an empty map
 on failure rather than a map of zeros: a zero is indistinguishable from a month with no labour, and a
 project whose wages are invisible looks like a project running under budget.
+
+### T031 implementation record, 2026-10-02
+
+**`GET projects/pnl/drill-down?projectId&period&figure&scope`**, in
+`src/projects/pnl/pnl-drill-down.service.ts`. 12 unit tests, plus 4 in the labour roll-up's spec for
+the source it reads.
+
+**The total is summed from the records returned, never queried separately.** A drill-down whose rows
+do not add up to the total is worse than none: it tells the reader the number is wrong without
+telling them how, and from then on they check everything by hand. That is also why a straddling
+payment sheet appears carrying *what the month took from it* rather than its own total — asserted
+both ways.
+
+**`ProjectCostSource.recordsByProject` is optional, and the optionality carries the meaning.** A
+module that reports a period total without listing what is behind it declines to implement it, and
+the drill-down says so, naming the category and stating that the summary's figure is still measured.
+Every source returning `[]` instead would make "we cannot itemise this" and "nothing was spent" the
+same answer — the identical mistake `unavailableCategories` exists to avoid one level up, arriving by
+a different route. Four states are distinguished, and none of them is a zero: no source registered,
+a source that cannot itemise, a read that failed, and a genuinely empty period.
+
+Today labour itemises (per sheet, with `itemisedFurtherAt` pointing at the per-worker register rather
+than copying it); revenue and subcontractor cost are read directly because client and RA bills live
+in the `projects` schema; materials, machinery and fuel report "total only" until those modules add a
+reader. That is the honest state and the response says it per figure.
+
+**The pre-018 RA bill fallback is repeated here deliberately** — `grossAmount || amount` — because
+reading gross alone would silently drop every bill raised before 018 out of a total that is supposed
+to match the summary's.
+
+**`fr-022-unmigrated-modules.spec.ts` went red a commit late for the second time**, on the
+T026-T028 commit. Recorded in that spec rather than quietly fixed: the check diffs two commits, so a
+new file is invisible to it until the commit lands and *then* it fires. The habit that fixes it is
+running that one spec before committing anything under its six scanned paths.
 
 ## Phase 6: Variations ⚠️ RESTS ON AN ASSUMPTION
 

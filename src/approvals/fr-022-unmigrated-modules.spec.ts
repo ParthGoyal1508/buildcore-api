@@ -180,6 +180,19 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/labour/reports/dto/monthly-wage-rollup.dto.ts',
           ':(exclude)src/labour/reports/monthly-wage-rollup.service.ts',
           ':(exclude)src/labour/reports/monthly-wage-rollup.service.spec.ts',
+          // Owned by 018 T026-T028 and T031: the four cost sources the P&L asks, and the drill-down
+          // behind each figure. Registration only — each module announces a read-only cost reader to
+          // `ProjectSourcesRegistry` on init, the same registry pattern 021's exit custody uses.
+          // No approval path is touched; the per-file `approve()` assertions above still read the
+          // material indent, the muster, the payment sheet and the labour advance.
+          //
+          // **Added a commit late for the second time**, which is now a pattern worth naming rather
+          // than apologising for: this check diffs two commits, so a new file is invisible to it
+          // until the commit lands, and *then* it fires. The habit that fixes it is running this one
+          // spec before committing anything under the six scanned paths — not remembering harder.
+          ':(exclude)src/plant/plant.service.ts',
+          ':(exclude)src/inventory/inventory.service.ts',
+          ':(exclude)src/projects/portfolio/cost-source-registration.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

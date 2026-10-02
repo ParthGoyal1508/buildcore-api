@@ -21,6 +21,7 @@ import {
   ProjectPositionExportService,
   type PositionExportFormat,
 } from './position-export.service';
+import { PnlDrillDownService } from './pnl-drill-down.service';
 import { ProjectPnlService } from './project-pnl.service';
 
 /**
@@ -35,6 +36,7 @@ export class ProjectPnlController {
   constructor(
     private readonly pnl: ProjectPnlService,
     private readonly exports: ProjectPositionExportService,
+    private readonly drillDown: PnlDrillDownService,
   ) {}
 
   @Get()
@@ -62,6 +64,40 @@ export class ProjectPnlController {
       resolveCompanyId(caller, companyId),
       projectId,
       period,
+    );
+  }
+
+  @Get('drill-down')
+  @ApiOperation({
+    summary:
+      'Open any figure on the summary and see what it is made of (FR-012)',
+    description:
+      'The total returned is **summed from the records returned**, never queried separately. A ' +
+      'drill-down whose rows do not add up to the total is worse than none: it tells the reader ' +
+      'the number is wrong without telling them how, and from then on they check everything by ' +
+      'hand.\n\n' +
+      '`records: null` with an `unavailableReason` means this figure cannot be itemised — either ' +
+      'no module registered a source for it, or the module reports a period total without listing ' +
+      'what is behind it. **That is not an empty list**, because "we cannot itemise this" and ' +
+      '"nothing was spent" are different facts and a reader acts differently on each.\n\n' +
+      'Labour carries `itemisedFurtherAt`: the per-worker register is one request away rather than ' +
+      'copied in here.',
+  })
+  async openFigure(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('projectId') projectId: string,
+    @Query('period') period: string,
+    @Query('figure') figure: string,
+    @Query('scope') scope?: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.drillDown.drillInto(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      period,
+      figure,
+      scope === 'cumulative' ? 'cumulative' : 'month',
     );
   }
 

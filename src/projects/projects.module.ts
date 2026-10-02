@@ -17,6 +17,7 @@ import { RaBillsController } from './billing/ra-bills.controller';
 import { RaBillsService } from './billing/ra-bills.service';
 import { ProjectPnlController } from './pnl/project-pnl.controller';
 import { ProjectPnlService } from './pnl/project-pnl.service';
+import { PnlDrillDownService } from './pnl/pnl-drill-down.service';
 import { ProjectPositionExportService } from './pnl/position-export.service';
 import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
@@ -80,6 +81,8 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // 018 FR-011a (`bugs.md` item 14): the month's position as a document, over the same
     // renderer the dashboard's reports use.
     ProjectPositionExportService,
+    // 018 FR-012: opening a figure on the summary and seeing the records behind it.
+    PnlDrillDownService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
     // Declared here rather than imported from AuthModule, matching every other
