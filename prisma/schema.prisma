@@ -468,6 +468,19 @@ model Company {
   /// The flag decides whose punches are refused, never whether the code is exercised.
   punchBlockEnforced Boolean @default(false)
 
+  /// The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
+  /// (020 FR-007a).
+  ///
+  /// The client's answer of 2026-10-02: half that month's wages, shared with every other deduction
+  /// rather than being the fuel recovery's own allowance. Stored per company and not a literal,
+  /// because it is a statutory figure and statutory figures are revised — Principle III.
+  ///
+  /// **Capped at 50 by a check constraint, not merely defaulted to it.** A configuration mistake here
+  /// does not produce a slightly wrong payslip, it produces an unlawful one, and a bound the database
+  /// enforces cannot be raised by a careless settings edit. Lowering it is allowed: a company may be
+  /// stricter than the Act, never laxer.
+  deductionCeilingPercent Int @default(50)
+
   /// Hides cash amounts and cash transactions across the application (019 FR-014).
   ///
   /// A **display** control, never a data operation — FR-017 is explicit that nothing is
@@ -2995,6 +3008,15 @@ model PayrollLineItem {
   tds              Decimal @default(0) @db.Decimal(12, 2)
   loanEmiDeduction Decimal @default(0) @db.Decimal(12, 2)
 
+  /// Fuel lost on a machine, recovered from the operator who ran it (020 FR-007).
+  ///
+  /// **Its own column, not `loanEmiDeduction`.** FR-007 says a *named* deduction, and the task
+  /// generating it says named as a fuel recovery and not as an advance. The distinction is the
+  /// employee's: a loan instalment is money they asked for and agreed to repay, and this is money
+  /// taken for a loss. Folding it into either would leave somebody reading their payslip unable to
+  /// tell why their pay fell, which FR-007 exists to prevent.
+  fuelRecoveryDeduction Decimal @default(0) @db.Decimal(12, 2)
+
   netPay Decimal @default(0) @db.Decimal(12, 2)
 
   // ── Employer contributions ────────────────────────────────────────────────
@@ -3127,6 +3149,10 @@ model SalarySlip {
   deductionTds             Decimal @db.Decimal(12, 2)
   deductionLoanEmi         Decimal @db.Decimal(12, 2)
   deductionAdvanceRecovery Decimal @db.Decimal(12, 2)
+  /// 020 FR-007. Defaulted, unlike its neighbours, because every slip already issued predates it
+  /// and a required column would need every historical row rewritten to a figure that was never
+  /// deducted.
+  deductionFuelRecovery    Decimal @default(0) @db.Decimal(12, 2)
 
   /// Informational on the payslip — shown to the employee, not subtracted from
   /// `netPay`.
@@ -5031,8 +5057,20 @@ model OperatorFuelRecovery {
   /// The approval spine's item. Null only before submission.
   approvalItemId String?
 
+  /// How much of `amount` has actually been deducted so far (020 FR-007b).
+  ///
+  /// A recovery is **not** necessarily settled in one period. FR-007a caps a payslip's *total*
+  /// deductions at half its wages, so a line already carrying an advance and a loan may have room for
+  /// only part of this — and the remainder carries. This column is what makes a carried balance a
+  /// fact rather than an inference: the balance is `amount − recoveredAmount`, and it is visible
+  /// without reconstructing it from payroll history.
+  recoveredAmount Decimal @default(0) @db.Decimal(18, 2)
+
   /// Set when the approved recovery reaches a payroll line, and what makes application idempotent:
   /// a second `approval.completed` for the same recovery finds this already set and does nothing.
+  ///
+  /// The **last** line it touched, where a carried recovery touches several. The audit trail of every
+  /// instalment is the payroll lines themselves, each carrying its own `fuelRecoveryDeduction`.
   appliedPayrollLineItemId String?
 
   reversedAt       DateTime?
@@ -5073,6 +5111,15 @@ enum FuelAttribution {
   hirer
   /// Recovered from the operator's salary, through the approval chain.
   operator
+  /// Shared between the hirer and the operator (FR-002).
+  ///
+  /// **Added 2026-10-02.** Phase 5 implemented three of the four attributions FR-002 names and this
+  /// was missed; it surfaced while writing the recovery, which is the first code that had to branch
+  /// on all four. Shared means the loss is *divided*, never collected twice — so an exception
+  /// attributed `both` still admits exactly one recovery, and whichever destination is raised first
+  /// claims it. Splitting one loss across two destinations needs a share per destination, which
+  /// FR-002 does not define and this does not invent.
+  both
   /// Confirmed as real and pursued against nobody. A deliberate answer, which is why it is a
   /// value here rather than a null.
   neither

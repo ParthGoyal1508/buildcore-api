@@ -250,6 +250,17 @@ What a flag cannot do is make the branch safe by never running. A dormant path i
 production until the day somebody turns it on, which is why every test of the refusal path runs
 with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
 The flag decides whose punches are refused, never whether the code is exercised.']
+  deductionCeilingPercent Int [not null, default: 50, note: 'The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
+(020 FR-007a).
+
+The client\'s answer of 2026-10-02: half that month\'s wages, shared with every other deduction
+rather than being the fuel recovery\'s own allowance. Stored per company and not a literal,
+because it is a statutory figure and statutory figures are revised — Principle III.
+
+**Capped at 50 by a check constraint, not merely defaulted to it.** A configuration mistake here
+does not produce a slightly wrong payslip, it produces an unlawful one, and a bound the database
+enforces cannot be raised by a careless settings edit. Lowering it is allowed: a company may be
+stricter than the Act, never laxer.']
   hideCashTransactions Boolean [not null, default: false, note: 'Hides cash amounts and cash transactions across the application (019 FR-014).
 
 A **display** control, never a data operation — FR-017 is explicit that nothing is
@@ -1662,6 +1673,13 @@ ProjectsService, never a cross-schema Prisma relation (FR-046).']
   tds Decimal [not null, default: 0, note: 'Manual entry, default 0 (spec clarification — TDS computation arrives with
 the 2026-09-01 amendment, US14).']
   loanEmiDeduction Decimal [not null, default: 0]
+  fuelRecoveryDeduction Decimal [not null, default: 0, note: 'Fuel lost on a machine, recovered from the operator who ran it (020 FR-007).
+
+**Its own column, not `loanEmiDeduction`.** FR-007 says a *named* deduction, and the task
+generating it says named as a fuel recovery and not as an advance. The distinction is the
+employee\'s: a loan instalment is money they asked for and agreed to repay, and this is money
+taken for a loss. Folding it into either would leave somebody reading their payslip unable to
+tell why their pay fell, which FR-007 exists to prevent.']
   netPay Decimal [not null, default: 0]
   employerPf Decimal [not null, default: 0]
   employerEps Decimal [not null, default: 0]
@@ -1752,6 +1770,9 @@ service pairs them explicitly so the `draft` check can never be skipped.']
   deductionTds Decimal [not null]
   deductionLoanEmi Decimal [not null]
   deductionAdvanceRecovery Decimal [not null]
+  deductionFuelRecovery Decimal [not null, default: 0, note: '020 FR-007. Defaulted, unlike its neighbours, because every slip already issued predates it
+and a required column would need every historical row rewritten to a figure that was never
+deducted.']
   employerPf Decimal [not null, note: 'Informational on the payslip — shown to the employee, not subtracted from
 `netPay`.']
   employerEps Decimal [not null]
@@ -2805,8 +2826,18 @@ Table OperatorFuelRecovery {
   amount Decimal [not null]
   status OperatorRecoveryStatus [not null, default: 'pending_approval']
   approvalItemId String [note: 'The approval spine\'s item. Null only before submission.']
+  recoveredAmount Decimal [not null, default: 0, note: 'How much of `amount` has actually been deducted so far (020 FR-007b).
+
+A recovery is **not** necessarily settled in one period. FR-007a caps a payslip\'s *total*
+deductions at half its wages, so a line already carrying an advance and a loan may have room for
+only part of this — and the remainder carries. This column is what makes a carried balance a
+fact rather than an inference: the balance is `amount − recoveredAmount`, and it is visible
+without reconstructing it from payroll history.']
   appliedPayrollLineItemId String [note: 'Set when the approved recovery reaches a payroll line, and what makes application idempotent:
-a second `approval.completed` for the same recovery finds this already set and does nothing.']
+a second `approval.completed` for the same recovery finds this already set and does nothing.
+
+The **last** line it touched, where a carried recovery touches several. The audit trail of every
+instalment is the payroll lines themselves, each carrying its own `fuelRecoveryDeduction`.']
   reversedAt DateTime
   reversedByUserId String
   createdByUserId String [not null]
@@ -4473,6 +4504,7 @@ Enum OperatorRecoveryStatus {
 Enum FuelAttribution {
   hirer
   operator
+  both
   neither
 }
 

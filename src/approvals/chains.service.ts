@@ -12,6 +12,7 @@ import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
 import {
   ACTION_ATTENDANCE_CORRECTION,
+  ACTION_OPERATOR_FUEL_RECOVERY,
   ACTION_DIRECTOR_FINAL_SET_CHANGE,
   ACTION_ATTENDANCE_EXCEPTION,
   ACTION_PAYROLL_RUN,
@@ -231,6 +232,12 @@ export class ChainsService {
       // them. Seeded here so a new company can never be created with this gate missing.
       [ACTION_DIRECTOR_FINAL_SET_CHANGE, DEFAULT_DIRECTOR_FINAL_LEVELS],
       [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
+      // 020 FR-006: recovering fuel from an operator's salary. The same Employer → HR → Director
+      // shape as a correction — it is not one of the four director-final actions the client confirmed
+      // on 2026-10-02, so it ends at the Director as a third level rather than as a one-level gate.
+      // Seeded for every company: without the chain, the first recovery raised anywhere would be
+      // refused as a configuration fault, and the remedy would be a settings visit per company.
+      [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
       // FR-018's remaining action types, each a director-only chain (T048). Seeded even
       // though no module submits into them yet: without the chain, feature 017's first
       // work order would be refused as a configuration fault in every company at once,

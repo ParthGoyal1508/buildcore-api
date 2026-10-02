@@ -71,11 +71,37 @@ export function computeHireBillAmounts(params: {
   billedHours: number;
   rate: number;
   tdsRate: number | null;
-}): { grossAmount: number; tdsAmount: number; netPayable: number } {
+  /**
+   * Fuel recovered from this bill (020 FR-004), every deduction currently against it.
+   *
+   * **A list, not a running total, and recomputed rather than decremented** (plan D28). A
+   * `netPayable` reduced by an `UPDATE` is a number with no derivation: a vendor disputing the bill
+   * is owed the arithmetic, and "it used to be more" is not arithmetic. Passing the deductions in
+   * means `netPayable` is always a function of things that can be shown on the bill beside it.
+   *
+   * It also makes removal free. Reversing a deduction (FR-010) deletes its row and recomputes, where
+   * an in-place decrement would need an inverse adjustment — a second entry explaining the first,
+   * which is how a bill acquires a history nobody can read.
+   */
+  deductions?: readonly number[];
+}): {
+  grossAmount: number;
+  tdsAmount: number;
+  deductionTotal: number;
+  netPayable: number;
+} {
   const grossAmount = paise(params.billedHours * params.rate);
   const tdsAmount =
     params.tdsRate === null ? 0 : paise((grossAmount * params.tdsRate) / 100);
-  return { grossAmount, tdsAmount, netPayable: paise(grossAmount - tdsAmount) };
+  const deductionTotal = paise(
+    (params.deductions ?? []).reduce((sum, amount) => sum + amount, 0),
+  );
+  return {
+    grossAmount,
+    tdsAmount,
+    deductionTotal,
+    netPayable: paise(grossAmount - tdsAmount - deductionTotal),
+  };
 }
 
 /**

@@ -37,6 +37,10 @@ export interface SalarySlipView {
     tds: number;
     loanEmi: number;
     advanceRecovery: number;
+    /** 020 FR-007. Fuel lost on a machine, recovered from the operator who ran it. */
+    fuelRecovery: number;
+    /** Summed from the fields above by `Object.values`, so a new deduction is counted the moment it
+     * is added rather than when somebody remembers to extend this. */
     total: number;
   };
   /** Informational only — shown to the employee, never subtracted from net pay. */
@@ -155,6 +159,10 @@ function toView(slip: SalarySlip, employeeCode: string): SalarySlipView {
     tds: n(slip.deductionTds),
     loanEmi: n(slip.deductionLoanEmi),
     advanceRecovery: n(slip.deductionAdvanceRecovery),
+    // 020 FR-007. Named separately on the payslip the employee reads, which is the point of the
+    // requirement: a recovery folded into the loan line leaves somebody unable to find out why their
+    // pay fell short.
+    fuelRecovery: n(slip.deductionFuelRecovery),
   };
   const employerContributions = {
     pf: n(slip.employerPf),

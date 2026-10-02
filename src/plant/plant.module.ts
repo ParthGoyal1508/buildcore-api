@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { HrModule } from '../hr/hr.module';
@@ -10,6 +10,7 @@ import { EquipmentCategoriesService } from '../settings/machinery-masters/equipm
 import { EquipmentDocTypesService } from '../settings/machinery-masters/equipment-doc-types.service';
 import { HireRatesService } from '../settings/machinery-masters/hire-rates.service';
 import { SettingsModule } from '../settings/settings.module';
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { EquipmentCategoriesController } from './categories/equipment-categories.controller';
 import { EquipmentDocTypesController } from './doc-types/equipment-doc-types.controller';
 import { EquipmentController } from './equipment/equipment.controller';
@@ -17,6 +18,8 @@ import { EquipmentService } from './equipment/equipment.service';
 import { FuelController } from './fuel/fuel.controller';
 import { FuelExceptionsController } from './fuel-exceptions/fuel-exceptions.controller';
 import { FuelExceptionsService } from './fuel-exceptions/fuel-exceptions.service';
+import { FuelRecoveryController } from './fuel-recovery/fuel-recovery.controller';
+import { FuelRecoveryService } from './fuel-recovery/fuel-recovery.service';
 import { FuelService } from './fuel/fuel.service';
 import { HireBillsController } from './hire-bills/hire-bills.controller';
 import { HireBillsService } from './hire-bills/hire-bills.service';
@@ -65,14 +68,18 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
  */
 @Module({
   imports: [
+    // 020 FR-006: an operator fuel recovery reaches no payroll line except through an approved
+    // item, so this module submits into the spine rather than keeping an approval of its own.
+    ApprovalsModule,
     SettingsModule,
     ProjectsModule,
     PartnersModule,
-    HrModule,
+    forwardRef(() => HrModule),
     InventoryModule,
   ],
   controllers: [
     FuelExceptionsController,
+    FuelRecoveryController,
     EquipmentCategoriesController,
     EquipmentDocTypesController,
     HireRatesController,
@@ -94,6 +101,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     LogbookService,
     FuelService,
     FuelExceptionsService,
+    FuelRecoveryService,
     ServiceScheduleService,
     MaintenanceService,
     HireBillsService,
@@ -111,6 +119,13 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
   // module (FR-008), and for its project-detail machinery tab. `MaintenanceService`
   // is exported for 004's Pending Approvals KPI, which counts open maintenance jobs
   // (FR-005, research.md §8).
-  exports: [PlantService, MaintenanceService],
+  exports: [
+    PlantService,
+    MaintenanceService,
+    // 020 FR-006/FR-007: `payroll` reads what an operator owes and records what it took, through
+    // exactly two methods on this service. It must not query `plant`'s schema itself (Principle I),
+    // and keeping the surface to two methods is what makes FR-006's gate a single `where` clause.
+    FuelRecoveryService,
+  ],
 })
 export class PlantModule {}

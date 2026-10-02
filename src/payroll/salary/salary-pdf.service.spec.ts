@@ -37,7 +37,10 @@ const slip: SalarySlipView = {
     tds: 0,
     loanEmi: 1500,
     advanceRecovery: 500,
-    total: 4603,
+    // 020 FR-007. Non-zero on purpose: a fixture of zero would render the row and prove nothing about
+    // whether the figure reaches it.
+    fuelRecovery: 750,
+    total: 5353,
   },
   employerContributions: {
     pf: 1980,
@@ -74,7 +77,8 @@ describe('SalaryPdfService figure mapping', () => {
       ['TDS', 0],
       ['Loan EMI', 1500],
       ['Advance Recovery', 500],
-      ['Total Deductions', 4603],
+      ['Fuel Recovery', 750],
+      ['Total Deductions', 5353],
     ]);
   });
 
@@ -96,7 +100,10 @@ describe('SalaryPdfService figure mapping', () => {
     expect(deductionRows(slip).reduce((s, [, a]) => s + a, 0)).not.toBe(
       employerTotal,
     );
-    expect(deductionLabels).toHaveLength(7);
+    // Eight since 020 FR-007 added the fuel recovery. Asserted as a count on purpose: it is what
+    // catches an employer contribution leaking into this list, and it has to be updated deliberately
+    // when a real deduction is added — which is the check working, not noise.
+    expect(deductionLabels).toHaveLength(8);
   });
 
   it('takes no figure from anywhere but the view it was given', () => {

@@ -21,6 +21,8 @@ import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { AttendanceHistoryService } from '../../hr/punch/attendance-history.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
+import { FuelRecoveryService } from '../../plant/fuel-recovery/fuel-recovery.service';
+import { applyDeductionCeiling } from './deduction-ceiling';
 import { ReimbursementsAdminService } from '../reimbursements-admin/reimbursements-admin.service';
 import { SalaryAdvancesService } from '../advances/salary-advances.service';
 import { TdsService } from '../tds/tds.service';
@@ -58,6 +60,9 @@ export class PayrollEngineService {
     private readonly reimbursements: ReimbursementsAdminService,
     private readonly tds: TdsService,
     private readonly advances: SalaryAdvancesService,
+    // 020 FR-006/FR-007. `plant` owns the recovery; this module reads what is owed and records what
+    // it took, through exactly two methods. It must not query `plant`'s schema (Principle I).
+    private readonly fuelRecovery: FuelRecoveryService,
     private readonly auditLog: AuditLogService,
     configService: ConfigService,
   ) {
@@ -86,6 +91,10 @@ export class PayrollEngineService {
     }
 
     const company = await this.companies.getPayrollRates(companyId);
+    // 020 FR-007a. Read per run rather than per line — it cannot change mid-run, and reading it once
+    // means a company lowering it takes effect on the next run with no restart.
+    const deductionCeilingPercent =
+      await this.companies.getDeductionCeilingPercent(companyId);
     const rates: CompanyPayrollRates = {
       pfEmployerRatePercent: company.pfEmployerRate,
       esicEmployerRatePercent: company.esicEmployerRate,
@@ -104,6 +113,25 @@ export class PayrollEngineService {
         orderBy: { employeeCode: 'asc' },
       }),
     );
+
+    /**
+     * Fuel recoveries owed by these employees (020 FR-006, FR-007).
+     *
+     * Read once for the whole run rather than per employee — a per-employee query would be one round
+     * trip per payslip. Only `approved` rows come back, which is where FR-006's "no payroll line until
+     * approved" is actually enforced: there is no query here that could surface a pending one.
+     */
+    const fuelDue = await this.fuelRecovery.dueForEmployees(
+      companyId,
+      employees.map((employee) => employee.id),
+    );
+    /** What each line actually took, so the balance is reduced by what was recovered, not what was
+     * owed — the same distinction FR-055 draws for advances. */
+    const fuelRecoveries: {
+      employeeId: string;
+      recoveryId: string;
+      amount: number;
+    }[] = [];
 
     const lines: (Prisma.PayrollLineItemCreateManyInput & {
       employeeId: string;
@@ -203,6 +231,41 @@ export class PayrollEngineService {
         });
       }
 
+      /**
+       * Fuel recovery, last of all and under the statutory ceiling (020 FR-007, FR-007a to FR-007c).
+       *
+       * **Last deliberately, and the ceiling counts everything before it.** Statutory dues are not
+       * negotiable, a loan EMI is a contracted schedule, an advance is money the employee asked for —
+       * a fuel recovery is the company recovering a loss, and it is the one that should wait. So it
+       * takes only the headroom left under half the gross wages once every other deduction is counted.
+       *
+       * `figures.totalDeductions` already sums PF, ESIC, professional tax, TDS and the loan EMI, so
+       * the ceiling sees them as one figure rather than a list this code has to keep in step. A
+       * deduction added to the engine later is included automatically, which is the failure mode worth
+       * designing against: a missing deduction here would not error, it would silently raise the
+       * ceiling.
+       */
+      let fuelRecovered = 0;
+      for (const due of fuelDue.get(employee.id) ?? []) {
+        const ceiling = applyDeductionCeiling({
+          grossWages: figures.gross,
+          existingDeductions: [
+            figures.totalDeductions,
+            advanceRecovered,
+            fuelRecovered,
+          ],
+          requested: due.balance,
+          ceilingPercent: deductionCeilingPercent,
+        });
+        if (ceiling.applied <= 0) break;
+        fuelRecovered = r2(fuelRecovered + ceiling.applied);
+        fuelRecoveries.push({
+          employeeId: employee.id,
+          recoveryId: due.recoveryId,
+          amount: ceiling.applied,
+        });
+      }
+
       lines.push({
         payrollRunId: '',
         employeeId: employee.id,
@@ -226,7 +289,13 @@ export class PayrollEngineService {
         professionalTax: figures.professionalTax,
         tds: figures.tds,
         loanEmiDeduction: figures.loanEmiDeduction,
-        netPay: r2(figures.netPay + reimbursement.total - advanceRecovered),
+        fuelRecoveryDeduction: fuelRecovered,
+        netPay: r2(
+          figures.netPay +
+            reimbursement.total -
+            advanceRecovered -
+            fuelRecovered,
+        ),
         employerPf: figures.employerPf,
         employerEps: figures.employerEps,
         employerEdli: figures.employerEdli,
@@ -272,6 +341,34 @@ export class PayrollEngineService {
       // balance can never disagree with the deduction that reduced it.
       for (const rec of advanceRecoveries) {
         await this.advances.applyRecovery(tx, rec.advanceId, rec.amount);
+      }
+
+      /**
+       * Fuel recovery balances, reduced in the same transaction as the lines that reduced them
+       * (FR-007b).
+       *
+       * The line ids are read back because `createMany` returns none, and a recovery records which
+       * line took each instalment — a carried recovery touches several, and "which payslip was this
+       * deducted on" is the first question anybody asks about it.
+       */
+      if (fuelRecoveries.length > 0) {
+        const written = await tx.payrollLineItem.findMany({
+          where: { payrollRunId: created.id },
+          select: { id: true, employeeId: true },
+        });
+        const lineByEmployee = new Map(
+          written.map((line) => [line.employeeId, line.id]),
+        );
+        for (const rec of fuelRecoveries) {
+          const lineId = lineByEmployee.get(rec.employeeId);
+          if (!lineId) continue;
+          await this.fuelRecovery.recordRecovered(
+            tx,
+            rec.recoveryId,
+            rec.amount,
+            lineId,
+          );
+        }
       }
 
       return created;
@@ -521,6 +618,11 @@ export class PayrollEngineService {
         // Salary advances arrive with the 2026-09-01 amendment (US15); until then
         // there is nothing to recover, and zero is the honest value.
         deductionAdvanceRecovery: 0,
+        // 020 FR-007. Its own line on the payslip, named as a fuel recovery — not folded into the
+        // loan or advance line above. A deduction an employee cannot see explained is a grievance
+        // waiting to happen, and "why is my pay short" is not answered by a figure under a heading
+        // about a loan they never took.
+        deductionFuelRecovery: l.fuelRecoveryDeduction,
         employerPf: l.employerPf,
         employerEps: l.employerEps,
         employerEdli: l.employerEdli,

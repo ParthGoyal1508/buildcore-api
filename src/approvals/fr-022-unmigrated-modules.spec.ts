@@ -137,6 +137,22 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.controller.ts',
           ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.spec.ts',
           ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.ts',
+          // Owned by 020 Phase 6 (the fuel recovery). These do call `ApprovalService` — FR-006 gives
+          // an operator recovery no path to a payroll line except through an approved item — which is
+          // the spine, and is what FR-022 asks for. Excluded by path, with the per-file assertions
+          // above still enforcing that `src/plant` keeps no approval mechanism of its own.
+          //
+          // Added *before* the commit this time. Phase 5's equivalent exclusion was added a commit
+          // late because this check diffs two commits and cannot see untracked files — knowing that,
+          // not pre-empting it would be a choice.
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.controller.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.service.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.service.spec.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.arithmetic.spec.ts',
+          // The module and the two files the recovery changed in place.
+          ':(exclude)src/plant/plant.module.ts',
+          ':(exclude)src/plant/fuel/fuel.service.ts',
+          ':(exclude)src/plant/hire-bills/hire-bills.service.ts',
         ],
         {
           cwd: REPO_ROOT,

@@ -125,6 +125,29 @@ export class CompaniesService {
   }
 
   /**
+   * The ceiling on total deductions from one payslip, as a percentage of gross wages (020 FR-007a).
+   *
+   * Exported for `payroll` on the same terms as the other getters here — Principle I forbids that
+   * module reading `settings.Company`. The database bounds it at 50, so a caller never has to defend
+   * against a value that would be unlawful.
+   */
+  async getDeductionCeilingPercent(companyId: string): Promise<number> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { deductionCeilingPercent: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company.deductionCeilingPercent;
+  }
+
+  /**
    * Whether this company refuses a punch that fails validation, rather than flagging it (020 FR-013).
    *
    * Read per request alongside the accuracy threshold, so switching it takes effect on the next

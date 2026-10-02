@@ -82,6 +82,21 @@ export const ACTION_DIRECTOR_FINAL_SET_CHANGE = 'director_final_set_change';
 export const ACTION_FINAL_SETTLEMENT = 'final_settlement';
 
 /**
+ * Recovering lost fuel from an operator's salary (020 FR-006).
+ *
+ * **Not in `DIRECTOR_FINAL_SEEDED_ACTIONS`, and that is the confirmed set rather than an omission.**
+ * The client confirmed on 2026-10-02 that the four director-final actions are payment release,
+ * payroll run, money-committing letters and final settlement. A fuel recovery is none of them, so it
+ * takes the same Employer → HR → Director shape as an attendance correction — which still ends at the
+ * Director, but as the last level of a three-level chain rather than as a one-level gate.
+ *
+ * Declared here with every other action type rather than inside `plant`, so the module raising it
+ * imports the key rather than inventing one. That is what makes FR-006's "no path to a payroll line
+ * except through an approved item" checkable: there is exactly one key, and one handler watching it.
+ */
+export const ACTION_OPERATOR_FUEL_RECOVERY = 'operator_fuel_recovery';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these

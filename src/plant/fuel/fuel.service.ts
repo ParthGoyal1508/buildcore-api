@@ -88,6 +88,59 @@ export function computeFuelVariance(params: {
 }
 
 /**
+ * The shortfall a confirmed exception may recover — in litres and in money (020 FR-001).
+ *
+ * FR-001 asks for "the shortfall expressed in both quantity and money", and this is the one place it
+ * is defined. It is deliberately **not** derived from `variancePercent`: that figure is rounded to two
+ * decimals at save time, and recovering money from a rounded percentage means the figure on the
+ * payslip cannot be reproduced from the readings behind it.
+ *
+ * The excess is measured against what the benchmark *allowed* for the hours actually run, which is the
+ * only quantity anybody can be asked to account for. A machine that ran four hours on a 2 l/hr
+ * benchmark was allowed eight litres; burning eleven is a three-litre excess, not eleven litres of
+ * fault.
+ *
+ * Returns zeros rather than null for a reading at or under benchmark. A confirmed exception should not
+ * normally be in that state — it was flagged for being over — but a benchmark edited since it was
+ * flagged can put it there, and a negative recovery is money paid *to* somebody for using less fuel
+ * than expected.
+ */
+export function computeFuelShortfall(params: {
+  /** Litres burned that day, per the logbook. */
+  fuelConsumed: number | null;
+  /** Meter units run that day, per the logbook. */
+  totalHours: number | null;
+  /** Litres per meter unit the category expects. */
+  benchmark: number | null;
+  /** What that fuel cost per litre — the entry's own rate, not today's. */
+  rate: number;
+}): { shortfallQuantity: number; shortfallAmount: number } {
+  const { fuelConsumed, totalHours, benchmark, rate } = params;
+
+  if (
+    benchmark === null ||
+    benchmark <= 0 ||
+    fuelConsumed === null ||
+    totalHours === null ||
+    totalHours <= 0
+  ) {
+    return { shortfallQuantity: 0, shortfallAmount: 0 };
+  }
+
+  const allowed = benchmark * totalHours;
+  const excess = fuelConsumed - allowed;
+  if (excess <= 0) return { shortfallQuantity: 0, shortfallAmount: 0 };
+
+  // Litres to three decimals, money to paise — the same precisions the columns carry, so the stored
+  // figure and the computed one cannot disagree.
+  const shortfallQuantity = Math.round(excess * 1000) / 1000;
+  return {
+    shortfallQuantity,
+    shortfallAmount: Math.round(shortfallQuantity * rate * 100) / 100,
+  };
+}
+
+/**
  * Fuel entries and their variance alerts (006 US4).
  *
  * The variance is computed once, at save, and stored (research.md §3). Deriving it

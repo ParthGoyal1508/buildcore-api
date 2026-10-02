@@ -417,51 +417,51 @@ This phase moves no money.
   T031: everything local runs as a Postgres superuser, which is exempt from policies
   unconditionally, so the policy is verified to exist and be forced but not to deny anything.
 
-## Phase 6: Consequence — the hire bill and the operator's salary (FR-003 to FR-007, FR-010)
+## Phase 6: Consequence — the hire bill and the operator's salary (FR-003 to FR-007, FR-010) ✅ implemented 2026-10-02
 
 This is where a figure first moves. It is gated on feature 016's chain, which is complete.
 
-- [ ] T053 [US1] Add `model HireBillDeduction` in `plant` — `companyId`, `hireBillId`,
+- [X] T053 [US1] Add `model HireBillDeduction` in `plant` — `companyId`, `hireBillId`,
   `fuelVarianceExceptionId`, `amount`, `createdBy`, timestamps.
   `@@unique([fuelVarianceExceptionId])`, so one exception cannot be recovered twice from a bill.
-- [ ] T054 [US1] **Recompute** `HireBill.netPayable` from `grossAmount`, `tdsAmount` and the sum of
+- [X] T054 [US1] **Recompute** `HireBill.netPayable` from `grossAmount`, `tdsAmount` and the sum of
   deductions. Do not decrement it in place — a vendor disputing a bill is owed the arithmetic, and a net
   reduced by an `UPDATE` cannot produce it (plan D28).
-- [ ] T055 [US1] Refuse a deduction against a bill already `paid`, and carry the recovery to the next
+- [X] T055 [US1] Refuse a deduction against a bill already `paid`, and carry the recovery to the next
   bill for that equipment and vendor. Adjusting a paid bill changes a figure somebody has already
   transferred against.
-- [ ] T056 [P] [US1] Unit test: `netPayable` equals gross less TDS less deductions, for zero, one and
+- [X] T056 [P] [US1] Unit test: `netPayable` equals gross less TDS less deductions, for zero, one and
   two deductions.
-- [ ] T057 [P] [US1] Unit test: a deduction against a paid bill is refused with a code naming the
+- [X] T057 [P] [US1] Unit test: a deduction against a paid bill is refused with a code naming the
   reason.
-- [ ] T058 [US2] Add `model OperatorFuelRecovery` in `plant` — `companyId`,
+- [X] T058 [US2] Add `model OperatorFuelRecovery` in `plant` — `companyId`,
   `fuelVarianceExceptionId`, `employeeId`, `amount`, `status`, `approvalItemId String?`,
   `appliedPayrollLineItemId String?`, `reversedAt`, `reversedByUserId`, timestamps.
   `@@unique([fuelVarianceExceptionId])`.
-- [ ] T059 [US2] Raise the recovery and submit it to `ApprovalsService`. It MUST have **no path to a
+- [X] T059 [US2] Raise the recovery and submit it to `ApprovalsService`. It MUST have **no path to a
   payroll line except through an approved item** (FR-006) — this is a spine gate, not a check inside the
   payroll service, and the difference is whether it can be bypassed by a second caller.
-- [ ] T060 [US2] Apply on `approval.completed`, idempotently, as a **named** deduction on the payroll
+- [X] T060 [US2] Apply on `approval.completed`, idempotently, as a **named** deduction on the payroll
   line (FR-007) — named as a fuel recovery, not as an advance. It settles through
   `SalaryAdvance`'s recovery machinery, which already handles instalments and a recovery exceeding the
   month's net, but it is not an advance: this is a recovery for loss, not money lent.
-- [ ] T061 [US2] Show the recovery on the payroll line and the payslip (FR-007). A deduction an employee
+- [X] T061 [US2] Show the recovery on the payroll line and the payslip (FR-007). A deduction an employee
   cannot see explained is a grievance waiting to happen.
-- [ ] T062 [US1] [US2] Reversal (FR-010) — delete the deduction line or mark the recovery reversed,
+- [X] T062 [US1] [US2] Reversal (FR-010) — delete the deduction line or mark the recovery reversed,
   recording who and when. Deleting a line rather than posting an inverse adjustment is why T054
   recomputes.
-- [ ] T063 [US1] Enforce FR-002's attribution as **exclusive**: an exception attributed to the hirer has
+- [X] T063 [US1] Enforce FR-002's attribution as **exclusive**: an exception attributed to the hirer has
   no operator recovery and vice versa. Double recovery for one loss is the failure this prevents, and
   the `@@unique` on both tables is what makes it structural rather than a convention.
-- [ ] T064 [P] [US2] e2e: raise a recovery, confirm it does **not** reach payroll while pending, approve
+- [ ] **NOT RUN** T064 [P] [US2] e2e: raise a recovery, confirm it does **not** reach payroll while pending, approve
   it, confirm it appears as a named deduction.
-- [ ] T065 [P] [US2] e2e: a rejected recovery never touches a payroll line.
-- [ ] T066 [P] [US1] Unit test: an exception attributed to the hirer cannot also raise an operator
+- [ ] **NOT RUN** T065 [P] [US2] e2e: a rejected recovery never touches a payroll line.
+- [X] T066 [P] [US1] Unit test: an exception attributed to the hirer cannot also raise an operator
   recovery.
-- [ ] T067 [P] [US1] Unit test: reversing a recovery after the underlying reading is corrected leaves the
+- [X] T067 [P] [US1] Unit test: reversing a recovery after the underlying reading is corrected leaves the
   reversal recorded and the payroll line adjusted.
 
-## Phase 7: The recovery cap ✅ UNBLOCKED 2026-10-02
+## Phase 7: The recovery cap ✅ implemented 2026-10-02 (merged into Phase 6 — one code path)
 
 The client answered on 2026-10-02: **half of that month's wages, and the ceiling is shared with every
 other deduction on the line.** Excess carries forward. Spec FR-007a to FR-007c.
@@ -472,31 +472,93 @@ deductions exceed the statutory limit — each rule satisfied, the law broken. S
 *sum* at apply time, where every other deduction on that line is finally known, and the raise-time
 check can only ever be advisory.
 
-- [ ] T068 [US2] Add the ceiling as a stored company setting with a config default — `50` — following
+- [X] T068 [US2] Add the ceiling as a stored company setting with a config default — `50` — following
   D19's precedent for the accuracy maximum in this same feature. A percentage, not a rupee figure, and
   bounded at 50 so a configuration mistake cannot exceed the statutory limit rather than merely being
   unlikely to.
-- [ ] T069 [US2] **CRITICAL** Apply the ceiling to the **sum of every deduction on the payroll line**,
+- [X] T069 [US2] **CRITICAL** Apply the ceiling to the **sum of every deduction on the payroll line**,
   not to the fuel recovery in isolation. Read the line's existing deductions, add the pending recovery,
   and reduce the recovery to whatever headroom remains. A test must prove a line already carrying a 40%
   advance takes only 10% of fuel recovery, because that is the case a per-deduction cap gets wrong while
   looking correct.
-- [ ] T069a [US2] Warn at **raise** time when the recovery looks likely to exceed the headroom, and
+- [X] T069a [US2] Warn at **raise** time when the recovery looks likely to exceed the headroom, and
   refuse nothing there. Raise-time is too early to know: other deductions can be added to the line
   afterwards, so a refusal then is a guess, and the reviewer would be told a figure is impossible that
   is actually fine.
-- [ ] T070 [P] [US2] Unit tests: a recovery inside the headroom applies in full; one above it is reduced
+- [X] T070 [P] [US2] Unit tests: a recovery inside the headroom applies in full; one above it is reduced
   to the headroom and the remainder carried; a line with no headroom at all carries the whole recovery
   and deducts nothing.
-- [ ] T070a [US2] Carry the unrecovered balance to the next period (FR-007b) and apply it there on the
+- [X] T070a [US2] Carry the unrecovered balance to the next period (FR-007b) and apply it there on the
   same terms, so a carried balance is subject to the ceiling again rather than exempt from it.
-- [ ] T070b [US2] **Never clear a carried balance by exceeding the ceiling, and never expire it**
+- [X] T070b [US2] **Never clear a carried balance by exceeding the ceiling, and never expire it**
   (FR-007c). Both are ways software disposes of an inconvenient balance, and both are worse than showing
   it. A balance that has carried for several periods must remain visible and attributable.
-- [ ] T070c [P] [US2] Unit test: a balance that cannot be recovered for three consecutive periods is
+- [X] T070c [P] [US2] Unit test: a balance that cannot be recovered for three consecutive periods is
   still present, still the right figure, and has not been deducted past the ceiling to clear it.
 - [ ] T071 [US2] ✅ Done 2026-10-02 — the spec's Clarifications carry the client's answer and the marker
   is removed.
+
+### Phases 6 and 7 implementation record, 2026-10-02
+
+**Phase 7 was merged into Phase 6, because they are one code path.** The ceiling is not a check that
+runs after a recovery is applied — it is what decides how much gets applied — so implementing them
+apart would have meant writing the application twice. Recorded as a deviation rather than presented as
+two phases.
+
+**Three things the task list assumed that turned out not to be true.**
+
+*`FuelAttribution` had no `both`.* FR-002 names four attributions and Phase 5 shipped three. It
+surfaced here because the recovery is the first code that has to branch on all four. Added in its own
+migration (`ALTER TYPE` cannot share a transaction with a use of the value). `both` means the loss is
+**shared, never collected twice** — so an exception attributed `both` still admits exactly one
+recovery and whichever destination is raised first claims it. Splitting one loss across two
+destinations needs a share per destination, which FR-002 does not define and this does not invent.
+
+*FR-001's shortfall was never computed.* The requirement asks for "the shortfall expressed in both
+quantity and money" and Phase 5's list returned the benchmark and the stored variance percentage, not
+the shortfall. Phase 6 needed exactly that figure, so `computeFuelShortfall` now defines it once.
+Deliberately **not** derived from `variancePercent`: that figure is rounded to two decimals at save
+time, and money derived from a rounded percentage cannot be reproduced from the readings behind it —
+which is the first thing anybody disputing a payslip would try.
+
+*There was no column for a named fuel deduction.* T060 says named as a fuel recovery and not as an
+advance, and the only candidate column was `loanEmiDeduction`. Reusing it is precisely what the task
+forbids, so `PayrollLineItem.fuelRecoveryDeduction` and `SalarySlip.deductionFuelRecovery` were added.
+The payslip PDF's two "every deduction has its own row" tests failed on the new row and were updated —
+the guard working, not noise.
+
+**T060's "apply on `approval.completed`" is implemented as "become eligible on `approval.completed`".**
+The handler marks the recovery `approved`; the payroll engine applies it on the next run. Applying from
+the handler would mean writing into a line for a period that may have no run yet, or one already
+approved or paid — rewriting a figure somebody has transferred against. The advance-recovery machinery
+this follows works the same way for the same reason.
+
+**Where FR-006 actually lives.** `dueForEmployees` queries `status: approved` and nothing else, so
+"no payroll line until approved" is a property of one `where` clause rather than a condition in the
+engine that a second caller could bypass. The test asserts on the query for that reason.
+
+**The ceiling, and why it is a pure function.** FR-007a's "total" is the whole difficulty: a rule
+capping the fuel recovery alone at 50% passes its own test while the payslip's combined deductions
+exceed the limit. `applyDeductionCeiling` takes the existing deductions as a **list** so a caller
+cannot quietly omit one — a missing deduction there does not fail, it silently raises the ceiling. The
+engine passes `figures.totalDeductions`, so a deduction added to payroll later is counted
+automatically. `Company.deductionCeilingPercent` is bounded at 50 **by a check constraint**: a mistake
+in that value does not produce a slightly wrong payslip, it produces an unlawful one.
+
+**A module cycle appeared.** `payroll` → `plant` closes a cycle through `hr` (plant imports hr, hr
+imports payroll). Resolved with `forwardRef` on both edges. Worth knowing that plant and payroll do not
+import each other directly — the cycle is through hr, which is why it appeared only now.
+
+**The FR-022 guard was pre-empted this time.** Phase 5's exclusion was added a commit late because that
+check diffs two commits and cannot see untracked files. Knowing that, the Phase 6 files were excluded
+before the commit rather than after.
+
+**Not run:** T064 and T065, the two e2e passes. Their substance — a pending recovery not reaching
+payroll, a rejected one never touching a line — is asserted at the boundary query instead, which is
+where the gate is. The end-to-end walk through a real chain has not been performed. T052's RLS probe
+is unchanged: every local database role is a superuser.
+
+1,187 tests across 113 suites; tsc, eslint and the injector clean.
 
 ## Verification for phases 5-7
 

@@ -48,6 +48,8 @@ export function deductionRows(slip: SalarySlipView): SlipRow[] {
     ['TDS', slip.deductions.tds],
     ['Loan EMI', slip.deductions.loanEmi],
     ['Advance Recovery', slip.deductions.advanceRecovery],
+    // 020 FR-007: on the payslip itself, under its own name.
+    ['Fuel Recovery', slip.deductions.fuelRecovery],
     ['Total Deductions', slip.deductions.total],
   ];
 }

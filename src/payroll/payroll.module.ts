@@ -18,6 +18,7 @@ import { PayrollRegisterService } from './registers/payroll-register.service';
 import { TdsController } from './tds/tds.controller';
 import { TdsService } from './tds/tds.service';
 import { ApprovalsModule } from '../approvals/approvals.module';
+import { PlantModule } from '../plant/plant.module';
 import { BankSheetService } from './runs/bank-sheet.service';
 import { PayrollRunsController } from './runs/payroll-runs.controller';
 import { PayrollScheduleCron } from './runs/payroll-schedule.cron';
@@ -40,7 +41,18 @@ import { SalaryService } from './salary/salary.service';
   // ApprovalsModule for feature 016: a payroll run travels Site Incharge → HR →
   // Director before it can produce a bank sheet, and the run is submitted into that
   // chain through `ApprovalService` rather than by writing to the spine's tables.
-  imports: [forwardRef(() => HrModule), SettingsModule, ApprovalsModule],
+  imports: [
+    forwardRef(() => HrModule),
+    SettingsModule,
+    ApprovalsModule,
+    // 020 FR-006/FR-007: the operator fuel recovery is owned by `plant` and read here through two
+    // methods on `FuelRecoveryService`.
+    //
+    // `forwardRef` because this closes a module cycle: plant imports hr, and hr imports this. Plant
+    // does not import payroll directly, so the cycle is through hr rather than between the two —
+    // which is why it appears only now and why a forward reference is the whole fix.
+    forwardRef(() => PlantModule),
+  ],
   controllers: [
     SalaryController,
     PayrollRunsController,
