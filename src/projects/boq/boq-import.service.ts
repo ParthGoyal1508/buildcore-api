@@ -95,7 +95,21 @@ export class BoqImportService {
     companyId: string;
     userId: string;
     projectId: string;
+    ctx: RlsContext;
   }): Promise<ValidationReport> {
+    // FR-049 **at the validate step, per FR-046.** Checked here as well as inside `confirm`'s
+    // transaction, and the reason is not redundancy: without it somebody uploads a tender, waits
+    // for a 231-line report, reads it, presses Confirm and *then* learns the project was already
+    // populated. The transaction keeps its own check because the project can gain lines between
+    // the two requests, and that one is what makes the rule true; this one is what makes it kind.
+    // Found by walking quickstart pass 11 against a real instance rather than by reasoning.
+    const existing = await withRlsContext(this.prisma, input.ctx, (tx) =>
+      tx.bOQTaskItem.count({
+        where: { group: { projectId: input.projectId } },
+      }),
+    );
+    if (existing > 0) throw this.alreadyPopulated(existing);
+
     const sheets = await this.reader.read(input.buffer);
 
     const schedule = identifySchedule(sheets);
@@ -469,14 +483,7 @@ export class BoqImportService {
         const existing = await tx.bOQTaskItem.count({
           where: { group: { projectId: input.projectId } },
         });
-        if (existing > 0) {
-          throw refuse(
-            BOQ_ERRORS.alreadyPopulated,
-            `This project already has ${existing} BOQ lines. Importing again would add a second ` +
-              'copy of the schedule rather than replace the first. Add or revise lines on the ' +
-              'project instead.',
-          );
-        }
+        if (existing > 0) throw this.alreadyPopulated(existing);
 
         let lines = 0;
         for (const group of batch.groups) {
@@ -549,6 +556,17 @@ export class BoqImportService {
     });
 
     return { ...written, quotedPercentageSet: batch.quotedPercentage !== null };
+  }
+
+  /** FR-049, worded once and raised from both steps. */
+  private alreadyPopulated(existing: number): BadRequestException {
+    return refuse(
+      BOQ_ERRORS.alreadyPopulated,
+      `This project already has ${existing} BOQ lines. Importing again would add a second copy ` +
+        'of the schedule rather than replace the first — and the existing lines cannot be removed ' +
+        'automatically, because bills and work reports may already measure against them. Add or ' +
+        'revise lines on the project instead.',
+    );
   }
 
   /**

@@ -133,3 +133,34 @@
    A freshly imported tender is not behind schedule and is not on time.
 3. Plan one line (set start, finish, duration, per-day). **Expected**: it leaves `unplanned` and
    joins exactly one of the other three.
+
+### Verification run, 2026-10-03 — passes 10 to 12, against a real instance
+
+Run against a build on `PORT=3011`, the local Postgres, and the client's own
+`docs/BOQ_794578.xls` on a seeded project (`SBPL-2411`). Not a browser pass; the API was driven
+directly, which is what these three passes actually test.
+
+| Step | Expected | Observed |
+|---|---|---|
+| 10.3 lines | ~231, **not** ~462 | **231 lines, 66 groups** |
+| 10.4 totals | reconcile with the file's own two figures | derived `29,961,506.79` / `30,698,559.86` against stated `29,961,506.78` / `30,698,559.85`; difference `0.01` each against `2.31` tolerance; `reconciles: true` |
+| 10.5 percentage | `0.0246`, found | `0.024600`, `quotedPercentageFound: true` |
+| 10.6 nothing written | tree still empty after validate | **confirmed empty** |
+| 10.7 confirm | groups and lines appear, percentage set | `{ groups: 66, lines: 231, quotedPercentageSet: true }`; first line `unit: "Cum"`, `rate: "251.00"`, `perDayQty: null`, `finishDate: null`, `state: "unplanned"` |
+| 10.8 second confirm | refused, count unchanged | `400 BOQ_BATCH_ALREADY_CONFIRMED`, line count unchanged |
+| 11.1 text renamed `.xls` | refused by name | `400 BOQ_WORKBOOK_UNREADABLE` |
+| 11.3 no empty success | no `2xx` carrying `lines: 0` | none observed on any path |
+| 11.4 populated project | refused | `400 BOQ_ALREADY_POPULATED` |
+| 12 alerts | all lines unplanned | `{ today: 0, delayed: 0, toBeDelayed: 0, unplanned: 231 }` |
+
+**The run found one defect, which is why it was worth doing.** Pass 11.4 originally refused only at
+`confirm`: validate returned `201` on an already-populated project, so somebody would upload a
+tender, wait for a 231-line report, read it, press Confirm and *then* be told. FR-046 requires every
+rule at the validate step, so the check is now raised from both — the transaction keeps its own,
+because the project can gain lines between the two requests and that one is what makes the rule
+true, while this one is what makes it usable.
+
+**The verification data was removed afterwards.** The 66 groups and 231 lines this run created were
+deleted from the development database and the project's `quotedPercentage` reset, after checking
+that nothing referenced them. Re-importing is one call if seeded data is wanted for the interface
+work.

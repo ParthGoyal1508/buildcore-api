@@ -15,7 +15,29 @@ const CALLER = {
   companyId: 'company-1',
   userId: 'user-1',
   projectId: 'project-1',
+  ctx: { isSuperAdmin: false, companyId: 'company-1' },
 };
+
+/**
+ * A Prisma stub that answers one question: how many BOQ lines the project already has.
+ *
+ * `validate` reads exactly that and writes nothing (FR-049 at the validate step), so a stub with
+ * one counter is the whole of its database surface — and a stub that *only* counts is itself the
+ * assertion that nothing else is touched.
+ */
+function prismaWithExistingLines(existing: number) {
+  const count = jest.fn().mockResolvedValue(existing);
+  const tx = {
+    $executeRaw: jest.fn().mockResolvedValue(0),
+    bOQTaskItem: { count },
+  };
+  return {
+    count,
+    prisma: {
+      $transaction: (fn: (client: typeof tx) => Promise<unknown>) => fn(tx),
+    } as never,
+  };
+}
 
 /**
  * Asserts refusal **with** a code. Never `.catch(cb)`, which passes silently when the promise
@@ -51,9 +73,9 @@ describe('BoqImportService.validate', () => {
     service = new BoqImportService(
       new BoqWorkbookReader(),
       batches,
-      // validate writes nothing, so neither of these is reached by any test in this describe —
-      // passed as nulls rather than mocked, which is itself the assertion that it writes nothing.
-      null as never,
+      prismaWithExistingLines(0).prisma,
+      // The audit log belongs to `confirm` and is never reached from `validate`. Left as null
+      // rather than mocked, which is itself the assertion that validate records nothing.
       null as never,
     );
   });
@@ -291,6 +313,29 @@ describe('BoqImportService.validate', () => {
           'excess+',
         );
       },
+    );
+  });
+});
+
+describe('BoqImportService.validate, on a project that already has a schedule', () => {
+  it('refuses at the validate step rather than at confirm (FR-046, FR-049)', async () => {
+    const batches = new ImportBatchStore();
+    const { prisma } = prismaWithExistingLines(231);
+    const service = new BoqImportService(
+      new BoqWorkbookReader(),
+      batches,
+      prisma,
+      null as never,
+    );
+
+    // Found by walking quickstart pass 11 against a running instance: the confirm-time check
+    // alone meant somebody uploaded a tender, waited for a 231-line report, read it, pressed
+    // Confirm and *then* learned the project was already populated. The transaction keeps its own
+    // check — the project can gain lines between the two requests, and that one is what makes the
+    // rule true. This one is what makes it kind.
+    await expectRefusal(
+      service.validate({ buffer: readFileSync(SYNTHETIC), ...CALLER }),
+      BOQ_ERRORS.alreadyPopulated,
     );
   });
 });

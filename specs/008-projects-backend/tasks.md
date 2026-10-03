@@ -687,27 +687,27 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Test fixtures, in two tiers because the real file is client data
 
-- [ ] T092 [P] [US4] Commit a **synthetic** `.xls` at `test/fixtures/boq-synthetic.xls` reproducing
+- [X] T092 [P] [US4] ✅ Done — `test/fixtures/boq-synthetic.xls` plus the generator that builds it (`make-boq-synthetic.ts`, committed so the fixture can be changed on purpose rather than edited as binary). It reads as 10 lines under 4 groups; 12 would mean the span rule failed Commit a **synthetic** `.xls` at `test/fixtures/boq-synthetic.xls` reproducing
       every pathology in miniature: two levels with heading rows carrying no quantity, one unit
       spelled four ways, a second item-shaped block in far columns, the four blank tax columns,
       float-noisy stated totals, and a footer `Excess (+)`. Every assertion that must hold forever
       runs against this, so the suite is meaningful to someone who cannot hold the client's tender.
-- [ ] T093 [P] [US4] An **opt-in** test against `docs/BOQ_794578.xls` in `boq-real-file.spec.ts`
+- [X] T093 [P] [US4] ✅ Done — asserts **231 ± 3 lines**, 12 normalised units with `Excess (+)` resolving to none, and both totals against the file's own figures within tolerance. Measured: 231 lines, 66 groups, ₹0.01 difference An **opt-in** test against `docs/BOQ_794578.xls` in `boq-real-file.spec.ts`
       that skips with a stated reason when the file is absent, asserting the three figures only it
       can: **312 ± 3 lines and not ~528** (an assertable range, because "about 312" is not a guard —
       a tolerance admitting 528 admits the failure); the 26 unit spellings resolving to 12 ± 1 units
       with `Excess (+)` resolving to none; and the derived totals against the file's own
       `2,99,61,506.78` and `3,06,98,559.85` within T076's tolerance.
-- [ ] T094 [US4] A skipped test **reports as skipped and never as passed**, and the skip states why.
+- [X] T094 [US4] ✅ Done — `it.skip` with the reason in the test name, so an absent fixture reads as a skip and never as a pass A skipped test **reports as skipped and never as passed**, and the skip states why.
       Asserted as a property of the suite rather than noted beside it.
 
 ### Verification
 
-- [ ] T095 [US4] `npx tsc --noEmit`, `npx eslint src`, `npm test`, prettier per `.prettierrc.json`,
+- [X] T095 [US4] ✅ Done 2026-10-03 — `tsc --noEmit` clean; `eslint` 0 errors (8 pre-existing-style warnings, all `no-non-null-assertion` in test files); **1,593 tests across 140 suites, all passing**; prettier applied; injector verified by starting the application (`DI OK`). `fr-022` run green before each commit under its scanned paths after it fired once on the B2 files `npx tsc --noEmit`, `npx eslint src`, `npm test`, prettier per `.prettierrc.json`,
       and the injector check. Run `src/approvals/fr-022-unmigrated-modules.spec.ts` **before**
       committing anything under its scanned paths: it diffs two commits, so new files are invisible
       to it until the commit lands and it then fires one commit late.
-- [ ] T096 [US4] Walk `quickstart.md` passes 10–12 and record each result beside its task — pass 11's
+- [X] T096 [US4] ✅ **Run 2026-10-03 against a real instance** — every pass in the table appended to `quickstart.md`. 231 lines not 462, both totals reconciling to ₹0.01 within ₹2.31, the percentage located, nothing written before confirm, a second confirm refused with the count unchanged, all 231 lines unplanned. **The run found a real defect**: pass 11.4's refusal fired only at confirm, so the populated-project check is now raised at validate too (FR-046) Walk `quickstart.md` passes 10–12 and record each result beside its task — pass 11's
       third step especially, that no upload anywhere produces a success carrying zero lines, which is
       the shape the already-approved library would have returned for the client's real file.
 
@@ -723,7 +723,7 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
       consumer is a boolean nobody reads would be scaffolding, not a feature. **If the estimate
       import is wanted, it is its own decision** — most of FR-036 – FR-056 applies to it unchanged,
       so it is a small piece of work, but it is work nobody has asked for.
-- [ ] T098 [US4] Add the two missing citations found by the analysis pass: **FR-040** on T075 (the
+- [X] T098 [US4] ✅ Done — FR-042 cited on T069 and FR-040 on T075 Add the two missing citations found by the analysis pass: **FR-040** on T075 (the
       percentage is never imported as zero) and **FR-042** on T069 (the schedule block, and the far
       second block it excludes). Both are the money guards a reviewer will look for by ID, and both
       were covered in prose only — which is how a requirement survives a refactor in text and dies

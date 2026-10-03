@@ -168,6 +168,7 @@ export class BoqController {
       companyId: resolveCompanyId(caller),
       userId: caller.id,
       projectId,
+      ctx: rlsContextFor(caller),
     });
   }
 
