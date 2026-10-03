@@ -61,11 +61,6 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
-    // 008 US4, amended 2026-10-03. Entry, the tree, the four alert groups and the two-step tender
-    // import — the path that was specified in August, never built, and that 018's billing has been
-    // measuring against a table nothing could fill. Its paths all sit under `projects/:id/boq`, so
-    // they cannot collide with the literal-vs-`:id` ordering problem described below.
-    BoqController,
     WorkOrdersController,
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
@@ -83,6 +78,20 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     ProjectDocumentsController,
     ClientsController,
     SitesController,
+    // 008 US4, amended 2026-10-03. Entry, the tree, the four alert groups and the two-step tender
+    // import — the path that was specified in August, never built, and that 018's billing had been
+    // measuring against a table nothing could fill.
+    //
+    // **Registered last of the `projects/*` controllers, and the first draft got this exactly
+    // backwards.** It said these paths "all sit under `projects/:id/boq`, so they cannot collide
+    // with the literal-vs-`:id` ordering problem" — which is the collision, not the absence of one.
+    // `GET /projects/:id/boq` matches `GET /projects/client-bills/boq`, with `id` bound to the
+    // literal string `client-bills`, and registered first it answered the billing sheet's request
+    // for the priced schedule with the BOQ tree of a project that does not exist: **HTTP 200 and an
+    // empty array**. The billing screen would have reported a BOQ-less project on every project in
+    // the company. Found by `test/client-bills.e2e-spec.ts` on its first run; `route-shadowing.spec.ts`
+    // asserts the ordering rather than trusting this comment to be read.
+    BoqController,
     ProjectsController,
   ],
   providers: [

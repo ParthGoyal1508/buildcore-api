@@ -45,7 +45,25 @@ the feature; moving them earlier for convenience would have thrown that away.
 - [x] T011 [P] Unit-test the frozen rate: revise the BOQ rate, assert the submitted bill is unchanged.
       **This is the assertion the feature turns on**
 - [x] T012 [P] Unit-test cumulative quantity across two bills
-- [ ] T013 **NOT RUN** e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit
+- [X] T013 e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit.
+
+      **RUN 2026-10-03, 19 assertions, all passing.** Possible for the first time: every case needed
+      a project with a priced BOQ, which nothing in this repository could create until 008's entry
+      and import landed the same evening.
+
+      **It found a defect on its first run, and the defect was in the route table.** `BoqController`
+      is mounted at `projects/:id/boq` and was registered before `ClientBillsController`, so
+      `GET /projects/client-bills/boq` — the request the billing screen opens with — was answered by
+      the BOQ *tree* of a project named `client-bills`: **HTTP 200 carrying an empty array.** Every
+      project in the company would have reported having no BOQ on the one screen whose job is to show
+      one. Fixed by registering `BoqController` last, and `src/projects/route-shadowing.spec.ts`
+      now asserts the ordering by reflection in the unit suite rather than leaving it to a comment
+      that said the opposite.
+
+      Also corrected a wrong assumption of our own: the first draft expected a **draft** bill to
+      count towards the cumulative position. It does not, and should not — a draft has measured
+      nothing yet. That is now its own assertion rather than an accident the over-scope cases
+      depended on.
 
 ## Phase 3: Subcontractor bills measured against the award (US2)
 
@@ -248,12 +266,17 @@ running that one spec before committing anything under its six scanned paths.
       publish the whole of revenue as original scope — a plausible falsehood rather than an
       obviously missing cell.
 
-- [ ] T037 **NOT RUN (needs a seeded project with a variation line)** e2e: a variation line bills and
+- [X] T037 e2e: a variation line bills and
       reconciles through the same path as original scope.
 
-      Covered in part by construction: a variation **is** an ordinary `BOQTaskItem`, so it uses the
-      same pricing, the same cumulative-quantity aggregate and the same over-scope check. That is an
-      argument from the data model rather than an observation, which is why this stays open.
+      Was covered in part by construction: a variation **is** an ordinary `BOQTaskItem`, so it uses
+      the same pricing, the same cumulative-quantity aggregate and the same over-scope check. That
+      was an argument from the data model rather than an observation, which is why it stayed open.
+
+      **RUN 2026-10-03** in `test/client-bills.e2e-spec.ts`: a variation line prices at its own rate
+      with the quoted percentage applied identically, reaches the same cumulative aggregate, is
+      flagged and refused on the same terms, and stays identifiable as a variation through to the
+      bill view — which is what lets the P&L report it apart from original scope.
 
 ## Phase 7: Retention release — **confirmed by the client 2026-10-03**
 
@@ -340,8 +363,14 @@ running that one spec before committing anything under its six scanned paths.
       writes rather than merely equal to its old value — a bill that rewrote its own gross to match
       the certification would pass an equality check against the new figure.
 
-- [ ] T045 **NOT RUN (needs a seeded project and a submitted bill)** e2e: bill, certify less,
-      confirm both figures and the variance.
+- [X] T045 e2e: bill, certify less, confirm both figures and the variance.
+
+      **RUN 2026-10-03** in `test/client-bills.e2e-spec.ts`: certifying a draft is refused
+      (`BILL_NOT_SUBMITTED`), certifying more than was billed is refused
+      (`CERTIFIED_EXCEEDS_BILLED`), and certifying less keeps **both** figures with the shortfall
+      reported as `certificationVariance` — the billed amount is not overwritten and the cumulative
+      billed quantity does not move, so the next bill measures from what was billed rather than from
+      what was paid.
 
 ## Phase 9: The group view and verification
 
