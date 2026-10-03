@@ -831,9 +831,14 @@ the same day.
   `29961506.782150004`), and the arithmetic is exactly reproducible, so recomputing is both
   possible and more trustworthy than trusting the sheet.
 - **FR-045**: The validation report MUST state both the schedule total and the quoted total it
-  derived, and MUST compare them against the two figures the workbook itself states. An import that
-  reads the file correctly can prove it; one that cannot reconcile MUST say so before anything is
-  written.
+  derived, and MUST compare them against the two figures the workbook itself states, reporting the
+  difference in both cases. An import that reads the file correctly can prove it; one that cannot
+  reconcile MUST say so before anything is written. **Reconciliation is to a tolerance of one paisa
+  per line** (`0.01 × lineCount` rupees — ₹3.12 on the sample), not exact equality: rounding each
+  line to two decimal places can legitimately differ from the file's own unrounded sum by up to half
+  a paisa per line, so exactness would fail a correct import. The tolerance is derived from the
+  rounding rather than chosen, and every structural error this check exists to catch — a doubled
+  block, a missed section — exceeds it by seven orders of magnitude.
 - **FR-046**: Import MUST remain the two-step validate-then-confirm flow FR-004 already requires,
   and every rule in this amendment MUST apply at the **validate** step, so that a file which would
   import wrongly is refused before any row exists.
@@ -854,3 +859,63 @@ the same day.
   and all.
 - Programme planning stays a separate act from quantity entry. This amendment makes dates optional;
   it does not move them, rename them, or change how feature 009's schedule uses them.
+
+### Second amendment pass, 2026-10-03 — closing what the silent-failure checklist found
+
+`checklists/silent-failure.md` was written against the requirements above and ten of its items
+failed. Six named a case the amendment did not cover; four named a criterion stated in prose that an
+implementer could not act on without choosing it themselves. Both kinds are the amendment's own
+theme one level down — a decision nobody reviewed — so they are settled here rather than in code.
+
+- **FR-047** (closes CHK029, a conflict this amendment introduced): "To Be Delayed" MUST be defined
+  against the **finish date**, not against `perDayQty`. A line is at risk when it has a finish date
+  and the rate needed to finish by it exceeds the rate achieved so far, where the needed rate is
+  `perDayQty` when set and `pendingQty ÷ remaining days to finishDate` otherwise. A line with no
+  finish date cannot be at risk and is **Unplanned**. The original definition — "Avg Qty Per Day vs
+  required Per Day Qty" — has no meaning once `perDayQty` is optional, and would silently evaluate
+  as not-at-risk for every imported line.
+- **FR-048** (closes CHK026, CHK027, CHK028): the four alert groups MUST be mutually exclusive and
+  jointly exhaustive, and membership MUST be decided by **the presence of a finish date alone**: no
+  finish date ⇒ Unplanned; finish date in the past with pending quantity ⇒ Delayed; finish date
+  today ⇒ Today; otherwise FR-047 decides Today-or-To-Be-Delayed. A partially planned line therefore
+  has exactly one home, and no line can be absent from all four or present in two.
+- **FR-049** (closes CHK020): an import into a project that **already has BOQ lines** MUST be
+  refused, naming the existing line count. Appending is the same silent doubling FR-042 exists to
+  prevent, reached by uploading twice rather than by reading the wrong block; replacing is
+  impossible, because lines may already be referenced by a client bill line, a DWR task or a
+  work-order award. A revision after the first import is therefore entry by hand or a variation
+  line, both of which are deliberate acts by a person.
+- **FR-050** (closes CHK025): an import batch MUST be confirmable only by the user who validated it
+  and only against the project it was validated for. The report is the review, so the person who
+  accepted a 312-line write must be the person who read it.
+- **FR-051** (closes CHK003): a workbook with candidate schedule rows of which **none** is importable
+  MUST be refused as its own condition. `validate` MUST NOT return a batch identifier for an empty
+  result — a batch of nothing is a confirmable write of nothing, which is FR-036's prohibited shape
+  reached by a different route.
+- **FR-052** (closes CHK017, CHK018, CHK019, CHK022): a batch MUST carry a state, and the states MUST
+  be distinguishable to the caller: **ready**, **committing**, **confirmed** and **expired**. A
+  confirm MUST move the batch to committing before opening its transaction and MUST return it to
+  ready if that transaction fails, so that the schedule is never lost and never written twice. A
+  second confirm MUST report *which* of those it hit — already confirmed, in progress, or expired —
+  rather than a single "not found" that cannot be explained to the person who pressed the button.
+- **FR-053** (closes CHK021, CHK024): a batch MUST expire **30 minutes** after validation — long
+  enough to read a 312-line report, short enough that it is not confirmed against a project that has
+  since changed. At most **5 live batches per company and 20 overall**; a validate that would exceed
+  that MUST be refused by its own condition rather than by evicting a batch somebody is reading.
+- **FR-054** (closes CHK006, CHK007): the schedule block MUST be identified by **header text**, not
+  by column position: the header row is the one carrying both a description-like and a
+  quantity-like header, and the block spans that row's first to last contiguous matched column.
+  Columns 238–242 of the sample are therefore excluded for being *outside the identified span* — the
+  rule that also holds for the next tender, which will put its second block somewhere else. Where no
+  such header row can be found, the workbook MUST be refused rather than guessed at.
+- **FR-055** (closes CHK031, CHK032, CHK033): "candidate schedule rows" MUST mean rows inside the
+  identified block carrying a non-empty description, **counting heading rows and rows that will
+  later be rejected**, counted immediately after block identification and before validation. The
+  1,000-row cap exists to bound synchronous response time, and MUST be applied at that point.
+- **FR-056** (closes CHK012, CHK014, CHK034): the quoted percentage counts as **located** only when
+  a footer label matching `Excess` or `Quoted Rate` is found *and* the quoted total derived from it
+  reconciles under FR-045's tolerance. Either failing means not located, which makes "with
+  confidence" objective and resolves it the same way in both FR-040 and FR-045. A percentage that
+  parses but falls outside 0 to 1 MUST be treated as not located. Separately, a workbook over
+  **10MB** MUST be refused before parsing begins: FR-055's cap is applied after a full parse, so
+  without this nothing bounds the work done before it.

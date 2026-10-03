@@ -266,3 +266,41 @@ A `200` carrying `"lines": 0` is not a valid response from `validate`.
 `confirm` commits in one transaction — groups on first reference, then items, then
 `Project.quotedPercentage` **only if** `quotedPercentageFound`. The batch is consumed as it commits,
 so a second confirm returns `BOQ_BATCH_NOT_FOUND` rather than appending the schedule again.
+
+### Refusals, revised by the second amendment pass (FR-047 – FR-056)
+
+| Code | When |
+|---|---|
+| `BOQ_FILE_TOO_LARGE` | over 10MB, refused before parsing (FR-056) |
+| `BOQ_WORKBOOK_UNREADABLE` | not a workbook either parser recognises |
+| `BOQ_WORKBOOK_EMPTY` | parsed, no sheets — the shape `exceljs` silently returns for `.xls` |
+| `BOQ_NO_SCHEDULE_BLOCK` | no header row carrying both a description and a quantity header (FR-054) |
+| `BOQ_NO_SCHEDULE_ROWS` | block identified, no candidate rows in it |
+| `BOQ_NO_IMPORTABLE_ROWS` | candidate rows found, none importable — no batch is issued (FR-051) |
+| `BOQ_TOO_MANY_ROWS` | over 1,000 candidate schedule rows (FR-055) |
+| `BOQ_TOO_MANY_BATCHES` | 5 live batches for this company, or 20 overall (FR-053) |
+| `BOQ_ALREADY_POPULATED` | the project already has BOQ lines; names the count (FR-049) |
+| `BOQ_BATCH_NOT_FOUND` | no such batch identifier |
+| `BOQ_BATCH_EXPIRED` | validated more than 30 minutes ago (FR-053) |
+| `BOQ_BATCH_IN_PROGRESS` | another confirm of this batch is committing (FR-052) |
+| `BOQ_BATCH_ALREADY_CONFIRMED` | this batch has been imported; shown as "already imported" |
+| `BOQ_BATCH_NOT_YOURS` | a different user, or a different project, than validated it (FR-050) |
+
+Batch states (FR-052): `ready → committing → confirmed`, with `committing → ready` on a failed
+transaction and `ready → expired` at 30 minutes. The state is what the caller is told, so "nothing
+happened" and "it already happened" are never the same answer.
+
+`validate` adds to its response:
+
+```jsonc
+{
+  "alerts": { "today": 0, "delayed": 0, "toBeDelayed": 0, "unplanned": 312 },
+  "totals": {
+    "reconciles": true,
+    "tolerance": "3.12",                  // 0.01 × lineCount — FR-045
+    "scheduleDifference": "0.00",
+    "quotedDifference": "0.00"
+  },
+  "quotedPercentageFound": true           // false unless the label was found AND it reconciles
+}
+```
