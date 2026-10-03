@@ -136,6 +136,25 @@ export class LetterKindsController {
     return this.fields_.fieldsFor(rlsContextFor(caller), id);
   }
 
+  @Get(':id/fields/:token/usage')
+  @ApiOperation({
+    summary: 'Which of this kind’s templates reference this field (web T136)',
+    description:
+      'Information before a decision, not a gate. Withdrawing a field is **not** refused while ' +
+      'templates use it — an administrator tidying a kind should not be blocked by a draft somebody ' +
+      'abandoned — but they should see what it will break first.\n\n' +
+      'Served here rather than left to the browser because the template endpoints sit under ' +
+      '`RECRUITMENT` and this one under `SETTINGS`: a caller who may define fields may not be ' +
+      'permitted to list templates.',
+  })
+  async fieldUsage(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('token') token: string,
+  ) {
+    return this.fields_.templatesUsingField(rlsContextFor(caller), id, token);
+  }
+
   @Put(':id/fields/:token')
   @ApiOperation({
     summary: 'Declare or redefine one field on this kind (FR-011b, FR-011c)',

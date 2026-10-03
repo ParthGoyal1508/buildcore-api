@@ -332,3 +332,85 @@ describe('resolving a company-defined kind’s fields (T140)', () => {
     expect(values.deep).toBe('');
   });
 });
+
+/**
+ * Which templates a field removal would break (017 FR-011b, web T136).
+ *
+ * Matched by tokenising rather than by substring. A field named `site` reported as used by a
+ * template referencing `{{siteName}}` would make the warning cry wolf, and a warning that is
+ * usually wrong is a warning people click past — including the time it was right.
+ */
+describe('LetterKindFieldsService.templatesUsingField', () => {
+  const build = (
+    templates: {
+      id: string;
+      name: string;
+      bodyTemplate: string;
+      isActive: boolean;
+    }[],
+  ) => {
+    const tx = {
+      $executeRaw: async () => 0,
+      letterTemplate: { findMany: async () => templates },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    return new LetterKindFieldsService(prisma as never);
+  };
+  const ctx = { isSuperAdmin: true } as never;
+
+  const TEMPLATES = [
+    {
+      id: 't1',
+      name: 'Offer, standard',
+      bodyTemplate: 'Posted at {{siteName}} under {{reportingManager}}.',
+      isActive: true,
+    },
+    {
+      id: 't2',
+      name: 'Offer, trainee',
+      bodyTemplate: 'Welcome {{candidateName}}.',
+      isActive: false,
+    },
+  ];
+
+  it('names the templates that reference the field', async () => {
+    const service = build(TEMPLATES);
+
+    await expect(
+      service.templatesUsingField(ctx, 'kind-1', 'siteName'),
+    ).resolves.toEqual([{ id: 't1', name: 'Offer, standard', isActive: true }]);
+  });
+
+  it('does not report a template that merely contains the token as a substring', async () => {
+    // `site` is a prefix of `siteName`. A substring match would report t1 and the administrator
+    // would learn to ignore the warning.
+    const service = build(TEMPLATES);
+
+    await expect(
+      service.templatesUsingField(ctx, 'kind-1', 'site'),
+    ).resolves.toEqual([]);
+  });
+
+  it('returns nothing when no template uses it, rather than failing', async () => {
+    // The common case — a field declared and not yet used. It must read as "nothing will break",
+    // which is a different answer from an error, and the screen renders them differently.
+    const service = build(TEMPLATES);
+
+    await expect(
+      service.templatesUsingField(ctx, 'kind-1', 'neverUsed'),
+    ).resolves.toEqual([]);
+  });
+
+  it('reports a draft template as well as a live one', async () => {
+    const service = build(TEMPLATES);
+
+    // Both, and `isActive` tells them apart. The api does not refuse the removal, so the
+    // administrator decides — and "one live template and one draft" is a different decision from
+    // "two live templates".
+    await expect(
+      service.templatesUsingField(ctx, 'kind-1', 'candidateName'),
+    ).resolves.toEqual([{ id: 't2', name: 'Offer, trainee', isActive: false }]);
+  });
+});

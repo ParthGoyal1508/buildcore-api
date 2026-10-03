@@ -142,6 +142,41 @@ export class LetterKindFieldsService {
   }
 
   /**
+   * Which of this kind's templates reference a token (017 FR-011b, web T136).
+   *
+   * **A warning, not a gate.** `removeField` below is deliberately not refused while templates use
+   * the field — an administrator tidying a kind should not be blocked by a draft somebody
+   * abandoned. But "this will break three templates, and here they are" is information they should
+   * have before they decide, and the same shape FR-015 already uses before deleting a template.
+   *
+   * Served here rather than computed in the browser because the browser cannot get the list: the
+   * template endpoints sit under `RECRUITMENT` and this screen under `SETTINGS`, so a caller who may
+   * define fields may not be allowed to read templates. Asking the server keeps the warning working
+   * for every caller who can reach the screen at all.
+   *
+   * Matched by tokenising each body rather than by substring, so a field named `site` is not
+   * reported as used by a template referencing `{{siteName}}`.
+   */
+  async templatesUsingField(
+    ctx: RlsContext,
+    letterKindId: string,
+    token: string,
+  ): Promise<{ id: string; name: string; isActive: boolean }[]> {
+    const templates = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.letterTemplate.findMany({
+        where: { letterKindId },
+        select: { id: true, name: true, bodyTemplate: true, isActive: true },
+        orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
+      }),
+    );
+    return templates
+      .filter((template) =>
+        extractTokens(template.bodyTemplate).includes(token),
+      )
+      .map(({ id, name, isActive }) => ({ id, name, isActive }));
+  }
+
+  /**
    * Removes a declared field.
    *
    * Deliberately **not** guarded on templates using it. A field cannot be withdrawn safely by
