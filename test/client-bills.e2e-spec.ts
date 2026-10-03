@@ -445,6 +445,41 @@ describe('Client bills against a BOQ (e2e)', () => {
       expect(clash.body.code).toBe('BILL_NUMBER_IN_USE');
     });
 
+    it('refuses a bill on a project with no BOQ at all, and says which problem it is', async () => {
+      // Quickstart Pass 1. Distinct from "this line is not on the BOQ": the project has no priced
+      // scope whatsoever, and the remedy is to enter a BOQ rather than to correct a line. One code
+      // for both would send somebody looking for a line that was never the problem.
+      const bare = await sys.project.create({
+        data: {
+          companyId,
+          code: unique('NOBOQ').slice(0, 40),
+          name: unique('NoBoqProject'),
+          clientId,
+          contractValue: 1000,
+          startDate: new Date('2026-07-01'),
+        },
+        select: { id: true },
+      });
+
+      try {
+        const res = await http()
+          .post(`/projects/client-bills?companyId=${companyId}`)
+          .set(auth())
+          .send({
+            projectId: bare.id,
+            billNumber: billNumber(),
+            billingDate: '2026-08-21',
+            // A real line id, but belonging to another project — which is the case that would
+            // otherwise price a bill against a schedule the project does not have.
+            lines: [{ boqTaskItemId: item['1.1'].id, quantity: 1 }],
+          })
+          .expect(400);
+        expect(res.body.code).toBe('BOQ_REQUIRED');
+      } finally {
+        await sys.project.deleteMany({ where: { id: bare.id } });
+      }
+    });
+
     it('refuses a bill with no lines', async () => {
       const res = await compose({ billNumber: billNumber(), lines: [] }, 400);
       expect(res.body.code).toBe('BILL_HAS_NO_LINES');

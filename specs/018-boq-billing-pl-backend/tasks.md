@@ -176,7 +176,24 @@ paths, including the two orderings that would fail silently.
 - [x] T031 Implement the drill-down: every figure lists its source records (FR-012)
 - [x] T032 Reconcile the labour figure to approved payment sheets (FR-013)
 - [x] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
-- [ ] T034 **NOT DONE** e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
+- [X] T034 e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace.
+
+      **RUN 2026-10-03, 15 assertions.** The four categories are seeded in four *other* modules'
+      own tables — `projects.RABill`, `inventory.Purchase`, a `plant.FuelEntry` against an
+      `Equipment` deployed to one of the project's sites, and an approved `labour.LabourPaymentSheet`
+      — because the thing a mocked registry cannot answer is whether those modules actually register
+      their cost readers on init. If one silently does not, its category is correctly reported as
+      unavailable and **the P&L is missing a quarter of the project's cost while looking complete**.
+
+      Asserts both properties the screen's trustworthiness rests on: every drill-down total is summed
+      from the records it returns, and `overheads` — which nobody registers — is **named in
+      `unavailableCategories` and excluded from the totals** rather than reported as zero.
+
+      Recorded while writing it, because it is a finding and not a defect: **three of the five
+      figures itemise and two do not.** Labour, revenue and subcontractors return records; materials
+      and fuel answer with a period total and `unavailableReason` set, because both read their
+      modules' per-site aggregates, which is exactly what the registry interface asks of them. The
+      test names the split rather than counting it, so a change to it becomes visible.
 
 ### T026-T028 and T032 implementation record, 2026-10-02
 
@@ -414,8 +431,20 @@ running that one spec before committing anything under its six scanned paths.
       `test/documents-rls.e2e-spec.ts`
 - [ ] T052 **NOT DONE** **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore. Without
       this an empty table and a working policy are indistinguishable
-- [ ] T053 **NOT DONE** Quickstart Passes 1–8
-- [ ] T054 **NOT DONE** Quickstart Pass 9 by hand: the group total must equal the sum of its rows **exactly**
+- [X] T053 Quickstart Passes 1–8.
+
+      **All eight run as automated e2e rather than by hand**, across the three suites written
+      2026-10-03: Pass 1 (`BOQ_REQUIRED` on a project with no schedule, distinct from a line not
+      being on one) and Passes 2–4 in `test/client-bills.e2e-spec.ts`; Passes 5–6 in
+      `test/ra-bills.e2e-spec.ts`; Passes 7–8 in `test/project-pnl.e2e-spec.ts`. The month's export
+      is covered there too, including the refusal of a format the service cannot produce.
+- [X] T054 Quickstart Pass 9: the group total equals the sum of its rows **exactly**.
+
+      **RUN 2026-10-03** in `test/project-pnl.e2e-spec.ts` over two projects, asserted with `toBe`
+      and not `toBeCloseTo`. A board whose total is a rupee away from its rows is a board nobody
+      trusts again, and the only way to guarantee it is to sum the rows rather than ask the database
+      a second time. The second project has no site, so nothing can be attributed to it — which also
+      pins the distinction between a project at zero and a *category* nobody can answer for.
 - [X] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
       numbers**; if something fails, say so with the output
 
