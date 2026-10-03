@@ -171,26 +171,39 @@ error report), check alerts — no DWR data needed.
 
 ### Implementation for User Story 4
 
-- [ ] T026 [P] [US4] Create BOQ DTOs: `create-boq-group.dto.ts`, `create-boq-item.dto.ts`,
+- [ ] ~~T026~~ **SUPERSEDED by T084** (2026-10-03) — the DTOs are right in shape and wrong in
+      detail: the programme fields are optional now (FR-037).
+  Original: [P] [US4] Create BOQ DTOs: `create-boq-group.dto.ts`, `create-boq-item.dto.ts`,
       `import-boq-validate.dto.ts`, `import-boq-confirm.dto.ts` (`{ batchId }`) in
       `src/projects/boq/dto/`
-- [ ] T027 [P] [US4] Implement `BOQImportService` in `src/projects/boq/boq-import.service.ts` with
+- [ ] ~~T027~~ **SUPERSEDED by T063–T079** (2026-10-03) — **wrong on both of its two named
+      specifics.** `exceljs` cannot read the client's `.xls` (it returns zero sheets and throws
+      nothing, research §15), and there is no 9-column schedule: the real sheet carries Item
+      Description, Quantity, Units, Basic Rate, four blank pre-GST tax columns and Total Amount,
+      with no Task Group column and no programme dates.
+  Original: [P] [US4] Implement `BOQImportService` in `src/projects/boq/boq-import.service.ts` with
       two methods: `validate(file)` — `exceljs` workbook parsing, 9-column schema validation,
       row-by-row error collection, holds valid rows server-side keyed by a generated `batchId`
       (TTL'd), generates CSV error report as Buffer stored to object storage, returns
       `{ batchId, validRows, errors, errorReportUrl }` without writing anything; and
       `confirm(batchId)` — commits the held valid rows in a single Prisma transaction (group
       created on first reference), returns `{ imported }` — research.md §4, §12
-- [ ] T028 [P] [US4] Unit test `BOQImportService`: `validate()` on an all-valid file → 0 errors,
+- [ ] ~~T028~~ **SUPERSEDED by T075–T079** (2026-10-03) — the three cases it names are kept and
+      joined by the ones the client's file made necessary.
+  Original: [P] [US4] Unit test `BOQImportService`: `validate()` on an all-valid file → 0 errors,
       writes nothing; `validate()` on a file with 3 invalid rows → correct error objects, writes
       nothing; `confirm()` on a validated batch → exactly the valid rows created; file > 1000 rows
       → 413 thrown — `src/projects/boq/boq-import.service.spec.ts`
-- [ ] T029 [US4] Implement `BOQService` in `src/projects/boq/boq.service.ts`:
+- [ ] ~~T029~~ **SUPERSEDED by T085–T087** (2026-10-03) — `getAlerts` returns four groups now,
+      not three (FR-048).
+  Original: [US4] Implement `BOQService` in `src/projects/boq/boq.service.ts`:
       `createGroup`, `createItem`, `getTree` (groups + items with computed pendingQty/
       avgQtyPerDay/daysToComplete), `getAlerts` (today/delayed/toBeDelayed), `updateDoneQty`
       (called by DWR service on **approval**, not submission — research.md §13), `deleteItem`
       (→ 409 if DWRTask references it)
-- [ ] T030 [US4] Implement `BOQController` in `src/projects/boq/boq.controller.ts`: all BOQ
+- [ ] ~~T030~~ **SUPERSEDED by T088** (2026-10-03) — the endpoint list grew with the import
+      refusals and the alerts' fourth group.
+  Original: [US4] Implement `BOQController` in `src/projects/boq/boq.controller.ts`: all BOQ
       endpoints from contracts — `Permission.PROJECTS`, `ProjectLockGuard` on writes
 
 **Checkpoint**: BOQ management and import fully functional.
@@ -510,3 +523,190 @@ and the `TA*` amendment are correctly unbuilt and are not reported here.
       first-class `hr.Holiday` calendar superseded it. FR-012 and data-model.md's Site
       section both still describe it as a live export HR depends on. Documentation only;
       no code change.
+
+---
+
+## Amendment 2026-10-03 — BOQ entry and import (T061 – T096)
+
+Sources: `spec.md` Amendment 2026-10-03 (FR-036 – FR-046) and its second pass (FR-047 – FR-056);
+`plan.md` phases B1–B5 and its constitution re-check; `research.md` §15–§17;
+`contracts/projects-api.md`; `quickstart.md` passes 10–12.
+
+T026–T030 above are **superseded, not deleted** — each carries a note naming its replacement.
+
+### Phase B1: The migration that lets a tender schedule exist
+
+- [ ] T061 [US4] Make six columns nullable in `prisma/schema.prisma` (FR-037):
+      `BOQTaskItem.startDate`, `finishDate`, `duration`, `perDayQty` and
+      `BOQTaskGroup.startDate`, `finishDate`. Update each field's doc comment to say that null means
+      **unplanned** and that unplanned is a reported state, not a missing value.
+- [ ] T062 [US4] Generate the migration in `prisma/migrations/`, opening with
+      `SELECT set_config('app.is_super_admin','true',true)` per the RLS convention. No backfill —
+      widening to nullable is safe and both tables are empty in every environment. No new policy:
+      nothing is added, only relaxed.
+
+**Checkpoint**: a BOQ line can exist without a programme.
+
+### Phase B2: The parser boundary (constitution v1.5.0)
+
+- [ ] T063 [US4] Add `xlsx` to `package.json` pinned to
+      `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, and commit the lockfile with its
+      integrity hash. **Not `npm install xlsx`** — the registry build is 0.18.5, carrying
+      CVE-2023-30533 and CVE-2024-22363, and the constitution prohibits it.
+- [ ] T064 [US4] Implement `BoqWorkbookReader` in `src/projects/boq/boq-workbook.reader.ts`: takes a
+      buffer, returns `{ rowNumber, cells: (string | number | null)[] }[]`. The **only** importer of
+      `xlsx` anywhere. No caller receives a workbook, a worksheet or a cell object — that is what
+      makes replacing the library one file's work.
+- [ ] T065 [US4] Route by content, not by filename: `.xlsx` to `exceljs`, legacy `.xls` to SheetJS.
+      A renamed file is the common case, not the exception.
+- [ ] T066 [US4] The four whole-file refusals, each named (FR-036, FR-056): `BOQ_FILE_TOO_LARGE`
+      (over 10MB, before parsing), `BOQ_WORKBOOK_UNREADABLE`, `BOQ_WORKBOOK_EMPTY` (parsed, no
+      sheets — the shape `exceljs` silently returns for the client's real file) and
+      `BOQ_NO_SCHEDULE_BLOCK`.
+- [ ] T067 [P] [US4] Unit test the reader alone in `boq-workbook.reader.spec.ts`: a real `.xls`, a
+      real `.xlsx`, a text file renamed `.xls`, a workbook with no sheets, and an oversized buffer.
+- [ ] T068 [P] [US4] Assert **no file other than the reader imports `xlsx`**, by reading the source
+      tree in `boq-workbook.reader.spec.ts`. The constraint decays silently: a second import would
+      work perfectly and nobody would notice until the library had to be replaced.
+
+**Checkpoint**: bytes become rows, or a refusal that says which condition it hit.
+
+### Phase B3: `validate` — every decision made before anything is written
+
+- [ ] T069 [US4] `identifySchedule()` in `src/projects/boq/schedule-block.ts` (FR-054): find the
+      header row carrying both a description-like and a quantity-like header; the block spans that
+      row's first to last **contiguous** matched column. The sample's second block at columns
+      238–242 is excluded for being outside the span — a rule that still holds for the next tender,
+      which will put its own second block somewhere else. No header row found ⇒
+      `BOQ_NO_SCHEDULE_BLOCK` rather than a guess.
+- [ ] T070 [US4] Count **candidate schedule rows** (FR-055) — rows inside the block with a non-empty
+      description, *including* headings and rows that will later be rejected — immediately after
+      identification and before validation, and apply the 1,000-row cap there
+      (`BOQ_TOO_MANY_ROWS`). Judged on raw sheet rows instead, the client's own 312-line tender
+      could be refused for being too large (research §17).
+- [ ] T071 [US4] Hierarchy inference (FR-038): a row with a description and no quantity opens a
+      group; rows below belong to it until the next such row. Deeper nesting folds the outer heading
+      text into the group name. A quantity row before any heading goes to a group named for the sheet
+      and raises a **warning** — the rows are good and only the structure is unstated, so it is not
+      an error.
+- [ ] T072 [P] [US4] `normaliseUnit()` in `src/projects/boq/unit-normalise.ts` (FR-041): lowercase,
+      strip periods, collapse whitespace, so `R. Mtr.`, `R.Mtr.` and `R mtr` agree. Store the source
+      string verbatim on the line; normalise for matching only. **`Excess (+)` must resolve to no
+      unit** — it appears in the units column on the quoted-rate row, and a unit named "excess" would
+      be invented out of a footer.
+- [ ] T073 [US4] Read and discard the four pre-GST tax columns (FR-043) — Excise Duty, VAT,
+      DGS&D/RITES inspection, Cenvat credit. Not errors, not data: the template predates GST.
+- [ ] T074 [US4] Recompute every amount as `quantity × rate` in `Prisma.Decimal` (FR-044). The file's
+      own figures (`178.09326499999995`, `29961506.782150004`) are the thing to reconcile against,
+      never an input.
+- [ ] T075 [US4] Locate the quoted percentage (FR-039, FR-056): a footer label matching `Excess` or
+      `Quoted Rate`, **and** the quoted total it implies reconciling under T076's tolerance. Either
+      failing, or a value outside 0–1, means **not located** — `quotedPercentage: null` and a
+      first-class entry in the report. **Never 0**: zero is a valid percentage, so that failure is
+      silent and under-bills every line by 2.46% — ₹7.37 lakh on this file.
+- [ ] T076 [US4] Reconcile both derived totals against the two the workbook states, reporting each
+      difference (FR-045). Tolerance is **one paisa per line** (`0.01 × lineCount`; ₹3.12 on the
+      sample), derived from two-decimal rounding rather than chosen — exact equality would fail a
+      correct import, and every structural error this catches exceeds the tolerance by seven orders
+      of magnitude.
+- [ ] T077 [US4] `BOQImportService.validate(projectId, userId, buffer)` writing **nothing**,
+      returning the contract's shape: `batchId`, group and line counts, units as-typed with their
+      normalised form, both totals with differences and the tolerance, the percentage and whether it
+      was located, errors, warnings, the alert preview, and `errorReportUrl` when errors exist.
+- [ ] T078 [US4] Batch storage with the four states (FR-052, FR-053) in
+      `src/projects/boq/import-batch.store.ts`: `ready → committing → confirmed`, plus `expired`.
+      30-minute TTL, 5 live batches per company and 20 overall, a validate that would exceed the cap
+      refused (`BOQ_TOO_MANY_BATCHES`) rather than evicting one somebody is reading. TTL, caps and
+      the row threshold go in **centralized config** per Principle III, not inline.
+- [ ] T079 [US4] Refuse to issue a batch for an empty result (FR-051): candidate rows found but none
+      importable ⇒ `BOQ_NO_IMPORTABLE_ROWS`. A batch of nothing is a confirmable write of nothing,
+      which is FR-036's prohibited shape reached by another route.
+- [ ] T080 [P] [US4] Unit tests for Phase B3 in `boq-import.service.spec.ts`: block identification
+      against a far second block; a heading row opening a group; a quantity row before any heading
+      raising a warning not an error; units normalising with `Excess (+)` resolving to none; the four
+      tax columns dropped; amounts recomputed rather than read; a percentage outside 0–1 treated as
+      not located; a located percentage whose total does not reconcile treated as not located; the
+      row cap counted on candidates; and **no response carrying a batch with zero lines**.
+
+**Checkpoint**: the client's file produces a report that reconciles, and the database is untouched.
+
+### Phase B4: `confirm` — one transaction, once, by the right person
+
+- [ ] T081 [US4] `confirm(batchId, userId, projectId)` in one `$transaction`: groups on first
+      reference, then items, then `Project.quotedPercentage` **only if** the percentage was located.
+- [ ] T082 [US4] **Move the batch to `committing` before opening the transaction, and back to
+      `ready` if it fails** (FR-052). Consuming it after the commit admits a double write; consuming
+      it before loses the schedule when the transaction fails. A concurrent second confirm sees
+      `committing` and gets `BOQ_BATCH_IN_PROGRESS`; a later one sees `confirmed` and gets
+      `BOQ_BATCH_ALREADY_CONFIRMED`, which the interface shows as "already imported" rather than as
+      a failure. One undifferentiated "not found" cannot be explained to whoever pressed the button.
+- [ ] T083 [US4] Ownership and project scope (FR-050), and the populated-project refusal (FR-049):
+      `BOQ_BATCH_NOT_YOURS` for a different user or project; `BOQ_ALREADY_POPULATED`, naming the
+      existing line count, when the project already has BOQ lines. Appending is the same silent
+      doubling by a different route — uploading twice rather than reading the wrong block — and
+      replacing is impossible, since lines may already be referenced by a client bill line, a DWR
+      task or an award line.
+- [ ] T084 [US4] **One** audit entry per import, naming the project, the batch, the group and line
+      counts and whether the quoted percentage was set. Not 312 entries: one import is one act, and
+      312 rows would bury the next thing in the log. (Replaces T026's DTO work, now with the
+      programme fields optional.)
+- [ ] T085 [P] [US4] Unit tests in `boq-import-confirm.spec.ts`: confirm writes exactly the
+      validated lines; a second confirm is refused and the line count is unchanged; a concurrent
+      confirm hits `BOQ_BATCH_IN_PROGRESS`; a failed transaction returns the batch to `ready`; a
+      batch with no located percentage leaves `quotedPercentage` untouched rather than writing 0;
+      another user's confirm is refused; a populated project is refused.
+
+**Checkpoint**: a BOQ exists, and 018's billing has something to measure against.
+
+### Phase B5: Entry by hand, and the four alert groups
+
+- [ ] T086 [US4] DTOs in `src/projects/boq/dto/` with the programme fields **optional**
+      (FR-037): `create-boq-group.dto.ts`, `create-boq-item.dto.ts`, `import-boq-confirm.dto.ts`.
+- [ ] T087 [US4] `BOQService` in `src/projects/boq/boq.service.ts`: `createGroup`, `createItem`,
+      `getTree` (with `pendingQty`, `avgQtyPerDay`, `daysToComplete` computed, null where
+      unplanned), `updateDoneQty` (on DWR **approval** only, research §13), `deleteItem` — `409` if
+      referenced by a `DWRTask`, a `ClientBillLine` **or** a `WorkOrderBOQItem`; three relations,
+      not one.
+- [ ] T088 [US4] `getAlerts` returning **four** mutually exclusive, jointly exhaustive groups
+      (FR-047, FR-048), membership decided by the finish date alone: no finish date ⇒ `unplanned`;
+      past with pending quantity ⇒ `delayed`; today ⇒ `today`; otherwise at risk when the rate
+      needed to finish exceeds the rate achieved, where the needed rate is `perDayQty` when set and
+      `pendingQty ÷ remaining days` otherwise. The old definition measured against `perDayQty`
+      directly and would read every imported line as not-at-risk.
+- [ ] T089 [US4] `BOQController` in `src/projects/boq/boq.controller.ts` — the entry endpoints, the
+      two import steps and the alerts, each with `Permission.PROJECTS` and `ProjectLockGuard` on
+      every write.
+- [ ] T090 [US4] Register `BoqModule` and wire it into `ProjectsModule`; confirm the injector
+      resolves by starting the application.
+- [ ] T091 [P] [US4] Unit tests in `boq.service.spec.ts`: the four alert groups are exhaustive and
+      disjoint across a fixture holding one line of each kind, **including a partially planned line**
+      (finish date, no per-day quantity) which must land in exactly one group; `deleteItem` refuses
+      against each of the three relations separately.
+
+**Checkpoint**: a BOQ can be entered without a spreadsheet at all.
+
+### Test fixtures, in two tiers because the real file is client data
+
+- [ ] T092 [P] [US4] Commit a **synthetic** `.xls` at `test/fixtures/boq-synthetic.xls` reproducing
+      every pathology in miniature: two levels with heading rows carrying no quantity, one unit
+      spelled four ways, a second item-shaped block in far columns, the four blank tax columns,
+      float-noisy stated totals, and a footer `Excess (+)`. Every assertion that must hold forever
+      runs against this, so the suite is meaningful to someone who cannot hold the client's tender.
+- [ ] T093 [P] [US4] An **opt-in** test against `docs/BOQ_794578.xls` in `boq-real-file.spec.ts`
+      that skips with a stated reason when the file is absent, asserting the three figures only it
+      can: **312 ± 3 lines and not ~528** (an assertable range, because "about 312" is not a guard —
+      a tolerance admitting 528 admits the failure); the 26 unit spellings resolving to 12 ± 1 units
+      with `Excess (+)` resolving to none; and the derived totals against the file's own
+      `2,99,61,506.78` and `3,06,98,559.85` within T076's tolerance.
+- [ ] T094 [US4] A skipped test **reports as skipped and never as passed**, and the skip states why.
+      Asserted as a property of the suite rather than noted beside it.
+
+### Verification
+
+- [ ] T095 [US4] `npx tsc --noEmit`, `npx eslint src`, `npm test`, prettier per `.prettierrc.json`,
+      and the injector check. Run `src/approvals/fr-022-unmigrated-modules.spec.ts` **before**
+      committing anything under its scanned paths: it diffs two commits, so new files are invisible
+      to it until the commit lands and it then fires one commit late.
+- [ ] T096 [US4] Walk `quickstart.md` passes 10–12 and record each result beside its task — pass 11's
+      third step especially, that no upload anywhere produces a success carrying zero lines, which is
+      the shape the already-approved library would have returned for the client's real file.
