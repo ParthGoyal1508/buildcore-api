@@ -99,3 +99,37 @@
    - `POST /projects/:id/boq/items` → **Expected**: 423
    - `PUT /projects/:id/budget` → **Expected**: 423
    - `GET /projects/:id` → **Expected**: 200 (reads are never blocked)
+
+## Amendment 2026-10-03 — BOQ entry and import
+
+### Pass 10 — a tender file becomes a BOQ
+
+1. `npx prisma migrate deploy`, then start the API.
+2. `POST /projects/:id/boq/import/validate` with `docs/BOQ_794578.xls` as `file`.
+3. **Expected**: `lines` about 312 — **not** about 528. 528 means the second block at columns
+   238–242 was read and the tender has been silently doubled.
+4. **Expected**: `totals.reconciles` true, with `scheduleDerived` against `29961506.78` and
+   `quotedDerived` against `30698559.85` — the two figures the workbook itself states.
+5. **Expected**: `quotedPercentageFound` true and `quotedPercentage` `0.0246`. If it is `0`, FR-040
+   is violated and every bill on this project will be 2.46% short.
+6. **Expected**: nothing written. Re-run `GET /projects/:id/boq` and confirm it is still empty.
+7. `POST .../boq/import/confirm { batchId }`. **Expected**: the tree now carries the groups and
+   lines, every programme column null, and `Project.quotedPercentage` set.
+8. Repeat step 7 with the same `batchId`. **Expected**: `BOQ_BATCH_NOT_FOUND`, and the line count
+   unchanged. A second schedule appended here is the failure this pass exists to catch.
+
+### Pass 11 — the refusals, which matter more than the happy path
+
+1. Upload a `.txt` renamed `.xls`. **Expected**: `BOQ_WORKBOOK_UNREADABLE`.
+2. Upload an `.xlsx` with one empty sheet. **Expected**: `BOQ_NO_SCHEDULE_ROWS`.
+3. **The one that matters**: confirm that no upload anywhere produces a `200` with `"lines": 0`.
+   That is the shape `exceljs` would have returned for the client's real file, and it reads as a
+   successful import of an empty project.
+
+### Pass 12 — unplanned is a state, not a blank
+
+1. `GET /projects/:id/boq/alerts` on the project just imported.
+2. **Expected**: all 312 lines in `unplanned`; `today`, `delayed` and `toBeDelayed` all empty.
+   A freshly imported tender is not behind schedule and is not on time.
+3. Plan one line (set start, finish, duration, per-day). **Expected**: it leaves `unplanned` and
+   joins exactly one of the other three.

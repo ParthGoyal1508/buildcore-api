@@ -184,3 +184,27 @@ interface ProjectPnlResponse {
   unavailableModules: string[];
 }
 ```
+
+## Amendment 2026-10-03 — BOQ programme fields become optional
+
+No new entity. Two existing ones are relaxed, and nothing is added.
+
+**`BOQTaskItem`** — `startDate`, `finishDate`, `duration`, `perDayQty` become nullable.
+**`BOQTaskGroup`** — `startDate`, `finishDate` become nullable.
+
+A line with no `startDate`/`finishDate` is **unplanned**. Unplanned is a reportable state of its
+own, not a synonym for on-time and not a synonym for delayed: the BOQ alerts return it as a fourth
+group rather than letting it fall into one of the three (FR-037). An imported tender is entirely
+unplanned on the day it arrives, so this is the ordinary state of a new project's schedule.
+
+`scopeQty`, `unit`, `taskName`, `boqNo` and `rate` are unchanged and stay required — they are what a
+schedule of quantities actually carries.
+
+**Transient, not persisted**: the import batch (`batchId` → parsed groups, lines, totals, located
+percentage) is held in memory with a TTL and consumed by `confirm`. It is deliberately not a table —
+research §16.
+
+**`Project.quotedPercentage`** is written by `confirm` only when the workbook's `Excess (+)` figure
+was actually located. Where it was not, the column keeps its existing value and the report says so.
+Writing 0 on a failed read is prohibited: 0 is a valid percentage, so the failure would be
+indistinguishable from a tender quoted at the schedule of rates exactly.

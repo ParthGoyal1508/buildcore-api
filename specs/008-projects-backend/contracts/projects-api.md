@@ -200,3 +200,69 @@ Every write to `Client`, `Project` (create/edit/lock/unlock), `Site`, `BOQTaskGr
 `actorUserId`, `action`, `before` (JSON), `after` (JSON), `timestamp`. Extends
 `shared.AuditLogEntry.entityType` with: `PROJECT`, `CLIENT`, `SITE`, `BOQ_GROUP`, `BOQ_ITEM`,
 `DWR`, `REVENUE`, `RA_BILL`, `WORK_ORDER`, `PROJECT_BUDGET`, `PROJECT_DOCUMENT`.
+
+## Amendment 2026-10-03 — BOQ entry and import
+
+`Permission.PROJECTS` on all; `ProjectLockGuard` on every write; `423 Locked` on a locked project.
+
+### Entry
+
+```
+POST   /projects/:id/boq/groups     { boqNo, name, scopeQty, startDate?, finishDate? }
+POST   /projects/:id/boq/items      { groupId, boqNo, taskName, unit, scopeQty, rate?,
+                                      startDate?, finishDate?, duration?, perDayQty? }
+GET    /projects/:id/boq            → groups with items; pendingQty, avgQtyPerDay,
+                                      daysToComplete computed; nulls where unplanned
+GET    /projects/:id/boq/alerts     → { today[], delayed[], toBeDelayed[], unplanned[] }
+DELETE /projects/:id/boq/items/:itemId   → 409 if referenced by a DWR task,
+                                           a client bill line or a work-order award line
+```
+
+The four programme fields are **optional** on both writes (FR-037). A reader distinguishes
+"unplanned" from "planned for today" by the null, never by a sentinel date.
+
+### Import, two steps (FR-046)
+
+```
+POST /projects/:id/boq/import/validate      multipart/form-data: file
+POST /projects/:id/boq/import/confirm       { batchId }
+```
+
+`validate` writes nothing and returns:
+
+```jsonc
+{
+  "batchId": "…",
+  "groups": 83,
+  "lines": 312,
+  "units": [{ "asTyped": "R. Mtr.", "normalised": "r mtr", "lines": 14 }],
+  "totals": {
+    "scheduleDerived": "29961506.78",      // computed as sum of quantity × rate
+    "scheduleStated":  "29961506.78",      // what the workbook says
+    "quotedDerived":   "30698559.85",
+    "quotedStated":    "30698559.85",
+    "reconciles": true
+  },
+  "quotedPercentage": "0.024600",           // or null, never 0 — FR-040
+  "quotedPercentageFound": true,
+  "errors":   [{ "row": 118, "column": "Quantity", "reason": "not a number: '—'" }],
+  "warnings": [{ "row": 7, "reason": "line appears before any heading; grouped under the sheet name" }],
+  "errorReportUrl": "…"                     // present only when errors exist
+}
+```
+
+Refusals, each naming its condition rather than reporting an empty success (FR-036):
+
+| Code | When |
+|---|---|
+| `BOQ_WORKBOOK_UNREADABLE` | the bytes are not a workbook either parser recognises |
+| `BOQ_WORKBOOK_EMPTY` | parsed, but no sheets — the shape `exceljs` silently returns for a `.xls` |
+| `BOQ_NO_SCHEDULE_ROWS` | sheets present, no candidate schedule rows found |
+| `BOQ_TOO_MANY_ROWS` | more than 1,000 **candidate schedule** rows — research §17 |
+| `BOQ_BATCH_NOT_FOUND` | unknown, expired, or already-confirmed `batchId` |
+
+A `200` carrying `"lines": 0` is not a valid response from `validate`.
+
+`confirm` commits in one transaction — groups on first reference, then items, then
+`Project.quotedPercentage` **only if** `quotedPercentageFound`. The batch is consumed as it commits,
+so a second confirm returns `BOQ_BATCH_NOT_FOUND` rather than appending the schedule again.
