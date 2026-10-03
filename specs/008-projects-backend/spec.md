@@ -201,16 +201,18 @@ calling `confirm` and confirming exactly those four rows are created — indepen
 **Acceptance Scenarios**:
 
 1. **Given** a project, **When** `POST /projects/:id/boq/groups` is called with BOQ No., Task
-   Group Name, Start Date, Finish Date, and Scope Qty, **Then** the group is created and linked to
-   the project.
+   Group Name and Scope Qty — Start Date and Finish Date **optional**, per the 2026-10-03 amendment
+   — **Then** the group is created and linked to the project.
 2. **Given** a BOQ group, **When** `POST /projects/:id/boq/items` is called with BOQ No., Task
-   Name, Unit, Scope Qty, Start Date, Finish Date, Duration, and Per Day Qty, **Then** the item is
-   created and its Pending Qty initialised to Scope Qty.
+   Name, Unit and Scope Qty — Start Date, Finish Date, Duration and Per Day Qty **optional**, per
+   the 2026-10-03 amendment — **Then** the item is created and its Pending Qty initialised to
+   Scope Qty.
 3. **Given** a BOQ item, **When** DWRs are submitted against it, **Then** `GET /projects/:id/boq`
    returns the item with updated Done Qty, Pending Qty, Avg Qty Per Day, and Days to Complete
    — computed from submitted DWR entries.
-4. **Given** an Excel file with the required BOQ columns (BOQ No., Task Group, Task Name, Unit,
-   Scope Qty, Start Date, Finish Date, Duration, Per Day Qty), **When** `POST
+4. **Given** a BOQ workbook in the client's tender-sheet shape — Item Description, Quantity, Units,
+   Basic Rate, the four blank pre-GST tax columns and Total Amount, with no Task Group column and no
+   programme dates, per the 2026-10-03 amendment — **When** `POST
    /projects/:id/boq/import/validate` is called, **Then** it returns a per-row validation report
    (valid rows + rows with missing/non-parseable required columns, each with row number, column
    name, and error reason) without writing anything, downloadable as CSV; **When** `POST
@@ -744,3 +746,111 @@ with the correct slippage in days.
   are unchanged after arbitrary planned-date edits.
 - **SC-A03**: No dependency cycle can be persisted, verified by a test attempting cycles within and
   across phases.
+
+---
+
+## Amendment 2026-10-03 — The BOQ import, against the client's actual tender sheet
+
+**Why this amendment exists, stated plainly: nothing in either repository writes a BOQ.**
+`BOQTaskGroup` and `BOQTaskItem` are read in four places and written in none — no endpoint, no
+screen, no importer, not a line in the seed data. Feature 018 built client billing, the project P&L,
+variation reporting and certification *on top of* those tables, so all of it is correct and
+currently unusable: the schedule it measures against cannot be put into the system by any route.
+User Story 4 was specified here in August, never built, and the billing that depends on it was.
+
+The second reason is that US4 was written before the client's file arrived. `docs/BOQ_794578.xls`
+was read on 2026-10-03 and contradicts what US4 assumed in four ways, each settled by the client
+the same day.
+
+### Clarifications
+
+#### Session 2026-10-03
+
+- Q: `exceljs` — the only spreadsheet library this project has pre-approved — reads the client's
+  `.xls` as **zero sheets with no error**. Require a `.xlsx` re-save, or add a parser? → A: **Add a
+  `.xls` parser.** Government portals will keep issuing the old format, and a Save As step is one
+  people forget. The silent-empty behaviour is the real danger and is refused explicitly either way:
+  an unreadable or sheetless workbook is a refusal naming the format, **never** a successful import
+  of 0 rows against a ₹3 crore tender.
+- Q: The BOQ tables require `startDate`, `finishDate`, `duration` and `perDayQty`, and a tender
+  schedule of quantities carries none of them. → A: **Make them optional and plan later.** Quantity,
+  unit and rate import now; dates and per-day targets are filled in on the BOQ screen when somebody
+  actually plans the work. The alternative — spreading the project's own dates across all 312 lines
+  to keep the columns populated — invents a programme, and the Delayed tab then reports fiction in
+  the shape of fact.
+- Q: The sheet has no Task Group column; its hierarchy is implied. How are headings told from items?
+  → A: **A row with a description and no quantity is a group heading**, and the rows beneath it are
+  its items until the next heading. The model holds exactly two levels, so deeper nesting folds the
+  intermediate heading text into the group name rather than dropping it.
+- Q: The file states two totals — `Total in Figures` ₹2,99,61,506.78 and `Quoted Rate in Figures`
+  ₹3,06,98,559.85 at `Excess (+) 0.0246`. Which rate goes on the line? → A: **The schedule's Basic
+  Rate**, with the `Excess (+)` figure read into `Project.quotedPercentage`, where 018's billing
+  already applies it per line and freezes it onto each bill. Importing the quoted rate *and*
+  carrying the percentage would inflate every bill by 2.46% twice.
+
+### Additional Functional Requirements
+
+- **FR-036**: The system MUST parse both `.xlsx` and legacy `.xls` BOQ workbooks. A workbook that
+  cannot be parsed, or that parses to zero sheets or zero candidate rows, MUST be refused with a
+  reason naming the condition. A successful response reporting zero imported rows is specifically
+  prohibited: it is indistinguishable from a working import of an empty project.
+- **FR-037**: `BOQTaskItem.startDate`, `finishDate`, `duration` and `perDayQty`, and
+  `BOQTaskGroup.startDate` and `finishDate`, MUST be optional. A line with no planned dates is
+  **unplanned**, and MUST be reported as unplanned by the BOQ alerts (Today / Delayed / To Be
+  Delayed) rather than counted as on-time or as delayed. This reverses US4's original requirement
+  that all nine fields be supplied on creation.
+- **FR-038**: On import, a row carrying a description and no quantity MUST be treated as a group
+  heading; subsequent rows MUST belong to that group until the next heading. Where the source nests
+  deeper than two levels, the intermediate heading text MUST be folded into the group name rather
+  than discarded. A quantity row appearing before any heading MUST be placed in a group named for
+  the sheet and flagged on the validation report — never silently dropped and never used to
+  invent a heading.
+- **FR-039**: On import, each item's rate MUST be taken from the schedule's **Basic Rate** column
+  (the pre-percentage figure the bidder enters), and the quoted percentage MUST be read from the
+  workbook's own `Excess (+)` figure into `Project.quotedPercentage`.
+- **FR-040**: Where the quoted percentage cannot be located with confidence, it MUST be left unset
+  and reported as not found. Importing it as zero is prohibited: zero is a valid percentage, so the
+  failure would be silent and would under-bill every line on the project by the true figure —
+  2.46% on the sample file, ₹7.37 lakh.
+- **FR-041**: Units MUST be stored as the string the source carried, and matched on a normalised
+  form. The sample file spells about 12 units 26 ways (`Cum`, `Cum.`, `Cum ` with a trailing space;
+  `Sqm`/`Sqm.`/`sqm`; `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr`; `Each`/`EACH`). A unit master would
+  reject the file outright, and discarding what the client typed would make a later disagreement
+  unarguable.
+- **FR-042**: The importer MUST read only the known schedule block. The sample file carries a
+  second BOQ block at columns 238–242 holding 216 rows shaped exactly like line items — the
+  artefacts of the e-tender template's other BOQ types (Item Rate, Discount, Negative, Turnkey,
+  which the workbook names in its own defined names). An importer scanning for populated columns
+  finds them and silently doubles the tender. Importing the sample MUST yield about 312 lines, not
+  about 528.
+- **FR-043**: The four pre-GST tax columns the template carries and the client leaves blank — Excise
+  Duty, VAT, DGS&D/RITES inspection charges, and Cenvat credit — MUST be tolerated on import and
+  MUST NOT be carried into the product. The template predates GST.
+- **FR-044**: Line and group totals MUST be computed as quantity × rate rather than read from the
+  file. The source carries accumulated float noise (`178.09326499999995`,
+  `29961506.782150004`), and the arithmetic is exactly reproducible, so recomputing is both
+  possible and more trustworthy than trusting the sheet.
+- **FR-045**: The validation report MUST state both the schedule total and the quoted total it
+  derived, and MUST compare them against the two figures the workbook itself states. An import that
+  reads the file correctly can prove it; one that cannot reconcile MUST say so before anything is
+  written.
+- **FR-046**: Import MUST remain the two-step validate-then-confirm flow FR-004 already requires,
+  and every rule in this amendment MUST apply at the **validate** step, so that a file which would
+  import wrongly is refused before any row exists.
+
+### Additional Success Criteria
+
+- **SC-A04**: A BOQ can be created from the portal by both routes — entered by hand, and imported
+  from the client's own tender file — verified by importing `docs/BOQ_794578.xls` end to end and
+  finding its lines available to a client bill.
+- **SC-A05**: Importing the sample file yields about 312 item lines, and the derived schedule and
+  quoted totals reconcile with the two figures the file states.
+- **SC-A06**: No import path can report success while having written nothing, and no import path can
+  set the quoted percentage to zero by inference.
+
+### Additional Assumptions
+
+- The client re-exports nothing: the file is taken as the portal issued it, macros, hidden blocks
+  and all.
+- Programme planning stays a separate act from quantity entry. This amendment makes dates optional;
+  it does not move them, rename them, or change how feature 009's schedule uses them.
