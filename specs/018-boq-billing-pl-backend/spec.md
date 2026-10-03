@@ -169,10 +169,30 @@ phased last for exactly that reason.
   mandatory would force a workflow on companies that do not have one; omitting it entirely would make
   FR-005 unimplementable for the companies that do.
 
-> **These are assumptions, not client answers.** They are recorded here so that a reviewer can see
-> exactly what was assumed and reject it cheaply. Phase ordering in `tasks.md` puts variations,
-> retention release and certification after the core billing spine, so overturning any of them costs
-> one phase rather than the feature.
+> ~~**These are assumptions, not client answers.**~~ **Confirmed by the client on 2026-10-03 — see
+> the session below.** All three were put back to them as questions, with the alternatives and what
+> each would cost, and all three came back as recorded. Left visible rather than rewritten, because
+> the reasoning that produced a correct guess is worth more than the guess, and the next unanswered
+> question will be handled the same way.
+
+### Session 2026-10-03
+
+The three assumptions above were put to the client individually, each with its alternatives and the
+cost of changing. **All three confirmed as assumed**, so Phases 6–8 build as specified and no part
+of Phases 1–5 is reworked.
+
+- Q: When you bill work that was not in the original BOQ, how should it be handled? → A: **A flagged
+  line in the same BOQ.** A separate variation schedule was offered and declined; so was not billing
+  variations through the BOQ at all.
+- Q: Retention held back from subcontractor bills — when is it released? → A: **By hand, when
+  somebody decides.** Half-at-completion-half-after-defects and a fixed number of days were both
+  offered and declined, as was holding no retention. The release schedule therefore stays a human
+  act, which is correct under every contract; automating it later needs no schema change.
+- Q: Do your clients certify a different amount from what you claimed, and should the system keep
+  both figures? → A: **Yes — keep both.** Overwriting the claim with the certified figure was
+  offered and declined, and so was having no certification step. The claimed quantity does not
+  shrink to match a short certification, which is what keeps a shortfall from disappearing and then
+  being billed twice or never.
 
 ### Session 2026-09-29
 
@@ -322,10 +342,10 @@ project with the labour figure reconciled to those sheets. Two narrow things wer
 
 ### Needing the client's decision
 
-- **Variations and extra items** — resolved 2026-09-16 as a flagged BOQ line (see Clarifications).
-  Recorded as an assumption awaiting the client's confirmation, not as a client answer.
-- **Retention** — resolved 2026-09-16 as a per-work-order percentage withheld per bill and released
-  manually (see Clarifications). The release *schedule* still needs the client's contracts; manual
-  release is correct under all of them.
-- **Client certification** — resolved 2026-09-16 as nullable fields on the client bill (see
-  Clarifications). A company that does not certify never fills them.
+- **Variations and extra items** — a flagged BOQ line. Assumed 2026-09-16, **confirmed by the
+  client 2026-10-03**.
+- **Retention** — a per-work-order percentage withheld per bill and released manually. Assumed
+  2026-09-16, **confirmed by the client 2026-10-03**: they were offered two automatic schedules and
+  chose the manual act.
+- **Client certification** — nullable fields on the client bill. Assumed 2026-09-16, **confirmed by
+  the client 2026-10-03**, including that the claimed figure must survive a short certification.

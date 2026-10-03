@@ -14,10 +14,10 @@ description: "Task list for 018 BOQ, Billing and Project P&L (backend)"
 
 ## Phase ordering, and why it must not be rearranged
 
-Phases 6–8 are the ones that rest on the **assumptions** recorded in the spec's Clarifications —
-variations, retention release, client certification. None was answered by the client. They are last
-so that overturning one costs a phase rather than the feature, and moving them earlier for
-convenience would throw that away.
+Phases 6–8 rested on the **assumptions** recorded in the spec's Clarifications — variations,
+retention release, client certification. **All three were confirmed by the client on 2026-10-03**,
+as assumed. They stayed last until then so that overturning one would have cost a phase rather than
+the feature; moving them earlier for convenience would have thrown that away.
 
 ---
 
@@ -216,13 +216,13 @@ T026-T028 commit. Recorded in that spec rather than quietly fixed: the check dif
 new file is invisible to it until the commit lands and *then* it fires. The habit that fixes it is
 running that one spec before committing anything under its six scanned paths.
 
-## Phase 6: Variations ⚠️ RESTS ON AN ASSUMPTION
+## Phase 6: Variations — **confirmed by the client 2026-10-03**
 
 - [ ] T035 Surface `isVariation` wherever quantities or values are reported (FR-015a)
 - [ ] T036 [P] Unit-test that original scope and variations are separable in every report
 - [ ] T037 e2e: a variation line bills and reconciles through the same path as original scope
 
-## Phase 7: Retention release ⚠️ RESTS ON AN ASSUMPTION
+## Phase 7: Retention release — **confirmed by the client 2026-10-03**
 
 - [ ] T038 Add `RetentionRelease` and `WorkOrder.retentionPercent`; RLS for the new table
 - [ ] T039 Implement release as an explicit recorded act, refusing more than was withheld —
@@ -230,7 +230,7 @@ running that one spec before committing anything under its six scanned paths.
 - [ ] T040 [P] Unit-test the outstanding balance across several bills and one partial release
 - [ ] T041 e2e: withhold across three bills, release part, confirm the balance
 
-## Phase 8: Client certification ⚠️ RESTS ON AN ASSUMPTION
+## Phase 8: Client certification — **confirmed by the client 2026-10-03**
 
 - [ ] T042 Implement `certify()` retaining **both** billed and certified amounts (FR-005)
 - [ ] T043 Ensure a shortfall does not silently vanish from cumulative billed quantity (spec edge case)
@@ -272,9 +272,15 @@ running that one spec before committing anything under its six scanned paths.
 **MVP = Phases 1–3.** Bills that reference the BOQ and price from it are the whole of Note 12's
 complaint; the P&L is what they make truthful.
 
-**Do not start Phase 6, 7 or 8 until the client has confirmed the three assumptions.** They are
-implementable today under what is recorded in the spec, and each is a phase's worth of rework if the
-answer differs — which is exactly why they are separable.
+~~**Do not start Phase 6, 7 or 8 until the client has confirmed the three assumptions.**~~
+
+**Cleared 2026-10-03.** All three were put to the client separately, each with its alternatives and
+what changing would cost, and all three came back exactly as assumed. Nothing in Phases 1–5 is
+reworked and these three build as specified.
+
+The separation earned its keep even though nothing changed: the questions could be asked precisely,
+one at a time, with a real cost attached to each option — which is only possible because the work
+had already been scoped and isolated.
 
 ## Phase 10: Amendment of 2026-09-29 — the monthly labour roll-up (FR-010a, FR-010b)
 
