@@ -1720,7 +1720,7 @@ model BOQTaskItem {
   /// Carried on the line rather than inferred from a date, because a variation agreed in week two and
   /// a scope item added by a late correction look identical by timestamp and are different facts to
   /// a client.
-  isVariation Boolean @default(false)
+  isVariation  Boolean @default(false)
   /// The variation order this line came in under, where there is one.
   variationRef String?
 
@@ -1893,11 +1893,11 @@ model RABill {
   /// difference, and a single `netPayable` cannot answer. Equally important for the P&L: retention is
   /// the company's money withheld and an advance recovery is money already paid, so **neither is a
   /// project cost** — a summary that treated net as spend would understate the project.
-  grossAmount        Decimal @default(0) @db.Decimal(18, 2)
-  retentionAmount    Decimal @default(0) @db.Decimal(18, 2)
-  advanceRecovery    Decimal @default(0) @db.Decimal(18, 2)
-  otherDeductions    Decimal @default(0) @db.Decimal(18, 2)
-  netPayable         Decimal @default(0) @db.Decimal(18, 2)
+  grossAmount     Decimal @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal @default(0) @db.Decimal(18, 2)
+  advanceRecovery Decimal @default(0) @db.Decimal(18, 2)
+  otherDeductions Decimal @default(0) @db.Decimal(18, 2)
+  netPayable      Decimal @default(0) @db.Decimal(18, 2)
 
   lines RABillLine[]
 
@@ -1935,8 +1935,9 @@ model WorkOrder {
   /// Retention withheld per RA bill, as a fraction. FR-008's first deduction.
   retentionPercent Decimal @default(0) @db.Decimal(8, 6)
 
-  awardLines WorkOrderBOQItem[]
-  raBills    RABill[]
+  awardLines        WorkOrderBOQItem[]
+  raBills           RABill[]
+  retentionReleases RetentionRelease[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1979,18 +1980,18 @@ model ClientBill {
   quotedPercentage Decimal @default(0) @db.Decimal(8, 6)
 
   /// Gross of the lines, after the quoted percentage. Stored because a submitted bill is a document.
-  grossAmount Decimal @default(0) @db.Decimal(18, 2)
+  grossAmount     Decimal @default(0) @db.Decimal(18, 2)
   /// Retention withheld by the client. **Not a project cost** — it is the client's money held back.
   retentionAmount Decimal @default(0) @db.Decimal(18, 2)
   /// Gross less retention and any other deduction. What the client is asked to pay.
-  netAmount Decimal @default(0) @db.Decimal(18, 2)
+  netAmount       Decimal @default(0) @db.Decimal(18, 2)
 
   /// What the client **certified**, which can be less than what was billed (FR-005).
   ///
   /// Null until certification. Kept **alongside** the billed figures and never instead of them: the
   /// variance between the two is the thing a project manager chases, and overwriting the billed
   /// amount with the certified one erases the fact that there was a shortfall.
-  certifiedAmount Decimal? @db.Decimal(18, 2)
+  certifiedAmount Decimal?  @db.Decimal(18, 2)
   certifiedAt     DateTime?
 
   status ClientBillStatus @default(draft)
@@ -2047,7 +2048,7 @@ model ClientBillLine {
   /// **A flag, not a refusal, at composition.** Over-measurement happens on real sites and is often
   /// correct; refusing it at entry means the measurement never gets recorded anywhere. The refusal is
   /// at *submit*, and only without a reason.
-  exceedsScope Boolean @default(false)
+  exceedsScope    Boolean @default(false)
   /// Why the over-measurement is justified. Required to submit a bill carrying one.
   overScopeReason String?
 
@@ -2066,6 +2067,44 @@ model ClientBillLine {
 /// BOQ rate is revenue and the subcontractor's awarded rate is cost, and the margin between them is
 /// the thing item 11's P&L exists to show. Holding one column and calling it "the rate" would make
 /// that margin unrepresentable.
+/// Retention paid back to a subcontractor (018 FR-016a, Phase 7).
+///
+/// **An explicit act, never a schedule.** Confirmed by the client on 2026-10-03, who were offered
+/// two automatic schedules — half at practical completion and half after defects, and a fixed
+/// number of days — and chose the manual release. The reasoning holds beyond their answer: terms
+/// vary by contract, and a schedule guessed wrong does not fail loudly. It quietly withholds money
+/// that was due or releases money that was not, and nobody notices until the subcontractor does.
+///
+/// Append-only, like every other ledger in this product. A release is money leaving, and correcting
+/// one by editing the row would leave no trace that it had been for a different amount yesterday.
+model RetentionRelease {
+  id        String @id @default(cuid())
+  companyId String
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  /// Always positive. The service refuses a release exceeding what is still held, so the balance
+  /// can never be driven negative by a release — only by a bill being deleted beneath it, which
+  /// `onDelete: Restrict` on the bill lines already prevents.
+  amount Decimal @db.Decimal(18, 2)
+
+  /// The day the money went back, which is not necessarily the day somebody recorded it.
+  releasedOn DateTime @db.Date
+
+  /// Why now. Required by the service rather than by the column: an optional reason on a path that
+  /// moves money is an empty field, and "which milestone was this against" is the first question
+  /// anybody asks six months later.
+  reason String?
+
+  releasedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, workOrderId])
+  @@schema("projects")
+}
+
 model WorkOrderBOQItem {
   id        String @id @default(cuid())
   companyId String
@@ -2352,7 +2391,7 @@ model Employee {
   /// Nullable, and the bank export **refuses** a row where it is unset rather than falling back to
   /// the employee's name. A silent fallback is worse than a refusal: the refusal happens while
   /// somebody can still fix it.
-  bankAccountHolderName      String?
+  bankAccountHolderName String?
 
   // ── Contact ───────────────────────────────────────────────────────────────
   mobile                   String?
@@ -3667,8 +3706,8 @@ model BankSheetRecovery {
   id        String @id @default(cuid())
   companyId String
 
-  payrollRunId   String
-  employeeId     String
+  payrollRunId    String
+  employeeId      String
   salaryAdvanceId String
 
   amount Decimal @db.Decimal(12, 2)

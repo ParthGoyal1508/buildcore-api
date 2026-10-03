@@ -27,6 +27,7 @@ import { resolveCompanyId } from '../../settings/company-scope';
 import { RaBillsService } from './ra-bills.service';
 import {
   ComposeRaBillDto,
+  ReleaseRetentionDto,
   ReviseRaBillDto,
   SetAwardDto,
 } from './dto/ra-bill.dto';
@@ -81,6 +82,53 @@ export class RaBillsController {
     return this.bills.awardFor(rlsContextFor(caller), workOrderId, {
       excludeBillId,
     });
+  }
+
+  /**
+   * **Also before `@Get(':id')`**, for the reason above: `retention` is a literal segment that the
+   * parameterised route would otherwise swallow.
+   */
+  @Get('retention/:workOrderId')
+  @ApiOperation({
+    summary:
+      'What a work order still holds back, and every release against it (FR-016a)',
+    description:
+      'Withheld, released and outstanding — all three, not just the balance. A subcontractor asking ' +
+      '"how much are you still holding" is really asking "and how did it get to that", and a single ' +
+      'figure sends somebody to add up bills by hand to answer the second half.\n\n' +
+      '**Withheld counts only bills that have left draft.** A draft is a working document and its ' +
+      'retention has been withheld from nobody.',
+  })
+  async retention(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('workOrderId') workOrderId: string,
+  ) {
+    return this.bills.retentionFor(rlsContextFor(caller), workOrderId);
+  }
+
+  @Post('retention/:workOrderId/release')
+  @ApiOperation({
+    summary: 'Record retention going back to the subcontractor (FR-016a)',
+    description:
+      '**An act somebody performs, never a schedule the system runs** — the client’s own answer of ' +
+      '2026-10-03, chosen over two automatic schedules they were offered. Contract terms vary, and a ' +
+      'schedule guessed wrong does not fail loudly: it quietly withholds money that was due or ' +
+      'releases money that was not, and nobody notices until the subcontractor does.\n\n' +
+      'Refuses `RETENTION_EXCEEDS_HELD` for more than the outstanding balance, and ' +
+      '`RETENTION_RELEASE_REASON_REQUIRED` for a release with nothing said about it. Append-only: ' +
+      'there is no edit, because the row *is* the evidence that money moved.',
+  })
+  async releaseRetention(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('workOrderId') workOrderId: string,
+    @Body() dto: ReleaseRetentionDto,
+  ) {
+    return this.bills.releaseRetention(
+      rlsContextFor(caller),
+      workOrderId,
+      dto,
+      caller.id,
+    );
   }
 
   @Post(':id/submit')

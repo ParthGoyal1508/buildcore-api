@@ -50,4 +50,15 @@ export const BILLING_ERRORS = {
    * re-measure against would be a fiction, so the refusal says to raise a new bill instead.
    */
   awardRequired: 'RA_BILL_HAS_NO_AWARD',
+  /**
+   * Releasing more retention than was ever withheld (FR-016a).
+   *
+   * The one refusal this whole ledger exists for. Retention released past the balance is money the
+   * company never held being paid out as though it had, and nothing downstream would catch it: the
+   * bills it was withheld from are already closed, and the subcontractor is not going to query a
+   * payment in their favour.
+   */
+  retentionExceedsHeld: 'RETENTION_EXCEEDS_HELD',
+  /** A release with no reason. "Which milestone was this against" is asked within the year. */
+  retentionReasonRequired: 'RETENTION_RELEASE_REASON_REQUIRED',
 } as const;

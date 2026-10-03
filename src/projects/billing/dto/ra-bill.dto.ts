@@ -173,3 +173,42 @@ export class ReviseRaBillDto {
   @Min(0)
   otherDeductions?: number;
 }
+
+/**
+ * Recording retention going back to a subcontractor (018 FR-016a, Phase 7).
+ *
+ * There is no update DTO and no id to update, deliberately. A release is money leaving, and
+ * correcting one by editing the row would leave no trace it had been for a different amount
+ * yesterday — on the one path where the row *is* the evidence.
+ */
+export class ReleaseRetentionDto {
+  @ApiProperty({
+    description:
+      'Positive, and never more than the work order still holds — the service refuses the ' +
+      'latter with `RETENTION_EXCEEDS_HELD` and the column refuses the former.',
+  })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount: number;
+
+  @ApiProperty({
+    description:
+      'The day the money went back, `YYYY-MM-DD`. Not the day somebody recorded it — a release ' +
+      'entered a fortnight late still belongs on the date it happened.',
+    example: '2026-10-01',
+  })
+  @IsDateString()
+  releasedOn: string;
+
+  @ApiProperty({
+    description:
+      'What this release is against. Required rather than encouraged: the first question asked ' +
+      'of a release six months later is which milestone it settled, and an optional field on a ' +
+      'path that moves money is an empty field.',
+  })
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason: string;
+}

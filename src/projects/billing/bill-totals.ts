@@ -165,3 +165,30 @@ export function billTotals(
 export function retentionOn(gross: number, fraction: number): number {
   return money(gross * fraction);
 }
+
+/**
+ * What a work order still holds back from its subcontractor (018 FR-016a).
+ *
+ * Pure, so the arithmetic that decides whether a release is allowed can be tested without a
+ * database — and so the figure a screen shows and the figure the refusal is computed against are
+ * produced by the same line of code rather than by two that agree today.
+ *
+ * **Withheld counts only bills that have left draft.** A draft is a working document whose
+ * retention has not been withheld from anybody yet; counting it would let somebody release money
+ * against a bill that may never be issued.
+ */
+export function retentionBalance(input: {
+  withheld: number;
+  released: number;
+}): { withheld: number; released: number; outstanding: number } {
+  const withheld = money(input.withheld);
+  const released = money(input.released);
+  return {
+    withheld,
+    released,
+    // Never clamped at zero. A negative balance should be impossible — the release path refuses to
+    // create one — so if it ever appears it is a defect worth seeing rather than hiding, and the
+    // one place it could come from is a bill edited after its retention was released against.
+    outstanding: money(withheld - released),
+  };
+}

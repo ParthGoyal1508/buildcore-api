@@ -1044,6 +1044,7 @@ schema-level note above.']
   retentionPercent Decimal [not null, default: 0, note: 'Retention withheld per RA bill, as a fraction. FR-008\'s first deduction.']
   awardLines WorkOrderBOQItem [not null]
   raBills RABill [not null]
+  retentionReleases RetentionRelease [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1129,6 +1130,39 @@ at *submit*, and only without a reason.']
   Note: 'One BOQ line as billed on one client bill.'
 }
 
+Table RetentionRelease {
+  id String [pk]
+  companyId String [not null]
+  workOrderId String [not null]
+  workOrder WorkOrder [not null]
+  amount Decimal [not null, note: 'Always positive. The service refuses a release exceeding what is still held, so the balance
+can never be driven negative by a release — only by a bill being deleted beneath it, which
+`onDelete: Restrict` on the bill lines already prevents.']
+  releasedOn DateTime [not null, note: 'The day the money went back, which is not necessarily the day somebody recorded it.']
+  reason String [note: 'Why now. Required by the service rather than by the column: an optional reason on a path that
+moves money is an empty field, and "which milestone was this against" is the first question
+anybody asks six months later.']
+  releasedByUserId String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A line of the **award** to a subcontractor — their rate, not the client\'s (018 US2).
+
+Separate from `BOQTaskItem` because the two are different numbers for the same work: the client\'s
+BOQ rate is revenue and the subcontractor\'s awarded rate is cost, and the margin between them is
+the thing item 11\'s P&L exists to show. Holding one column and calling it "the rate" would make
+that margin unrepresentable.
+Retention paid back to a subcontractor (018 FR-016a, Phase 7).
+
+**An explicit act, never a schedule.** Confirmed by the client on 2026-10-03, who were offered
+two automatic schedules — half at practical completion and half after defects, and a fixed
+number of days — and chose the manual release. The reasoning holds beyond their answer: terms
+vary by contract, and a schedule guessed wrong does not fail loudly. It quietly withholds money
+that was due or releases money that was not, and nobody notices until the subcontractor does.
+
+Append-only, like every other ledger in this product. A release is money leaving, and correcting
+one by editing the row would leave no trace that it had been for a different amount yesterday.'
+}
+
 Table WorkOrderBOQItem {
   id String [pk]
   companyId String [not null]
@@ -1145,13 +1179,6 @@ somebody invent one.']
   billLines RABillLine [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
-
-  Note: 'A line of the **award** to a subcontractor — their rate, not the client\'s (018 US2).
-
-Separate from `BOQTaskItem` because the two are different numbers for the same work: the client\'s
-BOQ rate is revenue and the subcontractor\'s awarded rate is cost, and the margin between them is
-the thing item 11\'s P&L exists to show. Holding one column and calling it "the rate" would make
-that margin unrepresentable.'
 }
 
 Table RABillLine {
@@ -5192,6 +5219,8 @@ Ref: ClientBill.projectId > Project.id [delete: Cascade]
 Ref: ClientBillLine.clientBillId > ClientBill.id [delete: Cascade]
 
 Ref: ClientBillLine.boqTaskItemId > BOQTaskItem.id [delete: Restrict]
+
+Ref: RetentionRelease.workOrderId > WorkOrder.id [delete: Cascade]
 
 Ref: WorkOrderBOQItem.workOrderId > WorkOrder.id [delete: Cascade]
 

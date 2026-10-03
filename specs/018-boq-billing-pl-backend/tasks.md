@@ -257,11 +257,51 @@ running that one spec before committing anything under its six scanned paths.
 
 ## Phase 7: Retention release — **confirmed by the client 2026-10-03**
 
-- [ ] T038 Add `RetentionRelease` and `WorkOrder.retentionPercent`; RLS for the new table
-- [ ] T039 Implement release as an explicit recorded act, refusing more than was withheld —
+- [X] T038 Add `RetentionRelease` and `WorkOrder.retentionPercent`; RLS for the new table
+
+      Done 2026-10-03. `WorkOrder.retentionPercent` already existed from the billing migration;
+      `RetentionRelease` is new, with its tenant policy carrying **`WITH CHECK` as well as `USING`**
+      — a policy with only `USING` filters reads and admits any write naming another tenant — and
+      `FORCE` so the owner is not exempt. A `CHECK (amount > 0)` catches the narrower case the
+      service cannot: a caller reaching the table some other way, now or in a script somebody writes
+      next year.
+
+      Nothing is backfilled and no existing figure moves. Retention has been withheld per bill since
+      the billing migration; what was missing was anywhere to record it going back, so every work
+      order starts with its whole withheld balance outstanding — which is the truth.
+
+- [X] T039 Implement release as an explicit recorded act, refusing more than was withheld —
       `RETENTION_EXCEEDS_HELD`
-- [ ] T040 [P] Unit-test the outstanding balance across several bills and one partial release
-- [ ] T041 e2e: withhold across three bills, release part, confirm the balance
+
+      Done. Two details worth the words:
+
+      **The balance is read inside the same transaction as the write.** Two releases submitted
+      together would otherwise each see the balance before the other and both pass — the classic
+      read-then-write race, and on this path it pays out money that was never held.
+
+      **A reason is required**, refused as `RETENTION_RELEASE_REASON_REQUIRED`. An optional field on
+      a path that moves money is an empty field, and the first question asked of a release six months
+      later is which milestone it settled.
+
+      Append-only: there is no edit and no id to edit. Correcting a release by rewriting its row
+      would leave no trace it had been for a different amount yesterday, on the one path where the
+      row *is* the evidence that money moved.
+
+- [X] T040 [P] Unit-test the outstanding balance across several bills and one partial release
+
+      Done — `src/projects/billing/retention-release.spec.ts`, 13 tests. The one that earns the
+      phase is the refusal: with the client having chosen a manual release over any schedule, there
+      is no bound on this path except that check, and retention paid past the balance is money the
+      company never held going out as though it had — uncatchable downstream, because the bills it
+      was withheld from are closed and no subcontractor queries a payment in their favour.
+
+      A test of my own was wrong and the code was right: each part is rounded *then* subtracted
+      (1000.56 less 100.11 = 900.45, not 900.444 rounded). Pinned deliberately — a reader checks the
+      balance by subtracting the two figures printed in front of them, and being right in the fourth
+      decimal is worth less than agreeing with the person holding the screen.
+
+- [ ] T041 **NOT RUN (needs a seeded work order and three issued bills)** e2e: withhold across three
+      bills, release part, confirm the balance.
 
 ## Phase 8: Client certification — **confirmed by the client 2026-10-03**
 

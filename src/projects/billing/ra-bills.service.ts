@@ -18,7 +18,12 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
-import { billTotals, lineTotals, retentionOn } from './bill-totals';
+import {
+  billTotals,
+  lineTotals,
+  retentionBalance,
+  retentionOn,
+} from './bill-totals';
 
 /** One award line as the work order captures it. */
 export interface AwardLineInput {
@@ -73,6 +78,38 @@ export interface RaBillLineView {
   remainingQty: number;
   rate: number;
   amount: number;
+}
+
+/** One retention release, as a reader sees it. */
+export interface RetentionReleaseView {
+  id: string;
+  amount: number;
+  releasedOn: Date;
+  reason: string | null;
+  releasedByUserId: string | null;
+}
+
+/**
+ * A work order's retention position (FR-016a).
+ *
+ * All three figures, not just the balance. A subcontractor asking "how much are you still holding"
+ * is really asking "and how did it get to that", and a single outstanding figure sends somebody to
+ * add up bills by hand to answer the second half.
+ */
+export interface RetentionLedger {
+  workOrderId: string;
+  retentionPercent: number;
+  withheld: number;
+  released: number;
+  outstanding: number;
+  releases: RetentionReleaseView[];
+}
+
+export interface ReleaseRetentionInput {
+  amount: number;
+  /** `YYYY-MM-DD`. The day the money went back, not the day somebody recorded it. */
+  releasedOn: string;
+  reason: string;
 }
 
 export interface RaBillView {
@@ -315,6 +352,148 @@ export class RaBillsService {
         }),
       };
     });
+  }
+
+  /**
+   * What a work order still holds back, and every release against it (018 FR-016a).
+   *
+   * **Withheld counts only bills that have left draft.** A draft is a working document and its
+   * retention has been withheld from nobody; counting it would let somebody release money against a
+   * bill that may never be issued.
+   */
+  async retentionFor(
+    ctx: RlsContext,
+    workOrderId: string,
+  ): Promise<RetentionLedger> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const workOrder = await tx.workOrder.findFirst({
+        where: { id: workOrderId },
+        select: { id: true, retentionPercent: true },
+      });
+      if (!workOrder) throw new NotFoundException('Work order not found');
+
+      const [withheld, releases] = await Promise.all([
+        tx.rABill.aggregate({
+          where: { workOrderId, status: { not: RaBillStatus.draft } },
+          _sum: { retentionAmount: true },
+        }),
+        tx.retentionRelease.findMany({
+          where: { workOrderId },
+          orderBy: { releasedOn: 'desc' },
+        }),
+      ]);
+
+      const balance = retentionBalance({
+        withheld: withheld._sum.retentionAmount?.toNumber() ?? 0,
+        released: releases.reduce(
+          (sum, release) => sum + release.amount.toNumber(),
+          0,
+        ),
+      });
+
+      return {
+        workOrderId,
+        retentionPercent: workOrder.retentionPercent.toNumber(),
+        ...balance,
+        releases: releases.map((release) => ({
+          id: release.id,
+          amount: release.amount.toNumber(),
+          releasedOn: release.releasedOn,
+          reason: release.reason,
+          releasedByUserId: release.releasedByUserId,
+        })),
+      };
+    });
+  }
+
+  /**
+   * Records retention going back to the subcontractor (FR-016a, Phase 7).
+   *
+   * **An act somebody performs, never a schedule the system runs.** Confirmed by the client on
+   * 2026-10-03, who were offered two automatic schedules and chose this. The reasoning survives
+   * their answer: contract terms vary, and a schedule guessed wrong does not fail loudly — it
+   * quietly withholds money that was due or releases money that was not, and nobody notices until
+   * the subcontractor does.
+   *
+   * Append-only. Correcting a release by editing its row would leave no trace that it had been for
+   * a different amount yesterday, on a path where the row *is* the evidence that money moved.
+   */
+  async releaseRetention(
+    ctx: RlsContext,
+    workOrderId: string,
+    input: ReleaseRetentionInput,
+    releasedByUserId: string,
+  ): Promise<RetentionLedger> {
+    if (!input.reason?.trim()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.retentionReasonRequired,
+        message:
+          'Say what this release is against. Six months from now the first question asked of ' +
+          'it will be which milestone it settled.',
+      });
+    }
+
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const workOrder = await tx.workOrder.findFirst({
+        where: { id: workOrderId },
+        select: { id: true, companyId: true },
+      });
+      if (!workOrder) throw new NotFoundException('Work order not found');
+
+      // Read inside the same transaction as the write. Two releases submitted together would
+      // otherwise each see the balance before the other and both pass — the classic read-then-write
+      // race, and on this path it pays out money that was never held.
+      const [withheld, released] = await Promise.all([
+        tx.rABill.aggregate({
+          where: { workOrderId, status: { not: RaBillStatus.draft } },
+          _sum: { retentionAmount: true },
+        }),
+        tx.retentionRelease.aggregate({
+          where: { workOrderId },
+          _sum: { amount: true },
+        }),
+      ]);
+
+      const balance = retentionBalance({
+        withheld: withheld._sum.retentionAmount?.toNumber() ?? 0,
+        released: released._sum.amount?.toNumber() ?? 0,
+      });
+
+      if (input.amount <= 0) {
+        throw new BadRequestException(
+          'A retention release must be a positive amount.',
+        );
+      }
+
+      if (input.amount > balance.outstanding) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: BILLING_ERRORS.retentionExceedsHeld,
+          message:
+            `This work order holds ${balance.outstanding.toFixed(
+              2,
+            )} in retention, and ` +
+            `${input.amount.toFixed(
+              2,
+            )} is being released. Releasing more than was withheld pays ` +
+            `out money the company never held.`,
+        });
+      }
+
+      await tx.retentionRelease.create({
+        data: {
+          companyId: workOrder.companyId,
+          workOrderId,
+          amount: input.amount,
+          releasedOn: new Date(input.releasedOn),
+          reason: input.reason.trim(),
+          releasedByUserId,
+        },
+      });
+    });
+
+    return this.retentionFor(ctx, workOrderId);
   }
 
   /**
