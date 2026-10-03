@@ -218,9 +218,42 @@ running that one spec before committing anything under its six scanned paths.
 
 ## Phase 6: Variations — **confirmed by the client 2026-10-03**
 
-- [ ] T035 Surface `isVariation` wherever quantities or values are reported (FR-015a)
-- [ ] T036 [P] Unit-test that original scope and variations are separable in every report
-- [ ] T037 e2e: a variation line bills and reconciles through the same path as original scope
+- [X] T035 Surface `isVariation` wherever quantities or values are reported (FR-015a)
+
+      Done 2026-10-03. The flag was already on `BOQTaskItem` and already surfaced on the billable
+      BOQ and on bill lines; what was missing was every place a **value** is reported.
+
+      - **The P&L** gains `revenueFromVariations` monthly and cumulative, summed from the bills' own
+        lines rather than apportioned from their totals — on a client bill the quoted percentage is
+        applied per line, so the line amounts add to `grossAmount` exactly and this *partitions* the
+        figure rather than estimating a share of it.
+      - **The position export** carries two indented rows under revenue, "of which original scope"
+        and "of which variations". Indented and not beside it, because a document whose two revenue
+        rows could be read as additive is one somebody double-counts from.
+      - **The drill-down** says how much of each bill was variation work, alongside the certification
+        shortfall already there. A bill is usually part original scope and part variation, so the
+        fact cannot live on the row — it is the sum of the bill's variation lines.
+
+      Reported as a **part of** revenue throughout, never as a second total. The two must always add
+      up, and a reader who has to add them is a reader who will one day add them wrong.
+
+- [X] T036 [P] Unit-test that original scope and variations are separable in every report
+
+      Done — `src/projects/pnl/variation-reporting.spec.ts`, 8 tests against the pure functions each
+      report composes, so none of it needs a database. The ones that earn their place: the two parts
+      add back to the whole (they come from different code paths — a subtraction in the export, a sum
+      over lines in the service); a project with no variations still shows both rows, so "no
+      variations" is distinguishable from "this document does not report variations"; and the split
+      goes to `Hidden` with revenue rather than subtracting against a hidden total, which would
+      publish the whole of revenue as original scope — a plausible falsehood rather than an
+      obviously missing cell.
+
+- [ ] T037 **NOT RUN (needs a seeded project with a variation line)** e2e: a variation line bills and
+      reconciles through the same path as original scope.
+
+      Covered in part by construction: a variation **is** an ordinary `BOQTaskItem`, so it uses the
+      same pricing, the same cumulative-quantity aggregate and the same over-scope check. That is an
+      argument from the data model rather than an observation, which is why this stays open.
 
 ## Phase 7: Retention release — **confirmed by the client 2026-10-03**
 

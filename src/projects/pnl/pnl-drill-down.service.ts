@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { ClientBillStatus, RaBillStatus } from '@prisma/client';
+import { ClientBillStatus, Prisma, RaBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
@@ -73,6 +73,51 @@ export interface PnlDrillDown {
  * Client bills and RA bills live in the `projects` schema, so this is not a cross-module read
  * (Principle I). Every other category arrives through the registry.
  */
+/**
+ * What a client bill's row says beyond its number and amount (FR-005, FR-015a).
+ *
+ * Two facts, each of which a reader would otherwise have to go and find: that the client certified
+ * less than was claimed, and how much of the bill was variation work rather than original scope.
+ * Both are composed into the one free-text field a cost record carries, in that order — a
+ * certification shortfall is money in dispute, a variation share is context.
+ *
+ * Exported and pure so the composition can be tested without a database, which is the only way the
+ * "both at once" case gets exercised: it is rare in the wild and exactly the one a format mistake
+ * would mangle.
+ */
+export function billNote(bill: {
+  description: string | null;
+  grossAmount: Prisma.Decimal;
+  certifiedAmount: Prisma.Decimal | null;
+  lines: { amount: Prisma.Decimal; boqTaskItem: { isVariation: boolean } }[];
+}): string | null {
+  const parts: string[] = [];
+  if (bill.description) parts.push(bill.description);
+
+  if (
+    bill.certifiedAmount !== null &&
+    !bill.certifiedAmount.equals(bill.grossAmount)
+  ) {
+    parts.push(
+      `Certified ${bill.certifiedAmount
+        .toNumber()
+        .toFixed(2)} of ${bill.grossAmount.toNumber().toFixed(2)}`,
+    );
+  }
+
+  const variation = bill.lines
+    .filter((line) => line.boqTaskItem.isVariation)
+    .reduce((sum, line) => sum + line.amount.toNumber(), 0);
+  // Said only when there is some. A bill of entirely original scope is the ordinary case, and a
+  // note reading "0.00 of this is variation work" on every row is noise that teaches people to stop
+  // reading the column.
+  if (variation > 0) {
+    parts.push(`Includes ${variation.toFixed(2)} of variation work`);
+  }
+
+  return parts.length > 0 ? parts.join('. ') : null;
+}
+
 @Injectable()
 export class PnlDrillDownService {
   private readonly logger = new Logger(PnlDrillDownService.name);
@@ -201,6 +246,15 @@ export class PnlDrillDownService {
           status: true,
           description: true,
           certifiedAmount: true,
+          // FR-015a. A bill is not variation work or original scope — it is usually both, so the
+          // flag cannot live on the row. What a reader needs is how much of *this* bill was added
+          // scope, which is the sum of its variation lines.
+          lines: {
+            select: {
+              amount: true,
+              boqTaskItem: { select: { isVariation: true } },
+            },
+          },
         },
         orderBy: { billingDate: 'asc' },
       }),
@@ -213,15 +267,9 @@ export class PnlDrillDownService {
       status: bill.status,
       // The certified shortfall is said here rather than left for somebody to find by comparing two
       // screens: it is the figure a project manager chases, and the whole reason FR-005 keeps both.
-      description:
-        bill.certifiedAmount !== null &&
-        !bill.certifiedAmount.equals(bill.grossAmount)
-          ? `${
-              bill.description ? `${bill.description}. ` : ''
-            }Certified ${bill.certifiedAmount
-              .toNumber()
-              .toFixed(2)} of ${bill.grossAmount.toNumber().toFixed(2)}`
-          : bill.description,
+      // The variation share rides alongside it for the same reason — a reader opening the revenue
+      // figure to see what it is made of should not have to open each bill to find that out.
+      description: billNote(bill),
     }));
   }
 

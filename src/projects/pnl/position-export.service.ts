@@ -11,6 +11,7 @@ import {
   renderReportPdf,
 } from '../../dashboard/reports/export/export-renderer';
 import type { ReportData } from '../../dashboard/reports/report.types';
+import { money } from '../billing/bill-totals';
 import { ProjectPnlService } from './project-pnl.service';
 
 /** The two formats the repository's renderer already produces. */
@@ -50,6 +51,9 @@ export interface PositionExportInput {
   costCumulative: number | null;
   marginCumulative: number | null;
   unavailableCategories: string[];
+  /** The variation share of the revenue above (FR-015a). Nullable for the same reason revenue is. */
+  revenueFromVariationsMonthly: number | null;
+  revenueFromVariationsCumulative: number | null;
 }
 
 export const POSITION_EXPORT_COLUMNS = [
@@ -189,6 +193,27 @@ export function positionReport(
       monthly: cell(view.revenueMonthly),
       cumulative: cell(view.revenueCumulative),
     },
+    // FR-015a. Indented under revenue, not added beside it: these are *parts* of the figure above,
+    // and a document whose two revenue rows could be read as additive is a document somebody
+    // double-counts from. The split is what tells a reader whether a project at 110% of contract
+    // value is doing well on approved variations or is simply over-measuring its original scope.
+    {
+      line: '  of which original scope',
+      monthly: cell(
+        originalScope(view.revenueMonthly, view.revenueFromVariationsMonthly),
+      ),
+      cumulative: cell(
+        originalScope(
+          view.revenueCumulative,
+          view.revenueFromVariationsCumulative,
+        ),
+      ),
+    },
+    {
+      line: '  of which variations',
+      monthly: cell(view.revenueFromVariationsMonthly),
+      cumulative: cell(view.revenueFromVariationsCumulative),
+    },
     { line: '' },
   ];
 
@@ -230,6 +255,21 @@ export function positionReport(
   }
 
   return { columns: POSITION_EXPORT_COLUMNS, rows };
+}
+
+/**
+ * Revenue less its variation share, or null where either half is hidden (FR-015a).
+ *
+ * Null rather than a subtraction against a missing figure. Treating a hidden variation total as
+ * zero would publish the whole of revenue as original scope, which is a specific and plausible
+ * falsehood — not an obviously missing cell.
+ */
+export function originalScope(
+  revenue: number | null,
+  variations: number | null,
+): number | null {
+  if (revenue === null || variations === null) return null;
+  return money(revenue - variations);
 }
 
 /**

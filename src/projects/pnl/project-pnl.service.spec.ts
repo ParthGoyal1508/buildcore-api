@@ -17,6 +17,8 @@ function build(opts: {
     billingDate: string;
     grossAmount: number;
     overScope?: boolean;
+    /** How much of `grossAmount` is variation work (FR-015a). The rest is original scope. */
+    variationAmount?: number;
   }[];
   raBills?: {
     projectId: string;
@@ -39,7 +41,21 @@ function build(opts: {
           projectId: bill.projectId,
           billingDate: new Date(bill.billingDate),
           grossAmount: dec(bill.grossAmount),
-          lines: [{ exceedsScope: bill.overScope ?? false }],
+          // Mirrors the service's own `select`: a bill line carries its amount and whether the BOQ
+          // line behind it is a variation (FR-015a). Two lines so a bill can be part original scope
+          // and part variation, which is the case the split exists for.
+          lines: [
+            {
+              exceedsScope: bill.overScope ?? false,
+              amount: dec(bill.grossAmount - (bill.variationAmount ?? 0)),
+              boqTaskItem: { isVariation: false },
+            },
+            {
+              exceedsScope: false,
+              amount: dec(bill.variationAmount ?? 0),
+              boqTaskItem: { isVariation: true },
+            },
+          ],
         })),
     },
     rABill: {

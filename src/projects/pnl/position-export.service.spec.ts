@@ -28,6 +28,9 @@ const view: PositionExportInput = {
   revenueMonthly: 1250000.5,
   revenueCumulative: 8400000.75,
   revenueNote: 'Billed gross, before retention, on bills that have left draft.',
+  // FR-015a: part of the revenue above, never an addition to it.
+  revenueFromVariationsMonthly: 150000.5,
+  revenueFromVariationsCumulative: 400000.75,
   categories: [
     {
       category: 'labour',

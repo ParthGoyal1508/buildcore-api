@@ -22,6 +22,8 @@ function build(opts: {
     status?: string;
     description?: string | null;
     certifiedAmount?: number | null;
+    /** How much of `grossAmount` is variation work (FR-015a). */
+    variationAmount?: number;
   }[];
   raBills?: {
     id: string;
@@ -59,6 +61,18 @@ function build(opts: {
             bill.certifiedAmount === undefined || bill.certifiedAmount === null
               ? null
               : dec(bill.certifiedAmount),
+          // Mirrors the service's `select`: a bill is usually part original scope and part
+          // variation, so the flag is on the line and not on the bill.
+          lines: [
+            {
+              amount: dec(bill.grossAmount - (bill.variationAmount ?? 0)),
+              boqTaskItem: { isVariation: false },
+            },
+            {
+              amount: dec(bill.variationAmount ?? 0),
+              boqTaskItem: { isVariation: true },
+            },
+          ],
         })),
     },
     rABill: {

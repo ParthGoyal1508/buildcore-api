@@ -65,6 +65,19 @@ export interface ProjectPnl {
   unavailableCategories: string[];
   /** True when any client bill in the period measured past its BOQ scope. */
   revenueIncludesOverScope: boolean;
+  /**
+   * How much of the revenue above is variation work rather than original BOQ scope (FR-015a).
+   *
+   * **A part of `revenue`, not an addition to it.** Original scope is `revenueCumulative` less this.
+   * Reported as a part rather than as two separate totals because the two must always add up, and a
+   * reader who has to add them is a reader who will one day add them wrong.
+   *
+   * The distinction is the one a director actually asks about: a project at 110% of its contract
+   * value is doing well if the extra 10% is approved variations, and is in trouble if it is not —
+   * and a single revenue figure cannot tell them which.
+   */
+  revenueFromVariationsMonthly: number;
+  revenueFromVariationsCumulative: number;
 }
 
 /**
@@ -236,6 +249,10 @@ export class ProjectPnlService {
         marginCumulative: money(revenueCumulative - costCumulative),
         unavailableCategories: [...unavailable],
         revenueIncludesOverScope: revenue.overScope.get(project.id) ?? false,
+        revenueFromVariationsMonthly:
+          revenue.variationMonthly.get(project.id) ?? 0,
+        revenueFromVariationsCumulative:
+          revenue.variationCumulative.get(project.id) ?? 0,
       });
     }
     return out;
@@ -276,6 +293,8 @@ export class ProjectPnlService {
     monthly: Map<string, number>;
     cumulative: Map<string, number>;
     overScope: Map<string, boolean>;
+    variationMonthly: Map<string, number>;
+    variationCumulative: Map<string, number>;
   }> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const bills = await tx.clientBill.findMany({
@@ -288,23 +307,50 @@ export class ProjectPnlService {
           projectId: true,
           billingDate: true,
           grossAmount: true,
-          lines: { select: { exceedsScope: true } },
+          lines: {
+            select: {
+              exceedsScope: true,
+              amount: true,
+              // FR-015a. The flag lives on the BOQ line, which is the whole point of the client's
+              // 2026-10-03 answer: a variation is an ordinary line carrying a mark, so it prices and
+              // bills through machinery that already exists and every report can still separate it.
+              boqTaskItem: { select: { isVariation: true } },
+            },
+          },
         },
       });
 
       const monthly = new Map<string, number>();
       const cumulative = new Map<string, number>();
       const overScope = new Map<string, boolean>();
+      const variationMonthly = new Map<string, number>();
+      const variationCumulative = new Map<string, number>();
       for (const bill of bills) {
         const amount = bill.grossAmount.toNumber();
+        // Summed from the bill's own lines rather than apportioned from its total. On a client bill
+        // the quoted percentage is applied per line, so the line amounts add up to `grossAmount`
+        // exactly and this partitions it rather than estimating a share of it.
+        const variation = money(
+          bill.lines
+            .filter((line) => line.boqTaskItem.isVariation)
+            .reduce((sum, line) => sum + line.amount.toNumber(), 0),
+        );
         cumulative.set(
           bill.projectId,
           (cumulative.get(bill.projectId) ?? 0) + amount,
+        );
+        variationCumulative.set(
+          bill.projectId,
+          (variationCumulative.get(bill.projectId) ?? 0) + variation,
         );
         if (bill.billingDate >= monthStart) {
           monthly.set(
             bill.projectId,
             (monthly.get(bill.projectId) ?? 0) + amount,
+          );
+          variationMonthly.set(
+            bill.projectId,
+            (variationMonthly.get(bill.projectId) ?? 0) + variation,
           );
         }
         // Carried up to the summary because **a total over a bill containing an over-quantity line is
@@ -314,7 +360,13 @@ export class ProjectPnlService {
           overScope.set(bill.projectId, true);
         }
       }
-      return { monthly, cumulative, overScope };
+      return {
+        monthly,
+        cumulative,
+        overScope,
+        variationMonthly,
+        variationCumulative,
+      };
     });
   }
 
