@@ -16,6 +16,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { companyScope } from '../../settings/company-scope';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { computeFuelShortfall } from '../fuel/fuel.service';
 import { PlantRefsService } from '../plant-refs.service';
 import { ReviewFuelExceptionDto } from './dto/fuel-exception.dto';
 
@@ -118,16 +119,84 @@ export class FuelExceptionsService {
       ...new Set(rows.map((row) => row.fuelEntry.equipment.categoryId)),
     ]);
 
-    return rows.map((row) => ({
-      ...row,
-      // FR-001 wants the actual, the benchmark and the gap between them on one line. The entry's
-      // `variancePercent` is the figure computed at save time and the benchmark is read now, which
-      // is worth seeing together: a benchmark edited since explains why a reading that looks fine
-      // today was flagged then.
-      benchmark:
+    // FR-001 asks for the shortfall in litres and rupees, and neither can be derived from anything
+    // on the fuel entry: the excess is measured against what the benchmark allowed for the hours
+    // actually run, and the hours live in the logbook. Read here, in one query for the page, so the
+    // interface is not left to compute it from `variancePercent` — which is rounded to two decimals
+    // at save time, and would give a figure the readings behind it cannot reproduce.
+    const readings = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.logbookEntry.findMany({
+          where: {
+            OR: rows.map((row) => ({
+              equipmentId: row.fuelEntry.equipmentId,
+              date: row.fuelEntry.date,
+            })),
+          },
+          select: {
+            equipmentId: true,
+            date: true,
+            fuelConsumed: true,
+            totalHours: true,
+          },
+        }),
+    );
+    const readingKey = (equipmentId: string, date: Date) =>
+      `${equipmentId}|${date.toISOString().slice(0, 10)}`;
+    const readingBy = new Map(
+      readings.map((reading) => [
+        readingKey(reading.equipmentId, reading.date),
+        reading,
+      ]),
+    );
+
+    return rows.map((row) => {
+      const benchmark =
         categories.get(row.fuelEntry.equipment.categoryId)?.fuelBenchmark ??
-        null,
-    }));
+        null;
+      const reading = readingBy.get(
+        readingKey(row.fuelEntry.equipmentId, row.fuelEntry.date),
+      );
+      const fuelConsumed =
+        reading?.fuelConsumed === null || reading?.fuelConsumed === undefined
+          ? null
+          : Number(reading.fuelConsumed);
+      const totalHours =
+        reading?.totalHours === null || reading?.totalHours === undefined
+          ? null
+          : Number(reading.totalHours);
+
+      return {
+        ...row,
+        // FR-001 wants the actual, the benchmark and the gap between them on one line. The entry's
+        // `variancePercent` is the figure computed at save time and the benchmark is read now, which
+        // is worth seeing together: a benchmark edited since explains why a reading that looks fine
+        // today was flagged then.
+        benchmark,
+        /**
+         * Litres per meter unit actually burned, against the benchmark above.
+         *
+         * Null where the logbook has no reading for that day — which is a real state, not a
+         * failure: the fuel was issued and the machine's hours were never entered. A screen showing
+         * zero there would read as a machine that ran for no hours and still burned fuel.
+         */
+        actualPerHour:
+          fuelConsumed !== null && totalHours !== null && totalHours > 0
+            ? Math.round((fuelConsumed / totalHours) * 1000) / 1000
+            : null,
+        // The same function the recovery uses, so the figure a reviewer reads before deciding is
+        // the figure that reaches the hire bill or the payslip. Two implementations of this would
+        // disagree in the fourth decimal and be argued about in rupees.
+        ...computeFuelShortfall({
+          fuelConsumed,
+          totalHours,
+          benchmark,
+          rate: Number(row.fuelEntry.rate),
+        }),
+      };
+    });
   }
 
   /**

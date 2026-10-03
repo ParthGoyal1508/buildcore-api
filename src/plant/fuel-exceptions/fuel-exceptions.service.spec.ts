@@ -209,3 +209,117 @@ describe('FuelExceptionsService', () => {
     ).rejects.toThrow(BadRequestException);
   });
 });
+
+/**
+ * The figures FR-001 asks a reviewer to decide on (added 2026-10-03, web Phase 6 T039).
+ *
+ * The list used to carry the benchmark and the saved `variancePercent` and nothing else, which left
+ * the interface to derive a rupee figure from a percentage rounded to two decimals at save time —
+ * a figure the readings behind it cannot reproduce, and one that would then disagree with what the
+ * recovery actually deducts.
+ */
+describe('FuelExceptionsService.list — the shortfall a reviewer decides on', () => {
+  const caller = callerFor('co-1');
+
+  const listWith = (
+    reading: { fuelConsumed: number; totalHours: number } | null,
+    benchmark: number | null = 2,
+  ) => {
+    const prisma = createPrismaMock({
+      fuelVarianceException: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'exc-1',
+            companyId: 'co-1',
+            status: FuelExceptionStatus.open,
+            fuelEntry: {
+              equipmentId: 'eq-1',
+              date: new Date('2026-09-20'),
+              rate: 95,
+              equipment: {
+                id: 'eq-1',
+                code: 'EX-01',
+                name: 'Excavator',
+                ownership: 'hired',
+                categoryId: 'cat-1',
+              },
+            },
+          },
+        ]),
+      },
+      logbookEntry: {
+        findMany: jest.fn().mockResolvedValue(
+          reading === null
+            ? []
+            : [
+                {
+                  equipmentId: 'eq-1',
+                  date: new Date('2026-09-20'),
+                  ...reading,
+                },
+              ],
+        ),
+      },
+    });
+    const refs = {
+      categoriesByIds: jest
+        .fn()
+        .mockResolvedValue(new Map([['cat-1', { fuelBenchmark: benchmark }]])),
+    };
+    const service = new FuelExceptionsService(
+      prisma as never,
+      { record: jest.fn() } as never,
+      refs as never,
+    );
+    return service.list(caller);
+  };
+
+  it('reports the actual rate, the benchmark, and the excess in litres and rupees', async () => {
+    // 4 hours at a 2 l/hr benchmark allows 8 litres; 11 were burned.
+    const [row] = await listWith({ fuelConsumed: 11, totalHours: 4 });
+
+    expect(row.benchmark).toBe(2);
+    expect(row.actualPerHour).toBe(2.75);
+    expect(row.shortfallQuantity).toBe(3);
+    // Three litres at the entry's own rate of 95, not at today's.
+    expect(row.shortfallAmount).toBe(285);
+  });
+
+  /**
+   * The excess is measured against what the benchmark allowed for the hours run — not against the
+   * whole tank. A machine allowed 8 litres and burning 11 is three litres at fault, not eleven.
+   */
+  it('does not treat the whole quantity as the excess', async () => {
+    const [row] = await listWith({ fuelConsumed: 11, totalHours: 4 });
+    expect(row.shortfallQuantity).not.toBe(11);
+  });
+
+  /**
+   * A fuel issue with no logbook reading for that day is a real state, not a failure: the diesel
+   * was issued and nobody entered the machine's hours. Null rather than zero — zero reads as a
+   * machine that ran no hours and still burned fuel, which is an accusation.
+   */
+  it('reports no actual rate where the logbook has no reading for that day', async () => {
+    const [row] = await listWith(null);
+    expect(row.actualPerHour).toBe(null);
+    expect(row.shortfallQuantity).toBe(0);
+    expect(row.shortfallAmount).toBe(0);
+  });
+
+  it('reports nothing to recover where the category has no benchmark', async () => {
+    const [row] = await listWith({ fuelConsumed: 11, totalHours: 4 }, null);
+    expect(row.benchmark).toBe(null);
+    expect(row.shortfallAmount).toBe(0);
+  });
+
+  /**
+   * A benchmark raised after the flag can put a confirmed exception under its own benchmark. The
+   * answer is zero, never a negative: a negative recovery is money paid *to* somebody for using
+   * less fuel than expected.
+   */
+  it('never reports a negative shortfall when the reading is under benchmark', async () => {
+    const [row] = await listWith({ fuelConsumed: 6, totalHours: 4 });
+    expect(row.shortfallQuantity).toBe(0);
+    expect(row.shortfallAmount).toBe(0);
+  });
+});
