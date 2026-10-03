@@ -573,7 +573,7 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B3: `validate` — every decision made before anything is written
 
-- [ ] T069 [US4] `identifySchedule()` in `src/projects/boq/schedule-block.ts` (FR-054): find the
+- [ ] T069 [US4] `identifySchedule()` in `src/projects/boq/schedule-block.ts` (FR-054, FR-042): find the
       header row carrying both a description-like and a quantity-like header; the block spans that
       row's first to last **contiguous** matched column. The sample's second block at columns
       238–242 is excluded for being outside the span — a rule that still holds for the next tender,
@@ -599,7 +599,7 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 - [ ] T074 [US4] Recompute every amount as `quantity × rate` in `Prisma.Decimal` (FR-044). The file's
       own figures (`178.09326499999995`, `29961506.782150004`) are the thing to reconcile against,
       never an input.
-- [ ] T075 [US4] Locate the quoted percentage (FR-039, FR-056): a footer label matching `Excess` or
+- [ ] T075 [US4] Locate the quoted percentage (FR-039, FR-040, FR-056): a footer label matching `Excess` or
       `Quoted Rate`, **and** the quoted total it implies reconciling under T076's tolerance. Either
       failing, or a value outside 0–1, means **not located** — `quotedPercentage: null` and a
       first-class entry in the report. **Never 0**: zero is a valid percentage, so that failure is
@@ -710,3 +710,21 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 - [ ] T096 [US4] Walk `quickstart.md` passes 10–12 and record each result beside its task — pass 11's
       third step especially, that no upload anywhere produces a success carrying zero lines, which is
       the shape the already-approved library would have returned for the client's real file.
+
+### Carried from the 2026-10-03 analysis pass
+
+- [ ] T097 **[US4] Deferred, with the reason stated rather than left blank.** US4 AC6's
+      `POST /projects/:id/boq/estimate-import` and the `isEstimate: true` variant have **no task
+      coverage at all** — not in T026–T030, and not in T061–T096. The analysis pass surfaced it
+      because superseding T026–T030 removed the only phase it could have been assumed to live in.
+      Deferred rather than built, on three grounds: `isEstimate` is read by **nothing** in `src/`
+      (checked, zero occurrences); the client's file is a tender schedule and not an estimate, so
+      nothing in the work that prompted this amendment needs it; and an estimate variant whose only
+      consumer is a boolean nobody reads would be scaffolding, not a feature. **If the estimate
+      import is wanted, it is its own decision** — most of FR-036 – FR-056 applies to it unchanged,
+      so it is a small piece of work, but it is work nobody has asked for.
+- [ ] T098 [US4] Add the two missing citations found by the analysis pass: **FR-040** on T075 (the
+      percentage is never imported as zero) and **FR-042** on T069 (the schedule block, and the far
+      second block it excludes). Both are the money guards a reviewer will look for by ID, and both
+      were covered in prose only — which is how a requirement survives a refactor in text and dies
+      in code.
