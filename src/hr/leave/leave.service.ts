@@ -23,6 +23,7 @@ import { SitesService } from '../../projects/sites/sites.service';
 import { HolidaysService } from '../holidays/holidays.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
+import { EMPLOYEE_NAME_SELECT, withEmployeeNames } from '../employee-name';
 import { EmployeesService } from '../employees/employees.service';
 import { isPayrollLocked } from '../punch/payroll-lock';
 import { CreateLeaveApplicationDto } from './dto/leave-application.dto';
@@ -311,6 +312,32 @@ export class LeaveService {
         orderBy: { fromDate: 'asc' },
       }),
     );
+  }
+
+  /**
+   * The same queue, with each application's employee named (`employee-name.ts`).
+   *
+   * Separate from `listForReview` rather than folded into it because the dashboard
+   * providers that also call it count and aggregate rows and never display a name —
+   * charging them a second query for a column nobody renders would be the kind of
+   * cost that is invisible until a widget is slow.
+   *
+   * One query for the page's distinct employees, not one per row. The roster read runs
+   * in the caller's own RLS context, so an application belonging to a company they
+   * cannot see comes back with a null name and a null code rather than with a
+   * borrowed one.
+   */
+  async listForReviewNamed(caller: Caller, status?: LeaveApplicationStatus) {
+    const rows = await this.listForReview(caller, status);
+    if (rows.length === 0) return [];
+
+    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findMany({
+        where: { id: { in: [...new Set(rows.map((row) => row.employeeId))] } },
+        select: EMPLOYEE_NAME_SELECT,
+      }),
+    );
+    return withEmployeeNames(rows, employees);
   }
 
   /** Records an approver's verdict, debiting the balance on approval (FR-022a). */
