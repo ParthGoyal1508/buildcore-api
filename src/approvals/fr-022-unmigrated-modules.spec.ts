@@ -193,6 +193,17 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/plant.service.ts',
           ':(exclude)src/inventory/inventory.service.ts',
           ':(exclude)src/projects/portfolio/cost-source-registration.spec.ts',
+          // Owned by 008's 2026-10-03 amendment: BOQ entry and the tender import, which exist
+          // because nothing in either repository could write a BOQ and 018's billing was therefore
+          // unusable. A parse-and-stage path and plain CRUD; **nothing here calls
+          // `ApprovalService`**, and the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          //
+          // **Fired a commit late for the third time**, and the habit named above is the reason:
+          // this spec was run before the Phase B1 commit, when the Phase B2 files did not yet
+          // exist to be seen. Running it before *each* commit under the scanned paths is the rule,
+          // not running it once at the start of the work.
+          ':(exclude)src/projects/boq',
         ],
         {
           cwd: REPO_ROOT,

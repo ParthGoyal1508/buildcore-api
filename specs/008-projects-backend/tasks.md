@@ -573,55 +573,55 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B3: `validate` — every decision made before anything is written
 
-- [ ] T069 [US4] `identifySchedule()` in `src/projects/boq/schedule-block.ts` (FR-054, FR-042): find the
+- [X] T069 [US4] ✅ Done — header-text identification; on the real file it lands on sheet `BoQ1` row 11 with description=1, quantity=3, unit=4, rate=5, bidderRate=12, amount=52, span 0–54. The span rule disposes of the far block **and** of stray column-57 values on two heading rows without naming either `identifySchedule()` in `src/projects/boq/schedule-block.ts` (FR-054, FR-042): find the
       header row carrying both a description-like and a quantity-like header; the block spans that
       row's first to last **contiguous** matched column. The sample's second block at columns
       238–242 is excluded for being outside the span — a rule that still holds for the next tender,
       which will put its own second block somewhere else. No header row found ⇒
       `BOQ_NO_SCHEDULE_BLOCK` rather than a guess.
-- [ ] T070 [US4] Count **candidate schedule rows** (FR-055) — rows inside the block with a non-empty
+- [X] T070 [US4] ✅ Done — 311 candidates measured on the real file (231 items + 80 headings); the footer rows are kept separately rather than discarded, since FR-045 has nothing to reconcile against without them Count **candidate schedule rows** (FR-055) — rows inside the block with a non-empty
       description, *including* headings and rows that will later be rejected — immediately after
       identification and before validation, and apply the 1,000-row cap there
       (`BOQ_TOO_MANY_ROWS`). Judged on raw sheet rows instead, the client's own 312-line tender
       could be refused for being too large (research §17).
-- [ ] T071 [US4] Hierarchy inference (FR-038): a row with a description and no quantity opens a
+- [X] T071 [US4] ✅ Done — 80 heading rows fold into 66 groups on the real file, because consecutive headings are one nested section. Groups are renumbered **after** empty ones are dropped, so the numbering has no gaps corresponding to nothing a reader can see Hierarchy inference (FR-038): a row with a description and no quantity opens a
       group; rows below belong to it until the next such row. Deeper nesting folds the outer heading
       text into the group name. A quantity row before any heading goes to a group named for the sheet
       and raises a **warning** — the rows are good and only the structure is unstated, so it is not
       an error.
-- [ ] T072 [P] [US4] `normaliseUnit()` in `src/projects/boq/unit-normalise.ts` (FR-041): lowercase,
+- [X] T072 [P] [US4] ✅ Done — strips case, punctuation **and whitespace**: periods alone left `R.Mtr.` as `rmtr` and `R. Mtr.` as `r mtr`, which was the first implementation and did not unify the family. Measured: 25 raw spellings → 21 visibly distinct → **12 units**. Surrounding whitespace is trimmed, the one deviation from "verbatim", because four spellings differed from another only by a trailing space and listing the same visible spelling twice reads as a defect in the report `normaliseUnit()` in `src/projects/boq/unit-normalise.ts` (FR-041): lowercase,
       strip periods, collapse whitespace, so `R. Mtr.`, `R.Mtr.` and `R mtr` agree. Store the source
       string verbatim on the line; normalise for matching only. **`Excess (+)` must resolve to no
       unit** — it appears in the units column on the quoted-rate row, and a unit named "excess" would
       be invented out of a footer.
-- [ ] T073 [US4] Read and discard the four pre-GST tax columns (FR-043) — Excise Duty, VAT,
+- [X] T073 [US4] ✅ Done — read, found blank, dropped Read and discard the four pre-GST tax columns (FR-043) — Excise Duty, VAT,
       DGS&D/RITES inspection, Cenvat credit. Not errors, not data: the template predates GST.
-- [ ] T074 [US4] Recompute every amount as `quantity × rate` in `Prisma.Decimal` (FR-044). The file's
+- [X] T074 [US4] ✅ Done — `Prisma.Decimal`, `quantity × rate`. Measured: zero of the real file's 231 lines disagree with its own stated amount, so recomputing is safe as well as correct Recompute every amount as `quantity × rate` in `Prisma.Decimal` (FR-044). The file's
       own figures (`178.09326499999995`, `29961506.782150004`) are the thing to reconcile against,
       never an input.
-- [ ] T075 [US4] Locate the quoted percentage (FR-039, FR-040, FR-056): a footer label matching `Excess` or
+- [X] T075 [US4] ✅ Done — located by its label in the **units** column of the footer row, with the value beside it in the rate column; `0.0246` on the real file, and `× 1.0246` reproduces its stated quoted total. Outside 0–1, or failing reconciliation, counts as not located Locate the quoted percentage (FR-039, FR-040, FR-056): a footer label matching `Excess` or
       `Quoted Rate`, **and** the quoted total it implies reconciling under T076's tolerance. Either
       failing, or a value outside 0–1, means **not located** — `quotedPercentage: null` and a
       first-class entry in the report. **Never 0**: zero is a valid percentage, so that failure is
       silent and under-bills every line by 2.46% — ₹7.37 lakh on this file.
-- [ ] T076 [US4] Reconcile both derived totals against the two the workbook states, reporting each
+- [X] T076 [US4] ✅ Done — tolerance `0.01 × lineCount`. **The tolerance earns its place on the real file**: derived 29,961,506.79 against stated 29,961,506.78, a one-paisa difference across 231 rounded lines, with ₹2.31 of tolerance. Exact equality would have failed a correct import of the client's own tender Reconcile both derived totals against the two the workbook states, reporting each
       difference (FR-045). Tolerance is **one paisa per line** (`0.01 × lineCount`; ₹3.12 on the
       sample), derived from two-decimal rounding rather than chosen — exact equality would fail a
       correct import, and every structural error this catches exceeds the tolerance by seven orders
       of magnitude.
-- [ ] T077 [US4] `BOQImportService.validate(projectId, userId, buffer)` writing **nothing**,
+- [X] T077 [US4] ✅ Done — writes nothing; asserted by reading the batch back and finding it `ready` `BOQImportService.validate(projectId, userId, buffer)` writing **nothing**,
       returning the contract's shape: `batchId`, group and line counts, units as-typed with their
       normalised form, both totals with differences and the tolerance, the percentage and whether it
       was located, errors, warnings, the alert preview, and `errorReportUrl` when errors exist.
-- [ ] T078 [US4] Batch storage with the four states (FR-052, FR-053) in
+- [X] T078 [US4] ✅ Done — four states, 30-minute TTL, 5/20 caps from centralized config. **Expiry is two-step**: marked `expired` at the TTL and dropped at twice it, because deleting at the TTL made "expired" and "never existed" indistinguishable — which was this file's first implementation and the same defect class as the rest of the feature Batch storage with the four states (FR-052, FR-053) in
       `src/projects/boq/import-batch.store.ts`: `ready → committing → confirmed`, plus `expired`.
       30-minute TTL, 5 live batches per company and 20 overall, a validate that would exceed the cap
       refused (`BOQ_TOO_MANY_BATCHES`) rather than evicting one somebody is reading. TTL, caps and
       the row threshold go in **centralized config** per Principle III, not inline.
-- [ ] T079 [US4] Refuse to issue a batch for an empty result (FR-051): candidate rows found but none
+- [X] T079 [US4] ✅ Done — `BOQ_NO_IMPORTABLE_ROWS`, and no batch issued Refuse to issue a batch for an empty result (FR-051): candidate rows found but none
       importable ⇒ `BOQ_NO_IMPORTABLE_ROWS`. A batch of nothing is a confirmable write of nothing,
       which is FR-036's prohibited shape reached by another route.
-- [ ] T080 [P] [US4] Unit tests for Phase B3 in `boq-import.service.spec.ts`: block identification
+- [X] T080 [P] [US4] ✅ Done — 14 tests on the import service plus 8 on the batch store, against the synthetic fixture and the real file Unit tests for Phase B3 in `boq-import.service.spec.ts`: block identification
       against a far second block; a heading row opening a group; a quantity row before any heading
       raising a warning not an error; units normalising with `Excess (+)` resolving to none; the four
       tax columns dropped; amounts recomputed rather than read; a percentage outside 0–1 treated as
