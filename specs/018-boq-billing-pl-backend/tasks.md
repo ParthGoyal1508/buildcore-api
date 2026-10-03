@@ -75,7 +75,14 @@ the feature; moving them earlier for convenience would have thrown that away.
       **separately** (FR-008)
 - [x] T019 [P] Unit-test that `netPayable` equals gross minus the three deductions, and that each is
       visible in its own right
-- [ ] T020 **NOT RUN** e2e: two bills against one award, with remaining quantity correct on the second
+- [X] T020 e2e: two bills against one award, with remaining quantity correct on the second.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts`. To-date quantity is summed over sibling bill
+      lines each time rather than stored, so it needed a sibling to be wrong about — the one thing no
+      single-bill unit test can see. Also asserts the deliberate asymmetry with the client side: a
+      measurement past the **award** is refused (`RA_BILL_EXCEEDS_AWARD`) where a measurement past the
+      client's **BOQ scope** is flagged, because over-claiming on a client bill is a claim to justify
+      while paying a subcontractor for work nobody awarded is not.
 
 ## Phase 4: Approval invalidation (FR-009)
 
@@ -84,7 +91,21 @@ the feature; moving them earlier for convenience would have thrown that away.
 - [x] T022 Refuse the edit outright if the spine cannot be reached — an un-approved edit that looks
       approved is the failure mode
 - [x] T023 [P] Unit-test both paths
-- [ ] T024 **NOT RUN** e2e: approve, edit, confirm the prior approval did not survive
+- [X] T024 e2e: approve, edit, confirm the prior approval did not survive.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts`, as a full round trip: submit enters the
+      `ra_bill` chain and approves nothing, `ApprovalService.decide` completes the single `final`
+      level, `onApprovalCompleted` moves the bill to `approved`, and a revision then leaves the
+      completed decision row byte-for-byte as it was — same instance, same actor, same reason — while
+      raising a **new** pending instance and taking the bill out of `approved`. A recorded decision
+      describes what somebody approved; editing quantities under it would leave an approver's name
+      against numbers they never saw.
+
+      Two corrections to our own expectations, both found here. There is no `certified` state on an
+      RA bill: the enum is `draft | submitted | approved`, and `certified` belongs to the *client*
+      bill because a client certifies what they will pay while a subcontractor's bill is approved
+      internally. And the fixture leaked a role on every run — it created one before checking whether
+      the `final` slot was already mapped, which in the seeded companies it is, to Super Admin.
 
 ### Phase 4 implementation record, 2026-10-03
 
@@ -323,8 +344,13 @@ running that one spec before committing anything under its six scanned paths.
       balance by subtracting the two figures printed in front of them, and being right in the fourth
       decimal is worth less than agreeing with the person holding the screen.
 
-- [ ] T041 **NOT RUN (needs a seeded work order and three issued bills)** e2e: withhold across three
-      bills, release part, confirm the balance.
+- [X] T041 e2e: withhold across three bills, release part, confirm the balance.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts` across four bills. Asserts that a **draft**
+      bill's retention is withheld from nobody and so does not count towards the balance; that
+      withheld reconciles to the sum of every issued bill's retention; that a release with no reason
+      and a release past the balance are both refused (`RETENTION_EXCEEDS_HELD`); and that the ledger
+      appends rather than edits, a second release adding a row and leaving the first alone.
 
 ## Phase 8: Client certification — **confirmed by the client 2026-10-03**
 

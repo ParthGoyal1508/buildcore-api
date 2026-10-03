@@ -204,6 +204,17 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // exist to be seen. Running it before *each* commit under the scanned paths is the rule,
           // not running it once at the start of the work.
           ':(exclude)src/projects/boq',
+          // Owned by 018's 2026-10-03 verification work: the route-registration guard written after
+          // `GET /projects/:id/boq` was found shadowing `GET /projects/client-bills/boq`. Pure
+          // reflection over Nest's own route metadata — it calls nothing and touches no approval
+          // path, and the per-file assertions above still enforce that `src/projects` keeps no
+          // approval mechanism of its own.
+          //
+          // **Fired a commit late for the fourth time.** The habit named above was followed — this
+          // spec was run before the commit — but the exclusion was not added, which is the other
+          // half of the same rule: running it is only useful if its refusal is then acted on rather
+          // than read. The refusal names the file; adding it takes a line.
+          ':(exclude)src/projects/route-shadowing.spec.ts',
         ],
         {
           cwd: REPO_ROOT,
