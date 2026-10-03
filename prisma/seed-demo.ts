@@ -23,14 +23,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { hash } from 'argon2';
 import * as PDFDocument from 'pdfkit';
 
-import {
-  ACTION_ATTENDANCE_EXCEPTION,
-  ACTION_PAYROLL_RUN,
-  DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
-  DEFAULT_DIRECTOR_FINAL_LEVELS,
-  DEFAULT_PAYROLL_RUN_LEVELS,
-  DIRECTOR_FINAL_SEEDED_ACTIONS,
-} from '../src/approvals/default-chains';
+import { DEFAULT_COMPANY_CHAINS } from '../src/approvals/default-chains';
 import { SLOT_FINAL } from '../src/approvals/approval-slots';
 import {
   DEFAULT_ASSET_CATEGORIES,
@@ -306,17 +299,16 @@ async function seedCompanyDefaults(
   // reason as the masters above — and it matters more, because without a chain the
   // first work order 017 composes is refused as a configuration fault rather than
   // sent for approval, which looks like a bug in the letter screen.
-  const chains: [string, typeof DEFAULT_DIRECTOR_FINAL_LEVELS][] = [
-    [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-    [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
-    ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
-      (actionType): [string, typeof DEFAULT_DIRECTOR_FINAL_LEVELS] => [
-        actionType,
-        DEFAULT_DIRECTOR_FINAL_LEVELS,
-      ],
-    ),
-  ];
-  for (const [actionType, levels] of chains) {
+  //
+  // **Taken from `DEFAULT_COMPANY_CHAINS` rather than listed here, and that is a fix.** This block
+  // used to carry its own hand-copied list, and on 2026-10-03 it was found three chains behind the
+  // service's: `attendance_correction`, `operator_fuel_recovery` and `ra_bill`. The symptom was
+  // that **every demo company refused a subcontractor bill sent for certification** with
+  // `APPROVAL_CHAIN_NOT_CONFIGURED`, while the same path worked in any company old enough to have
+  // been reached by the backfill migration — a configuration gap that depends on when a company was
+  // created, which is the hardest kind to notice. Found by seeding a fresh database and running the
+  // RA bill e2e against it.
+  for (const [actionType, levels] of DEFAULT_COMPANY_CHAINS) {
     const existing = await prisma.approvalChain.findFirst({
       where: { companyId, actionType },
       select: { id: true },
@@ -402,6 +394,602 @@ const STATUTORY_DOCUMENT_TYPES = [
   // re-creating them would be a unique violation on (companyId, code).
   (kind) => !DEFAULT_DOCUMENT_TYPES.some((d) => d.code === kind.code),
 );
+
+/**
+ * A tender schedule and the bills measured against it (018, and `bugs.md` items 11, 12 and 14).
+ *
+ * ## Why this had to wait
+ *
+ * Added 2026-10-03, and it could not have been written before that morning: `BOQTaskGroup` and
+ * `BOQTaskItem` were read in four places and written in none, so the whole of 018's billing —
+ * client bills, the project P&L, the variation and retention reporting — had nothing to measure
+ * against. The seed is what turns "built" into "demonstrable", and roughly thirty verification
+ * tasks across both repositories carried the note *"needs seeded data"* for this reason.
+ *
+ * ## Shaped like the client's own tender, in miniature
+ *
+ * Two levels, because `docs/BOQ_794578.xls` is two levels: headings carrying no quantity, with
+ * measurable lines under them. A **quoted percentage** on the project, because it is a percentage
+ * BoQ — the bidder quotes one figure against the schedule and a bill priced from line rates alone
+ * is short by it on every line. Units spelled as a site spells them (`Cum`, `Cum.`, `Sqm`) rather
+ * than normalised, because the real file spells twelve units twenty-five ways and a demo that
+ * tidies that up hides the thing the importer exists to handle.
+ *
+ * ## Seeded deliberately mid-flight, not finished
+ *
+ * The same judgement `seedDocumentsAndLetters` makes above. Every bill certified in full, every
+ * line fully measured and nothing withheld would make each reporting figure read as its own
+ * happy path, which is the one state that proves nothing: it looks identical whether the
+ * calculation works or always returns the input. So of the three client bills, one is certified
+ * **short** — a dispute to pursue — one is awaiting certification, and one is still a draft that
+ * must not appear in any revenue figure at all. Retention is withheld across the subcontractor's
+ * bills and **part** released, so the balance is a number somebody can check rather than zero.
+ *
+ * One BOQ line is left **unpriced**, which is the single most useful fixture here: the rate column
+ * defaults to zero, so "nobody has priced this" and "this is free" are the same byte, and a bill
+ * composed over it is refused with `BOQ_RATE_MISSING`. A demo where every line is priced never
+ * shows that refusal.
+ *
+ * Only the **first** project gets a schedule. A company whose every project is fully billed has no
+ * project left to demonstrate entry or import against, and the import path needs an empty one —
+ * `confirm` refuses a project that already has a schedule (008 FR-046).
+ *
+ * ## The demo project's margin is negative, and that is the data rather than a defect
+ *
+ * Two bills raised against a ₹1.1 crore schedule, against a full company's worth of seeded material
+ * purchases attributed to that project's site. Measured on a fresh seed: August reads ₹6.92 lakh of
+ * revenue against ₹22.4 lakh of cost, September ₹28.97 lakh against ₹23.09 lakh. A project three
+ * bills into a job it has bought most of the materials for genuinely looks like that, and the figure
+ * is noted here so nobody reads the loss as a billing error. Raising the seeded billing to make the
+ * demo flatter would make the P&L's arithmetic unverifiable, which is the trade `seedDocumentsAndLetters`
+ * refuses above for the same reason.
+ */
+async function seedBoqAndBilling(input: {
+  companyId: string;
+  shortCode: string;
+  project: { id: string; name: string };
+  workerIds: string[];
+  vendorId: string | null;
+  actorUserId: string;
+  /** Business-timezone date helper, so dates land where the rest of the seed's do. */
+  dateOnlyFor: (iso: string) => Date;
+}): Promise<{
+  boqLines: number;
+  clientBills: number;
+  raBills: number;
+  retentionReleased: number;
+  labourSheets: number;
+}> {
+  const {
+    companyId,
+    shortCode,
+    project,
+    workerIds,
+    vendorId,
+    actorUserId,
+    dateOnlyFor: d,
+  } = input;
+
+  /** 2.46%, the excess the client's own tender quotes. */
+  const QUOTED_PERCENTAGE = 0.0246;
+
+  await prisma.project.update({
+    where: { id: project.id },
+    data: { quotedPercentage: new Prisma.Decimal(QUOTED_PERCENTAGE) },
+  });
+
+  /**
+   * The schedule. `rate: null` marks the one line nobody has priced.
+   *
+   * Rates are the kind a real Indian tender carries rather than round numbers, because a demo
+   * whose every figure is divisible by 100 makes a rounding defect invisible — and rounding is
+   * exactly where the two quoted totals diverge (see `bill-totals.ts`).
+   */
+  const SCHEDULE: {
+    boqNo: string;
+    name: string;
+    items: {
+      boqNo: string;
+      taskName: string;
+      unit: string;
+      scopeQty: number;
+      rate: number | null;
+      isVariation?: boolean;
+      variationRef?: string;
+    }[];
+  }[] = [
+    {
+      boqNo: '1',
+      name: 'Earthwork and site clearance',
+      items: [
+        {
+          boqNo: '1.1',
+          taskName:
+            'Excavation in ordinary soil up to 1.5m depth, including shoring and dewatering',
+          unit: 'Cum',
+          scopeQty: 1842.5,
+          rate: 251.4,
+        },
+        {
+          boqNo: '1.2',
+          taskName:
+            'Filling in plinth with excavated earth, watered and rammed',
+          unit: 'Cum.',
+          scopeQty: 920.75,
+          rate: 87.65,
+        },
+        {
+          boqNo: '1.3',
+          taskName: 'Disposal of surplus earth beyond 50m lead',
+          unit: 'Cum',
+          scopeQty: 640,
+          rate: 41.2,
+        },
+      ],
+    },
+    {
+      boqNo: '2',
+      name: 'Concrete and reinforced concrete',
+      items: [
+        {
+          boqNo: '2.1',
+          taskName: 'PCC 1:4:8 in foundation, 100mm thick',
+          unit: 'Cum',
+          scopeQty: 184.25,
+          rate: 4712.8,
+        },
+        {
+          boqNo: '2.2',
+          taskName: 'RCC M25 in footings and plinth beams, excluding steel',
+          unit: 'Cum',
+          scopeQty: 412.6,
+          rate: 6284.55,
+        },
+        {
+          boqNo: '2.3',
+          taskName: 'TMT reinforcement Fe500D, cut, bent and placed',
+          unit: 'Kg',
+          scopeQty: 48250,
+          rate: 72.35,
+        },
+        {
+          boqNo: '2.4',
+          taskName: 'Centering and shuttering to soffits, propped',
+          unit: 'Sqm',
+          scopeQty: 2240.5,
+          rate: 318.9,
+        },
+      ],
+    },
+    {
+      boqNo: '3',
+      name: 'Masonry and finishes',
+      items: [
+        {
+          boqNo: '3.1',
+          taskName: 'Brickwork in CM 1:6, 230mm thick, in superstructure',
+          unit: 'Sqm',
+          scopeQty: 1680,
+          rate: 1142.25,
+        },
+        {
+          boqNo: '3.2',
+          taskName: 'Cement plaster 12mm thick in CM 1:4, internal faces',
+          unit: 'Sqm',
+          scopeQty: 4120.8,
+          rate: 214.6,
+        },
+        {
+          // The line nobody has priced. See the function docblock — this is the most useful
+          // fixture in it, because a zero rate reads as "free" and billing has to refuse it.
+          boqNo: '3.3',
+          taskName:
+            'Waterproofing to terrace with APP membrane — rate to be finalised',
+          unit: 'Sqm',
+          scopeQty: 760,
+          rate: null,
+        },
+      ],
+    },
+    {
+      boqNo: '4',
+      name: 'Variations against client instruction',
+      items: [
+        {
+          boqNo: '4.1',
+          taskName:
+            'Additional shoring to north face, rock encountered 1.2m deeper than trial pit',
+          unit: 'Sqm',
+          scopeQty: 180,
+          rate: 612.4,
+          isVariation: true,
+          variationRef: 'VO-07',
+        },
+        {
+          boqNo: '4.2',
+          taskName: 'Extra over for M30 concrete in lift pit, instruction 12',
+          unit: 'Cum',
+          scopeQty: 34.5,
+          rate: 1180.25,
+          isVariation: true,
+          variationRef: 'VO-12',
+        },
+      ],
+    },
+  ];
+
+  /** Keyed by BOQ number, so the bills below read like a measurement sheet. */
+  const lineByNo = new Map<string, { id: string; rate: number }>();
+  let boqLines = 0;
+
+  for (const group of SCHEDULE) {
+    // No dates on either level. A tender schedule carries no programme, and 008's 2026-10-03
+    // amendment made the six programme fields nullable precisely so that an unplanned line is
+    // reported **unplanned** rather than falling into Delayed against a date somebody invented.
+    const row = await prisma.bOQTaskGroup.create({
+      data: {
+        companyId,
+        projectId: project.id,
+        boqNo: group.boqNo,
+        name: group.name,
+        scopeQty: new Prisma.Decimal(0),
+      },
+    });
+    for (const item of group.items) {
+      const created = await prisma.bOQTaskItem.create({
+        data: {
+          companyId,
+          groupId: row.id,
+          boqNo: item.boqNo,
+          taskName: item.taskName,
+          unit: item.unit,
+          scopeQty: new Prisma.Decimal(item.scopeQty),
+          rate: new Prisma.Decimal(item.rate ?? 0),
+          isVariation: item.isVariation ?? false,
+          variationRef: item.variationRef ?? null,
+        },
+      });
+      lineByNo.set(item.boqNo, {
+        id: created.id,
+        rate: item.rate ?? 0,
+      });
+      boqLines += 1;
+    }
+  }
+
+  /** `quantity × rate × (1 + quoted)`, to two places — `lineTotals` in `bill-totals.ts`. */
+  const lineAmount = (quantity: number, rate: number) =>
+    Math.round(quantity * rate * (1 + QUOTED_PERCENTAGE) * 100) / 100;
+
+  /**
+   * One client bill, with the rate frozen onto each line.
+   *
+   * Written the way `ClientBillsService.compose` writes it rather than the way a reader would
+   * guess: the rate and the quoted percentage are **copied onto the row**, so revising the BOQ
+   * afterwards does not move a bill that was already sent.
+   */
+  async function clientBill(
+    billNumber: string,
+    billingDate: string,
+    status: 'draft' | 'submitted' | 'certified',
+    measured: { boqNo: string; quantity: number }[],
+    options: { retentionPercent?: number; certifiedAmount?: number } = {},
+  ) {
+    const priced = measured.map((m) => {
+      const line = lineByNo.get(m.boqNo);
+      if (!line) throw new Error(`Seed bug: BOQ line ${m.boqNo} is missing.`);
+      return { ...m, ...line, amount: lineAmount(m.quantity, line.rate) };
+    });
+    const gross =
+      Math.round(priced.reduce((sum, p) => sum + p.amount, 0) * 100) / 100;
+    const retention =
+      Math.round(gross * (options.retentionPercent ?? 0) * 100) / 100;
+
+    return prisma.clientBill.create({
+      data: {
+        companyId,
+        projectId: project.id,
+        billNumber,
+        description: `Running account bill, ${project.name}`,
+        billingDate: d(billingDate),
+        quotedPercentage: new Prisma.Decimal(QUOTED_PERCENTAGE),
+        grossAmount: new Prisma.Decimal(gross),
+        retentionAmount: new Prisma.Decimal(retention),
+        netAmount: new Prisma.Decimal(
+          Math.round(Math.max(0, gross - retention) * 100) / 100,
+        ),
+        status,
+        submittedAt: status === 'draft' ? null : d(billingDate),
+        certifiedAmount:
+          options.certifiedAmount === undefined
+            ? null
+            : new Prisma.Decimal(options.certifiedAmount),
+        certifiedAt:
+          options.certifiedAmount === undefined ? null : d(billingDate),
+        lines: {
+          create: priced.map((p) => ({
+            companyId,
+            boqTaskItemId: p.id,
+            quantity: new Prisma.Decimal(p.quantity),
+            rate: new Prisma.Decimal(p.rate),
+            amount: new Prisma.Decimal(p.amount),
+            exceedsScope: false,
+          })),
+        },
+      },
+      select: { id: true, grossAmount: true },
+    });
+  }
+
+  // Three bills, in three different states, and the states are the point — see the docblock.
+  const first = await clientBill(
+    `${shortCode}/RA/01`,
+    '2026-08-05',
+    'certified',
+    [
+      { boqNo: '1.1', quantity: 820 },
+      { boqNo: '1.2', quantity: 410 },
+      { boqNo: '2.1', quantity: 92 },
+    ],
+    { retentionPercent: 0.05 },
+  );
+  // Certified short by a little over a lakh. A shortfall is a dispute somebody has to pursue, and
+  // the P&L reports it apart from a bill nobody has certified yet — one needs a conversation with
+  // the client, the other needs a reminder.
+  await prisma.clientBill.update({
+    where: { id: first.id },
+    data: {
+      certifiedAmount: new Prisma.Decimal(
+        Math.round((first.grossAmount.toNumber() - 112500) * 100) / 100,
+      ),
+      certifiedAt: d('2026-08-22'),
+    },
+  });
+
+  await clientBill(
+    `${shortCode}/RA/02`,
+    '2026-09-08',
+    'submitted',
+    [
+      { boqNo: '2.2', quantity: 186 },
+      { boqNo: '2.3', quantity: 21400 },
+      { boqNo: '4.1', quantity: 180 },
+    ],
+    { retentionPercent: 0.05 },
+  );
+
+  // A draft, which must appear in no revenue figure anywhere. The P&L counts bills that have left
+  // draft; a draft counted as revenue would report money nobody has asked the client for.
+  await clientBill(`${shortCode}/RA/03`, '2026-10-01', 'draft', [
+    { boqNo: '2.4', quantity: 640 },
+    { boqNo: '3.1', quantity: 420 },
+  ]);
+
+  // ── The subcontract: an award at the subcontractor's rates, not the client's ──
+  //
+  // A separate set of rates deliberately. The margin between what the client is billed and what
+  // the subcontractor is paid is the whole of what the project P&L exists to show, and one rate
+  // column would make that margin unrepresentable.
+  const RETENTION = 0.05;
+  const workOrder = await prisma.workOrder.create({
+    data: {
+      companyId,
+      projectId: project.id,
+      partnerId: vendorId,
+      workDetail:
+        'RCC works including shuttering and reinforcement, blocks A to C',
+      terms:
+        'Payment within 30 days of certification. 5% retention, released half at practical ' +
+        'completion and half after the defects period.',
+      retentionPercent: new Prisma.Decimal(RETENTION),
+      labourAmount: new Prisma.Decimal(4850000),
+      materialAmount: new Prisma.Decimal(0),
+      // `active`, not `issued`. The enum is draft | active | completed — a work order being
+      // *worked under* is the state bills are measured in, and the first draft of this guessed a
+      // word that is not there.
+      status: 'active',
+    },
+  });
+
+  const AWARD = [
+    {
+      description: 'Excavation in ordinary soil',
+      unit: 'Cum',
+      awardedQty: 1842.5,
+      rate: 184.5,
+      boqNo: '1.1',
+    },
+    {
+      description: 'PCC 1:4:8 in foundation',
+      unit: 'Cum',
+      awardedQty: 184.25,
+      rate: 3920.0,
+      boqNo: '2.1',
+    },
+    {
+      description: 'RCC M25, labour and plant only',
+      unit: 'Cum',
+      awardedQty: 412.6,
+      rate: 1850.0,
+      boqNo: '2.2',
+    },
+    {
+      description: 'Reinforcement, cut bend and place',
+      unit: 'Kg',
+      awardedQty: 48250,
+      rate: 8.4,
+      boqNo: '2.3',
+    },
+  ];
+  const awardByDesc = new Map<string, { id: string; rate: number }>();
+  for (const line of AWARD) {
+    const created = await prisma.workOrderBOQItem.create({
+      data: {
+        companyId,
+        workOrderId: workOrder.id,
+        // Linked to the client-side line where one corresponds. Nullable on purpose: a subcontract
+        // can itemise work the client's BOQ splits differently, and forcing a match would make
+        // somebody invent one.
+        boqTaskItemId: lineByNo.get(line.boqNo)?.id ?? null,
+        description: line.description,
+        unit: line.unit,
+        awardedQty: new Prisma.Decimal(line.awardedQty),
+        rate: new Prisma.Decimal(line.rate),
+      },
+    });
+    awardByDesc.set(line.description, { id: created.id, rate: line.rate });
+  }
+
+  async function raBill(
+    billNumber: string,
+    billingDate: string,
+    status: 'draft' | 'submitted' | 'approved',
+    measured: { description: string; quantity: number }[],
+    advanceRecovery = 0,
+  ) {
+    const priced = measured.map((m) => {
+      const line = awardByDesc.get(m.description);
+      if (!line)
+        throw new Error(`Seed bug: award line ${m.description} is missing.`);
+      return {
+        ...m,
+        ...line,
+        amount: Math.round(m.quantity * line.rate * 100) / 100,
+      };
+    });
+    const gross =
+      Math.round(priced.reduce((sum, p) => sum + p.amount, 0) * 100) / 100;
+    const retention = Math.round(gross * RETENTION * 100) / 100;
+    const deductions = Math.round((retention + advanceRecovery) * 100) / 100;
+
+    return prisma.rABill.create({
+      data: {
+        companyId,
+        projectId: project.id,
+        workOrderId: workOrder.id,
+        billNumber,
+        description: 'RCC works, measured this period',
+        billingDate: d(billingDate),
+        // `amount` is the pre-018 single-figure column, kept in step with gross so an older
+        // reader of this row is not shown a different number from a newer one.
+        amount: new Prisma.Decimal(gross),
+        grossAmount: new Prisma.Decimal(gross),
+        retentionAmount: new Prisma.Decimal(retention),
+        advanceRecovery: new Prisma.Decimal(advanceRecovery),
+        otherDeductions: new Prisma.Decimal(0),
+        netPayable: new Prisma.Decimal(
+          Math.round(Math.max(0, gross - deductions) * 100) / 100,
+        ),
+        status,
+        submittedAt: status === 'draft' ? null : d(billingDate),
+        approvedAt: status === 'approved' ? d(billingDate) : null,
+        approvedByUserId: status === 'approved' ? actorUserId : null,
+        lines: {
+          create: priced.map((p) => ({
+            companyId,
+            workOrderBoqItemId: p.id,
+            quantity: new Prisma.Decimal(p.quantity),
+            rate: new Prisma.Decimal(p.rate),
+            amount: new Prisma.Decimal(p.amount),
+          })),
+        },
+      },
+      select: { id: true, retentionAmount: true },
+    });
+  }
+
+  const sc1 = await raBill(`${shortCode}/SC/01`, '2026-08-10', 'approved', [
+    { description: 'Excavation in ordinary soil', quantity: 820 },
+    { description: 'PCC 1:4:8 in foundation', quantity: 92 },
+  ]);
+  const sc2 = await raBill(
+    `${shortCode}/SC/02`,
+    '2026-09-12',
+    'approved',
+    [
+      { description: 'RCC M25, labour and plant only', quantity: 186 },
+      { description: 'Reinforcement, cut bend and place', quantity: 21400 },
+    ],
+    // Money already advanced, coming back. **Not a project cost** — counting it would count the
+    // same rupee twice, once when the advance went out and once here.
+    150000,
+  );
+  // A third, still awaiting its decision, so the approval queue has something real in it.
+  await raBill(`${shortCode}/SC/03`, '2026-10-02', 'submitted', [
+    { description: 'Excavation in ordinary soil', quantity: 410 },
+  ]);
+
+  // Retention: withheld across the issued bills, part released. A balance of zero would look
+  // identical whether the ledger works or always returns its input.
+  const withheld =
+    sc1.retentionAmount.toNumber() + sc2.retentionAmount.toNumber();
+  const released = Math.round(withheld * 0.4 * 100) / 100;
+  await prisma.retentionRelease.create({
+    data: {
+      companyId,
+      workOrderId: workOrder.id,
+      amount: new Prisma.Decimal(released),
+      releasedOn: d('2026-09-28'),
+      reason:
+        'Half of the practical-completion tranche, against clause 14 of the work order',
+      releasedByUserId: actorUserId,
+    },
+  });
+
+  // ── Labour: one approved payment sheet, so the P&L's labour line is not zero ──
+  //
+  // Approved rather than draft: only `approved`, `partially_disbursed` and `closed` are counted
+  // (`COUNTED_SHEET_STATUSES`), because the P&L must read what was approved for payment rather
+  // than what somebody is still working on. Gross, not net — a deduction is money recovered from
+  // the worker, not money the project did not spend.
+  let labourSheets = 0;
+  const onSheet = workerIds.slice(0, 12);
+  if (onSheet.length > 0) {
+    const DAILY = 742.5;
+    const DAYS = 24;
+    const gross = Math.round(onSheet.length * DAILY * DAYS * 100) / 100;
+    const sheet = await prisma.labourPaymentSheet.create({
+      data: {
+        companyId,
+        projectId: project.id,
+        periodFrom: d('2026-09-01'),
+        periodTo: d('2026-09-30'),
+        engagementType: 'direct',
+        status: 'approved',
+        grossTotal: new Prisma.Decimal(gross),
+        deductionTotal: new Prisma.Decimal(0),
+        netTotal: new Prisma.Decimal(gross),
+        approvedBy: actorUserId,
+        approvedAt: d('2026-10-01'),
+        createdBy: actorUserId,
+      },
+    });
+    for (const workerId of onSheet) {
+      await prisma.paymentSheetLine.create({
+        data: {
+          companyId,
+          sheetId: sheet.id,
+          workerId,
+          daysWorked: new Prisma.Decimal(DAYS),
+          resolvedRate: new Prisma.Decimal(DAILY),
+          rateSource: 'project_rate',
+          grossWage: new Prisma.Decimal(Math.round(DAILY * DAYS * 100) / 100),
+          deductions: {},
+          netPayable: new Prisma.Decimal(Math.round(DAILY * DAYS * 100) / 100),
+        },
+      });
+    }
+    labourSheets = 1;
+  }
+
+  return {
+    boqLines,
+    clientBills: 3,
+    raBills: 3,
+    retentionReleased: released,
+    labourSheets,
+  };
+}
 
 /**
  * Feature 017's half of the demo: statutory documents, project readiness, a signatory
@@ -1705,6 +2293,10 @@ async function main() {
     companyDocuments: 0,
     projectDocuments: 0,
     paymentProofs: 0,
+    boqLines: 0,
+    clientBills: 0,
+    raBills: 0,
+    labourSheets: 0,
   };
   let firstCompanyId: string | null = null;
 
@@ -3818,6 +4410,37 @@ async function main() {
     totals.companyDocuments += documents.companyDocuments;
     totals.projectDocuments += documents.projectDocuments;
 
+    // ── Feature 018 ────────────────────────────────────────────────────────────
+    // Only the first project, and only once per company — see the function's docblock. A company
+    // whose every project carries a schedule leaves no empty project to demonstrate BOQ entry or
+    // the tender import against, and `confirm` refuses a project that already has one.
+    if (projects[0]) {
+      const workersForSheet = await prisma.labourWorker.findMany({
+        where: { companyId: company.id },
+        select: { id: true },
+        orderBy: { labourCode: 'asc' },
+        take: 12,
+      });
+      const billing = await seedBoqAndBilling({
+        companyId: company.id,
+        shortCode: spec.shortCode,
+        project: projects[0],
+        workerIds: workersForSheet.map((w) => w.id),
+        vendorId: vendors[0]?.id ?? null,
+        actorUserId: superAdmin.id,
+        dateOnlyFor: d,
+      });
+      totals.boqLines += billing.boqLines;
+      totals.clientBills += billing.clientBills;
+      totals.raBills += billing.raBills;
+      totals.labourSheets += billing.labourSheets;
+      console.log(
+        `    ${billing.boqLines} BOQ lines on ${projects[0].name}, ` +
+          `${billing.clientBills} client bills, ${billing.raBills} RA bills, ` +
+          `Rs ${billing.retentionReleased} retention released`,
+      );
+    }
+
     /**
      * Transaction proof on two payments, not all of them (017 FR-020, FR-021).
      *
@@ -3879,6 +4502,9 @@ async function main() {
   );
   console.log(
     `  Documents: ${totals.companyDocuments} company documents, ${totals.projectDocuments} project documents, ${totals.paymentProofs} payment proofs`,
+  );
+  console.log(
+    `  Billing: ${totals.boqLines} BOQ lines, ${totals.clientBills} client bills, ${totals.raBills} RA bills, ${totals.labourSheets} labour payment sheets`,
   );
   console.log(
     '\n  Every login is  <first>.<last>@<company-domain>  with password  secret42',

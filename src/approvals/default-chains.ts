@@ -208,3 +208,52 @@ export const DIRECTOR_FINAL_SEEDED_ACTIONS: string[] = [
   // approver in that sentence.
   ACTION_EXIT_CLEARANCE_WAIVER,
 ];
+
+/**
+ * Every chain a company must have on the day it is created, in one place.
+ *
+ * **This list exists because there were two of them.** `ChainsService.seedDefaultsForCompany`
+ * carried the canonical set and `prisma/seed-demo.ts` carried a hand-copied subset, and on
+ * 2026-10-03 the copy was found to be three chains behind: `attendance_correction`,
+ * `operator_fuel_recovery` and `ra_bill`. The visible consequence was that **every demo company
+ * refused a subcontractor bill sent for certification** with `APPROVAL_CHAIN_NOT_CONFIGURED` —
+ * item 12's certification path could not be walked at all in a freshly seeded database, while the
+ * same path worked in any company old enough to have been reached by the backfill migration. A
+ * configuration gap that depends on when a company was created is the hardest kind to notice.
+ *
+ * Both readers now take the list from here. Adding an action type to the product means adding it
+ * once.
+ */
+export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
+  [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  // 016 FR-012: the manual correction, same three-level shape as the exception it replaced as the
+  // spine's first consumer. A distinct action type — see the constant's comment for why reusing
+  // the exception key would have been wrong.
+  [ACTION_ATTENDANCE_CORRECTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
+  // 020 FR-006: recovering fuel from an operator's salary. The same Employer → HR → Director shape
+  // as a correction — it is not one of the director-final actions the client confirmed on
+  // 2026-10-02, so it ends at the Director as a third level rather than as a one-level gate.
+  [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
+  // 018 FR-009: certifying a subcontractor's RA bill. One Director level by default — the minimum
+  // gate that makes "editing a certified bill sends it round again" mean anything. Listed here
+  // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
+  // about what the client confirmed and an RA bill is not on it.
+  [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // FR-018's remaining action types, each a director-only chain (T048). Seeded even where no module
+  // submits into them yet: without the chain, feature 017's first work order would be refused as a
+  // configuration fault in every company at once, and the remedy would be a settings visit per
+  // company rather than a deployment.
+  //
+  // `director_final_set_change` comes through this spread — 016 FR-018b, changing which actions the
+  // Director must approve being itself one of them. It used to be listed explicitly *as well*,
+  // which made it the one duplicated entry in the list: harmless, because the seeder skips a chain
+  // it has already created, but it meant the levels somebody intended for a duplicated action
+  // would be silently ignored. Found by `default-chains.spec.ts` the moment that check was written.
+  ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
+    (actionType): [string, ChainLevelInput[]] => [
+      actionType,
+      DEFAULT_DIRECTOR_FINAL_LEVELS,
+    ],
+  ),
+];

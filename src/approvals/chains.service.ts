@@ -10,18 +10,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
-import {
-  ACTION_ATTENDANCE_CORRECTION,
-  ACTION_OPERATOR_FUEL_RECOVERY,
-  ACTION_DIRECTOR_FINAL_SET_CHANGE,
-  ACTION_ATTENDANCE_EXCEPTION,
-  ACTION_PAYROLL_RUN,
-  DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
-  DEFAULT_DIRECTOR_FINAL_LEVELS,
-  DEFAULT_PAYROLL_RUN_LEVELS,
-  ACTION_RA_BILL,
-  DIRECTOR_FINAL_SEEDED_ACTIONS,
-} from './default-chains';
+import { DEFAULT_COMPANY_CHAINS } from './default-chains';
 
 /** One level as supplied when defining or replacing a chain. */
 export interface ChainLevelInput {
@@ -223,38 +212,10 @@ export class ChainsService {
     tx: Prisma.TransactionClient,
     opts: { superAdminRoleId?: string | null } = {},
   ): Promise<void> {
-    const seeds: [string, ChainLevelInput[]][] = [
-      [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-      // 016 FR-012: the manual correction, same three-level shape as the exception it
-      // replaced as the spine's first consumer. A distinct action type — see the constant's
-      // comment for why reusing the exception key would have been wrong.
-      [ACTION_ATTENDANCE_CORRECTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-      // 016 FR-018b: changing which actions the Director must approve is itself one of
-      // them. Seeded here so a new company can never be created with this gate missing.
-      [ACTION_DIRECTOR_FINAL_SET_CHANGE, DEFAULT_DIRECTOR_FINAL_LEVELS],
-      [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
-      // 020 FR-006: recovering fuel from an operator's salary. The same Employer → HR → Director
-      // shape as a correction — it is not one of the four director-final actions the client confirmed
-      // on 2026-10-02, so it ends at the Director as a third level rather than as a one-level gate.
-      // Seeded for every company: without the chain, the first recovery raised anywhere would be
-      // refused as a configuration fault, and the remedy would be a settings visit per company.
-      [ACTION_OPERATOR_FUEL_RECOVERY, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-      // 018 FR-009: certifying a subcontractor's RA bill. One Director level by default — the
-      // minimum gate that makes "editing a certified bill sends it round again" mean anything.
-      // Listed here rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries
-      // a policy claim about what the client confirmed and an RA bill is not on it.
-      [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
-      // FR-018's remaining action types, each a director-only chain (T048). Seeded even
-      // though no module submits into them yet: without the chain, feature 017's first
-      // work order would be refused as a configuration fault in every company at once,
-      // and the remedy would be a settings visit per company rather than a deployment.
-      ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
-        (actionType): [string, ChainLevelInput[]] => [
-          actionType,
-          DEFAULT_DIRECTOR_FINAL_LEVELS,
-        ],
-      ),
-    ];
+    // One list, in `default-chains.ts`, because there used to be two: `prisma/seed-demo.ts`
+    // carried a hand-copied subset and drifted three chains behind, which left every demo company
+    // refusing a subcontractor bill sent for certification. See `DEFAULT_COMPANY_CHAINS`.
+    const seeds = DEFAULT_COMPANY_CHAINS;
 
     for (const [actionType, levels] of seeds) {
       const existing = await tx.approvalChain.findFirst({
