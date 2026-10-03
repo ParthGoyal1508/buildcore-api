@@ -30,6 +30,8 @@ describe('ExitClearanceService', () => {
       latestDecision?: { actorUserId: string };
     } | null;
     noCustodySource?: boolean;
+    /** Open **and** closed allocations, as the settlement summary asks for them. */
+    custodyHistory?: Record<string, unknown>[];
   }) => {
     const waiverWrites: Record<string, unknown>[] = [];
     const proposalWrites: Record<string, unknown>[] = [];
@@ -97,7 +99,19 @@ describe('ExitClearanceService', () => {
       source: () =>
         opts.noCustodySource
           ? null
-          : { openCustodyFor: async () => opts.assets ?? [] },
+          : {
+              openCustodyFor: async () => opts.assets ?? [],
+              // A different question from `openCustodyFor`, answered separately — see
+              // `custodyOutcomesFor`. Defaults to the open set so an existing test that only
+              // supplies `assets` still describes a consistent world.
+              custodyHistoryFor: async () =>
+                opts.custodyHistory ??
+                (opts.assets ?? []).map((asset) => ({
+                  ...asset,
+                  status: 'open',
+                  actualReturnDate: null,
+                })),
+            },
     };
     return {
       service: new ExitClearanceService(
@@ -640,5 +654,180 @@ describe('ExitClearanceService', () => {
       // nobody is accountable for it.
       expect(clearance.items[0].waiver?.waivedByName).toBe('user-gone');
     });
+  });
+});
+
+/**
+ * The settlement summary's asset list (021 FR-018a) — `bugs.md` item 10.
+ *
+ * ## The defect these pin
+ *
+ * `FnfService.settlementSummary` derived its asset list by filtering the clearance's items. The
+ * clearance can only ever contain **open** custody, so an asset returned a week before the last
+ * working day was absent from the settlement summary entirely — the summary said the employee had
+ * never been given it. Against a client who asked, in their own words, for "any assets assigned to
+ * the employee" to appear in the F&F summary.
+ *
+ * Nothing announced it. The summary rendered a shorter list that looked complete, and the only way
+ * to notice was to know an asset had been returned and go looking for it.
+ */
+describe('ExitClearanceService.custodyOutcomesFor', () => {
+  const ctx = { isSuperAdmin: true } as never;
+
+  const build = (opts: {
+    custodyHistory?: Record<string, unknown>[];
+    waivers?: Record<string, unknown>[];
+    users?: Record<string, unknown>[];
+    noCustodySource?: boolean;
+  }) => {
+    const tx = {
+      $executeRaw: async () => 0,
+      exitRecord: { findFirst: async () => ({ id: 'exit-1' }) },
+      exitClearanceWaiver: { findMany: async () => opts.waivers ?? [] },
+      user: { findMany: async () => opts.users ?? [] },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    const registry = {
+      source: () =>
+        opts.noCustodySource
+          ? null
+          : { custodyHistoryFor: async () => opts.custodyHistory ?? [] },
+    };
+    return new ExitClearanceService(
+      prisma as never,
+      registry as never,
+      { submit: jest.fn(), stateOfSystem: jest.fn() } as never,
+    );
+  };
+
+  const record = (over: Record<string, unknown> = {}) => ({
+    allocationId: 'alloc-1',
+    assetId: 'a-1',
+    assetName: 'Total Station',
+    assetCode: 'AST-9',
+    projectId: 'p-1',
+    siteId: 'site-1',
+    quantity: 1,
+    expectedReturnDate: new Date('2026-10-01T00:00:00.000Z'),
+    status: 'open',
+    actualReturnDate: null,
+    ...over,
+  });
+
+  it('keeps an asset that was returned, which the clearance correctly drops', async () => {
+    // The whole of the defect. This allocation is closed, so it is absent from the clearance — and
+    // it must still be on the settlement summary, marked returned, with the date.
+    const service = build({
+      custodyHistory: [
+        record({
+          status: 'closed',
+          actualReturnDate: new Date('2026-09-24T00:00:00.000Z'),
+        }),
+      ],
+    });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+
+    expect(assets).toHaveLength(1);
+    expect(assets?.[0].outcome).toBe('returned');
+    expect(assets?.[0].returnedOn).toBe('2026-09-24');
+    expect(assets?.[0].label).toContain('Total Station');
+  });
+
+  it('marks a still-held asset outstanding, with no return date', async () => {
+    const service = build({ custodyHistory: [record()] });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+
+    expect(assets?.[0].outcome).toBe('outstanding');
+    expect(assets?.[0].returnedOn).toBeNull();
+    expect(assets?.[0].waivedByName).toBeNull();
+  });
+
+  it('names the person who waived one, and their reason', async () => {
+    const service = build({
+      custodyHistory: [record()],
+      waivers: [
+        {
+          itemKind: 'asset_custody',
+          itemRef: 'alloc-1',
+          reason: 'Lost on site; recovered from the final payment by agreement',
+          waivedByUserId: 'u-9',
+        },
+      ],
+      users: [{ id: 'u-9', firstname: 'Asha', lastname: 'Menon' }],
+    });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+
+    // FR-016's requirement, carried onto the summary: a write-off of company money shows whose
+    // decision it was.
+    expect(assets?.[0].outcome).toBe('waived');
+    expect(assets?.[0].waivedByName).toBe('Asha Menon');
+    expect(assets?.[0].waiverReason).toMatch(
+      /recovered from the final payment/,
+    );
+  });
+
+  it('prefers "waived" over "returned" when a closed allocation carries a waiver', async () => {
+    // Different facts about where the asset is. A closed allocation with a waiver against it is an
+    // asset somebody wrote off, not one that came back — and the summary is the record of which.
+    const service = build({
+      custodyHistory: [
+        record({
+          status: 'closed',
+          actualReturnDate: new Date('2026-09-24T00:00:00.000Z'),
+        }),
+      ],
+      waivers: [
+        {
+          itemKind: 'asset_custody',
+          itemRef: 'alloc-1',
+          reason: 'Written off',
+          waivedByUserId: 'u-9',
+        },
+      ],
+    });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+    expect(assets?.[0].outcome).toBe('waived');
+  });
+
+  it('falls back to the user id when the waiver author’s row has gone', async () => {
+    const service = build({
+      custodyHistory: [record()],
+      waivers: [
+        {
+          itemKind: 'asset_custody',
+          itemRef: 'alloc-1',
+          reason: 'Written off',
+          waivedByUserId: 'u-deleted',
+        },
+      ],
+      users: [],
+    });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+    // An unreadable identifier is more honest than a dash where a person belongs.
+    expect(assets?.[0].waivedByName).toBe('u-deleted');
+  });
+
+  it('returns null, not an empty list, when the asset module is not deployed', async () => {
+    const service = build({ noCustodySource: true });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+
+    // "Could not ask" and "held nothing" are different facts, and a settlement is signed off on
+    // them. The same decision `forEmployee` makes with `unavailableSources`.
+    expect(assets).toBeNull();
+  });
+
+  it('reports an employee who held nothing as an empty list, which is not null', async () => {
+    const service = build({ custodyHistory: [] });
+
+    const { assets } = await service.custodyOutcomesFor(ctx, 'co-1', 'emp-1');
+    expect(assets).toEqual([]);
   });
 });

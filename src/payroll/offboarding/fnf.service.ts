@@ -91,22 +91,28 @@ export class FnfService {
    */
   async settlementSummary(caller: Caller, employeeId: string) {
     const { employee } = await this.requireExit(caller, employeeId);
-    const [computed, clearance] = await Promise.all([
+    const [computed, clearance, custody] = await Promise.all([
       this.compute(caller, employeeId),
       this.clearance.forEmployee(caller.rls, employee.companyId, employeeId),
+      // **Not derived from `clearance.items`, and that was a real defect** (fixed 2026-10-03). The
+      // clearance can only contain *open* custody, so an asset returned a week before the last
+      // working day was absent from this summary entirely — the summary said the employee had never
+      // been given it, against a client who asked for "any assets assigned to the employee" to
+      // appear. `custodyOutcomesFor` asks for the history, open and closed.
+      this.clearance.custodyOutcomesFor(
+        caller.rls,
+        employee.companyId,
+        employeeId,
+      ),
     ]);
 
     return {
       ...computed,
-      assets: clearance.items
-        .filter((item) => item.kind === 'asset_custody')
-        .map((item) => ({
-          label: item.label,
-          detail: item.detail,
-          outcome: item.waiver ? ('waived' as const) : ('outstanding' as const),
-          waivedBy: item.waiver?.waivedByUserId ?? null,
-          waiverReason: item.waiver?.reason ?? null,
-        })),
+      assets: custody.assets,
+      // Null `assets` above means the asset module is not deployed and the question went
+      // unanswered. Said in its own field so a screen renders "we could not ask" rather than
+      // "nothing was held" — the two are different facts and a settlement is signed off on them.
+      assetsUnavailable: custody.assets === null,
       clearanceSettleable: clearance.settleable,
       // Stated on the response rather than left to be inferred from the absence of a deduction.
       assetValueRecovered: null as null,

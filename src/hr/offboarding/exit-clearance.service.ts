@@ -147,6 +147,112 @@ export class ExitClearanceService {
     private readonly approvals: ApprovalService,
   ) {}
 
+  /**
+   * Every asset this leaver was ever given, with how each one ended (021 FR-018a).
+   *
+   * **A different question from `forEmployee` below, and the difference is the client's item 10.**
+   * The clearance lists what is *still* outstanding, so an asset returned during the notice period
+   * correctly disappears from it. The settlement summary is the record of how each asset ended, and
+   * it must still show that one — "any assets assigned to the employee should appear in the F&F
+   * summary", read literally.
+   *
+   * This was the gap behind web task T025a. The settlement summary derived its asset list by
+   * filtering the clearance's items, which can only ever contain **open** custody: an asset returned
+   * a week before the last working day was absent from the summary entirely, so the summary said the
+   * employee had never been given it. `FnfService.settlementSummary`'s own docblock claimed every
+   * asset appeared "whether or not it blocked the settlement" — the intent, not the behaviour.
+   *
+   * `outcome` is the one word a reader needs:
+   *
+   *   * `returned` — came back, with the date.
+   *   * `waived` — written off by a named person, with their reason. Still held.
+   *   * `outstanding` — still held, nobody has decided.
+   *
+   * A waiver wins over the allocation being closed, because a closed allocation with a waiver
+   * against it is an asset somebody **wrote off** rather than one that came back, and those are
+   * different facts about where the asset now is.
+   */
+  async custodyOutcomesFor(
+    ctx: RlsContext,
+    companyId: string,
+    employeeId: string,
+  ): Promise<{
+    /** Null when feature 012 is not deployed — never an empty list. */
+    assets:
+      | {
+          allocationId: string;
+          label: string;
+          detail: string | null;
+          outcome: 'returned' | 'waived' | 'outstanding';
+          returnedOn: string | null;
+          waivedByName: string | null;
+          waiverReason: string | null;
+        }[]
+      | null;
+  }> {
+    const exitRecord = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.exitRecord.findFirst({
+        where: { employeeId },
+        orderBy: { createdAt: 'desc' },
+      }),
+    );
+    if (!exitRecord) {
+      throw new NotFoundException(
+        'No exit has been initiated for this employee.',
+      );
+    }
+
+    const custodySource = this.custody.source();
+    // Null, not `[]`. "Feature 012 is not deployed" and "this employee held nothing" are different
+    // facts, and a settlement summary must not render the first as the second — the decision
+    // `forEmployee` makes with `unavailableSources` and the project P&L makes with
+    // `unavailableCategories`.
+    if (!custodySource) return { assets: null };
+
+    const [records, waivers] = await Promise.all([
+      custodySource.custodyHistoryFor(ctx, companyId, employeeId),
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.exitClearanceWaiver.findMany({
+          where: {
+            exitRecordId: exitRecord.id,
+            itemKind: CLEARANCE_KIND.asset,
+          },
+        }),
+      ),
+    ]);
+
+    const names = await this.namesFor(waivers.map((w) => w.waivedByUserId));
+
+    return {
+      assets: records.map((record) => {
+        const waiver = waivers.find((w) => w.itemRef === record.allocationId);
+        return {
+          allocationId: record.allocationId,
+          label: `${record.assetName}${
+            record.assetCode ? ` (${record.assetCode})` : ''
+          }`,
+          detail:
+            `Site ${record.siteId}` +
+            (record.quantity > 1 ? `, ${record.quantity} units` : ''),
+          outcome: waiver
+            ? ('waived' as const)
+            : record.status === 'closed'
+            ? ('returned' as const)
+            : ('outstanding' as const),
+          returnedOn: record.actualReturnDate
+            ? record.actualReturnDate.toISOString().slice(0, 10)
+            : null,
+          // Falls back to the id rather than a dash, for the reason `waiverFor` gives below: a
+          // waiver whose author's row has gone is still a waiver somebody made.
+          waivedByName: waiver
+            ? names.get(waiver.waivedByUserId) ?? waiver.waivedByUserId
+            : null,
+          waiverReason: waiver?.reason ?? null,
+        };
+      }),
+    };
+  }
+
   async forEmployee(
     ctx: RlsContext,
     companyId: string,
