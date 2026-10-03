@@ -436,9 +436,22 @@ This phase moves no money.
   otherwise owe without anyone deciding they owe it: a whitespace-only dismissal reason, a hirer
   attribution on an **owned** machine (FR-004 — there is no hirer to deduct from), and re-reviewing an
   exception somebody has already decided.
-- [ ] T052 [P] [US1] **Not run** — probe test with `NOSUPERUSER NOBYPASSRLS`. Same limitation as
-  T031: everything local runs as a Postgres superuser, which is exempt from policies
-  unconditionally, so the policy is verified to exist and be forced but not to deny anything.
+- [X] T052 [P] [US1] **Run 2026-10-03** in `test/wave-rls.e2e-spec.ts`, alongside 019 T069's
+  tables — the question is identical and one probe role is cheaper than two.
+
+  The limitation this task recorded was the same one T041 recorded, and it is answered the same way:
+  a superuser can `CREATE ROLE … NOSUPERUSER NOBYPASSRLS` and connect as it, so "everything local
+  runs as a superuser" is true of a query issued as `prisma` and not of a role made for the purpose.
+
+  `plant.FuelVarianceException` and `plant.OperatorFuelRecovery` both carry ENABLE and FORCE, both
+  refuse a cross-company unfiltered read, both default-deny with no company context, and each has
+  its own vacuity check.
+
+  Two named writes, because they cost different things. A cross-tenant `INSERT` into
+  `OperatorFuelRecovery` is a disciplinary deduction fabricated against **somebody else's employee**
+  — the most personal row in either feature, and it would reach them as a smaller payslip with a
+  reason attached. A cross-tenant `DELETE` of a `FuelVarianceException` is an attacker making
+  another company's losses disappear from their own report. Both refused.
 
 ## Phase 6: Consequence — the hire bill and the operator's salary (FR-003 to FR-007, FR-010) ✅ implemented 2026-10-02
 
@@ -587,6 +600,9 @@ is unchanged: every local database role is a superuser.
 ## Verification for phases 5-7
 
 - [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **See 019 T072 for the measured result, which is the same run.** Clean on the first three; the
+      e2e suite is red from connection exhaustion and pre-existing drift in suites older than 017,
+      neither of which is this feature's work.
 - [X] T073 Re-read `spec.md` FR-001 to FR-010 and FR-017 and confirm the built behaviour matches.
   Confirm explicitly that **detection is unchanged** — the client's item 13 asked for consequence, and
   the half that already worked must still work identically.

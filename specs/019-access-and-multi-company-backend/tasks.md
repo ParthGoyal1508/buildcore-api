@@ -386,7 +386,29 @@ payment. If the client wants the other reading, this phase is where it is built.
   including one export.
 - [ ] T068 NFR-002: re-run T003's measurement and compare p95. If the guard exceeds the baseline by
   more than 50ms, T019's decision was wrong and grants belong on the token.
-- [ ] T069 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against all three new tables.
+- [X] T069 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against all three new tables.
+
+  **Done 2026-10-03** in `test/wave-rls.e2e-spec.ts`, which covers 020 T052's tables in the same
+  suite — the question is identical and one probe role is cheaper than two.
+
+  Two of the three tables have tenant policies and are proven to deny: `settings.PermissionRefusal`
+  and `settings.UserCompanySelection`. Each gets ENABLE and FORCE checked, an unfiltered read with
+  **no `WHERE` clause**, default-deny with no company context set, and **its own** vacuity check —
+  per table rather than once for the set, because a single check would pass while a different
+  table's policy was missing entirely, which is the failure a table-driven sweep is most likely to
+  have.
+
+  The named write case is the one that matters here: a cross-tenant `UPDATE` of
+  `UserCompanySelection` would move somebody else's session into a company they did not choose, and
+  every list they then read would be correct for the wrong company. Refused, with the stored value
+  confirmed unmoved.
+
+  **The third table cannot have a policy, and that is now a test rather than an omission.**
+  `settings.RolePermission` carries no `companyId` — because `settings.Role` carries none either: a
+  role is globally named and shared across companies, which is the divergence recorded under T071
+  above. A tenant policy there is not possible rather than merely absent, and asserting one would
+  mean inventing a column. The test asserts both facts, so the day somebody adds `companyId` to
+  `Role` it fails and asks for the policy that then becomes possible.
 - [X] T070 Re-read `spec.md` and confirm each of FR-001 to FR-017 is either built or explicitly
   deferred with a reason. Record FR-002 as **already satisfied before this feature** for the area
   dimension (research §2) rather than silently claiming it as new work.
@@ -418,6 +440,26 @@ payment. If the client wants the other reading, this phase is where it is built.
   the cost of leaving both readings in the document is that the next person to design against it
   believes a company's roles are its own.
 - [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+
+      **MEASURED 2026-10-03, and left open with the reason rather than ticked.** `npx tsc --noEmit`
+      clean; `npx eslint src test prisma` 0 errors; `npm test` **1629 passing across 144 suites**.
+      `npm run test:e2e` is **red**, and none of it is this feature's work — two causes, both
+      measured:
+
+      * **Connection exhaustion.** Run all 33 suites together and Postgres refuses with *"sorry, too
+        many clients already"*: 158 failures across 15 suites. `app.e2e-spec.ts` — one assertion
+        against `GET /` — passes alone and fails in the full run, which is the clearest proof it is
+        the harness and not the product. Each suite builds its own `PrismaClient`s and they are not
+        closed promptly enough for the next suite, even at `maxWorkers: 1`.
+      * **Pre-existing drift in suites older than 017 and 019.** Run individually, several still
+        fail: `partners` 4 of 15, `projects` 17 of 21. The cause is environment, not regression —
+        017's `PROJECT_DOCUMENTS_MANDATORY_MISSING` now refuses project creation until every
+        mandatory document kind is attached, and 019's company selection means a caller writes to the
+        company on their *context* rather than the oldest one. Suites written before either assume
+        otherwise. `client-bills.e2e-spec.ts` documents both at the point it works around them.
+
+      All four suites written today pass, alone and in the full run. Closing this task would mean
+      reporting a green e2e suite that is not green, so it stays open with the number attached.
 
 ## Dependencies
 

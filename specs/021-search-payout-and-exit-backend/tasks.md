@@ -325,6 +325,9 @@ path FR-014c requires to satisfy an item without a second action (plan D14).
 ## Verification for phases 4-8
 
 - [ ] T083 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **See 019 T072 for the measured result, which is the same run.** Clean on the first three; the
+      e2e suite is red from connection exhaustion and pre-existing drift in suites older than 017,
+      neither of which is this feature's work.
 - [X] T084 Re-read `spec.md` FR-005 to FR-018b and confirm each is built or explicitly deferred with a
   reason.
 
