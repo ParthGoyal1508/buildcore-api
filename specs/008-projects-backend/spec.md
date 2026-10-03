@@ -886,11 +886,20 @@ theme one level down — a decision nobody reviewed — so they are settled here
   finish date cannot be at risk and is **Unplanned**. The original definition — "Avg Qty Per Day vs
   required Per Day Qty" — has no meaning once `perDayQty` is optional, and would silently evaluate
   as not-at-risk for every imported line.
-- **FR-048** (closes CHK026, CHK027, CHK028): the four alert groups MUST be mutually exclusive and
-  jointly exhaustive, and membership MUST be decided by **the presence of a finish date alone**: no
-  finish date ⇒ Unplanned; finish date in the past with pending quantity ⇒ Delayed; finish date
-  today ⇒ Today; otherwise FR-047 decides Today-or-To-Be-Delayed. A partially planned line therefore
-  has exactly one home, and no line can be absent from all four or present in two.
+- **FR-048** (closes CHK026, CHK027, CHK028): every line MUST carry exactly one of **five**
+  states, and the four alert groups MUST be mutually exclusive: no finish date ⇒ **Unplanned**;
+  nothing outstanding ⇒ **On Track**; finish date past ⇒ **Delayed**; finish date today ⇒
+  **Today**; needed rate above achieved rate ⇒ **To Be Delayed**; otherwise **On Track**. The
+  alerts surface reports the first four and MUST NOT report On Track, which is the absence of an
+  alert. A partially planned line therefore has exactly one home, and no line is absent from the
+  five or present in two.
+  **Corrected 2026-10-03 while implementing it, and the correction is the same mistake in reverse.**
+  This requirement first named only four states and said "otherwise FR-047 decides
+  Today-or-To-Be-Delayed" — under which a line *finished before its finish date* falls into Today,
+  reporting completed work as needing attention. The amendment exists to stop an unplanned line
+  being reported as on time; the first draft of its replacement reported finished work as due
+  today. A fifth state is the fix, because "needs nobody's attention" is a real state of a line and
+  four groups had nowhere to put it.
 - **FR-049** (closes CHK020): an import into a project that **already has BOQ lines** MUST be
   refused, naming the existing line count. Appending is the same silent doubling FR-042 exists to
   prevent, reached by uploading twice rather than by reading the wrong block; replacing is

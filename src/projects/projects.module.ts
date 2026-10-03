@@ -9,6 +9,11 @@ import { ClientsService } from './clients/clients.service';
 import { ProjectDocumentsController } from './documents/project-documents.controller';
 import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
+import { BoqImportService } from './boq/boq-import.service';
+import { BoqWorkbookReader } from './boq/boq-workbook.reader';
+import { BoqController } from './boq/boq.controller';
+import { BoqService } from './boq/boq.service';
+import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSearchSource } from './portfolio/project-search.source';
 import { ProjectSourcesRegistry } from './portfolio/project-sources.registry';
@@ -56,6 +61,11 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
+    // 008 US4, amended 2026-10-03. Entry, the tree, the four alert groups and the two-step tender
+    // import — the path that was specified in August, never built, and that 018's billing has been
+    // measuring against a table nothing could fill. Its paths all sit under `projects/:id/boq`, so
+    // they cannot collide with the literal-vs-`:id` ordering problem described below.
+    BoqController,
     WorkOrdersController,
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
@@ -96,6 +106,15 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     PnlDrillDownService,
     ProjectSourcesRegistry,
     ProjectLockGuard,
+    // 008 US4. `ImportBatchStore` is a **singleton on purpose**: a validated batch lives in its
+    // memory between the validate request and the confirm request, so a request-scoped provider
+    // would hand every confirm an empty store and every import would fail as "batch not found".
+    // Nest's default scope is one instance per application, which is what this needs — and
+    // research §16 records that it is also what ties the design to a single running instance.
+    BoqService,
+    BoqImportService,
+    BoqWorkbookReader,
+    ImportBatchStore,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
     AuditLogService,
@@ -111,7 +130,10 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // module can ask how far a project is from fully papered through a service method.
   // `projects.ProjectDocumentRequirement` is this module's table and Principle I means
   // nobody else may read it directly.
+  // `BoqService` is exported for the DWR work (US5): approving a report moves a BOQ line's
+  // completed quantity, and that has to go through this service rather than through the table.
   exports: [
+    BoqService,
     SitesService,
     ProjectsService,
     ProjectDocumentsService,

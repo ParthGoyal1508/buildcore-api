@@ -660,25 +660,25 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B5: Entry by hand, and the four alert groups
 
-- [ ] T086 [US4] DTOs in `src/projects/boq/dto/` with the programme fields **optional**
+- [X] T086 [US4] ✅ Done — programme fields optional. **One deviation from research §4, deliberately**: the workbook arrives as **base64 in JSON**, not `multipart/form-data`. Every other upload in this product is base64 (company documents, equipment photos, purchase bills, payment attachments each say so at their own DTO) because feature 015 established the web client has no `FormData` anywhere; multipart here would mean introducing a second transport for one endpoint and the web half would have had to build it DTOs in `src/projects/boq/dto/` with the programme fields **optional**
       (FR-037): `create-boq-group.dto.ts`, `create-boq-item.dto.ts`, `import-boq-confirm.dto.ts`.
-- [ ] T087 [US4] `BOQService` in `src/projects/boq/boq.service.ts`: `createGroup`, `createItem`,
+- [X] T087 [US4] ✅ Done — `deleteItem` checks **three** relations (`dwrTasks`, `clientBillLines`, `awardLines`) and names which one blocks; checking only the DWR, the only relation that existed when US4 was written, would let a billed line be deleted from under a submitted bill `BOQService` in `src/projects/boq/boq.service.ts`: `createGroup`, `createItem`,
       `getTree` (with `pendingQty`, `avgQtyPerDay`, `daysToComplete` computed, null where
       unplanned), `updateDoneQty` (on DWR **approval** only, research §13), `deleteItem` — `409` if
       referenced by a `DWRTask`, a `ClientBillLine` **or** a `WorkOrderBOQItem`; three relations,
       not one.
-- [ ] T088 [US4] `getAlerts` returning **four** mutually exclusive, jointly exhaustive groups
+- [X] T088 [US4] ✅ Done — and **the first draft was defective in the amendment's own direction.** With four states and no `onTrack`, a line finished before its finish date fell into Today: completed work reported as due. FR-048 was corrected to five states, four of which are alert groups; `onTrack` is the absence of an alert and appears on the tree only `getAlerts` returning **four** mutually exclusive, jointly exhaustive groups
       (FR-047, FR-048), membership decided by the finish date alone: no finish date ⇒ `unplanned`;
       past with pending quantity ⇒ `delayed`; today ⇒ `today`; otherwise at risk when the rate
       needed to finish exceeds the rate achieved, where the needed rate is `perDayQty` when set and
       `pendingQty ÷ remaining days` otherwise. The old definition measured against `perDayQty`
       directly and would read every imported line as not-at-risk.
-- [ ] T089 [US4] `BOQController` in `src/projects/boq/boq.controller.ts` — the entry endpoints, the
+- [X] T089 [US4] ✅ Done — `Permission.PROJECTS` (not `PROJECT_FINANCIALS`: a schedule is project work, and a site engineer who may not see a bill may need the schedule), `ProjectLockGuard` on all five writes including both import steps, and `@Ip()` on confirm so the audit entry records a real address `BOQController` in `src/projects/boq/boq.controller.ts` — the entry endpoints, the
       two import steps and the alerts, each with `Permission.PROJECTS` and `ProjectLockGuard` on
       every write.
-- [ ] T090 [US4] Register `BoqModule` and wire it into `ProjectsModule`; confirm the injector
+- [X] T090 [US4] ✅ Done — folded into `ProjectsModule` rather than a `BoqModule`, matching billing and pnl which have no modules of their own. `ImportBatchStore` is provided once, so it is the application-wide singleton the two-request flow needs. Injector verified by starting the app: `DI OK` Register `BoqModule` and wire it into `ProjectsModule`; confirm the injector
       resolves by starting the application.
-- [ ] T091 [P] [US4] Unit tests in `boq.service.spec.ts`: the four alert groups are exhaustive and
+- [X] T091 [P] [US4] ✅ Done — 13 tests, including the partially-planned line (finish date, no per-day quantity) landing in exactly one group, the finished-line case above, and `deleteItem` refused against each of the three relations separately Unit tests in `boq.service.spec.ts`: the four alert groups are exhaustive and
       disjoint across a fixture holding one line of each kind, **including a partially planned line**
       (finish date, no per-day quantity) which must land in exactly one group; `deleteItem` refuses
       against each of the three relations separately.
