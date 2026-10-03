@@ -361,8 +361,18 @@ running that one spec before committing anything under its six scanned paths.
       this an empty table and a working policy are indistinguishable
 - [ ] T053 **NOT DONE** Quickstart Passes 1–8
 - [ ] T054 **NOT DONE** Quickstart Pass 9 by hand: the group total must equal the sum of its rows **exactly**
-- [ ] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
+- [X] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
       numbers**; if something fails, say so with the output
+
+      **Run 2026-10-03, all eight phases complete.** `npx tsc --noEmit` clean. `npx eslint src` 0
+      errors, 61 pre-existing warnings. **1,539 tests across 135 suites, all passing.** The Nest
+      injector resolves (`DI OK`) — worth running after Phase 7 added a table and a service method,
+      because a missing provider is a green test suite and a server that will not start.
+
+      The e2e and RLS tasks above stay **NOT RUN** for the reason recorded against each. The RLS
+      ones specifically cannot be run here at all: every database login available locally is a
+      Postgres SUPERUSER, and the policies deliberately exempt superusers — so the probe would pass
+      without proving anything, which is worse than not running it.
 
 ---
 
