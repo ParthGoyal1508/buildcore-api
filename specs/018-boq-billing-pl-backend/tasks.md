@@ -305,10 +305,43 @@ running that one spec before committing anything under its six scanned paths.
 
 ## Phase 8: Client certification — **confirmed by the client 2026-10-03**
 
-- [ ] T042 Implement `certify()` retaining **both** billed and certified amounts (FR-005)
-- [ ] T043 Ensure a shortfall does not silently vanish from cumulative billed quantity (spec edge case)
-- [ ] T044 [P] Unit-test that certifying less than billed leaves cumulative billed quantity unchanged
-- [ ] T045 e2e: bill, certify less, confirm both figures and the variance
+- [X] T042 Implement `certify()` retaining **both** billed and certified amounts (FR-005)
+
+      Already built in Phase 2 and confirmed correct on 2026-10-03 — `certifiedAmount` and
+      `certifiedAt` are written, `grossAmount` and `netAmount` are not touched, and
+      `certificationVariance` is derived on the view so the gap is not reachable only by subtracting
+      two columns somebody might not notice differ.
+
+      What this phase **added** is the aggregate. Per bill the gap was visible; across a project it
+      was not, so a project manager asking "how much of what we have billed is actually agreed" had
+      to open every bill. The P&L now carries two figures, deliberately apart:
+
+      - `revenueCertifiedShortfall` — billed and certified for less. **Money in dispute.**
+      - `revenueAwaitingCertification` — billed, out of draft, certified by nobody yet. A decision
+        outstanding, not a disagreement.
+
+      Summing them into one "uncertified" figure would merge a dispute with a queue, and a project
+      manager acts differently on each: one needs a conversation with the client, the other needs a
+      reminder.
+
+- [X] T043 Ensure a shortfall does not silently vanish from cumulative billed quantity
+
+      Holds, and is now pinned rather than assumed. `previouslyBilled` aggregates bill **lines** on
+      bills out of draft and its filter never mentions certification — which is the whole guarantee:
+      cumulative billed quantity is what the next bill measures against, so a shortfall absorbed
+      there comes back as billable scope and is billed twice, or vanishes with no record that
+      anybody disagreed.
+
+- [X] T044 [P] Unit-test that certifying less than billed leaves cumulative billed quantity unchanged
+
+      Done — `src/projects/billing/certification.spec.ts`, 5 tests. The T043 one asserts against the
+      **query** rather than an outcome, because the outcome is a sum the mock supplies: the filter
+      is the guarantee. It also checks that `grossAmount` is **absent** from the fields certify
+      writes rather than merely equal to its old value — a bill that rewrote its own gross to match
+      the certification would pass an equality check against the new figure.
+
+- [ ] T045 **NOT RUN (needs a seeded project and a submitted bill)** e2e: bill, certify less,
+      confirm both figures and the variance.
 
 ## Phase 9: The group view and verification
 

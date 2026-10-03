@@ -19,6 +19,8 @@ function build(opts: {
     overScope?: boolean;
     /** How much of `grossAmount` is variation work (FR-015a). The rest is original scope. */
     variationAmount?: number;
+    /** What the client certified. Omit for a bill nobody has certified yet. */
+    certifiedAmount?: number;
   }[];
   raBills?: {
     projectId: string;
@@ -41,6 +43,12 @@ function build(opts: {
           projectId: bill.projectId,
           billingDate: new Date(bill.billingDate),
           grossAmount: dec(bill.grossAmount),
+          // `undefined` in the fixture means nobody has certified it, which the service reads as
+          // awaiting certification rather than as a shortfall of the whole bill (FR-005).
+          certifiedAmount:
+            bill.certifiedAmount === undefined
+              ? null
+              : dec(bill.certifiedAmount),
           // Mirrors the service's own `select`: a bill line carries its amount and whether the BOQ
           // line behind it is a variation (FR-015a). Two lines so a bill can be part original scope
           // and part variation, which is the case the split exists for.

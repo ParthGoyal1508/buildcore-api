@@ -78,6 +78,18 @@ export interface ProjectPnl {
    */
   revenueFromVariationsMonthly: number;
   revenueFromVariationsCumulative: number;
+  /**
+   * Billed and certified for less, cumulatively (FR-005).
+   *
+   * **Money in dispute**, and kept apart from the figure below it on purpose: a bill certified short
+   * is a disagreement somebody has to pursue, while a bill nobody has certified yet is a decision
+   * that has not been taken. Summing them into one "uncertified" figure would merge a dispute with
+   * a queue, and a project manager acts differently on each — one needs a conversation with the
+   * client, the other needs a reminder.
+   */
+  revenueCertifiedShortfall: number;
+  /** Billed, out of draft, and not yet certified by anybody. Not a dispute — a decision outstanding. */
+  revenueAwaitingCertification: number;
 }
 
 /**
@@ -253,6 +265,10 @@ export class ProjectPnlService {
           revenue.variationMonthly.get(project.id) ?? 0,
         revenueFromVariationsCumulative:
           revenue.variationCumulative.get(project.id) ?? 0,
+        revenueCertifiedShortfall:
+          revenue.certifiedShortfall.get(project.id) ?? 0,
+        revenueAwaitingCertification:
+          revenue.awaitingCertification.get(project.id) ?? 0,
       });
     }
     return out;
@@ -295,6 +311,8 @@ export class ProjectPnlService {
     overScope: Map<string, boolean>;
     variationMonthly: Map<string, number>;
     variationCumulative: Map<string, number>;
+    certifiedShortfall: Map<string, number>;
+    awaitingCertification: Map<string, number>;
   }> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const bills = await tx.clientBill.findMany({
@@ -307,6 +325,7 @@ export class ProjectPnlService {
           projectId: true,
           billingDate: true,
           grossAmount: true,
+          certifiedAmount: true,
           lines: {
             select: {
               exceedsScope: true,
@@ -325,6 +344,8 @@ export class ProjectPnlService {
       const overScope = new Map<string, boolean>();
       const variationMonthly = new Map<string, number>();
       const variationCumulative = new Map<string, number>();
+      const certifiedShortfall = new Map<string, number>();
+      const awaitingCertification = new Map<string, number>();
       for (const bill of bills) {
         const amount = bill.grossAmount.toNumber();
         // Summed from the bill's own lines rather than apportioned from its total. On a client bill
@@ -359,6 +380,26 @@ export class ProjectPnlService {
         if (bill.lines.some((line) => line.exceedsScope)) {
           overScope.set(bill.projectId, true);
         }
+        // FR-005, in aggregate. Per bill the gap is already visible; across a project it was not,
+        // and a project manager asking "how much of what we have billed is actually agreed" had no
+        // way to find out short of opening every bill.
+        if (bill.certifiedAmount === null) {
+          awaitingCertification.set(
+            bill.projectId,
+            (awaitingCertification.get(bill.projectId) ?? 0) + amount,
+          );
+        } else {
+          const shortfall = money(amount - bill.certifiedAmount.toNumber());
+          // Only a shortfall. A client certifying *more* than was billed is refused at
+          // certification, so this can only be zero or positive — and summing a negative would
+          // quietly offset a real dispute on another bill.
+          if (shortfall > 0) {
+            certifiedShortfall.set(
+              bill.projectId,
+              (certifiedShortfall.get(bill.projectId) ?? 0) + shortfall,
+            );
+          }
+        }
       }
       return {
         monthly,
@@ -366,6 +407,8 @@ export class ProjectPnlService {
         overScope,
         variationMonthly,
         variationCumulative,
+        certifiedShortfall,
+        awaitingCertification,
       };
     });
   }
