@@ -71,6 +71,12 @@ export interface BillLineTotals {
  * different answers after rounding, and the per-line figure is the one that appears on the document a
  * client reads — so the total must be the sum of the printed lines rather than a separately-derived
  * number that is a rupee or two away from them.
+ *
+ * **`BillableBoq.quotedTotal` applies it once to the total, and that is not a contradiction.** It
+ * reproduces the figure the tender document itself states, which is what the BOQ import reconciles
+ * against. Two documents, two correct answers, differing by at most half a paisa a line — and
+ * `test/client-bills.e2e-spec.ts` measures the gap rather than asserting it away. The first drafts of
+ * this comment and of `billableBoq`'s each called the other's choice wrong.
  */
 export function lineTotals(
   line: BillLineInput,

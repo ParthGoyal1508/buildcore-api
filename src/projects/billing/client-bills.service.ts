@@ -86,8 +86,14 @@ export interface BillableBoqGroup {
  * **Two totals, not one** (web T058). The estimated total is the schedule at its own rates; the
  * quoted total is that figure with the bidder's percentage applied **once, to the total**. The
  * client's own file carries both — ₹2,99,61,506.78 becoming ₹3,06,98,559.85 at 2.46% excess — and
- * applying the percentage per line instead gives a figure close enough to pass a glance and wrong by
- * rounding, which is the worst available outcome for a tender document.
+ * that is the figure the tender document states, so it is the one this summary must reproduce.
+ *
+ * **A bill applies the same percentage per line instead, and that is also right.** `lineTotals` in
+ * `bill-totals.ts` does so because the total printed on a document a client reads must equal the
+ * column above it. The two differ by rounding — at most half a paisa a line — and
+ * `test/client-bills.e2e-spec.ts` measures that divergence rather than asserting it away. An earlier
+ * version of this comment and of `lineTotals`' each described the other's choice as the wrong one;
+ * they serve different documents.
  */
 export interface BillableBoq {
   projectId: string;
@@ -203,6 +209,24 @@ export class ClientBillsService {
         });
       }
       const itemById = new Map(items.map((item) => [item.id, item]));
+
+      // 008 US4 AC6. The schedule endpoint never offers these, so reaching here means a line id was
+      // supplied directly — and the consequence is a client billed at the company's own costing.
+      // Named, like every other refusal on this path: "this line cannot be billed" without saying
+      // which sends somebody down the schedule looking for it.
+      const estimates = items.filter((item) => item.isEstimate);
+      if (estimates.length > 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: BILLING_ERRORS.lineIsEstimate,
+          message: `These lines belong to this project's internal estimate and cannot be billed to the client: ${estimates
+            .map((item) => item.boqNo)
+            .join(
+              ', ',
+            )}. An estimate is costed at your own rates, not at the rates the client agreed.`,
+          boqNumbers: estimates.map((item) => item.boqNo),
+        });
+      }
 
       const unpriced = items.filter((item) => item.rate.toNumber() === 0);
       if (unpriced.length > 0) {
@@ -444,9 +468,15 @@ export class ClientBillsService {
       });
       if (!project) throw new NotFoundException('Project not found');
 
+      // **Excludes the estimate variant** (008 US4 AC6). A project may hold its own costing beside
+      // the client's tender, and offering both on one billing sheet would present the company's
+      // internal rates as billable scope — doubled quantities at the wrong prices, on a document
+      // that looks correct.
       const groups = await tx.bOQTaskGroup.findMany({
-        where: { projectId },
-        include: { items: { orderBy: { boqNo: 'asc' } } },
+        where: { projectId, isEstimate: false },
+        include: {
+          items: { where: { isEstimate: false }, orderBy: { boqNo: 'asc' } },
+        },
         orderBy: { boqNo: 'asc' },
       });
 

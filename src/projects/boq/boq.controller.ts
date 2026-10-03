@@ -172,6 +172,87 @@ export class BoqController {
     });
   }
 
+  /**
+   * The estimate variant (US4 AC6, T097).
+   *
+   * **The same pipeline, deliberately.** Every refusal, the block identification, the unit
+   * normalisation, the recomputed totals and the reconciliation to one paisa per line apply
+   * unchanged — FR-036 – FR-056 are about reading a workbook honestly, and that does not depend on
+   * whose figures it carries. A second parser for estimates would be a second place for the same
+   * bugs.
+   *
+   * What the flag changes is what the rows *mean* once written, in three ways, and each one is a
+   * failure it prevents:
+   *
+   *   * **Not billable.** `ClientBillsService` excludes estimate lines and refuses one measured on
+   *     a bill (`BOQ_LINE_IS_ESTIMATE`). Without that, importing an estimate would put the
+   *     company's own costing on the client's billable schedule at the company's own rates.
+   *   * **Not on the alerts.** An estimate carries no programme and nobody is delivering it, so its
+   *     lines are excluded rather than reported unplanned — otherwise a project's own costing
+   *     buries its tender under a second copy of the same scope.
+   *   * **No quoted percentage.** `Project.quotedPercentage` is the bidder's quote against the
+   *     client's schedule and every client bill is priced with it. An internal costing's percentage
+   *     written there would reprice the whole tender at a figure the client never saw.
+   *
+   * A project may hold both variants at once, which is the point of a separate one — so the
+   * already-populated refusal counts only the variant being imported, and names it.
+   */
+  @Post('estimate-import/validate')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary:
+      'Read an internal estimate workbook and report what it says (US4 AC6)',
+    description:
+      'Identical to `import/validate` in every refusal and every figure. The difference is what ' +
+      'the confirmed rows mean: an estimate is **not billable**, is absent from the alert groups, ' +
+      'and does not set the project’s quoted percentage.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'One of the fourteen named refusals.',
+  })
+  async validateEstimateImport(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') projectId: string,
+    @Body() body: ValidateBoqImportDto,
+  ) {
+    return this.imports.validate({
+      buffer: Buffer.from(body.file, 'base64'),
+      companyId: resolveCompanyId(caller),
+      userId: caller.id,
+      projectId,
+      ctx: rlsContextFor(caller),
+      isEstimate: true,
+    });
+  }
+
+  /**
+   * Commits an estimate batch.
+   *
+   * A separate route from `import/confirm` so the two cannot be crossed, but the variant is read
+   * from the **batch** rather than from this path: a batch validated as an estimate and confirmed
+   * through the tender route would otherwise write the company's costing onto the billable
+   * schedule. The flag lives where the review happened.
+   */
+  @Post('estimate-import/confirm')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({ summary: 'Commit a reviewed estimate batch (US4 AC6)' })
+  async confirmEstimateImport(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') projectId: string,
+    @Body() body: ConfirmBoqImportDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.imports.confirm({
+      batchId: body.batchId,
+      companyId: resolveCompanyId(caller),
+      userId: caller.id,
+      projectId,
+      ctx: rlsContextFor(caller),
+      ipAddress,
+    });
+  }
+
   @Post('import/confirm')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({

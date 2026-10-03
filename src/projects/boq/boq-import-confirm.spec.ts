@@ -113,6 +113,9 @@ describe('BoqImportService.confirm', () => {
       projectId: CALLER.projectId,
       groups: GROUPS,
       quotedPercentage: '0.024600',
+      // The tender variant unless a case says otherwise; `estimate-import.spec.ts` covers the
+      // estimate, whose confirm writes different rows and touches no quoted percentage.
+      isEstimate: false,
       ...overrides,
     })!;
 
@@ -138,7 +141,12 @@ describe('BoqImportService.confirm', () => {
       ...CALLER,
     });
 
-    expect(result).toEqual({ groups: 1, lines: 2, quotedPercentageSet: true });
+    expect(result).toEqual({
+      groups: 1,
+      lines: 2,
+      isEstimate: false,
+      quotedPercentageSet: true,
+    });
     expect(created.groups).toHaveLength(1);
     expect(created.items).toHaveLength(2);
     expect(created.projectUpdates).toEqual([{ quotedPercentage: '0.024600' }]);

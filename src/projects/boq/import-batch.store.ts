@@ -36,6 +36,15 @@ export interface ImportBatch {
   groups: StagedGroup[];
   /** Null where the workbook's `Excess (+)` could not be located — never 0 (FR-040). */
   quotedPercentage: string | null;
+  /**
+   * Whether this is an internal **estimate** rather than the client's tender (US4 AC6).
+   *
+   * On the batch and not only on the request, because `confirm` writes it onto every row and the
+   * two endpoints must not be able to disagree: a batch validated as an estimate and confirmed as a
+   * tender would put the company's own costing on the client's billable schedule, at the company's
+   * own rates. There is no way to ask for that, and this is why.
+   */
+  isEstimate: boolean;
 }
 
 /** Why a batch is not available, which the caller turns into one of four sentences (FR-052). */

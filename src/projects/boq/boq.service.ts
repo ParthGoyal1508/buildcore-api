@@ -29,6 +29,17 @@ export interface BoqItemView {
   startDate: Date | null;
   finishDate: Date | null;
   isVariation: boolean;
+  /**
+   * True for a line imported from an internal **estimate** rather than from the client's tender
+   * (US4 AC6).
+   *
+   * Carried on the view because it changes what the line is for, not just where it came from: an
+   * estimate line is the company's own costing and is **not billable to the client**
+   * (`BOQ_LINE_IS_ESTIMATE`), and it carries no programme, so it is excluded from the alert groups.
+   * A screen that could not tell the two apart would show one project's tender and its estimate as
+   * one schedule with doubled quantities.
+   */
+  isEstimate: boolean;
   /** Exactly one of the five, always (FR-048). `onTrack` means no alert. */
   state: LineState;
 }
@@ -40,6 +51,8 @@ export interface BoqGroupView {
   scopeQty: string;
   startDate: Date | null;
   finishDate: Date | null;
+  /** True for a section imported from an internal estimate — see `BoqItemView.isEstimate`. */
+  isEstimate: boolean;
   items: BoqItemView[];
 }
 
@@ -82,6 +95,7 @@ const ITEM_SELECT = {
   finishDate: true,
   duration: true,
   isVariation: true,
+  isEstimate: true,
 } as const;
 
 /**
@@ -185,6 +199,7 @@ export class BoqService {
           scopeQty: true,
           startDate: true,
           finishDate: true,
+          isEstimate: true,
           items: { orderBy: { boqNo: 'asc' }, select: ITEM_SELECT },
         },
       }),
@@ -197,6 +212,7 @@ export class BoqService {
       scopeQty: group.scopeQty.toFixed(3),
       startDate: group.startDate,
       finishDate: group.finishDate,
+      isEstimate: group.isEstimate,
       items: group.items.map((item) => viewOf(item, asOf)),
     }));
   }
@@ -222,7 +238,14 @@ export class BoqService {
       unplanned: [],
     };
     for (const group of tree) {
+      // An internal estimate carries no programme and is not work anybody is delivering, so its
+      // lines are excluded rather than reported unplanned (US4 AC6). Including them would bury the
+      // tender's own lines under a second copy of the same scope on the one screen whose claim is
+      // to show what needs attention — and the estimate's quantities are a costing, not a
+      // commitment to anybody.
+      if (group.isEstimate) continue;
       for (const item of group.items) {
+        if (item.isEstimate) continue;
         // `onTrack` is the absence of an alert, so it belongs on the tree and not here. Putting it
         // in one of the four would report work that needs nobody's attention as needing it today,
         // which is the defect the old three-group definition had in the other direction.
@@ -322,6 +345,7 @@ type ItemRow = {
   finishDate: Date | null;
   duration: number | null;
   isVariation: boolean;
+  isEstimate: boolean;
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -338,6 +362,7 @@ function viewOf(item: ItemRow, asOf: Date): BoqItemView {
     unit: item.unit,
     scopeQty: item.scopeQty.toFixed(3),
     rate: item.rate.toFixed(2),
+    isEstimate: item.isEstimate,
     doneQty: item.doneQty.toFixed(3),
     pendingQty: pending.toFixed(3),
     perDayQty: item.perDayQty?.toFixed(3) ?? null,

@@ -58,6 +58,8 @@ export interface ValidationReport {
   /** Null, never 0, where the figure could not be located (FR-040). */
   quotedPercentage: string | null;
   quotedPercentageFound: boolean;
+  /** True when this batch will be written as an internal estimate rather than the tender. */
+  isEstimate: boolean;
   errors: RowProblem[];
   warnings: RowProblem[];
   /** Every imported line is unplanned until somebody plans it (FR-037, FR-048). */
@@ -96,19 +98,37 @@ export class BoqImportService {
     userId: string;
     projectId: string;
     ctx: RlsContext;
+    /**
+     * An internal **estimate** rather than the client's tender (US4 AC6, T097).
+     *
+     * The same pipeline, the same refusals, the same reconciliation — the whole of FR-036 – FR-056
+     * applies unchanged. What differs is what the rows mean once written, and therefore three
+     * things: an estimate is **not billable** to the client, it is **excluded from the alert
+     * groups** because it carries no programme and nobody is delivering it, and it does **not** set
+     * the project's quoted percentage, which is the bidder's figure against the client and not a
+     * property of an internal costing.
+     */
+    isEstimate?: boolean;
   }): Promise<ValidationReport> {
+    const isEstimate = input.isEstimate === true;
+
     // FR-049 **at the validate step, per FR-046.** Checked here as well as inside `confirm`'s
     // transaction, and the reason is not redundancy: without it somebody uploads a tender, waits
     // for a 231-line report, reads it, presses Confirm and *then* learns the project was already
     // populated. The transaction keeps its own check because the project can gain lines between
     // the two requests, and that one is what makes the rule true; this one is what makes it kind.
     // Found by walking quickstart pass 11 against a real instance rather than by reasoning.
+    //
+    // **Scoped to the variant** (T097). A project may legitimately hold both a tender and an
+    // estimate — that is what the separate variant is *for* — so counting across both would make
+    // importing the second one impossible, and the refusal would name a count the operator could
+    // not reconcile with the screen they were looking at.
     const existing = await withRlsContext(this.prisma, input.ctx, (tx) =>
       tx.bOQTaskItem.count({
-        where: { group: { projectId: input.projectId } },
+        where: { isEstimate, group: { projectId: input.projectId } },
       }),
     );
-    if (existing > 0) throw this.alreadyPopulated(existing);
+    if (existing > 0) throw this.alreadyPopulated(existing, isEstimate);
 
     const sheets = await this.reader.read(input.buffer);
 
@@ -168,6 +188,7 @@ export class BoqImportService {
       projectId: input.projectId,
       groups: parsed.groups,
       // FR-040: only a percentage that was located *and* reconciles is carried. Never 0.
+      isEstimate,
       quotedPercentage:
         totals.reconciles && percentage ? percentage.toFixed(6) : null,
     });
@@ -188,6 +209,11 @@ export class BoqImportService {
       totals,
       quotedPercentage: batch.quotedPercentage,
       quotedPercentageFound: batch.quotedPercentage !== null,
+      // Restated on the report so the screen a person reads before confirming says which variant
+      // they are about to write. A batch confirmed as the wrong one cannot happen — the flag lives
+      // on the batch — but somebody reading a 231-line report deserves to be told which schedule
+      // it is going to become.
+      isEstimate,
       errors: parsed.errors,
       warnings: parsed.warnings,
       // Every line arrives unplanned, and says so rather than appearing on time (FR-048).
@@ -449,7 +475,13 @@ export class BoqImportService {
     projectId: string;
     ctx: RlsContext;
     ipAddress: string;
-  }): Promise<{ groups: number; lines: number; quotedPercentageSet: boolean }> {
+  }): Promise<{
+    groups: number;
+    lines: number;
+    isEstimate: boolean;
+    /** False for an estimate always — see the note at the write. */
+    quotedPercentageSet: boolean;
+  }> {
     const found = this.batches.lookup(input.batchId);
     if (!found.batch) throw this.batchRefusal(found.reason);
 
@@ -480,10 +512,16 @@ export class BoqImportService {
         // Appending is the same silent doubling FR-042 guards against, reached by uploading twice
         // rather than by reading the wrong columns — and replacing is impossible, because lines
         // may already be referenced by a client bill, a DWR task or a work-order award.
+        // Scoped to the variant, for the reason `validate` gives: a project may hold both a
+        // tender and an estimate, and that is what the variant is for.
         const existing = await tx.bOQTaskItem.count({
-          where: { group: { projectId: input.projectId } },
+          where: {
+            isEstimate: batch.isEstimate,
+            group: { projectId: input.projectId },
+          },
         });
-        if (existing > 0) throw this.alreadyPopulated(existing);
+        if (existing > 0)
+          throw this.alreadyPopulated(existing, batch.isEstimate);
 
         let lines = 0;
         for (const group of batch.groups) {
@@ -493,6 +531,7 @@ export class BoqImportService {
               projectId: input.projectId,
               boqNo: group.boqNo,
               name: group.name,
+              isEstimate: batch.isEstimate,
               // The group's scope is the sum of its lines; a tender states no group quantity.
               scopeQty: group.items
                 .reduce(
@@ -512,6 +551,7 @@ export class BoqImportService {
               unit: item.unit,
               scopeQty: item.scopeQty,
               rate: item.rate,
+              isEstimate: batch.isEstimate,
             })),
           });
           lines += group.items.length;
@@ -520,7 +560,13 @@ export class BoqImportService {
         // FR-040, the last place this could go wrong: written **only** when the figure was
         // located. A zero here would under-bill every line on the project by the real percentage,
         // and nothing downstream would contradict it.
-        if (batch.quotedPercentage !== null) {
+        //
+        // And never from an **estimate** (T097). `Project.quotedPercentage` is the bidder's quote
+        // against the client's schedule and every client bill is priced with it; an internal
+        // costing's own percentage written there would reprice the whole tender at a figure the
+        // client never saw. An estimate's percentage is reported on the validation report and goes
+        // no further.
+        if (!batch.isEstimate && batch.quotedPercentage !== null) {
           await tx.project.update({
             where: { id: input.projectId },
             data: { quotedPercentage: batch.quotedPercentage },
@@ -549,20 +595,33 @@ export class BoqImportService {
         groups: written.groups,
         lines: written.lines,
         quotedPercentage: batch.quotedPercentage,
+        isEstimate: batch.isEstimate,
       },
       accountId: input.userId,
       companyId: input.companyId,
       ipAddress: input.ipAddress,
     });
 
-    return { ...written, quotedPercentageSet: batch.quotedPercentage !== null };
+    return {
+      ...written,
+      isEstimate: batch.isEstimate,
+      quotedPercentageSet: !batch.isEstimate && batch.quotedPercentage !== null,
+    };
   }
 
   /** FR-049, worded once and raised from both steps. */
-  private alreadyPopulated(existing: number): BadRequestException {
+  private alreadyPopulated(
+    existing: number,
+    isEstimate = false,
+  ): BadRequestException {
+    // Names the **variant**, not just the count. A project holding a tender and an estimate can
+    // legitimately refuse a second estimate while admitting nothing about the tender, and
+    // "this project already has 231 BOQ lines" on a project whose estimate has 12 is a figure the
+    // operator cannot reconcile with the screen in front of them.
+    const what = isEstimate ? 'estimate lines' : 'BOQ lines';
     return refuse(
       BOQ_ERRORS.alreadyPopulated,
-      `This project already has ${existing} BOQ lines. Importing again would add a second copy ` +
+      `This project already has ${existing} ${what}. Importing again would add a second copy ` +
         'of the schedule rather than replace the first — and the existing lines cannot be removed ' +
         'automatically, because bills and work reports may already measure against them. Add or ' +
         'revise lines on the project instead.',

@@ -17,6 +17,16 @@ export const BILLING_ERRORS = {
   /** The project has no BOQ at all, so there is nothing to bill against. */
   boqRequired: 'BOQ_REQUIRED',
   /**
+   * A line from an internal **estimate**, measured on a client bill (008 US4 AC6).
+   *
+   * An estimate is the company's own costing at the company's own rates. Billing a client against
+   * it would send them a document priced from figures they never agreed to — and it would look
+   * exactly like a correct bill, because an estimate line has the same shape, the same units and a
+   * plausible rate. The schedule endpoint already excludes them; this is the gate for a line id
+   * supplied directly.
+   */
+  lineIsEstimate: 'BOQ_LINE_IS_ESTIMATE',
+  /**
    * An over-scope line at submit with no reason given (FR-003).
    *
    * The flag is raised at composition and tolerated there; this is the gate. Over-measurement is often

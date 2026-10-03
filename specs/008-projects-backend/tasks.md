@@ -713,7 +713,7 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Carried from the 2026-10-03 analysis pass
 
-- [ ] T097 **[US4] Deferred, with the reason stated rather than left blank.** US4 AC6's
+- [X] T097 **[US4] Built 2026-10-03, after the client asked for it.** US4 AC6's
       `POST /projects/:id/boq/estimate-import` and the `isEstimate: true` variant have **no task
       coverage at all** — not in T026–T030, and not in T061–T096. The analysis pass surfaced it
       because superseding T026–T030 removed the only phase it could have been assumed to live in.
@@ -723,6 +723,38 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
       consumer is a boolean nobody reads would be scaffolding, not a feature. **If the estimate
       import is wanted, it is its own decision** — most of FR-036 – FR-056 applies to it unchanged,
       so it is a small piece of work, but it is work nobody has asked for.
+
+      **It was asked for later the same day, and the second and third grounds were answered rather
+      than waived.** The variant is built, and `isEstimate` now decides three things — which is what
+      stops it being the scaffolding this note warned about:
+
+      * **An estimate line is not billable.** `billableBoq` excludes it from the schedule entirely
+        and `compose` refuses one named directly, with `BOQ_LINE_IS_ESTIMATE` and the BOQ number.
+        Without this, importing an estimate would put the company's own costing on the client's
+        billable schedule at the company's own rates — doubled quantities at the wrong prices, on a
+        document indistinguishable from a correct one.
+      * **An estimate is absent from the alert groups**, at both the group and the line level. It
+        carries no programme and nobody is delivering it; reported as unplanned it would bury the
+        tender's own lines under a second copy of the same scope. It stays on the **tree**, because
+        somebody entered it and must be able to read it.
+      * **An estimate never sets `Project.quotedPercentage`.** That is the bidder's quote against
+        the client and every client bill is priced with it; an internal costing's percentage written
+        there would reprice the whole tender at a figure the client never saw.
+
+      The pipeline is the tender's, unchanged — every refusal, the block identification, the unit
+      normalisation and the reconciliation, because those are about reading a workbook honestly and
+      that does not depend on whose figures it carries. `estimate-import.spec.ts` asserts the two
+      reports are identical figure for figure, so a second parser cannot creep in.
+
+      One behaviour had to change for the variant to be usable: the already-populated refusal is now
+      **scoped to the variant and names it**. A project may legitimately hold a tender and an
+      estimate — that is what a separate variant is *for* — and a single unscoped count made
+      importing the second impossible while reporting a figure the operator could not reconcile with
+      the screen in front of them.
+
+      Fourteen assertions across `estimate-import.spec.ts`, `boq.service.spec.ts` and
+      `test/client-bills.e2e-spec.ts`, each paired with the tender case so none of them passes by
+      accident.
 - [X] T098 [US4] ✅ Done — FR-042 cited on T069 and FR-040 on T075 Add the two missing citations found by the analysis pass: **FR-040** on T075 (the
       percentage is never imported as zero) and **FR-042** on T069 (the schedule block, and the far
       second block it excludes). Both are the money guards a reviewer will look for by ID, and both

@@ -68,11 +68,19 @@ export class ClientBillsController {
     description:
       'Headings and their lines, because a BOQ is **two levels**: a heading carries no quantity and ' +
       'no rate here, so a sheet cannot render it as a measured line of zero. The client’s own file ' +
-      'is 83 headings across 312 rows, and a flat list cannot represent it.\n\n' +
-      '**Two totals, not one.** `estimatedTotal` is the schedule at its own rates; `quotedTotal` is ' +
-      'that figure with the bidder’s percentage applied **once, to the total**. Applying it per line ' +
-      'gives a figure close enough to pass a glance and wrong by rounding — the worst available ' +
-      'outcome for a tender document.\n\n' +
+      'is 80 heading rows across 311 schedule rows — measured through the parser on 2026-10-03, ' +
+      'replacing the earlier estimate of 83 across 312 — and a flat list cannot represent it.\n\n' +
+      '**Two totals, not one, and they are computed differently from a bill’s on purpose.** ' +
+      '`estimatedTotal` is the schedule at its own rates; `quotedTotal` is that figure with the ' +
+      'bidder’s percentage applied **once, to the total**, which is how the tender document states ' +
+      'it and what the BOQ import reconciles against. A **bill** applies the percentage per line and ' +
+      'sums the printed lines, because the total on a document a client reads must equal the column ' +
+      'above it. Both are right for their own document and they differ by rounding — at most half a ' +
+      'paisa a line; `test/client-bills.e2e-spec.ts` measures the divergence rather than pretending ' +
+      'it is zero. Neither comment should be read as calling the other wrong.\n\n' +
+      'Lines belonging to the project’s internal **estimate** are excluded entirely (008 US4 AC6): ' +
+      'an estimate is costed at your own rates, and offering it here would present it as billable ' +
+      'scope.\n\n' +
       '`unpriced` marks a line whose rate is still 0, so the sheet can say so **before** somebody ' +
       'fills a column and meets `BOQ_RATE_MISSING` at submit.',
   })

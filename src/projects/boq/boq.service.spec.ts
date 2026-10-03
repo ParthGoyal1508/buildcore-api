@@ -22,6 +22,7 @@ function line(overrides: Partial<Record<string, unknown>> = {}) {
     finishDate: null,
     duration: null,
     isVariation: false,
+    isEstimate: false,
     ...overrides,
   };
 }
@@ -29,6 +30,7 @@ function line(overrides: Partial<Record<string, unknown>> = {}) {
 function serviceWith(
   items: ReturnType<typeof line>[],
   counts?: Record<string, number>,
+  groupIsEstimate = false,
 ) {
   const tx = {
     $executeRaw: jest.fn().mockResolvedValue(0),
@@ -41,6 +43,7 @@ function serviceWith(
           scopeQty: DEC('100'),
           startDate: null,
           finishDate: null,
+          isEstimate: groupIsEstimate,
           items,
         },
       ]),
@@ -234,5 +237,66 @@ describe('BoqService', () => {
         where: { id: 'item-1' },
       });
     });
+  });
+});
+
+/**
+ * An internal estimate is on the tree and absent from the alerts (008 US4 AC6, T097).
+ *
+ * The flag has to *do* something or the estimate import is scaffolding, which is what T097 deferred
+ * it for. This is one of its three consequences; the other two are that an estimate line cannot be
+ * billed (`BOQ_LINE_IS_ESTIMATE`, covered in `test/client-bills.e2e-spec.ts`) and that it never
+ * sets the project's quoted percentage (`estimate-import.spec.ts`).
+ */
+describe('BoqService and the estimate variant', () => {
+  it('keeps an estimate line out of the alert groups', async () => {
+    const { service } = serviceWith([line({ isEstimate: true })]);
+
+    const alerts = await service.getAlerts(CTX, 'project-1', TODAY);
+
+    // An estimate carries no programme and nobody is delivering it. Reported as unplanned it would
+    // bury the tender's own lines under a second copy of the same scope, on the one screen whose
+    // whole claim is to show what needs attention.
+    expect(alerts.unplanned).toHaveLength(0);
+    expect(alerts.today).toHaveLength(0);
+    expect(alerts.delayed).toHaveLength(0);
+    expect(alerts.toBeDelayed).toHaveLength(0);
+  });
+
+  it('excludes a whole estimate section, not only its marked lines', async () => {
+    // Belt and braces at both levels. A group marked and its items not — or the reverse, after a
+    // partial migration — would make the exclusion depend on which level a reader filtered.
+    const { service } = serviceWith(
+      [line({ isEstimate: false })],
+      undefined,
+      true,
+    );
+
+    const alerts = await service.getAlerts(CTX, 'project-1', TODAY);
+    expect(alerts.unplanned).toHaveLength(0);
+  });
+
+  it('still reports a tender line, so the two cases above are not passing by accident', async () => {
+    const { service } = serviceWith([line()]);
+
+    const alerts = await service.getAlerts(CTX, 'project-1', TODAY);
+    expect(alerts.unplanned).toHaveLength(1);
+  });
+
+  it('carries the flag on the tree, where a screen can tell the two apart', async () => {
+    const { service } = serviceWith(
+      [line({ isEstimate: true })],
+      undefined,
+      true,
+    );
+
+    const tree = await service.getTree(CTX, 'project-1', TODAY);
+
+    // Excluded from the alerts but present on the tree, deliberately: an estimate is something
+    // somebody entered and must be readable. It is the alerting, not the record, that it has no
+    // place in.
+    expect(tree).toHaveLength(1);
+    expect(tree[0].isEstimate).toBe(true);
+    expect(tree[0].items[0].isEstimate).toBe(true);
   });
 });

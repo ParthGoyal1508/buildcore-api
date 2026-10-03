@@ -661,6 +661,122 @@ describe('Client bills against a BOQ (e2e)', () => {
     });
   });
 
+  describe('an internal estimate is not billable (008 US4 AC6, T097)', () => {
+    let estimateGroupId = '';
+    let estimateItemId = '';
+
+    beforeAll(async () => {
+      // Written directly because the only route to an estimate line is the estimate import, which
+      // needs a workbook — and what is under test here is the billing refusal, not the import.
+      estimateGroupId = (
+        await sys.bOQTaskGroup.create({
+          data: {
+            companyId,
+            projectId,
+            boqNo: '9',
+            name: 'Internal costing — not the client’s scope',
+            scopeQty: '0',
+            isEstimate: true,
+          },
+          select: { id: true },
+        })
+      ).id;
+      estimateItemId = (
+        await sys.bOQTaskItem.create({
+          data: {
+            companyId,
+            groupId: estimateGroupId,
+            boqNo: '9.1',
+            taskName: 'RCC at our own cost rate',
+            unit: 'Cum',
+            scopeQty: '50',
+            rate: '1850.00',
+            isEstimate: true,
+          },
+          select: { id: true },
+        })
+      ).id;
+    });
+
+    afterAll(async () => {
+      await sys.bOQTaskItem
+        .deleteMany({ where: { groupId: estimateGroupId } })
+        .catch(() => undefined);
+      await sys.bOQTaskGroup
+        .deleteMany({ where: { id: estimateGroupId } })
+        .catch(() => undefined);
+    });
+
+    it('is absent from the billing sheet’s schedule entirely', async () => {
+      const res = await http()
+        .get(`/projects/client-bills/boq?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+
+      // Offering both would present the company's internal rates as billable scope: doubled
+      // quantities at the wrong prices, on a sheet that looks correct.
+      expect(
+        res.body.groups.map((g: { boqNo: string }) => g.boqNo),
+      ).not.toContain('9');
+      const everyItem = res.body.groups.flatMap(
+        (g: { items: { id: string }[] }) => g.items,
+      );
+      expect(everyItem.map((i: { id: string }) => i.id)).not.toContain(
+        estimateItemId,
+      );
+    });
+
+    it('refuses a bill that names one directly, by BOQ number', async () => {
+      const res = await compose(
+        {
+          billNumber: billNumber(),
+          lines: [{ boqTaskItemId: estimateItemId, quantity: 5 }],
+        },
+        400,
+      );
+
+      // The sheet never offers it, so reaching here means a line id was supplied by hand — and the
+      // consequence is a client billed at the company's own costing, on a document indistinguishable
+      // from a correct one.
+      expect(res.body.code).toBe('BOQ_LINE_IS_ESTIMATE');
+      expect(res.body.boqNumbers).toEqual(['9.1']);
+    });
+
+    it('does not report its lines on the alerts screen', async () => {
+      const res = await http()
+        .get(`/projects/${projectId}/boq/alerts`)
+        .set(auth())
+        .expect(200);
+
+      const everyAlert = [
+        ...res.body.today,
+        ...res.body.delayed,
+        ...res.body.toBeDelayed,
+        ...res.body.unplanned,
+      ];
+      expect(everyAlert.map((item: { id: string }) => item.id)).not.toContain(
+        estimateItemId,
+      );
+      // And the tender's lines are still there, so this is not passing because the endpoint
+      // returned nothing.
+      expect(everyAlert.length).toBeGreaterThan(0);
+    });
+
+    it('is still on the tree, because somebody entered it and must be able to read it', async () => {
+      const res = await http()
+        .get(`/projects/${projectId}/boq`)
+        .set(auth())
+        .expect(200);
+
+      const estimate = res.body.find(
+        (group: { boqNo: string }) => group.boqNo === '9',
+      );
+      expect(estimate).toBeDefined();
+      expect(estimate.isEstimate).toBe(true);
+      expect(estimate.items[0].isEstimate).toBe(true);
+    });
+  });
+
   describe('cumulative position as at the bill’s own date', () => {
     it('shows a historical bill the running total as it stood then, not today’s', async () => {
       const first = await compose({
