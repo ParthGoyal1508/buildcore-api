@@ -21,8 +21,28 @@ import { UsersService } from '../../users/users.service';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
-/** A role plus how many accounts currently hold it (FR-009). */
-export type RoleWithAssignedCount = Role & { assignedUserCount: number };
+/** One area at one level, as the role screen reads it back. */
+export type RoleGrant = { permission: Permission; level: AccessLevel };
+
+/**
+ * A role plus how many accounts currently hold it (FR-009), and the level of each area it
+ * touches (019 FR-001).
+ *
+ * **`grants` was missing from every read until 2026-10-03**, and the consequence was quiet: the
+ * write side has accepted levels since Phase 1, the guard has enforced them since, and the role
+ * screen could not show them — so it sent `permissions` alone, which means read **and** write on
+ * everything. A read-only role was therefore impossible to create from the portal, which is the
+ * entire point of item 19's own example: site staff who may enter logbook readings and see nothing
+ * else of machinery.
+ *
+ * Returned alongside `permissions` rather than instead of it. `Role.permissions` is on its way out
+ * and is still what the rest of the codebase reads; replacing it here would break every caller for
+ * the benefit of one screen.
+ */
+export type RoleWithAssignedCount = Role & {
+  assignedUserCount: number;
+  grants: RoleGrant[];
+};
 
 @Injectable()
 export class RolesService {
@@ -40,11 +60,20 @@ export class RolesService {
    * come from `UsersService`, not a join into `shared.User` — Principle I.
    */
   async findAll(): Promise<RoleWithAssignedCount[]> {
-    const roles = await this.prisma.role.findMany({ orderBy: { name: 'asc' } });
+    const roles = await this.prisma.role.findMany({
+      orderBy: { name: 'asc' },
+      // One query for every role's levels rather than one per role. The set is small — nine seeded
+      // roles plus whatever a company has added — but a per-role round trip here is a pattern that
+      // gets copied.
+      include: {
+        rolePermissions: { select: { permission: true, level: true } },
+      },
+    });
     return Promise.all(
-      roles.map(async (role) => ({
+      roles.map(async ({ rolePermissions, ...role }) => ({
         ...role,
         assignedUserCount: await this.usersService.countByRoleId(role.id),
+        grants: rolePermissions,
       })),
     );
   }
@@ -180,7 +209,8 @@ export class RolesService {
       grantRows,
       ipAddress,
     );
-    return { ...created, assignedUserCount: 0 };
+    // The grants as written, so the screen can show what it just saved without a second read.
+    return { ...created, assignedUserCount: 0, grants: grantRows };
   }
 
   async update(
@@ -252,6 +282,15 @@ export class RolesService {
     return {
       ...updated,
       assignedUserCount: await this.usersService.countByRoleId(id),
+      // What this request wrote, or what was already there when it named no levels. Read back
+      // rather than assumed in the second case: an update that changes only the name must not
+      // report an empty grant set and have the screen render the role as touching nothing.
+      grants:
+        grantRows ??
+        (await this.prisma.rolePermission.findMany({
+          where: { roleId: id },
+          select: { permission: true, level: true },
+        })),
     };
   }
 

@@ -39,6 +39,77 @@ function build(
 }
 
 describe('RolesService', () => {
+  /**
+   * The gap found 2026-10-03, and the reason a read-only role could not be created from the portal.
+   *
+   * The write side has accepted levels since Phase 1 and the guard has enforced them since — but no
+   * read returned them, so the role screen had nothing to render and sent `permissions` alone,
+   * which means read **and** write on everything. Item 19's own example — site staff who may enter
+   * logbook readings and see nothing else of machinery — was unreachable through the interface.
+   */
+  describe('grants are readable, not only writable (019 FR-001)', () => {
+    it('returns each area with the level it is granted at', async () => {
+      const { service } = build({
+        findMany: jest.fn().mockResolvedValue([
+          {
+            ...customRole,
+            rolePermissions: [
+              { permission: Permission.MACHINERY, level: AccessLevel.read },
+              { permission: Permission.MACHINERY, level: AccessLevel.write },
+              { permission: Permission.ATTENDANCE, level: AccessLevel.read },
+            ],
+          },
+        ]),
+      });
+
+      const [role] = await service.findAll();
+
+      expect(role.grants).toEqual([
+        { permission: Permission.MACHINERY, level: AccessLevel.read },
+        { permission: Permission.MACHINERY, level: AccessLevel.write },
+        { permission: Permission.ATTENDANCE, level: AccessLevel.read },
+      ]);
+    });
+
+    /**
+     * Read-only on an area is the whole point, and it has to be *distinguishable* from read+write
+     * in the response — otherwise a screen rendering the role has no way to show it, and saving
+     * from that screen silently widens it back to write.
+     */
+    it('distinguishes a read-only area from one granted at both levels', async () => {
+      const { service } = build({
+        findMany: jest.fn().mockResolvedValue([
+          {
+            ...customRole,
+            rolePermissions: [
+              { permission: Permission.MACHINERY, level: AccessLevel.read },
+            ],
+          },
+        ]),
+      });
+
+      const [role] = await service.findAll();
+
+      expect(role.grants).toHaveLength(1);
+      expect(
+        role.grants.some((grant) => grant.level === AccessLevel.write),
+      ).toBe(false);
+    });
+
+    it('does not leak the join rows themselves into the response', async () => {
+      const { service } = build({
+        findMany: jest
+          .fn()
+          .mockResolvedValue([{ ...customRole, rolePermissions: [] }]),
+      });
+
+      const [role] = await service.findAll();
+
+      expect(role).not.toHaveProperty('rolePermissions');
+      expect(role.grants).toEqual([]);
+    });
+  });
+
   describe('findAll', () => {
     it("attaches each role's assigned-user count (FR-009)", async () => {
       const { service, usersService } = build(
