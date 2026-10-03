@@ -817,12 +817,24 @@ the same day.
   `Sqm`/`Sqm.`/`sqm`; `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr`; `Each`/`EACH`). A unit master would
   reject the file outright, and discarding what the client typed would make a later disagreement
   unarguable.
+  **Measured 2026-10-03: 25 spellings resolving to 12 units.** Normalisation MUST strip case,
+  punctuation **and whitespace** — periods alone leave `R.Mtr.` as `rmtr` and `R. Mtr.` as
+  `r mtr`, which is the running-metre family failing to unify and was the first implementation's
+  result. It MUST NOT merge different *words*: `Rm`, `R Mtr.` and `Mtr.` stay three units, because
+  deciding that a running metre and a metre are the same thing is a judgement about meaning and
+  this requirement is about spelling.
 - **FR-042**: The importer MUST read only the known schedule block. The sample file carries a
   second BOQ block at columns 238–242 holding 216 rows shaped exactly like line items — the
   artefacts of the e-tender template's other BOQ types (Item Rate, Discount, Negative, Turnkey,
   which the workbook names in its own defined names). An importer scanning for populated columns
-  finds them and silently doubles the tender. Importing the sample MUST yield about 312 lines, not
-  about 528.
+  finds them and silently doubles the tender.
+  **Measured 2026-10-03** through the parser, replacing the earlier estimates: the sheet is 243
+  columns wide and the schedule block spans columns 0–54. Rows 13–323 hold **311 candidate rows —
+  231 item rows and 80 headings**. Importing the sample MUST therefore yield **231 ± 3 item lines
+  under 80 ± 3 groups**, stated as a range because "about 312" is not a guard: a tolerance loose
+  enough to admit the doubled figure admits the failure it exists to catch. Two further artefacts
+  the span rule disposes of without naming them: stray values in column 57 on two heading rows, and
+  the second block's own rows continuing past the schedule's last line into the footer.
 - **FR-043**: The four pre-GST tax columns the template carries and the client leaves blank — Excise
   Duty, VAT, DGS&D/RITES inspection charges, and Cenvat credit — MUST be tolerated on import and
   MUST NOT be carried into the product. The template predates GST.
