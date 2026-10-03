@@ -1667,12 +1667,19 @@ model BOQTaskGroup {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  boqNo      String
-  name       String
-  startDate  DateTime
-  finishDate DateTime
-  scopeQty   Decimal  @db.Decimal(18, 3)
-  isEstimate Boolean  @default(false)
+  boqNo String
+  name  String
+
+  /// **Optional, and null means unplanned** (008 FR-037, amended 2026-10-03).
+  ///
+  /// A tender schedule of quantities carries no programme — the client's own e-tender sheet has
+  /// quantity, unit and rate columns and no dates at all. Requiring these would mean inventing a
+  /// programme at import time, and an invented finish date drives "Delayed" alerts that are fiction
+  /// in the shape of fact. Planning is a separate act, performed later on the BOQ screen.
+  startDate  DateTime?
+  finishDate DateTime?
+  scopeQty   Decimal   @db.Decimal(18, 3)
+  isEstimate Boolean   @default(false)
 
   items BOQTaskItem[]
 
@@ -1695,17 +1702,33 @@ model BOQTaskItem {
   groupId String
   group   BOQTaskGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  boqNo      String
-  taskName   String
-  unit       String
-  scopeQty   Decimal  @db.Decimal(18, 3)
-  startDate  DateTime
-  finishDate DateTime
-  /// Planned working days, used to derive the per-day target.
-  duration   Int
-  perDayQty  Decimal  @db.Decimal(18, 3)
-  doneQty    Decimal  @default(0) @db.Decimal(18, 3)
-  isEstimate Boolean  @default(false)
+  boqNo    String
+  taskName String
+
+  /// **The string the source carried, verbatim** (FR-041).
+  ///
+  /// Free text on purpose. The client's own file spells about 12 units 26 ways — `Cum`/`Cum.`,
+  /// `Sqm`/`Sqm.`/`sqm`, `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr` — and a unit master would reject the
+  /// file outright. Matching happens on a normalised form (`unit-normalise.ts`); what is stored is
+  /// what they typed, because discarding it would make a later disagreement unarguable.
+  unit     String
+  scopeQty Decimal @db.Decimal(18, 3)
+
+  /// **Optional, and null means unplanned** (FR-037, amended 2026-10-03). See `BOQTaskGroup`.
+  ///
+  /// `getAlerts` reports an unplanned line as **unplanned** — its own group, never folded into
+  /// on-time or delayed (FR-048). Membership is decided by `finishDate` alone, so a line with some
+  /// of these set still has exactly one home.
+  startDate  DateTime?
+  finishDate DateTime?
+  /// Planned working days, used to derive the per-day target. Null where unplanned.
+  duration   Int?
+  /// An **override** for the rate needed to finish, not the source of it (FR-047). Where null, the
+  /// needed rate is `pendingQty ÷ remaining days to finishDate`; the old definition measured
+  /// against this column directly and would read every imported line as not-at-risk.
+  perDayQty  Decimal?  @db.Decimal(18, 3)
+  doneQty    Decimal   @default(0) @db.Decimal(18, 3)
+  isEstimate Boolean   @default(false)
 
   /// The line's rate, which FR-002 prices a bill from (018 research §1) — `bugs.md` item 11.
   ///

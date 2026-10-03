@@ -536,11 +536,11 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B1: The migration that lets a tender schedule exist
 
-- [ ] T061 [US4] Make six columns nullable in `prisma/schema.prisma` (FR-037):
+- [X] T061 [US4] ✅ Done 2026-10-03 Make six columns nullable in `prisma/schema.prisma` (FR-037):
       `BOQTaskItem.startDate`, `finishDate`, `duration`, `perDayQty` and
       `BOQTaskGroup.startDate`, `finishDate`. Update each field's doc comment to say that null means
       **unplanned** and that unplanned is a reported state, not a missing value.
-- [ ] T062 [US4] Generate the migration in `prisma/migrations/`, opening with
+- [X] T062 [US4] ✅ Done 2026-10-03 — `20261003180000_boq_programme_optional`, applied locally; `prisma migrate deploy` clean, client regenerated, `tsc --noEmit` clean Generate the migration in `prisma/migrations/`, opening with
       `SELECT set_config('app.is_super_admin','true',true)` per the RLS convention. No backfill —
       widening to nullable is safe and both tables are empty in every environment. No new policy:
       nothing is added, only relaxed.

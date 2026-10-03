@@ -855,8 +855,13 @@ Table BOQTaskGroup {
   project Project [not null]
   boqNo String [not null]
   name String [not null]
-  startDate DateTime [not null]
-  finishDate DateTime [not null]
+  startDate DateTime [note: '**Optional, and null means unplanned** (008 FR-037, amended 2026-10-03).
+
+A tender schedule of quantities carries no programme — the client\'s own e-tender sheet has
+quantity, unit and rate columns and no dates at all. Requiring these would mean inventing a
+programme at import time, and an invented finish date drives "Delayed" alerts that are fiction
+in the shape of fact. Planning is a separate act, performed later on the BOQ screen.']
+  finishDate DateTime
   scopeQty Decimal [not null]
   isEstimate Boolean [not null, default: false]
   items BOQTaskItem [not null]
@@ -873,12 +878,23 @@ Table BOQTaskItem {
   group BOQTaskGroup [not null]
   boqNo String [not null]
   taskName String [not null]
-  unit String [not null]
+  unit String [not null, note: '**The string the source carried, verbatim** (FR-041).
+
+Free text on purpose. The client\'s own file spells about 12 units 26 ways — `Cum`/`Cum.`,
+`Sqm`/`Sqm.`/`sqm`, `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr` — and a unit master would reject the
+file outright. Matching happens on a normalised form (`unit-normalise.ts`); what is stored is
+what they typed, because discarding it would make a later disagreement unarguable.']
   scopeQty Decimal [not null]
-  startDate DateTime [not null]
-  finishDate DateTime [not null]
-  duration Int [not null, note: 'Planned working days, used to derive the per-day target.']
-  perDayQty Decimal [not null]
+  startDate DateTime [note: '**Optional, and null means unplanned** (FR-037, amended 2026-10-03). See `BOQTaskGroup`.
+
+`getAlerts` reports an unplanned line as **unplanned** — its own group, never folded into
+on-time or delayed (FR-048). Membership is decided by `finishDate` alone, so a line with some
+of these set still has exactly one home.']
+  finishDate DateTime
+  duration Int [note: 'Planned working days, used to derive the per-day target. Null where unplanned.']
+  perDayQty Decimal [note: 'An **override** for the rate needed to finish, not the source of it (FR-047). Where null, the
+needed rate is `pendingQty ÷ remaining days to finishDate`; the old definition measured
+against this column directly and would read every imported line as not-at-risk.']
   doneQty Decimal [not null, default: 0]
   isEstimate Boolean [not null, default: false]
   rate Decimal [not null, default: 0, note: 'The line\'s rate, which FR-002 prices a bill from (018 research §1) — `bugs.md` item 11.
