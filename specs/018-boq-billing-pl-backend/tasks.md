@@ -427,10 +427,26 @@ running that one spec before committing anything under its six scanned paths.
       `plant` tables, and no business module may query the billing tables
 - [x] T050 Prove the boundary by breaking it in both directions and confirming T049 fails each time.
       A guard that has never failed has not been shown to work
-- [ ] T051 **NOT DONE** RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
-      `test/documents-rls.e2e-spec.ts`
-- [ ] T052 **NOT DONE** **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore. Without
-      this an empty table and a working policy are indistinguishable
+- [X] T051 RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
+      `test/documents-rls.e2e-spec.ts`.
+
+      **RUN 2026-10-03, 12 assertions.** All five of 018's tables carry ENABLE *and* FORCE, and each
+      is read with **no `WHERE` clause** under a real non-superuser login role — so anything that
+      comes back came back because the policy let it. Covers the SELECT, the cross-company UPDATE
+      (zero rows, and the value confirmed unmoved), the cross-company INSERT (refused by the policy),
+      the default-deny case where no company context is set at all, and the super-admin flag, which
+      must keep working or the Settings company switcher shows an administrator an empty screen.
+- [X] T052 **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore.
+
+      **RUN 2026-10-03, on two tables rather than one.** `ClientBill` and `WorkOrderBOQItem`: the
+      first proof could pass while a different table's policy was missing entirely, and the award
+      table is the one whose exposure would cost the most — it is what a company pays its
+      subcontractors. Both restore ENABLE and FORCE in a `finally`, so a failed assertion cannot
+      leave a table unprotected for every subsequent suite. Confirmed after the run that all five
+      tables still carry both flags.
+
+      An empty table, a missing grant and a mistyped table name each produce a passing isolation
+      test. This is the only thing that tells them apart.
 - [X] T053 Quickstart Passes 1–8.
 
       **All eight run as automated e2e rather than by hand**, across the three suites written
