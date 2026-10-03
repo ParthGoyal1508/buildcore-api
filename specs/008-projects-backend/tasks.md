@@ -632,25 +632,25 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B4: `confirm` — one transaction, once, by the right person
 
-- [ ] T081 [US4] `confirm(batchId, userId, projectId)` in one `$transaction`: groups on first
+- [X] T081 [US4] ✅ Done — one `$transaction` under the caller's RLS context; groups then items then the percentage `confirm(batchId, userId, projectId)` in one `$transaction`: groups on first
       reference, then items, then `Project.quotedPercentage` **only if** the percentage was located.
-- [ ] T082 [US4] **Move the batch to `committing` before opening the transaction, and back to
+- [X] T082 [US4] ✅ Done — `claim()` moves the batch to `committing` **before** the transaction opens and `release()` returns it to `ready` on failure. Asserted both ways: a second confirm during commit gets `BOQ_BATCH_IN_PROGRESS`, and a failed transaction leaves the batch retryable **Move the batch to `committing` before opening the transaction, and back to
       `ready` if it fails** (FR-052). Consuming it after the commit admits a double write; consuming
       it before loses the schedule when the transaction fails. A concurrent second confirm sees
       `committing` and gets `BOQ_BATCH_IN_PROGRESS`; a later one sees `confirmed` and gets
       `BOQ_BATCH_ALREADY_CONFIRMED`, which the interface shows as "already imported" rather than as
       a failure. One undifferentiated "not found" cannot be explained to whoever pressed the button.
-- [ ] T083 [US4] Ownership and project scope (FR-050), and the populated-project refusal (FR-049):
+- [X] T083 [US4] ✅ Done — ownership and project scope refused with `BOQ_BATCH_NOT_YOURS`; `BOQ_ALREADY_POPULATED` names the existing count, checked **inside** the transaction with a test asserting the call order, since two imports racing would otherwise both read an empty project Ownership and project scope (FR-050), and the populated-project refusal (FR-049):
       `BOQ_BATCH_NOT_YOURS` for a different user or project; `BOQ_ALREADY_POPULATED`, naming the
       existing line count, when the project already has BOQ lines. Appending is the same silent
       doubling by a different route — uploading twice rather than reading the wrong block — and
       replacing is impossible, since lines may already be referenced by a client bill line, a DWR
       task or an award line.
-- [ ] T084 [US4] **One** audit entry per import, naming the project, the batch, the group and line
+- [X] T084 [US4] ✅ Done — one entry, `AuditEntityType.BOQ_IMPORT` (new enum value + migration, separate from `BOQ_GROUP`/`BOQ_ITEM` because those describe rows). Asserted as `toHaveBeenCalledTimes(1)` **One** audit entry per import, naming the project, the batch, the group and line
       counts and whether the quoted percentage was set. Not 312 entries: one import is one act, and
       312 rows would bury the next thing in the log. (Replaces T026's DTO work, now with the
       programme fields optional.)
-- [ ] T085 [P] [US4] Unit tests in `boq-import-confirm.spec.ts`: confirm writes exactly the
+- [X] T085 [P] [US4] ✅ Done — 12 tests. **One design note found while writing them:** `BatchLookup` is a flat `{ batch, reason }` pair rather than a discriminated union, because this project compiles with `strictNullChecks: false` and a boolean discriminant does not narrow under it. Found by writing it the other way and reading the compiler error, and recorded on the type Unit tests in `boq-import-confirm.spec.ts`: confirm writes exactly the
       validated lines; a second confirm is refused and the line count is unchanged; a concurrent
       confirm hits `BOQ_BATCH_IN_PROGRESS`; a failed transaction returns the batch to `ready`; a
       batch with no located percentage leaves `quotedPercentage` untouched rather than writing 0;

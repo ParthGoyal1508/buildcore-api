@@ -1271,6 +1271,12 @@ enum AuditEntityType {
   SITE
   BOQ_GROUP
   BOQ_ITEM
+  /// One tender import, as one act (008 FR-014, amended 2026-10-03).
+  ///
+  /// Separate from BOQ_GROUP and BOQ_ITEM on purpose: those describe rows, and an import that
+  /// logged one entry per row would put 231 entries in the log and bury whatever came next. The
+  /// entry carries the batch, the counts and whether the quoted percentage was set.
+  BOQ_IMPORT
   DWR
   REVENUE
   RA_BILL

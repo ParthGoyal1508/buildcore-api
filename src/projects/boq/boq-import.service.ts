@@ -1,7 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
+import { PrismaService } from 'nestjs-prisma';
 
+import { AuditLogService } from '../../auth/audit-log.service';
 import config from '../../common/configs/config';
+import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { BOQ_ERRORS } from './boq-error-codes';
 import { BoqWorkbookReader, WorkbookRow } from './boq-workbook.reader';
 import {
@@ -10,6 +13,7 @@ import {
   ScheduleColumns,
 } from './schedule-block';
 import {
+  BatchUnavailable,
   ImportBatchStore,
   StagedGroup,
   StagedItem,
@@ -82,6 +86,8 @@ export class BoqImportService {
   constructor(
     private readonly reader: BoqWorkbookReader,
     private readonly batches: ImportBatchStore,
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditLogService,
   ) {}
 
   async validate(input: {
@@ -414,6 +420,169 @@ export class BoqImportService {
       tolerance: tolerance.toFixed(2),
       reconciles: within(scheduleDifference) && within(quotedDifference),
     };
+  }
+
+  /**
+   * Commits a reviewed batch, in one transaction, once (008 FR-049 – FR-052).
+   *
+   * Everything was decided by `validate`. This writes what the person read and nothing else — a
+   * rule enforced here instead would be a rule they never saw.
+   */
+  async confirm(input: {
+    batchId: string;
+    companyId: string;
+    userId: string;
+    projectId: string;
+    ctx: RlsContext;
+    ipAddress: string;
+  }): Promise<{ groups: number; lines: number; quotedPercentageSet: boolean }> {
+    const found = this.batches.lookup(input.batchId);
+    if (!found.batch) throw this.batchRefusal(found.reason);
+
+    // FR-050. The report is the review, so the person who accepts a 231-line write must be the
+    // person who read it — and against the project they read it for.
+    if (
+      found.batch.userId !== input.userId ||
+      found.batch.projectId !== input.projectId
+    ) {
+      throw refuse(
+        BOQ_ERRORS.batchNotYours,
+        'This import was prepared by someone else, or for a different project. Upload the file ' +
+          'again on the project you want it on.',
+      );
+    }
+
+    // FR-052. Claimed **before** the transaction opens, and released if it fails. Committing
+    // first and consuming after leaves a window where a second confirm reads it as ready and
+    // writes the schedule twice; consuming first loses the schedule when the transaction fails.
+    const claimed = this.batches.claim(input.batchId);
+    if (!claimed.batch) throw this.batchRefusal(claimed.reason);
+    const batch = claimed.batch;
+
+    let written: { groups: number; lines: number };
+    try {
+      written = await withRlsContext(this.prisma, input.ctx, async (tx) => {
+        // FR-049, inside the transaction so two imports racing cannot both find it empty.
+        // Appending is the same silent doubling FR-042 guards against, reached by uploading twice
+        // rather than by reading the wrong columns — and replacing is impossible, because lines
+        // may already be referenced by a client bill, a DWR task or a work-order award.
+        const existing = await tx.bOQTaskItem.count({
+          where: { group: { projectId: input.projectId } },
+        });
+        if (existing > 0) {
+          throw refuse(
+            BOQ_ERRORS.alreadyPopulated,
+            `This project already has ${existing} BOQ lines. Importing again would add a second ` +
+              'copy of the schedule rather than replace the first. Add or revise lines on the ' +
+              'project instead.',
+          );
+        }
+
+        let lines = 0;
+        for (const group of batch.groups) {
+          const created = await tx.bOQTaskGroup.create({
+            data: {
+              companyId: input.companyId,
+              projectId: input.projectId,
+              boqNo: group.boqNo,
+              name: group.name,
+              // The group's scope is the sum of its lines; a tender states no group quantity.
+              scopeQty: group.items
+                .reduce(
+                  (sum, item) => sum.plus(new Prisma.Decimal(item.scopeQty)),
+                  new Prisma.Decimal(0),
+                )
+                .toFixed(3),
+            },
+            select: { id: true },
+          });
+          await tx.bOQTaskItem.createMany({
+            data: group.items.map((item) => ({
+              companyId: input.companyId,
+              groupId: created.id,
+              boqNo: item.boqNo,
+              taskName: item.taskName,
+              unit: item.unit,
+              scopeQty: item.scopeQty,
+              rate: item.rate,
+            })),
+          });
+          lines += group.items.length;
+        }
+
+        // FR-040, the last place this could go wrong: written **only** when the figure was
+        // located. A zero here would under-bill every line on the project by the real percentage,
+        // and nothing downstream would contradict it.
+        if (batch.quotedPercentage !== null) {
+          await tx.project.update({
+            where: { id: input.projectId },
+            data: { quotedPercentage: batch.quotedPercentage },
+          });
+        }
+
+        return { groups: batch.groups.length, lines };
+      });
+    } catch (error) {
+      // Nothing was written, so the batch is valid to retry — and losing it here would mean
+      // re-uploading and re-reading the whole report for a failure that was not the operator's.
+      this.batches.release(input.batchId);
+      throw error;
+    }
+
+    this.batches.markConfirmed(input.batchId);
+
+    // FR-014 and the constitution re-check: **one** entry. One import is one act, and 231 rows in
+    // the log would bury whatever came next.
+    await this.audit.record({
+      entityType: AuditEntityType.BOQ_IMPORT,
+      action: AuditAction.CREATE,
+      entityId: input.projectId,
+      changes: {
+        batchId: input.batchId,
+        groups: written.groups,
+        lines: written.lines,
+        quotedPercentage: batch.quotedPercentage,
+      },
+      accountId: input.userId,
+      companyId: input.companyId,
+      ipAddress: input.ipAddress,
+    });
+
+    return { ...written, quotedPercentageSet: batch.quotedPercentage !== null };
+  }
+
+  /**
+   * Turns a batch's situation into the sentence that fits it (FR-052).
+   *
+   * Four outcomes, four messages. One "not found" covering all of them cannot be explained to
+   * whoever pressed the button: "it already worked" and "it never existed" need opposite actions.
+   */
+  private batchRefusal(reason: BatchUnavailable): BadRequestException {
+    switch (reason) {
+      case 'confirmed':
+        return refuse(
+          BOQ_ERRORS.batchAlreadyConfirmed,
+          'This schedule has already been imported. Nothing further is needed.',
+        );
+      case 'committing':
+        return refuse(
+          BOQ_ERRORS.batchInProgress,
+          'This schedule is being imported right now. Wait a moment and reload the project.',
+        );
+      case 'expired':
+        return refuse(
+          BOQ_ERRORS.batchExpired,
+          `This import was prepared more than ${
+            config().boqImport.batchTtlMinutes
+          } minutes ago ` +
+            'and has expired. Upload the file again — nothing was imported.',
+        );
+      default:
+        return refuse(
+          BOQ_ERRORS.batchNotFound,
+          'There is no import waiting under that reference. Upload the file again.',
+        );
+    }
   }
 
   /** A footer figure, found by its label and read from the amount column. */

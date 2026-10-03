@@ -38,13 +38,27 @@ export interface ImportBatch {
   quotedPercentage: string | null;
 }
 
-/** What `lookup` found, so the caller can tell four different situations apart (FR-052). */
-export type BatchLookup =
-  | { found: true; batch: ImportBatch }
-  | {
-      found: false;
-      reason: 'not-found' | 'expired' | 'committing' | 'confirmed';
-    };
+/** Why a batch is not available, which the caller turns into one of four sentences (FR-052). */
+export type BatchUnavailable =
+  | 'not-found'
+  | 'expired'
+  | 'committing'
+  | 'confirmed';
+
+/**
+ * What `lookup` found.
+ *
+ * **A flat pair rather than a discriminated union, for a checked reason**: this project compiles
+ * with `strictNullChecks: false` (tsconfig.json), under which narrowing a union on a boolean
+ * discriminant does not work — `if (!found.found)` leaves `found.reason` inaccessible. Found by
+ * writing it the other way first and reading the compiler error.
+ */
+export interface BatchLookup {
+  /** Null when the batch cannot be used; `reason` then says why. */
+  batch: ImportBatch | null;
+  /** Null when `batch` is present. */
+  reason: BatchUnavailable | null;
+}
 
 /**
  * Validated-but-unconfirmed import batches, in process memory (008 FR-052, FR-053; research §16).
@@ -107,13 +121,9 @@ export class ImportBatchStore {
   lookup(id: string): BatchLookup {
     this.sweep();
     const batch = this.batches.get(id);
-    if (!batch) return { found: false, reason: 'not-found' };
-    if (batch.state === 'confirmed')
-      return { found: false, reason: 'confirmed' };
-    if (batch.state === 'committing')
-      return { found: false, reason: 'committing' };
-    if (batch.state === 'expired') return { found: false, reason: 'expired' };
-    return { found: true, batch };
+    if (!batch) return { batch: null, reason: 'not-found' };
+    if (batch.state !== 'ready') return { batch: null, reason: batch.state };
+    return { batch, reason: null };
   }
 
   /**
@@ -128,7 +138,7 @@ export class ImportBatchStore {
    */
   claim(id: string): BatchLookup {
     const found = this.lookup(id);
-    if (!found.found) return found;
+    if (!found.batch) return found;
     found.batch.state = 'committing';
     return found;
   }

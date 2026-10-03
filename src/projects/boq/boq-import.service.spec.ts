@@ -48,7 +48,14 @@ describe('BoqImportService.validate', () => {
 
   beforeEach(() => {
     batches = new ImportBatchStore();
-    service = new BoqImportService(new BoqWorkbookReader(), batches);
+    service = new BoqImportService(
+      new BoqWorkbookReader(),
+      batches,
+      // validate writes nothing, so neither of these is reached by any test in this describe —
+      // passed as nulls rather than mocked, which is itself the assertion that it writes nothing.
+      null as never,
+      null as never,
+    );
   });
 
   describe('the synthetic fixture, which carries every pathology in miniature', () => {
@@ -154,10 +161,10 @@ describe('BoqImportService.validate', () => {
       const report = await run(SYNTHETIC);
 
       const found = batches.lookup(report.batchId);
-      expect(found.found).toBe(true);
-      expect(found.found && found.batch.state).toBe('ready');
-      expect(found.found && found.batch.userId).toBe(CALLER.userId);
-      expect(found.found && found.batch.projectId).toBe(CALLER.projectId);
+      expect(found.batch).not.toBeNull();
+      expect(found.batch.state).toBe('ready');
+      expect(found.batch.userId).toBe(CALLER.userId);
+      expect(found.batch.projectId).toBe(CALLER.projectId);
     });
   });
 

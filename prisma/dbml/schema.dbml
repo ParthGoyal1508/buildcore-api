@@ -4459,6 +4459,7 @@ Enum AuditEntityType {
   SITE
   BOQ_GROUP
   BOQ_ITEM
+  BOQ_IMPORT
   DWR
   REVENUE
   RA_BILL

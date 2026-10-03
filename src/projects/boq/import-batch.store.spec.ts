@@ -24,9 +24,9 @@ describe('ImportBatchStore', () => {
     // FR-052, and the defect this file shipped in its first draft: deleting at the TTL made these
     // two indistinguishable. Somebody who read a 312-line report for ten minutes and then pressed
     // Confirm has to be told that it expired, not that their batch never existed.
-    expect(found).toEqual({ found: false, reason: 'expired' });
+    expect(found).toEqual({ batch: null, reason: 'expired' });
     expect(store.lookup('never-existed')).toEqual({
-      found: false,
+      batch: null,
       reason: 'not-found',
     });
   });
@@ -37,7 +37,7 @@ describe('ImportBatchStore', () => {
 
     // The explanation is worth keeping for a while and not forever; this is what bounds memory.
     expect(store.lookup(batch.id)).toEqual({
-      found: false,
+      batch: null,
       reason: 'not-found',
     });
   });
@@ -45,10 +45,10 @@ describe('ImportBatchStore', () => {
   it('claims a batch before its transaction and reports a concurrent confirm as in progress', () => {
     const batch = store.create(SEED)!;
 
-    expect(store.claim(batch.id).found).toBe(true);
+    expect(store.claim(batch.id).batch).not.toBeNull();
     // FR-052: the second caller is told what is happening rather than being told nothing is.
     expect(store.lookup(batch.id)).toEqual({
-      found: false,
+      batch: null,
       reason: 'committing',
     });
   });
@@ -61,7 +61,7 @@ describe('ImportBatchStore', () => {
 
     // Nothing was written, so a retry is valid — and losing the batch here would mean re-uploading
     // and re-reading the whole report for a failure that was not the operator's.
-    expect(store.lookup(batch.id).found).toBe(true);
+    expect(store.lookup(batch.id).batch).not.toBeNull();
   });
 
   it('keeps a confirmed batch so a repeat can be explained', () => {
@@ -72,7 +72,7 @@ describe('ImportBatchStore', () => {
     // "Nothing happened" and "it already happened" are different facts needing different
     // sentences; deleting the batch would collapse them into one.
     expect(store.lookup(batch.id)).toEqual({
-      found: false,
+      batch: null,
       reason: 'confirmed',
     });
   });
@@ -101,7 +101,7 @@ describe('ImportBatchStore', () => {
 
     // Evicting it would lose the only record of a write in flight.
     expect(store.lookup(batch.id)).toEqual({
-      found: false,
+      batch: null,
       reason: 'committing',
     });
   });
