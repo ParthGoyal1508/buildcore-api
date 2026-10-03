@@ -223,7 +223,18 @@ and remains usable; turn it off and confirm they return.
 
 - **Permission**: An access right, distinguishing the area it covers from the level (read or write)
   it grants.
-- **Role**: A named set of permissions, company-scoped, definable by an administrator.
+- **Role**: A named set of permissions, definable by an administrator.
+
+  **Not company-scoped, and this entry said it was** (corrected 2026-10-03, T071). `settings.Role`
+  carries no `companyId` and its `name` is globally unique: a role defined by one company is visible
+  to every company, and two companies cannot both define a role called "Site Engineer". The
+  *assignment* is per-user and therefore effectively per-company, which is why nothing has broken,
+  but the row itself is shared.
+
+  Recorded as a divergence rather than quietly corrected in either direction, because fixing it is a
+  schema change with a migration behind it — every existing `UserRole` points at a shared row — and
+  the cost of leaving both readings in this document is that the next person to design against it
+  believes a company's roles are its own. They are not. See plan D8.
 - **Company Selection**: The company a user is currently working in — per user, persisted, and
   constrained to the companies they may access.
 - **Cash Visibility Setting**: A company-level display control with an owner and a change history.

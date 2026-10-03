@@ -387,12 +387,36 @@ payment. If the client wants the other reading, this phase is where it is built.
 - [ ] T068 NFR-002: re-run T003's measurement and compare p95. If the guard exceeds the baseline by
   more than 50ms, T019's decision was wrong and grants belong on the token.
 - [ ] T069 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against all three new tables.
-- [ ] T070 Re-read `spec.md` and confirm each of FR-001 to FR-017 is either built or explicitly
+- [X] T070 Re-read `spec.md` and confirm each of FR-001 to FR-017 is either built or explicitly
   deferred with a reason. Record FR-002 as **already satisfied before this feature** for the area
   dimension (research §2) rather than silently claiming it as new work.
-- [ ] T071 Record in the spec that roles remain globally named, not company-scoped, contradicting its
+
+  **Read 2026-10-03.** FR-001 to FR-017 are each built or carry a stated reason, with two entries
+  that must not be read as this feature's work:
+
+  * **FR-002** — a role holding write access to a specific *area* within a module. The area dimension
+    was already satisfied before this feature (research §2); what 019 added is the read/write
+    separation over it. Recorded here rather than counted as new, because claiming it would overstate
+    what this feature delivered.
+  * **Phase 6 (FR-014, cash entry)** is open and stays open: it rests on an unanswered client
+    question — whether cash may still be **entered** while hiding is on — and the phase header says
+    so. Building either reading would be answering it on the client's behalf.
+
+  Everything else is built. The one divergence found by the re-read is recorded under T071 below.
+- [X] T071 Record in the spec that roles remain globally named, not company-scoped, contradicting its
   own Key Entities (plan D8). Either correct the entity description or state the divergence; do not
   leave both readings in the document.
+
+  **Recorded 2026-10-03** in `spec.md`'s Key Entities, which had said "company-scoped" and was
+  wrong: `settings.Role` carries no `companyId` and its `name` is globally unique, so a role defined
+  by one company is visible to all of them and two companies cannot both define a "Site Engineer".
+  The *assignment* is per-user and therefore effectively per-company, which is why nothing has
+  broken.
+
+  Stated as a divergence rather than silently corrected in either direction, because closing it is a
+  schema change with a migration behind it — every existing `UserRole` points at a shared row — and
+  the cost of leaving both readings in the document is that the next person to design against it
+  believes a company's roles are its own.
 - [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
 
 ## Dependencies

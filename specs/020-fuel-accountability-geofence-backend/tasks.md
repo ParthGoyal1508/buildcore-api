@@ -323,10 +323,33 @@ Independent of phases 1–3.
 
 - [X] T039 `npx tsc --noEmit` clean; `npm test` **1118 passing across 107 suites**, up 4 from the
   tests added here. `npm run test:e2e` not run for this phase — see T038 and T041.
-- [ ] T041 **Open from T031**: prove the RLS policy *denies* a cross-company read of this table from a
-  non-superuser role. Everything local runs as a superuser, which Postgres exempts from policies
-  unconditionally, so the guarantee is currently asserted by the policy's existence rather than by its
-  behaviour. `scripts/provision-app-role.sql` creates the `buildcore_app` role this needs.
+- [X] T041 **Closed 2026-10-03**: the RLS policy on `hr.EmployeeLocationAssignment` is now proven to
+  *deny* a cross-company read from a non-superuser role, in
+  `test/location-assignment-rls.e2e-spec.ts`.
+
+  The obstacle this task recorded was real and is no longer binding. "Everything local runs as a
+  superuser" is true of a query issued as `prisma` — but a superuser can
+  `CREATE ROLE … NOSUPERUSER NOBYPASSRLS`, connect as it, and ask the question with the policies
+  actually in force. That is what `documents-rls.e2e-spec.ts` did in September and
+  `billing-rls.e2e-spec.ts` did earlier the same day; this is the same shape for the one table left
+  asserting rather than proving. No `scripts/provision-app-role.sql` run is needed — the suite
+  creates and drops its own role.
+
+  Seven assertions: the probe role genuinely cannot bypass RLS (first, because every other assertion
+  is meaningless without it), ENABLE and FORCE both still set, a cross-company read with **no `WHERE`
+  clause** returning nothing, default-deny when no company context is set, and the two writes that
+  matter most on this table — a cross-tenant `UPDATE` setting `isMobile` is refused with the stored
+  value confirmed unmoved, and a cross-tenant `INSERT` is refused by the policy. That update is an
+  attacker exempting somebody else's employee from their geofence, whose only symptom would be
+  attendance quietly accepted from anywhere.
+
+  Plus the vacuity check: the policy is disabled, the hidden row confirmed to appear, and ENABLE and
+  FORCE restored in a `finally`. An empty table, a missing grant and a mistyped table name each
+  produce a passing isolation test; that is the only thing that tells them apart.
+
+  One correction to our own assumption, found on the first run: `EmployeeLocationAssignment.employeeId`
+  **does** carry a foreign key. `hr.Employee` itself carries none, so one bare row per company is the
+  whole of the fixture.
 - [ ] T040 Walk `checklists/refusal.md` and record, per item, whether the requirement it questions is
   now answered. **Do not tick the boxes** — that file is reviewer-owned. CHK001–CHK005 are answered by
   FR-013a's enumeration and FR-013d, built by T022–T023.
@@ -495,8 +518,9 @@ check can only ever be advisory.
   it. A balance that has carried for several periods must remain visible and attributable.
 - [X] T070c [P] [US2] Unit test: a balance that cannot be recovered for three consecutive periods is
   still present, still the right figure, and has not been deducted past the ceiling to clear it.
-- [ ] T071 [US2] ✅ Done 2026-10-02 — the spec's Clarifications carry the client's answer and the marker
-  is removed.
+- [X] T071 [US2] ✅ Done 2026-10-02 — the spec's Clarifications carry the client's answer and the marker
+  is removed. **Checkbox ticked 2026-10-03**: the work was done and recorded and only the box was
+  left, which is the fourth task file in this review found wrong in our favour.
 
 ### Phases 6 and 7 implementation record, 2026-10-02
 
@@ -563,9 +587,21 @@ is unchanged: every local database role is a superuser.
 ## Verification for phases 5-7
 
 - [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
-- [ ] T073 Re-read `spec.md` FR-001 to FR-010 and FR-017 and confirm the built behaviour matches.
+- [X] T073 Re-read `spec.md` FR-001 to FR-010 and FR-017 and confirm the built behaviour matches.
   Confirm explicitly that **detection is unchanged** — the client's item 13 asked for consequence, and
   the half that already worked must still work identically.
+
+  **Read 2026-10-03.** FR-001 to FR-010 and FR-017 are built, and **detection is unchanged**: the
+  variance calculation, its threshold and the alert it raises are the code that shipped before this
+  feature, untouched. 020 added what happens *next* — the recovery from the operator's salary, its
+  approval chain, and the geofence assignment — which is the half item 13 asked for. A change to
+  detection would have been the easy mistake here, because the two halves read as one feature from
+  the client's sentence, and it would have shown up as alerts appearing or disappearing on machines
+  nobody had touched.
+
+  The one item still open in this feature is T016, and it is not code: reporting the measured refusal
+  rate to the client before the hard geofence block goes on. They accepted its cost without a number
+  and are owed one while the decision is still reversible.
 
 ### Dependencies for phases 5-7
 

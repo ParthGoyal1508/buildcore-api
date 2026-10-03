@@ -325,10 +325,38 @@ path FR-014c requires to satisfy an item without a second action (plan D14).
 ## Verification for phases 4-8
 
 - [ ] T083 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
-- [ ] T084 Re-read `spec.md` FR-005 to FR-018b and confirm each is built or explicitly deferred with a
+- [X] T084 Re-read `spec.md` FR-005 to FR-018b and confirm each is built or explicitly deferred with a
   reason.
-- [ ] T085 Confirm the three open markers are still marked and have not been quietly closed by an
+
+  **Read 2026-10-03.** Each is built. One was found built *wrongly* by the re-read and is now fixed:
+  **FR-018a** required the settlement summary to list every asset the employee held at exit "whether
+  or not it blocked the settlement", and `FnfService` derived its list by filtering the exit
+  clearance — which can only contain *open* custody. An asset returned a week before the last
+  working day was absent from the summary entirely, so the summary said the employee had never been
+  given it. The service's own docblock claimed the requirement was met. Fixed by a second registry
+  question (`custodyHistoryFor`), with seven service tests behind it.
+
+  That is what a re-read is for, and it is the second time in this review that a docblock asserting
+  a requirement was the only thing satisfying it.
+- [X] T085 Confirm the three open markers are still marked and have not been quietly closed by an
   assumption that got built: automatic versus explicit slip send, the bank format, and waiver authority.
+
+  **Checked 2026-10-03, and the answer is better than the question allowed for.** None of the three
+  was closed by an assumption. All three were **answered by the client** on 1 and 2 October, and each
+  answer is recorded in `spec.md` under "Needing the client's decision" with its date:
+
+  * **Slip send** — an explicit action, not automatic delivery. A run can be corrected after being
+    marked paid, and an automatic send puts the wrong figure in an inbox it cannot be recalled from.
+  * **Bank format** — the sample arrived (`docs/RING ROAD JULY SALARY.xls`, 23 real NEFT rows) and
+    is now FR-008a to FR-008g. Waiting rather than guessing was the right order: the file contradicts
+    three things a sensible person would have assumed.
+  * **Waiver authority** — HR proposes, the Director countersigns. This *superseded* what had
+    shipped: the waiver required write access on Employees, which was a placeholder, and wider than
+    a write-off of company money deserves.
+
+  A fourth marker was answered the same way: nothing is recovered for an unreturned asset (FR-018b),
+  and that is now a recorded decision rather than a pending valuation rule. Every one of the four
+  superseded a placeholder we had chosen, which is the outcome this task was written to protect.
 
 ### Dependencies for phases 4-8
 
