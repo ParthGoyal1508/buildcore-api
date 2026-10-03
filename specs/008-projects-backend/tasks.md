@@ -549,23 +549,23 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
 
 ### Phase B2: The parser boundary (constitution v1.5.0)
 
-- [ ] T063 [US4] Add `xlsx` to `package.json` pinned to
+- [X] T063 [US4] ✅ Done — resolved to the CDN tarball, integrity hash in the lockfile, zero `registry.npmjs.org` resolutions for `xlsx`; installed version confirmed 0.20.3 Add `xlsx` to `package.json` pinned to
       `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, and commit the lockfile with its
       integrity hash. **Not `npm install xlsx`** — the registry build is 0.18.5, carrying
       CVE-2023-30533 and CVE-2024-22363, and the constitution prohibits it.
-- [ ] T064 [US4] Implement `BoqWorkbookReader` in `src/projects/boq/boq-workbook.reader.ts`: takes a
+- [X] T064 [US4] ✅ Done — `BoqWorkbookReader` returns `WorkbookSheet[]` of plain rows. **One refinement:** it returns sheets rather than a flat row list, because a tender workbook carries several (the e-tender template has one per BoQ type) and choosing between them is a schedule-identification decision, not a parsing one Implement `BoqWorkbookReader` in `src/projects/boq/boq-workbook.reader.ts`: takes a
       buffer, returns `{ rowNumber, cells: (string | number | null)[] }[]`. The **only** importer of
       `xlsx` anywhere. No caller receives a workbook, a worksheet or a cell object — that is what
       makes replacing the library one file's work.
-- [ ] T065 [US4] Route by content, not by filename: `.xlsx` to `exceljs`, legacy `.xls` to SheetJS.
+- [X] T065 [US4] ✅ Done — routed on magic bytes (`PK\x03\x04` → exceljs, OLE2/CFB → SheetJS), not on the filename Route by content, not by filename: `.xlsx` to `exceljs`, legacy `.xls` to SheetJS.
       A renamed file is the common case, not the exception.
-- [ ] T066 [US4] The four whole-file refusals, each named (FR-036, FR-056): `BOQ_FILE_TOO_LARGE`
+- [X] T066 [US4] ✅ Done — `BOQ_FILE_TOO_LARGE` (checked first, asserted by a test that would otherwise fail as unreadable), `BOQ_WORKBOOK_UNREADABLE`, `BOQ_WORKBOOK_EMPTY`. `BOQ_NO_SCHEDULE_BLOCK` belongs to T069 The four whole-file refusals, each named (FR-036, FR-056): `BOQ_FILE_TOO_LARGE`
       (over 10MB, before parsing), `BOQ_WORKBOOK_UNREADABLE`, `BOQ_WORKBOOK_EMPTY` (parsed, no
       sheets — the shape `exceljs` silently returns for the client's real file) and
       `BOQ_NO_SCHEDULE_BLOCK`.
-- [ ] T067 [P] [US4] Unit test the reader alone in `boq-workbook.reader.spec.ts`: a real `.xls`, a
+- [X] T067 [P] [US4] ✅ Done — 7 tests. **The first draft was vacuous**: four assertions used `.catch(cb)`, which passes silently when the promise resolves — the exact failure shape this feature exists to prevent. Replaced with a helper that fails explicitly on resolution, and proved non-vacuous by breaking one deliberately and confirming it fails Unit test the reader alone in `boq-workbook.reader.spec.ts`: a real `.xls`, a
       real `.xlsx`, a text file renamed `.xls`, a workbook with no sheets, and an oversized buffer.
-- [ ] T068 [P] [US4] Assert **no file other than the reader imports `xlsx`**, by reading the source
+- [X] T068 [P] [US4] ✅ Done — walks `src/` and asserts no file but the reader imports `xlsx` Assert **no file other than the reader imports `xlsx`**, by reading the source
       tree in `boq-workbook.reader.spec.ts`. The constraint decays silently: a second import would
       work perfectly and nobody would notice until the library had to be replaced.
 

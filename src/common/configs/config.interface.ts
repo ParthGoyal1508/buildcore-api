@@ -15,6 +15,7 @@ export interface Config {
   recruitment: RecruitmentConfig;
   dashboard: DashboardConfig;
   search: SearchConfig;
+  boqImport: BoqImportConfig;
 }
 
 /**
@@ -685,4 +686,60 @@ export interface EmailConfig {
    * refuses to boot.
    */
   allowConsoleInProduction: boolean;
+}
+
+/**
+ * BOQ import tunables (008 FR-053, FR-055, FR-056; plan.md Phase B3).
+ *
+ * Principle III keeps these out of the services that read them, and here that is not a formality:
+ * all six are numbers somebody will want changed the first time a tender arrives in an unexpected
+ * shape, and every one of them was a figure the specification had to *choose* rather than inherit.
+ * The reasoning lives beside each so the next person can change it on purpose.
+ */
+export interface BoqImportConfig {
+  /**
+   * Largest workbook accepted, in bytes, refused **before parsing begins** (FR-056).
+   *
+   * `maxCandidateRows` is applied after a full parse, so without this nothing bounds the work done
+   * before that check. The client's own 312-line tender is 680KB, so 10MB is roughly fifteen times
+   * the real case.
+   */
+  maxFileBytes: number;
+  /**
+   * Largest number of **candidate schedule rows** accepted — rows inside the identified block with
+   * a non-empty description, counting headings and rows that will later be rejected (FR-055).
+   *
+   * Counted after block identification, never on raw sheet rows: the sample's sheet holds far more
+   * raw rows than its 312 lines once the headings and the second block at columns 238-242 are
+   * included, so a cap judged on raw rows could refuse the client's own tender for being too large.
+   * The cap exists to bound synchronous response time, which is why it is a row count and not a
+   * byte count.
+   */
+  maxCandidateRows: number;
+  /**
+   * How long a validated batch stays confirmable, in minutes (FR-053).
+   *
+   * Long enough to read a 312-line report, short enough that it is not confirmed against a project
+   * that has since changed. A batch holds no money and losing one costs a re-upload.
+   */
+  batchTtlMinutes: number;
+  /**
+   * Live batches one company may hold at once, and the overall ceiling (FR-053).
+   *
+   * A validate that would exceed either is **refused** rather than evicting a batch somebody is
+   * part-way through reading — the eviction would present as their confirm failing for no stated
+   * reason. Batches live in process memory, so the overall figure is also what bounds that memory.
+   */
+  maxLiveBatchesPerCompany: number;
+  maxLiveBatchesTotal: number;
+  /**
+   * Reconciliation tolerance, in **paise per line** (FR-045).
+   *
+   * Derived from the arithmetic rather than chosen: rounding each line to two decimal places can
+   * differ from the source's own unrounded sum by up to half a paisa per line, so exact equality
+   * would fail a *correct* import of a 312-line file. One paisa per line is ₹3.12 there — and every
+   * structural error this check exists to catch (a doubled block, a missed section) exceeds it by
+   * seven orders of magnitude.
+   */
+  reconciliationPaisePerLine: number;
 }

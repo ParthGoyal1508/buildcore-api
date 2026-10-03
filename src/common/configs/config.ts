@@ -588,6 +588,36 @@ const config: Config = {
       5000,
     ),
   },
+  boqImport: {
+    // FR-056. Refused before parsing; the client's own tender is 680KB.
+    maxFileBytes: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_FILE_BYTES,
+      10 * 1024 * 1024,
+    ),
+    // FR-055. Candidate schedule rows, counted after block identification — never raw sheet rows.
+    maxCandidateRows: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_CANDIDATE_ROWS,
+      1000,
+    ),
+    // FR-053. Long enough to read 312 lines; short enough not to outlive the project's state.
+    batchTtlMinutes: numberFromEnv(
+      process.env.BOQ_IMPORT_BATCH_TTL_MINUTES,
+      30,
+    ),
+    maxLiveBatchesPerCompany: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_BATCHES_PER_COMPANY,
+      5,
+    ),
+    maxLiveBatchesTotal: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_BATCHES_TOTAL,
+      20,
+    ),
+    // FR-045. One paisa per line — derived from two-decimal rounding, not picked.
+    reconciliationPaisePerLine: numberFromEnv(
+      process.env.BOQ_IMPORT_RECONCILIATION_PAISE_PER_LINE,
+      1,
+    ),
+  },
 };
 
 export default (): Config => config;
