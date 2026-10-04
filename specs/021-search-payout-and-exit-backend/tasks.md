@@ -324,7 +324,18 @@ path FR-014c requires to satisfy an item without a second action (plan D14).
 
 ## Verification for phases 4-8
 
-- [ ] T083 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T083 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **Run 2026-10-04, and this is the first time the last of those four was green.** `tsc` clean;
+      `eslint src test prisma` 0 errors (one pre-existing prettier error remains in the untouched
+      `test/account-creation.e2e-spec.ts`); **1,647 unit tests across 147 suites**; and
+      **`npm run test:e2e` 581 tests across 33 suites, all passing.**
+
+      Held open deliberately until today rather than ticked on a passing unit suite. The e2e run was
+      red with 15 suites and 158 assertions down, and closing this task would have meant reporting a
+      green suite that was not green. Repairing it found four defects that are committed separately —
+      connections never released on shutdown, eight masters readers ignoring the company switcher, a
+      permission fallback that was per caller instead of per area, and a project refusal demanding
+      four document uploads before checking that the client exists.
       **See 019 T072 for the measured result, which is the same run.** Clean on the first three; the
       e2e suite is red from connection exhaustion and pre-existing drift in suites older than 017,
       neither of which is this feature's work.

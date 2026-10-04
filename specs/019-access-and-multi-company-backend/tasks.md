@@ -453,7 +453,18 @@ describes. We built the thing the client asked for instead, and the two are diff
   schema change with a migration behind it — every existing `UserRole` points at a shared row — and
   the cost of leaving both readings in the document is that the next person to design against it
   believes a company's roles are its own.
-- [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+- [X] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **Run 2026-10-04, and this is the first time the last of those four was green.** `tsc` clean;
+      `eslint src test prisma` 0 errors (one pre-existing prettier error remains in the untouched
+      `test/account-creation.e2e-spec.ts`); **1,647 unit tests across 147 suites**; and
+      **`npm run test:e2e` 581 tests across 33 suites, all passing.**
+
+      Held open deliberately until today rather than ticked on a passing unit suite. The e2e run was
+      red with 15 suites and 158 assertions down, and closing this task would have meant reporting a
+      green suite that was not green. Repairing it found four defects that are committed separately —
+      connections never released on shutdown, eight masters readers ignoring the company switcher, a
+      permission fallback that was per caller instead of per area, and a project refusal demanding
+      four document uploads before checking that the client exists.
 
       **MEASURED 2026-10-03, and left open with the reason rather than ticked.** `npx tsc --noEmit`
       clean; `npx eslint src test prisma` 0 errors; `npm test` **1629 passing across 144 suites**.
