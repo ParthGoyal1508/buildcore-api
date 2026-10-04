@@ -39,6 +39,53 @@ export interface ProjectMachinerySource {
   ): Promise<number>;
 }
 
+/**
+ * One machine's day, as its own logbook records it — 022 FR-032.
+ *
+ * `YYYY-MM-DD` for the date, so the key is a day rather than an instant and cannot be made to
+ * disagree with itself by a timezone.
+ */
+export interface EquipmentLogbookDay {
+  date: string;
+  openingReading: string;
+  closingReading: string;
+  totalHours: string;
+  fuelConsumed: string | null;
+  remarks: string | null;
+}
+
+/**
+ * What feature 006 contributes to a daily work report (022 FR-032, FR-033).
+ *
+ * ## Why this interface exists rather than a query
+ *
+ * `plant.LogbookEntry` already records a machine's day — opening reading, closing reading, total
+ * run, fuel, operator, remarks, unique per machine per date. That is **exactly** the odometer
+ * register printed beneath each measurement sheet in the client's real RA bill package. So a daily
+ * work report does not need to store those readings; it needs to be able to read them, and
+ * Principle I forbids `projects` from querying the `plant` schema.
+ *
+ * Copying them instead would create a second system of record for one odometer, and the two would
+ * disagree the first time either was corrected.
+ *
+ * ## Why a map, and why batched
+ *
+ * Returns a **map keyed by date**, so a date with no entry is **absent rather than zero** — which
+ * is 022 FR-033 and also the rule this registry's cost sources already follow: a caller must be
+ * able to tell "the machine did nothing" from "nobody recorded it". A run of zero kilometres and a
+ * missing register page are different facts, and only one of them is a reason to chase somebody.
+ *
+ * Batched over dates for the reason `ProjectCostSource` gives about projects: a per-date signature
+ * would make a month's report an N+1 that no registrant could fix from their side.
+ */
+export interface ProjectLogbookSource {
+  getLogbookDays(
+    equipmentId: string,
+    companyId: string,
+    dates: string[],
+  ): Promise<Map<string, EquipmentLogbookDay>>;
+}
+
 /** What feature 009 contributes. */
 export interface ProjectMaterialsSource {
   getMaterialsByProject(
@@ -184,6 +231,7 @@ export class ProjectSourcesRegistry {
 
   private machinery: ProjectMachinerySource | null = null;
   private materials: ProjectMaterialsSource | null = null;
+  private logbook: ProjectLogbookSource | null = null;
 
   registerMachinerySource(source: ProjectMachinerySource): void {
     if (this.machinery) {
@@ -208,9 +256,39 @@ export class ProjectSourcesRegistry {
     this.materials = source;
   }
 
+  /**
+   * Registered by `PlantService.onModuleInit` (022 FR-032).
+   *
+   * **The direction is forced, not chosen.** `PlantModule` already imports `ProjectsModule`, so
+   * having `ProjectsModule` import `PlantModule` to inject a logbook service would close a cycle —
+   * the one `PlantService`'s own docblock says would span five modules. It is also the hazard 006
+   * T058/T059 recorded from the other side: `EquipmentCategoriesService` lives under
+   * `src/settings/machinery-masters` but is *provided* by `PlantModule`, and injecting across that
+   * line made a cycle. So `plant` announces itself and `projects` asks the registry.
+   */
+  registerLogbookSource(source: ProjectLogbookSource): void {
+    if (this.logbook) {
+      this.logger.warn(
+        'A logbook source is already registered; the second registration is ignored.',
+      );
+      return;
+    }
+    this.logbook = source;
+  }
+
   /** Null when feature 006 is not part of this deployment. */
   machinerySource(): ProjectMachinerySource | null {
     return this.machinery;
+  }
+
+  /**
+   * Null when feature 006 is not part of this deployment.
+   *
+   * A caller must report that absence as an absence rather than as "no logbook entries", which is
+   * the same distinction FR-033 draws for a missing date.
+   */
+  logbookSource(): ProjectLogbookSource | null {
+    return this.logbook;
   }
 
   /** Null when feature 009 is not part of this deployment. */

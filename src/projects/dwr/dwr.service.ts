@@ -16,6 +16,10 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { BoqService } from '../boq/boq.service';
+import {
+  EquipmentLogbookDay,
+  ProjectSourcesRegistry,
+} from '../portfolio/project-sources.registry';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import {
   contentDispositionFor,
@@ -32,6 +36,11 @@ import {
 } from './dwr-quantity';
 import { CreateDwrDto, CreateDwrLineDto } from './dto/create-dwr.dto';
 import { ReverseDwrDto } from './dto/dwr-lifecycle.dto';
+import {
+  DWR_PAGE_SIZE_DEFAULT,
+  DWR_PAGE_SIZE_MAX,
+  ListDwrDto,
+} from './dto/dwr-query.dto';
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 
 /** Separates the project code from the sequence in a report number (FR-002a). */
@@ -55,6 +64,24 @@ export interface DwrWarning {
   message: string;
   /** Whatever the reader needs to act: a report number, a line's BOQ number, a date. */
   detail?: Record<string, unknown>;
+}
+
+/** One report as its detail screen reads it. Shapes rather than Prisma rows, so the wire is typed. */
+export interface DwrDetail {
+  id: string;
+  dprNumber: string;
+  workDate: string;
+  status: DwrStatus;
+  lines: {
+    id: string;
+    boqItemId: string | null;
+    boqNo: string | null;
+    quantityInForce: string;
+    logbook: EquipmentLogbookDay | null;
+    logbookMissing: boolean;
+    [key: string]: unknown;
+  }[];
+  [key: string]: unknown;
 }
 
 export interface CreatedDwr {
@@ -99,6 +126,7 @@ export class DwrService {
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
     private readonly boq: BoqService,
+    private readonly sources: ProjectSourcesRegistry,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -452,6 +480,250 @@ export class DwrService {
       // download — a defect this repository shipped and fixed on 2026-10-04.
       contentDisposition: contentDispositionFor(attachment.fileName),
     };
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Reading (Phase E — FR-026, FR-027, FR-032, FR-033)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A project's reports, filtered and paginated (FR-026).
+   *
+   * The total comes from a separate `count` over the same filter, so it does **not** depend on the
+   * page returned — a total equal to the page length is the classic way a paginated list tells a
+   * reader there are 25 reports when there are 300.
+   */
+  async list(
+    ctx: RlsContext,
+    query: ListDwrDto,
+  ): Promise<{
+    items: {
+      id: string;
+      dprNumber: string;
+      workDate: Date;
+      status: DwrStatus;
+      workerCount: number;
+      machineryCount: number;
+      progress: number;
+      lineCount: number;
+    }[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(
+      DWR_PAGE_SIZE_MAX,
+      Math.max(1, query.pageSize ?? DWR_PAGE_SIZE_DEFAULT),
+    );
+
+    const where: Prisma.DailyWorkReportWhereInput = {
+      ...(query.projectId ? { projectId: query.projectId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.from || query.to
+        ? {
+            workDate: {
+              ...(query.from ? { gte: startOfDay(new Date(query.from)) } : {}),
+              ...(query.to ? { lte: startOfDay(new Date(query.to)) } : {}),
+            },
+          }
+        : {}),
+    };
+
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const [rows, total] = await Promise.all([
+        tx.dailyWorkReport.findMany({
+          where,
+          orderBy: [{ workDate: 'desc' }, { dprNumber: 'desc' }],
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+          select: {
+            id: true,
+            dprNumber: true,
+            workDate: true,
+            status: true,
+            workerCount: true,
+            machineryCount: true,
+            progress: true,
+            _count: { select: { tasks: true } },
+          },
+        }),
+        tx.dailyWorkReport.count({ where }),
+      ]);
+
+      return {
+        items: rows.map(({ _count, ...row }) => ({
+          ...row,
+          lineCount: _count.tasks,
+        })),
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
+  /**
+   * One report, with each line beside its BOQ line's position and its equipment's logbook day
+   * (FR-027, FR-032, FR-033).
+   *
+   * The logbook comes through `ProjectSourcesRegistry`, never by querying `plant.LogbookEntry` —
+   * Principle I, and research §5's reason for the direction. A date the equipment has no entry for
+   * is reported as **missing**, not as a run of zero: an unrecorded day and a day the machine did
+   * nothing are different facts, and only one of them is somebody to go and ask.
+   */
+  async findOne(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+  ): Promise<DwrDetail> {
+    const report = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          projectId: true,
+          dprNumber: true,
+          workDate: true,
+          status: true,
+          supervisorEmployeeId: true,
+          weather: true,
+          workerCount: true,
+          machineryCount: true,
+          progress: true,
+          location: true,
+          description: true,
+          contractFor: true,
+          contractNumber: true,
+          rfiNo: true,
+          layer: true,
+          createdByUserId: true,
+          submittedByUserId: true,
+          submittedAt: true,
+          approvedByUserId: true,
+          approvedAt: true,
+          reversedAt: true,
+          reversedByUserId: true,
+          reversalReason: true,
+          reversalCount: true,
+          attachments: {
+            select: {
+              id: true,
+              fileName: true,
+              mimeType: true,
+              sizeBytes: true,
+              uploadedAt: true,
+            },
+          },
+          tasks: {
+            select: {
+              id: true,
+              boqItemId: true,
+              paymentMode: true,
+              actualQty: true,
+              servedQty: true,
+              equipmentId: true,
+              chainageFrom: true,
+              chainageTo: true,
+              layer: true,
+              roadSide: true,
+              section: true,
+              layerNo: true,
+              engineerName: true,
+              remark: true,
+              exceedsScope: true,
+              boqItem: {
+                select: {
+                  boqNo: true,
+                  taskName: true,
+                  unit: true,
+                  scopeQty: true,
+                  doneQty: true,
+                  perDayQty: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    if (!report) throw new NotFoundException('Daily work report not found');
+
+    const workDate = report.workDate.toISOString().slice(0, 10);
+    const logbook = await this.logbookFor(report.tasks, companyId, workDate);
+
+    return {
+      ...report,
+      workDate,
+      lines: report.tasks.map((task) => {
+        const scopeQty = task.boqItem?.scopeQty ?? null;
+        const doneQty = task.boqItem?.doneQty ?? null;
+        const entry = task.equipmentId
+          ? logbook.get(task.equipmentId)
+          : undefined;
+
+        return {
+          id: task.id,
+          boqItemId: task.boqItemId,
+          boqNo: task.boqItem?.boqNo ?? null,
+          taskName: task.boqItem?.taskName ?? null,
+          unit: task.boqItem?.unit ?? null,
+          paymentMode: task.paymentMode,
+          quantityInForce: storedQuantityInForce(task).toFixed(3),
+          // The BOQ line's own position (FR-027), from `BoqService`'s projection rather than
+          // recomputed: pending is scope less done, and two definitions of it would diverge.
+          scopeQty: scopeQty?.toFixed(3) ?? null,
+          doneQty: doneQty?.toFixed(3) ?? null,
+          pendingQty:
+            scopeQty && doneQty ? scopeQty.minus(doneQty).toFixed(3) : null,
+          targetQty: task.boqItem?.perDayQty?.toFixed(3) ?? null,
+          chainageFrom: task.chainageFrom?.toFixed(3) ?? null,
+          chainageTo: task.chainageTo?.toFixed(3) ?? null,
+          layer: task.layer,
+          roadSide: task.roadSide,
+          section: task.section,
+          layerNo: task.layerNo,
+          engineerName: task.engineerName,
+          remark: task.remark,
+          exceedsScope: task.exceedsScope,
+          equipmentId: task.equipmentId,
+          logbook: entry ?? null,
+          // FR-033. Three states, not two: no equipment named, an entry found, or an entry
+          // genuinely absent for that date. Collapsing the last two into `logbook: null` would
+          // make "nobody recorded it" look like "this line is not about a machine".
+          logbookMissing: Boolean(task.equipmentId) && !entry,
+        };
+      }),
+    };
+  }
+
+  /** The logbook day for every equipment a report's lines name, in one call per machine. */
+  private async logbookFor(
+    tasks: { equipmentId: string | null }[],
+    companyId: string,
+    workDate: string,
+  ): Promise<Map<string, EquipmentLogbookDay>> {
+    const source = this.sources.logbookSource();
+    const equipmentIds = [
+      ...new Set(
+        tasks
+          .map((t) => t.equipmentId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    if (!source || equipmentIds.length === 0) return new Map();
+
+    const found = new Map<string, EquipmentLogbookDay>();
+    await Promise.all(
+      equipmentIds.map(async (equipmentId) => {
+        const days = await source.getLogbookDays(equipmentId, companyId, [
+          workDate,
+        ]);
+        const day = days.get(workDate);
+        if (day) found.set(equipmentId, day);
+      }),
+    );
+    return found;
   }
 
   // ───────────────────────────────────────────────────────────────────────────

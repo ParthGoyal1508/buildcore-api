@@ -13,6 +13,7 @@ import { BoqImportService } from './boq/boq-import.service';
 import { BoqWorkbookReader } from './boq/boq-workbook.reader';
 import { BoqController } from './boq/boq.controller';
 import { BoqService } from './boq/boq.service';
+import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
 import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
@@ -130,6 +131,12 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // months — so every BOQ line in the system reported 0% executed regardless of work done.
     // This provider is where that closes.
     DwrService,
+    // 022 US6 — the contract feature 023 composes a bill from: per BOQ line, the measurement
+    // approved in a period, before it, and the total. Aggregated at read time rather than stored,
+    // because 018 research §3 decided exactly that for cumulative billed quantity and named
+    // `doneQty` as the one denormalised counter already in place. `reconcile` is what can say that
+    // counter has drifted, and is the only thing that can.
+    DwrPeriodFiguresService,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
     AuditLogService,

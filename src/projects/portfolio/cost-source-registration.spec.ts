@@ -74,7 +74,18 @@ describe('plant registers both of its categories (T028)', () => {
     const service = new PlantService(
       { $transaction: async () => 0 } as never,
       { getSitesByProject: async () => [] } as never,
-      { registerMachinerySource: () => undefined, ...registry } as never,
+      {
+        registerMachinerySource: () => undefined,
+        // 022 FR-032: `PlantService` also announces its equipment logbook, so a daily work report
+        // can show a machine's own register page beside a presence-paid line. Stubbed here rather
+        // than collected, because this suite is about the **cost** sources — but it has to exist,
+        // and that is the point worth recording: this fake registry is a hand-written stand-in, so
+        // every new registration on the real one breaks it until it is added. That is a feature.
+        // A fake that silently tolerated unknown registrations would let a module stop announcing
+        // itself without any test noticing, and an unregistered source presents as a cost of zero.
+        registerLogbookSource: () => undefined,
+        ...registry,
+      } as never,
     );
     return { service, registered };
   };
