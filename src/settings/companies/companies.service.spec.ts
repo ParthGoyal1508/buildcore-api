@@ -90,7 +90,10 @@ describe('CompaniesService', () => {
         employeeCodeSequence: { create: jest.fn() },
         // 016 resolves the Super Admin role here so the approval spine never reads
         // `settings.Role` itself (Principle I). Null is a valid answer.
-        role: { findFirst: jest.fn().mockResolvedValue(null) },
+        role: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -130,7 +133,10 @@ describe('CompaniesService', () => {
         employeeCodeSequence: { create: jest.fn() },
         // 016 resolves the Super Admin role here so the approval spine never reads
         // `settings.Role` itself (Principle I). Null is a valid answer.
-        role: { findFirst: jest.fn().mockResolvedValue(null) },
+        role: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -171,7 +177,16 @@ describe('CompaniesService', () => {
           create: jest.fn().mockResolvedValue(companyRow()),
         },
         employeeCodeSequence: { create: seqCreate },
-        role: { findFirst: jest.fn().mockResolvedValue({ id: 'role-super' }) },
+        role: {
+          findFirst: jest.fn().mockResolvedValue({ id: 'role-super' }),
+          // The three default slot roles, resolved by name since 2026-10-04 so a new
+          // company can approve its own payroll on day one.
+          findMany: jest.fn().mockResolvedValue([
+            { id: 'role-site', name: 'Site Admin' },
+            { id: 'role-ho', name: 'HO User' },
+            { id: 'role-super', name: 'Super Admin' },
+          ]),
+        },
       });
       const service = new CompaniesService(
         prisma as never,
@@ -195,6 +210,23 @@ describe('CompaniesService', () => {
       expect(documentTypes.seedDefaultsForCompany).toHaveBeenCalledWith(
         'company-1',
         prisma.tx,
+      );
+      // 2026-10-04: and the approval chains get their *staffing*, not only their shape.
+      // Five of the twelve seeded chains name `first_approver` and `hr`, so a company
+      // created without these two mappings cannot approve a payroll run at all — which
+      // was true of both live companies until this was found. Asserted at the caller
+      // because this is the layer that may read `settings.Role`; the spine may not.
+      expect(approvalChains.seedDefaultsForCompany).toHaveBeenCalledWith(
+        'company-1',
+        prisma.tx,
+        {
+          superAdminRoleId: 'role-super',
+          slotRoleIds: {
+            first_approver: 'role-site',
+            hr: 'role-ho',
+            final: 'role-super',
+          },
+        },
       );
       expect(seqCreate).toHaveBeenCalledWith({
         data: { companyId: 'company-1', lastNumber: 0 },

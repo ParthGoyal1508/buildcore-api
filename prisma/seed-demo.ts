@@ -24,7 +24,10 @@ import { hash } from 'argon2';
 import * as PDFDocument from 'pdfkit';
 
 import { DEFAULT_COMPANY_CHAINS } from '../src/approvals/default-chains';
-import { SLOT_FINAL } from '../src/approvals/approval-slots';
+import {
+  DEFAULT_SLOT_ROLE_NAMES,
+  SLOT_FINAL,
+} from '../src/approvals/approval-slots';
 import {
   DEFAULT_ASSET_CATEGORIES,
   DEFAULT_ASSET_DOC_TYPES,
@@ -331,10 +334,32 @@ async function seedCompanyDefaults(
       },
     });
   }
-  if (superAdminRoleId) {
+  // The chains' **staffing**, and the same class of defect as the drift above: until
+  // 2026-10-04 only `final` was mapped here, so five of the twelve chains just seeded named
+  // slots that resolved to nobody. A seeded company could not approve a payroll run, an
+  // attendance correction, an attendance exception or a fuel recovery — `APPROVAL_SLOT_UNMAPPED`
+  // at the first decision. Nobody met it because nobody had run a payroll in a seeded company.
+  //
+  // The default role names are the client's answer of 2026-10-04 and live in one place for the
+  // same reason `DEFAULT_COMPANY_CHAINS` does: two copies of this drifted once already.
+  const slotRoles = new Map(
+    (
+      await prisma.role.findMany({
+        where: { name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) } },
+        select: { id: true, name: true },
+      })
+    ).map((r) => [r.name, r.id] as const),
+  );
+  for (const [slotKey, roleName] of Object.entries(DEFAULT_SLOT_ROLE_NAMES)) {
+    // `final` prefers the Super Admin id the caller already resolved by its protected flag.
+    const roleId =
+      slotKey === SLOT_FINAL
+        ? superAdminRoleId ?? slotRoles.get(roleName) ?? null
+        : slotRoles.get(roleName) ?? null;
+    if (!roleId) continue;
     await prisma.roleSlotMapping.upsert({
-      where: { companyId_slotKey: { companyId, slotKey: SLOT_FINAL } },
-      create: { companyId, slotKey: SLOT_FINAL, roleId: superAdminRoleId },
+      where: { companyId_slotKey: { companyId, slotKey } },
+      create: { companyId, slotKey, roleId },
       update: {},
     });
   }
@@ -2491,11 +2516,21 @@ async function main() {
           // A manager needs the back office; everyone else lives in My Workspace.
           // Matching what these people would actually be given, so the permission
           // filtering has something real to do.
+          //
+          // **Human Resources gets `HO User`, added 2026-10-04 and not cosmetic.** The
+          // payroll, attendance-correction and fuel-recovery chains all route their middle
+          // level to the `hr` slot, which maps to `HO User`. Mapping a slot to a role **no
+          // seeded person holds** stalls the chain one level deeper than an unmapped slot
+          // does, and more quietly: the level resolves, the queue is simply empty, and the
+          // run sits at HR with nobody able to act. Found by checking holders per mapping
+          // rather than only checking that each level resolved.
           userRoles: {
             create: {
               roleId: roleId(
                 isManager
                   ? 'Site Admin'
+                  : s.dept === 'Human Resources'
+                  ? 'HO User'
                   : s.dept === 'Accounts & Finance'
                   ? 'Accountant'
                   : s.dept === 'Stores & Procurement'

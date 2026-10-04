@@ -1,3 +1,4 @@
+import { DEFAULT_SLOT_ROLE_NAMES, SLOT_LABELS } from './approval-slots';
 import * as chains from './default-chains';
 
 /**
@@ -80,6 +81,47 @@ describe('DEFAULT_COMPANY_CHAINS', () => {
       );
       expect(actionType).toMatch(/^[a-z_]+$/);
     }
+  });
+
+  it('gives every slot its chains name a default role to map to', () => {
+    // ## The second defect this file exists for, found 2026-10-04
+    //
+    // The chains were right and their *staffing* was not. `seedDefaultsForCompany` mapped one
+    // slot of the three — `final` — on the reasoning that the other two were not guessable. Five
+    // of the twelve chains below name those two slots, so every company was created unable to
+    // approve a payroll run, an attendance correction, an attendance exception or a fuel
+    // recovery. Both live companies were in that state three weeks after the spine shipped,
+    // because nobody had tried.
+    //
+    // This is the part worth guarding, and it is not "are the two slots mapped": it is that a
+    // chain level added later with a *new* slot key gets a default too. Without this, such a
+    // level repeats the whole defect, and the symptom is again a queue that never moves rather
+    // than an error.
+    const used = new Set(
+      chains.DEFAULT_COMPANY_CHAINS.flatMap(([, levels]) =>
+        levels.map((level) => level.slotKey),
+      ),
+    );
+    const undefaulted = [...used]
+      .filter((slotKey) => !(slotKey in DEFAULT_SLOT_ROLE_NAMES))
+      .map((slotKey) => `${slotKey} (${SLOT_LABELS[slotKey] ?? 'no label'})`);
+
+    // Named rather than counted, for the same reason as above.
+    expect(undefaulted).toEqual([]);
+  });
+
+  it('names a role for no slot the chains do not use', () => {
+    // The other direction, and it matters less but costs nothing: a default naming a slot no
+    // chain uses would map a role to a position nothing consults, which reads in the settings
+    // screen as authority somebody has and in fact does not.
+    const used = new Set(
+      chains.DEFAULT_COMPANY_CHAINS.flatMap(([, levels]) =>
+        levels.map((level) => level.slotKey),
+      ),
+    );
+    expect(
+      Object.keys(DEFAULT_SLOT_ROLE_NAMES).filter((s) => !used.has(s)),
+    ).toEqual([]);
   });
 
   it('lists each action type exactly once', () => {

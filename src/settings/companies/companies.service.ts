@@ -7,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType, Company, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { DEFAULT_SLOT_ROLE_NAMES } from '../../approvals/approval-slots';
 import { ChainsService } from '../../approvals/chains.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type {
@@ -444,17 +445,38 @@ export class CompaniesService {
         await this.assetCategories.seedDefaultsForCompany(company.id, tx);
         await this.assetDocTypes.seedDefaultsForCompany(company.id, tx);
         await this.conditionGrades.seedDefaultsForCompany(company.id, tx);
-        // Feature 016's approval chains. The shape is seeded; the staffing mostly is
-        // not — only the `final` slot, which the client settled as Super Admin. The
-        // Super Admin role id is resolved HERE, in the module that owns `settings.Role`,
-        // and handed over: the approval spine lives in `shared` and reading roles itself
-        // would be the cross-schema query Principle I forbids.
+        // Feature 016's approval chains — the shape and, since 2026-10-04, the staffing.
+        // Both are resolved HERE, in the module that owns `settings.Role`, and handed
+        // over: the approval spine lives in `shared` and reading roles itself would be
+        // the cross-schema query Principle I forbids.
+        //
+        // Only `final` used to be mapped, on the argument that the other two slots were
+        // not guessable. The client answered on 2026-10-04 and they are no longer guesses
+        // — and the gap had a cost: five of the twelve chains seeded below name those
+        // slots, so a company could not approve a payroll run until somebody made two
+        // settings entries. Neither of the two live companies had.
         const superAdminRole = await tx.role.findFirst({
           where: { isProtected: true },
           select: { id: true },
         });
+        // Resolved by name, and a name that no longer exists resolves to nothing rather
+        // than failing the creation — a renamed default role must not make a company
+        // uncreatable. The unmapped slot is then reported by `APPROVAL_SLOT_UNMAPPED`,
+        // which is the behaviour this used to rely on for all three.
+        const slotRoles = await tx.role.findMany({
+          where: { name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) } },
+          select: { id: true, name: true },
+        });
+        const idByName = new Map(slotRoles.map((r) => [r.name, r.id]));
+        const slotRoleIds = Object.fromEntries(
+          Object.entries(DEFAULT_SLOT_ROLE_NAMES).map(([slotKey, roleName]) => [
+            slotKey,
+            idByName.get(roleName) ?? null,
+          ]),
+        );
         await this.approvalChains.seedDefaultsForCompany(company.id, tx, {
           superAdminRoleId: superAdminRole?.id ?? null,
+          slotRoleIds,
         });
 
         await tx.employeeCodeSequence.create({

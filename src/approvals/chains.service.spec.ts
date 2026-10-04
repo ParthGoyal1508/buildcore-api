@@ -524,14 +524,32 @@ describe('ChainsService', () => {
   });
 
   describe('seeding a new company (T022)', () => {
-    it('seeds the three-level shape but maps ONLY the final slot', async () => {
-      const tx: Record<string, any> = {
-        approvalChain: {
-          findFirst: jest.fn().mockResolvedValue(null),
-          create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
-        },
-        roleSlotMapping: { upsert: jest.fn().mockResolvedValue({}) },
-      };
+    /**
+     * **These assertions were reversed on 2026-10-04, and the old ones were passing.**
+     *
+     * The test this replaces was named "maps ONLY the final slot" and asserted exactly one
+     * mapping, with a comment arguing that the other two slots were not guessable. The
+     * argument was sound; its consequence had never been measured. Five of the twelve seeded
+     * chains name those slots, so every company was created unable to approve a payroll run,
+     * an attendance correction, an attendance exception or a fuel recovery — and both live
+     * companies were in that state three weeks after the spine shipped.
+     *
+     * The client chose the two mappings on 2026-10-04. Recorded here because the old test
+     * would have kept passing after the behaviour changed: it supplied only
+     * `superAdminRoleId`, so the other slots resolved to nothing and were skipped for a
+     * reason that had nothing to do with the policy it claimed to assert. It passed for the
+     * wrong reason, which is the only kind of green worth coming back for.
+     */
+    const seedTx = () => ({
+      approvalChain: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
+      },
+      roleSlotMapping: { upsert: jest.fn().mockResolvedValue({}) },
+    });
+
+    it('seeds the three-level shape and maps all three slots', async () => {
+      const tx: Record<string, any> = seedTx();
       const service = new ChainsService(
         createPrismaMock() as never,
         auditMock() as never,
@@ -539,6 +557,11 @@ describe('ChainsService', () => {
 
       await service.seedDefaultsForCompany(COMPANY, tx as never, {
         superAdminRoleId: 'role-super',
+        slotRoleIds: {
+          [SLOT_FIRST_APPROVER]: 'role-site',
+          [SLOT_HR]: 'role-ho',
+          [SLOT_FINAL]: 'role-ignored',
+        },
       });
 
       const created = tx.approvalChain.create.mock.calls[0][0].data;
@@ -548,22 +571,73 @@ describe('ChainsService', () => {
         created.levels.create.map((l: { slotKey: string }) => l.slotKey),
       ).toEqual([SLOT_FIRST_APPROVER, SLOT_HR, SLOT_FINAL]);
 
-      // Exactly one mapping, and it is `final`. The other two are NOT guessable —
-      // neither "HR Office" nor "Site Incharge" exists as a role, which is the whole
-      // reason slots exist. Inventing a mapping would hand the right to approve
-      // attendance to whichever role sounded closest.
-      expect(tx.roleSlotMapping.upsert).toHaveBeenCalledTimes(1);
-      expect(tx.roleSlotMapping.upsert.mock.calls[0][0].create).toMatchObject({
-        slotKey: SLOT_FINAL,
-        roleId: 'role-super',
-      });
+      const mapped = new Map<string, string>(
+        tx.roleSlotMapping.upsert.mock.calls.map(
+          (c: [{ create: { slotKey: string; roleId: string } }]) =>
+            [c[0].create.slotKey, c[0].create.roleId] as [string, string],
+        ),
+      );
+      expect([...mapped.keys()].sort()).toEqual(
+        [SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR].sort(),
+      );
+      expect(mapped.get(SLOT_FIRST_APPROVER)).toBe('role-site');
+      expect(mapped.get(SLOT_HR)).toBe('role-ho');
+      // `superAdminRoleId` wins for `final`: the caller resolves it by the protected flag,
+      // which is more reliable than resolving it by a name an administrator may have changed.
+      expect(mapped.get(SLOT_FINAL)).toBe('role-super');
     });
 
-    it('seeds no mapping at all when there is no Super Admin role to point at', async () => {
+    it('never overwrites a mapping a company already chose', async () => {
+      const tx: Record<string, any> = seedTx();
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {
+        superAdminRoleId: 'role-super',
+        slotRoleIds: { [SLOT_HR]: 'role-ho' },
+      });
+
+      // Every upsert is `update: {}`. This seeder is idempotent and may reach a company
+      // configured by hand; a default that overwrote a deliberate mapping would silently
+      // re-route a live chain, and the symptom would be an approval arriving at the wrong
+      // desk rather than an error.
+      expect(tx.roleSlotMapping.upsert.mock.calls.length).toBeGreaterThan(0);
+      for (const call of tx.roleSlotMapping.upsert.mock.calls) {
+        expect(call[0].update).toEqual({});
+      }
+    });
+
+    it('skips a slot whose role could not be resolved, rather than failing', async () => {
+      const tx: Record<string, any> = seedTx();
+      const service = new ChainsService(
+        createPrismaMock() as never,
+        auditMock() as never,
+      );
+
+      // What the caller passes when a default role has been renamed or deleted.
+      await service.seedDefaultsForCompany(COMPANY, tx as never, {
+        superAdminRoleId: 'role-super',
+        slotRoleIds: { [SLOT_FIRST_APPROVER]: null, [SLOT_HR]: 'role-ho' },
+      });
+
+      const mapped = tx.roleSlotMapping.upsert.mock.calls.map(
+        (c: [{ create: { slotKey: string } }]) => c[0].create.slotKey,
+      );
+      // A company that could not be created because somebody renamed a role would be a
+      // worse outcome than one slot left to settings — which is what
+      // `APPROVAL_SLOT_UNMAPPED` reports, and what every slot relied on before today.
+      expect(mapped).not.toContain(SLOT_FIRST_APPROVER);
+      expect(mapped).toContain(SLOT_HR);
+      expect(tx.approvalChain.create).toHaveBeenCalled();
+    });
+
+    it('seeds no mapping at all when no role could be resolved for any slot', async () => {
       const tx: Record<string, any> = {
         approvalChain: {
           findFirst: jest.fn().mockResolvedValue(null),
-          create: jest.fn().mockResolvedValue({ id: 'chain-new' }),
+          create: jest.fn(),
         },
         roleSlotMapping: { upsert: jest.fn() },
       };
