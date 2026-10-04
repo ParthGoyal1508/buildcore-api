@@ -131,9 +131,11 @@ of record for an odometer reading would disagree the first time one was correcte
 - **Reversal history** — the latest reversal is on the report; the sequence is in the audit log,
   which is the system of record for who did what (research §7).
 - **Which bill line consumed which report's measurement** — no such link exists anywhere in the
-  schema today, and 022 does not invent one. This is why FR-020 is implemented as a
-  billed-quantity floor rather than by provenance, stated plainly in research §4 so that 023 is
-  asked the question rather than inheriting a gap that looks closed.
+  schema today, and 022 does not invent one. This is why FR-020 **is** a billed-quantity floor
+  rather than a provenance check — it was rewritten to say so after
+  `checklists/silent-failure.md` CHK029 found that its original wording described a condition no
+  implementation could determine. FR-020a now makes deciding the linkage an obligation on 023,
+  so the question is asked rather than inherited as a gap that looks closed.
 
 ---
 

@@ -123,9 +123,19 @@ quantity is unchanged.
 - [ ] T015 [US1] Create `src/projects/dwr/dto/create-dwr.dto.ts` as **two line shapes**
       discriminated by `paymentMode` via `class-validator` + `@Type`, so a presence line cannot
       carry factors at all and a work line cannot carry a served quantity (FR-030b, Principle II)
+- [ ] T015a [US1] In `src/projects/dwr/dto/create-dwr.dto.ts` and `src/projects/dwr/dwr.service.ts`,
+      carry and persist a measurement line's **position**: `chainageFrom`, `chainageTo`, `layer`,
+      `roadSide`, `section`, `engineerName`, `remark` and `paymentMode` (FR-005). All eight columns
+      already exist on `DWRTask`; this task exists because FR-005 had no covering task until
+      cross-artifact analysis found it (finding F4), and a position nobody stores is a measurement
+      nobody can locate on site
 - [ ] T016 [P] [US1] Create `src/projects/dwr/dto/update-dwr.dto.ts` and
       `src/projects/dwr/dto/dwr-query.dto.ts` (project, date range, status, page, pageSize)
-- [ ] T017 [US1] Create `src/projects/dwr/dwr.service.ts` with `create`, generating `dprNumber` as
+- [ ] T017 [US1] Create `src/projects/dwr/dwr.service.ts` with `create`, taking the report's own
+      fields — supervisor, weather, worker count, machinery count, progress assessment, location,
+      description, contract reference, inspection number, layer — and starting it in `draft`, which
+      is one of exactly three statuses the existing `DwrStatus` enum already permits (FR-001,
+      FR-010). Generate `dprNumber` as
       `{Project.code}{separator}{per-project sequence}` in that one rendering (FR-002, FR-002a) —
       `Site` has no code field and the report has no site, so 008's `{siteCode}-{sequence}` was
       impossible twice over (research §2)
@@ -148,6 +158,12 @@ quantity is unchanged.
 - [ ] T024 [US5] In `create`, require a remark on any presence line whose served quantity is less
       than a full day (FR-030c), because that shortfall is the fact a client's deduction is argued
       from
+- [ ] T024a [US5] In `src/projects/dwr/dwr.service.ts`, accept a presence-paid day whose served
+      quantity is **zero** with a remark, and keep it distinguishable from no record for that date:
+      a stored zero means "the asset was there and performed nothing", an absent line means "nobody
+      recorded this day" (FR-031). The client's real sheets carry both — many measurement rows read
+      "-" — and collapsing them loses the fact the deduction is argued from. Found absent from
+      tasks.md by cross-artifact analysis (finding F2)
 - [ ] T025 [US1] In `create`, write the report's measurement lines in **one multi-row statement**,
       not one per line (research §8) — 132 sequential round trips inside one 5 s transaction budget
       was a production 500 on 2026-10-04
@@ -201,7 +217,8 @@ by exactly the approved measurement, once; reverse and confirm it returns to its
       (FR-022), using the existing `AuditEntityType.DWR` and its mapping in
       `src/dashboard/activity-log/module-bucket-mapping.ts` — both added in August and never used
 - [ ] T037 [US3] Implement `returnToDraft` in `src/projects/dwr/dwr.service.ts`:
-      `submitted → draft`, moving nothing because submission never moved anything (US3 AC2)
+      `submitted → draft` (FR-017), moving nothing because submission never moved anything
+      (US3 AC2)
 - [ ] T038 [US3] Implement `reverse` in `src/projects/dwr/dwr.service.ts`: `approved → draft`,
       subtracting exactly what the approval added, recording actor, time and reason and incrementing
       `reversalCount` (FR-019); never driving a counter below zero (FR-021); leaving `approvedAt`
@@ -209,7 +226,11 @@ by exactly the approved measurement, once; reverse and confirm it returns to its
 - [ ] T039 [US3] In `reverse`, implement **FR-020 as the billed-quantity floor**: refuse when the
       reversal would reduce a BOQ line's done quantity below the quantity already billed against it
       on a `submitted`/`certified` `ClientBill` or a `submitted`/`approved` `RABill`, including one
-      reaching the line through a `WorkOrderBOQItem`. Name the bill. Put research §4's reasoning in
+      reaching the line through a `WorkOrderBOQItem`. **Reuse the cumulative-billed-quantity
+      aggregate `src/projects/billing/client-bills.service.ts` already computes** rather than writing
+      a second one — 018 research §3 chose that aggregate deliberately over a stored counter, and two
+      implementations of it would be the disagreement that decision exists to prevent (finding F5).
+      Name the bill. Put research §4's reasoning in
       the docblock: **nothing in the data links a bill line to the measurement it consumed**, so
       provenance is not a question the database can answer, and this floor protects the arithmetic
       instead. Say that FR-020a hands the provenance question to feature 023
@@ -266,6 +287,14 @@ and paginates; seed approved reports across two months and confirm the period fi
       (FR-039): per BOQ line, the difference between the stored counter and the authoritative sum,
       at an **exact** tolerance (FR-039a). Docblock the direction of authority: the sum is right by
       construction and the counter is a cache of it (FR-039b)
+- [ ] T050a [US6] Add an **absolute** set path for a BOQ line's done quantity to
+      `src/projects/boq/boq.service.ts`, distinct from `updateDoneQty`'s relative increment and
+      reachable only from repair (FR-015b). FR-015 forbids writing a figure read earlier in the same
+      operation; a repair cannot obey that, because "make this equal that" is not expressible as an
+      increment when the difference is the very thing being corrected. Docblock it as FR-015's sole
+      exception and record the previous value. **This contradiction between FR-015 and FR-039c was
+      invisible inside the spec** — both requirements are individually sound — and was found only by
+      reading across artifacts (finding F1)
 - [ ] T051 [US6] Implement `repair(boqItemIds, reason)` in
       `src/projects/dwr/dwr-period-figures.service.ts` (FR-039c): explicit, permissioned, audited
       with the previous value, refusing when there is nothing to repair, and **never automatic**.
@@ -300,7 +329,10 @@ and paginates; seed approved reports across two months and confirm the period fi
 - [ ] T057 Create `test/dwr-rls.e2e-spec.ts` following `test/company-selection-rls.e2e-spec.ts`:
       a `NOSUPERUSER NOBYPASSRLS` probe role, covering **both** `projects."DailyWorkReport"` and
       `projects."DWRTask"` by name (FR-040). Both have carried `tenant_isolation` since August and
-      **neither has ever had it in force in a test run**
+      **neither has ever had it in force in a test run**. Docblock FR-040c: the BOQ line table,
+      whose counter this feature moves, is deliberately **out** of this suite's scope — it is owned
+      by another feature's service, and naming it here would claim coverage this feature does not
+      deliver
 - [ ] T058 In `test/dwr-rls.e2e-spec.ts`, assert the probe role was actually created **before any
       other assertion** (FR-040a) — without it every later assertion runs against a privileged
       connection and passes while proving nothing, which is exactly how a `42501` reached production
@@ -336,6 +368,12 @@ and paginates; seed approved reports across two months and confirm the period fi
       moving the counter once (FR-014a)
 - [ ] T066 [P] Confirm `test/dwr.e2e-spec.ts` closes its Nest application and disconnects any
       `PrismaClient`, per T060's reasoning
+- [ ] T066a Establish **SC-008** in `test/dwr.e2e-spec.ts`: time recording, submitting and
+      approving a report of seventeen measurement lines, asserting each step under three seconds,
+      and listing a month of reports for one project under two seconds. Until this exists SC-008 is
+      a number nobody measures — no task referenced any success criterion at all before
+      cross-artifact analysis said so (finding F3). Assert generously enough not to be flaky on a
+      loaded machine, and state the margin in a comment rather than silently widening it later
 - [ ] T067 Run `npx jest src/approvals/fr-022-unmigrated-modules.spec.ts` **before** each of the
       seven phase commits. It diffs two commits, so files this feature adds are invisible to it
       until the commit lands and it then fires one commit late — running it after is running it on

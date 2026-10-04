@@ -157,9 +157,31 @@ UPDATE projects."BOQTaskItem" SET "doneQty" = "doneQty" + 5 WHERE "boqNo" = '30.
 SQL
 ```
 
-**Expect** `discrepancies: 1`, that line named, and `difference: "5.000"` (FR-039). Then put it
-back. This endpoint is the only thing in the system that can say the counter is wrong; a
-denormalised total with no way to check it is a total whose drift is found at a month-end.
+**Expect** `discrepancies: 1`, that line named, and `difference: "5.000"` (FR-039), at an exact
+tolerance — not approximately zero elsewhere (FR-039a).
+
+Now repair it the way FR-039c requires, rather than by hand:
+
+```bash
+curl -s -X POST "$API/projects/$PROJECT/dwr/reconciliation/repair" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"boqItemIds":["<the line>"],"reason":"induced during verification"}'
+```
+
+**Expect** 200, the counter back at the authoritative sum, and an audit entry carrying the
+**previous** value. Then call it again on the same line: **expect** 409
+`DWR_NOTHING_TO_REPAIR` — refused rather than silently succeeding, so a caller learns the drift
+they were chasing is already gone.
+
+Finally, send it with no reason: **expect** 400 `DWR_REPAIR_NEEDS_REASON`.
+
+Two things this pass is really checking. The sum is authoritative and the counter is a cache of it
+(FR-039b) — so repair moves the counter, never the sum. And **nothing repaired itself**: the drift
+sat there until somebody asked, because the discrepancy is the only symptom of whatever moved the
+counter without a report, and a silent self-heal would destroy that evidence every time it ran
+(decision D3).
+
+A denormalised total with no way to check it is a total whose drift is found at a month-end.
 
 ## Pass 8 — Locks, permissions and tenancy
 

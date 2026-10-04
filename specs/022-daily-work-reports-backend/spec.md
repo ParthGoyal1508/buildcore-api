@@ -282,7 +282,9 @@ report appears in neither.
   inherit from an existing constraint. **The number MUST derive from the project**, not the site: a
   report references a project and not a site, and a site carries no code to build a number from.
 - **FR-002a**: The number MUST be the project's code, a separator, and a per-project sequence, in
-  that order. Specified to one rendering because a report number is printed and filed.
+  that order. Specified to one rendering because a report number is printed and filed. This is the
+  single field the stored column `dprNumber` holds — "report number" and `dprNumber` name one thing,
+  said here because they otherwise read as two.
 - **FR-002b**: Two reports created for one project at the same instant MUST NOT both be given the
   same number, and neither attempt may be lost: a collision MUST be resolved and retried, not
   reported to the caller.
@@ -329,6 +331,13 @@ report appears in neither.
   is attempted.
 - **FR-015**: System MUST apply each increment as a relative change to the stored counter and MUST
   NOT write a value derived from one read earlier in the same operation.
+- **FR-015b**: Repair under FR-039c is the **sole exception** to FR-015. It sets the counter to the
+  authoritative sum as an absolute value, because a relative increment cannot express "make this
+  equal that" — the difference is the very thing being corrected. The absolute path MUST be distinct
+  from the incremental one, MUST be reachable only by repair, and MUST record the previous value.
+  Stated as an exception rather than left to be discovered, because FR-015 and FR-039c were written
+  on different days and are individually sound while contradicting each other at the mechanism
+  level (found by cross-artifact analysis on 2026-10-04, finding F1).
 - **FR-015a**: Where two reports measuring the same BOQ line are approved concurrently, **both**
   increments MUST be applied. Stated as a required outcome and not only as the mechanism of
   FR-015, because a read-then-write loop would lose one of the two and lose it silently.
@@ -397,8 +406,11 @@ report appears in neither.
   full day" MUST NOT be inferred from the line's unit or rate.
 - **FR-030c**: System MUST require a remark on any presence-based day whose served quantity is less
   than a full day, because that shortfall is the fact a client's deduction is later argued from.
-- **FR-031**: System MUST accept a presence-based day of zero with a remark, distinguishably from
-  no record for that day.
+- **FR-031**: System MUST accept a presence-based day of zero with a remark, and MUST keep it
+  distinguishable from no record for that day: a stored served quantity of zero means "the asset was
+  there and performed nothing", while an absent line means "nobody recorded this day". The client's
+  real measurement sheets contain both, and collapsing them loses the fact a deduction is argued
+  from.
 - **FR-032**: System MUST make the equipment's own logbook entry for the work date — opening
   reading, closing reading, total run, remarks — readable alongside a presence-based day, read
   across the plant module's boundary, and MUST NOT store a second copy of those readings.

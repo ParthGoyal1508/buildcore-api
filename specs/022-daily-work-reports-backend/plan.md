@@ -67,7 +67,7 @@ period-figures read must be designed for.
 | **I. Schema-per-module boundaries** | Does this feature query a schema it does not own? | **PASS with one designed seam.** Everything written is in `projects`. The supervisor stays an `hr.Employee` id held bare, as the existing column already does. The equipment logbook (FR-032) lives in `plant` and is read **through `ProjectSourcesRegistry`**, never by querying `plant.LogbookEntry` — see research §5, including why the registration direction is forced. |
 | **II. Validated DTO contracts** | Is every request body typed and validated? | **PASS.** Every endpoint takes a `class-validator` DTO. The create DTO is deliberately *two* shapes rather than one permissive shape — research §3. |
 | **III. Centralised configuration, no hardcoded values** | Any magic values or inline strings? | **PASS.** Refusal codes and messages go in `src/projects/dwr/dwr-error-codes.ts`, following `src/projects/boq/boq-error-codes.ts`. The report-number format and the default page size are config, not literals. |
-| **IV. Multi-tenant isolation and PII protection** | Is every row scoped, and is the scoping *proven*? | **PASS, and this is the gate that needs the most work.** Both tables carry `companyId`; every path runs through `withRlsContext`; another company's report is reported as not found (FR-029). FR-040 requires a probe suite under a role that cannot bypass RLS, because the development and CI role is a superuser and Postgres exempts superusers from row-level security unconditionally. This session established that 148 tables carry `tenant_isolation` while about 21 are named in the five existing probe suites, and that the gap is what let a `42501` reach production. `test/dwr-rls.e2e-spec.ts` is therefore a deliverable of this feature, not a nicety. |
+| **IV. Multi-tenant isolation and PII protection** | Is every row scoped, and is the scoping *proven*? | **PASS, and this is the gate that needs the most work.** Both tables carry `companyId`; every path runs through `withRlsContext`; another company's report is reported as not found (FR-029). FR-040 names both tables and requires a probe under a role that cannot bypass RLS, because the development and CI role is a superuser and Postgres exempts superusers from row-level security unconditionally. FR-040a requires the non-vacuity assertion **first**, FR-040b requires an un-creatable probe to report as skipped and never as passed, and FR-040c puts the BOQ line table explicitly out of scope rather than silently claiming it. This session established that 148 tables carry `tenant_isolation` while about 21 are named in the five existing probe suites, and that the gap is what let a `42501` reach production. `test/dwr-rls.e2e-spec.ts` is therefore a deliverable of this feature, not a nicety. |
 | **V. Auth, authorisation, secrets** | Is every route permissioned? | **PASS.** `Permission.DWR` on every route (already seeded into roles), `ProjectLockGuard` on writes. No new secret. |
 | **VI. Observability and safe migrations** | Is the migration generated, additive and reversible? | **PASS with one justified deviation.** All columns are added nullable with no backfill — verified safe because the tables are empty (research §1). The deviation is a single `CHECK` constraint appended to the generated migration, which the Prisma schema cannot express. See **Complexity Tracking**. |
 
@@ -147,7 +147,7 @@ nullable. Detail in [data-model.md](./data-model.md); the decisions behind them 
 No new table, so no new RLS policy; both tables already carry `tenant_isolation`. What they do not
 have is a test proving it, which Phase F delivers.
 
-### Phase B — the quantity in force (FR-003, FR-004, FR-030a, FR-030b)
+### Phase B — the quantity in force (FR-003, FR-004, FR-030a, FR-030b, FR-030d, FR-030e)
 
 `src/projects/dwr/dwr-quantity.ts`: pure functions, no Nest, no Prisma, unit-tested on their own.
 
@@ -198,8 +198,10 @@ Every later phase calls `quantityInForce` — create, read, approval, reversal a
 - The approver may not be the author (FR-012a, decision D2).
 - `reverse` subtracts exactly what the approval added and returns the report to draft, recording
   actor, time and reason (FR-019), and may not drive any counter below zero (FR-021).
-- **FR-020 is implemented as a billed-quantity floor, which is not what FR-020 literally says.**
-  Research §4 states this plainly: no bill line references a daily work report anywhere in the
+- **FR-020 is a billed-quantity floor.** It did not say so when this plan was written — it then
+  required refusal for "a report whose measurement has been claimed on a bill", a condition no
+  implementation can determine, and `checklists/silent-failure.md` CHK029 caught the divergence and
+  the requirement was rewritten. The reasoning, which came first, is research §4: no bill line references a daily work report anywhere in the
   schema, so "this report's measurement has been billed" is not a question the database can answer
   today. What it can answer is whether reversing would drop a BOQ line's done quantity below the
   quantity already billed against it on a non-draft bill — `ClientBillLine` on a `submitted` or
@@ -209,7 +211,7 @@ Every later phase calls `quantityInForce` — create, read, approval, reversal a
   bill line consumed — waits for 023, and research §4 says so rather than letting FR-020 look
   finished.
 
-### Phase E — reading, and the contract to 023 (FR-026, FR-027, FR-032 to FR-039)
+### Phase E — reading, and the contract to 023 (FR-026, FR-027, FR-032 to FR-039c, FR-015b)
 
 - `list` with project, date-range and status filters, ordered by work date, server-paginated with a
   total count that does not depend on the page (FR-026).
@@ -229,7 +231,10 @@ Every later phase calls `quantityInForce` — create, read, approval, reversal a
     check on the counter; FR-039 exists because `doneQty` is denormalised and therefore capable of
     drifting.
   - `repair(boqItemIds, reason)` for FR-039c — explicit, permissioned, audited with the previous
-    value, and **never automatic**. Decision D3 records why: the discrepancy is the only symptom of
+    value, and **never automatic**. It needs an **absolute** set on `BoqService`, distinct from
+    `updateDoneQty`'s relative increment and reachable only from here: FR-015 forbids writing a
+    figure read earlier, and FR-015b records repair as its sole exception, because a relative
+    increment cannot express "make this equal that" when the difference is what is being corrected. Decision D3 records why: the discrepancy is the only symptom of
     whatever moved the counter without a report, and a silent self-heal destroys that evidence each
     time it runs. The aggregate is authoritative and the counter is a cache of it (FR-039b).
 - The logbook read (FR-032, FR-033) goes through a new `ProjectLogbookSource` on
