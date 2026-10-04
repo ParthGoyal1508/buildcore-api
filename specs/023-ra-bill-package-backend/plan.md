@@ -198,6 +198,37 @@ Nothing is dropped from `ClientBill` despite it being empty, and research §3 sa
 `DwrPeriodFiguresService.figuresFor` once, and write one claim per BOQ or award line in a single
 multi-row statement. 312 lines is one write, not 312 — research §8 and the production 500 behind it.
 
+**Correction, made while building this phase.** An earlier version of this paragraph said the
+underlying bill row should be created "through 018's existing service". Reading
+`ClientBillsService.compose` shows it cannot be, for two reasons that would both be defects:
+
+1. **It refuses an unpriced line at composition.** Right for 018, where the caller chooses which
+   lines to measure. Wrong here: FR-003 proposes *every* line and FR-009 defers that refusal to
+   issue, so delegating would make one unpriced row refuse a whole 312-line package.
+2. **It opens its own transaction.** Composition writes a bill, its lines, the package and a claim
+   per line, and that has to be all-or-nothing. Two transactions cannot give it — the same wall 022
+   hit with `BoqService.updateDoneQty`.
+
+The bill row is therefore created inside this service's own transaction, while its figures still come
+from `bill-totals.ts`, which stays the single definition of gross and net.
+
+**Two schema additions this phase needed and Phase A did not have** (migration
+`20261005130000_bill_package_rates_and_counterparty`):
+
+- **The rates had no home.** FR-023 requires every rate from configuration or the contract, and
+  research §4 requires a missing one to be a refusal — but nothing in the schema carried a tax rate
+  at all, and only `WorkOrder.retentionPercent` carried a retention term, so a bill to a client had
+  nowhere to read one from. The four statutory rates go on `settings.Company` beside `bocwCessRate`,
+  which is this repository's existing home for exactly this kind of value, read through
+  `CompaniesService.getBillingTaxRates` for Principle I. `Project.clientRetentionFraction` is
+  nullable with no default: null is refused, `0` is a contract with no retention. Research §4's
+  objection to project-level rates — that two work orders on one project can differ — does not reach
+  the client direction, where a project has exactly one client agreement and *is* the contract.
+- **`BillPackage` was keyed on project and direction alone**, which conflates two subcontractors on
+  one project: they would share one running series, so A's bills would be RA-01 and RA-03 while B's
+  were RA-02 and RA-04. FR-002's overlap check has the same shape. `counterpartyKey` — the client
+  for `to_client`, the work order for `to_subcontractor` — carries both.
+
 The refusals that matter: a period overlapping one already billed (FR-002, and the reason is that a
 day's measurement claimed on two bills is claimed twice); the same project and period returning the
 **existing** bill rather than a second (FR-007); one line per item (FR-008); an unpriced line

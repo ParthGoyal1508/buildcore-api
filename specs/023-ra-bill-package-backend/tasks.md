@@ -149,82 +149,82 @@ this the hard way five times.
 schedule line, the count is assertable, and a second call for the same period returns the first
 package rather than creating another.
 
-- [ ] T018 [P] [US1] Create `src/projects/billing/package/package-error-codes.ts` with every refusal
+- [X] T018 [P] [US1] Create `src/projects/billing/package/package-error-codes.ts` with every refusal
       code [contracts/bill-package-api.md](./contracts/bill-package-api.md) names, each with a
       docblock saying what the caller should do about it — following
       `src/projects/boq/boq-error-codes.ts`, whose own docblock explains why one "it failed" sends
       every caller to the same place, which is nowhere
-- [ ] T019 [P] [US1] Create `src/projects/billing/package/dto/compose-bill.dto.ts` — `direction`,
+- [X] T019 [P] [US1] Create `src/projects/billing/package/dto/compose-bill.dto.ts` — `direction`,
       `periodFrom`, `periodTo`, `workOrderId` required when the direction is `to_subcontractor`,
       `externalBillNo`, `externalWorkOrderNo`. No total, no rate, no quantity: `whitelist` and
       `forbidNonWhitelisted` are both on, so a caller supplying a computed figure gets a 400 rather
       than having it stripped (plan.md Constitution Check II)
-- [ ] T020 [P] [US1] Create `src/projects/billing/package/dto/bill-line.dto.ts` — `claimedQty` and
+- [X] T020 [P] [US1] Create `src/projects/billing/package/dto/bill-line.dto.ts` — `claimedQty` and
       an optional `reason`, both validated as the repository validates decimals (the BOQ DTOs use
       `@IsNumberString`, so quantities arrive as strings; 022's e2e suite failed on exactly this)
-- [ ] T021 [US1] Add `resolveSchedule(direction, projectId, workOrderId)` to
+- [X] T021 [US1] Add `resolveSchedule(direction, projectId, workOrderId)` to
       `src/projects/billing/package/bill-package.service.ts`, returning the project's `BOQTaskItem`
       lines for `to_client` and that work order's `WorkOrderBOQItem` lines for `to_subcontractor`.
       **The two directions measure different schedules** (research §1, FR-003) — this function is
       the only place that decides which, so nothing downstream has to know
-- [ ] T022 [US1] Implement the period-overlap refusal in `bill-package.service.ts`: refuse a period
+- [X] T022 [US1] Implement the period-overlap refusal in `bill-package.service.ts`: refuse a period
       overlapping one already billed **on the same schedule to the same counterparty** — the project
       for a client bill, the work order for a subcontractor bill — naming the package (FR-002). One
       project is legitimately billed to its client and to several subcontractors over the same
       month, so a per-project check would refuse the second of those (checklist CHK029). A package
       in **any** status occupies its period (FR-002a)
-- [ ] T023 [US1] Implement `compose` in `bill-package.service.ts`: create the bill row (`ClientBill`
+- [X] T023 [US1] Implement `compose` in `bill-package.service.ts`: create the bill row (`ClientBill`
       or `RABill` through 018's existing service), the `BillPackage`, and one
       `BillPackageLineClaim` per schedule line. Read 022's
       `DwrPeriodFiguresService.figuresFor(ctx, projectId, {from, to})` **once** and write the claims
       in **one multi-row statement** — 312 lines is one write, not 312 (research §8, and the
       production 500 behind it: 132 sequential round trips inside a 5 s transaction budget)
-- [ ] T024 [US1] Map each schedule line to its proposal in `bill-package.service.ts`:
+- [X] T024 [US1] Map each schedule line to its proposal in `bill-package.service.ts`:
       (SC-001: the engineer reviews proposals rather than entering quantities)
       `approved_measurement` with the period's approved quantity for a BOQ line, and
       **`no_measurement_source` with a null quantity** for an award line whose `boqTaskItemId` is
       null — which the subcontract model permits because a subcontract may itemise work differently.
       Zero would say "no work was done this month" for every unmapped line of every bill (FR-003a)
-- [ ] T025 [US1] Implement FR-003b in `bill-package.service.ts`: where two or more award lines map
+- [X] T025 [US1] Implement FR-003b in `bill-package.service.ts`: where two or more award lines map
       to one BOQ line, refuse the composition naming the lines rather than proposing that line's
       full approved measurement to each. Silently duplicating it would pass FR-008's
       one-line-per-item rule, because they are two different lines
-- [ ] T026 [US1] Freeze each line's rate and amount at composition in `bill-package.service.ts`:
+- [X] T026 [US1] Freeze each line's rate and amount at composition in `bill-package.service.ts`:
       the rate onto the claim's bill line (FR-010), and the amount as quantity × rate adjusted by
       any percentage quoted against that schedule — `ClientBillLine.amount` already carries
       `quantity × rate × (1 + quotedPercentage)`, and a work-done figure computed without it would
       disagree with the schedule it totals (FR-012, checklist CHK012)
-- [ ] T026a [US1] Report a cumulative claim that has passed its line's **scope or awarded**
+- [X] T026a [US1] Report a cumulative claim that has passed its line's **scope or awarded**
       quantity in `bill-package.service.ts`, and carry the remaining quantity as the **negative
       figure it is** rather than its magnitude (FR-012b). 018 already flags over-scope on a bill
       line rather than refusing it (`ClientBillLine.exceedsScope`), and the real Annexure carries a
       Balance Qty column that a magnitude would print as though there were scope left
-- [ ] T027 [US1] Implement FR-007 in `bill-package.service.ts`: the same project, direction and
+- [X] T027 [US1] Implement FR-007 in `bill-package.service.ts`: the same project, direction and
       period returns the **existing** package in the body rather than creating a second, and
       FR-011's refusal when the schedule is empty, naming the absence
-- [ ] T028 [US1] Implement `updateLine` in `bill-package.service.ts`: accept the proposal unchanged
+- [X] T028 [US1] Implement `updateLine` in `bill-package.service.ts`: accept the proposal unchanged
       with no reason; require a reason for a reduction (FR-004); accept an over-claim with a reason
       and set `overClaimed` (FR-006); **clear the reason** when a later edit returns the claim to
       its proposal (FR-004a) — a reason beside a zero variance argues for a deduction the bill does
       not make. Store `varianceQty` rather than deriving it, and leave it null when the proposal is
       (FR-005)
-- [ ] T029 [US1] Implement `abandon` in `bill-package.service.ts` (FR-002b): a draft releases its
+- [X] T029 [US1] Implement `abandon` in `bill-package.service.ts` (FR-002b): a draft releases its
       period; an issued package is refused with `BILL_PACKAGE_ISSUED` and is never deletable
       (FR-044a)
-- [ ] T030 [US1] Create `src/projects/billing/package/bill-package.service.spec.ts` covering the
+- [X] T030 [US1] Create `src/projects/billing/package/bill-package.service.spec.ts` covering the
       overlap refusal per counterparty, the existing-package return, the reason rules including
       FR-004a's clearing, and the one-line-per-item refusal
-- [ ] T031 [US1] **The award line with no measurement source** — its own test in
+- [X] T031 [US1] **The award line with no measurement source** — its own test in
       `bill-package.service.spec.ts`. Assert `proposedQty` is `null` and `proposalSource` is
       `no_measurement_source`, that `varianceQty` is null, and that the line is **not** counted as
       an over-claim. Then assert the contrast: a mapped line with no approved measurement comes back
       as `0` with `approved_measurement`. These two are the same number in the obvious
       implementation, on the direction the company bills every month (FR-003a, checklist CHK010)
-- [ ] T032 [US1] [P] Add to `bill-package.service.spec.ts` the count assertion: the number of claims
+- [X] T032 [US1] [P] Add to `bill-package.service.spec.ts` the count assertion: the number of claims
       written equals the number of lines `resolveSchedule` returned, asserted as a **count** and not
       by inspecting the list — an assertion over a returned list passes just as happily over a short
       one, and a bill missing an item is a smaller invoice (FR-003)
-- [ ] T033 [US1] [P] Add a test to `bill-package.service.spec.ts` proving the claims are written in
+- [X] T033 [US1] [P] Add a test to `bill-package.service.spec.ts` proving the claims are written in
       one statement, not one per line — assert against the number of queries the transaction issues
       for a 50-line schedule, so the regression research §8 describes is caught in a unit test rather
       than on the deployment

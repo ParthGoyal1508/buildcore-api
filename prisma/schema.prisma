@@ -432,6 +432,28 @@ model Company {
   /// a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.
   bocwCessRate Decimal @default(0.0100) @db.Decimal(6, 4)
 
+  /// The indirect-tax and withholding rates a running-account bill is computed at (023 FR-015,
+  /// FR-019, FR-023), as fractions — `0.090000` is 9%.
+  ///
+  /// Here rather than in the billing module for the reason `bocwCessRate` is here: a statutory
+  /// percentage is exactly the value Principle III keeps out of the calculation that uses it, and
+  /// `settings.Company` is where this repository already keeps them. Read through
+  /// `CompaniesService.getBillingTaxRates` — Principle I forbids `projects` reading this table
+  /// directly.
+  ///
+  /// **Six decimal places, matching `BillPackage`'s frozen columns.** A freeze that narrowed the
+  /// precision would be a silent change to the rate it claims to have recorded.
+  ///
+  /// The defaults state today's statute, and carry the same trade `bocwCessRate` accepted: a
+  /// company that never reviews them keeps billing at these. What makes that survivable here is
+  /// that every bill **records the rate it was computed at** (023 FR-019), so a rate change is
+  /// visible as a difference between two bills rather than as a silent re-derivation of both.
+  cgstFraction Decimal @default(0.090000) @db.Decimal(8, 6)
+  sgstFraction Decimal @default(0.090000) @db.Decimal(8, 6)
+  igstFraction Decimal @default(0.180000) @db.Decimal(8, 6)
+  /// Income tax deducted at source on a works contract.
+  tdsFraction  Decimal @default(0.020000) @db.Decimal(8, 6)
+
   /// The labour wage cycle a payment sheet's period defaults to (013 FR-041) —
   /// independent of the monthly salary `payCycle` above, because daily-wage labour
   /// is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
@@ -1653,7 +1675,22 @@ model Project {
   purchaseLimit  Decimal?  @db.Decimal(18, 2)
   orderNumber    String?
   cgstApplicable Boolean   @default(false)
-  description    String?
+
+  /// The **client contract's** retention term as a fraction — `0.050000` is 5% (023 FR-018).
+  ///
+  /// **Nullable with no default, deliberately.** Research §4 requires a missing rate to be a
+  /// refusal rather than a default of zero: a silent zero produces a bill with no retention and a
+  /// payable 5% too high, which is the error most likely to be paid before anybody notices. Null
+  /// means nobody has recorded the term; `0` means the contract has none.
+  ///
+  /// **Why a project-level rate is right here when research §4 rejected project-level rates.** That
+  /// objection was that two work orders on one project can carry different terms, so a rate on the
+  /// project would quietly apply one contract's to another's bill. It does not reach the client
+  /// direction: a project has exactly one client and one client agreement, so for that direction
+  /// the project *is* the contract. A bill to a subcontractor still reads
+  /// `WorkOrder.retentionPercent`, which is that subcontract's own term.
+  clientRetentionFraction Decimal? @db.Decimal(8, 6)
+  description             String?
 
   sites             Site[]
   boqTaskGroups     BOQTaskGroup[]
@@ -2272,7 +2309,20 @@ model BillPackage {
   periodFrom DateTime @db.Date
   periodTo   DateTime @db.Date
 
-  /// The package's running number — the "12" of "RA-12". Per project, per direction.
+  /// **Which counterparty this bill is to**: the project's client for `to_client`, the work order
+  /// for `to_subcontractor`.
+  ///
+  /// Denormalised onto the package rather than reached through the bill, for two reasons that are
+  /// the same reason. FR-002's overlap check is "the same schedule to the same counterparty" — one
+  /// project is billed to its client and to several subcontractors over the same month,
+  /// legitimately — and the running number is per counterparty too: the client's own package is
+  /// "RA-12" for *that* subcontractor. Keyed on the project and direction alone, two
+  /// subcontractors on one project would share one series, so A's bills would be RA-01 and RA-03
+  /// while B's were RA-02 and RA-04, and neither party's file would make sense.
+  counterpartyKey String
+
+  /// The package's running number — the "12" of "RA-12". Per project, per direction, per
+  /// counterparty.
   sequenceNo Int
 
   // --- Frozen rates (FR-019, FR-023, research §4) -------------------------------------------
@@ -2413,11 +2463,11 @@ model BillPackage {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  /// So "RA-12" means one thing.
-  @@unique([projectId, direction, sequenceNo])
+  /// So "RA-12" means one thing — to one counterparty.
+  @@unique([projectId, direction, counterpartyKey, sequenceNo])
   @@index([companyId])
   /// FR-002's overlap check, which is per schedule and per counterparty rather than per project.
-  @@index([projectId, periodFrom, periodTo])
+  @@index([projectId, direction, counterpartyKey, periodFrom, periodTo])
   @@schema("projects")
 }
 

@@ -247,6 +247,52 @@ export class CompaniesService {
   }
 
   /**
+   * The indirect-tax and withholding rates a running-account bill is computed at (023 FR-015,
+   * FR-019, FR-023), as fractions.
+   *
+   * Exported for `projects` for the same reason `getBocwCessRate` is exported for
+   * `partners`: Principle I forbids that module reading `settings.Company`
+   * directly, and Principle III keeps a statutory percentage out of the
+   * calculation that applies it.
+   *
+   * **Returned as strings, not numbers**, which is the one place this differs from
+   * its neighbours above. Those feed a payroll computation that works in numbers;
+   * these are frozen onto a bill as `Decimal(8,6)` and compared against a client's
+   * signed paper, and a rate that has been through a double is a rate somebody
+   * other than us has rounded. The consumer still stays free of Prisma types.
+   */
+  async getBillingTaxRates(companyId: string): Promise<{
+    cgstFraction: string;
+    sgstFraction: string;
+    igstFraction: string;
+    tdsFraction: string;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            cgstFraction: true,
+            sgstFraction: true,
+            igstFraction: true,
+            tdsFraction: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return {
+      cgstFraction: company.cgstFraction.toFixed(6),
+      sgstFraction: company.sgstFraction.toFixed(6),
+      igstFraction: company.igstFraction.toFixed(6),
+      tdsFraction: company.tdsFraction.toFixed(6),
+    };
+  }
+
+  /**
    * The per-company payroll rates the engine applies (005 FR-014/FR-014a).
    *
    * Exported for `payroll` for the same reason `getPayrollLockDay` is exported for
