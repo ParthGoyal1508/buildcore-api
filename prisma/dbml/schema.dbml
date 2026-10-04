@@ -949,6 +949,20 @@ the BOQ computes — the two are reported separately rather than reconciled.']
   contractNumber String
   rfiNo String
   layer String
+  createdByUserId String [note: 'Who created the draft and who put it forward. `shared.User.id`, bare ids.
+
+**`submittedByUserId` is what makes 022 FR-012a enforceable at all.** Approval is a direct
+transition rather than a routed chain action (decision D2), and the control that replaces the
+chain is that the approver is not the person who submitted it — a site engineer may not
+certify their own claim. Without this column that rule has nothing to compare against: the
+audit log holds the act, but enforcing a refusal by querying an audit trail makes the trail
+load-bearing for correctness rather than for accountability, and a gap in it would silently
+become a permission.
+
+Submission rather than creation is the act that matters: a clerk may type a report up for a
+supervisor, and it is the person who put it forward as true who must not also certify it.']
+  submittedByUserId String
+  submittedAt DateTime
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
   fileRefs String[] [not null, note: 'Object-storage references, as 008 created them.

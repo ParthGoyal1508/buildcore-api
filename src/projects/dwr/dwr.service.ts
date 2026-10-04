@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -14,6 +15,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { BoqService } from '../boq/boq.service';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import {
   contentDispositionFor,
@@ -26,8 +28,10 @@ import {
   MeasurementLine,
   ZeroFactorError,
   quantityColumnsFor,
+  storedQuantityInForce,
 } from './dwr-quantity';
 import { CreateDwrDto, CreateDwrLineDto } from './dto/create-dwr.dto';
+import { ReverseDwrDto } from './dto/dwr-lifecycle.dto';
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 
 /** Separates the project code from the sequence in a report number (FR-002a). */
@@ -94,6 +98,7 @@ export class DwrService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly auditLog: AuditLogService,
+    private readonly boq: BoqService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -185,6 +190,7 @@ export class DwrService {
               contractNumber: input.contractNumber ?? null,
               rfiNo: input.rfiNo ?? null,
               layer: input.layer ?? null,
+              createdByUserId: actor.userId,
             },
             select: { id: true, dprNumber: true, status: true },
           }),
@@ -449,6 +455,501 @@ export class DwrService {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
+  // Lifecycle (Phase D — FR-010 to FR-024)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /** `draft` → `submitted`. Moves no executed quantity (FR-011). */
+  async submit(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<{ id: string; status: DwrStatus }> {
+    const result = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: { id: true, status: true, _count: { select: { tasks: true } } },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+
+      assertStatus(report.status, DwrStatus.draft, 'submit');
+
+      // FR-024. A day's report asserting nothing is a form somebody abandoned, and submitting it
+      // would put it in a reviewer's queue to be approved into no effect at all.
+      if (report._count.tasks === 0) {
+        throw new BadRequestException({
+          code: DWR_ERRORS.noLines,
+          message:
+            'This report has no measured lines, so there is nothing to review. Add the work done, ' +
+            'or leave it as a draft.',
+        });
+      }
+
+      // The transition is conditional on the status, so a concurrent second submit loses.
+      const updated = await tx.dailyWorkReport.updateMany({
+        where: { id: dwrId, status: DwrStatus.draft },
+        data: {
+          status: DwrStatus.submitted,
+          submittedByUserId: actor.userId,
+          submittedAt: new Date(),
+        },
+      });
+      if (updated.count === 0) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            'Somebody else moved this report while you were submitting it.',
+        });
+      }
+
+      return { id: dwrId, status: DwrStatus.submitted };
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      action: AuditAction.UPDATE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return result;
+  }
+
+  /**
+   * `submitted` → `approved`, and the only path in the system that increases a BOQ line's executed
+   * quantity (FR-012 to FR-016, FR-012a).
+   *
+   * ## Four properties, and each of them is load-bearing
+   *
+   * **All of a report's increments or none** (FR-013). One transaction, and the row count returned
+   * by `applyDoneQtyDeltas` is compared against the number asked for — a shortfall throws, so the
+   * transaction rolls back and the report stays submitted. "Stays submitted" is the only permitted
+   * outcome of a failure, not one of several: a report that half-approved would leave the BOQ
+   * showing work nobody approved with nothing to say which lines moved.
+   *
+   * **At most once** (FR-014, FR-014a). The status transition is a conditional `updateMany` inside
+   * the same transaction as the increments, so two concurrent approvals of one report serialise on
+   * the row and exactly one sees `count === 1`. Approving twice must not bill twice.
+   *
+   * **Relative increments only** (FR-015, FR-015a). Deltas are grouped per BOQ line and applied by
+   * one statement that adds to the row as it stands. Two *different* reports measuring the same
+   * line, approved at the same moment, both land — which a read-then-write would silently lose.
+   *
+   * **The approver is not the author** (FR-012a, decision D2). Approval is a direct transition
+   * rather than a routed chain action, because one report a day per project makes routing
+   * disproportionate and a chain nobody has configured would block the site's measurement rather
+   * than review it. Segregation of duty is the control that remains, so a site engineer still
+   * cannot certify their own claim.
+   */
+  async approve(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<{
+    id: string;
+    status: DwrStatus;
+    moved: { boqNo: string; delta: string }[];
+  }> {
+    const result = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          status: true,
+          submittedByUserId: true,
+          tasks: {
+            select: {
+              id: true,
+              boqItemId: true,
+              paymentMode: true,
+              actualQty: true,
+              servedQty: true,
+              boqItem: { select: { boqNo: true } },
+            },
+          },
+        },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+
+      if (report.status === DwrStatus.approved) {
+        throw new ConflictException({
+          code: DWR_ERRORS.alreadyApproved,
+          message:
+            'This report is already approved. Its quantities have been counted once and will not ' +
+            'be counted again.',
+        });
+      }
+      assertStatus(report.status, DwrStatus.submitted, 'approve');
+
+      if (
+        report.submittedByUserId &&
+        report.submittedByUserId === actor.userId
+      ) {
+        throw new ForbiddenException({
+          code: DWR_ERRORS.approverIsAuthor,
+          message:
+            'You submitted this report, so somebody else has to approve it. Approving it moves ' +
+            'the executed quantities a bill is later built from.',
+        });
+      }
+
+      const deltas = groupDeltas(report.tasks);
+
+      // One statement, relative, with the non-negative floor inside it (FR-015, FR-021).
+      const moved = await this.boq.applyDoneQtyDeltas(tx, deltas);
+
+      if (moved !== deltas.length) {
+        // FR-013a. Named rather than counted: an all-or-nothing rule that reports nothing leaves
+        // an operator retrying a write that will fail again for a reason nobody has been told.
+        throw new ConflictException({
+          code: DWR_ERRORS.approvalIncomplete,
+          message:
+            `${deltas.length - moved} of ${
+              deltas.length
+            } measured BOQ line(s) could not be ` +
+            'updated, so none were. A line has been deleted, or the increment would have driven ' +
+            'its executed quantity below zero — which only happens when the counter has already ' +
+            'drifted. Check the project reconciliation.',
+          detail: { asked: deltas.length, applied: moved },
+        });
+      }
+
+      const transitioned = await tx.dailyWorkReport.updateMany({
+        where: { id: dwrId, status: DwrStatus.submitted },
+        data: {
+          status: DwrStatus.approved,
+          approvedByUserId: actor.userId,
+          approvedAt: new Date(),
+        },
+      });
+      // FR-014a. Two concurrent approvals serialise on this row; the loser sees no rows and throws,
+      // rolling its own increments back. The counter moves once.
+      if (transitioned.count === 0) {
+        throw new ConflictException({
+          code: DWR_ERRORS.alreadyApproved,
+          message:
+            'Somebody else approved this report while you were approving it.',
+        });
+      }
+
+      return {
+        id: dwrId,
+        status: DwrStatus.approved,
+        moved: deltas.map((d) => ({
+          boqNo:
+            report.tasks.find((t) => t.boqItemId === d.itemId)?.boqItem
+              ?.boqNo ?? d.itemId,
+          delta: d.delta.toFixed(3),
+        })),
+      };
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      // `AuditAction` has no APPROVE: the enum is CREATE/UPDATE/DELETE/READ plus login events, and
+      // adding a value would change a shared enum for one caller. The entity type and the entry's
+      // own timestamp say which transition this was, and `approvedByUserId`/`approvedAt` on the row
+      // are the durable record of the approval itself.
+      action: AuditAction.UPDATE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return result;
+  }
+
+  /** `submitted` → `draft`. Nothing moves, because submission never moved anything (US3 AC2). */
+  async returnToDraft(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<{ id: string; status: DwrStatus }> {
+    const result = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: { id: true, status: true },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+      assertStatus(report.status, DwrStatus.submitted, 'return to draft');
+
+      await tx.dailyWorkReport.update({
+        where: { id: dwrId },
+        data: { status: DwrStatus.draft },
+      });
+      return { id: dwrId, status: DwrStatus.draft };
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      action: AuditAction.UPDATE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return result;
+  }
+
+  /**
+   * `approved` → `draft`, taking back **exactly** what the approval added (FR-019 to FR-021).
+   *
+   * ## What makes this safe, and what it refuses
+   *
+   * The quantities subtracted are the ones **stored on the lines**, read rather than recomputed —
+   * `storedQuantityInForce`, not `quantityInForce`. A measured line's factors may have been edited
+   * since, and recomputing from them would subtract a figure the approval never added, leaving the
+   * counter wrong in a way nothing would notice.
+   *
+   * **FR-020 is a floor, not provenance, and the message says so.** Nothing in this schema links a
+   * bill line to the measurement it consumed, so "has this report been billed" is not a question
+   * the database can answer. What it can answer is whether this reversal would drop a BOQ line's
+   * executed quantity below the quantity already billed against it on a bill that has left draft —
+   * a client bill that is submitted or certified, or a subcontractor bill that is submitted or
+   * approved, including one reaching the line through a work-order award line. That protects the
+   * arithmetic rather than the provenance, which is the stronger of the two guarantees and the one
+   * available now. Research §4 records what is deferred to feature 023.
+   *
+   * `approvedAt` and `approvedByUserId` are **not** cleared. The approval happened; erasing it
+   * leaves a reversal reason referring to an approval nobody can see.
+   */
+  async reverse(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+    input: ReverseDwrDto,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<{ id: string; status: DwrStatus; reversalCount: number }> {
+    const result = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          status: true,
+          reversalCount: true,
+          tasks: {
+            select: {
+              boqItemId: true,
+              paymentMode: true,
+              actualQty: true,
+              servedQty: true,
+              boqItem: { select: { boqNo: true } },
+            },
+          },
+        },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+      assertStatus(report.status, DwrStatus.approved, 'reverse');
+
+      const deltas = groupDeltas(report.tasks);
+      await this.assertNotBilledBelow(tx, deltas);
+
+      const moved = await this.boq.applyDoneQtyDeltas(
+        tx,
+        deltas.map((d) => ({ itemId: d.itemId, delta: d.delta.negated() })),
+      );
+      if (moved !== deltas.length) {
+        // The floor inside the statement refused at least one row (FR-021). Only drift can cause
+        // this — a reversal subtracts exactly what its own approval added — so the message says
+        // where to look rather than just that something failed.
+        throw new ConflictException({
+          code: DWR_ERRORS.reversalBelowZero,
+          message:
+            "Reversing this report would drive at least one BOQ line's executed quantity below " +
+            'zero, so nothing was changed. That can only happen if the counter has already ' +
+            'drifted from the approved measurement — run the project reconciliation.',
+          detail: { asked: deltas.length, applied: moved },
+        });
+      }
+
+      const updated = await tx.dailyWorkReport.updateMany({
+        where: { id: dwrId, status: DwrStatus.approved },
+        data: {
+          status: DwrStatus.draft,
+          reversedAt: new Date(),
+          reversedByUserId: actor.userId,
+          reversalReason: input.reason.trim(),
+          reversalCount: { increment: 1 },
+        },
+      });
+      if (updated.count === 0) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            'Somebody else moved this report while you were reversing it.',
+        });
+      }
+
+      return {
+        id: dwrId,
+        status: DwrStatus.draft,
+        reversalCount: report.reversalCount + 1,
+      };
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      action: AuditAction.UPDATE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return result;
+  }
+
+  /** Deletes a draft. A submitted or approved report is refused (FR-023). */
+  async remove(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<void> {
+    const refs = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          status: true,
+          attachments: { select: { fileRef: true } },
+        },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+
+      if (report.status !== DwrStatus.draft) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            `This report is ${report.status}. Only a draft can be deleted — ` +
+            (report.status === DwrStatus.approved
+              ? 'reverse it first, which takes its quantities back out and says why.'
+              : 'return it to draft first.'),
+        });
+      }
+
+      await tx.dailyWorkReport.delete({ where: { id: dwrId } });
+      return report.attachments.map((a) => a.fileRef);
+    });
+
+    // After the transaction, deliberately: a blob deleted inside one that then rolls back is gone
+    // while its row survives, which is the worse of the two inconsistencies. `deleteMany` is
+    // best-effort and never throws for a missing reference.
+    if (refs.length > 0) await this.storage.deleteMany(refs);
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      action: AuditAction.DELETE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+  }
+
+  /**
+   * Refuses a reversal that would take a line's executed quantity below what has already been
+   * billed against it (FR-020).
+   *
+   * One query per bill side, both grouped — not one per line. The figures come from the same
+   * aggregate 018 composes bills with (`ClientBillLine` grouped by `boqTaskItemId`), which 018
+   * research §3 chose over a stored counter precisely so that two implementations could not
+   * disagree about one number. A second aggregate here would be that disagreement.
+   */
+  private async assertNotBilledBelow(
+    tx: Prisma.TransactionClient,
+    deltas: { itemId: string; delta: Prisma.Decimal }[],
+  ): Promise<void> {
+    const itemIds = deltas.map((d) => d.itemId);
+    if (itemIds.length === 0) return;
+
+    const [current, clientBilled, subBilled] = await Promise.all([
+      tx.bOQTaskItem.findMany({
+        where: { id: { in: itemIds } },
+        select: { id: true, boqNo: true, doneQty: true },
+      }),
+      tx.clientBillLine.groupBy({
+        by: ['boqTaskItemId'],
+        where: {
+          boqTaskItemId: { in: itemIds },
+          clientBill: { status: { in: ['submitted', 'certified'] } },
+        },
+        _sum: { quantity: true },
+      }),
+      tx.rABillLine.groupBy({
+        by: ['workOrderBoqItemId'],
+        where: {
+          workOrderBoqItem: { boqTaskItemId: { in: itemIds } },
+          raBill: { status: { in: ['submitted', 'approved'] } },
+        },
+        _sum: { quantity: true },
+      }),
+    ]);
+
+    const billed = new Map<string, Prisma.Decimal>();
+    for (const row of clientBilled) {
+      billed.set(
+        row.boqTaskItemId,
+        (billed.get(row.boqTaskItemId) ?? new Prisma.Decimal(0)).plus(
+          row._sum.quantity ?? 0,
+        ),
+      );
+    }
+    if (subBilled.length > 0) {
+      const awards = await tx.workOrderBOQItem.findMany({
+        where: { id: { in: subBilled.map((r) => r.workOrderBoqItemId) } },
+        select: { id: true, boqTaskItemId: true },
+      });
+      const awardToItem = new Map(awards.map((a) => [a.id, a.boqTaskItemId]));
+      for (const row of subBilled) {
+        const itemId = awardToItem.get(row.workOrderBoqItemId);
+        if (!itemId) continue;
+        billed.set(
+          itemId,
+          (billed.get(itemId) ?? new Prisma.Decimal(0)).plus(
+            row._sum.quantity ?? 0,
+          ),
+        );
+      }
+    }
+
+    const blocked: { boqNo: string; billed: string; wouldLeave: string }[] = [];
+    for (const delta of deltas) {
+      const item = current.find((i) => i.id === delta.itemId);
+      if (!item) continue;
+      const billedQty = billed.get(delta.itemId);
+      if (!billedQty || billedQty.isZero()) continue;
+
+      const wouldLeave = item.doneQty.minus(delta.delta);
+      if (wouldLeave.lessThan(billedQty)) {
+        blocked.push({
+          boqNo: item.boqNo,
+          billed: billedQty.toFixed(3),
+          wouldLeave: wouldLeave.toFixed(3),
+        });
+      }
+    }
+
+    if (blocked.length > 0) {
+      throw new ConflictException({
+        code: DWR_ERRORS.measurementBilled,
+        message:
+          `Reversing this report would leave ${blocked.length} BOQ line(s) with less executed ` +
+          'quantity than has already been billed against them on a bill that has left draft. ' +
+          'Revise the bill first. (This checks the totals, not which bill line consumed which ' +
+          'report — nothing in the data records that, so it cannot be checked.)',
+        detail: { lines: blocked },
+      });
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
   // Internals
   // ───────────────────────────────────────────────────────────────────────────
 
@@ -615,6 +1116,51 @@ interface BoqItemForLine {
   boqNo: string;
   scopeQty: Prisma.Decimal;
   doneQty: Prisma.Decimal;
+}
+
+/**
+ * Sums a report's lines into one delta per BOQ line (FR-015).
+ *
+ * Grouped rather than applied per line, for two reasons that happen to coincide: one statement
+ * instead of many (research §8), and a report measuring the same BOQ line twice — two stretches of
+ * one item, which the client's sheets do — must move the counter by the total rather than racing
+ * itself. Lines referencing no BOQ line are dropped here, which is FR-007's "moves nothing".
+ */
+function groupDeltas(
+  tasks: {
+    boqItemId: string | null;
+    paymentMode: DwrPaymentMode;
+    actualQty: Prisma.Decimal | null;
+    servedQty: Prisma.Decimal | null;
+  }[],
+): { itemId: string; delta: Prisma.Decimal }[] {
+  const totals = new Map<string, Prisma.Decimal>();
+
+  for (const task of tasks) {
+    if (!task.boqItemId) continue;
+    // Read, never recomputed. A reversal must subtract exactly what its approval added, and a
+    // measured line's factors may have been edited in between.
+    const quantity = storedQuantityInForce(task);
+    totals.set(
+      task.boqItemId,
+      (totals.get(task.boqItemId) ?? new Prisma.Decimal(0)).plus(quantity),
+    );
+  }
+
+  return [...totals].map(([itemId, delta]) => ({ itemId, delta }));
+}
+
+/** Refuses a transition from the wrong status, naming the status the report is actually in. */
+function assertStatus(
+  actual: DwrStatus,
+  required: DwrStatus,
+  action: string,
+): void {
+  if (actual === required) return;
+  throw new ConflictException({
+    code: DWR_ERRORS.wrongStatus,
+    message: `This report is ${actual}, so it cannot ${action}. It must be ${required}.`,
+  });
 }
 
 /** Midnight, so a work date compares as a day rather than as an instant. */

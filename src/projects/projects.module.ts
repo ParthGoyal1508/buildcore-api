@@ -13,6 +13,7 @@ import { BoqImportService } from './boq/boq-import.service';
 import { BoqWorkbookReader } from './boq/boq-workbook.reader';
 import { BoqController } from './boq/boq.controller';
 import { BoqService } from './boq/boq.service';
+import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSearchSource } from './portfolio/project-search.source';
@@ -124,6 +125,11 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     BoqImportService,
     BoqWorkbookReader,
     ImportBatchStore,
+    // 022 US5, which 008 specified in August and never built. `BoqService.updateDoneQty` was
+    // written then, exported from this module **for this caller**, and had no caller for two
+    // months — so every BOQ line in the system reported 0% executed regardless of work done.
+    // This provider is where that closes.
+    DwrService,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
     AuditLogService,
@@ -141,6 +147,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // nobody else may read it directly.
   // `BoqService` is exported for the DWR work (US5): approving a report moves a BOQ line's
   // completed quantity, and that has to go through this service rather than through the table.
+  // 022 added two transaction-aware siblings to it for that caller — `applyDoneQtyDeltas`, because
+  // `updateDoneQty` opens its own transaction and a report must move every line or none, and
+  // `setDoneQtyAbsolute`, which is reconciliation repair's one exception to relative movement.
   exports: [
     BoqService,
     SitesService,
