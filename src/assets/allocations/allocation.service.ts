@@ -648,4 +648,67 @@ export class AllocationService implements OnModuleInit {
       expectedReturnDate: row.expectedReturnDate,
     }));
   }
+  /**
+   * Every allocation this employee was ever custodian of — open and closed (021 FR-018a).
+   *
+   * The settlement summary's question, which is **not** the clearance's. `openCustodyFor` above
+   * answers "what is still outstanding", so an asset returned during the notice period correctly
+   * disappears from it. The summary is the record of how each asset *ended*, and omitting the
+   * returned one would make it say the employee was never given it — against a client who asked
+   * for "any assets assigned to the employee" to appear.
+   *
+   * Written as a separate method rather than a flag on the other, because a boolean parameter is
+   * how one caller silently receives the other's answer. The clearance must not report a returned
+   * asset as outstanding, and the summary must not drop it; a shared method with a switch would
+   * eventually do one of those two things wrong.
+   *
+   * Soft-deleted allocations stay excluded. A deleted row is a correction — an allocation somebody
+   * recorded in error — and a settlement summary listing it would be reporting an asset that was
+   * never actually given out.
+   */
+  async custodyHistoryFor(
+    ctx: RlsContext,
+    companyId: string,
+    employeeId: string,
+  ): Promise<
+    {
+      allocationId: string;
+      assetId: string;
+      assetName: string;
+      assetCode: string | null;
+      projectId: string;
+      siteId: string;
+      quantity: number;
+      expectedReturnDate: Date;
+      status: 'open' | 'closed';
+      actualReturnDate: Date | null;
+    }[]
+  > {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.assetAllocation.findMany({
+        where: {
+          companyId,
+          custodianEmployeeId: employeeId,
+          deletedAt: null,
+        },
+        include: { asset: { select: { name: true, assetCode: true } } },
+        // Open first, because those are the ones that still need a decision; then most recently
+        // returned, because that is the order somebody reviewing a settlement reads them in.
+        orderBy: [{ status: 'asc' }, { expectedReturnDate: 'asc' }],
+      }),
+    );
+
+    return rows.map((row) => ({
+      allocationId: row.id,
+      assetId: row.assetId,
+      assetName: row.asset.name,
+      assetCode: row.asset.assetCode,
+      projectId: row.projectId,
+      siteId: row.siteId,
+      quantity: Number(row.quantity),
+      expectedReturnDate: row.expectedReturnDate,
+      status: row.status === AssetAllocationStatus.open ? 'open' : 'closed',
+      actualReturnDate: row.actualReturnDate,
+    }));
+  }
 }

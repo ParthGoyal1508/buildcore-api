@@ -31,6 +31,10 @@ export class LeaveHrAdminController {
   @Get('applications')
   @ApiOperation({
     summary: 'Every employee’s leave applications, filterable by status',
+    description:
+      'Each application carries `employeeCode` and `employeeName`, resolved on the server. Both are ' +
+      'null for an employee outside the caller’s scope — which is a different fact from “this person ' +
+      'has no name on record”, where the code is present and the name is null.',
   })
   async applications(
     @UserEntity() user: AuthenticatedUser,
@@ -40,7 +44,13 @@ export class LeaveHrAdminController {
     // Passed through as-is: an omitted status means "every status", which is what
     // the screen's default filter asks for. Defaulting to `pending` here would
     // make "All statuses" quietly show only the pending ones.
-    return this.leave.listForReview(callerFrom(user, request), query.status);
+    // Named rather than raw: the column is headed "Employee" and a cuid is not an
+    // employee. Resolved here so every client gets the name, not only the one that
+    // remembered to fetch the roster and join it.
+    return this.leave.listForReviewNamed(
+      callerFrom(user, request),
+      query.status,
+    );
   }
 
   @Get('balances')

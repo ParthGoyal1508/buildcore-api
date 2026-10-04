@@ -76,21 +76,21 @@ export function extractTokens(body: string): string[] {
 }
 
 /**
- * Tokens in the body that are not in the kind's documented set.
+ * `unknownTokens()` lived here and was removed on 2026-10-03.
  *
- * **A kind with no documented set validates nothing**, which is a deliberate change from
- * the enum version. FR-011 lets an administrator define a letter kind without a code
- * change, and this file cannot know the tokens for a kind invented after it shipped —
- * rejecting every token for such a kind would make FR-011 unusable, and rejecting none
- * is the only other honest answer. The kinds that DO have documented sets are still
- * validated exactly as before.
+ * It answered "is this token in the kind's documented set" from `LETTER_TOKENS` above, and it was
+ * deliberately **permissive**: a kind with no documented set validated nothing, because this file
+ * cannot know the tokens for a kind an administrator invented after it shipped. That was the only
+ * honest answer available at the time and it is why the feature did not work — a kind defined
+ * through 017's screen got an empty set, every token passed validation, and the letter rendered a
+ * page of blanks. Signed.
+ *
+ * The answer now comes from the fields a kind **declares**
+ * (`LetterKindFieldsService.assertTemplateFieldsDeclared`), which can answer for any kind and
+ * refuses a kind with no fields rather than admitting everything. `LETTER_TOKENS` survives as the
+ * source the 2026-10-02 migration backfilled the five shipped kinds' fields from, and as the
+ * fixture `letter-kind-field.spec.ts` checks that backfill against.
  */
-export function unknownTokens(body: string, letterKindKey: string): string[] {
-  const allowed = LETTER_TOKENS[letterKindKey];
-  if (!allowed) return [];
-  const set = new Set(allowed);
-  return extractTokens(body).filter((t) => !set.has(t));
-}
 
 /** Substitutes `{{token}}` with values; an unresolved token renders empty. */
 export function renderTemplate(

@@ -24,7 +24,6 @@ import { rlsContextFor } from '../../common/prisma/rls-context';
 import { LetterKindsService } from '../../settings/letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from '../../settings/letter-templates/letter-templates.service';
 import { LetterService } from './letter.service';
-import { unknownTokens } from './letter-tokens.util';
 import {
   CreateLetterTemplateDto,
   GenerateLetterDto,
@@ -54,16 +53,32 @@ export class LetterController {
     return this.templates.findAll(caller, companyId);
   }
 
+  /**
+   * **Token validation is no longer done here, and removing it was a fix** (2026-10-03).
+   *
+   * This endpoint used to run `unknownTokens()` against `LETTER_TOKENS`, a map keyed by the five
+   * letter types this product shipped with. `LetterTemplatesService.create` now checks the body
+   * against the fields the kind actually **declares** (017 FR-011b), which is both stricter and
+   * correct for a kind defined after the code shipped.
+   *
+   * Keeping both meant a field an administrator added to a *shipped* kind through
+   * `PUT /letter-kinds/:id/fields/:token` was declared, offered by the editor, and then refused
+   * here by a hardcoded list that could not know about it — FR-011b contradicted by a check written
+   * before it existed. The newer refusal also names the remedy ("add the field to the kind") rather
+   * than just the token.
+   */
   @Post('letter-templates')
   @ApiOperation({
-    summary: 'Create a letter template (unknown tokens rejected)',
+    summary: 'Create a letter template',
+    description:
+      'The body is validated against the fields its letter **kind** declares, and a token the kind ' +
+      'does not declare is refused with `LETTER_FIELD_NOT_DECLARED`, naming it.',
   })
   async createTemplate(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CreateLetterTemplateDto,
     @Ip() ip: string,
   ) {
-    this.assertTokensKnown(dto.bodyTemplate, dto.letterType);
     const companyId = dto.companyId ?? caller.companyId;
     if (!companyId) {
       throw new BadRequestException(
@@ -91,12 +106,6 @@ export class LetterController {
     @Body() dto: UpdateLetterTemplateDto,
     @Ip() ip: string,
   ) {
-    if (dto.bodyTemplate) {
-      const templates = await this.templates.findAll(caller);
-      const existing = templates.find((t) => t.id === id);
-      if (existing)
-        this.assertTokensKnown(dto.bodyTemplate, existing.letterType);
-    }
     return this.templates.update(caller, id, dto, ip);
   }
 
@@ -134,14 +143,5 @@ export class LetterController {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(buffer);
-  }
-
-  private assertTokensKnown(body: string, letterType: string) {
-    const unknown = unknownTokens(body, letterType);
-    if (unknown.length > 0) {
-      throw new BadRequestException(
-        `Unknown tokens for a ${letterType} letter: ${unknown.join(', ')}`,
-      );
-    }
   }
 }

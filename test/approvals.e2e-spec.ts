@@ -213,6 +213,15 @@ describe('Approval spine (e2e, real database)', () => {
     expect(view.instanceId).toBeTruthy();
   });
 
+  // Releases the database pool. Added 2026-10-04: 19 of the 33 e2e suites never closed
+  // their app, and `app.close()` alone was not enough either — `PrismaService` has no
+  // `onModuleDestroy`, so `PrismaShutdownService` had to be added to make closing work.
+  // Together these are why the suites could not all run in one go: Postgres refused new
+  // connections part-way through, 158 failures with no product defect behind any of them.
+  afterAll(async () => {
+    await app.close();
+  });
+
   it('refuses a second live instance for the same item — the partial unique index, not a service check', async () => {
     const originator = await makeUser('Dup', null);
     const entityId = unique('dup');

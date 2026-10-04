@@ -40,6 +40,8 @@ import { EmployeeSearchSource } from './employees/employee-search.source';
 import { ExitClearanceController } from './offboarding/exit-clearance.controller';
 import { ExitClearanceService } from './offboarding/exit-clearance.service';
 import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
+import { LocationAssignmentsController } from './location-assignments/location-assignments.controller';
+import { LocationAssignmentsService } from './location-assignments/location-assignments.service';
 import { PunchRefusalsService } from './punch/punch-refusals.service';
 
 /**
@@ -73,6 +75,7 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     forwardRef(() => PayrollModule),
   ],
   controllers: [
+    LocationAssignmentsController,
     ExitClearanceController,
     EmployeesController,
     AttendanceAdminController,
@@ -91,6 +94,7 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
   ],
   providers: [
     PunchRefusalsService,
+    LocationAssignmentsService,
     ExitCustodyRegistry,
     ExitClearanceService,
     // 021 US1 — see ProjectSearchSource.

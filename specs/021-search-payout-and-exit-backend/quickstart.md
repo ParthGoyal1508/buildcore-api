@@ -88,3 +88,43 @@ query added by someone who found the fan-out inconvenient.
   the known risk of this feature and the plan's Risks table names the ordered remedies.
 - **Whether four registers is the right four.** The spec names these four; the registry makes a fifth
   an implementation of an existing interface rather than a change to search.
+
+---
+
+## Pass 8 — a clearance waiver is two steps with a named approver between them
+
+Added 2026-10-02 (Phase 8, FR-016). **T094 asked for the existing clearance pass to be updated and
+there was none** — this quickstart covered US1's search only. So this is new rather than amended,
+and it is here because a reader who tries the waiver against the shipped build and expects one step
+will conclude the screen is broken.
+
+1. Initiate an exit for an employee holding an open asset allocation.
+2. `GET /hr/employees/:id/exit-clearance` — the allocation is listed, `settleable` is `false`.
+3. As a caller holding **`PAYROLL`**, `POST .../exit-clearance/waivers` with a kind, a ref and a
+   reason. Expect `200` carrying **both** the clearance and a `pending` approval item.
+   * **The clearance still shows the item unwaived and `settleable: false`.** This is the step most
+     likely to be read as a failure. It is not: HR has proposed, and nothing is written yet.
+   * As a caller holding only `EMPLOYEES`, the same call is `403 EXIT_WAIVER_NOT_PROPOSABLE`. Write
+     access on employee records used to be enough; a write-off of company money is not something a
+     site administrator puts in front of the Director alone.
+4. `POST .../exit-clearance/waivers` again for the same obligation →
+   `409 EXIT_WAIVER_ALREADY_PENDING`. Two items in the Director's queue for one decision.
+5. Attempt the final settlement → still `400 EXIT_CLEARANCE_OUTSTANDING`, naming the allocation.
+6. As the Director, approve the item in the approvals queue.
+7. `GET` the clearance again — the item now carries a waiver whose **author is the HR proposer** and
+   whose `approvedByUserId` is the Director. Two names, because "HR waived this" and "HR asked and
+   the Director agreed" are different facts. `settleable` is `true`.
+8. Settle. It succeeds.
+
+**Then the rejection path, which is the one worth doing deliberately:**
+
+9. Repeat steps 1–3 on a second employee, and **reject** the item instead.
+10. `GET` the clearance — the obligation is still outstanding, still unwaived, and the settlement is
+    still refused. A rejection that silently cleared the item would look like success to everybody
+    except the company's balance sheet.
+11. Propose again with a better reason. It is **accepted**, not refused as a duplicate. The spine
+    raises no event for a rejection, so the proposal's status is reconciled against the spine at
+    this moment — see `settleStaleProposal`.
+
+**What this pass cannot cover:** the asset register is untouched throughout (FR-014c), and
+confirming that needs a second read against `assets` rather than anything on this screen.

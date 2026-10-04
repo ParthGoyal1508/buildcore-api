@@ -19,7 +19,11 @@ import {
   APPROVAL_VIEW_FORBIDDEN,
 } from './approval-error-codes';
 import { SLOT_FINAL, SLOT_FIRST_APPROVER, SLOT_HR } from './approval-slots';
-import { APPROVAL_COMPLETED_EVENT, ApprovalService } from './approvals.service';
+import {
+  APPROVAL_COMPLETED_EVENT,
+  APPROVAL_REJECTED_EVENT,
+  ApprovalService,
+} from './approvals.service';
 
 const COMPANY = 'company-1';
 const ROLE_FIRST = 'role-site';
@@ -441,6 +445,49 @@ describe('ApprovalService', () => {
 
       expect(state.state).toBe('rejected');
       expect(state.currentPosition).toBe(1);
+
+      /**
+       * **Changed 2026-10-04: a rejection is announced now, and this test asserted that it was
+       * not.** It read `expect(events.emit).not.toHaveBeenCalled()`, which was a faithful
+       * description of the old behaviour and of a defect.
+       *
+       * The spine announced approvals and said nothing about refusals, so no module ever learned
+       * that a decision had gone against it. Where a module's outcome is "write nothing" — feature
+       * 021's clearance waiver — silence is correct and the absence of a row is the outcome. Where
+       * the module has already written a row in a pending state, silence leaves that row lying
+       * about itself for ever: feature 020's operator fuel recovery stayed at `pending_approval`
+       * permanently, and the status value meant for it was set by nothing in the codebase.
+       *
+       * Found by writing 020 T065. See `APPROVAL_REJECTED_EVENT` for what it cost.
+       */
+      expect(events.emit).toHaveBeenCalledWith(APPROVAL_REJECTED_EVENT, {
+        entityType: 'attendance_exception',
+        entityId: 'punch-1',
+        companyId: COMPANY,
+        instanceId: 'inst-1',
+      });
+      // One event, not both. A rejection that also announced completion would have every
+      // handler apply the thing that was just refused.
+      expect(events.emit).toHaveBeenCalledTimes(1);
+      expect(events.emit).not.toHaveBeenCalledWith(
+        APPROVAL_COMPLETED_EVENT,
+        expect.anything(),
+      );
+    });
+
+    it('announces nothing while the chain is still running', async () => {
+      // The assertion the test above used to make, kept where it is still true: an intermediate
+      // approval is not an outcome, and a module acting on one would apply a decision two more
+      // people have yet to take.
+      const { service, state, events } = harness();
+
+      await service.decide(
+        { instanceId: 'inst-1', action: ApprovalDecisionAction.approve },
+        caller('site-1', [ROLE_FIRST]),
+        '10.0.0.1',
+      );
+
+      expect(state.state).toBe('pending');
       expect(events.emit).not.toHaveBeenCalled();
     });
 

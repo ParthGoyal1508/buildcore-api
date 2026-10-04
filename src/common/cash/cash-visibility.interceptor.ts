@@ -9,6 +9,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { withRlsContext } from '../prisma/rls-context';
+import { maySeeCashBreakup } from './cash-entry.interceptor';
 import {
   CASH_AMOUNT_FIELDS,
   CASH_MODE_FIELDS,
@@ -28,6 +29,13 @@ import {
  * a figure, and neither a reader nor a spreadsheet summing a column can tell a hidden amount
  * from a real one; marking it is what stops an export silently understating a total by the value
  * of every cash payment in it.
+ *
+ * **The denomination breakup is the one exception, and it is a holder exception** (FR-017d, added
+ * 2026-10-02). It stays hidden from everyone except a caller holding `CASH_ENTRY`. Hiding a note
+ * count from the cashier who has to count the notes against it conceals nothing from anybody it
+ * was meant to conceal from, while making the screen's only purpose unreachable. Amounts are not
+ * treated the same way: a cashier needs the breakup to pay out, and needs no view of what every
+ * other cash payment in the company came to.
  */
 @Injectable()
 export class CashVisibilityInterceptor implements NestInterceptor {
@@ -41,22 +49,48 @@ export class CashVisibilityInterceptor implements NestInterceptor {
       .switchToHttp()
       .getRequest<{ user?: AuthenticatedUser }>();
 
-    const companyId = user?.selectedCompanyId ?? user?.companyId ?? null;
-    if (!companyId) return next.handle();
+    const { hidden, maySeeBreakup } = await cashHidingFor(this.prisma, user);
+    if (!hidden) return next.handle();
 
-    const company = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.company.findUnique({
-          where: { id: companyId },
-          select: { hideCashTransactions: true },
-        }),
-    );
-    if (!company?.hideCashTransactions) return next.handle();
-
-    return next.handle().pipe(map((body) => hideCash(body)));
+    return next
+      .handle()
+      .pipe(map((body) => hideCash(body, false, maySeeBreakup)));
   }
+}
+
+/**
+ * Whether this caller's company has asked for cash hidden, and whether they still see the breakup.
+ *
+ * Exported because **a response sent through `@Res()` never reaches this interceptor.** Nest's
+ * response-mapping pipe runs on what a handler returns, and a handler that writes to the raw
+ * response returns nothing — so every file download in this product is outside the interceptor's
+ * reach by construction. An export that silently understated a total by every cash payment in it
+ * would be worse than one that says a figure is hidden, so those surfaces ask this directly rather
+ * than each re-deriving the rule (Principle III).
+ */
+export async function cashHidingFor(
+  prisma: PrismaService,
+  user?: AuthenticatedUser,
+): Promise<{ hidden: boolean; maySeeBreakup: boolean }> {
+  const companyId = user?.selectedCompanyId ?? user?.companyId ?? null;
+  if (!companyId) return { hidden: false, maySeeBreakup: false };
+
+  const company = await withRlsContext(prisma, { isSuperAdmin: true }, (tx) =>
+    tx.company.findUnique({
+      where: { id: companyId },
+      select: { hideCashTransactions: true },
+    }),
+  );
+  // Hiding off means nothing is hidden, the breakup included. The company setting is the master
+  // control (FR-014); `CASH_ENTRY` decides who still sees the breakup once it is on, not who sees
+  // it when nobody asked for anything to be hidden.
+  if (!company?.hideCashTransactions) {
+    return { hidden: false, maySeeBreakup: false };
+  }
+  return {
+    hidden: true,
+    maySeeBreakup: user ? maySeeCashBreakup(user) : false,
+  };
 }
 
 /**
@@ -66,9 +100,13 @@ export class CashVisibilityInterceptor implements NestInterceptor {
  * one: a `Date`, a `Buffer` or a Prisma `Decimal` must be returned untouched, or hiding a
  * figure would corrupt every timestamp beside it.
  */
-export function hideCash(value: unknown, rowIsCash = false): unknown {
+export function hideCash(
+  value: unknown,
+  rowIsCash = false,
+  maySeeBreakup = false,
+): unknown {
   if (Array.isArray(value)) {
-    return value.map((item) => hideCash(item, rowIsCash));
+    return value.map((item) => hideCash(item, rowIsCash, maySeeBreakup));
   }
   if (!isPlainObject(value)) return value;
 
@@ -82,8 +120,14 @@ export function hideCash(value: unknown, rowIsCash = false): unknown {
   let hidAnything = false;
 
   for (const [key, child] of Object.entries(row)) {
-    if (UNCONDITIONAL_CASH_FIELDS.includes(key) && child !== null) {
-      // Cash by construction: a note-count breakup exists only for cash.
+    if (
+      UNCONDITIONAL_CASH_FIELDS.includes(key) &&
+      child !== null &&
+      !maySeeBreakup
+    ) {
+      // Cash by construction: a note-count breakup exists only for cash. `null` and not an
+      // empty breakup or a zeroed one — a denomination count of zero reads as a real count of
+      // no notes, which is a different and false statement.
       out[key] = null;
       hidAnything = true;
       continue;
@@ -93,7 +137,7 @@ export function hideCash(value: unknown, rowIsCash = false): unknown {
       hidAnything = true;
       continue;
     }
-    out[key] = hideCash(child, cash);
+    out[key] = hideCash(child, cash, maySeeBreakup);
   }
 
   if (hidAnything) {

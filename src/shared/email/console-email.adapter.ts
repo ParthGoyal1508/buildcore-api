@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from './email.service';
-import { renderAccountLockedEmail, renderInviteEmail } from './email-templates';
+import {
+  renderAccountLockedEmail,
+  renderInviteEmail,
+  renderPayslipEmail,
+} from './email-templates';
 
 /**
  * Writes email to the application log instead of sending it — the dev/test adapter.
@@ -49,6 +53,23 @@ export class ConsoleEmailAdapter extends EmailService {
       `[console adapter] ${subject} → ${
         input.to
       } (unlocks ${input.unlockAt.toISOString()})`,
+    );
+  }
+
+  async sendPayslipEmail(input: {
+    to: string;
+    employeeName: string;
+    periodLabel: string;
+    companyName: string;
+    pdf: Buffer;
+    filename: string;
+  }): Promise<void> {
+    const { subject } = renderPayslipEmail(input);
+    // The attachment's *size* and not its contents: a payslip is regulated data and this adapter
+    // writes to the application log. The size is the one fact worth having — a zero-byte PDF is the
+    // failure a local run is most likely to produce and least likely to notice.
+    this.logger.log(
+      `[console adapter] ${subject} → ${input.to} (${input.filename}, ${input.pdf.length} bytes)`,
     );
   }
 

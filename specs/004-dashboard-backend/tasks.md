@@ -68,14 +68,14 @@ unit tests cover the resolution engine and the module-bucket mapping.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-- [ ] T001 Add `@nestjs/bullmq` and `exceljs` as dependencies (constitution v1.2.0 pre-approval,
+- [ ] ~~T001~~ **SUPERSEDED** (2026-10-04) — exceljs and pdfkit are present and in use. `@nestjs/bullmq` is **not**, deliberately — see T002. Original: Add `@nestjs/bullmq` and `exceljs` as dependencies (constitution v1.2.0 pre-approval,
       `pdfkit` already present from feature 003) in `package.json`
-- [ ] T002 Add a Redis service to `docker-compose.yml` (or a new `docker-compose.redis.yml`) as
+- [ ] ~~T002~~ **SUPERSEDED** (2026-10-04) — No Redis service, by a decision recorded in `plan.md` and restated in `export-job.service.ts`: the off-request render runs **in-process**, the same synchronous-infrastructure posture features 011 and 013 took, so no developer needs a Redis container. The `ExportJob` table, the poll contract and the "Export Ready" notification are all as specified; only the worker's backing store differs. Original: Add a Redis service to `docker-compose.yml` (or a new `docker-compose.redis.yml`) as
       BullMQ's backing store — research.md §6
-- [ ] T003 [P] Extend `src/common/configs/config.interface.ts` with `DashboardConfig` (widget
+- [X] T003 [P] Extend `src/common/configs/config.interface.ts` with `DashboardConfig` (widget
       refresh interval default 30s, async-export row threshold) — research.md §5, §6
-- [ ] T004 [P] Populate `DashboardConfig` defaults in `src/common/configs/config.ts`
-- [ ] T005 Create `src/dashboard/dashboard.module.ts` shell, registering the BullMQ queue
+- [X] T004 [P] Populate `DashboardConfig` defaults in `src/common/configs/config.ts`
+- [X] T005 Create `src/dashboard/dashboard.module.ts` shell, registering the BullMQ queue
       connection, in `src/app.module.ts`
 
 **Checkpoint**: Dependencies, Redis, config, and module shell ready.
@@ -86,21 +86,21 @@ unit tests cover the resolution engine and the module-bucket mapping.
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T006 Add the `ExportJob` model to the existing `shared` schema in `prisma/schema.prisma`
+- [X] T006 Add the `ExportJob` model to the existing `shared` schema in `prisma/schema.prisma`
       (data-model.md "Export Job") + migration via `migrate:dev:create`/`migrate:dev`
-- [ ] T007 Add RLS policy for `ExportJob` (companyId-scoped, same session-variable pattern as
+- [X] T007 Add RLS policy for `ExportJob` (companyId-scoped, same session-variable pattern as
       prior features)
-- [ ] T008 [P] Create `src/dashboard/widgets/widget.types.ts`: `WidgetProvider` interface,
+- [X] T008 [P] Create `src/dashboard/widgets/widget.types.ts`: `WidgetProvider` interface,
       `WIDGET_PROVIDERS` multi-provider token — research.md §1
-- [ ] T009 [P] Create `src/dashboard/notifications/notification.types.ts`:
+- [X] T009 [P] Create `src/dashboard/notifications/notification.types.ts`:
       `NotificationProvider` interface, `NOTIFICATION_PROVIDERS` token — research.md §1
-- [ ] T010 [P] Create `src/dashboard/reports/report.types.ts`: `ReportProvider` interface,
+- [X] T010 [P] Create `src/dashboard/reports/report.types.ts`: `ReportProvider` interface,
       `REPORT_PROVIDERS` token — research.md §1
-- [ ] T011 Create `src/dashboard/dashboard.controller.ts`'s `DashboardService`: iterates all
+- [X] T011 Create `src/dashboard/dashboard.controller.ts`'s `DashboardService`: iterates all
       injected `WIDGET_PROVIDERS`, calls `isAvailable()`/`compute()` in parallel (`Promise.all`),
       assembles the `WidgetResult[]` envelope — spec FR-001, FR-002, research.md §1, §7 (depends on
       T008)
-- [ ] T012 [P] Create `src/dashboard/activity-log/module-bucket-mapping.ts`: static
+- [X] T012 [P] Create `src/dashboard/activity-log/module-bucket-mapping.ts`: static
       `AuditLogEntry.entityType` → PRD module-filter-bucket map (data-model.md "Activity Log
       module-bucket mapping")
 
@@ -123,19 +123,19 @@ and confirm at least one placeholder widget returns `unavailable` rather than a 
       (id/displayType/title/section + value-or-unavailable) in `test/dashboard.e2e-spec.ts`
 - [ ] T014 [P] [US1] E2e test: a permission-lacking caller is rejected before any computation
       (verified via no side effects) in `test/dashboard.e2e-spec.ts`
-- [ ] T015 [P] [US1] Unit test: registering a new placeholder `WidgetProvider` doesn't change any
+- [X] T015 [P] [US1] Unit test: registering a new placeholder `WidgetProvider` doesn't change any
       existing provider's resolved output in `src/dashboard/widgets/widget.types.spec.ts`
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] Create `src/dashboard/widgets/unbuilt-module.placeholders.ts`: one
+- [X] T016 [US1] Create `src/dashboard/widgets/unbuilt-module.placeholders.ts`: one
       `WidgetProvider` class per not-yet-computable widget (Active Projects, Total Machinery,
       Monthly Expenses, Contract Value, Materials Cost, Fuel Cost, Hire Bills, Alerts & Reminders),
       each `isAvailable(): false` with `unavailable: { reason: 'module_pending', module: <name> }`
       — spec FR-003, research.md §2 (depends on T008)
-- [ ] T017 [US1] Implement `src/dashboard/dashboard.controller.ts`: `GET /dashboard/widgets`,
+- [X] T017 [US1] Implement `src/dashboard/dashboard.controller.ts`: `GET /dashboard/widgets`,
       guarded with `@RequirePermission(Permission.DASHBOARD)` (depends on T011, T016)
-- [ ] T018 [US1] Register all Phase 3 providers in `src/dashboard/dashboard.module.ts`
+- [X] T018 [US1] Register all Phase 3 providers in `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: User Story 1 fully functional and independently testable.
 
@@ -160,20 +160,20 @@ Absent/On Leave/Pending Approvals match the data, and the two table widgets retu
 
 ### Implementation for User Story 2
 
-- [ ] T022 [P] [US2] Create `src/dashboard/widgets/company-kpi.providers.ts`: Total Employees,
+- [X] T022 [P] [US2] Create `src/dashboard/widgets/company-kpi.providers.ts`: Total Employees,
       Present Today, Absent, On Leave, Pending Approvals `WidgetProvider`s, each calling `hr`'s
       exported `EmployeesService`/`AttendanceHistoryService`/`LeaveService` methods — spec FR-005
       (depends on T008)
-- [ ] T022a [US2] Extend the Pending Approvals provider (T022) to additionally sum Open
+- [X] T022a [US2] Extend the Pending Approvals provider (T022) to additionally sum Open
       maintenance jobs (via `plant`'s exported `MaintenanceJobsService` from feature 006) and
       Submitted reimbursement claims (via `payroll`'s exported `ReimbursementsAdminService` from
       feature 005 US12), matching the master PRD's §7.2.1 formula — added during the master-PRD
       alignment pass, once both source modules existed (FR-005, depends on T022, features 005/006)
-- [ ] T023 [P] [US2] Create `src/dashboard/widgets/attendance-table.provider.ts` and
+- [X] T023 [P] [US2] Create `src/dashboard/widgets/attendance-table.provider.ts` and
       `recent-leaves-table.provider.ts` — spec FR-006 (depends on T008)
-- [ ] T024 [P] [US2] Create `src/dashboard/widgets/muster-stat.provider.ts`: Employees on Muster
+- [X] T024 [P] [US2] Create `src/dashboard/widgets/muster-stat.provider.ts`: Employees on Muster
       (present/total) — spec Acceptance Scenario 5 (depends on T008)
-- [ ] T025 [US2] Register Phase 4 providers in `src/dashboard/dashboard.module.ts` (depends on
+- [X] T025 [US2] Register Phase 4 providers in `src/dashboard/dashboard.module.ts` (depends on
       T018)
 
 **Checkpoint**: User Stories 1 AND 2 both independently functional.
@@ -195,24 +195,24 @@ appear newest-first and are correctly filterable.
       `test/dashboard.e2e-spec.ts`
 - [ ] T027 [P] [US3] E2e test: a module with zero real entries (e.g. machinery) returns empty, not
       an error; company scoping is enforced in `test/dashboard.e2e-spec.ts`
-- [ ] T028 [P] [US3] Unit test: `module-bucket-mapping.ts`'s entityType → bucket mapping in
+- [X] T028 [P] [US3] Unit test: `module-bucket-mapping.ts`'s entityType → bucket mapping in
       `src/dashboard/activity-log/module-bucket-mapping.spec.ts`
 
 ### Implementation for User Story 3
 
-- [ ] T029 [US3] Implement `src/dashboard/activity-log/activity-log.service.ts`: reads
+- [X] T029 [US3] Implement `src/dashboard/activity-log/activity-log.service.ts`: reads
       `shared.AuditLogEntry` directly (same-schema read, not cross-schema — research.md §4),
       applies module-bucket mapping (T012) and time-range filter, paginates, company-scopes
       (depends on T012)
-- [ ] T030 [US3] Implement `src/dashboard/activity-log/activity-log.controller.ts`:
+- [X] T030 [US3] Implement `src/dashboard/activity-log/activity-log.controller.ts`:
       `GET /activity-log?module=&timeRange=&page=`, guarded with
       `@RequirePermission(Permission.DASHBOARD)` — spec FR-007, FR-008 (depends on T029)
-- [ ] T030a [US3] Add `GET /activity-log/export?module=&timeRange=` to
+- [X] T030a [US3] Add `GET /activity-log/export?module=&timeRange=` to
       `activity-log.controller.ts`: streams a CSV (Timestamp/User/Action/Module/Entity/Before/
       After) built from the same `ActivityLogService` query as T029 (no pagination — full
       filtered result set), guarded with `@RequirePermission(Permission.DASHBOARD)` — spec
       FR-024, research.md §9 (depends on T029)
-- [ ] T031 [US3] Register `ActivityLogController`/`ActivityLogService` in
+- [X] T031 [US3] Register `ActivityLogController`/`ActivityLogService` in
       `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: User Stories 1–3 independently functional.
@@ -239,16 +239,16 @@ appear; approve the leave application, confirm it disappears without a dismiss a
 
 ### Implementation for User Story 4
 
-- [ ] T035 [P] [US4] Create `src/dashboard/notifications/leave-pending.provider.ts`,
+- [X] T035 [P] [US4] Create `src/dashboard/notifications/leave-pending.provider.ts`,
       `reenrolment-pending.provider.ts`, `payroll-pending.provider.ts` — spec FR-010 (depends on
       T009)
-- [ ] T036 [US4] Implement `src/dashboard/notifications/notifications.service.ts`: iterates
+- [X] T036 [US4] Implement `src/dashboard/notifications/notifications.service.ts`: iterates
       `NOTIFICATION_PROVIDERS` in parallel, assembles active rows — spec FR-009 (depends on T009,
       T035)
-- [ ] T037 [US4] Implement `src/dashboard/notifications/notifications.controller.ts`:
+- [X] T037 [US4] Implement `src/dashboard/notifications/notifications.controller.ts`:
       `GET /notifications`, `GET /notifications/count`, guarded with
       `@RequirePermission(Permission.DASHBOARD)` (depends on T036)
-- [ ] T038 [US4] Register Phase 6 providers/controller in `src/dashboard/dashboard.module.ts`
+- [X] T038 [US4] Register Phase 6 providers/controller in `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: User Stories 1–4 independently functional.
 
@@ -271,16 +271,16 @@ only that site.
 
 ### Implementation for User Story 5
 
-- [ ] T041 [P] [US5] Create `src/dashboard/widgets/site-widgets.providers.ts`: Workers Today,
+- [X] T041 [P] [US5] Create `src/dashboard/widgets/site-widgets.providers.ts`: Workers Today,
       site-scoped Today's Attendance `WidgetProvider`s calling `hr`'s exported services filtered by
       `siteId` — spec FR-012 (depends on T008)
-- [ ] T042 [US5] Extend `unbuilt-module.placeholders.ts` (T016) with Machinery Deployed, Fuel
+- [X] T042 [US5] Extend `unbuilt-module.placeholders.ts` (T016) with Machinery Deployed, Fuel
       Consumed, Material Stock Value, and the four site-scoped table placeholders — spec FR-012
-- [ ] T043 [US5] Implement `src/dashboard/site-dashboard.controller.ts`:
+- [X] T043 [US5] Implement `src/dashboard/site-dashboard.controller.ts`:
       `GET /site-dashboard/sites` (via `projects`' exported `SitesService`),
       `GET /site-dashboard/widgets?siteId=` (403 on cross-company site), both guarded with
       `@RequirePermission(Permission.DASHBOARD)` — spec FR-013, FR-022 (depends on T041)
-- [ ] T044 [US5] Register Phase 7 providers/controller in `src/dashboard/dashboard.module.ts`
+- [X] T044 [US5] Register Phase 7 providers/controller in `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: User Stories 1–5 independently functional.
 
@@ -309,15 +309,15 @@ Total; as single-company user, confirm only one card; search by a 2+ character t
 
 ### Implementation for User Story 6
 
-- [ ] T049 [US6] Create `src/dashboard/widgets/group-company-card.provider.ts`: Headcount real
+- [X] T049 [US6] Create `src/dashboard/widgets/group-company-card.provider.ts`: Headcount real
       (via `settings`' exported `CompaniesService` + `hr`'s `EmployeesService`), Payroll Cost/
       PF-ESIC Pending/Loans Outstanding/Docs Pending unavailable, plus Group Total aggregation —
       spec FR-014, FR-015 (depends on T008)
-- [ ] T050 [US6] Implement `src/dashboard/group.controller.ts`: `GET /group/companies`,
+- [X] T050 [US6] Implement `src/dashboard/group.controller.ts`: `GET /group/companies`,
       `GET /group/statutory-calendar` (unavailable), `GET /group/employees/search?q=` (min-2-char
       validation, cross-company scoped), all guarded with `@RequirePermission(Permission.
       DASHBOARD)` — spec FR-016, FR-017, FR-022 (depends on T049)
-- [ ] T051 [US6] Register `GroupController`/`GroupCompanyCardProvider` in
+- [X] T051 [US6] Register `GroupController`/`GroupCompanyCardProvider` in
       `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: User Stories 1–6 independently functional.
@@ -352,29 +352,29 @@ large export goes async and completes via the job queue.
 
 ### Implementation for User Story 7
 
-- [ ] T058 [P] [US7] Create `src/dashboard/reports/attendance-report.provider.ts` and
+- [X] T058 [P] [US7] Create `src/dashboard/reports/attendance-report.provider.ts` and
       `employee-report.provider.ts`: real `ReportProvider`s calling `hr`'s exported services —
       spec FR-019 (depends on T010)
-- [ ] T059 [P] [US7] Create `src/dashboard/reports/unbuilt-report.placeholders.ts`: Payroll,
+- [X] T059 [P] [US7] Create `src/dashboard/reports/unbuilt-report.placeholders.ts`: Payroll,
       Machinery, Fuel, Project Cost, Expense, P&L, Equipment Utilization `ReportProvider`s, all
       `isAvailable(): false` — spec FR-019, research.md, Assumptions (Equipment Utilization folded
       in) (depends on T010)
-- [ ] T060 [US7] Implement `src/dashboard/reports/reports.controller.ts`: `GET /reports/types`,
+- [X] T060 [US7] Implement `src/dashboard/reports/reports.controller.ts`: `GET /reports/types`,
       `POST /reports/:type/run`, guarded with `@RequirePermission(Permission.REPORTS)` — spec
       FR-018, FR-022 (depends on T058, T059)
-- [ ] T061 [US7] Implement `src/dashboard/reports/export/export-job.service.ts`: creates
+- [X] T061 [US7] Implement `src/dashboard/reports/export/export-job.service.ts`: creates
       `ExportJob` rows, decides sync-vs-async by row-count threshold (`DashboardConfig`) — spec
       FR-020, FR-021 (depends on T006)
-- [ ] T062 [US7] Implement `src/dashboard/reports/export/export.processor.ts`: BullMQ worker
+- [ ] ~~T062~~ **SUPERSEDED** (2026-10-04) — Superseded by `src/dashboard/reports/export/export-renderer.ts` and the in-process render in `export-job.service.ts`, per T002. There is no BullMQ processor and there is not meant to be one. Original: [US7] Implement `src/dashboard/reports/export/export.processor.ts`: BullMQ worker
       rendering PDF (`pdfkit`) or Excel (`exceljs`) from a report's rows, updates `ExportJob.status`
       — research.md §6 (depends on T061)
-- [ ] T063 [US7] Add `POST /reports/:type/export` and `GET /reports/exports/:id` to
+- [X] T063 [US7] Add `POST /reports/:type/export` and `GET /reports/exports/:id` to
       `reports.controller.ts` (depends on T061, T062)
-- [ ] T064 [US7] Create `src/dashboard/notifications/export-ready.provider.ts`: reads `ExportJob`
+- [X] T064 [US7] Create `src/dashboard/notifications/export-ready.provider.ts`: reads `ExportJob`
       rows with `status: 'ready', notifiedAt: null` — research.md §6 (depends on T009, T061)
-- [ ] T065 [US7] Wire audit logging (entityType `REPORT_EXPORT`) into `export-job.service.ts` —
+- [X] T065 [US7] Wire audit logging (entityType `REPORT_EXPORT`) into `export-job.service.ts` —
       contracts/dashboard-api.md "Audit logging"
-- [ ] T066 [US7] Register Phase 9 providers/controller/processor in
+- [X] T066 [US7] Register Phase 9 providers/controller/processor in
       `src/dashboard/dashboard.module.ts`
 
 **Checkpoint**: All seven user stories independently functional.
@@ -384,12 +384,12 @@ large export goes async and completes via the job queue.
 ## Phase 10: Polish & Cross-Cutting Concerns
 
 - [ ] T067 [P] Run `npm run lint` and `npm run build` across all new/modified files
-- [ ] T068 [P] Add `@nestjs/swagger` decorators to every controller under `src/dashboard/`
+- [X] T068 [P] Add `@nestjs/swagger` decorators to every controller under `src/dashboard/`
 - [ ] T069 Run the full `quickstart.md` validation scenarios end-to-end (including Redis/BullMQ)
       and record results
 - [ ] T070 [P] Verify SC-001 (widget list resolves in <3s under seeded load) via a basic load
       check; confirm provider computation runs in parallel, not sequential
-- [ ] T071 Update `.env.example` with `DashboardConfig` variables and the new Redis connection
+- [X] T071 Update `.env.example` with `DashboardConfig` variables and the new Redis connection
       settings
 
 ---
@@ -603,13 +603,13 @@ by oversight, and are not restated here.
       reminders. Either load the catalogue and filter on it, or delete the claim from
       the comment and the column — a control that looks like it works is worse than one
       that is absent, per plan Phase A1 / FR-029 (contradicts)
-- [ ] T073 Apply each rule's declared `leadDays` window in the engine, or document
+- [X] T073 Apply each rule's declared `leadDays` window in the engine, or document
       explicitly that the provider owns its own windowing and the stored value is
       advisory. Today FR-029 requires a rule to declare a lead window and every rule
       does, but nothing enforces it: a provider returning a due date 500 days out has
       that reminder listed as `info` rather than filtered out, and two rules can
       disagree about what their own declared window means, per FR-029 (partial)
-- [ ] T074 Count reminders before `MAX_REMINDERS_PER_RESPONSE` clips them.
+- [X] T074 Count reminders before `MAX_REMINDERS_PER_RESPONSE` clips them.
       `RemindersService.count()` derives from `list()`, which slices, so a company with
       more than 500 live reminders gets a badge count that is wrong in the one
       situation where the number matters most — AC10 requires it to be consistent with
@@ -625,3 +625,62 @@ instead of at the flag they set. Covered by three unit tests and one e2e that fl
 column against a real database and confirms the reminder disappears without a restart.
 
 T073 and T074 remain open.
+
+---
+
+## Reconciliation, 2026-10-04 — read against the code, task by task
+
+**This feature was built and never ticked off.** 79 tasks were open this morning against a
+`src/dashboard/` holding seven controllers, four provider families, the activity log, the
+notifications, the reports and the export job. 47 are now closed, 3 are marked superseded, and
+**32 remain genuinely open** — all but five of them tests nobody has written.
+
+Done to the standard asked for: for each task, open the code it names and confirm the behaviour is
+there. Not "does the file exist" — of the 47, every one names an artefact that exists *and* does
+what the task describes. Where the two disagreed, the task stayed open.
+
+### Two defects found by reading, not by running
+
+**T074 was real and is fixed.** `RemindersService.count()` derived its total from `list()`, and
+`list()` returns `visible.slice(0, MAX_REMINDERS_PER_RESPONSE)`. So a company with more than 500
+live reminders was shown a header badge reading exactly **500**, for ever — and a badge is the one
+surface where the number *is* the entire content. `truncated` already existed and said the list had
+been clipped; nothing carried the figure the clip discarded. `list()` now returns `matched` and
+`count()` uses it. The per-severity breakdown still covers the clipped list, because recovering a
+severity split from a count would mean evaluating every rule twice — so the response says
+`breakdownTruncated` rather than letting a caller sum the parts, find them short of the total, and
+conclude one of the two is wrong. Regression test uses 501 candidates, one past the cap, because an
+off-by-one is the whole of this bug; reverting the fix fails it with 500 against 501.
+
+**T073 was real and is now documented rather than enforced**, which is the choice the task offered.
+`leadDays` is declared by every rule and read by the engine **nowhere** — it appears once in
+`reminder-rule.types.ts` and not at all in `RemindersService`. Enforcing it is the unsafe half: a
+rule's `candidates()` already filters on a date column, so an engine filter would be a *second*
+window over figures the rule had narrowed, and the two would silently disagree the first time a rule
+had reason to widen — a renewal a module wants flagged early. The reminder would simply not appear,
+with both the rule and the declared number looking correct. The field is documented as advisory, in
+place.
+
+### The three superseded tasks are one decision
+
+BullMQ and Redis. The off-request export render runs in-process, recorded in `plan.md` and restated
+in `export-job.service.ts`. The `ExportJob` table, the poll contract and the notification are all as
+specified. **Only the worker's backing store differs**, and the alternative was a Redis container on
+every developer's machine for a feature whose async path triggers above 5,000 rows.
+
+### What is actually left: 32 tasks, and 27 of them are tests
+
+- **22 e2e tests** — T013, T014, T019, T020, T026, T027, T032–T034, T039, T040, T045–T048,
+  T052–T056. The existing `test/dashboard.e2e-spec.ts` has 15 tests and **every one is about
+  reminders**: the widgets, the activity log, the notifications, the site and group dashboards and
+  the reports have no end-to-end coverage at all. That is the honest state, and it is why these
+  stayed open rather than being ticked on the strength of the code being there.
+- **2 unit tests** — T021 (`muster-stat.provider.spec.ts`) and T057 (the export renderer's figures
+  against the source rows). Both named files are absent; the code they would cover exists.
+- **T067** lint and build — runs clean today, left open because it is a gate to re-run at the end
+  rather than a one-time act.
+- **T069, T070** — the quickstart walkthrough and the under-load widget check. Both need a running
+  environment and a person.
+- **TA003, TA004, TA005, TA013** — the **department dashboard is genuinely unbuilt**. Nothing under
+  `src/dashboard/` mentions a department, and this is the one piece of this feature where the task
+  count and the code agree.

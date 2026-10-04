@@ -7,7 +7,10 @@ import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType, Company, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { DEFAULT_SLOT_ROLE_NAMES } from '../../approvals/approval-slots';
 import { ChainsService } from '../../approvals/chains.service';
+import { EquipmentCategoriesService } from '../machinery-masters/equipment-categories.service';
+import { EquipmentDocTypesService } from '../machinery-masters/equipment-doc-types.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type {
   SettingsConfig,
@@ -43,6 +46,8 @@ export class CompaniesService {
     private readonly assetCategories: AssetCategoriesService,
     private readonly assetDocTypes: AssetDocTypesService,
     private readonly conditionGrades: ConditionGradesService,
+    private readonly equipmentCategories: EquipmentCategoriesService,
+    private readonly equipmentDocTypes: EquipmentDocTypesService,
     private readonly approvalChains: ChainsService,
   ) {}
 
@@ -122,6 +127,77 @@ export class CompaniesService {
       punchAccuracyMaxMetres: metres,
       effective: await this.getPunchAccuracyMaxMetres(companyId),
     };
+  }
+
+  /**
+   * The ceiling on total deductions from one payslip, as a percentage of gross wages (020 FR-007a).
+   *
+   * Exported for `payroll` on the same terms as the other getters here — Principle I forbids that
+   * module reading `settings.Company`. The database bounds it at 50, so a caller never has to defend
+   * against a value that would be unlawful.
+   */
+  async getDeductionCeilingPercent(companyId: string): Promise<number> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { deductionCeilingPercent: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company.deductionCeilingPercent;
+  }
+
+  /**
+   * Whether this company refuses a punch that fails validation, rather than flagging it (020 FR-013).
+   *
+   * Read per request alongside the accuracy threshold, so switching it takes effect on the next
+   * punch with no restart. That is not a convenience here: the whole reason this is a company
+   * setting rather than a deploy is that the client's answer should be reversible within minutes of
+   * seeing what it does.
+   *
+   * Exported for `hr` on the same terms as `getPayrollLockDay` — Principle I forbids that module
+   * reading `settings.Company` itself.
+   */
+  async isPunchBlockEnforced(companyId: string): Promise<boolean> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { punchBlockEnforced: true },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company.punchBlockEnforced;
+  }
+
+  /**
+   * Switches the hard refusal on or off for one company (020 FR-013).
+   *
+   * Boolean and not nullable, unlike `punchAccuracyMaxMetres` next to it. There is no third state
+   * worth modelling: "this company has not decided" and "this company does not refuse punches" lead
+   * to identical behaviour, and a nullable flag would invite a product default that silently started
+   * refusing punches for every company that had never been asked.
+   */
+  async setPunchBlockEnforced(
+    companyId: string,
+    enforced: boolean,
+  ): Promise<{ punchBlockEnforced: boolean }> {
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: { punchBlockEnforced: enforced },
+      }),
+    );
+    return { punchBlockEnforced: enforced };
   }
 
   /**
@@ -373,17 +449,51 @@ export class CompaniesService {
         await this.assetCategories.seedDefaultsForCompany(company.id, tx);
         await this.assetDocTypes.seedDefaultsForCompany(company.id, tx);
         await this.conditionGrades.seedDefaultsForCompany(company.id, tx);
-        // Feature 016's approval chains. The shape is seeded; the staffing mostly is
-        // not — only the `final` slot, which the client settled as Super Admin. The
-        // Super Admin role id is resolved HERE, in the module that owns `settings.Role`,
-        // and handed over: the approval spine lives in `shared` and reading roles itself
-        // would be the cross-schema query Principle I forbids.
+        // And the two machinery masters (006 T058, added 2026-10-04). They were the only two
+        // `seedDefaultsForCompany` methods in `settings` that nothing called outside the demo
+        // seed, so every company was created with no equipment categories and no equipment
+        // document types — measured at zero rows for both live companies, which means **the first
+        // person to register a machine was refused** until they hand-created a category.
+        //
+        // **Correction, same day:** an earlier version of this comment said the ten defaults carry
+        // the fuel benchmarks the variance alerts are computed from. They do not —
+        // `DEFAULT_EQUIPMENT_CATEGORIES` carries a name and a meter type and nothing else, and the
+        // benchmark is null on every row this seeds. Checked after writing the claim, not before.
+        // The benchmark is still a per-category setting somebody has to fill in; see 006 T061.
+        await this.equipmentCategories.seedDefaultsForCompany(company.id, tx);
+        await this.equipmentDocTypes.seedDefaultsForCompany(company.id, tx);
+        // Feature 016's approval chains — the shape and, since 2026-10-04, the staffing.
+        // Both are resolved HERE, in the module that owns `settings.Role`, and handed
+        // over: the approval spine lives in `shared` and reading roles itself would be
+        // the cross-schema query Principle I forbids.
+        //
+        // Only `final` used to be mapped, on the argument that the other two slots were
+        // not guessable. The client answered on 2026-10-04 and they are no longer guesses
+        // — and the gap had a cost: five of the twelve chains seeded below name those
+        // slots, so a company could not approve a payroll run until somebody made two
+        // settings entries. Neither of the two live companies had.
         const superAdminRole = await tx.role.findFirst({
           where: { isProtected: true },
           select: { id: true },
         });
+        // Resolved by name, and a name that no longer exists resolves to nothing rather
+        // than failing the creation — a renamed default role must not make a company
+        // uncreatable. The unmapped slot is then reported by `APPROVAL_SLOT_UNMAPPED`,
+        // which is the behaviour this used to rely on for all three.
+        const slotRoles = await tx.role.findMany({
+          where: { name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) } },
+          select: { id: true, name: true },
+        });
+        const idByName = new Map(slotRoles.map((r) => [r.name, r.id]));
+        const slotRoleIds = Object.fromEntries(
+          Object.entries(DEFAULT_SLOT_ROLE_NAMES).map(([slotKey, roleName]) => [
+            slotKey,
+            idByName.get(roleName) ?? null,
+          ]),
+        );
         await this.approvalChains.seedDefaultsForCompany(company.id, tx, {
           superAdminRoleId: superAdminRole?.id ?? null,
+          slotRoleIds,
         });
 
         await tx.employeeCodeSequence.create({

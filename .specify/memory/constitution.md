@@ -1,4 +1,24 @@
 <!--
+Sync Impact Report (v1.5.0, 2026-10-03)
+- Version change: 1.4.0 → 1.5.0
+- Modified principles: n/a
+- Added sections:
+  - Technology Stack & Standards: pre-approved **SheetJS (`xlsx`)** for *reading* legacy binary
+    `.xls` workbooks — read-only, legacy format only, behind a single parser boundary. Introduced by
+    feature 008 User Story 4's BOQ import, its first and only consumer. Deliberately a second
+    spreadsheet library alongside `exceljs`, which handles `.xlsx` only and reads the client's real
+    `.xls` tender file as zero sheets with no error. The entry carries a supply-chain constraint as
+    part of the approval rather than as advice: the registry build is stale and vulnerable, so the
+    dependency is pinned to the vendor distribution and `npm install xlsx` is prohibited.
+- Modified sections: Technology Stack & Standards → Excel generation gains a cross-reference naming
+  the read/write split, so the two spreadsheet libraries cannot be confused for redundancy.
+- Removed sections: none
+- MINOR, not MAJOR or PATCH: a new pre-approved dependency with its own normative constraints is an
+  addition to governed guidance, in the same shape as v1.1.0 (face-api, pdfkit), v1.2.0 (exceljs),
+  v1.3.0 (resend) and v1.4.0 (object storage, sharp). No principle is removed or redefined.
+-->
+
+<!--
 Sync Impact Report
 - Version change: 1.3.0 → 1.4.0
 - Modified principles: n/a
@@ -165,8 +185,35 @@ production incident is far more expensive than wiring them from the start.
   materially different PDF-generation mechanism (a headless-browser HTML-to-PDF renderer, a hosted
   third-party document-generation API) still requires its own amendment before introduction.
 - **Excel generation**: `exceljs` is pre-approved for any module that needs to generate a
-  downloadable `.xlsx` document (e.g. a report export). A second, materially different
-  spreadsheet-generation mechanism still requires its own amendment before introduction.
+  downloadable `.xlsx` document (e.g. a report export), and to read `.xlsx` input. A second,
+  materially different spreadsheet-*generation* mechanism still requires its own amendment before
+  introduction. See **Legacy spreadsheet reading** below for the read-side split: `exceljs` owns
+  `.xlsx` in both directions, and nothing else writes a spreadsheet.
+- **Legacy spreadsheet reading**: SheetJS (`xlsx`) is pre-approved for **reading legacy binary
+  `.xls` workbooks only**. It MUST NOT be used to write any file, and MUST NOT be used for `.xlsx`,
+  which stays with `exceljs`. Introduced by feature 008 User Story 4's BOQ import, its first
+  consumer.
+  **Rationale**: this is a second spreadsheet library on purpose, and the reason is a failure mode
+  rather than a preference. `exceljs` supports `.xlsx` only, and handed the client's real
+  government e-tender file (`docs/BOQ_794578.xls`) it returns a workbook with **zero sheets and no
+  error** — verified 2026-10-03. An importer built on it alone would report a successful import of
+  0 rows against a ₹3 crore tender, which is the worst available shape for this failure: silent,
+  plausible, and discovered at billing time. Government portals issue `.xls` and will continue to,
+  so requiring a manual Save As would put the same silent failure behind a step people forget.
+  **Supply-chain constraint (normative, not advisory)**: the `xlsx` package published on the npm
+  registry is stale at 0.18.5 and carries two vulnerabilities fixed only in builds the registry does
+  not carry — prototype pollution (CVE-2023-30533) and ReDoS (CVE-2024-22363). The dependency
+  therefore MUST be pinned to the vendor's own distribution,
+  `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` (confirmed reachable 2026-10-03), with the
+  resolved integrity hash committed in the lockfile. **`npm install xlsx` from the registry is
+  prohibited**, and a lockfile entry resolving `xlsx` to `registry.npmjs.org` is a violation of this
+  section rather than a style issue. The maintained `node-xlsx` package pins the same vendor tarball
+  for the same reason, which is the precedent rather than the authority.
+  **Boundary constraint**: parsing MUST be reachable only through one module — a single parser
+  service with the same shape of containment the `StorageService` interface carries — so that
+  replacing or removing this library is one file's work and no caller holds a workbook object. A
+  materially different parsing mechanism (a hosted conversion API, a native-binding reader) still
+  requires its own amendment before introduction.
 - **Transactional email**: `resend` (Resend's Node SDK) is pre-approved for any module that needs
   to send transactional email (invite/set-password links, OTP codes, account notifications) — per
   master PRD §7.1, the system's named provider. A second, materially different email-delivery
@@ -233,4 +280,4 @@ Workflow & Quality Gates); a reviewer who approves a change that knowingly viola
 NON-NEGOTIABLE principle MUST record the justification in the PR description, and that
 justification MUST itself prompt a constitution amendment if the exception is expected to recur.
 
-**Version**: 1.4.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-08-30
+**Version**: 1.5.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-10-03

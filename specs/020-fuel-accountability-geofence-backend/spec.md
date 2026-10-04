@@ -25,6 +25,20 @@ every employee geo fencing location then other location does not capture attenda
 
 ## Clarifications
 
+### Session 2026-10-02
+
+The last open marker: the ceiling on recovering lost fuel from an operator's salary.
+
+- Q: Is there a cap on what may be recovered from an operator's salary for lost fuel? → A: **Half of
+  that month's wages, and the ceiling is shared with every other deduction.** Not 50% for the fuel
+  recovery on its own: the Payment of Wages Act caps *total* deductions, so a fuel recovery that
+  claimed its own 50% could push the payslip's combined deductions past the limit while each
+  individual rule looked satisfied. Anything above the ceiling carries to the following month.
+- Q: What happens when the carried balance never clears — an operator whose other deductions already
+  consume the ceiling? → A: **It keeps carrying, and it is visible.** The recovery does not expire and
+  is not written off silently. A balance that has carried for several months is a fact somebody should
+  act on, so it stays on the record rather than being quietly dropped or quietly deducted.
+
 ### Session 2026-09-16
 
 Raised against the client's re-stated requirement list, item 2: *"Block attendance marking if
@@ -187,6 +201,16 @@ attendance record created by either.
 - **FR-006**: System MUST NOT apply an operator recovery to payroll until it has been approved.
 - **FR-007**: System MUST show an applied recovery as a named deduction on the payroll line and the
   salary slip.
+- **FR-007a**: System MUST NOT let a payroll line's **total** deductions exceed 50% of that line's
+  wages for the period, counting the fuel recovery alongside every other deduction already applied.
+  The ceiling is on the sum, not on this deduction — a rule that capped the fuel recovery alone at 50%
+  would satisfy itself while pushing combined deductions past the statutory limit.
+- **FR-007b**: System MUST carry the unrecovered balance to the next period when the ceiling is
+  reached, and MUST apply it on the same terms there.
+- **FR-007c**: System MUST keep a carried balance visible and MUST NOT expire it, write it off, or
+  apply it beyond the ceiling to clear it. A balance still carrying after several periods is a fact
+  for somebody to act on, and the two ways software usually disposes of one — dropping it quietly or
+  deducting it anyway — are both worse than showing it.
 - **FR-008**: System MUST record the dismissal of an exception with its author and reason.
 - **FR-009**: System MUST require the responsible operator to be named explicitly when a machine had
   more than one operator in the period.
@@ -328,10 +352,7 @@ attendance record created by either.
 
 ### Needing the client's decision
 
-- **[NEEDS CLARIFICATION: is there a cap on operator salary recovery?]** Indian wage law constrains
-  deductions from wages. A cap, or spreading a recovery across months, is likely required; the limit
-  must come from the client or their compliance advisor, not from this specification.
-*The three clarifications that blocked the 2026-09-16 hard-refusal decision — the unassigned-location
-fallback, the acceptable GPS accuracy, and the face-match confidence — were resolved on that date and
-are recorded above. Only the recovery cap below remains open, and it belongs to User Story 2 rather
-than to the geofence work.*
+*Nothing in this feature now waits on the client.* The three clarifications that blocked the
+2026-09-16 hard-refusal decision — the unassigned-location fallback, the acceptable GPS accuracy, and
+the face-match confidence — were resolved on that date. The recovery cap, the last marker, was
+answered on 2026-10-02 and is now FR-007a to FR-007c.

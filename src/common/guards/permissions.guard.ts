@@ -100,20 +100,33 @@ export class PermissionsGuard implements CanActivate {
         context.getClass(),
       ]) ?? levelForMethod(request.method ?? 'GET');
 
-    // A caller whose grants have not been populated — an account whose roles predate
-    // 019's backfill, or a hand-built test double — falls back to the area-only check.
-    // Refusing instead would lock out every such caller on deploy, and the level model is
-    // additive: `permissions` still means "holds this area at some level".
-    if (user.grants === undefined || user.grants.length === 0) {
-      return required.some((permission) =>
-        user.permissions.includes(permission),
-      );
-    }
+    // A caller whose grants have not been populated — an account whose roles predate 019's
+    // backfill — falls back to the area-only check. Refusing instead would lock out every such
+    // caller on deploy, and the level model is additive: `permissions` still means "holds this
+    // area at some level".
+    //
+    // **The fallback is per AREA, not per caller. Changed 2026-10-04, and the distinction is
+    // the whole of it.** It used to apply only when the caller had *no* grants at all, so an
+    // account holding one backfilled role and one role whose permissions live only in the array
+    // lost the second role's areas entirely — the backfilled role's grants made the list
+    // non-empty, and the un-backfilled area then had no level to match. Silent, and in the
+    // direction of refusing something the caller holds. Found by `settings.e2e-spec.ts`, where
+    // deleting a role was supposed to revoke access and the access had never been granted.
+    //
+    // Narrowing it to the area is strictly safer than widening, which is why it is safe at all:
+    // the fallback now applies only where the caller has **zero** grant rows for that area, so
+    // a role deliberately held at `read` cannot be lifted to `write` by it. A read-only role
+    // has a `read` row for the area, which means the area is backfilled, which means no
+    // fallback. That case is asserted in this guard's spec.
+    const areaHasGrants = (permission: Permission): boolean =>
+      (user.grants ?? []).some((grant) => grant.permission === permission);
 
     const holdsAtLevel = required.some((permission) =>
-      user.grants.some(
-        (grant) => grant.permission === permission && grant.level === level,
-      ),
+      areaHasGrants(permission)
+        ? (user.grants ?? []).some(
+            (grant) => grant.permission === permission && grant.level === level,
+          )
+        : user.permissions.includes(permission),
     );
     if (holdsAtLevel) {
       return true;

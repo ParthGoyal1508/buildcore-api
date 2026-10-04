@@ -16,7 +16,7 @@ import {
   MAX_PAGE_SIZE,
 } from '../../inventory/constants/inventory.constants';
 import { CodeSeriesService } from '../code-series/code-series.service';
-import { assertInScope, companyScope } from '../company-scope';
+import { assertInScope, companyScope, isInScope } from '../company-scope';
 import { CreateItemDto, ListItemsDto, UpdateItemDto } from './dto/item.dto';
 
 export interface ItemView {
@@ -186,8 +186,10 @@ export class ItemsService {
         }),
     );
     if (!item) return null;
-    const ctx = rlsContextFor(caller);
-    if (!ctx.isSuperAdmin && item.companyId !== caller.companyId) {
+    // `isInScope`, not `row.companyId !== caller.companyId`. That comparison ignored the 019
+    // company switcher, and because this reader feeds a validator the symptom was a refusal
+    // stating that a row which plainly exists does not — see `isInScope`.
+    if (!isInScope(caller, item)) {
       return null;
     }
     return this.toView(item);

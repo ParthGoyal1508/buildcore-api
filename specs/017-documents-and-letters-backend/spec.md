@@ -56,6 +56,21 @@ change. Item 3 contradicted FR-009 as written.
 - Q: What happens to documents supplied with a creation that is then refused? → A: **Discarded, with their bytes.** The refusal is whole — no project, no attached document, nothing left to leak or to grow. An unconsumed document does not persist indefinitely; FR-009d and FR-009e.
 - Q: A kind is marked mandatory but the company has never defined a document type for it. Every project creation then fails with nothing the creator can do. → A: **A kind with no defined type cannot be mandatory.** The marking is refused at the point it is made, where an administrator with `SETTINGS` can define the type in place (the same affordance FR-003a gives the company-documents screen under `COMPANY_SETTINGS`), rather than at every project creation afterwards, where the person facing the refusal has neither the permission nor the context to fix it.
 
+### Session 2026-10-02
+
+The letter-field gap found while building on 1 October, which was in neither specification.
+
+- Q: A letter kind you define yourself gets an empty field list, and the editor then refuses to save a
+  template using any field. Close it? → A: **Yes — a letter kind declares its own fields.** You define
+  the kind, then define which fields it offers, and the editor validates against that list. This is
+  what makes FR-011's "define a new letter kind without a code change" true end to end.
+- Q: Why not one shared list of every field, available to every kind? → A: **Offered and declined.** It
+  is a much smaller build, and it would put exit-settlement fields in an offer letter's editor — making
+  the wrong field in the wrong letter easy rather than impossible.
+- Q: What happens to a template referencing a field its kind does not declare? → A: **Refused at
+  render, not blanked.** A field resolving to nothing produces a letter with a blank where a salary
+  should be, and once that letter is signed the blank is indistinguishable from a deliberate omission.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - The company's statutory papers live in the system (Priority: P1)
@@ -364,6 +379,22 @@ currently carry a reference number and nothing behind it.
   ships. Two kinds answering to one key leave every lookup with two candidate rows and no stated
   precedence, and the ambiguity would surface first in the FR-010 migration backfill, where it is
   least recoverable.
+- **FR-011b**: A letter kind MUST be able to **declare which variable fields its template may use**,
+  and the template editor MUST validate against that kind's own declaration.
+
+  *Found while building, 2026-10-01, and decided 2026-10-02.* FR-011 says a new kind can be defined
+  without a code change, and that was shipped — but the list of usable fields is fixed in code and
+  keyed to the five original letter types. A kind the client defines therefore gets an **empty** field
+  list, and the editor then refuses to save a template that uses any field at all. So FR-011 was true
+  and FR-012 was true and the two together still did not let anybody write a usable letter.
+
+  The alternative — one shared list of every field any letter might use — was offered and declined. It
+  is a far smaller build, and it would offer exit-settlement fields in an offer letter's editor, which
+  makes putting the wrong field in the wrong letter easy rather than impossible.
+- **FR-011c**: A field declaration MUST name where the value comes from, and the renderer MUST refuse
+  a template referencing a field the kind does not declare. A field that resolves to nothing at render
+  time produces a letter with a blank where a salary should be, and a blank is indistinguishable from
+  a deliberate omission once the letter is signed.
 - **FR-012**: System MUST render a letter from fixed terms plus variable details drawn from the named
   record.
 - **FR-013**: System MUST render a previously issued letter as it was issued, regardless of later

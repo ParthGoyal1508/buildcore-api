@@ -83,6 +83,9 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.EQUIPMENT_DOCUMENT,
     AuditEntityType.LOGBOOK_ENTRY,
     AuditEntityType.FUEL_ENTRY,
+    // 020 FR-002: the reviewer's decision about a fuel variance belongs with the reading it is
+    // about, so an activity-log reader following a machine sees the alert and the decision together.
+    AuditEntityType.FUEL_VARIANCE_EXCEPTION,
     AuditEntityType.SERVICE_SCHEDULE,
     AuditEntityType.MAINTENANCE_JOB,
     AuditEntityType.HIRE_BILL,
@@ -99,6 +102,9 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.SITE,
     AuditEntityType.BOQ_GROUP,
     AuditEntityType.BOQ_ITEM,
+    // One tender import, as one act (008 FR-014, amended 2026-10-03) — not one entry per line,
+    // which would put 231 rows in the activity log and bury whatever came next.
+    AuditEntityType.BOQ_IMPORT,
     AuditEntityType.DWR,
     AuditEntityType.REVENUE,
     AuditEntityType.RA_BILL,

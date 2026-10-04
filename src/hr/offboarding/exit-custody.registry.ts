@@ -14,6 +14,22 @@ export interface HeldAsset {
   expectedReturnDate: Date;
 }
 
+/**
+ * One asset this employee was ever given, as the **settlement summary** needs it (021 FR-018a).
+ *
+ * A different question from `HeldAsset`, and the difference is the whole of the client's item 10.
+ * The clearance asks "what is still outstanding"; the settlement summary is the record of how each
+ * asset *ended*. An asset returned during the notice period disappears from the first and **must
+ * still appear in the second** — "any assets assigned to the employee should appear in the F&F
+ * summary", read literally.
+ */
+export interface CustodyRecord extends HeldAsset {
+  /** `open` while still held; `closed` once returned or written off. */
+  status: 'open' | 'closed';
+  /** The day it actually came back. Null while it has not. */
+  actualReturnDate: Date | null;
+}
+
 /** What feature 012 contributes to an exit clearance. */
 export interface ExitCustodySource {
   openCustodyFor(
@@ -21,6 +37,20 @@ export interface ExitCustodySource {
     companyId: string,
     employeeId: string,
   ): Promise<HeldAsset[]>;
+
+  /**
+   * Every allocation naming this employee as custodian, open **and** closed.
+   *
+   * Separate from `openCustodyFor` rather than a flag on it, because the two have different
+   * callers with different needs and a boolean parameter is how one of them silently gets the
+   * other's answer. The clearance must not list a returned asset as outstanding; the settlement
+   * summary must not omit it.
+   */
+  custodyHistoryFor(
+    ctx: RlsContext,
+    companyId: string,
+    employeeId: string,
+  ): Promise<CustodyRecord[]>;
 }
 
 /**

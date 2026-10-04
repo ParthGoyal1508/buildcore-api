@@ -157,3 +157,53 @@ describe('hideCash', () => {
     expect(hideCash(row)).toEqual(row);
   });
 });
+
+/**
+ * FR-017d, task T079 — added 2026-10-02.
+ *
+ * The one change hiding itself needed. Hiding a note count from the cashier who has to count the
+ * notes against it conceals nothing from anybody it was meant to conceal from, while making the
+ * screen's only purpose unreachable.
+ */
+describe('the denomination breakup and who may see it', () => {
+  const SHEET = {
+    id: 's1',
+    paymentMode: 'cash',
+    netTotal: 10000,
+    denominationBreakup: { 500: 20 },
+  };
+
+  it('shows the breakup to a caller who may enter cash', () => {
+    const shown = hideCash(SHEET, false, true) as Record<string, unknown>;
+    expect(shown.denominationBreakup).toEqual({ 500: 20 });
+  });
+
+  it('still hides the amounts from that same caller', () => {
+    // A cashier needs the breakup to pay out. They need no view of what every other cash payment
+    // in the company came to, so the two are separate decisions and only one of them moved.
+    const shown = hideCash(SHEET, false, true) as Record<string, unknown>;
+    expect(shown.netTotal).toBeNull();
+  });
+
+  it('hides the breakup from everyone else', () => {
+    const hidden = hideCash(SHEET, false, false) as Record<string, unknown>;
+    expect(hidden.denominationBreakup).toBeNull();
+  });
+
+  it('hides it as null, never as a zeroed count', () => {
+    // A denomination count of zero reads as a real count of no notes — a different and false
+    // statement, and one a cashier would act on.
+    const hidden = hideCash(SHEET, false, false) as Record<string, unknown>;
+    expect(hidden.denominationBreakup).toBeNull();
+    expect(hidden.denominationBreakup).not.toEqual({});
+    expect(hidden.denominationBreakup).not.toEqual({ 500: 0 });
+  });
+
+  it('defaults to hiding when nobody said otherwise', () => {
+    // The argument is optional, so every existing caller of `hideCash` keeps the old behaviour.
+    // It must default to hiding: a default of "show" would silently publish the breakup on every
+    // surface that has not been updated.
+    const hidden = hideCash(SHEET) as Record<string, unknown>;
+    expect(hidden.denominationBreakup).toBeNull();
+  });
+});

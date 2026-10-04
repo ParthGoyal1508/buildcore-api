@@ -30,6 +30,8 @@ class CapturingEmailService extends EmailService {
     expiresAt: Date;
   }[] = [];
   public lockouts: { to: string; unlockAt: Date }[] = [];
+  /** 021 FR-005. Captured for the same reason the invites are, though this spec asserts on none. */
+  public payslips: { to: string; filename: string; bytes: number }[] = [];
   public failNext = false;
 
   async sendInviteEmail(input: {
@@ -51,6 +53,21 @@ class CapturingEmailService extends EmailService {
   }): Promise<void> {
     this.lockouts.push(input);
   }
+  async sendPayslipEmail(input: {
+    to: string;
+    employeeName: string;
+    periodLabel: string;
+    companyName: string;
+    pdf: Buffer;
+    filename: string;
+  }): Promise<void> {
+    this.payslips.push({
+      to: input.to,
+      filename: input.filename,
+      bytes: input.pdf.length,
+    });
+  }
+
 }
 
 describe('Account creation — invite flow (e2e)', () => {

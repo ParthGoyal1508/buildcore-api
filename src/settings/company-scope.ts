@@ -69,6 +69,38 @@ export function assertInScope(
 }
 
 /**
+ * Whether a row is within the caller's current company scope — the boolean form of
+ * `assertInScope`, for readers that answer `null` rather than throwing.
+ *
+ * ## Why this exists rather than the comparison being inlined
+ *
+ * Eight settings-master readers hand-rolled this as
+ * `!ctx.isSuperAdmin && row.companyId !== caller.companyId` — equipment categories, equipment
+ * document types, vendor categories, skill categories, items, asset categories, asset document
+ * types and condition grades. **`caller.companyId` is the wrong field**, and it is the exact
+ * mistake `companyScope` warns about two functions above: since 019 a cross-company caller who
+ * has selected a company arrives with `isSuperAdmin` false and the *selected* company on the
+ * context, so comparing against the account's own company ignores the switcher.
+ *
+ * The symptom was not "not found". It was worse, because these readers feed validators: with the
+ * second company selected, `POST /plant/equipment` refused a perfectly real category with
+ * **"Equipment category … does not exist in this company"** — a sentence that is false, and that
+ * sends the reader to look at the category rather than at the switcher. Found on 2026-10-04 by
+ * the plant e2e suite once it was pointed at the company the API actually resolves.
+ *
+ * One function, so the next reader of this kind cannot get it wrong in a ninth place. A guard
+ * spec fails on a reintroduced `!== caller.companyId`.
+ */
+export function isInScope(
+  caller: AuthenticatedUser,
+  row: { companyId: string },
+): boolean {
+  const ctx = rlsContextFor(caller);
+  if (ctx.isSuperAdmin) return true;
+  return row.companyId === (ctx.companyId ?? caller.companyId);
+}
+
+/**
  * The single company a write (or a single-company read) belongs to.
  *
  * `companyScope()` above answers a different question — it builds a `where` fragment,

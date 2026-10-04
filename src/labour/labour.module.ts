@@ -24,6 +24,7 @@ import { PaymentSheetController } from './payment-sheets/payment-sheet.controlle
 import { PaymentSheetService } from './payment-sheets/payment-sheet.service';
 import { LabourReportsController } from './reports/labour-reports.controller';
 import { LabourReportsService } from './reports/labour-reports.service';
+import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service';
 
 /**
  * The `labour` module (feature 013): per-project wage rates, workers and gangs,
@@ -37,7 +38,9 @@ import { LabourReportsService } from './reports/labour-reports.service';
  * same `BiometricsService` implementation here (FR-011), never reimplemented.
  *
  * `LabourService` is exported as the module's outward contract — the single method
- * feature 008's Project P&L reads labour cost through (FR-033).
+ * feature 008's Project P&L reads labour cost through (FR-033). `MonthlyWageRollupService`
+ * joins it for feature 018's per-month wage roll-up (FR-010a), for the same reason: a figure
+ * `projects` needs from `labour` arrives as a service call, never a cross-schema join.
  */
 @Module({
   imports: [SettingsModule, ProjectsModule, PartnersModule],
@@ -61,10 +64,17 @@ import { LabourReportsService } from './reports/labour-reports.service';
     LabourAdvanceService,
     PaymentSheetService,
     LabourReportsService,
+    MonthlyWageRollupService,
     ImageProcessingService,
     AuditLogService,
     { provide: BiometricsService, useClass: FaceApiBiometricsService },
   ],
-  exports: [LabourService],
+  exports: [
+    LabourService,
+    // 018 FR-010a. Exported so `projects` can reconcile its monthly labour figure against the
+    // payment sheets (FR-013) through a service call, which is the only route Principle I allows
+    // into `labour`'s tables.
+    MonthlyWageRollupService,
+  ],
 })
 export class LabourModule {}

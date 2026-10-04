@@ -171,6 +171,18 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
     ...overrides,
   });
 
+  /**
+   * Every account and role `makeUser` creates, so `afterAll` can remove all of them.
+   *
+   * Added 2026-10-04. The cleanup removed three named users and two named roles, and
+   * `makeUser` is called once per scenario that needs its own punch day — eight of them. The
+   * rest were left in the database on **every** run: eight roles and seven accounts a time,
+   * accumulating in a shared development database where the only sign of them is a Settings
+   * roles list that grows a little each day. Nothing failed, which is why it went unnoticed.
+   */
+  const madeUserIds: string[] = [];
+  const madeRoleIds: string[] = [];
+
   const makeUser = async (label: string, permissions: Permission[]) => {
     const user = await sys.user.create({
       data: {
@@ -186,6 +198,8 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       data: { name: unique(`${label}Role`), permissions },
     });
     await sys.userRole.create({ data: { userId: user.id, roleId: role.id } });
+    madeUserIds.push(user.id);
+    madeRoleIds.push(role.id);
     const login = await http()
       .post('/auth/login')
       .send({ identifier: user.email, password: 'secret42', rememberMe: false })
@@ -369,9 +383,16 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       await sys.shift.deleteMany({ where: { companyId } });
       await sys.company.deleteMany({ where: { id: companyId } });
     }
-    for (const id of [employeeUserId, otherUserId, adminUserId].filter(
-      Boolean,
-    )) {
+    // `madeUserIds` as well as the three named ones — see the note on that array. `Set`
+    // because the named accounts are created by `makeUser` too in some paths, and deleting
+    // a row twice is noise in the output rather than an error.
+    for (const id of [
+      ...new Set(
+        [employeeUserId, otherUserId, adminUserId, ...madeUserIds].filter(
+          Boolean,
+        ),
+      ),
+    ]) {
       await sys.userRole.deleteMany({ where: { userId: id } });
       await sys.refreshToken.deleteMany({ where: { accountId: id } });
       await sys.auditLogEntry.updateMany({
@@ -380,7 +401,9 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       });
       await sys.user.deleteMany({ where: { id } });
     }
-    for (const id of [workerRoleId, adminRoleId].filter(Boolean)) {
+    for (const id of [
+      ...new Set([workerRoleId, adminRoleId, ...madeRoleIds].filter(Boolean)),
+    ]) {
       await sys.role.deleteMany({ where: { id } });
     }
     await app.close();

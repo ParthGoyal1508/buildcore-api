@@ -71,6 +71,45 @@ export interface ApprovalCompletedEvent {
   instanceId: string;
 }
 
+/**
+ * The event a module listens for to learn its item was **refused** (added 2026-10-04).
+ *
+ * ## Why this was missing, and what it cost
+ *
+ * The spine emitted on approval and said nothing on rejection, so no module ever learned that a
+ * decision had gone against it. Where a module's outcome is "write nothing" — feature 021's
+ * clearance waiver — the silence is correct and the absence of a row *is* the outcome. Where the
+ * module has already written a row in a pending state, the silence leaves that row lying about
+ * itself for ever.
+ *
+ * Found on 2026-10-04 by writing 020 T065. An operator fuel recovery refused by the Director
+ * stayed at `pending_approval` permanently — `OperatorRecoveryStatus.rejected` existed in the
+ * schema and **nothing in the codebase ever set it**. Two consequences, and the second is the
+ * expensive one:
+ *
+ *   * a reviewer could not tell a refused recovery from one still waiting, and would chase an
+ *     approver about a decision already taken; and
+ *   * the refused recovery still blocked attributing the same loss to the **hirer** instead, with
+ *     the message *"This loss is already being recovered from the other party"* — which was false.
+ *     So after a Director said "do not dock the operator", the company could never recover the
+ *     fuel from anybody, and the refusal said the opposite of what had happened.
+ *
+ * Same payload as completion, deliberately: a module that needs to know why reads the instance.
+ * The spine still cannot include the item, for the reason given above.
+ */
+export const APPROVAL_REJECTED_EVENT = 'approval.rejected';
+
+/**
+ * The payload of `approval.rejected`. Identical in shape to `ApprovalCompletedEvent` and named
+ * separately so a handler's signature says which event it is for.
+ */
+export interface ApprovalRejectedEvent {
+  entityType: string;
+  entityId: string;
+  companyId: string;
+  instanceId: string;
+}
+
 /** Raised on the same index that enforces it, so the two cannot disagree. */
 const UNIQUE_VIOLATION = 'P2002';
 
@@ -453,14 +492,28 @@ export class ApprovalService {
     // T013. After the transaction commits, never inside it: a handler that reacted to a
     // decision the transaction then rolled back would apply an approval that never
     // happened.
+    const outcome = {
+      entityType: updated.entityType,
+      entityId: updated.entityId,
+      companyId: updated.companyId,
+      instanceId: updated.id,
+    };
     if (updated.state === 'approved') {
-      const event: ApprovalCompletedEvent = {
-        entityType: updated.entityType,
-        entityId: updated.entityId,
-        companyId: updated.companyId,
-        instanceId: updated.id,
-      };
-      this.events.emit(APPROVAL_COMPLETED_EVENT, event);
+      this.events.emit(
+        APPROVAL_COMPLETED_EVENT,
+        outcome as ApprovalCompletedEvent,
+      );
+    }
+    // Rejection is emitted too, as of 2026-10-04. It was not, and a module that had already
+    // written a row in a pending state was never told the decision went against it — see
+    // `APPROVAL_REJECTED_EVENT` for what that cost. Emitted after the commit for the same reason
+    // as completion: a handler reacting to a decision the transaction rolled back would act on a
+    // rejection that never happened.
+    if (updated.state === 'rejected') {
+      this.events.emit(
+        APPROVAL_REJECTED_EVENT,
+        outcome as ApprovalRejectedEvent,
+      );
     }
 
     return this.toView(updated, caller);

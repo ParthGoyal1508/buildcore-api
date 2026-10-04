@@ -6,6 +6,7 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
+import { effectiveCompanyIdFor } from './fixtures/effective-company';
 
 /**
  * End-to-end coverage of `/inventory/*` against a real database (009 T021, T027,
@@ -49,6 +50,22 @@ describe('Inventory module (e2e)', () => {
    * the right state either way.
    */
   const originalRolePermissions = new Map<string, string[]>();
+  /**
+   * The `RolePermission` **grant rows** removed alongside the array, so they can be put back.
+   *
+   * Added 2026-10-04, and the reason is the defect that made this suite fail. Since 019 a
+   * caller's `permissions` is the **union of two sources**: the `Role.permissions` array and
+   * the per-area `RolePermission` grants, which `toAuthenticatedUser` folds into the same set
+   * so that "holds the area at any level" keeps working while the array is phased out.
+   *
+   * This suite revoked only the array. The grant row kept supplying the permission, so the
+   * revoke did nothing, the request passed the guard, and the test failed on the **next**
+   * refusal down the line — a 400 for a reduced approval with no reason, which is the very
+   * thing the test immediately after this one asserts. A revoke that silently does not revoke
+   * is worth more comment than the fix.
+   */
+  const removedGrants: { roleId: string; permission: string; level: string }[] =
+    [];
   const createdItemIds: string[] = [];
   const createdCategoryIds: string[] = [];
   const createdSiteIds: string[] = [];
@@ -96,10 +113,10 @@ describe('Inventory module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({
-      orderBy: { createdAt: 'asc' },
-    });
-    companyId = company.id;
+    // Not the oldest company: the one the API will actually write to. Corrected 2026-10-04
+    // — a single `UserCompanySelection` row for this account overrides every `?companyId=`
+    // this suite sends, which is 019's intended behaviour and was news to this file.
+    companyId = await effectiveCompanyIdFor(sys);
 
     for (const name of ['StoreA', 'StoreB']) {
       const site = await http()
@@ -172,6 +189,21 @@ describe('Inventory module (e2e)', () => {
   }
 
   async function grantApprovePermission() {
+    // Grant rows first, so the caller is whole again even if the array update below is a
+    // no-op because the role never had the array entry.
+    for (const grant of removedGrants.splice(0)) {
+      await sys.rolePermission.upsert({
+        where: {
+          roleId_permission_level: {
+            roleId: grant.roleId,
+            permission: grant.permission,
+            level: grant.level,
+          },
+        },
+        create: grant,
+        update: {},
+      });
+    }
     for (const userRole of await callerRoles()) {
       if (userRole.role.permissions.includes('INVENTORY_APPROVE')) continue;
       await sys.role.update({
@@ -193,6 +225,24 @@ describe('Inventory module (e2e)', () => {
    */
   async function revokeApprovePermission() {
     for (const userRole of await callerRoles()) {
+      // **Both sources, or neither.** See `removedGrants`: the array alone is not where the
+      // permission comes from any more.
+      const grants = await sys.rolePermission.findMany({
+        where: { roleId: userRole.roleId, permission: 'INVENTORY_APPROVE' },
+      });
+      for (const grant of grants) {
+        removedGrants.push({
+          roleId: grant.roleId,
+          permission: grant.permission,
+          level: grant.level,
+        });
+      }
+      if (grants.length > 0) {
+        await sys.rolePermission.deleteMany({
+          where: { roleId: userRole.roleId, permission: 'INVENTORY_APPROVE' },
+        });
+      }
+
       if (!userRole.role.permissions.includes('INVENTORY_APPROVE')) continue;
       await sys.role.update({
         where: { id: userRole.roleId },

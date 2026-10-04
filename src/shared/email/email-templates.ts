@@ -77,3 +77,41 @@ export function renderAccountLockedEmail(input: {
 
   return { subject, text, html };
 }
+
+/**
+ * The payslip email (021 FR-005) — `bugs.md` item 8.
+ *
+ * Says the period and the company and nothing else about the money. A salary figure in an email
+ * subject or body is visible in a notification preview on a lock screen, and in whatever log the
+ * recipient's mail provider keeps; the slip itself is the attachment, which is what the client asked
+ * for.
+ */
+export function renderPayslipEmail(input: {
+  employeeName: string;
+  periodLabel: string;
+  companyName: string;
+}): RenderedEmail {
+  const { employeeName, periodLabel, companyName } = input;
+  const subject = `Payslip for ${periodLabel}`;
+
+  const text = [
+    `Dear ${employeeName},`,
+    '',
+    `Your payslip for ${periodLabel} is attached.`,
+    '',
+    'This is a system generated email and does not require a reply. If anything on the',
+    'payslip looks wrong, please raise it with your HR office.',
+    '',
+    companyName,
+  ].join('\n');
+
+  const html = [
+    `<p>Dear ${escapeHtml(employeeName)},</p>`,
+    `<p>Your payslip for ${escapeHtml(periodLabel)} is attached.</p>`,
+    '<p>This is a system generated email and does not require a reply. If anything on the ' +
+      'payslip looks wrong, please raise it with your HR office.</p>',
+    `<p>${escapeHtml(companyName)}</p>`,
+  ].join('\n');
+
+  return { subject, text, html };
+}

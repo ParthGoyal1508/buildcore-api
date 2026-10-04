@@ -360,19 +360,29 @@ concealing nothing anybody wanted concealed.
 constant does not name. Verified by adding one: it failed naming `ScratchCashMode`, and passed on
 removal.
 
-## Phase 6: Cash entry restriction ⚠️ RESTS ON AN UNANSWERED CLIENT QUESTION
+## Phase 6: Cash entry restriction — **ANSWERED 2026-10-02, SUPERSEDED BY PHASE 8**
 
-Do not start this phase until the client has answered whether cash may still be **entered** while
-hiding is on. FR-014 assumes display only. The reason for the assumption is recorded in plan D7:
-preventing entry stops site cash disbursement working, so a visibility toggle would silently halt wage
-payment. If the client wants the other reading, this phase is where it is built.
+The client answered on 2026-10-02: *hide the figures **and** block entry — but as two separate
+controls.* That answer does not make T062 implementable; it **rejects what T062 describes.** T062
+would have hung the refusal on `hideCashTransactions`, and that setting is company-wide, so turning it
+on would have stopped every site cashier in the company from paying labour for as long as it was on
+— the exact failure plan D7 warned about, and the reason the phase was held rather than guessed.
 
-- [ ] T062 [US3] Refuse the creation of a cash-mode payment and a cash disbursement while hiding is
-  on, with a code naming the setting as the reason — a refusal that does not say which setting caused
-  it is unactionable by the person who hit it.
-- [ ] T063 [P] [US3] Unit tests for both refusals, and for non-cash entry being unaffected.
-- [ ] T064 [US3] Update the spec's Clarifications with the client's answer and the date, and remove
-  the marker.
+Entry is therefore gated on a **permission** (`CASH_ENTRY`), not on the hiding setting, and that is
+Phase 8's T073–T079, all complete: the enum value and its migration, every cash write enumerated and
+gated, the staleness guard that fails when a new cash write arrives ungated, and the refusal code
+`CASH_ENTRY_DENIED` in `src/common/cash/cash-entry.interceptor.ts`. The spec records the answer in
+Clarifications and in FR-017a/FR-017b.
+
+**Recorded as superseded rather than ticked**, because ticking T062 would claim we built the thing it
+describes. We built the thing the client asked for instead, and the two are different designs.
+
+- [ ] ~~T062~~ **SUPERSEDED by T074** (answered 2026-10-02) — a refusal hung on the hiding setting is
+  the design the client's answer rules out. Gating is per-caller, by permission.
+- [ ] ~~T063~~ **SUPERSEDED by T076–T077** — the unit tests exist against the permission, including
+  the surface guard that fails when a cash write is added without declaring it.
+- [ ] ~~T064~~ **DONE as part of T073** — the Clarifications entry and FR-017a/FR-017b carry the
+  answer and its date; no marker remains in the spec.
 
 ## Phase 7: Verification
 
@@ -386,14 +396,104 @@ payment. If the client wants the other reading, this phase is where it is built.
   including one export.
 - [ ] T068 NFR-002: re-run T003's measurement and compare p95. If the guard exceeds the baseline by
   more than 50ms, T019's decision was wrong and grants belong on the token.
-- [ ] T069 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against all three new tables.
-- [ ] T070 Re-read `spec.md` and confirm each of FR-001 to FR-017 is either built or explicitly
+- [X] T069 [P] Probe test with `NOSUPERUSER NOBYPASSRLS` against all three new tables.
+
+  **Done 2026-10-03** in `test/wave-rls.e2e-spec.ts`, which covers 020 T052's tables in the same
+  suite — the question is identical and one probe role is cheaper than two.
+
+  Two of the three tables have tenant policies and are proven to deny: `settings.PermissionRefusal`
+  and `settings.UserCompanySelection`. Each gets ENABLE and FORCE checked, an unfiltered read with
+  **no `WHERE` clause**, default-deny with no company context set, and **its own** vacuity check —
+  per table rather than once for the set, because a single check would pass while a different
+  table's policy was missing entirely, which is the failure a table-driven sweep is most likely to
+  have.
+
+  The named write case is the one that matters here: a cross-tenant `UPDATE` of
+  `UserCompanySelection` would move somebody else's session into a company they did not choose, and
+  every list they then read would be correct for the wrong company. Refused, with the stored value
+  confirmed unmoved.
+
+  **The third table cannot have a policy, and that is now a test rather than an omission.**
+  `settings.RolePermission` carries no `companyId` — because `settings.Role` carries none either: a
+  role is globally named and shared across companies, which is the divergence recorded under T071
+  above. A tenant policy there is not possible rather than merely absent, and asserting one would
+  mean inventing a column. The test asserts both facts, so the day somebody adds `companyId` to
+  `Role` it fails and asks for the policy that then becomes possible.
+- [X] T070 Re-read `spec.md` and confirm each of FR-001 to FR-017 is either built or explicitly
   deferred with a reason. Record FR-002 as **already satisfied before this feature** for the area
   dimension (research §2) rather than silently claiming it as new work.
-- [ ] T071 Record in the spec that roles remain globally named, not company-scoped, contradicting its
+
+  **Read 2026-10-03.** FR-001 to FR-017 are each built or carry a stated reason, with two entries
+  that must not be read as this feature's work:
+
+  * **FR-002** — a role holding write access to a specific *area* within a module. The area dimension
+    was already satisfied before this feature (research §2); what 019 added is the read/write
+    separation over it. Recorded here rather than counted as new, because claiming it would overstate
+    what this feature delivered.
+  * **Phase 6 (FR-014, cash entry)** was open on that date and is now closed — the client answered
+    on 2026-10-02, and the answer superseded the phase rather than unblocking it. Entry is gated by
+    the `CASH_ENTRY` permission (Phase 8), not by the hiding setting. **Corrected 2026-10-04**: this
+    note and the Phase 6 header both still said the question was unanswered two days after it was
+    answered and built, which is how it came to be reported to the client as the one outstanding
+    question. A phase header is not a safe place to record a client dependency, because nothing fails
+    when it goes stale.
+
+  Everything else is built. The one divergence found by the re-read is recorded under T071 below.
+- [X] T071 Record in the spec that roles remain globally named, not company-scoped, contradicting its
   own Key Entities (plan D8). Either correct the entity description or state the divergence; do not
   leave both readings in the document.
-- [ ] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+
+  **Recorded 2026-10-03** in `spec.md`'s Key Entities, which had said "company-scoped" and was
+  wrong: `settings.Role` carries no `companyId` and its `name` is globally unique, so a role defined
+  by one company is visible to all of them and two companies cannot both define a "Site Engineer".
+  The *assignment* is per-user and therefore effectively per-company, which is why nothing has
+  broken.
+
+  Stated as a divergence rather than silently corrected in either direction, because closing it is a
+  schema change with a migration behind it — every existing `UserRole` points at a shared row — and
+  the cost of leaving both readings in the document is that the next person to design against it
+  believes a company's roles are its own.
+- [X] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **One unattributed intermittent failure, recorded rather than smoothed over.** In the run
+      immediately after 81 stale test accounts were deleted from the development database,
+      `approvals-queue.e2e-spec.ts` failed one assertion. It passed alone, and in the three full
+      runs since. I could not attribute it: the deletion finished before the run began, it touched
+      no approval instance, and the only plausible connection is that 268 audit rows had their
+      actor nulled, which changes what an actor-name lookup returns. Written down because "it
+      passes now" is not the same as "it is stable", and the difference is exactly what a
+      three-day-old connection leak looked like this morning.
+
+      **Run 2026-10-04, and this is the first time the last of those four was green.** `tsc` clean;
+      `eslint src test prisma` 0 errors (one pre-existing prettier error remains in the untouched
+      `test/account-creation.e2e-spec.ts`); **1,647 unit tests across 147 suites**; and
+      **`npm run test:e2e` 581 tests across 33 suites, all passing.**
+
+      Held open deliberately until today rather than ticked on a passing unit suite. The e2e run was
+      red with 15 suites and 158 assertions down, and closing this task would have meant reporting a
+      green suite that was not green. Repairing it found four defects that are committed separately —
+      connections never released on shutdown, eight masters readers ignoring the company switcher, a
+      permission fallback that was per caller instead of per area, and a project refusal demanding
+      four document uploads before checking that the client exists.
+
+      **MEASURED 2026-10-03, and left open with the reason rather than ticked.** `npx tsc --noEmit`
+      clean; `npx eslint src test prisma` 0 errors; `npm test` **1629 passing across 144 suites**.
+      `npm run test:e2e` is **red**, and none of it is this feature's work — two causes, both
+      measured:
+
+      * **Connection exhaustion.** Run all 33 suites together and Postgres refuses with *"sorry, too
+        many clients already"*: 158 failures across 15 suites. `app.e2e-spec.ts` — one assertion
+        against `GET /` — passes alone and fails in the full run, which is the clearest proof it is
+        the harness and not the product. Each suite builds its own `PrismaClient`s and they are not
+        closed promptly enough for the next suite, even at `maxWorkers: 1`.
+      * **Pre-existing drift in suites older than 017 and 019.** Run individually, several still
+        fail: `partners` 4 of 15, `projects` 17 of 21. The cause is environment, not regression —
+        017's `PROJECT_DOCUMENTS_MANDATORY_MISSING` now refuses project creation until every
+        mandatory document kind is attached, and 019's company selection means a caller writes to the
+        company on their *context* rather than the oldest one. Suites written before either assume
+        otherwise. `client-bills.e2e-spec.ts` documents both at the point it works around them.
+
+      All four suites written today pass, alone and in the full run. Closing this task would mean
+      reporting a green e2e suite that is not green, so it stays open with the number attached.
 
 ## Dependencies
 
@@ -419,3 +519,126 @@ payment. If the client wants the other reading, this phase is where it is built.
 **Phases 1-2.** That is FR-001, FR-003 and FR-006 — the read/write distinction, the refusal, and the
 proof nobody's access changed. It closes bugs.md item 19 on its own, and it is the only part of this
 feature the client described as impossible today.
+
+---
+
+## Phase 7: Cash entry becomes a permission (added 2026-10-02, FR-017a to FR-017d)
+
+The client's answer to the two cash questions. **Most of it is already built** — hiding stays exactly
+as it is, per row, with no screen list — so this phase is narrower than "block cash entry" sounds.
+
+Two of the three answers changed nothing. The per-row rule was confirmed against a screen list and
+kept. The salary carve-out the client asked for falls out of that rule already, except for a salary
+genuinely paid in cash, which stays hidden and which they accepted knowingly.
+
+- [x] T073 Add `CASH_ENTRY` to the `Permission` enum with a migration. A new permission, not a reuse of
+      `COMPANY_SETTINGS`: who may change the hiding setting and who may take cash are different
+      questions about different people, and FR-012 already owns the first.
+- [x] T074 **CRITICAL** Enumerate every write that records a cash payment and gate each on `CASH_ENTRY`.
+      This is the task that decides whether the feature works: a missed route is an unguarded way to
+      enter cash, and it will not show up in a test anybody thought to write. Start from
+      `CASH_MODE_FIELDS` and `CASH_ENUM_VALUES` in `src/common/cash/cash-surfaces.ts` — the constants the
+      interceptor already uses to find cash on the way out are the same ones that find it on the way in.
+- [x] T075 Grant `CASH_ENTRY` to every role that can currently record a cash payment, in the same
+      migration that adds it. **Preserving today's behaviour is the requirement, not a convenience**: a
+      permission that defaults to nobody stops every site cashier in the company the moment it deploys,
+      which is the exact failure the two-control design existed to avoid.
+- [x] T076 [P] Unit test: a caller without `CASH_ENTRY` is refused on a cash write and unaffected on a
+      bank-mode write. The second half matters more than the first — the permission must not become a
+      general payments gate.
+- [x] T077 [P] A guard test in the shape of `cash-surfaces.spec.ts`: parse the routes that accept a
+      payment mode and fail when one accepts a cash mode without declaring `CASH_ENTRY`. T074 is a
+      one-time audit; this is what keeps it true, and without it the next cash route added is unguarded
+      by default.
+- [x] T078 Stop hiding `denominationBreakup` unconditionally; show it to a caller holding `CASH_ENTRY`
+      and hide it from everyone else (FR-017d). The one change hiding itself needs. Hiding it from the
+      cashier counting notes against it conceals nothing from anybody it was meant to conceal from while
+      making the screen's purpose unreachable.
+- [x] T079 [P] Unit test: the breakup is present for a `CASH_ENTRY` holder and absent otherwise, and
+      absent means **absent or null, never zero** — a zero denomination count reads as a real count of
+      no notes.
+- [x] T080 Record the grant in the audit log with actor and time, on the same terms FR-012 requires for
+      changing the hiding setting. Granting somebody the right to take cash is at least as
+      consequential as hiding the figures.
+
+**Not in this phase, deliberately.** The per-row hiding rule (FR-017c) needs no work — it is built,
+and `cash-surfaces.spec.ts` already fails when a new cash payment mode appears that the constants do
+not name. Confirming a design is not a task.
+
+### Phase 7 implementation record, 2026-10-02
+
+**The gate finds cash in the request, not on a list of routes.** T074 asked for an enumeration of
+every cash write and a gate on each. The enumeration came back at **two** — `POST
+inventory/payments` and `PATCH labour/payment-sheets/lines/:lineId/disburse`, which are exactly the
+two surfaces the client named — and both take the payment mode as a *required* field, so a cash
+payment cannot be recorded without `paymentMode: 'cash'` arriving on the wire.
+
+That made a list the wrong shape for the job. The task itself says why: *"a missed route is an
+unguarded way to enter cash, and it will not show up in a test anybody thought to write."* A list of
+two is as prone to that as a list of twenty — it is the default that is wrong, not the length. So
+`CashEntryInterceptor` reads the request body using the same `CASH_MODE_FIELDS` and `isCashMode` the
+outbound interceptor uses to find cash on the way out, and a route that accepts `paymentMode` is
+gated the day it is written, by nobody's effort.
+
+**An interceptor and not a guard, which is not a style choice.** Global guards run before
+controller-level ones and `JwtAuthGuard` is declared per controller here, so a global guard would
+see no `request.user` and admit everything — invisibly, because admitting everything is what
+admitting looks like. `PasswordChangeInterceptor` carries the same note for the same reason.
+
+**Reads the raw body, before the validation pipe**, since pipes run after interceptors. That is the
+stronger position rather than an accident of ordering: a caller cannot evade the check by sending a
+shape no DTO declares.
+
+### Three things the task list did not anticipate
+
+**`CASH_ENTRY` needed two levels, not one.** T075 says grant it "to every role that can currently
+record a cash payment", which reads as a single `write` grant. `RolesService` refuses
+`WRITE_WITHOUT_READ`, so a write-only grant would have tripped that rule the next time anybody
+edited one of those roles through the interface — and the rule is right: being allowed to pay out
+notes while not allowed to see the breakup you are paying against is not a coherent grant. So the
+levels carry the split FR-017a and FR-017d were already describing separately — `write` records a
+cash payment, `read` sees a denomination breakup — and `mayEnterCash` and `maySeeCashBreakup` are
+two functions, not one with a flag.
+
+**A read that *filters* on cash is not cash entry.** `ListPaymentsDto` takes `paymentMode` as a
+filter. Without the level check at the top of the interceptor, a read-only clerk would have been
+refused the very list of cash payments FR-014 says they may see with the amounts hidden. The check
+is `AccessLevel.read`, so a `POST` search marked `@RequireLevel(read)` is also left alone.
+
+**`Role.permissions` had to be backfilled too.** The array is still what every service-level
+`permissions.includes(...)` reads, and `RolesService` writes the array and the grant rows together
+for that reason. A migration that wrote only the rows would have left the guard granting cash entry
+and a service check denying it.
+
+### T074's completeness, asserted rather than claimed
+
+`cash-entry-surface.spec.ts` asserts the condition that makes body inspection sufficient: **no
+source file writes a cash mode value of its own accord.** Every cash record therefore originates in
+a request, where the interceptor can see it. The day a service derives cash on the server — a sheet
+whose mode comes from its own type, an import defaulting to cash — that test fails and the route
+must declare `@RequiresCashEntry()`.
+
+The decorator is **deliberately unused today**, and that is the point: deleting it would leave the
+next such route silently unguarded. Verified the guard goes red by adding a file containing
+`paymentMode: 'cash'` — it failed naming the file, and passed on removal.
+
+### What T078 deliberately did not change
+
+The breakup becomes visible to a `CASH_ENTRY` holder **only when hiding is on at all**. The company
+setting stays the master control (FR-014); `CASH_ENTRY` decides who still sees the breakup once
+hiding is enabled, not who sees it when nobody asked for anything to be hidden. The `hideCash`
+argument defaults to hiding, so every existing caller keeps the old behaviour — a default of "show"
+would have silently published the breakup on every surface not yet updated.
+
+Amounts did **not** move with it. A cashier needs the breakup to pay out and needs no view of what
+every other cash payment in the company came to.
+
+### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,218 tests across 115 suites**, Nest
+injector resolves. Two migrations, the enum value alone in the first because PostgreSQL cannot add
+an enum value and use it in the same transaction.
+
+**T065 to T072 (the original Phase 7 verification list) remain NOT RUN** — they need `npm run
+test:e2e` and an RLS probe role, and the local `prisma` role is a superuser that bypasses policies.
+Unchanged by this phase.

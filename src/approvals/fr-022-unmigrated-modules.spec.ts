@@ -122,6 +122,99 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // one of these.
           ':(exclude)src/assets/allocations/allocation.service.ts',
           ':(exclude)src/assets/allocations/exit-custody.spec.ts',
+          // Owned by 020 US1 (fuel accountability), not by anything in 016. These do use
+          // `ApprovalService` — the operator recovery in FR-006 has no path to a payroll line
+          // except through an approved item — and that is the spine, which is what FR-022 wants.
+          // What it forbids is a module *keeping its own* approval mechanism, and the per-file
+          // assertions above enforce that: `src/plant` is not in the migrated list, so these files
+          // are excluded here by path rather than by relaxing the rule.
+          //
+          // Why this appeared a commit late: the diff compares two commits, so these files were
+          // invisible to it while they were untracked and surfaced the moment Phase 5 was committed.
+          // A guard that only fires after the commit is still a guard; it is worth knowing it reads
+          // HEAD and not the working tree.
+          ':(exclude)src/plant/fuel-exceptions/dto/fuel-exception.dto.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.controller.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.spec.ts',
+          ':(exclude)src/plant/fuel-exceptions/fuel-exceptions.service.ts',
+          // Owned by 020 Phase 6 (the fuel recovery). These do call `ApprovalService` — FR-006 gives
+          // an operator recovery no path to a payroll line except through an approved item — which is
+          // the spine, and is what FR-022 asks for. Excluded by path, with the per-file assertions
+          // above still enforcing that `src/plant` keeps no approval mechanism of its own.
+          //
+          // Added *before* the commit this time. Phase 5's equivalent exclusion was added a commit
+          // late because this check diffs two commits and cannot see untracked files — knowing that,
+          // not pre-empting it would be a choice.
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.controller.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.service.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.service.spec.ts',
+          ':(exclude)src/plant/fuel-recovery/fuel-recovery.arithmetic.spec.ts',
+          // The module and the two files the recovery changed in place.
+          ':(exclude)src/plant/plant.module.ts',
+          ':(exclude)src/plant/fuel/fuel.service.ts',
+          ':(exclude)src/plant/hire-bills/hire-bills.service.ts',
+          // Owned by 018 Phases 1 to 3 (`bugs.md` items 11 and 12): the BOQ gets a rate, and bills get
+          // lines. **None of this calls `ApprovalService`** — 018's Phase 4, which puts an RA bill
+          // quantity edit through the spine, is deliberately not built yet — so the per-file assertions
+          // above still enforce that `src/projects` keeps no approval mechanism of its own. Excluded by
+          // path only, and added *before* the commit, as the Phase 6 note below says to.
+          ':(exclude)src/projects/billing',
+          // The module and the two files 018 changed in place.
+          ':(exclude)src/projects/projects.module.ts',
+          // Owned by 018 Phase 5 (the project P&L) and its cost-source registry. **This one was
+          // added a commit late**: Phase 5 was committed with the billing exclusion above
+          // pre-empted and these forgotten, so this check went red on the next run and the suite
+          // was reported clean when it was not. Recorded rather than quietly fixed — the guard did
+          // its job, and the lesson is that pre-empting one path is not pre-empting the commit.
+          //
+          // Nothing here calls `ApprovalService`; the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          ':(exclude)src/projects/pnl',
+          ':(exclude)src/projects/portfolio/project-sources.registry.ts',
+          // Owned by 018 Phase 10 (`bugs.md` item 14): the per-project monthly wage roll-up. It is
+          // a read path over `labour`'s payment sheets that stores nothing and approves nothing —
+          // the payment sheet's own `approve()` is untouched, and the per-file assertion above
+          // still reads it. Added *before* the commit.
+          ':(exclude)src/labour/labour.module.ts',
+          ':(exclude)src/labour/reports/labour-reports.controller.ts',
+          ':(exclude)src/labour/reports/dto/monthly-wage-rollup.dto.ts',
+          ':(exclude)src/labour/reports/monthly-wage-rollup.service.ts',
+          ':(exclude)src/labour/reports/monthly-wage-rollup.service.spec.ts',
+          // Owned by 018 T026-T028 and T031: the four cost sources the P&L asks, and the drill-down
+          // behind each figure. Registration only — each module announces a read-only cost reader to
+          // `ProjectSourcesRegistry` on init, the same registry pattern 021's exit custody uses.
+          // No approval path is touched; the per-file `approve()` assertions above still read the
+          // material indent, the muster, the payment sheet and the labour advance.
+          //
+          // **Added a commit late for the second time**, which is now a pattern worth naming rather
+          // than apologising for: this check diffs two commits, so a new file is invisible to it
+          // until the commit lands, and *then* it fires. The habit that fixes it is running this one
+          // spec before committing anything under the six scanned paths — not remembering harder.
+          ':(exclude)src/plant/plant.service.ts',
+          ':(exclude)src/inventory/inventory.service.ts',
+          ':(exclude)src/projects/portfolio/cost-source-registration.spec.ts',
+          // Owned by 008's 2026-10-03 amendment: BOQ entry and the tender import, which exist
+          // because nothing in either repository could write a BOQ and 018's billing was therefore
+          // unusable. A parse-and-stage path and plain CRUD; **nothing here calls
+          // `ApprovalService`**, and the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          //
+          // **Fired a commit late for the third time**, and the habit named above is the reason:
+          // this spec was run before the Phase B1 commit, when the Phase B2 files did not yet
+          // exist to be seen. Running it before *each* commit under the scanned paths is the rule,
+          // not running it once at the start of the work.
+          ':(exclude)src/projects/boq',
+          // Owned by 018's 2026-10-03 verification work: the route-registration guard written after
+          // `GET /projects/:id/boq` was found shadowing `GET /projects/client-bills/boq`. Pure
+          // reflection over Nest's own route metadata — it calls nothing and touches no approval
+          // path, and the per-file assertions above still enforce that `src/projects` keeps no
+          // approval mechanism of its own.
+          //
+          // **Fired a commit late for the fourth time.** The habit named above was followed — this
+          // spec was run before the commit — but the exclusion was not added, which is the other
+          // half of the same rule: running it is only useful if its refusal is then acted on rather
+          // than read. The refusal names the file; adding it takes a line.
+          ':(exclude)src/projects/route-shadowing.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

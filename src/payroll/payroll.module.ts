@@ -18,7 +18,11 @@ import { PayrollRegisterService } from './registers/payroll-register.service';
 import { TdsController } from './tds/tds.controller';
 import { TdsService } from './tds/tds.service';
 import { ApprovalsModule } from '../approvals/approvals.module';
+import { PlantModule } from '../plant/plant.module';
+import { BankSheetRecoveryService } from './runs/bank-sheet-recovery.service';
 import { BankSheetService } from './runs/bank-sheet.service';
+import { SlipDeliveryService } from './runs/slip-delivery.service';
+import { TransactionSheetService } from './runs/transaction-sheet.service';
 import { PayrollRunsController } from './runs/payroll-runs.controller';
 import { PayrollScheduleCron } from './runs/payroll-schedule.cron';
 import { PayrollScheduleService } from './runs/payroll-schedule.service';
@@ -40,7 +44,18 @@ import { SalaryService } from './salary/salary.service';
   // ApprovalsModule for feature 016: a payroll run travels Site Incharge → HR →
   // Director before it can produce a bank sheet, and the run is submitted into that
   // chain through `ApprovalService` rather than by writing to the spine's tables.
-  imports: [forwardRef(() => HrModule), SettingsModule, ApprovalsModule],
+  imports: [
+    forwardRef(() => HrModule),
+    SettingsModule,
+    ApprovalsModule,
+    // 020 FR-006/FR-007: the operator fuel recovery is owned by `plant` and read here through two
+    // methods on `FuelRecoveryService`.
+    //
+    // `forwardRef` because this closes a module cycle: plant imports hr, and hr imports this. Plant
+    // does not import payroll directly, so the cycle is through hr rather than between the two —
+    // which is why it appears only now and why a forward reference is the whole fix.
+    forwardRef(() => PlantModule),
+  ],
   controllers: [
     SalaryController,
     PayrollRunsController,
@@ -57,6 +72,14 @@ import { SalaryService } from './salary/salary.service';
     SalaryPdfService,
     PayrollEngineService,
     BankSheetService,
+    // 021 FR-010 to FR-013 (`bugs.md` item 9). Advances taken after a run was drawn up come out of
+    // the transfer rather than out of the approved run.
+    BankSheetRecoveryService,
+    // 021 FR-005 to FR-007 (`bugs.md` item 8). Emailing employees their payslips, one at a time,
+    // with failures isolated and a retry that cannot double-send.
+    SlipDeliveryService,
+    // 021 FR-008 to FR-011. The bank's returned sheet, reconciled against the run.
+    TransactionSheetService,
     ChallansService,
     LoansService,
     FnfService,

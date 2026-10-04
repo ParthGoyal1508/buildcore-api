@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PunchRefusalReason, PunchType } from '@prisma/client';
+import { Prisma, PunchRefusalReason, PunchType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
@@ -25,6 +25,42 @@ export interface PunchRefusalInput {
  * trace anywhere, and a worker wrongly refused would have nothing to appeal to. The record is not a
  * consolation prize; it is the only evidence the event happened.
  */
+/**
+ * What a refusal looks like to a reader of the log.
+ *
+ * `faceMatchDistance` is included and the photo is not — there is no photo. A refused punch stores
+ * no image, because the blob would outlive the only row that ever referred to it. The distance is a
+ * number derived from a comparison, not a biometric, and it is the one piece of evidence that
+ * distinguishes "the camera saw somebody else" from "the light was bad".
+ */
+const REFUSAL_ROW_SELECT = {
+  id: true,
+  employeeId: true,
+  type: true,
+  reason: true,
+  latitude: true,
+  longitude: true,
+  distanceMeters: true,
+  accuracyMeters: true,
+  faceMatchDistance: true,
+  capturedAt: true,
+  createdAt: true,
+} as const;
+
+export type PunchRefusalRow = {
+  id: string;
+  employeeId: string;
+  type: PunchType;
+  reason: PunchRefusalReason;
+  latitude: Prisma.Decimal;
+  longitude: Prisma.Decimal;
+  distanceMeters: Prisma.Decimal | null;
+  accuracyMeters: number | null;
+  faceMatchDistance: Prisma.Decimal | null;
+  capturedAt: Date;
+  createdAt: Date;
+};
+
 @Injectable()
 export class PunchRefusalsService {
   private readonly logger = new Logger(PunchRefusalsService.name);
@@ -66,6 +102,81 @@ export class PunchRefusalsService {
         }`,
       );
     }
+  }
+
+  /**
+   * One employee's own refusals, most recent first (020 FR-013b, T026).
+   *
+   * The companion to the 422 the attempt itself returned. FR-013b is satisfied at the moment of
+   * refusal — the reason travels in the response — but that response is gone as soon as the screen
+   * is, and the day reads as a day with no punch. This is what answers "what happened last
+   * Tuesday" without an administrator in the loop.
+   *
+   * **No resolve, approve or dismiss accompanies this.** FR-013c specifies a log, not a work queue;
+   * a refusal is not an item anybody actions, because there is nothing to action — the punch does
+   * not exist. The way back is feature 016's manual correction, which creates attendance from
+   * nothing and is already reviewed by somebody.
+   */
+  async forEmployee(
+    ctx: RlsContext,
+    employeeId: string,
+    range?: { from?: Date; to?: Date },
+  ): Promise<PunchRefusalRow[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.punchRefusal.findMany({
+        where: {
+          employeeId,
+          ...(range?.from || range?.to
+            ? {
+                capturedAt: {
+                  ...(range.from ? { gte: range.from } : {}),
+                  ...(range.to ? { lte: range.to } : {}),
+                },
+              }
+            : {}),
+        },
+        orderBy: { capturedAt: 'desc' },
+        select: REFUSAL_ROW_SELECT,
+      }),
+    );
+  }
+
+  /**
+   * The company's refusals, for whoever audits attendance (020 FR-013c, T027).
+   *
+   * Filtered by employee, by day range and by reason, because the questions asked of this log are
+   * "is this person being refused repeatedly" and "did something change on Tuesday" — and a log that
+   * can only be read from the top answers neither once it is a month old.
+   */
+  async list(
+    ctx: RlsContext,
+    companyId: string,
+    filter: {
+      employeeId?: string;
+      from?: Date;
+      to?: Date;
+      reason?: PunchRefusalReason;
+    } = {},
+  ): Promise<PunchRefusalRow[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.punchRefusal.findMany({
+        where: {
+          companyId,
+          ...(filter.employeeId ? { employeeId: filter.employeeId } : {}),
+          ...(filter.reason ? { reason: filter.reason } : {}),
+          ...(filter.from || filter.to
+            ? {
+                capturedAt: {
+                  ...(filter.from ? { gte: filter.from } : {}),
+                  ...(filter.to ? { lte: filter.to } : {}),
+                },
+              }
+            : {}),
+        },
+        orderBy: { capturedAt: 'desc' },
+        select: REFUSAL_ROW_SELECT,
+      }),
+    );
   }
 
   /**

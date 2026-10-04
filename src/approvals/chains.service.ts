@@ -10,16 +10,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { APPROVAL_CHAIN_UNSATISFIABLE } from './approval-error-codes';
 import { labelForSlot, SLOT_FINAL } from './approval-slots';
-import {
-  ACTION_ATTENDANCE_CORRECTION,
-  ACTION_DIRECTOR_FINAL_SET_CHANGE,
-  ACTION_ATTENDANCE_EXCEPTION,
-  ACTION_PAYROLL_RUN,
-  DEFAULT_ATTENDANCE_EXCEPTION_LEVELS,
-  DEFAULT_DIRECTOR_FINAL_LEVELS,
-  DEFAULT_PAYROLL_RUN_LEVELS,
-  DIRECTOR_FINAL_SEEDED_ACTIONS,
-} from './default-chains';
+import { DEFAULT_COMPANY_CHAINS } from './default-chains';
 
 /** One level as supplied when defining or replacing a chain. */
 export interface ChainLevelInput {
@@ -199,49 +190,44 @@ export class ChainsService {
    * document types, item categories and asset grades are seeded — so `tx` is the
    * caller's, not one this service opens.
    *
-   * **Only the `final` slot is mapped.** The shape of authority is knowable because the
-   * client described it (Employer → HR → Director, Note 2), and `final` resolves to
-   * Super Admin because the client said so on 2026-09-13. The other two are *not*
-   * guessable: neither "HR Office" nor "Site Incharge" exists as a role in this system,
-   * and that absence is exactly what the role-slot indirection was introduced to handle
-   * (research.md §2). Inventing a mapping would hand the right to approve attendance to
-   * whichever role happened to sound closest.
+   * **All three default slots are mapped, as of 2026-10-04.** Until that date only `final`
+   * was, and the paragraphs this replaces argued the case for leaving the other two alone:
+   * neither "HR Office" nor "Site Incharge" exists as a role here, and inventing a mapping
+   * would hand the right to approve attendance to whichever role sounded closest. That was
+   * sound, and it had a cost nobody had paid yet — **five of the twelve chains a new company
+   * gets name those slots**, so a company could not approve a payroll run, an attendance
+   * correction, an attendance exception or a fuel recovery until somebody noticed. Checked
+   * against the live development database on 2026-10-04: unmapped in *both* companies,
+   * three weeks after the spine shipped, because nobody had yet tried to approve a payroll
+   * in a company that was seeded rather than migrated.
    *
-   * The consequence is deliberate and visible: until an administrator maps the first two
-   * slots, a decision at those levels is refused with `APPROVAL_SLOT_UNMAPPED` — a
-   * configuration fault naming the settings screen that fixes it, which is what FR-001b
-   * exists for. A silent default would be worse than a loud gap.
+   * The client chose the two mappings on 2026-10-04 (Site Admin, HO User), so they are now
+   * seeded as **starting values** — `putSlotMapping` changes them, and `APPROVAL_SLOT_UNMAPPED`
+   * still answers for any slot a company clears or for one outside the default set. The
+   * indirection is intact; what changed is that a company no longer begins life unable to
+   * approve its own payroll. See `DEFAULT_SLOT_ROLE_NAMES`.
    *
-   * `superAdminRoleId` is passed in rather than looked up: `settings.Role` belongs to the
-   * settings module, and the spine reading it would be the cross-schema query Principle I
-   * forbids. The caller already knows it.
+   * `slotRoleIds` is passed in rather than looked up, as `superAdminRoleId` was before it:
+   * `settings.Role` belongs to the settings module, and the spine reading it would be the
+   * cross-schema query Principle I forbids. The caller already knows the ids.
+   *
+   * `superAdminRoleId` is kept for `final` so existing callers and tests are unaffected, and
+   * wins over `slotRoleIds` for that slot — the caller that resolves the protected role by
+   * its flag is more reliable than one resolving it by name.
    */
   async seedDefaultsForCompany(
     companyId: string,
     tx: Prisma.TransactionClient,
-    opts: { superAdminRoleId?: string | null } = {},
+    opts: {
+      superAdminRoleId?: string | null;
+      /** Slot key → role id, resolved by the caller from `DEFAULT_SLOT_ROLE_NAMES`. */
+      slotRoleIds?: Record<string, string | null>;
+    } = {},
   ): Promise<void> {
-    const seeds: [string, ChainLevelInput[]][] = [
-      [ACTION_ATTENDANCE_EXCEPTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-      // 016 FR-012: the manual correction, same three-level shape as the exception it
-      // replaced as the spine's first consumer. A distinct action type — see the constant's
-      // comment for why reusing the exception key would have been wrong.
-      [ACTION_ATTENDANCE_CORRECTION, DEFAULT_ATTENDANCE_EXCEPTION_LEVELS],
-      // 016 FR-018b: changing which actions the Director must approve is itself one of
-      // them. Seeded here so a new company can never be created with this gate missing.
-      [ACTION_DIRECTOR_FINAL_SET_CHANGE, DEFAULT_DIRECTOR_FINAL_LEVELS],
-      [ACTION_PAYROLL_RUN, DEFAULT_PAYROLL_RUN_LEVELS],
-      // FR-018's remaining action types, each a director-only chain (T048). Seeded even
-      // though no module submits into them yet: without the chain, feature 017's first
-      // work order would be refused as a configuration fault in every company at once,
-      // and the remedy would be a settings visit per company rather than a deployment.
-      ...DIRECTOR_FINAL_SEEDED_ACTIONS.map(
-        (actionType): [string, ChainLevelInput[]] => [
-          actionType,
-          DEFAULT_DIRECTOR_FINAL_LEVELS,
-        ],
-      ),
-    ];
+    // One list, in `default-chains.ts`, because there used to be two: `prisma/seed-demo.ts`
+    // carried a hand-copied subset and drifted three chains behind, which left every demo company
+    // refusing a subcontractor bill sent for certification. See `DEFAULT_COMPANY_CHAINS`.
+    const seeds = DEFAULT_COMPANY_CHAINS;
 
     for (const [actionType, levels] of seeds) {
       const existing = await tx.approvalChain.findFirst({
@@ -270,14 +256,33 @@ export class ChainsService {
       });
     }
 
-    if (opts.superAdminRoleId) {
+    // Every slot the seeded chains actually name, not a fixed list of three: a chain level
+    // added later with a new slot would otherwise be born unmapped, which is the defect this
+    // block is being changed to fix. `DEFAULT_SLOT_ROLE_NAMES` is asserted to cover them all
+    // by `default-chains.spec.ts`, so a new slot with no default fails the suite rather than
+    // reaching a company.
+    const needed = new Set(
+      DEFAULT_COMPANY_CHAINS.flatMap(([, levels]) =>
+        levels.map((level) => level.slotKey),
+      ),
+    );
+
+    for (const slotKey of needed) {
+      const roleId =
+        slotKey === SLOT_FINAL
+          ? opts.superAdminRoleId ?? opts.slotRoleIds?.[slotKey] ?? null
+          : opts.slotRoleIds?.[slotKey] ?? null;
+      // No id means the caller could not resolve the role — a renamed or deleted default.
+      // Skipped rather than failed: a company that cannot be created because a role was
+      // renamed would be a worse outcome than one slot left to settings, which is exactly
+      // what `APPROVAL_SLOT_UNMAPPED` reports.
+      if (!roleId) continue;
+      // `update: {}` throughout. This seeder is idempotent and may reach a company that has
+      // already been configured by hand; overwriting a deliberate mapping with a default
+      // would silently re-route a live chain.
       await tx.roleSlotMapping.upsert({
-        where: { companyId_slotKey: { companyId, slotKey: SLOT_FINAL } },
-        create: {
-          companyId,
-          slotKey: SLOT_FINAL,
-          roleId: opts.superAdminRoleId,
-        },
+        where: { companyId_slotKey: { companyId, slotKey } },
+        create: { companyId, slotKey, roleId },
         update: {},
       });
     }

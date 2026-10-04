@@ -350,6 +350,42 @@ const config: Config = {
       'Asia/Kolkata',
   },
 
+  /**
+   * 021 FR-008a to FR-008g. Read off `docs/RING ROAD JULY SALARY.xls`, not inferred.
+   *
+   * The seven `CUSTOM_DETAILS*`/`Remarks`/`Purpose Of Payment` columns are empty in every row of
+   * the sample and are emitted anyway: a parser counting columns rejects a sheet that omits a blank.
+   */
+  bankSheet: {
+    columns: (
+      process.env.BANK_SHEET_COLUMNS ||
+      [
+        'CUSTOM_DETAILS1',
+        'Value Date',
+        'Message Type',
+        'Debit Account No.',
+        'Beneficiary Name',
+        'Payment Amount',
+        // The sample's own label. Every value under it is an IFSC and none is a SWIFT code —
+        // see `BANK_SHEET_IFSC_COLUMN` in the exporter.
+        'Beneficiary Bank Swift Code / IFSC Code',
+        'Beneficiary Account No.',
+        'Transaction Type Code',
+        'CUSTOM_DETAILS2',
+        'CUSTOM_DETAILS3',
+        'CUSTOM_DETAILS4',
+        'CUSTOM_DETAILS5',
+        'CUSTOM_DETAILS6',
+        'Remarks',
+        'Purpose Of Payment',
+      ].join('|')
+    ).split('|'),
+    messageType: process.env.BANK_SHEET_MESSAGE_TYPE || 'NEFT',
+    transactionTypeCode: process.env.BANK_SHEET_TRANSACTION_TYPE || 'NEFT',
+    valueDateFormat: (process.env.BANK_SHEET_VALUE_DATE_FORMAT ||
+      'DD/MM/YYYY') as 'DD/MM/YYYY' | 'YYYY-MM-DD',
+  },
+
   documents: {
     stagedDocumentRetentionHours: numberFromEnv(
       process.env.DOCUMENTS_STAGED_RETENTION_HOURS,
@@ -550,6 +586,36 @@ const config: Config = {
     asyncExportRowThreshold: numberFromEnv(
       process.env.DASHBOARD_ASYNC_EXPORT_ROW_THRESHOLD,
       5000,
+    ),
+  },
+  boqImport: {
+    // FR-056. Refused before parsing; the client's own tender is 680KB.
+    maxFileBytes: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_FILE_BYTES,
+      10 * 1024 * 1024,
+    ),
+    // FR-055. Candidate schedule rows, counted after block identification — never raw sheet rows.
+    maxCandidateRows: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_CANDIDATE_ROWS,
+      1000,
+    ),
+    // FR-053. Long enough to read 312 lines; short enough not to outlive the project's state.
+    batchTtlMinutes: numberFromEnv(
+      process.env.BOQ_IMPORT_BATCH_TTL_MINUTES,
+      30,
+    ),
+    maxLiveBatchesPerCompany: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_BATCHES_PER_COMPANY,
+      5,
+    ),
+    maxLiveBatchesTotal: numberFromEnv(
+      process.env.BOQ_IMPORT_MAX_BATCHES_TOTAL,
+      20,
+    ),
+    // FR-045. One paisa per line — derived from two-decimal rounding, not picked.
+    reconciliationPaisePerLine: numberFromEnv(
+      process.env.BOQ_IMPORT_RECONCILIATION_PAISE_PER_LINE,
+      1,
     ),
   },
 };

@@ -32,6 +32,7 @@ import { CompanyResponseDto } from './dto/company-response.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
+import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
 
 @ApiTags('settings/companies')
 @ApiBearerAuth()
@@ -115,6 +116,30 @@ export class CompaniesController {
     return this.companiesService.setPunchAccuracyMaxMetres(
       id,
       dto.punchAccuracyMaxMetres ?? null,
+    );
+  }
+
+  @Put(':id/punch-enforcement')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Switch the hard punch refusal on or off (020 FR-013)',
+    description:
+      'While this is false — the default for every company — a punch that fails location or face ' +
+      'validation is recorded as an exception for an admin, exactly as today, and the would-be ' +
+      'refusal is logged so the rate can be measured. While it is true the punch is refused with ' +
+      '422 and **nothing is written to attendance at all**.\n\n' +
+      'Switch it on for one company first. The refusal log under `GET /hr/attendance/refusals` is ' +
+      'the same shape before and after, so a fortnight of measured would-be refusals is directly ' +
+      'comparable with a fortnight of real ones.\n\n' +
+      'Takes effect on the next punch, with no restart.',
+  })
+  async setPunchEnforcement(
+    @Param('id') id: string,
+    @Body() dto: SetPunchEnforcementDto,
+  ) {
+    return this.companiesService.setPunchBlockEnforced(
+      id,
+      dto.punchBlockEnforced,
     );
   }
 

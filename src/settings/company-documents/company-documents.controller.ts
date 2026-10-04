@@ -21,6 +21,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../company-scope';
 import { CompanyDocumentsService } from './company-documents.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 import {
   CreateCompanyDocumentKindDto,
   UploadCompanyDocumentDto,
@@ -105,6 +106,7 @@ export class CompanyDocumentsController {
         documentTypeId: dto.documentTypeId,
         data: Buffer.from(dto.data, 'base64'),
         contentType: dto.contentType,
+        fileName: dto.fileName,
         documentNumber: dto.documentNumber ?? null,
         expiresAt: dto.expiresAt ?? null,
       },
@@ -180,17 +182,24 @@ export class CompanyDocumentsController {
     @Res() res: Response,
     @Query('companyId') companyId?: string,
   ) {
-    const { data, view } = await this.documents.download(
+    const { data, filename, contentType } = await this.documents.download(
       rlsContextFor(caller),
       resolveCompanyId(caller, companyId),
       id,
       { userId: caller.id, ipAddress },
     );
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${view.code}-${view.id}"`,
-    );
+    // The real type, not `application/octet-stream`. Serving every document as opaque bytes is
+    // why a PDF opened in a text editor: the browser cannot render what it has not been told.
+    res.setHeader('Content-Type', contentType);
+    // Both the plain and the RFC 5987 forms — and never the raw name. A filename is typed by a
+    // person, and `setHeader` throws on any byte outside latin1.
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
+    // For a cross-origin caller, which cannot read `Content-Disposition` off a `fetch`
+    // otherwise — and the name is the only place the filename exists, since a blob URL carries
+    // none of its own. `buildcore-web` reaches this through its own `/bff` rewrite and is
+    // therefore same-origin, so this is not what makes it work there; it is what stops a
+    // direct caller from being quietly unable to name the file.
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.send(data);
   }
 }

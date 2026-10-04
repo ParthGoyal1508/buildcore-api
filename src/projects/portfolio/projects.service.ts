@@ -190,6 +190,30 @@ export class ProjectsService {
   ): Promise<Project> {
     const targetCompanyId = this.targetCompanyOf(caller, companyId);
 
+    // The client is checked **before** the document gate, and the order is the point.
+    //
+    // Found on 2026-10-04 while repairing the end-to-end suites: with the gate first, a project
+    // manager who mistyped a client id was told to attach four mandatory documents, attached
+    // them, and was *then* told the client does not exist — four files uploaded for a project
+    // that was never going to be created. A cheap, fundamental reference should be refused
+    // before work is demanded of the person.
+    //
+    // This is a pre-flight check, not the authoritative one. The check inside the transaction
+    // below stays exactly where it is: it is what makes the write safe against a client deleted
+    // between here and there, which this one cannot be.
+    const clientExists = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.client.findFirst({
+          where: { id: dto.clientId, companyId: targetCompanyId },
+          select: { id: true },
+        }),
+    );
+    if (!clientExists) {
+      throw new NotFoundException(`Client ${dto.clientId} not found`);
+    }
+
     // 017 FR-009, FR-009a, FR-009c. **Before anything is written.** The gate refuses a creation
     // whose mandatory kinds are not all attached, naming each missing kind's label, and refuses a
     // staged reference the caller may not use. Both checks live in one call so they cannot be
@@ -273,6 +297,8 @@ export class ProjectsService {
               documentTypeId: staged.documentTypeId,
               fileRef: staged.fileRef,
               filePath: staged.filePath,
+              fileName: staged.fileName,
+              mimeType: staged.mimeType,
               uploadedByUserId: caller.id,
             })),
           });
@@ -753,6 +779,28 @@ export class ProjectsService {
       }),
     );
     return sites.map((site) => site.id);
+  }
+
+  /**
+   * A project's identity — code and name — for another module labelling a report or an export
+   * (018 FR-010a, FR-011a).
+   *
+   * `findOne()` exists and is the wrong tool here: it assembles a full project detail with its
+   * sites, BOQ and budget, and a caller that only needs a heading would pull all of it. Returns
+   * `null` for an unknown id rather than throwing, the contract `getActivityById()` set — the
+   * caller is labelling something, not validating access, and the roll-up it headings is already
+   * scoped by company.
+   */
+  async getProjectIdentityById(
+    projectId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<{ id: string; code: string; name: string } | null> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findFirst({
+        where: { id: projectId },
+        select: { id: true, code: true, name: true },
+      }),
+    );
   }
 
   /**

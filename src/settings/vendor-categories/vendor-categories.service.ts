@@ -10,7 +10,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
-import { assertInScope, companyScope } from '../company-scope';
+import { assertInScope, companyScope, isInScope } from '../company-scope';
 import {
   CreateVendorCategoryDto,
   UpdateVendorCategoryDto,
@@ -130,8 +130,10 @@ export class VendorCategoriesService {
       (tx) => tx.vendorCategory.findUnique({ where: { id } }),
     );
     if (!category) return null;
-    const ctx = rlsContextFor(caller);
-    if (!ctx.isSuperAdmin && category.companyId !== caller.companyId) {
+    // `isInScope`, not `row.companyId !== caller.companyId`. That comparison ignored the 019
+    // company switcher, and because this reader feeds a validator the symptom was a refusal
+    // stating that a row which plainly exists does not — see `isInScope`.
+    if (!isInScope(caller, category)) {
       return null;
     }
     return category;

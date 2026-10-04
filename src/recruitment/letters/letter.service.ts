@@ -11,7 +11,13 @@ import {
   ResignationStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
-import * as PDFDocument from 'pdfkit';
+// `import = require` deliberately, not `import * as`. The app is built by SWC
+// (nest-cli.json), which gives `import * as` true ESM semantics and hands back a
+// namespace object that cannot be constructed; the tests are built by ts-jest, which
+// emits a bare require and constructs fine. The namespace form therefore passes every
+// test and throws "_pdfkit is not a constructor" in the running server. This form emits
+// a bare require under both.
+import PDFDocument = require('pdfkit');
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -22,6 +28,7 @@ import { LetterKindsService } from '../../settings/letter-kinds/letter-kinds.ser
 import { LETTER_NAMESPACE } from '../constants/recruitment.constants';
 import { RecruitmentRefsService } from '../recruitment-refs.service';
 import { renderTemplate } from './letter-tokens.util';
+import { LetterKindFieldsService } from '../../settings/letter-kinds/letter-kind-fields.service';
 
 /** Renders plain text into a single-column A4 PDF buffer. */
 function renderPdf(title: string, body: string): Promise<Buffer> {
@@ -52,6 +59,7 @@ export class LetterService {
     // as it did when they were enum values. This resolves a key to the row that replaced
     // it, and is the only thing about this service the restructure changed.
     private readonly kinds: LetterKindsService,
+    private readonly kindFields: LetterKindFieldsService,
   ) {}
 
   async findAll(
@@ -312,6 +320,17 @@ export class LetterService {
         missingTemplateType: input.letterType,
       });
     }
+
+    // 017 FR-011c, task T137. Refused at render as well as at save: a template saved while a field
+    // was declared would otherwise render a **blank where a salary should be** after somebody removed
+    // the field from its kind, and a blank in a signed letter is indistinguishable from a deliberate
+    // omission. Not redundant with the save check — the two catch different moments.
+    await this.kindFields.assertTemplateFieldsDeclared(
+      rlsContextFor(caller),
+      kind.id,
+      template.bodyTemplate,
+      'render',
+    );
 
     const body = renderTemplate(template.bodyTemplate, input.values);
     const pdf = await renderPdf(

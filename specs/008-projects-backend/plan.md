@@ -301,3 +301,163 @@ RLS. Principle V — no new permission. PASS.
       the manual value with the source marked (FR-030), behind-schedule flagging with day slippage
       and critical-path marking (FR-031), explicit no-baseline response (FR-032)
 - [ ] Unit test: percent-complete source selection; slippage computation; no-baseline path
+
+---
+
+## Amendment 2026-10-03 — BOQ entry and import (FR-036 – FR-046)
+
+**What changed in this plan**: Phase 4 above is superseded in three specifics and otherwise stands.
+Its `BOQImportService (exceljs parsing, 9-column validation, …)` line is wrong on both counts —
+`exceljs` cannot read the client's file, and there is no 9-column schedule — and Phase 1's schema
+work needs one migration it never anticipated. Nothing else in this plan is touched: US1–US3,
+US5–US8 and the 2026-09-01 planning amendment are unchanged, and the phases below are additive.
+
+**Why now**: nothing writes a BOQ, so 018's billing cannot be used. See spec Amendment 2026-10-03.
+
+### Verified before planning, not assumed
+
+- **No code reads the programme fields.** `perDayQty`, `avgQtyPerDay` and `daysToComplete` appear
+  nowhere in `src/`. The only existing reads of either BOQ table are
+  `ProjectsService.getActivityById` and `getBoqItemById`, which select `id`, `name`/`taskName`,
+  `boqNo` and `projectId` only. Making the programme fields nullable therefore breaks no consumer —
+  checked rather than hoped, because the opposite finding would have changed this plan's order.
+- **`getAlerts` has no implementation to change.** There is no `src/projects/boq/` directory and no
+  DWR module; the alert behaviour FR-037 constrains is being written for the first time, not
+  retrofitted.
+- **`ProjectLockGuard` already exists** (`src/projects/guards/project-lock.guard.ts`, research §6),
+  so the lock rule is `@UseGuards()` on the new writes and nothing more.
+- **The fixture is 680KB, not 3.6MB**, and is already committed at `docs/BOQ_794578.xls`.
+
+### Phase B1: The migration that makes a tender schedule storable
+
+- [ ] One migration making `BOQTaskItem.startDate`, `finishDate`, `duration`, `perDayQty` and
+      `BOQTaskGroup.startDate`, `finishDate` nullable (FR-037). Widening a column to nullable is
+      safe on a populated table and these tables are empty in every environment, so no backfill.
+- [ ] `SELECT set_config('app.is_super_admin','true',true)` first, per the RLS migration convention.
+- [ ] No new table and no new RLS policy: nothing is added, only relaxed.
+
+**Checkpoint**: a BOQ line can exist without a programme.
+
+### Phase B2: The parser boundary (constitution v1.5.0)
+
+- [ ] `BoqWorkbookReader` in `src/projects/boq/boq-workbook.reader.ts` — the **only** place SheetJS
+      is imported. It takes a buffer and returns plain rows (`{ rowNumber, cells: (string | number |
+      null)[] }`); no caller ever holds a workbook, a worksheet or a cell object, which is what makes
+      replacing the library one file's work.
+- [ ] `xlsx` pinned to `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz` with the lockfile
+      integrity hash committed. **Not** `npm install xlsx`: the registry build is 0.20.5's
+      predecessor 0.18.5, carrying CVE-2023-30533 and CVE-2024-22363. Prohibited by the constitution,
+      so a lockfile entry resolving to `registry.npmjs.org` fails review.
+- [ ] Both formats through one entry point: `.xlsx` continues to `exceljs`, `.xls` to SheetJS. The
+      reader decides from the content, not the filename — a renamed file is the common case.
+- [ ] **The refusal is the point of this phase.** A workbook that cannot be parsed, parses to zero
+      sheets, or yields no candidate schedule rows throws a named refusal
+      (`BOQ_WORKBOOK_UNREADABLE`, `BOQ_WORKBOOK_EMPTY`). `exceljs` returns `{ worksheets: [] }` for
+      the client's real file with no error at all — verified 2026-10-03 — so the empty case is a
+      *measured* behaviour of a library we keep, not a defensive hypothetical.
+- [ ] Unit tests on the reader alone: a real `.xls`, a real `.xlsx`, a text file renamed `.xls`, and
+      a workbook with no sheets.
+
+**Checkpoint**: bytes become rows, or a refusal that says which condition it hit.
+
+### Phase B3: `validate` — everything decided before anything is written
+
+- [ ] `BOQImportService.validate(projectId, buffer)` → `{ batchId, groups, lines, totals, errors,
+      warnings, errorReportUrl? }`, writing **nothing**.
+- [ ] **Where the batch is held**: in process memory, keyed by `batchId`, with a TTL and a cap on
+      concurrent batches. Rejected: a staged table in the manner of 017's `StagedProjectDocument`,
+      which would need an RLS policy, a sweep and a retention answer for data whose entire purpose
+      is to be discarded minutes later; the only cost of losing a batch is re-uploading the file.
+      **Named trade-off**: a batch validated on one instance is invisible to another, so this holds
+      only while the API runs as a single instance. Horizontally scaling it is the trigger to move
+      the batch into Postgres, and that is recorded here rather than discovered as an intermittent
+      "batch not found".
+- [ ] **Hierarchy** (FR-038): a row with a description and no quantity opens a group; rows below it
+      are its items until the next such row. Deeper nesting folds the outer heading text into the
+      group name. A quantity row before any heading goes to a group named for the sheet and raises a
+      **warning**, not an error — the rows are good and the structure is merely unstated.
+- [ ] **Units** (FR-041): `normaliseUnit()` lowercases, strips periods and collapses whitespace, so
+      `R. Mtr.`, `R.Mtr.` and `R mtr` agree. The source string is stored verbatim on the line; the
+      normalised form is for matching only. `Excess (+)`, which appears *in the units column* on the
+      quoted-rate row, must resolve to no unit rather than to a unit named "excess".
+- [ ] **Block discipline** (FR-042): read only the columns of the identified schedule. The sample
+      carries a second block at columns 238–242 with 216 item-shaped rows — artefacts of the
+      template's other BOQ types, which the workbook names in its own defined names (`Percentage`,
+      `Discount BoQ`, `Negative BoQ`, Item Rate, Turnkey). A scan for "populated columns" finds them
+      and doubles the tender silently.
+- [ ] **Pre-GST columns** (FR-043): Excise Duty, VAT, DGS&D/RITES inspection, Cenvat credit are
+      read, found blank, and dropped. They are not errors and they are not data.
+- [ ] **Arithmetic** (FR-044): line amount is `quantity × rate`, computed as `Prisma.Decimal`. The
+      file's own figures carry float noise (`178.09326499999995`, `29961506.782150004`) and are used
+      only as the thing to reconcile against, never as input.
+- [ ] **The percentage** (FR-039, FR-040): locate `Excess (+)` / `Quoted Rate` in the footer. Found
+      → carried on the batch for `confirm` to set. Not found → `quotedPercentage: null` and a
+      first-class entry in the report. **Never 0**: zero is a valid percentage, so that failure is
+      silent and under-bills every line by the true figure — 2.46% and ₹7.37 lakh on this file.
+- [ ] **Reconciliation** (FR-045): report the derived schedule total and derived quoted total beside
+      the two the workbook states, with the difference. An import that read the file correctly can
+      prove it.
+- [ ] **The row cap is judged on candidate schedule rows, not raw sheet rows.** Research §4's
+      1,000-row `413` predates the sample, whose sheet holds far more raw rows than schedule lines
+      once the second block and the headings are accounted for. Judged on raw rows, the client's own
+      file could be refused for being too large while containing 312 lines.
+
+**Checkpoint**: the client's file produces a report that reconciles, and the database is untouched.
+
+### Phase B4: `confirm` — one transaction, once
+
+- [ ] `confirm(batchId)` commits in a single `$transaction`: groups created on first reference, then
+      their items, then `Project.quotedPercentage` **only if the percentage was found**.
+- [ ] **Idempotent by consuming the batch**: the batch is removed as the transaction commits, so a
+      second confirm is refused (`BOQ_BATCH_NOT_FOUND`) rather than appending the schedule again. A
+      double-submitted confirm is the ordinary way a 312-line tender gets entered twice, and the
+      duplicate would be indistinguishable from a real re-tender.
+- [ ] Unit tests: confirm writes exactly the validated lines; a second confirm is refused; a batch
+      with no percentage leaves `quotedPercentage` untouched rather than writing 0.
+
+**Checkpoint**: a BOQ exists, and 018's billing has something to measure against.
+
+### Phase B5: Entry by hand, and the alerts
+
+- [ ] `BOQService`: `createGroup`, `createItem`, `getTree` (with `pendingQty`, `avgQtyPerDay`,
+      `daysToComplete` computed), `getAlerts`, `updateDoneQty` (called on DWR **approval**, research
+      §13), `deleteItem` (`409` if a `DWRTask`, `ClientBillLine` or `WorkOrderBOQItem` references it
+      — three relations, not one).
+- [ ] `getAlerts` returns four groups, not three: Today, Delayed, To Be Delayed and **Unplanned**
+      (FR-037). An unplanned line appears in exactly one of them and it is the fourth.
+- [ ] `BOQController` with `Permission.PROJECTS` and `ProjectLockGuard` on every write.
+- [ ] DTOs with the programme fields optional, matching FR-037 rather than the August DTO sketch.
+
+**Checkpoint**: a BOQ can be entered without a spreadsheet at all.
+
+### Test strategy, stated because the fixture is client data
+
+The real file is the only honest test of FR-042 and FR-045, and it is 680KB of a client's tender
+already committed at `docs/BOQ_794578.xls`. Two tiers, so that neither its presence nor its absence
+decides whether the suite is meaningful:
+
+- [ ] **A committed synthetic `.xls`** reproducing each pathology in miniature: two levels with
+      heading rows carrying no quantity, one unit spelled four ways, a second item-shaped block in
+      far columns, the four blank tax columns, float-noisy totals, and a footer percentage. Every
+      assertion that must hold forever runs against this.
+- [ ] **An opt-in test against the real file** that skips with a stated reason when the file is
+      absent, asserting the three figures only it can: **~312 lines and not ~528**, the 26 unit
+      spellings resolving to ~12 units with `Excess (+)` resolving to none, and the computed grand
+      total against the file's own `2,99,61,506.78` and `3,06,98,559.85`.
+- [ ] A skipped test reports as skipped, never as passed. The repository must stay usable by someone
+      who cannot hold the client's tender data.
+
+### Constitution re-check, post-design (v1.5.0)
+
+- **Principle III, centralized config**: the batch TTL, the concurrent-batch cap and the 1,000-row
+  threshold go in centralized config, not inline constants. Three numbers that will be tuned the
+  first time somebody uploads something unusual.
+- **v1.5.0's boundary clause**: satisfied by `BoqWorkbookReader` being the sole importer of `xlsx`
+  and returning plain rows. A test asserts no other file imports it, because the constraint decays
+  silently — the second import would work perfectly and nobody would notice.
+- **FR-014 audit**: "BOQ import" is already in FR-014's list, so `confirm` writes **one** audit
+  entry naming the project, the batch, the line and group counts and whether the quoted percentage
+  was set — not 312 entries. One import is one act; 312 rows in the log would bury the next thing.
+- **Principle IV**: the uploaded workbook is client commercial data. It is parsed in memory and not
+  persisted — no object-storage write, so no new blob to encrypt or audit. Worth stating because the
+  obvious next feature request ("keep the file we imported") would change that answer.

@@ -214,3 +214,28 @@ Those were **not** audited here — the request was specifically the Notes secti
 rows imply capability beyond these six specs (for example "Total Group Dashboard" detail, DPR
 material management, spare parts inventory depth). A separate pass over the module rows would be
 needed to claim full coverage of the sheet.
+
+## `bugs.md` item 14, closed 2026-10-02 — and it was mostly already built
+
+Not to be confused with **Note 14** above, which is the fuel overconsumption note from the
+spreadsheet; the numbering collides and the subjects do not.
+
+The 2026-09-16 client review's item 14 asked for *"a monthly labour wages summary per project
+(similar to staff payroll)"* and *"a total monthly expense sheet per project for client billing
+reference"*. Checked against the code before anything was specified: feature 013's
+`LabourPaymentSheet` and `PaymentSheetLine` already gave a per-project, per-worker wage register with
+days worked, the resolved rate, gross, deductions and net — a register in the shape of a staff
+payroll — and 018 FR-010 already gave the monthly cost position per project.
+
+Two narrow things were genuinely missing, and 018 Phases 10 and 11 added exactly those:
+
+1. **The calendar-month framing.** A payment sheet covers the wage period its creator named. Nothing
+   made that a month, and under a fortnightly cycle a month boundary falls inside one. The roll-up
+   takes every sheet *overlapping* the month and apportions a straddling one on days worked inside
+   it, from the approved muster — never on elapsed calendar days — and states the split on the
+   response.
+2. **A document that leaves the system.** The month's position as a PDF or xlsx, carrying the
+   project, the month and the instant it was produced.
+
+Recorded because "item 14 is built" and "item 14 was mostly already built" lead to different
+conclusions about how much of the review remains.

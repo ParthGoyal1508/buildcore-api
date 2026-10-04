@@ -359,6 +359,17 @@ enum Permission {
   /// `_APPROVE` value in this enum is separate: authorising is not doing.
   ASSETS_APPROVE
 
+  /// Added by 019 Phase 7 (FR-017a, FR-017b). The right to *record* a payment in cash,
+  /// and to see a cash denomination breakup. Deliberately not a reuse of
+  /// `COMPANY_SETTINGS`: who may change the hiding setting and who may take cash are
+  /// different questions about different people, and FR-012 already owns the first.
+  ///
+  /// Granted to every role that could already record a cash payment, in the migration
+  /// that adds it — preserving today's behaviour is the requirement, not a convenience.
+  /// A permission that defaulted to nobody would stop every site cashier the moment it
+  /// deployed, which is the exact failure the two-control design existed to avoid.
+  CASH_ENTRY
+
   @@schema("settings")
 }
 
@@ -427,6 +438,17 @@ model Company {
   /// default. Company-configurable rather than a literal — Constitution Principle III.
   labourWageCycle LabourWageCycle @default(weekly)
 
+  /// The company's own account the payroll transfer is debited from (021 FR-008a).
+  ///
+  /// A **string**, not a number, and the sample file is the argument: every value in the
+  /// `Debit Account No.` column of `docs/RING ROAD JULY SALARY.xls` is `09310400000819` — an account
+  /// number whose leading zero is part of it. Stored as text here so it cannot be lost before the
+  /// export even looks at it.
+  ///
+  /// Nullable, and the export refuses rather than guesses. Not PII in the sense the employee's
+  /// account is: this is the company's own account, named on every cheque it writes.
+  payrollDebitAccountNumber String?
+
   /// Currency note denominations used to compute a cash payment sheet's breakup
   /// (013 FR-027), descending. Company-configurable because the notes in circulation
   /// change by legislation (the ₹2000 note's withdrawal being the recent example),
@@ -448,6 +470,38 @@ model Company {
   /// Deliberately **not** feature 013's `WORKSPACE_LABOUR_GPS_ACCURACY_MAX_METRES`: same units,
   /// different surface, different tolerance. Merging them means tuning one to fix the other.
   punchAccuracyMaxMetres Int?
+
+  /// Whether a punch that fails location or face validation is **refused** rather than recorded as
+  /// an exception for an admin (020 FR-013).
+  ///
+  /// **Default false, and that is the point.** The client accepted the hard block's cost without
+  /// knowing how often it would fire, and `PunchRefusal` is accumulating that figure right now while
+  /// punches are still being accepted. Shipping the inversion switched on would spend the only
+  /// moment at which their decision is cheap to reverse — so the code ships and the behaviour does
+  /// not, and the answer they give becomes a settings change rather than a release.
+  ///
+  /// It also keeps the decision cheap in **both** directions afterwards. One company can be switched
+  /// on, watched for a fortnight against its own refusal log, and switched off again without a
+  /// deploy.
+  ///
+  /// What a flag cannot do is make the branch safe by never running. A dormant path is untested in
+  /// production until the day somebody turns it on, which is why every test of the refusal path runs
+  /// with enforcement forced on rather than inheriting this default — see `punch.service.spec.ts`.
+  /// The flag decides whose punches are refused, never whether the code is exercised.
+  punchBlockEnforced Boolean @default(false)
+
+  /// The ceiling on **total** deductions from one payslip, as a percentage of its gross wages
+  /// (020 FR-007a).
+  ///
+  /// The client's answer of 2026-10-02: half that month's wages, shared with every other deduction
+  /// rather than being the fuel recovery's own allowance. Stored per company and not a literal,
+  /// because it is a statutory figure and statutory figures are revised — Principle III.
+  ///
+  /// **Capped at 50 by a check constraint, not merely defaulted to it.** A configuration mistake here
+  /// does not produce a slightly wrong payslip, it produces an unlawful one, and a bound the database
+  /// enforces cannot be raised by a careless settings edit. Lowering it is allowed: a company may be
+  /// stricter than the Act, never laxer.
+  deductionCeilingPercent Int @default(50)
 
   /// Hides cash amounts and cash transactions across the application (019 FR-014).
   ///
@@ -509,8 +563,6 @@ model Company {
   signatories   Signatory[]
   issuedLetters IssuedLetter[]
 
-  @@schema("settings")
-
   /// 016 FR-018a: which action types this company requires the Director to approve.
   directorFinalActions DirectorFinalAction[]
 
@@ -519,6 +571,8 @@ model Company {
 
   /// 019 FR-008: users currently working in this company.
   userCompanySelections UserCompanySelection[]
+
+  @@schema("settings")
 }
 
 enum CompanyStatus {
@@ -677,6 +731,7 @@ model LetterKind {
 
   templates LetterTemplate[]
   letters   IssuedLetter[]
+  fields    LetterKindField[]
 
   /// Company-authored kinds are unique per company. Product-shipped ones (companyId
   /// NULL) need a SECOND, hand-authored partial unique index, because Postgres treats
@@ -684,6 +739,64 @@ model LetterKind {
   /// rows — see `LetterKind_shipped_key` in the migration.
   @@unique([companyId, key])
   @@index([companyId])
+  @@schema("settings")
+}
+
+/// One field a letter kind's templates may reference (017 FR-011b, FR-011c) — `bugs.md` item 18.
+///
+/// **Keyed to the kind, not to the shipped `LetterType` enum**, and that coupling is exactly what
+/// made item 18 half-work: FR-011 let an administrator define a letter kind, and `LETTER_TOKENS` was
+/// keyed by the five shipped enum values, so a kind the client defined got an **empty** field list.
+/// The template editor then refused every field it used. Both requirements were satisfied and
+/// together they produced nothing usable.
+///
+/// `buildcore-web`'s FR-014 already required "define a new letter kind, **its variable fields** and
+/// its fixed terms", so this table is the api catching up to a contract already written rather than
+/// new scope invented on both sides.
+model LetterKindField {
+  id String @id @default(cuid())
+
+  letterKindId String
+  letterKind   LetterKind @relation(fields: [letterKindId], references: [id], onDelete: Cascade)
+
+  /// The `{{token}}` name, without braces. What a template references.
+  token String
+  /// What the template editor calls it. "Offered CTC", not `offeredCtc`.
+  label String
+
+  /// **Where the value comes from** (FR-011c).
+  ///
+  /// A field that is only a label is a placeholder that renders blank — and a blank in a signed
+  /// letter is indistinguishable from a deliberate omission, which is the failure this column exists
+  /// to prevent. `manual` is the honest exception: some terms are typed at issue time and have no
+  /// record behind them, and saying so is better than inventing a source.
+  sourceType LetterFieldSource
+  /// The path within the source record, dot-separated: `designation.name`, `basic`.
+  ///
+  /// Null only for `manual`, where there is no record to read. A `CHECK` in the migration enforces
+  /// that pairing rather than leaving it to every writer to remember.
+  sourcePath String?
+
+  /// Whether issuing without a value for this field is refused.
+  isRequired Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One declaration per token per kind.
+  @@unique([letterKindId, token])
+  @@index([letterKindId])
+  @@schema("settings")
+}
+
+enum LetterFieldSource {
+  employee
+  candidate
+  project
+  company
+  /// Typed at issue time. No record behind it, and `sourcePath` must be null.
+  manual
+
   @@schema("settings")
 }
 
@@ -846,7 +959,17 @@ model CompanyDocument {
   documentType   DocumentType @relation(fields: [documentTypeId], references: [id])
 
   /// Encrypted object-storage reference. Opaque: never a path a client supplies.
-  fileRef        String
+  fileRef String
+
+  /// The uploader's own file name, and what their browser said the file was.
+  ///
+  /// Nullable because every row filed before 2026-10-04 predates these columns: both routes
+  /// received a content type and discarded it, so the download served `application/octet-stream`
+  /// under a name with no extension and a PDF opened as text. `describeStoredFile` sniffs the
+  /// bytes when `mimeType` is null, which is why no backfill was attempted — the bytes are the
+  /// only honest source, and they are already there.
+  fileName       String?
+  mimeType       String?
   /// The GSTIN/PAN/TAN itself, when the kind carries one (`DocumentType.needsNumber`).
   documentNumber String?
   /// Required when `DocumentType.hasExpiry` — enforced in the service (FR-004).
@@ -1158,6 +1281,12 @@ enum AuditEntityType {
   SITE
   BOQ_GROUP
   BOQ_ITEM
+  /// One tender import, as one act (008 FR-014, amended 2026-10-03).
+  ///
+  /// Separate from BOQ_GROUP and BOQ_ITEM on purpose: those describe rows, and an import that
+  /// logged one entry per row would put 231 entries in the log and bury whatever came next. The
+  /// entry carries the batch, the counts and whether the quoted percentage was set.
+  BOQ_IMPORT
   DWR
   REVENUE
   RA_BILL
@@ -1189,6 +1318,9 @@ enum AuditEntityType {
   EQUIPMENT_DOCUMENT
   LOGBOOK_ENTRY
   FUEL_ENTRY
+  /// 020 FR-002: a reviewer's decision about a fuel variance. The entity is the decision,
+  /// not the reading — the reading is evidence and is never altered by a review (FR-017).
+  FUEL_VARIANCE_EXCEPTION
   SERVICE_SCHEDULE
   MAINTENANCE_JOB
   HIRE_BILL
@@ -1481,6 +1613,23 @@ model Project {
   /// percentage the P&L reports.
   contractValue Decimal @db.Decimal(18, 2)
 
+  /// The **quoted percentage** above or below the BOQ's own total (018 FR-002a, added 2026-10-02).
+  ///
+  /// Read off `docs/BOQ_794578.xls`, which the client supplied and which is a government e-tender
+  /// **"Percentage BoQ"**: the bidder does not quote per line. They quote one percentage against the
+  /// schedule of rates, and the file's own footer shows it — `Total in Figures` 2,99,61,506.78
+  /// becoming `Quoted Rate in Figures` 3,06,98,559.85 at `Excess (+) 0.0246`.
+  ///
+  /// **A bill priced from the line rate alone under-bills by exactly this percentage, on every line.**
+  /// On that file that is ₹7.37 lakh on a ₹3 crore project — invisible per line and material in total,
+  /// which is the worst shape a billing error can take. Stored on the project because it applies to
+  /// the whole award, not per line.
+  ///
+  /// A fraction, not a percentage: `0.0246` is +2.46%, matching the file. Signed, because the same
+  /// column carries a `Less (-)` quote. Default 0 means "at par", which is both the common case and
+  /// the safe one — it prices from the schedule exactly.
+  quotedPercentage Decimal @default(0) @db.Decimal(8, 6)
+
   startDate       DateTime
   expectedEndDate DateTime?
 
@@ -1511,6 +1660,7 @@ model Project {
   dailyWorkReports DailyWorkReport[]
   revenues         Revenue[]
   raBills          RABill[]
+  clientBills      ClientBill[]
   workOrders       WorkOrder[]
   budgets          ProjectBudget[]
   documents        ProjectDocument[]
@@ -1533,12 +1683,19 @@ model BOQTaskGroup {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  boqNo      String
-  name       String
-  startDate  DateTime
-  finishDate DateTime
-  scopeQty   Decimal  @db.Decimal(18, 3)
-  isEstimate Boolean  @default(false)
+  boqNo String
+  name  String
+
+  /// **Optional, and null means unplanned** (008 FR-037, amended 2026-10-03).
+  ///
+  /// A tender schedule of quantities carries no programme — the client's own e-tender sheet has
+  /// quantity, unit and rate columns and no dates at all. Requiring these would mean inventing a
+  /// programme at import time, and an invented finish date drives "Delayed" alerts that are fiction
+  /// in the shape of fact. Planning is a separate act, performed later on the BOQ screen.
+  startDate  DateTime?
+  finishDate DateTime?
+  scopeQty   Decimal   @db.Decimal(18, 3)
+  isEstimate Boolean   @default(false)
 
   items BOQTaskItem[]
 
@@ -1561,19 +1718,54 @@ model BOQTaskItem {
   groupId String
   group   BOQTaskGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
 
-  boqNo      String
-  taskName   String
-  unit       String
-  scopeQty   Decimal  @db.Decimal(18, 3)
-  startDate  DateTime
-  finishDate DateTime
-  /// Planned working days, used to derive the per-day target.
-  duration   Int
-  perDayQty  Decimal  @db.Decimal(18, 3)
-  doneQty    Decimal  @default(0) @db.Decimal(18, 3)
-  isEstimate Boolean  @default(false)
+  boqNo    String
+  taskName String
 
-  dwrTasks DWRTask[]
+  /// **The string the source carried, verbatim** (FR-041).
+  ///
+  /// Free text on purpose. The client's own file spells about 12 units 26 ways — `Cum`/`Cum.`,
+  /// `Sqm`/`Sqm.`/`sqm`, `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr` — and a unit master would reject the
+  /// file outright. Matching happens on a normalised form (`unit-normalise.ts`); what is stored is
+  /// what they typed, because discarding it would make a later disagreement unarguable.
+  unit     String
+  scopeQty Decimal @db.Decimal(18, 3)
+
+  /// **Optional, and null means unplanned** (FR-037, amended 2026-10-03). See `BOQTaskGroup`.
+  ///
+  /// `getAlerts` reports an unplanned line as **unplanned** — its own group, never folded into
+  /// on-time or delayed (FR-048). Membership is decided by `finishDate` alone, so a line with some
+  /// of these set still has exactly one home.
+  startDate  DateTime?
+  finishDate DateTime?
+  /// Planned working days, used to derive the per-day target. Null where unplanned.
+  duration   Int?
+  /// An **override** for the rate needed to finish, not the source of it (FR-047). Where null, the
+  /// needed rate is `pendingQty ÷ remaining days to finishDate`; the old definition measured
+  /// against this column directly and would read every imported line as not-at-risk.
+  perDayQty  Decimal?  @db.Decimal(18, 3)
+  doneQty    Decimal   @default(0) @db.Decimal(18, 3)
+  isEstimate Boolean   @default(false)
+
+  /// The line's rate, which FR-002 prices a bill from (018 research §1) — `bugs.md` item 11.
+  ///
+  /// **Default 0, and that is not laziness.** The table is populated, so a required column cannot be
+  /// added to it — and of the two ways to be wrong, a zero rate is *visibly* wrong on a bill while a
+  /// guessed one is invisibly wrong. Billing refuses a line whose rate is still 0 with
+  /// `BOQ_RATE_MISSING` rather than billing it at nothing.
+  rate Decimal @default(0) @db.Decimal(18, 2)
+
+  /// Whether this line is a variation rather than original scope (FR-015a).
+  ///
+  /// Carried on the line rather than inferred from a date, because a variation agreed in week two and
+  /// a scope item added by a late correction look identical by timestamp and are different facts to
+  /// a client.
+  isVariation  Boolean @default(false)
+  /// The variation order this line came in under, where there is one.
+  variationRef String?
+
+  dwrTasks        DWRTask[]
+  clientBillLines ClientBillLine[]
+  awardLines      WorkOrderBOQItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1719,11 +1911,41 @@ model RABill {
   approvedAt       DateTime?
   rejectionRemark  String?
 
+  /// How many times this bill's quantities were revised **after** it was certified (018 FR-009).
+  ///
+  /// Kept as a count rather than left to be reconstructed from the audit trail: "this bill has been
+  /// round three times" is what a reader wants, and counting approval instances by hand to find out
+  /// is how a reader stops asking.
+  revisionCount       Int       @default(0)
+  /// FR-016 for the edit, which nothing recorded before Phase 4.
+  lastRevisedAt       DateTime?
+  lastRevisedByUserId String?
+
+  /// The work order this bill measures against. Nullable for bills raised before 018 — their `amount`
+  /// is the only figure they ever had, and inventing an award to attach them to would be a fiction.
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  /// **Gross, the three deductions, and net — each visible in its own right** (FR-008).
+  ///
+  /// Not one net figure. A subcontractor disputing a payment asks which deduction accounts for the
+  /// difference, and a single `netPayable` cannot answer. Equally important for the P&L: retention is
+  /// the company's money withheld and an advance recovery is money already paid, so **neither is a
+  /// project cost** — a summary that treated net as spend would understate the project.
+  grossAmount     Decimal @default(0) @db.Decimal(18, 2)
+  retentionAmount Decimal @default(0) @db.Decimal(18, 2)
+  advanceRecovery Decimal @default(0) @db.Decimal(18, 2)
+  otherDeductions Decimal @default(0) @db.Decimal(18, 2)
+  netPayable      Decimal @default(0) @db.Decimal(18, 2)
+
+  lines RABillLine[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
   @@index([projectId])
+  @@index([workOrderId])
   @@schema("projects")
 }
 
@@ -1749,11 +1971,233 @@ model WorkOrder {
 
   status WorkOrderStatus @default(draft)
 
+  /// Retention withheld per RA bill, as a fraction. FR-008's first deduction.
+  retentionPercent Decimal @default(0) @db.Decimal(8, 6)
+
+  awardLines        WorkOrderBOQItem[]
+  raBills           RABill[]
+  retentionReleases RetentionRelease[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId])
   @@index([projectId])
+  @@schema("projects")
+}
+
+/// A bill raised **to the client**, measured against the project's BOQ (018 US1) — `bugs.md` item 11.
+///
+/// ## Why its lines exist at all
+///
+/// `RABill` already held a single `amount`. Note 12's complaint is precisely that: a bill that is one
+/// figure cannot be reconciled against a BOQ, so nobody could say what had been billed of which item,
+/// and "support reconciliation against BOQ work order amounts and quantities" was unanswerable.
+///
+/// ## Cumulative quantity is never stored here
+///
+/// How much of a BOQ line has been billed to date is an **aggregate over the lines** (research §3).
+/// A stored counter is a second copy of a derivable fact, and the two disagree the first time a bill
+/// is deleted, corrected, or raised concurrently — at which point the over-scope check is wrong in
+/// whichever direction nobody notices.
+model ClientBill {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  billNumber  String
+  description String?
+  billingDate DateTime @db.Date
+
+  /// The **quoted percentage frozen at composition**, alongside each line's frozen rate.
+  ///
+  /// The project's own percentage can be corrected; a submitted bill must keep the one it was priced
+  /// at, for the same reason its lines keep theirs. A bill whose total moved after it went to the
+  /// client is a bill nobody can reconcile against the payment that came back.
+  quotedPercentage Decimal @default(0) @db.Decimal(8, 6)
+
+  /// Gross of the lines, after the quoted percentage. Stored because a submitted bill is a document.
+  grossAmount     Decimal @default(0) @db.Decimal(18, 2)
+  /// Retention withheld by the client. **Not a project cost** — it is the client's money held back.
+  retentionAmount Decimal @default(0) @db.Decimal(18, 2)
+  /// Gross less retention and any other deduction. What the client is asked to pay.
+  netAmount       Decimal @default(0) @db.Decimal(18, 2)
+
+  /// What the client **certified**, which can be less than what was billed (FR-005).
+  ///
+  /// Null until certification. Kept **alongside** the billed figures and never instead of them: the
+  /// variance between the two is the thing a project manager chases, and overwriting the billed
+  /// amount with the certified one erases the fact that there was a shortfall.
+  certifiedAmount Decimal?  @db.Decimal(18, 2)
+  certifiedAt     DateTime?
+
+  status ClientBillStatus @default(draft)
+
+  submittedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines ClientBillLine[]
+
+  @@unique([projectId, billNumber])
+  @@index([companyId])
+  @@index([projectId, status])
+  @@schema("projects")
+}
+
+enum ClientBillStatus {
+  draft
+  submitted
+  certified
+
+  @@schema("projects")
+}
+
+/// One BOQ line as billed on one client bill.
+model ClientBillLine {
+  id        String @id @default(cuid())
+  companyId String
+
+  clientBillId String
+  clientBill   ClientBill @relation(fields: [clientBillId], references: [id], onDelete: Cascade)
+
+  /// The BOQ line this measures. A bare id: `BOQTaskItem` is in this schema, but the relation is kept
+  /// so a deleted BOQ line cannot orphan a billed figure.
+  boqTaskItemId String
+  boqTaskItem   BOQTaskItem @relation(fields: [boqTaskItemId], references: [id], onDelete: Restrict)
+
+  /// Quantity billed **on this bill**. Cumulative is an aggregate — see `ClientBill`.
+  quantity Decimal @db.Decimal(18, 3)
+
+  /// **The BOQ rate frozen onto the line at composition** (FR-002).
+  ///
+  /// This is the assertion the whole feature turns on: revise the BOQ rate afterwards and a submitted
+  /// bill does not move. A bill is a document that was sent; a rate table is a current opinion, and
+  /// reading the second to render the first makes every historical bill a lie that changes shape.
+  rate Decimal @db.Decimal(18, 2)
+
+  /// `quantity × rate × (1 + quotedPercentage)`. Stored for the same reason the rate is frozen.
+  amount Decimal @db.Decimal(18, 2)
+
+  /// Whether this line takes the BOQ item past its scope quantity (FR-003).
+  ///
+  /// **A flag, not a refusal, at composition.** Over-measurement happens on real sites and is often
+  /// correct; refusing it at entry means the measurement never gets recorded anywhere. The refusal is
+  /// at *submit*, and only without a reason.
+  exceedsScope    Boolean @default(false)
+  /// Why the over-measurement is justified. Required to submit a bill carrying one.
+  overScopeReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientBillId, boqTaskItemId])
+  @@index([companyId])
+  @@index([boqTaskItemId])
+  @@schema("projects")
+}
+
+/// A line of the **award** to a subcontractor — their rate, not the client's (018 US2).
+///
+/// Separate from `BOQTaskItem` because the two are different numbers for the same work: the client's
+/// BOQ rate is revenue and the subcontractor's awarded rate is cost, and the margin between them is
+/// the thing item 11's P&L exists to show. Holding one column and calling it "the rate" would make
+/// that margin unrepresentable.
+/// Retention paid back to a subcontractor (018 FR-016a, Phase 7).
+///
+/// **An explicit act, never a schedule.** Confirmed by the client on 2026-10-03, who were offered
+/// two automatic schedules — half at practical completion and half after defects, and a fixed
+/// number of days — and chose the manual release. The reasoning holds beyond their answer: terms
+/// vary by contract, and a schedule guessed wrong does not fail loudly. It quietly withholds money
+/// that was due or releases money that was not, and nobody notices until the subcontractor does.
+///
+/// Append-only, like every other ledger in this product. A release is money leaving, and correcting
+/// one by editing the row would leave no trace that it had been for a different amount yesterday.
+model RetentionRelease {
+  id        String @id @default(cuid())
+  companyId String
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  /// Always positive. The service refuses a release exceeding what is still held, so the balance
+  /// can never be driven negative by a release — only by a bill being deleted beneath it, which
+  /// `onDelete: Restrict` on the bill lines already prevents.
+  amount Decimal @db.Decimal(18, 2)
+
+  /// The day the money went back, which is not necessarily the day somebody recorded it.
+  releasedOn DateTime @db.Date
+
+  /// Why now. Required by the service rather than by the column: an optional reason on a path that
+  /// moves money is an empty field, and "which milestone was this against" is the first question
+  /// anybody asks six months later.
+  reason String?
+
+  releasedByUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId, workOrderId])
+  @@schema("projects")
+}
+
+model WorkOrderBOQItem {
+  id        String @id @default(cuid())
+  companyId String
+
+  workOrderId String
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+
+  /// The client-side BOQ line this work corresponds to, where it corresponds to one. Nullable: a
+  /// subcontract can cover work the client's BOQ itemises differently, and forcing a match would make
+  /// somebody invent one.
+  boqTaskItemId String?
+  boqTaskItem   BOQTaskItem? @relation(fields: [boqTaskItemId], references: [id], onDelete: SetNull)
+
+  description String
+  unit        String
+  /// Awarded quantity. What `remaining` on a measured bill is counted down from.
+  awardedQty  Decimal @db.Decimal(18, 3)
+  /// The subcontractor's rate.
+  rate        Decimal @db.Decimal(18, 2)
+
+  billLines RABillLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([workOrderId])
+  @@schema("projects")
+}
+
+/// One awarded line as measured on one RA bill (FR-007).
+model RABillLine {
+  id        String @id @default(cuid())
+  companyId String
+
+  raBillId String
+  raBill   RABill @relation(fields: [raBillId], references: [id], onDelete: Cascade)
+
+  workOrderBoqItemId String
+  workOrderBoqItem   WorkOrderBOQItem @relation(fields: [workOrderBoqItemId], references: [id], onDelete: Restrict)
+
+  /// Measured **this period**. To-date and remaining are aggregates over these rows, for the reason
+  /// `ClientBill` gives: a stored counter is a second copy that disagrees after the first correction.
+  quantity Decimal @db.Decimal(18, 3)
+  /// The awarded rate, frozen onto the line. Same reasoning as `ClientBillLine.rate`.
+  rate     Decimal @db.Decimal(18, 2)
+  amount   Decimal @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([raBillId, workOrderBoqItemId])
+  @@index([companyId])
+  @@index([workOrderBoqItemId])
   @@schema("projects")
 }
 
@@ -1807,6 +2251,11 @@ model StagedProjectDocument {
   fileRef  String
   filePath String?
 
+  /// Carried through to the `ProjectDocument` the creation promotes this into, so a document
+  /// staged before its project existed is not the one that downloads without a name.
+  fileName String?
+  mimeType String?
+
   /// Who staged it. Checked on use, not merely recorded — see the note above.
   uploadedBy String
 
@@ -1842,6 +2291,16 @@ model ProjectDocument {
   fileRef  String
   filePath String?
   remark   String?
+
+  /// The uploader's own file name, and what their browser said the file was.
+  ///
+  /// Nullable because every row filed before 2026-10-04 predates these columns: both routes
+  /// received a content type and discarded it, so the download served `application/octet-stream`
+  /// under a name with no extension and a PDF opened as text. `describeStoredFile` sniffs the
+  /// bytes when `mimeType` is null, which is why no backfill was attempted — the bytes are the
+  /// only honest source, and they are already there.
+  fileName String?
+  mimeType String?
 
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String
@@ -1975,6 +2434,19 @@ model Employee {
   bankAccountNumberEncrypted String?
   ifscCode                   String?
 
+  /// The name the **bank** holds against this account (021 FR-008e, task T100).
+  ///
+  /// Separate from the employee's own name, and that separation is the point rather than an
+  /// oversight. In `docs/RING ROAD JULY SALARY.xls` the beneficiary names are misspelled against any
+  /// HR record — "Arivnd", "Rosan" — because they are what the beneficiary's own bank has on file.
+  /// A transfer is matched on the account number, but a name that disagrees with the bank's is what
+  /// gets a payment returned, and the first anybody knows is on payment day.
+  ///
+  /// Nullable, and the bank export **refuses** a row where it is unset rather than falling back to
+  /// the employee's name. A silent fallback is worse than a refusal: the refusal happens while
+  /// somebody can still fix it.
+  bankAccountHolderName String?
+
   // ── Contact ───────────────────────────────────────────────────────────────
   mobile                   String?
   alternateMobile          String?
@@ -2011,30 +2483,33 @@ model Employee {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  faceEnrolment           FaceEnrolment?
-  reEnrolmentRequests     ReEnrolmentRequest[]
-  punchRecords            PunchRecord[]
-  leaveBalances           LeaveBalance[]
-  leaveApplications       LeaveApplication[]
-  reimbursementClaims     ReimbursementClaim[]
-  salarySlips             SalarySlip[]
-  documents               EmployeeDocument[]
-  transfers               EmployeeTransfer[]
-  attendanceModifications AttendanceModification[]
+  faceEnrolment                FaceEnrolment?
+  reEnrolmentRequests          ReEnrolmentRequest[]
+  punchRecords                 PunchRecord[]
+  leaveBalances                LeaveBalance[]
+  leaveApplications            LeaveApplication[]
+  reimbursementClaims          ReimbursementClaim[]
+  salarySlips                  SalarySlip[]
+  documents                    EmployeeDocument[]
+  transfers                    EmployeeTransfer[]
+  attendanceModifications      AttendanceModification[]
   pendingAttendanceCorrections PendingAttendanceCorrection[]
-  exitRecords             ExitRecord[]
-  payrollLineItems        PayrollLineItem[]
-  loans                   Loan[]
-  taxDeclarations         TaxDeclaration[]
-  salaryAdvances          SalaryAdvance[]
+  exitRecords                  ExitRecord[]
+  payrollLineItems             PayrollLineItem[]
+  loans                        Loan[]
+  taxDeclarations              TaxDeclaration[]
+  salaryAdvances               SalaryAdvance[]
+
+  /// 020 FR-013c: punches refused for this employee.
+  punchRefusals PunchRefusal[]
+
+  /// 020 FR-011: which location this employee's punches validate against, and its history.
+  locationAssignments EmployeeLocationAssignment[]
 
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([siteId])
   @@schema("hr")
-
-  /// 020 FR-013c: punches refused for this employee.
-  punchRefusals PunchRefusal[]
 }
 
 /// Exactly one row per employee. A completed re-enrolment replaces `descriptor`,
@@ -2616,6 +3091,53 @@ model PunchRefusal {
   @@schema("hr")
 }
 
+/// Which location an employee's punches validate against, and the history of that decision
+/// (020 FR-011, FR-014, FR-016).
+///
+/// **Layered over the site fence, never replacing it.** An employee with no row here is validated
+/// against their site's geofence exactly as before — which is every employee on the day this ships,
+/// so introducing the table refuses nobody. That fallback is FR-016 and is the whole reason this can
+/// be deployed without a backfill.
+///
+/// **Append-only.** `assign()` writes a new row and never updates a prior one, so a transfer six
+/// months ago is still explicable: the row that was in force then is still there, with who decided it
+/// and when it took effect.
+model EmployeeLocationAssignment {
+  id        String @id @default(cuid())
+  companyId String
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// The site whose fence applies. Null **only** when `isMobile` — see the check constraint.
+  siteId String?
+
+  /// FR-014's exemption, and it lives here rather than on `Employee` on purpose: exempting somebody
+  /// from location validation is a dated, attributable act, not a property of the person. On
+  /// `Employee` it would be a boolean somebody flipped with no record of when or why.
+  ///
+  /// **Location only.** A mobile employee is refused for a face mismatch exactly as anyone else is —
+  /// mobility says where a person legitimately works, and the face check says who is holding the
+  /// phone (Clarifications, 2026-09-16).
+  isMobile Boolean @default(false)
+
+  /// Resolution keys on this, and on the punch's **day** rather than the request time, so an
+  /// offline-queued punch validates against the assignment in force when it was taken.
+  effectiveFrom DateTime @db.Date
+
+  /// FR-011's author. A `User` id — the person who decided, not the employee.
+  assignedByUserId String
+
+  /// Why, where stated. A mobile exemption without one is unreviewable.
+  reason String?
+
+  createdAt DateTime @default(now())
+
+  /// The resolution query's access path, and the only way this table is read on the punch path.
+  @@index([employeeId, effectiveFrom])
+  @@schema("hr")
+}
+
 model PendingAttendanceCorrection {
   id        String @id @default(cuid())
   companyId String
@@ -2681,8 +3203,62 @@ model ExitClearanceWaiver {
   waivedByUserId String
   waivedAt       DateTime @default(now())
 
+  /// Who countersigned the waiver (021 FR-016, Phase 8 — added 2026-10-02).
+  ///
+  /// **Separate from `waivedByUserId`, and the distinction is the point.** The client's answer was
+  /// "HR, with a Director countersign": `waivedByUserId` is who *proposed* the write-off, this is
+  /// who *agreed* to it. Collapsing the two would lose the fact the answer exists to create —
+  /// "HR waived this" and "HR asked and the Director agreed" are different statements about who
+  /// is answerable for the money.
+  ///
+  /// Nullable only for rows written before this phase, which were applied on HR's authority alone.
+  /// A waiver created from here always has one.
+  approvedByUserId String?
+  approvedAt       DateTime?
+
   @@unique([exitRecordId, itemKind, itemRef])
   @@index([companyId])
+  @@schema("hr")
+}
+
+/// A waiver somebody has **proposed** but nobody has countersigned yet (021 FR-016, Phase 8).
+///
+/// A table of its own rather than a status column on `ExitClearanceWaiver`, because the existence
+/// of a waiver row is what unblocks a final settlement. A pending proposal living in that table
+/// would be one forgotten `where` clause away from clearing an obligation nobody approved — and
+/// the forgotten clause would be in a query that still returned sensible-looking data, so nothing
+/// would look wrong until a settlement went out.
+///
+/// The approval spine stores only `(entityType, entityId)` and never dereferences it, so this row's
+/// id is what the pending item points at. The reason and the proposer live here and move to the
+/// waiver on approval.
+model ExitClearanceWaiverProposal {
+  id        String @id @default(cuid())
+  companyId String
+
+  exitRecordId String
+  exitRecord   ExitRecord @relation(fields: [exitRecordId], references: [id], onDelete: Cascade)
+
+  itemKind String
+  itemRef  String
+
+  /// Required, for the same reason the waiver's is: this writes off company money.
+  reason String
+
+  proposedByUserId String
+  proposedAt       DateTime @default(now())
+
+  /// `pending`, `approved` or `rejected`. A string rather than an enum: the spine owns the
+  /// lifecycle and this only records where it ended, so a new enum value would be a second place
+  /// to keep the same list correct.
+  status String @default("pending")
+
+  /// One live proposal per obligation. A second proposal for the same item while one is pending
+  /// would put two pending items in the Director's queue for one decision; the service refuses it
+  /// and this index is what makes the refusal true rather than likely.
+  @@unique([exitRecordId, itemKind, itemRef, status])
+  @@index([companyId])
+  @@index([status])
   @@schema("hr")
 }
 
@@ -2739,11 +3315,12 @@ model ExitRecord {
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  @@index([employeeId])
-  @@schema("hr")
-
   /// 021 FR-016: obligations waived on this exit.
   clearanceWaivers ExitClearanceWaiver[]
+  waiverProposals  ExitClearanceWaiverProposal[]
+
+  @@index([employeeId])
+  @@schema("hr")
 }
 
 enum TaxDeclarationStatus {
@@ -2923,6 +3500,15 @@ model PayrollLineItem {
   tds              Decimal @default(0) @db.Decimal(12, 2)
   loanEmiDeduction Decimal @default(0) @db.Decimal(12, 2)
 
+  /// Fuel lost on a machine, recovered from the operator who ran it (020 FR-007).
+  ///
+  /// **Its own column, not `loanEmiDeduction`.** FR-007 says a *named* deduction, and the task
+  /// generating it says named as a fuel recovery and not as an advance. The distinction is the
+  /// employee's: a loan instalment is money they asked for and agreed to repay, and this is money
+  /// taken for a loss. Folding it into either would leave somebody reading their payslip unable to
+  /// tell why their pay fell, which FR-007 exists to prevent.
+  fuelRecoveryDeduction Decimal @default(0) @db.Decimal(12, 2)
+
   netPay Decimal @default(0) @db.Decimal(12, 2)
 
   // ── Employer contributions ────────────────────────────────────────────────
@@ -3049,12 +3635,37 @@ model SalarySlip {
   earningSpecialAllowance Decimal @db.Decimal(12, 2)
   earningOt               Decimal @db.Decimal(12, 2)
 
+  /// The **unprorated** monthly entitlement for each component (021 FR-008f, task T105).
+  ///
+  /// `docs/NC0060_Payslip_Feb 2026.pdf` prints earnings as two columns, Full and Actual: what the
+  /// salary structure says per month, beside what LOP left of it. The `earning*` columns above are
+  /// the Actual ones.
+  ///
+  /// **Stored, not derived from the employee master on read.** A salary revision next year would
+  /// otherwise retroactively rewrite the Full column of a payslip already issued — and the figures
+  /// above are stored for exactly that reason, so deriving these would make one half of the same
+  /// table authoritative and the other half not.
+  ///
+  /// Nullable, and only because every slip issued before 2026-10-02 predates them. The PDF prints
+  /// an em dash rather than repeating the Actual figure where they are null: Full equal to Actual
+  /// means "no LOP this month", and a reader must not be unable to tell that from "we never
+  /// recorded it".
+  fullEarningBasic            Decimal? @db.Decimal(12, 2)
+  fullEarningHra              Decimal? @db.Decimal(12, 2)
+  fullEarningConveyance       Decimal? @db.Decimal(12, 2)
+  fullEarningSiteAllowance    Decimal? @db.Decimal(12, 2)
+  fullEarningSpecialAllowance Decimal? @db.Decimal(12, 2)
+
   deductionPf              Decimal @db.Decimal(12, 2)
   deductionEsic            Decimal @db.Decimal(12, 2)
   deductionPt              Decimal @db.Decimal(12, 2)
   deductionTds             Decimal @db.Decimal(12, 2)
   deductionLoanEmi         Decimal @db.Decimal(12, 2)
   deductionAdvanceRecovery Decimal @db.Decimal(12, 2)
+  /// 020 FR-007. Defaulted, unlike its neighbours, because every slip already issued predates it
+  /// and a required column would need every historical row rewritten to a figure that was never
+  /// deducted.
+  deductionFuelRecovery    Decimal @default(0) @db.Decimal(12, 2)
 
   /// Informational on the payslip — shown to the employee, not subtracted from
   /// `netPay`.
@@ -3077,6 +3688,129 @@ model SalarySlip {
 
   @@unique([employeeId, period])
   @@index([employeeId])
+  @@schema("payroll")
+}
+
+/// One attempt to email one employee their payslip (021 FR-005 to FR-007) — `bugs.md` item 8.
+///
+/// **`@@unique([payrollRunId, employeeId])` is what makes the retry safe**, and it is the whole
+/// design. With it, a retry is an upsert per employee: running it twice sends once. Without it,
+/// "retry the failures" and "retry everything" differ only by the correctness of a filter, and the
+/// failure mode is 500 employees receiving a second copy of their salary slip — from a control
+/// somebody pressed because the first attempt looked incomplete.
+///
+/// Keyed on the **employee**, not the address. Several employees at one site can share a mailbox,
+/// and each must get their own row and their own slip; de-duplicating by address would silently send
+/// one of them and mark the rest done.
+model SlipDelivery {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId String
+  employeeId   String
+
+  /// The address **as sent**, stored rather than joined at read time.
+  ///
+  /// An employee whose email is corrected after a failure must not have the old failure read as
+  /// though it went to the new address — which is exactly what a join would show, and exactly the
+  /// reading that stops anybody retrying it.
+  ///
+  /// Personal data, which is why this table's RLS policy carries an explicit `WITH CHECK` and the
+  /// read endpoint needs a payroll permission rather than merely being authenticated.
+  address String
+
+  status        SlipDeliveryStatus @default(pending)
+  /// The provider's own words where there are any. Stored so a retry decision can be made from the
+  /// screen instead of from a log nobody has access to.
+  failureReason String?
+  sentAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([payrollRunId, employeeId])
+  @@index([companyId])
+  @@index([payrollRunId, status])
+  @@schema("payroll")
+}
+
+enum SlipDeliveryStatus {
+  pending
+  sent
+  failed
+  /// No address on file. Distinct from `failed`, because the two need different actions from
+  /// different people: a failure is retried, an undeliverable one needs somebody to find an address
+  /// first. A retry that swept both up would keep failing on the same employees forever.
+  undeliverable
+
+  @@schema("payroll")
+}
+
+/// An advance recovered from a **transfer**, not from the approved run (021 FR-010 to FR-013) —
+/// `bugs.md` item 9.
+///
+/// **`@@unique([payrollRunId, salaryAdvanceId])` *is* FR-013** — "MUST NOT recover the same advance
+/// twice" — enforced by the database rather than by a check somebody has to remember in a code path
+/// that regenerates a bank sheet. Producing the sheet a second time recovers nothing further.
+///
+/// The recovery adjusts the transfer and leaves the run's figures untouched. That is the point of
+/// item 9: an advance taken *between* approval and payment day must still come out of the money that
+/// actually moves, and an approved run is immutable.
+model BankSheetRecovery {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId    String
+  employeeId      String
+  salaryAdvanceId String
+
+  amount Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([payrollRunId, salaryAdvanceId])
+  @@index([companyId])
+  @@index([payrollRunId])
+  @@schema("payroll")
+}
+
+/// One line of the bank's own transaction sheet, as uploaded (021 FR-008 to FR-011).
+///
+/// **Stored whether or not it matched** (task T055). SC-004 asks that every line be either matched or
+/// reported, and a parser that rejects the file on its first unrecognised row reports none of them.
+/// So an unreadable row is a row here with an `unmatchedReason`, not an exception — the upload
+/// succeeds and the *reconciliation* is what is incomplete.
+///
+/// Replaced wholesale per run on each upload rather than appended to: a second upload is a correction
+/// of the first, and two sets of lines for one run would make "unmatched" a number nobody could
+/// interpret.
+model BankTransactionLine {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId String
+
+  /// Where in the file this came from, so a reported problem can be pointed at.
+  rowNumber Int
+
+  /// The raw fields, exactly as the file gave them. Not normalised: matching normalises a copy, and
+  /// storing the normalised form would lose the leading zero that is part of the account number.
+  beneficiaryName    String?
+  beneficiaryAccount String?
+  ifsc               String?
+  amount             Decimal? @db.Decimal(12, 2)
+
+  /// The payroll line this was matched to, or null.
+  matchedPayrollLineItemId String?
+  /// Why it did not match, in words. Null when it did.
+  unmatchedReason          String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([payrollRunId])
   @@schema("payroll")
 }
 
@@ -4838,11 +5572,194 @@ model FuelEntry {
   variancePercent Decimal? @db.Decimal(8, 2)
   varianceAlert   Boolean  @default(false)
 
+  /// 020 FR-001: the review raised against this reading, once somebody raises one.
+  varianceException FuelVarianceException?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([companyId, date])
   @@index([companyId, equipmentId, date])
+  @@schema("plant")
+}
+
+/// What a reviewer decided about a machine that burned more fuel than its benchmark
+/// (020 FR-001 to FR-009).
+///
+/// **Detection is untouched by this table** (FR-017). `Equipment.fuelBenchmark`,
+/// `FuelEntry.variancePercent` and `FuelEntry.varianceAlert` keep computing exactly as they did;
+/// what is added is the review that turns an alert nobody must act on into a decision with a name
+/// against it. Raising an exception is deliberately *not* done inside the detector — coupling the
+/// two would mean a change to either could silently alter the other.
+model FuelVarianceException {
+  id        String @id @default(cuid())
+  companyId String
+
+  fuelEntryId String    @unique
+  fuelEntry   FuelEntry @relation(fields: [fuelEntryId], references: [id], onDelete: Cascade)
+
+  status FuelExceptionStatus @default(open)
+
+  /// Who bears the cost. **Nullable, and deliberately without a default** (plan D27): a default
+  /// would decide, quietly and at scale, who pays for fuel nobody can account for. It is set only
+  /// when somebody confirms the exception, and `neither` is an explicit choice rather than an
+  /// absence.
+  attribution FuelAttribution?
+
+  /// Required when `attribution` is `operator` and the machine had more than one in the period
+  /// (FR-009). **Never inferred from the logbook** — the requirement says named explicitly, and
+  /// inferring is how the wrong person's wages get docked.
+  operatorEmployeeId String?
+
+  reviewedByUserId String?
+  reviewedAt       DateTime?
+
+  /// Why. Required to dismiss (FR-008): a dismissal nobody has to justify is how an exception
+  /// register becomes a list everybody clears without reading.
+  reason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// 020 Phase 6. Exclusive by construction — see `FuelAttribution`.
+  hireBillDeduction HireBillDeduction?
+  operatorRecovery  OperatorFuelRecovery?
+
+  @@index([companyId, status])
+  @@schema("plant")
+}
+
+/// Where a reviewed fuel exception stands (020 FR-002, FR-008).
+enum FuelExceptionStatus {
+  /// Raised from an alert, nobody has decided yet.
+  open
+  /// Somebody confirmed it, and `attribution` says who bears it.
+  confirmed
+  /// Somebody judged it not worth pursuing, with a reason.
+  dismissed
+
+  @@schema("plant")
+}
+
+/// Fuel burned beyond benchmark, recovered from the hirer's next bill (020 FR-003, FR-004).
+///
+/// `netPayable` on the bill is **recomputed** from gross, TDS and the sum of deductions rather than
+/// decremented in place (plan D28). A vendor disputing a bill is owed the arithmetic, and a net
+/// reduced by an `UPDATE` cannot produce it.
+model HireBillDeduction {
+  id        String @id @default(cuid())
+  companyId String
+
+  hireBillId String
+  hireBill   HireBill @relation(fields: [hireBillId], references: [id], onDelete: Cascade)
+
+  /// One exception cannot be recovered twice from a bill. Structural, not a convention.
+  fuelVarianceExceptionId String                @unique
+  fuelVarianceException   FuelVarianceException @relation(fields: [fuelVarianceExceptionId], references: [id], onDelete: Cascade)
+
+  amount Decimal @db.Decimal(18, 2)
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([companyId, hireBillId])
+  @@schema("plant")
+}
+
+/// Fuel burned beyond benchmark, recovered from the operator's salary (020 FR-005 to FR-007, FR-010).
+///
+/// **No path to a payroll line except through an approved item** (FR-006). The gate is the approval
+/// spine, not a check inside the payroll service — the difference is whether a second caller can
+/// bypass it.
+///
+/// Settles through `SalaryAdvance`'s recovery machinery, which already handles instalments and a
+/// recovery exceeding the month's net. It is **not** an advance, and is named as a fuel recovery on
+/// the payslip: this is a recovery for loss, not money lent (FR-007).
+model OperatorFuelRecovery {
+  id        String @id @default(cuid())
+  companyId String
+
+  fuelVarianceExceptionId String                @unique
+  fuelVarianceException   FuelVarianceException @relation(fields: [fuelVarianceExceptionId], references: [id], onDelete: Cascade)
+
+  /// → `hr.Employee`. Not a relation: `plant` does not reach into `hr`'s schema (Principle I).
+  employeeId String
+
+  amount Decimal @db.Decimal(18, 2)
+
+  status OperatorRecoveryStatus @default(pending_approval)
+
+  /// The approval spine's item. Null only before submission.
+  approvalItemId String?
+
+  /// How much of `amount` has actually been deducted so far (020 FR-007b).
+  ///
+  /// A recovery is **not** necessarily settled in one period. FR-007a caps a payslip's *total*
+  /// deductions at half its wages, so a line already carrying an advance and a loan may have room for
+  /// only part of this — and the remainder carries. This column is what makes a carried balance a
+  /// fact rather than an inference: the balance is `amount − recoveredAmount`, and it is visible
+  /// without reconstructing it from payroll history.
+  recoveredAmount Decimal @default(0) @db.Decimal(18, 2)
+
+  /// Set when the approved recovery reaches a payroll line, and what makes application idempotent:
+  /// a second `approval.completed` for the same recovery finds this already set and does nothing.
+  ///
+  /// The **last** line it touched, where a carried recovery touches several. The audit trail of every
+  /// instalment is the payroll lines themselves, each carrying its own `fuelRecoveryDeduction`.
+  appliedPayrollLineItemId String?
+
+  reversedAt       DateTime?
+  reversedByUserId String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([companyId, status])
+  @@index([companyId, employeeId])
+  @@schema("plant")
+}
+
+/// Where an operator fuel recovery stands (020 FR-006, FR-010).
+enum OperatorRecoveryStatus {
+  /// Raised and travelling the chain. **Cannot reach a payroll line in this state.**
+  pending_approval
+  /// Approved, not yet applied to a payroll line.
+  approved
+  /// Applied as a named deduction on a payroll line.
+  applied
+  /// Refused by the chain. Never touches a payroll line.
+  rejected
+  /// Undone after application, with who and when recorded (FR-010).
+  reversed
+
+  @@schema("plant")
+}
+
+/// Who bears the cost of fuel burned beyond the benchmark (020 FR-002 to FR-005).
+///
+/// **Exclusive.** An exception attributed to the hirer has no operator recovery and vice versa —
+/// double recovery for one loss is the failure this prevents, and the `@@unique` on each
+/// consequence table is what makes that structural rather than a convention somebody remembers.
+enum FuelAttribution {
+  /// Deducted from the hire bill. Not offered for an owned machine — there is no hirer.
+  hirer
+  /// Recovered from the operator's salary, through the approval chain.
+  operator
+  /// Shared between the hirer and the operator (FR-002).
+  ///
+  /// **Added 2026-10-02.** Phase 5 implemented three of the four attributions FR-002 names and this
+  /// was missed; it surfaced while writing the recovery, which is the first code that had to branch
+  /// on all four. Shared means the loss is *divided*, never collected twice — so an exception
+  /// attributed `both` still admits exactly one recovery, and whichever destination is raised first
+  /// claims it. Splitting one loss across two destinations needs a share per destination, which
+  /// FR-002 does not define and this does not invent.
+  both
+  /// Confirmed as real and pursued against nobody. A deliberate answer, which is why it is a
+  /// value here rather than a null.
+  neither
+
   @@schema("plant")
 }
 
@@ -4960,6 +5877,9 @@ model HireBill {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// 020 FR-003: fuel recovered from this bill.
+  fuelDeductions HireBillDeduction[]
 
   @@index([companyId, status])
   @@index([companyId, equipmentId])

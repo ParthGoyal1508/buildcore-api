@@ -10,5 +10,8 @@
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
-  "maxWorkers": 1
+  "maxWorkers": 1,
+  "setupFiles": [
+    "<rootDir>/bound-connection-pool.ts"
+  ]
 }

@@ -1,7 +1,7 @@
 {
   "name": "buildcore-api",
   "version": "0.1.0",
-  "description": "BuildCore ERP \u2014 REST API (NestJS + Prisma)",
+  "description": "BuildCore ERP — REST API (NestJS + Prisma)",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -69,7 +69,8 @@
     "reflect-metadata": "0.1.13",
     "resend": "^6.25.0",
     "rxjs": "7.8.1",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@nestjs/cli": "10.1.10",

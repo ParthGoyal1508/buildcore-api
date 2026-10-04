@@ -7,6 +7,7 @@ import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { LetterKindFieldsService } from '../letter-kinds/letter-kind-fields.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../company-scope';
@@ -48,14 +49,21 @@ type TemplateRow = {
 /**
  * Letter template master (011 FR-020, FR-021) — a `settings`-schema master owned by
  * feature 011. Enforces at most one active template per (company, letterKind) by
- * deactivating the prior active one when a template is activated. Token-set
- * validation is the recruitment controller's job (it owns the per-type token sets).
+ * deactivating the prior active one when a template is activated.
+ *
+ * **Field validation moved here on 2026-10-02** (017 FR-011b, FR-011c). It used to be the
+ * recruitment controller's job, which was right while the token sets were a compile-time map keyed by
+ * the five shipped letter types — and wrong the moment a kind became company-definable, because the
+ * controller validating a save it does not own meant a template created through any other path was
+ * not validated at all. Now every save goes through `LetterKindFieldsService` against **its own
+ * kind's** declaration.
  */
 @Injectable()
 export class LetterTemplatesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly fields: LetterKindFieldsService,
   ) {}
 
   private toView(row: TemplateRow): LetterTemplateView {
@@ -127,6 +135,15 @@ export class LetterTemplatesService {
       );
     }
 
+    // Before the transaction, so a refusal costs nothing and the error is about the template rather
+    // than about a rolled-back write.
+    await this.fields.assertTemplateFieldsDeclared(
+      rlsContextFor(caller),
+      dto.letterKindId,
+      dto.bodyTemplate,
+      'save',
+    );
+
     const created = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -184,6 +201,18 @@ export class LetterTemplatesService {
         if (!existing)
           throw new NotFoundException(`Letter template ${id} not found`);
         assertInScope(caller, existing, `Letter template ${id}`);
+
+        // Validated against the existing row's kind, not against anything in the DTO — a template's
+        // kind is not editable, and reading it from the request would let a caller point validation
+        // at a kind that declares what they wanted to use.
+        if (dto.bodyTemplate !== undefined) {
+          await this.fields.assertTemplateFieldsDeclared(
+            rlsContextFor(caller),
+            existing.letterKindId,
+            dto.bodyTemplate,
+            'save',
+          );
+        }
 
         if (dto.isActive === true && !existing.isActive) {
           await tx.letterTemplate.updateMany({

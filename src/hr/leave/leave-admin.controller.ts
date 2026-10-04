@@ -53,7 +53,7 @@ export class LeaveAdminController {
   ) {
     // Explicitly pending-by-default: this is the approver's queue, and an
     // unfiltered request here should not surface already-decided applications.
-    return this.leave.listForReview(
+    return this.leave.listForReviewNamed(
       callerFrom(user, request),
       query.status ?? LeaveApplicationStatus.pending,
     );

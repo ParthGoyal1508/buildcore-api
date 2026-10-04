@@ -68,16 +68,30 @@ export class ExitClearanceController {
 
   @Post('waivers')
   @ApiOperation({
-    summary: 'Stop pursuing one obligation, on the record',
+    summary: 'Propose that the company stop pursuing one obligation',
     description:
+      'HR proposes; the Director countersigns (FR-016, changed 2026-10-02). This **submits an ' +
+      'approval item and writes no waiver** — the clearance comes back still blocked, and the ' +
+      'obligation clears only when the item is approved. A rejected proposal leaves it ' +
+      'outstanding.\n\n' +
       'A waiver records that the company is not chasing this, with a name and a reason ' +
       'against the decision. It does **not** mark the obligation discharged: an asset waived ' +
       'here stays open in the asset register, because marking it returned would put a false ' +
       'fact in the register that owns the truth (FR-014c).',
   })
   @ApiResponse({
+    status: 403,
+    description:
+      'Proposing a waiver is an HR action — write access to employee records is not enough.',
+  })
+  @ApiResponse({
     status: 404,
     description: 'That obligation is not on this exit’s clearance.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'A waiver for this obligation is already pending, or already countersigned.',
   })
   async waive(
     @UserEntity() caller: AuthenticatedUser,
@@ -90,7 +104,7 @@ export class ExitClearanceController {
       resolveCompanyId(caller, companyId),
       employeeId,
       dto,
-      caller.id,
+      caller,
     );
   }
 }

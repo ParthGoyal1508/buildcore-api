@@ -343,3 +343,69 @@ from the task text, and what was verified.
   the notifications surface is 004's US4, which is not built.
 - `TODO(VIRUS_SCAN)`: equipment documents are stored unscanned, the same gap 005's and
   007's uploads carry.
+
+---
+
+## Reopened 2026-10-04 — the machinery masters are seeded for nobody
+
+- [ ] T058 **`CompaniesService.create` does not seed the two machinery masters, so a new
+      company has no equipment categories and no equipment document types.** Every other master
+      is seeded there: document types, vendor categories, item categories, asset categories,
+      asset document types and condition grades. `EquipmentCategoriesService.seedDefaultsForCompany`
+      and `EquipmentDocTypesService.seedDefaultsForCompany` both exist, are correct, and are
+      **called by nothing** outside `prisma/seed-demo.ts`.
+
+      Measured, not inferred: `SELECT count(*) FROM settings."EquipmentCategory"` returned **zero
+      rows for both companies** in the development database. The consequence is that the first
+      person to register a machine in a new company was refused until they hand-created a category.
+
+      **One claim in the first draft of this task was wrong, and is corrected here rather than
+      quietly dropped.** It said the ten defaults carry the fuel benchmarks item 13's variance
+      alerts are computed from. They do not: `DEFAULT_EQUIPMENT_CATEGORIES` carries a name and a
+      meter type and nothing else, so every seeded category has a **null** benchmark — exactly like
+      one created by hand. Found by querying `fuelBenchmark` after seeding, which is to say after
+      writing the claim into four files. All four are corrected. T061 records what is still true.
+
+      **No module boundary had to be decided — the codebase had already decided it.**
+      `SettingsModule` declares its **own** instances of the three asset masters for precisely this
+      purpose, under a comment reading *"Not exported: `AssetsModule` declares its own instances,
+      the same arrangement the machinery masters have with `PlantModule`."* That sentence was true
+      of where the services live and false of what `CompaniesService` does with them, which is how
+      the gap survived a reading of that file. Settings now declares its own two machinery
+      instances on the same terms, `PlantModule` keeps its own, and there is no cycle, no event and
+      no window in which a new company has no categories.
+
+- [X] T059 **A guard that fails when a `seedDefaultsForCompany` exists and nothing calls it from
+      company creation.** **Done 2026-10-04** — `src/settings/companies/seeded-masters.spec.ts`. This is the third defect of its exact class in two days — the approval
+      chain list drifted three chains behind, the chain *slots* were mapped for nobody, and now
+      two masters are seeded for nobody. All three share one symptom: whether a company works
+      depends on **when it was created**, because a backfill migration reached the old ones and
+      the creation path does not reach the new ones. A source scan over `src/settings` and
+      `src/approvals` for the method, checked against the calls in `CompaniesService.create`.
+
+      Three assertions, and the third has the teeth: the **count** of calls must equal the count of
+      services with a seeder. Checking only that each class name appears in the file would pass for
+      a service injected and never invoked — which is half of what went wrong here, since injecting
+      the machinery masters and forgetting the call would have looked identical from outside. Proven
+      by deleting one call: the test fails, naming the discrepancy.
+
+      **Its own first version was wrong and nearly shipped.** It scanned with
+      `git ls-files "src/settings/**/*.ts"`, which silently misses every file sitting *directly* in
+      `src/settings/` — `**/` requires a directory level. It found eight seeders against nine calls
+      and could not say why; the ninth was `ChainsService`. Directory pathspecs now.
+
+- [X] T060 Found while fixing this: `test/plant.e2e-spec.ts`'s "seeds a company with the ten
+      default categories" asserted a migration that does not exist. It was **corrected rather
+      than loosened** — it now asserts what the endpoint guarantees, and names this gap.
+      **Re-pointed 2026-10-04** now that T058 has landed.
+
+- [ ] T061 **Every seeded equipment category has a null fuel benchmark**, so item 13's variance
+      alert cannot fire for any of them until somebody fills one in per category. That is the state
+      T058 leaves, and it is not a regression — a hand-created category was equally empty. Recorded
+      because it was found while writing a claim that the opposite was true, into four files.
+
+      Two readings, and this one needs the client rather than a decision of ours: either the ten
+      defaults ship with indicative benchmarks (litres per hour for an excavator is a known figure,
+      and a wrong default silently mis-measures every machine under it), or the benchmark becomes a
+      **required** field when a category is created, so the gap is refused where somebody can fix it
+      rather than discovered when no alert ever fires. The second is the safer of the two.

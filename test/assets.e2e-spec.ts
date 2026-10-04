@@ -6,6 +6,8 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
+import { effectiveCompanyIdFor } from './fixtures/effective-company';
+import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 
 /**
  * End-to-end coverage of `/assets/*` against a real database (012 US1–US3).
@@ -106,10 +108,10 @@ describe('Assets module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({
-      orderBy: { createdAt: 'asc' },
-    });
-    companyId = company.id;
+    // Not the oldest company: the one the API will actually write to. Corrected 2026-10-04
+    // — a single `UserCompanySelection` row for this account overrides every `?companyId=`
+    // this suite sends, which is 019's intended behaviour and was news to this file.
+    companyId = await effectiveCompanyIdFor(sys);
 
     const client = await http()
       .post(`/projects/clients?companyId=${companyId}`)
@@ -118,16 +120,21 @@ describe('Assets module (e2e)', () => {
       .expect(201);
     createdClientIds.push(client.body.id);
 
-    const project = await http()
-      .post(`/projects?companyId=${companyId}`)
-      .set(auth())
-      .send({
+    // 017 FR-009 refuses creation while a mandatory document kind has none attached, and the
+    // seeded company marks four. This project is a fixture for something else, so the documents
+    // are staged the way a project manager stages them — see the helper.
+    const project = await createProjectWithMandatoryDocuments({
+      http,
+      headers: auth(),
+      companyId,
+      body: {
         name: unique('Project'),
         clientId: client.body.id,
         contractValue: 1,
         startDate: '2026-08-01',
-      })
-      .expect(201);
+      },
+    });
+    expect(project.status).toBe(201);
     projectId = project.body.id;
     createdProjectIds.push(projectId);
 

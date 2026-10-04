@@ -770,3 +770,102 @@ correct code. The double now honours the clause.
 asserted the pre-reversal rule. They were tasks rather than cleanup for a reason: a comment stating
 the opposite of the code is how the next reader is misled, and all three sat on the routes that
 implement the reversal.
+
+---
+
+## Phase 10: A letter kind declares its own fields (added 2026-10-02, FR-011b, FR-011c)
+
+Closes the gap found on 1 October: FR-011 lets a company define a letter kind without a developer, and
+FR-012 renders variable details — yet the list of usable fields is fixed in code and keyed to the five
+original letter types, so a kind the client defines gets an **empty** field list and the template editor
+then refuses to save a template using any field at all. Both requirements were satisfied and together
+they still produced nothing usable.
+
+**Smaller than it first looked.** `buildcore-web`'s FR-014 already requires "define a new letter kind,
+**its variable fields** and its fixed terms". The requirement existed; only this half was missing. So
+this is the api catching up to a contract already written, not new scope invented on both sides.
+
+- [x] T133 Add `LetterKindField` — the fields one kind's templates may use. Keyed to the kind, not to
+      the shipped `LetterType` enum, which is the coupling that caused this.
+- [x] T134 Each field names **where its value comes from** (FR-011c): the record type and the path within
+      it. A field that is only a label is a placeholder that renders blank, and a blank in a signed
+      letter is indistinguishable from a deliberate omission.
+- [x] T135 Seed the five shipped letter types' existing field lists into the new table in the migration,
+      so nothing that renders today starts rendering differently. **The backfill is the risk of this
+      phase** — every live template references these fields by name, and a seed that renames or drops one
+      breaks letters already issued.
+- [x] T136 **CRITICAL** Validate a template against **its own kind's** declaration on save, and refuse a
+      reference to a field the kind does not declare. The alternative offered to the client — one shared
+      list for every kind — was declined precisely because it would offer exit-settlement fields in an
+      offer letter's editor.
+- [x] T137 Refuse at render too, not only at save (FR-011c). A template saved before a field was removed
+      from its kind would otherwise render a blank where a salary should be.
+- [x] T138 [P] Unit test: a template using a field its kind declares saves; the same template under a
+      kind that does not declare it is refused, naming the field.
+- [x] T139 [P] Unit test: every shipped letter type renders exactly as before the migration. This is the
+      test that protects T135, and it is worth more than the four above it.
+- [x] T140 [P] Unit test: a company-defined kind with declared fields renders them — the end-to-end
+      claim item 18 actually made, which nothing currently proves.
+- [x] T141 Restricted-type handling is unchanged: a field drawing on regulated personal data (Aadhaar,
+      017 FR-024) stays refused by the template resolver whatever a kind declares. A kind must not be
+      able to declare its way past a PII gate.
+
+### Letter-field phase implementation record, 2026-10-02
+
+#### What the coupling actually cost
+
+`LETTER_TOKENS` was keyed by the five shipped letter types. FR-011 lets an administrator define a kind
+without a code change — and such a kind got an **empty** token list, so `unknownTokens` returned `[]`
+and validated nothing, while the renderer had no values to supply. Both requirements were satisfied,
+and together they produced a letter kind whose templates render a page of blanks. Signed.
+
+**The permissive default was the bug.** `unknownTokens` returning `[]` for an unknown kind was the
+honest-looking choice at the time — "this file cannot know the tokens for a kind invented after it
+shipped" — and it is why the feature half-worked rather than failed. `LetterKindFieldsService` refuses
+every token for a kind that declares none, and the message names the remedy.
+
+#### The backfill is the risk, so it is the thing under test
+
+Every live template references these tokens by name; a seed that renames or drops one breaks letters
+already issued. `letter-kind-field.spec.ts` **parses the migration's `VALUES` list and compares it
+against `LETTER_TOKENS` in both directions** — no token lost, none invented. That test is worth more
+than the nine around it, and it fails loudly if either file moves without the other.
+
+Where a shipped value is computed rather than read — `tenure`, `issueDate`, `offeredCtc` — the source
+is `manual`. The resolver supplies it, there is no column to point at, and claiming a path that does
+not exist would be worse than admitting there is none. A `CHECK` enforces the pairing in both
+directions so no writer has to remember it.
+
+#### Validation moved, and that was a correctness fix rather than tidying
+
+It used to live in the recruitment **controller**, which was right while the token sets were a
+compile-time map, and wrong the moment a kind became company-definable: a controller validating a save
+it does not own means a template created through any other path is not validated at all. It is now in
+`LetterTemplatesService`, so every save goes through it — and on update it validates against the
+**existing row's** kind rather than anything in the request, since a caller naming a kind could
+otherwise point validation at one that declares what they wanted to use.
+
+#### Render-time refusal is not redundant (T137)
+
+A template saved while a field was declared renders a blank where a salary should be after somebody
+removes that field. The two checks catch different moments, and the messages differ because the
+remedies do: "declare the field" at save, "its kind no longer declares this" at render.
+
+#### Withdrawing a field is deliberately not blocked
+
+An administrator tidying a kind should not be stopped by a draft somebody abandoned. So a delete
+succeeds and **issuing** refuses, naming the removed field — the failure lands on the person issuing
+rather than on the person tidying, which is where it can be acted on.
+
+#### T141, which is the one that would have been a disclosure
+
+A kind's field list became company-editable, so an administrator gained a way to put Aadhaar in a
+signed letter by naming the column. `FORBIDDEN_FIELD_PATH_FRAGMENTS` is checked when a field is
+declared **and again when it resolves** — a row written before the check existed would otherwise still
+resolve. Matched on any path *containing* a fragment, because `aadhaarEncrypted` and
+`employee.aadhaarEncrypted` are the same disclosure, and case-insensitively.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,325 tests across 120 suites**, injector
+resolves. One migration.

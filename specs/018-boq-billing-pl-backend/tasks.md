@@ -14,10 +14,10 @@ description: "Task list for 018 BOQ, Billing and Project P&L (backend)"
 
 ## Phase ordering, and why it must not be rearranged
 
-Phases 6–8 are the ones that rest on the **assumptions** recorded in the spec's Clarifications —
-variations, retention release, client certification. None was answered by the client. They are last
-so that overturning one costs a phase rather than the feature, and moving them earlier for
-convenience would throw that away.
+Phases 6–8 rested on the **assumptions** recorded in the spec's Clarifications — variations,
+retention release, client certification. **All three were confirmed by the client on 2026-10-03**,
+as assumed. They stayed last until then so that overturning one would have cost a phase rather than
+the feature; moving them earlier for convenience would have thrown that away.
 
 ---
 
@@ -25,106 +25,454 @@ convenience would throw that away.
 
 **Nothing else can start.** FR-002 prices from a rate that does not exist today (research §1).
 
-- [ ] T001 Add `rate Decimal @default(0)`, `isVariation Boolean @default(false)` and
+- [x] T001 Add `rate Decimal @default(0)`, `isVariation Boolean @default(false)` and
       `variationRef String?` to `BOQTaskItem`. Default 0 because the table is populated and a
       required column cannot be added to one — and because a zero rate is visibly wrong on a bill
       whereas a guessed rate is invisibly wrong
-- [ ] T002 [P] Expose rate on the BOQ CRUD surface and DTOs
-- [ ] T003 [P] Unit-test that a line with rate 0 is refused at billing with `BOQ_RATE_MISSING`,
+- [x] T002 [P] Expose rate on the BOQ CRUD surface and DTOs
+- [x] T003 [P] Unit-test that a line with rate 0 is refused at billing with `BOQ_RATE_MISSING`,
       not billed at zero
 
 ## Phase 2: Client bills with lines (US1)
 
-- [ ] T004 Add `ClientBill` and `ClientBillLine` per data-model.md
-- [ ] T005 Hand-author RLS for both — `ENABLE`, `FORCE`, `tenant_isolation`
-- [ ] T006 [P] DTOs for compose, submit and certify
-- [ ] T007 Implement `compose()` — prices from the BOQ rate and **freezes it onto the line**
-- [ ] T008 Implement cumulative billed quantity as an aggregate, never a stored counter (research §3)
-- [ ] T009 Implement the over-scope flag at composition and the refusal at submit (research §5)
-- [ ] T010 Refuse a bill on a project with no BOQ — `BOQ_REQUIRED`
-- [ ] T011 [P] Unit-test the frozen rate: revise the BOQ rate, assert the submitted bill is unchanged.
+- [x] T004 Add `ClientBill` and `ClientBillLine` per data-model.md
+- [x] T005 Hand-author RLS for both — `ENABLE`, `FORCE`, `tenant_isolation`
+- [x] T006 [P] DTOs for compose, submit and certify
+- [x] T007 Implement `compose()` — prices from the BOQ rate and **freezes it onto the line**
+- [x] T008 Implement cumulative billed quantity as an aggregate, never a stored counter (research §3)
+- [x] T009 Implement the over-scope flag at composition and the refusal at submit (research §5)
+- [x] T010 Refuse a bill on a project with no BOQ — `BOQ_REQUIRED`
+- [x] T011 [P] Unit-test the frozen rate: revise the BOQ rate, assert the submitted bill is unchanged.
       **This is the assertion the feature turns on**
-- [ ] T012 [P] Unit-test cumulative quantity across two bills
-- [ ] T013 e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit
+- [x] T012 [P] Unit-test cumulative quantity across two bills
+- [X] T013 e2e in `test/client-bills.e2e-spec.ts`: raise, flag, refuse, supply reason, submit.
+
+      **RUN 2026-10-03, 19 assertions, all passing.** Possible for the first time: every case needed
+      a project with a priced BOQ, which nothing in this repository could create until 008's entry
+      and import landed the same evening.
+
+      **It found a defect on its first run, and the defect was in the route table.** `BoqController`
+      is mounted at `projects/:id/boq` and was registered before `ClientBillsController`, so
+      `GET /projects/client-bills/boq` — the request the billing screen opens with — was answered by
+      the BOQ *tree* of a project named `client-bills`: **HTTP 200 carrying an empty array.** Every
+      project in the company would have reported having no BOQ on the one screen whose job is to show
+      one. Fixed by registering `BoqController` last, and `src/projects/route-shadowing.spec.ts`
+      now asserts the ordering by reflection in the unit suite rather than leaving it to a comment
+      that said the opposite.
+
+      Also corrected a wrong assumption of our own: the first draft expected a **draft** bill to
+      count towards the cumulative position. It does not, and should not — a draft has measured
+      nothing yet. That is now its own assertion rather than an accident the over-scope cases
+      depended on.
 
 ## Phase 3: Subcontractor bills measured against the award (US2)
 
-- [ ] T014 Add `WorkOrderBOQItem` and `RABillLine`; add the money columns to `RABill`
-- [ ] T015 Hand-author RLS for both new tables
-- [ ] T016 Implement award capture on the work order — the subcontractor's rate, not the client's
-- [ ] T017 Implement measured lines with this-period / to-date / remaining (FR-007)
-- [ ] T018 Implement retention, deductions and advance recovery, showing gross, deductions and net
+- [x] T014 Add `WorkOrderBOQItem` and `RABillLine`; add the money columns to `RABill`
+- [x] T015 Hand-author RLS for both new tables
+- [x] T016 Implement award capture on the work order — the subcontractor's rate, not the client's
+- [x] T017 Implement measured lines with this-period / to-date / remaining (FR-007)
+- [x] T018 Implement retention, deductions and advance recovery, showing gross, deductions and net
       **separately** (FR-008)
-- [ ] T019 [P] Unit-test that `netPayable` equals gross minus the three deductions, and that each is
+- [x] T019 [P] Unit-test that `netPayable` equals gross minus the three deductions, and that each is
       visible in its own right
-- [ ] T020 e2e: two bills against one award, with remaining quantity correct on the second
+- [X] T020 e2e: two bills against one award, with remaining quantity correct on the second.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts`. To-date quantity is summed over sibling bill
+      lines each time rather than stored, so it needed a sibling to be wrong about — the one thing no
+      single-bill unit test can see. Also asserts the deliberate asymmetry with the client side: a
+      measurement past the **award** is refused (`RA_BILL_EXCEEDS_AWARD`) where a measurement past the
+      client's **BOQ scope** is flagged, because over-claiming on a client bill is a claim to justify
+      while paying a subcontractor for work nobody awarded is not.
 
 ## Phase 4: Approval invalidation (FR-009)
 
-- [ ] T021 On a quantity edit to an approved RA bill, abandon the 016 instance and raise a new one
+- [x] T021 On a quantity edit to an approved RA bill, abandon the 016 instance and raise a new one
       through the spine. **Do not mutate the completed approval** (research §6)
-- [ ] T022 Refuse the edit outright if the spine cannot be reached — an un-approved edit that looks
+- [x] T022 Refuse the edit outright if the spine cannot be reached — an un-approved edit that looks
       approved is the failure mode
-- [ ] T023 [P] Unit-test both paths
-- [ ] T024 e2e: approve, edit, confirm the prior approval did not survive
+- [x] T023 [P] Unit-test both paths
+- [X] T024 e2e: approve, edit, confirm the prior approval did not survive.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts`, as a full round trip: submit enters the
+      `ra_bill` chain and approves nothing, `ApprovalService.decide` completes the single `final`
+      level, `onApprovalCompleted` moves the bill to `approved`, and a revision then leaves the
+      completed decision row byte-for-byte as it was — same instance, same actor, same reason — while
+      raising a **new** pending instance and taking the bill out of `approved`. A recorded decision
+      describes what somebody approved; editing quantities under it would leave an approver's name
+      against numbers they never saw.
+
+      Two corrections to our own expectations, both found here. There is no `certified` state on an
+      RA bill: the enum is `draft | submitted | approved`, and `certified` belongs to the *client*
+      bill because a client certifies what they will pay while a subcontractor's bill is approved
+      internally. And the fixture leaked a role on every run — it created one before checking whether
+      the `final` slot was already mapped, which in the seeded companies it is, to Super Admin.
+
+### Phase 4 implementation record, 2026-10-03
+
+**The phase was larger than its four tasks implied, and that is worth saying first.** T021 assumes an
+RA bill has an approval to invalidate. It did not: `RaBillStatus` carried `submitted` and `approved`
+and `RABill` carried `approvedByUserId`, but **nothing in the product set any of them** — there was no
+submit endpoint, no chain and no decision handler. So Phase 4 built the certification path as well as
+the invalidation, because FR-009 is not testable without it.
+
+What landed:
+
+- `ACTION_RA_BILL` in the spine's action types, with a **one-level Director chain** seeded for new
+  companies and backfilled for existing ones (migration `20261003120000_ra_bill_approval`).
+  Deliberately **not** added to `DIRECTOR_FINAL_SEEDED_ACTIONS`: that list carries a policy claim
+  about what the client confirmed, and an RA bill is not on it. One level is the minimum gate that
+  makes FR-009 mean anything, and a longer chain is a settings change per company.
+- `POST projects/ra-bills/:id/submit` — enters the chain; the bill becomes `submitted`.
+- `@OnEvent(approval.completed)` — the only place a bill becomes `approved`, guarded on it still
+  being `submitted` so a redelivered event or a revision raced against a completion cannot
+  re-certify changed quantities. The approver is read back through `ApprovalService.stateOfSystem()`,
+  never from `shared.ApprovalDecision` (Principle I; `spine-boundary.spec.ts` enforces it).
+- `PATCH projects/ra-bills/:id/lines` — the FR-009 path.
+- `revisionCount`, `lastRevisedAt`, `lastRevisedByUserId` on `RABill`. FR-016 asks for the actor and
+  time of every *edit*, which nothing recorded before.
+
+**T021, the completed approval.** `ApprovalService.abandon()` returns early on a non-live instance —
+by the spine's own design — so calling it is a deliberate no-op on a completed approval and is what
+closes a still-*pending* one. Research §6's words are "abandon the existing instance and raise a new
+one", and the completed instance staying exactly as it is, as history, is what §6's own reasoning
+asks for: a recorded decision must not come to describe a bill that no longer exists.
+
+**T022, the ordering.** The spine is asked **before** anything is written, so a chain that cannot be
+reached leaves the bill with both its quantities and its certification. If the write then fails, the
+fresh instance is abandoned — which leaves, at worst, a visible pending approval on an unchanged
+bill, rather than an invisible lie about a certified one. The same ordering is used on submit, where
+a bill flipped to `submitted` with no instance behind it would wait on nobody, sit in no queue, and
+look to its author exactly like one that was submitted.
+
+**A subtle one, caught by writing the test.** A revision must leave the bill **out of its own
+to-date figure**. Without that, the bill's existing quantities count as previously billed, and
+reducing a quantity on a fully-measured award is refused for exceeding the award it is reducing.
+`measuredToDate` gained an `excludeBillId`, and the test asserts the exclusion reaches the query
+rather than asserting a figure that would pass either way.
+
+**`priceLines` was extracted from `compose` rather than written twice.** Two of the three things it
+does are easy to get subtly wrong on a second attempt — the over-measurement refusal and the
+retention base — and a revision that priced differently from a composition would be a bill whose
+total changed for no reason anybody could point at.
+
+**A reason is required on a revision**, not encouraged: an optional field on this path is an empty
+field, and a certified bill going round again costs somebody a second decision.
+
+**T024 NOT RUN.** The e2e needs a seeded company with a mapped `final` approval slot, a work order
+with an award, and a bill carried through a real decision. 16 unit tests cover both T021 and T022
+paths, including the two orderings that would fail silently.
 
 ## Phase 5: The project P&L (US3)
 
-- [ ] T025 Extend `ProjectSourcesRegistry` with `ProjectCostSource`, **batched by projectIds**
+- [x] T025 Extend `ProjectSourcesRegistry` with `ProjectCostSource`, **batched by projectIds**
       (contract Part 1) — a per-project signature makes the group view an N+1 no registrant can fix
-- [ ] T026 [P] Register labour's source from `LabourModule`
-- [ ] T027 [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
+- [x] T026 [P] Register labour's source from `LabourModule`
+- [x] T027 [P] Register inventory's source from `InventoryModule`, handling **negative** amounts for
       returned material (spec edge case)
-- [ ] T028 [P] Register plant's source from `PlantModule`
-- [ ] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
-- [ ] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
+- [x] T028 [P] Register plant's source from `PlantModule`
+- [x] T029 Implement `summaryFor()` — monthly and cumulative, every category present even at zero
+- [x] T030 Name unregistered modules in `unavailableModules` rather than reporting zero (FR-010,
       008's precedent)
-- [ ] T031 Implement the drill-down: every figure lists its source records (FR-012)
-- [ ] T032 Reconcile the labour figure to approved payment sheets (FR-013)
-- [ ] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
-- [ ] T034 e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace
+- [x] T031 Implement the drill-down: every figure lists its source records (FR-012)
+- [x] T032 Reconcile the labour figure to approved payment sheets (FR-013)
+- [x] T033 [P] Unit-test that a missing source is named, not zeroed — the distinction a director acts on
+- [X] T034 e2e in `test/project-pnl.e2e-spec.ts`: one project, four cost categories, figures that trace.
 
-## Phase 6: Variations ⚠️ RESTS ON AN ASSUMPTION
+      **RUN 2026-10-03, 15 assertions.** The four categories are seeded in four *other* modules'
+      own tables — `projects.RABill`, `inventory.Purchase`, a `plant.FuelEntry` against an
+      `Equipment` deployed to one of the project's sites, and an approved `labour.LabourPaymentSheet`
+      — because the thing a mocked registry cannot answer is whether those modules actually register
+      their cost readers on init. If one silently does not, its category is correctly reported as
+      unavailable and **the P&L is missing a quarter of the project's cost while looking complete**.
 
-- [ ] T035 Surface `isVariation` wherever quantities or values are reported (FR-015a)
-- [ ] T036 [P] Unit-test that original scope and variations are separable in every report
-- [ ] T037 e2e: a variation line bills and reconciles through the same path as original scope
+      Asserts both properties the screen's trustworthiness rests on: every drill-down total is summed
+      from the records it returns, and `overheads` — which nobody registers — is **named in
+      `unavailableCategories` and excluded from the totals** rather than reported as zero.
 
-## Phase 7: Retention release ⚠️ RESTS ON AN ASSUMPTION
+      Recorded while writing it, because it is a finding and not a defect: **three of the five
+      figures itemise and two do not.** Labour, revenue and subcontractors return records; materials
+      and fuel answer with a period total and `unavailableReason` set, because both read their
+      modules' per-site aggregates, which is exactly what the registry interface asks of them. The
+      test names the split rather than counting it, so a change to it becomes visible.
 
-- [ ] T038 Add `RetentionRelease` and `WorkOrder.retentionPercent`; RLS for the new table
-- [ ] T039 Implement release as an explicit recorded act, refusing more than was withheld —
+### T026-T028 and T032 implementation record, 2026-10-02
+
+**The P&L now has four of its five registry-backed categories, verified at runtime** — booting the
+app and reading `registeredCostCategories()` reports `fuel, labour, machinery, materials`.
+`overheads` remains unavailable and should: no module owns it, so there is nothing to register and
+the P&L is right to say it cannot ask.
+
+**Labour's source is the payment sheets, not the muster** (T026, T032). `LabourService`'s existing
+`getLabourCostByProject()` prices the approved *muster*, re-resolving each day's rate;
+`MonthlyWageRollupService.costsByProject()` reads what the sheets *recorded*. Both are defensible and
+they are **not the same figure** — the muster is what was worked, the sheet is what was approved for
+payment — and FR-013 says the P&L's monthly labour cost must reconcile to the approved payment
+sheets. So the sheets are what the P&L reads.
+
+T032 is therefore satisfied **by construction rather than by a reconciliation report**: the cost
+source and the roll-up view share `lineShare()`, the one function that decides where a straddling
+sheet's line belongs, and a test asserts the two agree to the paisa on the straddling fixture. Two
+implementations of an apportionment rule is two answers, and the second one written is always the one
+nobody checks.
+
+It is **gross, not net**: a deduction is money recovered from the worker, not money the project did
+not spend. Reading `netPayable` would understate labour by every advance instalment recovered in the
+period, which is the same mistake `bill-totals.ts` refuses to make with an RA bill's retention.
+
+**Plant and inventory loop behind the batched contract, deliberately** (T027, T028).
+`costSourceFromPerProject()` holds that decision in one documented place. The batched *contract* is
+what T025 was for — a per-project signature makes the group view an N+1 no registrant can fix — and a
+registrant that loops behind a batched contract is a different thing: the consumer asks once, and
+whichever module needs to replace the loop with one query can, without anybody else changing a line.
+What was not done is rewriting `getMachineryCostByProject`, which sums verified hire bills,
+apportioned depreciation, spare parts net of reversals and verified service bills, and is the shipped
+figure the project detail page already serves. A second batched implementation of it would be a
+second machinery cost in the product, and the first time the two disagreed nobody would know which
+was right.
+
+**Negative material is not clamped** (T027). A credit note for material sent back is a negative
+amount, `materialCostForSites` aggregates it as such, and there is no `Math.max(0, ...)` anywhere on
+the path. Asserted, because the clamp is the thing somebody adds later believing it to be defensive.
+
+**A project that cannot be computed is omitted, never zeroed.** Labour's source returns an empty map
+on failure rather than a map of zeros: a zero is indistinguishable from a month with no labour, and a
+project whose wages are invisible looks like a project running under budget.
+
+### T031 implementation record, 2026-10-02
+
+**`GET projects/pnl/drill-down?projectId&period&figure&scope`**, in
+`src/projects/pnl/pnl-drill-down.service.ts`. 12 unit tests, plus 4 in the labour roll-up's spec for
+the source it reads.
+
+**The total is summed from the records returned, never queried separately.** A drill-down whose rows
+do not add up to the total is worse than none: it tells the reader the number is wrong without
+telling them how, and from then on they check everything by hand. That is also why a straddling
+payment sheet appears carrying *what the month took from it* rather than its own total — asserted
+both ways.
+
+**`ProjectCostSource.recordsByProject` is optional, and the optionality carries the meaning.** A
+module that reports a period total without listing what is behind it declines to implement it, and
+the drill-down says so, naming the category and stating that the summary's figure is still measured.
+Every source returning `[]` instead would make "we cannot itemise this" and "nothing was spent" the
+same answer — the identical mistake `unavailableCategories` exists to avoid one level up, arriving by
+a different route. Four states are distinguished, and none of them is a zero: no source registered,
+a source that cannot itemise, a read that failed, and a genuinely empty period.
+
+Today labour itemises (per sheet, with `itemisedFurtherAt` pointing at the per-worker register rather
+than copying it); revenue and subcontractor cost are read directly because client and RA bills live
+in the `projects` schema; materials, machinery and fuel report "total only" until those modules add a
+reader. That is the honest state and the response says it per figure.
+
+**The pre-018 RA bill fallback is repeated here deliberately** — `grossAmount || amount` — because
+reading gross alone would silently drop every bill raised before 018 out of a total that is supposed
+to match the summary's.
+
+**`fr-022-unmigrated-modules.spec.ts` went red a commit late for the second time**, on the
+T026-T028 commit. Recorded in that spec rather than quietly fixed: the check diffs two commits, so a
+new file is invisible to it until the commit lands and *then* it fires. The habit that fixes it is
+running that one spec before committing anything under its six scanned paths.
+
+## Phase 6: Variations — **confirmed by the client 2026-10-03**
+
+- [X] T035 Surface `isVariation` wherever quantities or values are reported (FR-015a)
+
+      Done 2026-10-03. The flag was already on `BOQTaskItem` and already surfaced on the billable
+      BOQ and on bill lines; what was missing was every place a **value** is reported.
+
+      - **The P&L** gains `revenueFromVariations` monthly and cumulative, summed from the bills' own
+        lines rather than apportioned from their totals — on a client bill the quoted percentage is
+        applied per line, so the line amounts add to `grossAmount` exactly and this *partitions* the
+        figure rather than estimating a share of it.
+      - **The position export** carries two indented rows under revenue, "of which original scope"
+        and "of which variations". Indented and not beside it, because a document whose two revenue
+        rows could be read as additive is one somebody double-counts from.
+      - **The drill-down** says how much of each bill was variation work, alongside the certification
+        shortfall already there. A bill is usually part original scope and part variation, so the
+        fact cannot live on the row — it is the sum of the bill's variation lines.
+
+      Reported as a **part of** revenue throughout, never as a second total. The two must always add
+      up, and a reader who has to add them is a reader who will one day add them wrong.
+
+- [X] T036 [P] Unit-test that original scope and variations are separable in every report
+
+      Done — `src/projects/pnl/variation-reporting.spec.ts`, 8 tests against the pure functions each
+      report composes, so none of it needs a database. The ones that earn their place: the two parts
+      add back to the whole (they come from different code paths — a subtraction in the export, a sum
+      over lines in the service); a project with no variations still shows both rows, so "no
+      variations" is distinguishable from "this document does not report variations"; and the split
+      goes to `Hidden` with revenue rather than subtracting against a hidden total, which would
+      publish the whole of revenue as original scope — a plausible falsehood rather than an
+      obviously missing cell.
+
+- [X] T037 e2e: a variation line bills and
+      reconciles through the same path as original scope.
+
+      Was covered in part by construction: a variation **is** an ordinary `BOQTaskItem`, so it uses
+      the same pricing, the same cumulative-quantity aggregate and the same over-scope check. That
+      was an argument from the data model rather than an observation, which is why it stayed open.
+
+      **RUN 2026-10-03** in `test/client-bills.e2e-spec.ts`: a variation line prices at its own rate
+      with the quoted percentage applied identically, reaches the same cumulative aggregate, is
+      flagged and refused on the same terms, and stays identifiable as a variation through to the
+      bill view — which is what lets the P&L report it apart from original scope.
+
+## Phase 7: Retention release — **confirmed by the client 2026-10-03**
+
+- [X] T038 Add `RetentionRelease` and `WorkOrder.retentionPercent`; RLS for the new table
+
+      Done 2026-10-03. `WorkOrder.retentionPercent` already existed from the billing migration;
+      `RetentionRelease` is new, with its tenant policy carrying **`WITH CHECK` as well as `USING`**
+      — a policy with only `USING` filters reads and admits any write naming another tenant — and
+      `FORCE` so the owner is not exempt. A `CHECK (amount > 0)` catches the narrower case the
+      service cannot: a caller reaching the table some other way, now or in a script somebody writes
+      next year.
+
+      Nothing is backfilled and no existing figure moves. Retention has been withheld per bill since
+      the billing migration; what was missing was anywhere to record it going back, so every work
+      order starts with its whole withheld balance outstanding — which is the truth.
+
+- [X] T039 Implement release as an explicit recorded act, refusing more than was withheld —
       `RETENTION_EXCEEDS_HELD`
-- [ ] T040 [P] Unit-test the outstanding balance across several bills and one partial release
-- [ ] T041 e2e: withhold across three bills, release part, confirm the balance
 
-## Phase 8: Client certification ⚠️ RESTS ON AN ASSUMPTION
+      Done. Two details worth the words:
 
-- [ ] T042 Implement `certify()` retaining **both** billed and certified amounts (FR-005)
-- [ ] T043 Ensure a shortfall does not silently vanish from cumulative billed quantity (spec edge case)
-- [ ] T044 [P] Unit-test that certifying less than billed leaves cumulative billed quantity unchanged
-- [ ] T045 e2e: bill, certify less, confirm both figures and the variance
+      **The balance is read inside the same transaction as the write.** Two releases submitted
+      together would otherwise each see the balance before the other and both pass — the classic
+      read-then-write race, and on this path it pays out money that was never held.
+
+      **A reason is required**, refused as `RETENTION_RELEASE_REASON_REQUIRED`. An optional field on
+      a path that moves money is an empty field, and the first question asked of a release six months
+      later is which milestone it settled.
+
+      Append-only: there is no edit and no id to edit. Correcting a release by rewriting its row
+      would leave no trace it had been for a different amount yesterday, on the one path where the
+      row *is* the evidence that money moved.
+
+- [X] T040 [P] Unit-test the outstanding balance across several bills and one partial release
+
+      Done — `src/projects/billing/retention-release.spec.ts`, 13 tests. The one that earns the
+      phase is the refusal: with the client having chosen a manual release over any schedule, there
+      is no bound on this path except that check, and retention paid past the balance is money the
+      company never held going out as though it had — uncatchable downstream, because the bills it
+      was withheld from are closed and no subcontractor queries a payment in their favour.
+
+      A test of my own was wrong and the code was right: each part is rounded *then* subtracted
+      (1000.56 less 100.11 = 900.45, not 900.444 rounded). Pinned deliberately — a reader checks the
+      balance by subtracting the two figures printed in front of them, and being right in the fourth
+      decimal is worth less than agreeing with the person holding the screen.
+
+- [X] T041 e2e: withhold across three bills, release part, confirm the balance.
+
+      **RUN 2026-10-03** in `test/ra-bills.e2e-spec.ts` across four bills. Asserts that a **draft**
+      bill's retention is withheld from nobody and so does not count towards the balance; that
+      withheld reconciles to the sum of every issued bill's retention; that a release with no reason
+      and a release past the balance are both refused (`RETENTION_EXCEEDS_HELD`); and that the ledger
+      appends rather than edits, a second release adding a row and leaving the first alone.
+
+## Phase 8: Client certification — **confirmed by the client 2026-10-03**
+
+- [X] T042 Implement `certify()` retaining **both** billed and certified amounts (FR-005)
+
+      Already built in Phase 2 and confirmed correct on 2026-10-03 — `certifiedAmount` and
+      `certifiedAt` are written, `grossAmount` and `netAmount` are not touched, and
+      `certificationVariance` is derived on the view so the gap is not reachable only by subtracting
+      two columns somebody might not notice differ.
+
+      What this phase **added** is the aggregate. Per bill the gap was visible; across a project it
+      was not, so a project manager asking "how much of what we have billed is actually agreed" had
+      to open every bill. The P&L now carries two figures, deliberately apart:
+
+      - `revenueCertifiedShortfall` — billed and certified for less. **Money in dispute.**
+      - `revenueAwaitingCertification` — billed, out of draft, certified by nobody yet. A decision
+        outstanding, not a disagreement.
+
+      Summing them into one "uncertified" figure would merge a dispute with a queue, and a project
+      manager acts differently on each: one needs a conversation with the client, the other needs a
+      reminder.
+
+- [X] T043 Ensure a shortfall does not silently vanish from cumulative billed quantity
+
+      Holds, and is now pinned rather than assumed. `previouslyBilled` aggregates bill **lines** on
+      bills out of draft and its filter never mentions certification — which is the whole guarantee:
+      cumulative billed quantity is what the next bill measures against, so a shortfall absorbed
+      there comes back as billable scope and is billed twice, or vanishes with no record that
+      anybody disagreed.
+
+- [X] T044 [P] Unit-test that certifying less than billed leaves cumulative billed quantity unchanged
+
+      Done — `src/projects/billing/certification.spec.ts`, 5 tests. The T043 one asserts against the
+      **query** rather than an outcome, because the outcome is a sum the mock supplies: the filter
+      is the guarantee. It also checks that `grossAmount` is **absent** from the fields certify
+      writes rather than merely equal to its old value — a bill that rewrote its own gross to match
+      the certification would pass an equality check against the new figure.
+
+- [X] T045 e2e: bill, certify less, confirm both figures and the variance.
+
+      **RUN 2026-10-03** in `test/client-bills.e2e-spec.ts`: certifying a draft is refused
+      (`BILL_NOT_SUBMITTED`), certifying more than was billed is refused
+      (`CERTIFIED_EXCEEDS_BILLED`), and certifying less keeps **both** figures with the shortfall
+      reported as `certificationVariance` — the billed amount is not overwritten and the cumulative
+      billed quantity does not move, so the next bill measures from what was billed rather than from
+      what was paid.
 
 ## Phase 9: The group view and verification
 
-- [ ] T046 Implement `groupSummary()` by calling `summaryFor()` and summing — **no second aggregate
+- [x] T046 Implement `groupSummary()` by calling `summaryFor()` and summing — **no second aggregate
       query** (research §7)
-- [ ] T047 Apply the visibility filter once, to the project set, so rows and total cannot disagree
-- [ ] T048 [P] Unit-test that the total equals the sum of the rows, and that an invisible project is
+- [x] T047 Apply the visibility filter once, to the project set, so rows and total cannot disagree
+- [x] T048 [P] Unit-test that the total equals the sum of the rows, and that an invisible project is
       absent from both
-- [ ] T049 Boundary test in `src/projects/pnl/pnl-boundary.spec.ts`, both directions, copying
+- [x] T049 Boundary test in `src/projects/pnl/pnl-boundary.spec.ts`, both directions, copying
       `src/letters/letters-boundary.spec.ts`: the P&L code must not query `labour`, `inventory` or
       `plant` tables, and no business module may query the billing tables
-- [ ] T050 Prove the boundary by breaking it in both directions and confirming T049 fails each time.
+- [x] T050 Prove the boundary by breaking it in both directions and confirming T049 fails each time.
       A guard that has never failed has not been shown to work
-- [ ] T051 RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
-      `test/documents-rls.e2e-spec.ts`
-- [ ] T052 **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore. Without
-      this an empty table and a working policy are indistinguishable
-- [ ] T053 Quickstart Passes 1–8
-- [ ] T054 Quickstart Pass 9 by hand: the group total must equal the sum of its rows **exactly**
-- [ ] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
+- [X] T051 RLS e2e in `test/billing-rls.e2e-spec.ts` with a `NOSUPERUSER NOBYPASSRLS` probe, copying
+      `test/documents-rls.e2e-spec.ts`.
+
+      **RUN 2026-10-03, 12 assertions.** All five of 018's tables carry ENABLE *and* FORCE, and each
+      is read with **no `WHERE` clause** under a real non-superuser login role — so anything that
+      comes back came back because the policy let it. Covers the SELECT, the cross-company UPDATE
+      (zero rows, and the value confirmed unmoved), the cross-company INSERT (refused by the policy),
+      the default-deny case where no company context is set at all, and the super-admin flag, which
+      must keep working or the Settings company switcher shows an administrator an empty screen.
+- [X] T052 **Check T051 for vacuousness** — disable a policy, confirm rows DO appear, restore.
+
+      **RUN 2026-10-03, on two tables rather than one.** `ClientBill` and `WorkOrderBOQItem`: the
+      first proof could pass while a different table's policy was missing entirely, and the award
+      table is the one whose exposure would cost the most — it is what a company pays its
+      subcontractors. Both restore ENABLE and FORCE in a `finally`, so a failed assertion cannot
+      leave a table unprotected for every subsequent suite. Confirmed after the run that all five
+      tables still carry both flags.
+
+      An empty table, a missing grant and a mistyped table name each produce a passing isolation
+      test. This is the only thing that tells them apart.
+- [X] T053 Quickstart Passes 1–8.
+
+      **All eight run as automated e2e rather than by hand**, across the three suites written
+      2026-10-03: Pass 1 (`BOQ_REQUIRED` on a project with no schedule, distinct from a line not
+      being on one) and Passes 2–4 in `test/client-bills.e2e-spec.ts`; Passes 5–6 in
+      `test/ra-bills.e2e-spec.ts`; Passes 7–8 in `test/project-pnl.e2e-spec.ts`. The month's export
+      is covered there too, including the refusal of a format the service cannot produce.
+- [X] T054 Quickstart Pass 9: the group total equals the sum of its rows **exactly**.
+
+      **RUN 2026-10-03** in `test/project-pnl.e2e-spec.ts` over two projects, asserted with `toBe`
+      and not `toBeCloseTo`. A board whose total is a rupee away from its rows is a board nobody
+      trusts again, and the only way to guarantee it is to sum the rows rather than ask the database
+      a second time. The second project has no site, so nothing can be attributed to it — which also
+      pins the distinction between a project at zero and a *category* nobody can answer for.
+- [X] T055 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`. Report **actual
       numbers**; if something fails, say so with the output
+
+      **Run 2026-10-03, all eight phases complete.** `npx tsc --noEmit` clean. `npx eslint src` 0
+      errors, 61 pre-existing warnings. **1,539 tests across 135 suites, all passing.** The Nest
+      injector resolves (`DI OK`) — worth running after Phase 7 added a table and a service method,
+      because a missing provider is a green test suite and a server that will not start.
+
+      The e2e and RLS tasks above stay **NOT RUN** for the reason recorded against each. The RLS
+      ones specifically cannot be run here at all: every database login available locally is a
+      Postgres SUPERUSER, and the policies deliberately exempt superusers — so the probe would pass
+      without proving anything, which is worse than not running it.
 
 ---
 
@@ -140,9 +488,15 @@ convenience would throw that away.
 **MVP = Phases 1–3.** Bills that reference the BOQ and price from it are the whole of Note 12's
 complaint; the P&L is what they make truthful.
 
-**Do not start Phase 6, 7 or 8 until the client has confirmed the three assumptions.** They are
-implementable today under what is recorded in the spec, and each is a phase's worth of rework if the
-answer differs — which is exactly why they are separable.
+~~**Do not start Phase 6, 7 or 8 until the client has confirmed the three assumptions.**~~
+
+**Cleared 2026-10-03.** All three were put to the client separately, each with its alternatives and
+what changing would cost, and all three came back exactly as assumed. Nothing in Phases 1–5 is
+reworked and these three build as specified.
+
+The separation earned its keep even though nothing changed: the questions could be asked precisely,
+one at a time, with a real cost attached to each option — which is only possible because the work
+had already been scoped and isolated.
 
 ## Phase 10: Amendment of 2026-09-29 — the monthly labour roll-up (FR-010a, FR-010b)
 
@@ -150,60 +504,143 @@ answer differs — which is exactly why they are separable.
 exist — `labour.LabourPaymentSheet` and `labour.PaymentSheetLine` — which is why item 14's amendment is
 two phases and no schema change. Most of what the client asked for was already built; see plan D12.
 
-- [ ] T056 [US3] Add a validated query DTO for the roll-up — `projectId`, `year`, `month`, with bounded
+- [x] T056 [US3] Add a validated query DTO for the roll-up — `projectId`, `year`, `month`, with bounded
   month and year (Principle II). A month outside 1-12 or a year outside a sane range is a 400, not a
   query that returns nothing and looks like an empty month.
-- [ ] T057 [US3] Resolve every `LabourPaymentSheet` **overlapping** the calendar month for the project:
+- [x] T057 [US3] Resolve every `LabourPaymentSheet` **overlapping** the calendar month for the project:
   `periodFrom <= monthEnd AND periodTo >= monthStart`. Not `periodFrom` within the month — a fortnightly
   sheet starting on the 28th belongs to two months and would be missed by a containment test.
-- [ ] T058 [US3] Apportion a straddling sheet **on days worked inside the month**, from the muster dates
+- [x] T058 [US3] Apportion a straddling sheet **on days worked inside the month**, from the muster dates
   behind each `PaymentSheetLine`, not on elapsed calendar days. A worker who worked four days of a
   fortnight all in the first week is not half-attributable to each month, and a labour figure that
   disagrees with the muster is worse than a coarse one (plan D12).
-- [ ] T059 [US3] Itemise per worker: days worked in the month, `resolvedRate`, gross and net. Read the
+- [x] T059 [US3] Itemise per worker: days worked in the month, `resolvedRate`, gross and net. Read the
   figures as the sheet recorded them — **recompute nothing** (FR-010b). There is exactly one place a
   wage is computed and this is not it.
-- [ ] T060 [US3] State the apportionment **on the response**, per sheet apportioned — which sheet, its
+- [x] T060 [US3] State the apportionment **on the response**, per sheet apportioned — which sheet, its
   period, and the days attributed to this month. FR-010a requires this; a figure the reader cannot
   account for is what this feature exists to remove.
-- [ ] T061 [US3] Reach `labour`'s tables through the labour module's service, never a cross-schema join
+- [x] T061 [US3] Reach `labour`'s tables through the labour module's service, never a cross-schema join
   from `projects` (Principle I). FR-013's existing reconciliation already takes this route; follow it
   rather than opening a second one.
-- [ ] T062 [P] [US3] Unit test: a sheet wholly inside the month contributes its full figures.
-- [ ] T063 [P] [US3] Unit test: a sheet straddling the month boundary contributes only the days inside
+- [x] T062 [P] [US3] Unit test: a sheet wholly inside the month contributes its full figures.
+- [x] T063 [P] [US3] Unit test: a sheet straddling the month boundary contributes only the days inside
   it, and the response says how it was apportioned. This is the test that earns the phase.
-- [ ] T064 [P] [US3] Unit test: the apportioned sum equals FR-013's monthly labour figure **to the
+- [x] T064 [P] [US3] Unit test: the apportioned sum equals FR-013's monthly labour figure **to the
   rupee**. This is SC-007, and it is the assertion that catches an apportionment rule that is merely
   plausible.
-- [ ] T065 [P] [US3] Unit test: a month whose labour was engaged entirely through a contractor returns
+- [x] T065 [P] [US3] Unit test: a month whose labour was engaged entirely through a contractor returns
   the sheet's totals with the engagement type stated and no per-worker disbursement list — the spec's
   edge case. An empty list here must not render as a broken screen.
-- [ ] T066 [P] [US3] Unit test: a sheet corrected and re-approved changes the roll-up on the next read,
+- [x] T066 [P] [US3] Unit test: a sheet corrected and re-approved changes the roll-up on the next read,
   because nothing is stored (FR-010b).
-- [ ] T067 [US3] Confirm no table was added in this phase. If one was, D13's reasoning was overridden
+- [x] T067 [US3] Confirm no table was added in this phase. If one was, D13's reasoning was overridden
   somewhere and a second figure for the same wage now exists.
+
+### Phase 10 implementation record, 2026-10-02
+
+**`GET labour/reports/monthly-wage-rollup`**, in `src/labour/reports/monthly-wage-rollup.service.ts`,
+exported from `LabourModule` so `projects` can reach it for FR-013 without a cross-schema join
+(T061). 27 unit tests. No migration, as D13 requires — T067 is now a test rather than a promise: the
+spec scans the service source for any Prisma write and the migrations directory for any table of its
+own.
+
+Three forks were resolved here rather than asked about, and each is stated because a later reader
+would otherwise have to guess:
+
+1. **A line the muster cannot place.** D12 apportions on muster days. A line with *no* approved
+   muster day in the period — a hand-built sheet, or a muster withdrawn after the sheet was generated
+   — has no basis to apportion on. Calendar pro-rating is what D12 refuses; attributing nothing would
+   lose the wage from **both** months, which is worse, because the month then stops reconciling to the
+   sheet and nothing says why. Such a line is placed whole in the month containing the sheet's
+   `periodTo`, counted in `apportionment.placedByPeriodEnd`, and named in the apportionment note. Two
+   tests cover it.
+2. **A contractor sheet is not itemised.** The spec's edge case says a contractor sheet is the
+   contractor's basis of payment, not a disbursement to the people named on it, so `workers` carries
+   directly engaged labour only and `workersNote` says so. The money stays in `grossTotal` and in
+   `byEngagement`, so a mixed month still reconciles — asserted.
+3. **Permission.** `PROJECT_FINANCIALS` **or** `REPORTS`, declared on the handler rather than
+   inherited from the controller's `REPORTS`. It is the P&L's labour drill-down, so a project-finance
+   reader must see it; and the payment register already shows a `REPORTS` holder every one of these
+   lines, so including `REPORTS` widens nobody's reach.
+
+**`monthBounds()` duplicates `periodRange()`'s arithmetic deliberately** rather than importing it:
+`labour` must not take a dependency on `projects/pnl` (Principle I), and a six-line date helper is a
+cheaper duplicate than an inverted module edge. A test asserts the two agree across five months
+including a leap February, so SC-008's "exactly" is checked rather than assumed.
+
+**A regression found, not introduced.** `fr-022-unmigrated-modules.spec.ts` was red at the Phase 5
+commit: the billing exclusion was pre-empted and `src/projects/pnl` was not, so the guard fired on
+the next run and the suite had been reported clean when it was not. Fixed here, with the reason
+recorded in that spec rather than silently patched.
 
 ## Phase 11: Amendment of 2026-09-29 — the monthly position export (FR-011a)
 
-- [ ] T068 [US3] Export the selected month's position — revenue billed, cost by category, budget and
+- [x] T068 [US3] Export the selected month's position — revenue billed, cost by category, budget and
   variance — in the repository's existing export format. Do not introduce a second export mechanism.
-- [ ] T069 [US3] Carry the project, the month, and the **date the export was produced**. The production
+- [x] T069 [US3] Carry the project, the month, and the **date the export was produced**. The production
   date is not decoration: the spec's edge case is a payment sheet reopened after a month was exported,
   and this is the only thing that distinguishes two exports of the same month. Without it the older
   document is indistinguishable from the current position and somebody quotes it to a client.
-- [ ] T070 [P] [US3] Unit test: the exported figures equal the screen's figures exactly (SC-008). Not
+- [x] T070 [P] [US3] Unit test: the exported figures equal the screen's figures exactly (SC-008). Not
   approximately — a client-facing document that disagrees with the system by a rounding step is the
   problem this asserts against.
-- [ ] T071 [P] [US3] Unit test: two exports of the same month taken either side of a sheet correction
+- [x] T071 [P] [US3] Unit test: two exports of the same month taken either side of a sheet correction
   carry different production dates and different figures.
-- [ ] T072 [US3] Respect feature 019's cash hiding if it has shipped: a hidden cash figure exports as
+- [x] T072 [US3] Respect feature 019's cash hiding if it has shipped: a hidden cash figure exports as
   marked-absent, never as zero. If 019 has not shipped, note here that this export will need revisiting
   when it does — an export that silently understates a total by every cash payment in it is worse than
   one that says a figure is hidden.
-- [ ] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`.
-- [ ] T074 Re-read `spec.md` FR-010a, FR-010b and FR-011a and confirm the built behaviour matches.
+- [x] T073 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`.
+- [x] T074 Re-read `spec.md` FR-010a, FR-010b and FR-011a and confirm the built behaviour matches.
   Record in the traceability notes that item 14 was **largely already satisfied** by feature 013's
   payment sheets, and that this amendment added the calendar-month framing and the export only.
+
+### Phase 11 implementation record, 2026-10-02
+
+**`GET projects/pnl/export?projectId&period&format=pdf|excel`**, in
+`src/projects/pnl/position-export.service.ts`. 17 unit tests. It uses the repository's existing
+`renderReportPdf` / `renderReportExcel` / `formatMeta` over the same `ReportData` shape the
+dashboard's reports use (T068) — `ExportJobService`'s sync/async machinery is deliberately not used,
+because it exists for reports that run to tens of thousands of rows and one project's month is a
+dozen; queuing a twelve-row document and handing back a job to poll would be a second mechanism in
+everything but name.
+
+**The production instant is to the second, in the document and in the filename** (T069, D14). A date
+alone would not do it: two exports taken on the same day either side of a correction are exactly the
+pair the spec's edge case is about. It is a row rather than part of the title because
+`renderReportExcel` uses the title as the worksheet name, and the xlsx format rejects a colon in one
+— so a timestamped title would have failed at render time, in production, on a client-facing
+document.
+
+**T072 found a real hole, and it was not the one the task anticipated.** The task asks the export to
+respect 019's cash hiding. It cannot inherit it: `CashVisibilityInterceptor` shapes what a handler
+*returns*, and a document written through `@Res()` returns nothing, so **every file download in this
+product is outside that interceptor's reach by construction**. The rule is now read from one place —
+`cashHidingFor()`, extracted from the interceptor rather than copied — and applied in the export
+explicitly.
+
+Stated plainly so nobody overclaims: **no figure on this document is hidden today.** `hideCash` keys
+off a `paymentMode`/`mode` field on the row and a closed list of amount field names, and a P&L
+aggregate carries neither. What is live today is the other half of the same principle — a category
+whose module registered no cost source exports as `Not available`, never as the zero the P&L hands
+over — and that is tested. The hidden path is implemented, tested at the formatter, and will work the
+day an aggregate gains one of those field names.
+
+**No figure is re-rounded.** Cells are the served number at two decimal places, trailing paisa kept:
+a column where some cells carry two places and some carry one is the first thing a client queries,
+and the answer is always "the system is fine, the export is odd".
+
+### Item 14 traceability (T074)
+
+Re-read against FR-010a, FR-010b and FR-011a after building. **Item 14 was largely already satisfied
+by feature 013**: `LabourPaymentSheet` and `PaymentSheetLine` have given a per-project, per-worker
+wage register carrying days worked, the resolved rate, gross, deductions and net since 013 shipped,
+and FR-010 gave the monthly cost position. What the client asked for and did not have was the
+**calendar-month framing** — sheets cover the wage period their creator named, which under a
+fortnightly cycle is never a month — and a **document that can leave the system**. This amendment
+added those two things and nothing else. Recorded here because "item 14 is built" and "item 14 was
+mostly already built" lead to different conclusions about how much of `bugs.md` remains.
 
 ### Dependencies for phases 10-11
 
@@ -216,3 +653,185 @@ the position comes from Phase 5. Neither depends on phases 6-8, which rest on cl
 **Phase 10.** The per-worker monthly view is the half of item 14 that nobody can currently assemble
 without opening several payment sheets and adding them up. The export is a convenience over a figure
 that is by then already correct.
+
+### Phases 1 and 2 implementation record, 2026-10-02
+
+#### The client's BOQ file contradicted the design, and that is the headline
+
+`docs/BOQ_794578.xls` arrived — the file this task list was "awaiting" — and it is not the
+per-line-priced schedule this feature assumed. It is a government e-tender **"Percentage BoQ"**: the
+bidder quotes **one percentage** against the schedule of rates rather than a rate per line. The file's
+own footer shows it: `Total in Figures` ₹2,99,61,506.78 becoming `Quoted Rate in Figures`
+₹3,06,98,559.85 at `Excess (+) 0.0246`.
+
+**A bill priced from the line rate alone under-bills by exactly that percentage, on every line.** On
+that file it is ₹7.37 lakh on a ₹3 crore project: invisible per line and material in total, which is
+the worst shape a billing error can take. `Project.quotedPercentage` is the fix, frozen onto each bill
+beside the frozen rates, and `bill-totals.spec.ts` asserts the gap as a *difference* rather than
+describing it in a comment.
+
+The percentage is applied **per line, not once at the total**. The two differ after rounding, and the
+per-line figure is what appears on the document a client reads — so the total has to be the sum of the
+printed lines rather than a separately-derived number a rupee away from them.
+
+#### What else the file settled
+
+* **311 item rows**, not 500. NFR-001's figure is confirmed as the right ballpark and conservatively
+  high, so no row virtualization is needed beyond what it already implies.
+* **Units are free text and inconsistent within one file** — `Cum` and `Cum.`, `Sqm`/`Sqm.`/`sqm`,
+  `R Mtr.`/`R. Mtr.`/`R.Mtr.`/`R. mtr`. A unit master would reject this file. Units stay a string.
+* The file carries a **second BOQ block at columns 238-242**, so an importer must not assume one
+  section. Not built in this phase; recorded because it is exactly the thing an importer assumes.
+
+#### bill-totals.ts exists because two definitions of "net" would not announce themselves
+
+The figures would simply differ slightly on two screens and each would look plausible. The file states
+the **four-way distinction** once: gross is the work; retention is a timing difference; an advance
+recovery is money already paid; net is what changes hands. `pnlAmount` is named separately from `gross`
+even though they are equal today, because "what did this bill do to the P&L" is the question a reader
+actually asks, and answering it with a field called `gross` invites the next person to reach for `net`.
+
+**A P&L that treats net as cost understates the project** by every rupee of retention held across it.
+That is the mistake this file exists to make unreachable by accident.
+
+#### Three decisions worth reading
+
+**The rate is frozen onto the line** (T011), the assertion the feature turns on. A bill is a document
+that was sent; a rate table is a current opinion. Rendering the first from the second makes every
+historical bill a lie that changes shape each time somebody corrects a rate.
+
+**Cumulative quantity is an aggregate, never a counter** (research §3). A counter diverges the first
+time a bill is deleted or two are composed concurrently, and the over-scope check is then wrong in
+whichever direction nobody notices. Draft bills are excluded, so two people composing bills
+simultaneously do not see each other's unfinished work as billed — and a bill's *own* lines are
+included in its own cumulative figure, or its column would read as though the bill had not happened.
+
+**Certification keeps both figures** (FR-005) and leaves cumulative billed quantity untouched. A
+shortfall is a dispute to pursue, not a correction to absorb; a system that silently reduced what was
+billed would lose the only record there was one, and the next bill would re-bill the same work.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,364 tests across 122 suites**, injector
+resolves. One migration covering Phases 1 to 3's schema.
+
+**T013 NOT RUN** — the e2e needs a seeded project with a priced BOQ.
+
+**Phases 6, 7 and 8 remain deliberately unstarted**, per this file's own instruction: they rest on three
+client assumptions that are not confirmed, and each is a phase's worth of rework if the answer differs.
+That is exactly why they were made separable.
+
+### Phase 3 implementation record, 2026-10-02
+
+#### One asymmetry worth stating plainly
+
+Over-measuring a **client BOQ** is flagged and allowed; over-measuring an **award** is refused. That
+looks inconsistent and is not, and the reason is about who is owed what:
+
+* a client bill that over-measures is a **claim the client can reject** — and refusing it at entry
+  means the measurement goes in a notebook instead of into the system;
+* an RA bill that over-measures is **the company agreeing to pay for work it never ordered**, with
+  nobody downstream to catch it.
+
+The refusal names the route out — a variation to the award — because a refusal with no remedy is how
+somebody edits the award instead, which is the other thing this phase refuses.
+
+#### Replacing an award is refused once it has been measured against
+
+Changing it would move the `remaining` figure on a bill already issued, and the subcontractor's copy
+would then disagree with ours. There is no safe merge for this: a reduced award under a measured bill
+makes the bill retrospectively over-measured, and an increased one silently approves what was already
+paid.
+
+#### `pnlAmount` is on the response, not left to the consumer
+
+Retention is money withheld and an advance recovery is money already paid, so **neither is a project
+cost**. The consumer that gets this wrong is the P&L, and it gets it wrong by reading the field that
+looks most like "the amount" — so the view says `pnlAmount: gross` rather than leaving each reader to
+rediscover the distinction from `bill-totals.ts`.
+
+#### The legacy `amount` column is set to gross
+
+Matching the migration's backfill of existing rows, so a screen still reading `amount` sees the work
+rather than the net — and bills raised either side of this change cannot disagree about what `amount`
+meant.
+
+#### The FR-022 guard, pre-empted again
+
+`src/projects/billing` and `projects.module.ts` are excluded by path, **before** the commit rather
+than after. None of this code calls `ApprovalService` — 018's Phase 4, which puts an RA bill quantity
+edit through the spine, is deliberately not built — so the per-file assertions still enforce that
+`src/projects` keeps no approval mechanism of its own.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,376 tests across 123 suites**, injector
+resolves.
+
+**T020 NOT RUN** — the e2e needs a seeded work order with an award.
+
+### Phase 5 and Phase 9 (partial) implementation record, 2026-10-02
+
+#### The line that matters most: a missing module is named, never zeroed
+
+FR-010, T033. A category with no registered cost source is listed in `unavailableCategories` **and
+excluded from the totals**. Counting it as zero is how a project looks profitable because half its
+costs are invisible — and nothing on the screen would say so.
+
+The row is still rendered, at zero, *beside* the unavailable list. A missing row reads as "this project
+has none of that"; a zero row plus a named gap is what lets a reader tell the two apart.
+
+#### Revenue and cost are both gross, and the response says what revenue counts
+
+An RA bill's retention is money withheld and its advance recovery is money already paid, so **neither
+is a cost**. A P&L reading `netPayable` would understate every project by the retention held across it,
+and the understatement grows with the project.
+
+The same reasoning puts revenue at billed gross — but a reader comparing that to the bank will find a
+gap, so `revenueNote` states what the figure counts. A figure somebody cannot reconcile is a figure
+they stop trusting, and then the whole screen goes with it.
+
+#### Two things the existing code shape forced
+
+**`ProjectCostSource` is batched by `projectIds`** (T025). The registry's existing
+`getMachineryCostByProject` and `getMaterialCostByProject` are per-project and predate this; a loop over
+them is what T025 calls an N+1 no registrant can fix. The new interface takes a list, and the test
+asserts the call count — ten for three projects across five categories and two date ranges, not thirty.
+
+**Subcontractor cost falls back to the pre-018 `amount`.** A bill raised before this feature has
+`grossAmount` 0 and an `amount` that is the only figure it ever had. Reading gross alone would silently
+drop every historical subcontractor cost from the P&L — and silently is the word that matters.
+
+#### The group total is the sum of the rows by construction
+
+Not a second aggregate query (research §7, T046). `summariesFor` produces the rows and the controller
+adds them up, so the figure a reader checks by hand is the figure returned. T047's visibility filter is
+applied by the caller naming the project set, which is the one place it can be applied once.
+
+#### T049 and T050: the guard was proven in both directions
+
+A `labourPaymentSheet` read added to the P&L service → red. A `clientBill` read added to
+`labour.module.ts` → red. Both restored → green. **The second direction matters as much as the first**:
+the moment `labour` reads `ClientBill` to work out what was billed, two modules compute revenue and the
+figures diverge — which is the defect `bill-totals.ts` exists to prevent, arriving by another route.
+
+The spec walks the **filesystem**, not `git ls-files`. `ls-files` omits files that are new and unstaged,
+which on the commit adding this test is every file it checks — and a guard that passes because it found
+nothing is worse than no guard.
+
+#### What is NOT done, and why
+
+* **T026, T027, T028** — labour, inventory and plant have not registered a batched `ProjectCostSource`.
+  The interface and the registry slot exist; each module must register itself, which is a change in
+  three other modules. Until they do, the P&L reports those categories as **unavailable**, which is the
+  honest state and exactly what FR-010 was written for.
+* **T031, T032** — the drill-down and the labour reconciliation. Both need the sources above.
+* **T034, T051 to T054** — e2e, the RLS probe, and the quickstart passes.
+* **Phase 4** (approval invalidation on an edited RA bill) — not started.
+* **Phases 6, 7, 8** — deliberately unstarted per this file's own instruction: three unconfirmed client
+  assumptions, each a phase's worth of rework if the answer differs.
+
+#### Verification
+
+`npx tsc --noEmit` clean, `npx eslint src` 0 errors, **1,400 tests across 125 suites**, injector
+resolves.

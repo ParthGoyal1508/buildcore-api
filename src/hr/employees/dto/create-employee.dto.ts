@@ -291,6 +291,19 @@ export class CreateEmployeeDto {
   })
   ifscCode?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'The name the **bank** holds against this account, which is often not the employee’s name ' +
+      'as HR spells it (021 FR-008e). A transfer is matched on the account number, but a name ' +
+      'disagreeing with the bank’s is what gets a payment returned — and the bank transfer sheet ' +
+      'refuses a row without this rather than substituting the employee’s name, because a silent ' +
+      'fallback moves that discovery to payment day.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  bankAccountHolderName?: string;
+
   // ── Tab 5: Contact ────────────────────────────────────────────────────────
 
   @ApiPropertyOptional()

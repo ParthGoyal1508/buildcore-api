@@ -6,6 +6,8 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { configureApp } from '../src/common/configure-app';
+import { effectiveCompanyIdFor } from './fixtures/effective-company';
+import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 
 /**
  * End-to-end coverage of `/projects/*` against a real database (008 T016, T025).
@@ -77,10 +79,9 @@ describe('Projects module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({
-      orderBy: { createdAt: 'asc' },
-    });
-    companyId = company.id;
+    // Not the oldest company: the one the API will actually write to. See the helper — a
+    // single `UserCompanySelection` row for this account silently repoints five suites.
+    companyId = await effectiveCompanyIdFor(sys);
   });
 
   afterAll(async () => {
@@ -109,11 +110,17 @@ describe('Projects module (e2e)', () => {
   }
 
   async function createProject(body: Record<string, unknown>) {
-    const res = await http()
-      .post(`/projects?companyId=${companyId}`)
-      .set(auth())
-      .send(body)
-      .expect(201);
+    // 017 FR-009 refuses creation while a mandatory document kind has none attached, and the
+    // seeded company marks four. Every creation below is a fixture for something else, so the
+    // documents are staged the way a project manager stages them rather than inserting the
+    // project row behind the rule's back — see the helper for why that trade was chosen.
+    const res = await createProjectWithMandatoryDocuments({
+      http,
+      headers: auth(),
+      body,
+      companyId,
+    });
+    expect(res.status).toBe(201);
     createdProjectIds.push(res.body.id);
     return res.body;
   }

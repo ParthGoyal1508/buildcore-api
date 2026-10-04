@@ -11,6 +11,7 @@ import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { describeStoredFile } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
 import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
@@ -530,6 +531,8 @@ export class ProjectDocumentsService {
       documentType: string;
       data: Buffer;
       contentType: string;
+      /** The uploader's own file name, so the download is not `<kind>-<id>` with no extension. */
+      fileName?: string;
       remark?: string;
     },
     actorUserId: string,
@@ -552,6 +555,8 @@ export class ProjectDocumentsService {
           documentType: input.documentType,
           documentTypeId: input.documentTypeId ?? null,
           fileRef,
+          fileName: input.fileName ?? null,
+          mimeType: input.contentType,
           remark: input.remark ?? null,
           uploadedByUserId: actorUserId,
         },
@@ -607,7 +612,7 @@ export class ProjectDocumentsService {
     companyId: string,
     projectId: string,
     documentId: string,
-  ): Promise<{ data: Buffer; filename: string }> {
+  ): Promise<{ data: Buffer; filename: string; contentType: string }> {
     const document = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.projectDocument.findFirst({
         where: { id: documentId, projectId, companyId },
@@ -616,14 +621,18 @@ export class ProjectDocumentsService {
     if (!document) throw new NotFoundException('Document not found.');
 
     const data = await this.storage.get(document.fileRef);
-    return {
+    const described = describeStoredFile({
+      bytes: data,
+      storedName: document.fileName,
+      storedType: document.mimeType,
       // The free-text label, not the id: this is what a person sees in their downloads folder.
       // Sanitised because it is user-supplied and ends up in a header.
-      filename: `${document.documentType.replace(/[^A-Za-z0-9._-]+/g, '-')}-${
-        document.id
-      }`,
-      data,
-    };
+      fallbackName: `${document.documentType.replace(
+        /[^A-Za-z0-9._-]+/g,
+        '-',
+      )}-${document.id}`,
+    });
+    return { data, ...described };
   }
 
   /** User ids to display names, in one query. */
@@ -655,6 +664,7 @@ export class ProjectDocumentsService {
       documentType: string;
       data: Buffer;
       contentType: string;
+      fileName?: string;
     },
     actorUserId: string,
   ): Promise<{ stagedDocumentId: string }> {
@@ -675,6 +685,8 @@ export class ProjectDocumentsService {
           documentTypeId: input.documentTypeId ?? null,
           documentType: input.documentType,
           fileRef,
+          fileName: input.fileName ?? null,
+          mimeType: input.contentType,
           uploadedBy: actorUserId,
         },
       }),
@@ -703,6 +715,8 @@ export class ProjectDocumentsService {
       documentType: string;
       fileRef: string;
       filePath: string | null;
+      fileName: string | null;
+      mimeType: string | null;
     }[]
   > {
     const staged = stagedIds.length
@@ -782,6 +796,10 @@ export class ProjectDocumentsService {
       documentType: row.documentType,
       fileRef: row.fileRef,
       filePath: row.filePath,
+      // Carried through the promotion, so a document staged before its project existed is not
+      // the one that downloads as `<kind>-<id>` with no extension.
+      fileName: row.fileName,
+      mimeType: row.mimeType,
     }));
   }
 

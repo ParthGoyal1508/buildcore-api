@@ -10,6 +10,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import config from '../../common/configs/config';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { describeStoredFile } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
 import {
   REQUIRED_COMPANY_DOCUMENT_CODES,
@@ -335,6 +336,8 @@ export class CompanyDocumentsService {
       documentTypeId: string;
       data: Buffer;
       contentType: string;
+      /** The uploader's own file name, so the download is not `<code>-<id>` with no extension. */
+      fileName?: string;
       documentNumber?: string | null;
       expiresAt?: string | null;
     },
@@ -402,6 +405,8 @@ export class CompanyDocumentsService {
             companyId: input.companyId,
             documentTypeId: type.id,
             fileRef,
+            fileName: input.fileName ?? null,
+            mimeType: input.contentType,
             documentNumber: input.documentNumber ?? null,
             expiresAt: input.expiresAt ? new Date(input.expiresAt) : null,
             uploadedByUserId: actor.userId,
@@ -446,7 +451,12 @@ export class CompanyDocumentsService {
     companyId: string,
     documentId: string,
     actor: { userId: string; ipAddress: string },
-  ): Promise<{ data: Buffer; view: CompanyDocumentView }> {
+  ): Promise<{
+    data: Buffer;
+    view: CompanyDocumentView;
+    filename: string;
+    contentType: string;
+  }> {
     const doc = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.companyDocument.findFirst({
         where: { id: documentId, companyId },
@@ -470,7 +480,15 @@ export class CompanyDocumentsService {
     });
 
     const data = await this.storage.get(doc.fileRef);
-    return { data, view: this.toView(doc, doc.documentType) };
+    const described = describeStoredFile({
+      bytes: data,
+      storedName: doc.fileName,
+      storedType: doc.mimeType,
+      // The kind's code and the row id, which is what this route has always named the file —
+      // now with the extension that makes it openable.
+      fallbackName: `${doc.documentType.code}-${doc.id}`,
+    });
+    return { data, view: this.toView(doc, doc.documentType), ...described };
   }
 
   /** Every version of one kind, newest first — the history FR-006 preserves. */

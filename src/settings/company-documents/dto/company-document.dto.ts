@@ -37,6 +37,18 @@ export class UploadCompanyDocumentDto {
 
   @ApiPropertyOptional({
     description:
+      "The uploader's own file name, kept so the download is what they recognise rather than " +
+      '`<code>-<id>` with no extension. Optional: a document filed before 2026-10-04 has none, ' +
+      'and the download sniffs the stored bytes for an extension in that case.',
+    example: 'GST registration certificate.pdf',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  fileName?: string;
+
+  @ApiPropertyOptional({
+    description:
       'The number on the document — GSTIN, PAN, TAN — when the kind carries one.',
   })
   @IsOptional()

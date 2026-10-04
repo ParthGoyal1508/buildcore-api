@@ -276,3 +276,61 @@ other feature that reads its enum now assumes exists.
 business need for the finer split (a site supervisor filing DWRs should not automatically see RA
 Bill/P&L financial data); collapsing them back to one value would re-introduce the access-control
 gap the clarification was meant to close.
+
+## 15. The client's `.xls` needs a second parser, and `exceljs` fails silently on it (2026-10-03)
+
+**Decision**: SheetJS (`xlsx`) reads legacy `.xls`; `exceljs` keeps `.xlsx` in both directions. One
+`BoqWorkbookReader` is the only importer of either, and it returns plain rows rather than library
+objects. Pinned to `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, never the npm registry.
+Constitution v1.5.0 carries the full entry.
+
+**Rationale**: measured, not assumed. Handed `docs/BOQ_794578.xls`, `exceljs` returns a workbook
+with **zero worksheets and throws nothing**:
+
+```
+await wb.xlsx.readFile('docs/BOQ_794578.xls')   →   worksheets.length === 0
+```
+
+An importer on `exceljs` alone would report a successful import of 0 rows against a ₹3 crore tender.
+That is the worst available shape for this failure: it looks like a working import of an empty
+project, and nothing downstream contradicts it until somebody tries to raise a bill months later.
+The registry constraint is equally measured — `npm view xlsx version` returns `0.18.5`, which
+predates the fixes for CVE-2023-30533 (prototype pollution) and CVE-2024-22363 (ReDoS); SheetJS
+ships patched builds only from their own CDN, which is what the maintained `node-xlsx` depends on.
+
+**Alternatives considered**: requiring a `.xlsx` re-save — rejected by the client on 2026-10-03,
+because government portals issue `.xls` and a Save As is a step people forget, which puts the same
+silent failure behind a human instead of a library. Converting server-side via LibreOffice — a
+native binary, a far larger surface, and prohibited by the no-native-build-step constraint the
+constitution already carries. `node-xlsx` as the dependency — it pins the same tarball but adds a
+wrapper over an API we use directly in one file.
+
+## 16. The import batch lives in memory, and that is a bounded bet (2026-10-03)
+
+**Decision**: `validate` holds parsed rows in process memory keyed by `batchId`, with a TTL and a cap
+on concurrent batches. `confirm` consumes the batch, which is what makes it idempotent.
+
+**Rationale**: the batch exists to be reviewed and then discarded, and the only cost of losing one
+is re-uploading the file. A staged table — the shape 017 used for `StagedProjectDocument` — would
+need an RLS policy, a sweep job and a retention answer for data whose entire purpose is to be
+transient, and would leave unconfirmed client tender data at rest for no benefit.
+
+**The trade-off, named rather than discovered**: a batch validated on one instance is invisible to
+another. This holds only while the API runs as a single instance, which it does today. Scaling
+horizontally is the trigger to move the batch into Postgres — recorded here so the symptom
+(intermittent `BOQ_BATCH_NOT_FOUND` under load) is diagnosable from the design rather than from
+production.
+
+**Alternatives considered**: a staged table (above); Redis (not in the stack, and a new
+infrastructure dependency for a five-minute cache); re-parsing the file on confirm (the client would
+have to upload twice, and the second parse could disagree with the report they approved — which is
+precisely what the two-step flow exists to prevent).
+
+## 17. The 1,000-row cap is judged after the schedule is identified (2026-10-03)
+
+**Decision**: research §4's 1,000-row `413` counts **candidate schedule rows**, not raw sheet rows.
+
+**Rationale**: §4 was written before any real file existed. The sample's sheet holds considerably
+more raw rows than its 312 schedule lines once the heading rows and the 216-row second block at
+columns 238–242 are counted. A cap judged on raw rows could refuse the client's own tender for being
+too large while it contains 312 lines — a refusal that would be both wrong and unarguable.
