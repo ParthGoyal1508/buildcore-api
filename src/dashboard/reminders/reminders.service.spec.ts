@@ -1,4 +1,5 @@
 import { ReminderSeverity } from '@prisma/client';
+import { MAX_REMINDERS_PER_RESPONSE } from '../constants/dashboard.constants';
 
 import {
   callerFor,
@@ -498,7 +499,45 @@ describe('RemindersService', () => {
       expect(await service.count(caller, {})).toEqual({
         total: 4,
         bySeverity: { overdue: 2, warning: 1, info: 1 },
+        breakdownTruncated: false,
       });
+    });
+
+    it('counts past the response cap, which the badge is the whole point of', async () => {
+      /**
+       * **004 T074, fixed 2026-10-04.** `count()` derived its total from the list `list()`
+       * returns, and that list is already sliced to `MAX_REMINDERS_PER_RESPONSE`. So a company
+       * with more than 500 live reminders saw a badge reading exactly 500 — for ever, and the
+       * badge is the one surface where the number *is* the content. `truncated` already existed
+       * and said the list had been clipped; nothing carried the figure the clip discarded.
+       *
+       * 501 candidates, one past the cap, because an off-by-one is the whole of this bug.
+       */
+      const many = Array.from(
+        { length: MAX_REMINDERS_PER_RESPONSE + 1 },
+        (_, i) => candidate(`r${i}`, -1),
+      );
+      const { service } = serviceWith(
+        [new FakeRule('testing-document-expiry', many)],
+        new FakeLedger(),
+      );
+
+      const counted = await service.count(caller, {});
+      expect(counted.total).toBe(MAX_REMINDERS_PER_RESPONSE + 1);
+
+      // And the list itself is still clipped, with the flag that says so — the fix adds a figure
+      // rather than lifting the cap, because a response carrying 20,000 rows is its own problem.
+      const listed = await service.list(caller, {});
+      expect(listed.reminders).toHaveLength(MAX_REMINDERS_PER_RESPONSE);
+      expect(listed.truncated).toBe(true);
+      expect(listed.matched).toBe(MAX_REMINDERS_PER_RESPONSE + 1);
+
+      // The breakdown covers the clipped list only, and says so rather than silently
+      // disagreeing with the total.
+      expect(counted.breakdownTruncated).toBe(true);
+      expect(Object.values(counted.bySeverity).reduce((a, b) => a + b, 0)).toBe(
+        MAX_REMINDERS_PER_RESPONSE,
+      );
     });
   });
 

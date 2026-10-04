@@ -59,7 +59,27 @@ export interface ReminderRuleProvider {
   readonly type: string;
   /** What the rule evaluates over: `EQUIPMENT_DOCUMENT`. */
   readonly entityType: string;
-  /** How far ahead of the due date the rule starts producing candidates. */
+  /**
+   * How far ahead of the due date the rule starts producing candidates.
+   *
+   * **The rule applies this itself. The engine does not (004 T073, settled 2026-10-04.)**
+   *
+   * FR-029 requires a rule to declare a lead window, and every rule does. What the engine does
+   * with the declared number is nothing: `RemindersService` never reads `leadDays`, and a rule
+   * that returned a candidate 400 days out would have it listed. Checked rather than assumed —
+   * the field appears once in this file and nowhere in the service.
+   *
+   * Documented rather than enforced, which is the choice the task offered, because enforcing it
+   * is not the safe half. A rule's `candidates()` already filters on a date column, so an engine
+   * filter would be a *second* window applied to figures the rule had already narrowed, and the
+   * two would silently disagree the first time a rule had a reason to widen — a renewal a module
+   * wants flagged early, say. The reminder would simply not appear, with both the rule and the
+   * declared value looking correct.
+   *
+   * So the value is **advisory**: it tells a reader, and the settings screen, what window a rule
+   * intends. It is not a bound the engine imposes. A rule that wants a different window changes
+   * its own query and this number together.
+   */
   readonly leadDays: number;
   readonly severityLadder: ReminderSeverityLadder;
 

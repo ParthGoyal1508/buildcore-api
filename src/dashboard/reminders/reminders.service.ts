@@ -40,11 +40,30 @@ export interface ReminderListResponse {
   unavailable: UnavailableRuleSource[];
   /** True when `MAX_REMINDERS_PER_RESPONSE` clipped the list. */
   truncated: boolean;
+  /**
+   * How many reminders matched **before** the clip — which is what the badge must count.
+   *
+   * Added 2026-10-04 (004 T074). `count()` derived its total from `reminders.length`, and
+   * `reminders` is already sliced to `MAX_REMINDERS_PER_RESPONSE`. So a company with more than
+   * 500 live reminders was shown a badge reading exactly 500, for ever, and the badge is the one
+   * surface where the number *is* the whole content. `truncated` was already here and said the
+   * list had been clipped; nothing carried the figure the clip discarded.
+   */
+  matched: number;
 }
 
 export interface ReminderCountResponse {
   total: number;
   bySeverity: Record<ReminderSeverity, number>;
+  /**
+   * True when `total` exceeds what the breakdown covers.
+   *
+   * The total is exact; the per-severity split is over the first
+   * `MAX_REMINDERS_PER_RESPONSE` only, because recovering a severity split from a count would
+   * mean evaluating every rule a second time. A caller that sums the breakdown and finds it short
+   * of the total needs to be told why, rather than left to conclude one of them is wrong.
+   */
+  breakdownTruncated: boolean;
 }
 
 export interface SweepResult {
@@ -298,6 +317,7 @@ export class RemindersService {
       reminders: visible.slice(0, MAX_REMINDERS_PER_RESPONSE),
       unavailable,
       truncated: visible.length > MAX_REMINDERS_PER_RESPONSE,
+      matched: visible.length,
     };
   }
 
@@ -307,12 +327,18 @@ export class RemindersService {
    * Computed from the same `list()` call rather than a cheaper aggregate query,
    * because there is no table to aggregate over — a reminder exists only as the
    * result of evaluating its rule. Filters apply, so a badge can count one module.
+   *
+   * **Counts `matched`, not `reminders.length` (fixed 2026-10-04, 004 T074).** `reminders` is
+   * sliced to `MAX_REMINDERS_PER_RESPONSE`, so counting it gave a company with more than 500 live
+   * reminders a badge that read exactly 500 and never moved. The per-severity breakdown is still
+   * computed from the clipped list and is documented as such below, because a severity count
+   * cannot be recovered from a number — the alternative is evaluating every rule twice.
    */
   async count(
     caller: AuthenticatedUser,
     query: ListRemindersDto,
   ): Promise<ReminderCountResponse> {
-    const { reminders } = await this.list(caller, query);
+    const { reminders, matched } = await this.list(caller, query);
     const bySeverity: Record<ReminderSeverity, number> = {
       [ReminderSeverity.info]: 0,
       [ReminderSeverity.warning]: 0,
@@ -321,7 +347,15 @@ export class RemindersService {
     for (const reminder of reminders) {
       bySeverity[reminder.severity] += 1;
     }
-    return { total: reminders.length, bySeverity };
+    // `total` is the true figure; the breakdown is over the first
+    // `MAX_REMINDERS_PER_RESPONSE`, so the two legitimately disagree past the cap. Stated here
+    // rather than hidden, because a caller summing the breakdown and finding it short of the
+    // total should be able to find out why.
+    return {
+      total: matched,
+      bySeverity,
+      breakdownTruncated: matched > reminders.length,
+    };
   }
 
   /**
