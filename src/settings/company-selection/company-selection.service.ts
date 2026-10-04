@@ -81,15 +81,42 @@ export class CompanySelectionService {
       });
     }
 
-    await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: false, companyId },
-      (tx) =>
-        tx.userCompanySelection.upsert({
-          where: { userId: caller.id },
-          create: { userId: caller.id, companyId },
-          update: { companyId },
-        }),
+    /**
+     * Written **unscoped**, and that is the only context this write can have.
+     *
+     * It used to run with `{ isSuperAdmin: false, companyId }` — the company being switched
+     * *to*. Under that context Postgres refused the write outright:
+     *
+     *     42501 new row violates row-level security policy (USING expression)
+     *            for table "UserCompanySelection"
+     *
+     * because the row is keyed by user and this statement **moves it between tenants**.
+     * Prisma's upsert is `INSERT ... ON CONFLICT DO UPDATE`, and on conflict Postgres applies
+     * the policy's USING to the row *already there* — which still holds the previous company.
+     * So the first selection worked and every switch after it failed: a user could choose a
+     * company once and was then stuck in it.
+     *
+     * No tenant context can satisfy both halves. The old company passes USING and fails WITH
+     * CHECK; the new one does the reverse. A row that names which tenant somebody is moving to
+     * is not a row that belongs to a tenant.
+     *
+     * Nothing is given away by this. The target was authorised two lines above by
+     * `selectableFor`, the key is the caller's own id so no other user's row is reachable, and
+     * the policy's own migration says it "does not make the selection authorisation ... whether
+     * they may choose it is checked in the service". `resolve` and `clear` already read and
+     * delete this row the same way.
+     *
+     * **It passed every test for four days because the local and CI database role is a
+     * superuser**, and Postgres exempts superusers from RLS unconditionally — so the policy was
+     * never in force here. `test/company-selection-rls.e2e-spec.ts` now asks under a role that
+     * cannot bypass it, which is the only way this is observable outside production.
+     */
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.userCompanySelection.upsert({
+        where: { userId: caller.id },
+        create: { userId: caller.id, companyId },
+        update: { companyId },
+      }),
     );
 
     return (await this.selectableFor(caller)).map((company) => ({
