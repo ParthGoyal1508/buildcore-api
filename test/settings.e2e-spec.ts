@@ -260,6 +260,73 @@ describe('Settings module (e2e)', () => {
       expect(res.body.bonusRate).toBe(8.33);
     });
 
+    it('gives the new company every master that has defaults (006 T058)', async () => {
+      /**
+       * The end-to-end half of 006 T058, and the only place it can be asserted: this is the one
+       * suite that creates a company through the API.
+       *
+       * Six masters were seeded at creation and the two machinery ones were not, so until
+       * 2026-10-04 a new company had no equipment categories at all and **the first person to
+       * register a machine was refused**. The two `seedDefaultsForCompany` methods existed and
+       * were correct; nothing called them outside the demo seed. Measured at zero rows for both
+       * live companies.
+       *
+       * Asserted on the company created by the test above, so what is being proven is the
+       * creation path rather than a backfill script's output — the two live companies were
+       * backfilled separately and asserting against them would prove the wrong thing.
+       */
+      const counts = await Promise.all([
+        sys.equipmentCategory.count({ where: { companyId } }),
+        sys.equipmentDocType.count({ where: { companyId } }),
+        sys.documentType.count({ where: { companyId } }),
+        sys.vendorCategory.count({ where: { companyId } }),
+        sys.itemCategory.count({ where: { companyId } }),
+        sys.assetCategory.count({ where: { companyId } }),
+        sys.assetDocType.count({ where: { companyId } }),
+        sys.conditionGrade.count({ where: { companyId } }),
+      ]);
+
+      // Every one non-empty, named rather than summed: a total would pass with one master empty
+      // and another over-seeded, which is exactly the shape of this defect.
+      const [
+        equipmentCategories,
+        equipmentDocTypes,
+        documentTypes,
+        vendorCategories,
+        itemCategories,
+        assetCategories,
+        assetDocTypes,
+        conditionGrades,
+      ] = counts;
+      expect(equipmentCategories).toBeGreaterThanOrEqual(10);
+      expect(equipmentDocTypes).toBeGreaterThanOrEqual(6);
+      expect(documentTypes).toBeGreaterThan(0);
+      expect(vendorCategories).toBeGreaterThan(0);
+      expect(itemCategories).toBeGreaterThan(0);
+      expect(assetCategories).toBeGreaterThan(0);
+      expect(assetDocTypes).toBeGreaterThan(0);
+      expect(conditionGrades).toBeGreaterThan(0);
+
+      // And by name, because a count of ten says nothing about which ten.
+      const names = (
+        await sys.equipmentCategory.findMany({
+          where: { companyId },
+          select: { name: true },
+        })
+      ).map((row: { name: string }) => row.name);
+      expect(names).toContain('EXCAVATOR');
+      expect(names).toContain('TRANSIT MIXER');
+
+      // **Null benchmarks, asserted deliberately.** The defaults carry a name and a meter type and
+      // nothing else, so item 13's variance alert cannot fire for any of them until somebody fills
+      // one in. Recorded as 006 T061 and asserted here so the day it changes, this test says so
+      // rather than the change passing unnoticed.
+      const benchmarked = await sys.equipmentCategory.count({
+        where: { companyId, fuelBenchmark: { not: null } },
+      });
+      expect(benchmarked).toBe(0);
+    });
+
     it('rejects a duplicate short code with 409, case-insensitively (T022, FR-004)', async () => {
       const company = await sys.company.findUniqueOrThrow({
         where: { id: companyId },

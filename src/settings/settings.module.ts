@@ -8,6 +8,8 @@ import { CompanyDocumentsController } from './company-documents/company-document
 import { CompanyDocumentsService } from './company-documents/company-documents.service';
 import { AssetCategoriesService } from './asset-masters/asset-categories.service';
 import { AssetDocTypesService } from './asset-masters/asset-doc-types.service';
+import { EquipmentCategoriesService } from './machinery-masters/equipment-categories.service';
+import { EquipmentDocTypesService } from './machinery-masters/equipment-doc-types.service';
 import { ConditionGradesService } from './asset-masters/condition-grades.service';
 import { CompaniesService } from './companies/companies.service';
 import { EmployeeCodeService } from './employee-code/employee-code.service';
@@ -103,6 +105,22 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     AssetCategoriesService,
     AssetDocTypesService,
     ConditionGradesService,
+    // And the two machinery masters, for exactly the same reason and on exactly the same terms
+    // (006 T058, added 2026-10-04). `PlantModule` declares its own instances; these are
+    // `CompaniesService`'s, and are not exported.
+    //
+    // **They were missing, and the consequence was measurable rather than theoretical.** Six
+    // masters were seeded at company creation and these two were not, so a new company had no
+    // equipment categories and no equipment document types, and the first person to register a
+    // machine was refused until they hand-created one. Measured on 2026-10-04:
+    // `SELECT count(*) FROM settings."EquipmentCategory"` returned **zero rows for both
+    // companies**.
+    //
+    // The comment above says the asset masters follow "the same arrangement the machinery masters
+    // have with `PlantModule`". That was true of where the services live and false of what
+    // `CompaniesService` does with them, which is how the gap survived a reading of this file.
+    EquipmentCategoriesService,
+    EquipmentDocTypesService,
   ],
   exports: [
     RolesService,

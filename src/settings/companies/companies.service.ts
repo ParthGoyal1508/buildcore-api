@@ -9,6 +9,8 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DEFAULT_SLOT_ROLE_NAMES } from '../../approvals/approval-slots';
 import { ChainsService } from '../../approvals/chains.service';
+import { EquipmentCategoriesService } from '../machinery-masters/equipment-categories.service';
+import { EquipmentDocTypesService } from '../machinery-masters/equipment-doc-types.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type {
   SettingsConfig,
@@ -44,6 +46,8 @@ export class CompaniesService {
     private readonly assetCategories: AssetCategoriesService,
     private readonly assetDocTypes: AssetDocTypesService,
     private readonly conditionGrades: ConditionGradesService,
+    private readonly equipmentCategories: EquipmentCategoriesService,
+    private readonly equipmentDocTypes: EquipmentDocTypesService,
     private readonly approvalChains: ChainsService,
   ) {}
 
@@ -445,6 +449,19 @@ export class CompaniesService {
         await this.assetCategories.seedDefaultsForCompany(company.id, tx);
         await this.assetDocTypes.seedDefaultsForCompany(company.id, tx);
         await this.conditionGrades.seedDefaultsForCompany(company.id, tx);
+        // And the two machinery masters (006 T058, added 2026-10-04). They were the only two
+        // `seedDefaultsForCompany` methods in `settings` that nothing called outside the demo
+        // seed, so every company was created with no equipment categories and no equipment
+        // document types — measured at zero rows for both live companies, which means **the first
+        // person to register a machine was refused** until they hand-created a category.
+        //
+        // **Correction, same day:** an earlier version of this comment said the ten defaults carry
+        // the fuel benchmarks the variance alerts are computed from. They do not —
+        // `DEFAULT_EQUIPMENT_CATEGORIES` carries a name and a meter type and nothing else, and the
+        // benchmark is null on every row this seeds. Checked after writing the claim, not before.
+        // The benchmark is still a per-category setting somebody has to fill in; see 006 T061.
+        await this.equipmentCategories.seedDefaultsForCompany(company.id, tx);
+        await this.equipmentDocTypes.seedDefaultsForCompany(company.id, tx);
         // Feature 016's approval chains — the shape and, since 2026-10-04, the staffing.
         // Both are resolved HERE, in the module that owns `settings.Role`, and handed
         // over: the approval spine lives in `shared` and reading roles itself would be
