@@ -18,8 +18,9 @@ findings).
 a wrong figure on one looks exactly like a right one. The six that exist for that reason alone are
 T060 (up-to-previous is read, not derived — without it the footer identity cannot fail), T031 (an
 award line with no measurement source), T046 (the client's real arithmetic), T074 (the sheet count),
-T075 (produced twice, identical) and T098 (the isolation probe). Each has its own task rather than a
-clause inside another.
+T075 (produced twice, identical), T073a (both directions from one renderer, which is the thing the
+user asked for in their own words) and T098 (the isolation probe). Each has its own task rather than
+a clause inside another.
 
 **Organization**: phases follow plan.md's **A–G** plus a verification phase, because each is
 independently committable and is committed on its own. Every task carries its `[US#]` label, so the
@@ -67,8 +68,9 @@ this the hard way five times.
       `ClaimProposalSource` states the distinction it carries: zero means the measurement was read
       and was nothing, absent means there was nothing to read (FR-003a)
 - [ ] T004 [US1] Add `model BillPackage` to `prisma/schema.prisma` — `companyId`, `projectId`,
-      `direction`, nullable `clientBillId`/`raBillId`, `periodFrom`/`periodTo` as `@db.Date` both
-      inclusive, `sequenceNo` (data-model.md §BillPackage)
+      `direction`, nullable `clientBillId`/`raBillId`, `periodFrom`/`periodTo` as `@db.Date` **both
+      inclusive** (FR-001), `sequenceNo`. The client's cycle runs the 21st to the 20th, so a period
+      is two stored dates and not a month anybody can derive (data-model.md §BillPackage)
 - [ ] T005 [US2] Add `BillPackage`'s **frozen rate** columns — `retentionFraction`, `cgstFraction`,
       `sgstFraction`, `igstFraction`, `tdsFraction` as `Decimal(8,6)`, `taxBasis`,
       `taxBasisSource` — each with a docblock stating it is recorded **per bill** so a statute or
@@ -178,6 +180,7 @@ package rather than creating another.
       in **one multi-row statement** — 312 lines is one write, not 312 (research §8, and the
       production 500 behind it: 132 sequential round trips inside a 5 s transaction budget)
 - [ ] T024 [US1] Map each schedule line to its proposal in `bill-package.service.ts`:
+      (SC-001: the engineer reviews proposals rather than entering quantities)
       `approved_measurement` with the period's approved quantity for a BOQ line, and
       **`no_measurement_source` with a null quantity** for an award line whose `boqTaskItemId` is
       null — which the subcontract model permits because a subcontract may itemise work differently.
@@ -191,6 +194,11 @@ package rather than creating another.
       any percentage quoted against that schedule — `ClientBillLine.amount` already carries
       `quantity × rate × (1 + quotedPercentage)`, and a work-done figure computed without it would
       disagree with the schedule it totals (FR-012, checklist CHK012)
+- [ ] T026a [US1] Report a cumulative claim that has passed its line's **scope or awarded**
+      quantity in `bill-package.service.ts`, and carry the remaining quantity as the **negative
+      figure it is** rather than its magnitude (FR-012b). 018 already flags over-scope on a bill
+      line rather than refusing it (`ClientBillLine.exceedsScope`), and the real Annexure carries a
+      Balance Qty column that a magnitude would print as though there were scope left
 - [ ] T027 [US1] Implement FR-007 in `bill-package.service.ts`: the same project, direction and
       period returns the **existing** package in the body rather than creating a second, and
       FR-011's refusal when the schedule is empty, naming the absence
@@ -278,6 +286,10 @@ figures, and each of the three columns balances on its own.
 - [ ] T044 [US2] Mark a draft's up-to-date column **provisional** in the abstract response
       (FR-013b): a package that has not been issued has no frozen cumulative position, and a figure
       that changes when the engineer presses Issue is a figure they did not approve
+- [ ] T044a [US2] Report the tax basis **and how it was decided** in the abstract response
+      (FR-016a): `derived_from_gstin` or `from_project_flag`. A client record carries no `state`
+      today, so for a bill to a client the fallback is the likely path rather than the exceptional
+      one — and a fallback recorded on a row and shown to nobody is a tax decision nobody made
 - [ ] T045 [P] [US2] Create `src/projects/billing/package/bill-abstract.spec.ts` with the structural
       tests: every named recovery and deduction present whether or not it carries an amount; the
       three columns each balancing; a negative payable surviving; and a rate omitted from the
@@ -317,8 +329,10 @@ from no.
       `historyFor(packageId, lineId)`: every period the line has been claimed in, in period order,
       each with its quantity, its reason and the package it went out on (FR-031)
 - [ ] T050 [US4] Reproduce reasons **verbatim** in `measurement-sheet.service.ts` (FR-032) — no
-      normalising, no trimming, no sentence-casing. The remarks are the argument the document exists
-      to settle, misspellings included
+      normalising, no trimming, no sentence-casing. The remarks are the argument the document
+      exists to settle, misspellings included — and SC-005 requires one to be readable on that
+      item's sheet a year later, which is why the history is a query across bills rather than a
+      field on one
 - [ ] T051 [US4] Add the daily record to `measurement-sheet.service.ts`, read through
       `ProjectSourcesRegistry.logbookSource()` — the registry 022 built, never by querying the plant
       schema (FR-033, plan.md Constitution Check I). Batched over the period's dates in one call
@@ -367,7 +381,7 @@ from no.
       applied to a second package refused **naming the first** (FR-037); two **simultaneous**
       applications of one debit, exactly one landing (FR-037a) — the rule has to hold where
       concurrent writers meet it and not only against a second attempt made afterwards; and
-      application to an issued package refused (FR-037b)
+      application to an issued package refused (FR-037b). SC-007 is this test and nothing else
 - [ ] T063 [P] [US5] Add the register tests to `debit-note.service.spec.ts`: a draft's register
       showing a debit recorded against a later package, an issued package's register **not** growing
       when a debit is recorded afterwards (FR-039a), and the grouping under headings (FR-040)
@@ -421,6 +435,12 @@ contains one measurement sheet per schedule line, and is identical when produced
       client is. Identifiers come from the **frozen header** on the package (FR-026), and a missing
       one is reported through the `X-Bill-Package-Missing-Fields` response header and the issue
       response body, never refused (FR-027, FR-027a)
+- [ ] T073a [US3] **Both directions, one renderer** — its own test in
+      `bill-workbook.renderer.spec.ts` (SC-008, FR-025). Render the same figures as a bill to a
+      client and as a bill to a subcontractor, and assert the **issuing and receiving party cells
+      exchange** while every other cell is identical. This is the requirement the user stated first
+      and in their own words — one renderer, two bindings, the two party names being the stated
+      variables — and two renderers that drift apart is the failure it exists to prevent
 - [ ] T074 [US3] **The sheet count** — its own test in `bill-workbook.renderer.spec.ts`. Assert that
       the number of measurement sheets **equals** the number of lines the schedule holds, including
       lines with nothing claimed, as a count computed from the input rather than a number typed into
@@ -438,9 +458,20 @@ contains one measurement sheet per schedule line, and is identical when produced
 - [ ] T077 [P] [US3] Add the naming tests to `bill-workbook.renderer.spec.ts`: two items whose names
       would collide produce two distinct sheets, both present; a name over the character cap is
       shortened by the rule and the item is still identifiable from inside its sheet (FR-024a)
+- [ ] T077a [US3] Assert the **five sheet kinds are present in the client's own order** in
+      `bill-workbook.renderer.spec.ts` (FR-024, SC-002): check list, abstract, priced schedule, the
+      measurement sheets, then the debit register. A reviewer finds each figure by where it sits,
+      and a workbook carrying every sheet in a different order is a workbook they have to search
 - [ ] T078 [US3] Add a renderer test asserting it cannot query: the renderer's constructor takes no
       Prisma client and `bill-workbook.renderer.ts` imports none. A renderer that could query could
       recompute, and a bill produced twice must be identical (FR-028, research §6)
+
+- [ ] T078a [—] Add a guard test asserting **no model links a bill claim to an individual daily
+      work report** (FR-049, decision D3) — scanning `prisma/schema.prisma` for a relation between
+      the package tables and `DailyWorkReport` or `DWRTask`. A prohibition nothing checks is a
+      prohibition a later "improvement" removes, and this one is load-bearing: 022's reversal guard
+      stays a quantity floor *because* this linkage does not exist (FR-049a). Follow
+      `src/common/strip-comments.ts` for the scan, as the other source-scanning guards do
 
 **Checkpoint**: the package is a workbook. Commit.
 
@@ -459,7 +490,9 @@ return the cases their decisions create.
       "this is free"
 - [ ] T080 [US7] Return `missingHeaderFields` and the check-list gaps in the issue response
       (FR-027a, FR-043a): reported to the caller, never a refusal, and not merely recorded against a
-      row where nobody looks
+      row where nobody looks. **Assert that an issue with every question unanswered still
+      succeeds** (FR-043) — the check list records a fact, and the client's own footer says only
+      that gaps "may delay the process"
 - [ ] T081 [US7] Implement `revise` and `certify` in `bill-package.service.ts`: a revision counted
       with a reason and what the package stated at issue still readable (FR-045, FR-046), and a
       certified amount kept **beside** the billed one and never instead of it (FR-047) — the
@@ -533,6 +566,12 @@ return the cases their decisions create.
       the third (D1's whole point, and the case that distinguishes frozen from recomputed); the
       footer identity on every item of every package; the debits including the as-at-issue register;
       and the workbook's sheet count
+- [ ] T097a [—] Establish SC-011 in `test/bill-package.e2e-spec.ts`: compose a package against a
+      **312-line** schedule inside one transaction's budget, and produce its workbook — 312
+      measurement sheets — in under ten seconds and under twenty megabytes. Measured rather than
+      assumed: `withRlsContext`'s interactive transaction defaults are `maxWait` 2000 ms and
+      `timeout` 5000 ms, and 022 research §8 records 132 sequential round trips inside that budget
+      returning a bare 500 on the deployment while passing every local run
 - [ ] T098 [—] **The isolation probe** — `test/ra-bill-package-rls.e2e-spec.ts`, following
       `test/dwr-rls.e2e-spec.ts` and `test/company-selection-rls.e2e-spec.ts`. Create a
       `NOSUPERUSER NOBYPASSRLS` role, and assert **first** that the role was actually created
@@ -541,7 +580,7 @@ return the cases their decisions create.
       is a superuser and Postgres exempts superusers from row-level security unconditionally, so a
       policy without this test has never been in force in any test run
 - [ ] T099 [—] Cover all **four** new tables in `test/ra-bill-package-rls.e2e-spec.ts` (FR-050), and
-      exercise the **write** half of each policy as well as the read half (FR-050c) — a probe that
+      exercise the **write** half of each policy as well as the read half (FR-050c, SC-010) — a probe that
       proves another company's rows are invisible says nothing about whether a row can be written
       *into* another company
 - [ ] T100 [—] Extend `test/bill-package.e2e-spec.ts` with pass 8: `Permission.PROJECT_FINANCIALS`
