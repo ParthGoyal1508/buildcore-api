@@ -190,6 +190,30 @@ export class ProjectsService {
   ): Promise<Project> {
     const targetCompanyId = this.targetCompanyOf(caller, companyId);
 
+    // The client is checked **before** the document gate, and the order is the point.
+    //
+    // Found on 2026-10-04 while repairing the end-to-end suites: with the gate first, a project
+    // manager who mistyped a client id was told to attach four mandatory documents, attached
+    // them, and was *then* told the client does not exist — four files uploaded for a project
+    // that was never going to be created. A cheap, fundamental reference should be refused
+    // before work is demanded of the person.
+    //
+    // This is a pre-flight check, not the authoritative one. The check inside the transaction
+    // below stays exactly where it is: it is what makes the write safe against a client deleted
+    // between here and there, which this one cannot be.
+    const clientExists = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.client.findFirst({
+          where: { id: dto.clientId, companyId: targetCompanyId },
+          select: { id: true },
+        }),
+    );
+    if (!clientExists) {
+      throw new NotFoundException(`Client ${dto.clientId} not found`);
+    }
+
     // 017 FR-009, FR-009a, FR-009c. **Before anything is written.** The gate refuses a creation
     // whose mandatory kinds are not all attached, naming each missing kind's label, and refuses a
     // staged reference the caller may not use. Both checks live in one call so they cannot be
