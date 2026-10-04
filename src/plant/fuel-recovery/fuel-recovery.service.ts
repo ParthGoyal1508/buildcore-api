@@ -21,6 +21,8 @@ import { ACTION_OPERATOR_FUEL_RECOVERY } from '../../approvals/default-chains';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
   APPROVAL_COMPLETED_EVENT,
+  APPROVAL_REJECTED_EVENT,
+  ApprovalRejectedEvent,
   type ApprovalCompletedEvent,
 } from '../../approvals/approvals.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -176,10 +178,19 @@ export class FuelRecoveryService {
     },
     raising: 'hire_bill' | 'operator',
   ): void {
+    // `reversed` **and `rejected`** are both dead. The second was missing until 2026-10-04 and it
+    // is the more important of the two: a recovery the Director refused is precisely the case where
+    // somebody wants to attribute the loss to the hirer instead, and treating it as live made that
+    // impossible — while saying the loss was "already being recovered from the other party", which
+    // was the opposite of what had happened.
+    const DEAD: OperatorRecoveryStatus[] = [
+      OperatorRecoveryStatus.reversed,
+      OperatorRecoveryStatus.rejected,
+    ];
     const other =
       raising === 'hire_bill'
         ? exception.operatorRecovery &&
-          exception.operatorRecovery.status !== OperatorRecoveryStatus.reversed
+          !DEAD.includes(exception.operatorRecovery.status)
         : exception.hireBillDeduction;
     if (other) {
       throw new BadRequestException({
@@ -466,6 +477,51 @@ export class FuelRecoveryService {
       // listener on the same event, and the recovery is recoverable by hand where this fails.
       this.logger.error(
         `Could not mark fuel recovery ${event.entityId} approved: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Marks a refused recovery `rejected`, so it stops claiming to be waiting (FR-006).
+   *
+   * **Added 2026-10-04, and `OperatorRecoveryStatus.rejected` was set by nothing before it.** The
+   * value existed in the schema; the spine emitted no event on rejection; so a recovery the
+   * Director refused sat at `pending_approval` for ever. Two costs, and the second is the one that
+   * mattered:
+   *
+   *   * a reviewer could not tell a refused recovery from one still waiting; and
+   *   * `assertNoOtherRecovery` treats any operator recovery that is not `reversed` as live, so the
+   *     refused one **blocked recovering the same loss from the hirer instead** — refusing with
+   *     *"This loss is already being recovered from the other party"*, which was false. After a
+   *     Director said "do not dock the operator", the fuel could be recovered from nobody.
+   *
+   * Found by writing 020 T065, which asserted a status that never arrived.
+   *
+   * Idempotent on the same terms as the completion handler: the status is the guard, so a
+   * redelivered event changes nothing. Scoped to `pending_approval` so a rejection arriving after
+   * a reversal cannot undo it.
+   */
+  @OnEvent(APPROVAL_REJECTED_EVENT)
+  async onApprovalRejected(event: ApprovalRejectedEvent): Promise<void> {
+    if (event.entityType !== ACTION_OPERATOR_FUEL_RECOVERY) return;
+
+    try {
+      await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.operatorFuelRecovery.updateMany({
+          where: {
+            id: event.entityId,
+            status: OperatorRecoveryStatus.pending_approval,
+          },
+          data: { status: OperatorRecoveryStatus.rejected },
+        }),
+      );
+    } catch (error) {
+      // Logged, never thrown — same reason as the completion handler: a throw here takes down
+      // delivery for every other listener on the event.
+      this.logger.error(
+        `Could not mark fuel recovery ${event.entityId} rejected: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

@@ -491,9 +491,31 @@ This is where a figure first moves. It is gated on feature 016's chain, which is
 - [X] T063 [US1] Enforce FR-002's attribution as **exclusive**: an exception attributed to the hirer has
   no operator recovery and vice versa. Double recovery for one loss is the failure this prevents, and
   the `@@unique` on both tables is what makes it structural rather than a convention.
-- [ ] **NOT RUN** T064 [P] [US2] e2e: raise a recovery, confirm it does **not** reach payroll while pending, approve
-  it, confirm it appears as a named deduction.
-- [ ] **NOT RUN** T065 [P] [US2] e2e: a rejected recovery never touches a payroll line.
+- [X] T064 [P] [US2] e2e: raise a recovery, confirm it does **not** reach payroll while pending, approve
+  it, confirm it appears as a named deduction. **Run 2026-10-04** — `test/fuel-recovery.e2e-spec.ts`,
+  three tests. 20 litres over a 10 l/hr benchmark at ₹95 is ₹1,900, asserted on the response and on
+  the row; invisible to `dueForEmployees` while pending; visible after all three levels approve, with
+  the status moved by the spine's event reaching this module's handler. The same recovery read twice,
+  which is the only form of the assertion a unit test cannot make.
+- [X] T065 [P] [US2] e2e: a rejected recovery never touches a payroll line. **Run 2026-10-04 — and it
+  found a defect.** Three tests, rejecting at the middle level deliberately.
+
+  **`OperatorRecoveryStatus.rejected` was set by nothing.** The value was in the schema; the spine
+  emitted an event on approval and **said nothing on rejection**; so a recovery the Director refused
+  sat at `pending_approval` for ever. Two costs, and the second is the expensive one: a reviewer could
+  not tell a refused recovery from one still waiting, and — because `assertNoOtherRecovery` treats any
+  operator recovery that is not dead as live — **the refused one blocked recovering the same loss from
+  the hirer instead**, with the message "this loss is already being recovered from the other party",
+  which was false. After a Director said "do not dock the operator", the fuel could be recovered from
+  nobody, and the refusal said the opposite of what had happened.
+
+  Fixed in three parts: `APPROVAL_REJECTED_EVENT` emitted by the spine, `onApprovalRejected` in this
+  module, and `rejected` added alongside `reversed` in the exclusivity check. Proven by reverting the
+  fix: three of the six e2e tests fail, and one unit test fails, each in the right place.
+
+  One existing test had to be retargeted — `approvals.service.spec.ts`'s "stops the chain on
+  rejection" asserted `events.emit` was **not** called, a faithful description of the defect. The
+  half of it that is still true (nothing is announced mid-chain) is now its own test.
 - [X] T066 [P] [US1] Unit test: an exception attributed to the hirer cannot also raise an operator
   recovery.
 - [X] T067 [P] [US1] Unit test: reversing a recovery after the underlying reading is corrected leaves the

@@ -387,6 +387,126 @@ describe('FuelRecoveryService', () => {
     });
   });
 
+  describe('a refused recovery (FR-006, added 2026-10-04)', () => {
+    /**
+     * `OperatorRecoveryStatus.rejected` was set by nothing before today.
+     *
+     * The spine announced approvals and said nothing about refusals, so this module never learned
+     * that a Director had refused a recovery. The row stayed at `pending_approval` for ever, and
+     * because `assertNoOtherRecovery` treats any operator recovery that is not dead as live, the
+     * refused one also blocked recovering the same loss from the **hirer** — refusing with "this
+     * loss is already being recovered from the other party", which was false.
+     *
+     * Found by writing the 020 T065 end-to-end test, which asserted a status that never arrived.
+     */
+    const rejectionHarness = () => {
+      const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      const prisma = createPrismaMock({
+        operatorFuelRecovery: { updateMany },
+      });
+      const service = new FuelRecoveryService(
+        prisma as never,
+        { record: jest.fn().mockResolvedValue(undefined) } as never,
+        { categoriesByIds: jest.fn() } as never,
+        { submit: jest.fn() } as never,
+      );
+      return { service, updateMany };
+    };
+
+    const event = (over: Record<string, unknown> = {}) => ({
+      entityType: 'operator_fuel_recovery',
+      entityId: 'rec-1',
+      companyId: 'co-1',
+      instanceId: 'inst-1',
+      ...over,
+    });
+
+    it('marks the recovery rejected', async () => {
+      const { service, updateMany } = rejectionHarness();
+
+      await service.onApprovalRejected(event() as never);
+
+      expect(updateMany).toHaveBeenCalledWith({
+        where: { id: 'rec-1', status: OperatorRecoveryStatus.pending_approval },
+        data: { status: OperatorRecoveryStatus.rejected },
+      });
+    });
+
+    it('scopes the write to a pending row, so a later reversal is not undone', async () => {
+      const { service, updateMany } = rejectionHarness();
+
+      await service.onApprovalRejected(event() as never);
+
+      // The status in the `where` is what makes this idempotent AND what stops a redelivered
+      // rejection overwriting a reversal that happened afterwards. Asserted explicitly because
+      // dropping it would leave both properties broken and no test failing.
+      expect(updateMany.mock.calls[0][0].where.status).toBe(
+        OperatorRecoveryStatus.pending_approval,
+      );
+    });
+
+    it('ignores an event for another module entirely', async () => {
+      const { service, updateMany } = rejectionHarness();
+
+      // Every module hears every event. One that acted on another module's entity id would write
+      // to a row it does not own, and the ids are cuids so a collision is possible rather than
+      // impossible.
+      await service.onApprovalRejected(
+        event({ entityType: 'attendance_exception' }) as never,
+      );
+
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+
+    it('logs a failure rather than throwing it', async () => {
+      const prisma = createPrismaMock({
+        operatorFuelRecovery: {
+          updateMany: jest.fn().mockRejectedValue(new Error('gone')),
+        },
+      });
+      const service = new FuelRecoveryService(
+        prisma as never,
+        { record: jest.fn() } as never,
+        { categoriesByIds: jest.fn() } as never,
+        { submit: jest.fn() } as never,
+      );
+      const logged = jest
+        .spyOn(
+          (service as unknown as { logger: { error: () => void } }).logger,
+          'error',
+        )
+        .mockImplementation(() => undefined);
+
+      // A throw inside an event handler takes down delivery for every other listener on the same
+      // event — so a failure here would silently stop unrelated modules reacting to a rejection.
+      await expect(
+        service.onApprovalRejected(event() as never),
+      ).resolves.toBeUndefined();
+      expect(logged).toHaveBeenCalled();
+    });
+
+    it('does not treat a rejected recovery as blocking the hirer', () => {
+      // The second half of the fix, and the expensive half. `recover/hire-bill` on an exception
+      // whose operator recovery was refused must not report that the loss is already being
+      // recovered — it is not, and that refusal closed the only remaining route to the money.
+      const { service, caller: hirerCaller } = {
+        ...build({
+          attribution: FuelAttribution.both,
+          operatorRecovery: {
+            id: 'rec-1',
+            status: OperatorRecoveryStatus.rejected,
+          },
+          billStatus: HireBillStatus.pending_verification,
+        }),
+        caller,
+      };
+
+      return expect(
+        service.deductFromHireBill(hirerCaller, 'exc-1', '127.0.0.1'),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('reversal (FR-010, T067)', () => {
     it('deletes a hire-bill deduction and recomputes the net', async () => {
       const { service, prisma } = build({
