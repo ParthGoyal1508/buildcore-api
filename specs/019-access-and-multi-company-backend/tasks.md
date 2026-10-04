@@ -454,6 +454,15 @@ describes. We built the thing the client asked for instead, and the two are diff
   the cost of leaving both readings in the document is that the next person to design against it
   believes a company's roles are its own.
 - [X] T072 `npx tsc --noEmit`, `npx eslint <touched files only>`, `npm test`, `npm run test:e2e`.
+      **One unattributed intermittent failure, recorded rather than smoothed over.** In the run
+      immediately after 81 stale test accounts were deleted from the development database,
+      `approvals-queue.e2e-spec.ts` failed one assertion. It passed alone, and in the three full
+      runs since. I could not attribute it: the deletion finished before the run began, it touched
+      no approval instance, and the only plausible connection is that 268 audit rows had their
+      actor nulled, which changes what an actor-name lookup returns. Written down because "it
+      passes now" is not the same as "it is stable", and the difference is exactly what a
+      three-day-old connection leak looked like this morning.
+
       **Run 2026-10-04, and this is the first time the last of those four was green.** `tsc` clean;
       `eslint src test prisma` 0 errors (one pre-existing prettier error remains in the untouched
       `test/account-creation.e2e-spec.ts`); **1,647 unit tests across 147 suites**; and
