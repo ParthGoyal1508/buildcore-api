@@ -307,13 +307,37 @@ readable as issued alongside the revised ones.
 
 - **FR-001**: System MUST open a bill against one project for one **period**, defined by a start and
   an end date, both inclusive.
-- **FR-002**: System MUST refuse a period that overlaps a period already billed on the same project,
-  naming the bill that covers the overlap.
-- **FR-003**: System MUST propose, for every BOQ line in the project, a claimed quantity equal to
-  the measurement **approved within the period**, and MUST include lines with no measurement at a
-  proposed quantity of zero rather than omitting them.
+- **FR-002**: System MUST refuse a period that overlaps a period already billed **on the same
+  schedule to the same counterparty** — the project's own schedule for a bill to a client, that
+  work order's schedule for a bill to a subcontractor — naming the bill that covers the overlap.
+  The check is deliberately not per project: one project is legitimately billed to its client and
+  to several subcontractors over the same month, and a per-project rule would refuse the second of
+  those, which is the direction the company bills every month.
+- **FR-002a**: A period is occupied by a bill in **any** status, draft included, so that two drafts
+  cannot both propose the same approved measurement.
+- **FR-002b**: System MUST provide a way to abandon a draft bill, releasing its period. Without
+  one, a mistakenly-opened draft occupies its period for ever and the only way out is deleting the
+  row that records that the period was billed (FR-044a).
+- **FR-003**: System MUST propose, for every line of **the schedule the bill's direction
+  measures** — the project's BOQ lines for a bill to a client, that subcontractor's award lines for
+  a bill to a subcontractor — a claimed quantity equal to the measurement **approved within the
+  period**, and MUST include lines with no measurement rather than omitting them. The two
+  directions measure different schedules, so "every BOQ line in the project" is the right
+  population for only one of them.
+- **FR-003a**: Where a line has **no measurement source at all** — an award line mapped to no BOQ
+  line, which the subcontract model permits because a subcontract may itemise work differently —
+  the proposal MUST be reported as *no measurement available*, distinguishably from a proposal of
+  zero. Zero means the measurement was read and was nothing. The two must never print the same, and
+  on the subcontractor direction they otherwise would, for every unmapped line, every month.
+- **FR-003b**: Where two or more award lines map to one BOQ line, System MUST NOT propose that
+  line's full approved measurement to each of them. It MUST either refuse the composition, naming
+  the lines, or require the quantity to be apportioned explicitly — never silently duplicate it,
+  which FR-008's one-line-per-item rule would not catch because they are two different lines.
 - **FR-004**: System MUST allow a proposed quantity to be reduced, and MUST require a written reason
   for each reduction.
+- **FR-004a**: System MUST clear a reason when a later edit returns the claimed quantity to the
+  proposed one. A reason left beside a zero variance argues on the measurement sheet for a
+  deduction the bill does not make.
 - **FR-005**: System MUST store, per line, the claimed quantity, the approved measurement it was
   proposed from, the reason where one was given, and the variance between the two.
 - **FR-006**: System MUST accept a claim above the approved measurement, MUST require a written
@@ -322,6 +346,9 @@ readable as issued alongside the revised ones.
   countable per bill and per project, so that over-claiming can be observed as a pattern rather than
   only inspected one line at a time. This is what keeps the reason field from becoming the route
   around the control: a reason nobody aggregates is a reason nobody reads.
+- **FR-006b**: The over-claim count MUST be reported against the number of lines it was drawn
+  from. A count without its denominator cannot be read as a pattern, which is the whole purpose
+  FR-006a states for it.
 - **FR-007**: System MUST return the existing bill rather than creating a second when the same
   project and period are opened again.
 - **FR-008**: System MUST refuse more than one line per BOQ item per bill.
@@ -334,31 +361,81 @@ readable as issued alongside the revised ones.
 
 #### The abstract
 
-- **FR-012**: System MUST compute, for the bill's period, the work done as the sum of each line's
-  claimed quantity at its frozen rate.
+- **FR-012**: System MUST compute the work done for the bill's period as the sum of its lines' own
+  stored amounts, and each line's amount from its claimed quantity at its frozen rate adjusted by
+  any percentage quoted against that schedule. The abstract's work-done figure and the priced
+  schedule's footer are the same number and MUST come from the same stored amounts — a work-done
+  figure computed as quantity times rate alone would disagree with the schedule it totals on every
+  tender quoted above or below its rates.
+- **FR-012a**: System MUST state the rounding applied to money: the unit, the direction, and that a
+  total is rounded from unrounded components rather than summed from rounded ones. The real
+  document's figures are whole rupees reached from fractions — a half-rate tax of 1,65,751.74 shown
+  as 1,65,752 — so an unstated rule is a rule each implementation invents, and rounding each row
+  before summing breaks FR-021's balance by a few rupees per column.
+- **FR-012b**: System MUST report a cumulative claim that has passed its line's scope or awarded
+  quantity, and MUST show the quantity remaining as the negative figure it is rather than as its
+  magnitude.
 - **FR-013**: System MUST carry every money figure in three forms: the position up to date, the
   position up to the previous bill, and the amount in this bill alone.
+- **FR-013a**: The up-to-previous position MUST NOT be derived from this bill's own figures. Up to
+  date less this bill equals up to previous only while the chain is unbroken — and defining the
+  column that way makes FR-035's identity a restatement of its own definition, true for any values
+  whatever. It is read from a stored figure or it is not an independent column.
+- **FR-013b**: A bill that has not been issued has no frozen cumulative position (FR-014a), so its
+  abstract's up-to-date column MUST be marked provisional. A figure that changes when the engineer
+  presses Issue is a figure they did not approve.
 - **FR-014**: The up-to-previous position MUST be read from the previous bill's stored up-to-date
-  position, and MUST NOT be recomputed from current data.
+  position, and MUST NOT be recomputed from current data. **The previous bill** is the one with the
+  highest sequence number below this bill's on the same schedule to the same counterparty that has
+  been issued; where there is none, every up-to-previous figure is zero — stated as zero, which is
+  a position, and not as absent, which is not.
 - **FR-014a**: System MUST store each bill's own cumulative position when the bill is issued, so
   that every bill is reproducible from itself for ever.
-- **FR-014b**: System MUST report any bill whose period's approved measurement has since grown
-  beyond what the bill claimed — the understatement a frozen cumulative position makes possible.
-  Without this, choosing to freeze would turn a late-approved report into a quantity nobody ever
-  bills.
+- **FR-014b**: System MUST report, **on demand**, any bill whose period's approved measurement has
+  since grown beyond what the bill claimed — the understatement a frozen cumulative position makes
+  possible. The comparison is exact: quantities are fixed-point, so no tolerance applies and any
+  difference at all is reportable. Without this, choosing to freeze would turn a late-approved
+  report into a quantity nobody ever bills.
+- **FR-014c**: System MUST provide a route to bill a reported understatement, and MUST state it.
+  Feature 022 attributes measurement by work date, so a quantity approved late whose work date
+  falls inside an already-billed period will never appear in any later period's proposal: it is not
+  late, it is unreachable. The route is an over-claim on a later bill under FR-006, carrying the
+  understatement report as its written reason. Left unstated, one engineer finds it and the next
+  writes the quantity off.
 - **FR-015**: System MUST compute tax on the work done at the rates in force for the bill, and MUST
   apply either the two half-rate taxes or the single full-rate tax according to whether the two
   parties are in the same state — never both, and never neither.
+- **FR-015a**: The taxable base MUST be stated, and MUST be the work done before any recovery,
+  deduction or withholding. Where an amount is withheld from release, System MUST state whether
+  that amount leaves the taxable base, and MUST apply the answer identically in all three columns.
+  The sample package withholds nothing, so no test drawn from it constrains this at all.
 - **FR-016**: System MUST derive which tax applies from the parties' own registration data rather
   than from a choice made at composition.
+- **FR-016a**: Where the basis cannot be derived from both parties' registration data and falls back
+  to the project's flag, System MUST report that it fell back. A client record carries no state
+  today, so for a bill to a client the fallback is the likely path rather than the exceptional one —
+  and a fallback recorded on a row and shown to nobody is a tax decision nobody made.
 - **FR-017**: System MUST carry four named recovery kinds and four named deduction kinds, each
   reported in its own right whether or not it carries an amount.
 - **FR-018**: System MUST compute retention from the percentage recorded on the contract, never from
   a value fixed in the system.
+- **FR-018a**: Retention's base MUST be stated, and MUST be the work done before tax, recoveries
+  and other deductions. FR-018 fixes where the percentage comes from and says nothing about what it
+  multiplies; 5 % of the right base reproduces the sample's 92,084 and 5 % of the tax-inclusive
+  total does not.
 - **FR-019**: System MUST compute tax deducted at source at a configured rate, recorded per bill so
   a rate change does not alter bills already issued.
-- **FR-020**: System MUST NOT re-recover a one-time deduction that has been fully recovered: such a
-  deduction MUST appear in the cumulative columns and be absent from this bill's.
+- **FR-019a**: The base for tax deducted at source MUST be stated, and MUST be the work done before
+  tax, recoveries and other deductions — not the payable it is subtracted from.
+- **FR-020**: A one-time recovery — a mobilisation advance, a performance security — MUST carry the
+  **total** to be recovered and the amount recovered to date, and "fully recovered" MUST be the
+  comparison of the two. Nothing else can make the distinction: without a recorded total, a
+  deduction that is complete and one somebody happened to enter as zero this month are the same row,
+  and the requirement is satisfied by an implementation that does nothing at all.
+- **FR-020a**: A fully-recovered one-time deduction MUST appear in the cumulative columns and be
+  absent from this bill's, which is what the sample package's performance security does.
+- **FR-020b**: System MUST refuse a recovery that would carry the amount recovered to date past the
+  recorded total, naming the total and what remains of it.
 - **FR-021**: System MUST compute the payable as the work total less recoveries, less deductions,
   less tax deducted, and MUST make each of the three columns balance independently.
 - **FR-022**: System MUST permit a negative payable rather than clamping it to zero.
@@ -371,6 +448,12 @@ readable as issued alongside the revised ones.
 - **FR-024**: System MUST produce a bill as a spreadsheet workbook containing a sheet of each of the
   five kinds: the check list, the abstract, the priced schedule, one measurement sheet per item, and
   the debit register.
+- **FR-024a**: Every sheet in the workbook MUST be named by a rule that cannot lose one. A sheet
+  name is limited to 31 characters, may not contain the characters a file path uses, and must be
+  unique within the workbook — so a name taken from an item's number or description will collide or
+  be truncated on a 312-item schedule, and what the writer does with a collision decides whether an
+  item's sheet silently disappears. The rule MUST be stated, MUST guarantee uniqueness, and each
+  sheet MUST identify its item **inside** the sheet rather than only by its name.
 - **FR-025**: System MUST bind the two party positions by the bill's direction: for a bill the
   company issues to a subcontractor the company is the issuing party; for a bill issued to a client
   the client is.
@@ -378,12 +461,22 @@ readable as issued alongside the revised ones.
   that party's own record, and MUST NOT require them to be retyped onto the bill.
 - **FR-027**: System MUST produce the workbook with a missing party identifier reported as missing
   rather than refusing to produce it.
+- **FR-027a**: The missing identifiers MUST be reported to the caller that produced the workbook. A
+  workbook is a file download, so a list recorded on the bill and absent from the response is a gap
+  nobody is told about.
 - **FR-028**: Every figure in the workbook MUST come from the stored bill, and none MUST be
-  recomputed at production time — a bill produced twice MUST be byte-for-byte identical in its
-  figures.
+  recomputed at production time: a bill produced twice MUST carry an identical value in every cell.
+  Not byte-for-byte — a workbook file records when it was written, so two productions are never
+  identical as bytes, and a requirement stated that way could only ever be met by abandoning it.
 - **FR-029**: System MUST carry an item's full description, however long, without truncation.
-- **FR-030**: System MUST produce one measurement sheet per BOQ item, including items with nothing
-  claimed in this period.
+- **FR-029a**: Where a description exceeds what a single cell can hold, System MUST report that it
+  could not be carried whole rather than truncating it silently.
+- **FR-030**: System MUST produce one measurement sheet per line of the bill's own schedule
+  (FR-003), including lines with nothing claimed in this period.
+- **FR-030a**: The number of measurement sheets MUST equal the number of lines that schedule holds,
+  and the equality MUST be assertable without knowing the number in advance. An assertion over the
+  sheets a workbook contains passes just as happily over a short list, and a missing sheet is a
+  smaller invoice.
 
 #### The measurement sheet
 
@@ -395,7 +488,11 @@ readable as issued alongside the revised ones.
 - **FR-034**: System MUST show a date with no daily record as having none, distinguishably from a
   date on which nothing was done.
 - **FR-035**: The sheet's footer MUST satisfy: this bill plus up to previous equals up to date,
-  exactly.
+  **exactly** — where up to previous is the figure stored on the previous bill (FR-013a, FR-014) and
+  not this bill's own up-to-date figure less its own quantity. The distinction is the whole value of
+  the requirement: stated against a stored figure the identity can fail and is therefore worth
+  asserting, while stated against a derived one it is a rearrangement of its own definition and
+  holds for any values whatever.
 
 #### The debit register
 
@@ -403,9 +500,20 @@ readable as issued alongside the revised ones.
   them, a quantity, a rate, a unit, an amount, and an amount including tax.
 - **FR-037**: System MUST allow a debit to be applied to exactly one bill, and MUST refuse a second
   application, naming the first.
+- **FR-037a**: The one-bill rule MUST hold under two simultaneous applications of one debit, not
+  only under a second attempt made after the first has finished. A debit recovered twice is money
+  taken twice, so the rule belongs where concurrent writers meet it rather than only in the service
+  that looks first.
+- **FR-037b**: A debit MUST be applicable only to a bill that has not been issued. Applying one
+  afterwards either moves a figure FR-044 froze or records a recovery the bill never made.
 - **FR-038**: System MUST include an applied debit in that bill's recoveries.
-- **FR-039**: System MUST show, in any bill's register, every debit recorded against the project,
-  including those recovered on earlier bills.
+- **FR-038a**: System MUST state which of the four named recovery kinds an applied debit is
+  reported under, so that two compliant implementations cannot produce two different abstracts.
+- **FR-039**: System MUST show, in a bill's register, every debit recorded against the project,
+  including those recovered on earlier bills, because the running total is the point of a register.
+- **FR-039a**: For a bill that has been issued, the register MUST be the register **as at issue**.
+  Otherwise FR-039 and FR-028 contradict each other outright: a debit recorded between two
+  productions of one issued bill would change a document that has been signed.
 - **FR-040**: System MUST group debits under their heading rather than listing them flat.
 
 #### The check list
@@ -416,19 +524,32 @@ readable as issued alongside the revised ones.
 - **FR-043**: System MUST NOT refuse to issue a bill on the strength of a check-list answer, and
   MUST report the gaps.
 
+- **FR-043a**: The gaps FR-043 requires reported MUST be reported to the caller issuing the bill
+  and not only recorded against it. "MUST report the gaps" with no addressee is satisfied by
+  storing them where nobody looks.
+
 #### Lifecycle
 
 - **FR-044**: System MUST freeze a bill's figures when it is issued and record when it went out.
+- **FR-044a**: An issued bill MUST NOT be deletable. A draft MUST be abandonable (FR-002b), which
+  is the only way a period is ever released.
 - **FR-045**: System MUST keep what a bill stated when issued readable after any revision.
 - **FR-046**: System MUST record each revision with a reason and a count.
 - **FR-047**: System MUST keep a certified amount beside the billed amount and never instead of it.
 - **FR-048**: System MUST leave an issued bill unaffected by a later reversal of measurement
   underlying it, and MUST make the resulting discrepancy reportable.
-- **FR-049**: A bill line's provenance **is its item and its bill's period**. System MUST NOT
+- **FR-048a**: FR-048's discrepancy and FR-014b's understatement MUST be answered by **one**
+  comparison of a billed period's claims against that period's approved measurement as it now
+  stands. Two implementations of one comparison disagree, and the first time they do nobody will
+  know which of them to believe.
+- **FR-049**: A bill line's provenance **is its line and its bill's period**. System MUST NOT
   create a link between a bill line and the individual daily work reports it drew on. A line names
-  one BOQ item, its bill names one period, and a period is billed once (FR-002, FR-007) — so the
-  measurement it consumed is exactly the approved measurement for that item in that period, true by
-  construction rather than by maintenance.
+  one line of one schedule, its bill names one period, and **one line of one schedule is billed
+  once in one period** (FR-002, FR-002a, FR-007) — so the measurement it consumed is exactly the
+  approved measurement for that line in that period, true by construction rather than by
+  maintenance. The narrow phrasing is deliberate: "a period is billed once" is false of a *project*,
+  which may be billed to its client and to several subcontractors over the same month, and the
+  whole of this decision rests on the sentence being true.
 - **FR-049a**: Because provenance is the period rather than a recorded link, feature 022's reversal
   guard **stays a quantity floor and is not tightened**. Recorded here as the answer to 022
   FR-020a, so the question is closed rather than left open in two features at once.
@@ -443,6 +564,13 @@ readable as issued alongside the revised ones.
   covered by a test exercising it under a database role that cannot bypass it. The development and
   continuous-integration role is a superuser, and a superuser is exempt from row-level security
   unconditionally, so a policy without such a test has never been in force in any test run.
+- **FR-050a**: The isolation test MUST assert, **before anything else**, that the role which cannot
+  bypass isolation was actually created. Every assertion after it is vacuous if it was not.
+- **FR-050b**: An isolation test that cannot run MUST report as skipped and MUST NOT report as
+  passed. A suite that warns and returns is counted as a pass by every summary that reads it.
+- **FR-050c**: The test MUST exercise the write half of each policy as well as the read half. A
+  probe that proves another company's rows are invisible says nothing about whether a row can be
+  written *into* another company.
 - **FR-051**: Composing, issuing and revising a bill MUST require the project-financials permission;
   recording and applying a debit MUST require it too.
 - **FR-052**: Every write MUST be refused against a locked project, distinguishably from a refusal of
@@ -472,9 +600,14 @@ readable as issued alongside the revised ones.
   proposed quantities rather than entering them, and types a figure only where they are reducing one.
 - **SC-002**: The package the system produces contains every sheet the client's own format contains,
   in the same order, and a reviewer can find each figure where they expect it.
-- **SC-003**: The abstract's arithmetic reproduces the real bill's own figures exactly: a work-done
-  amount of 18,41,686 yields two half-rate taxes of 1,65,752 each, retention of 92,084, tax deducted
-  of 36,834, and a payable of 11,39,971.
+- **SC-003**: The abstract's arithmetic reproduces the real bill's own figures exactly. From a
+  work-done amount of 18,41,686 the derived figures are two half-rate taxes of 1,65,752 each,
+  retention of 92,084 and tax deducted of 36,834 — each exact to the rupee, and each wrong under a
+  rate applied to the wrong base. The payable of 11,39,971 is **not** derivable from those figures
+  alone: the work total of 21,73,190 less retention and tax deducted leaves 20,44,272, so the
+  sample's own recoveries and remaining deductions account for 9,04,301, and they MUST be
+  transcribed from the source document into the test rather than inferred. A figure back-solved to
+  make a test pass tests nothing.
 - **SC-004**: For every item on every bill, this bill plus up to previous equals up to date, with no
   rounding difference.
 - **SC-005**: Every reduction of a claimed quantity on any issued bill has a reason attached, and
@@ -486,6 +619,8 @@ readable as issued alongside the revised ones.
 - **SC-009**: A bill downloaded twice is identical in every figure.
 - **SC-010**: Every table this feature creates is proven isolated between companies under a database
   role that cannot bypass isolation.
+- **SC-011**: A package for a 312-line schedule is composed inside one transaction's budget and
+  produced as a workbook in under ten seconds and under twenty megabytes.
 
 ## Assumptions
 
@@ -537,6 +672,12 @@ the next bill — or, if nobody notices, to no bill at all. Choosing to freeze w
 the understatement to be *reportable* would trade a reconciliation problem for a revenue leak, which
 is the worse of the two because it is silent.
 
+**And reporting it is not enough** (FR-014c). Feature 022 attributes measurement by work date, so a
+quantity approved after a bill went out, whose work date sits inside that bill's period, will never
+appear in any later period's proposal either. It is not deferred, it is unreachable — so the
+decision to freeze obliges both a report *and* a stated route back onto a bill, which is an
+over-claim under FR-006 carrying the report as its reason.
+
 ### D2 — A claim may exceed the approved measurement, with a reason, flagged (FR-006, FR-006a)
 
 The site does work the paperwork has not caught up with, and the alternative — refusing the claim —
@@ -560,6 +701,12 @@ with nothing to maintain and nothing that can drift.
 bill is, for a 312-line tender over a year of daily reporting, hundreds of thousands of rows whose
 only consumer is an audit question nobody has yet asked. The real sheets claim a **month** against a
 line, not a set of days, which is why feature 022 declined to design the link from inside itself.
+
+**The sentence this rests on had to be narrowed.** "A period is billed once" is false of a project:
+one project is billed to its client and to several subcontractors over the same month, legitimately.
+What is true is that **one line of one schedule is billed once in one period**, and FR-002 was
+rewritten to be the rule that makes it true — the overlap check is per schedule and per counterparty
+rather than per project. A decision resting on a sentence is only as sound as the sentence.
 
 **This closes 022 FR-020a.** That requirement made deciding the linkage an obligation on this
 feature, and the decision is: no linkage. 022's reversal guard therefore stays a quantity floor —
