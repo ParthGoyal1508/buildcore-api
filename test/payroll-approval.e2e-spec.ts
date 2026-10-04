@@ -245,6 +245,12 @@ describe('Payroll approval chain (e2e)', () => {
         esicEmployerRate: 3.25,
         gratuityRate: 4.81,
         bonusRate: 8.33,
+        // Added 2026-10-04. Scenario 5 builds a bank transfer sheet, and `BankSheetService`
+        // refuses the whole file when the company has no debit account on file — correctly:
+        // every row names the account the money leaves from, and a sheet with that column
+        // blank is one the bank cannot act on. This company predates that rule, so the test
+        // was failing on a refusal that is right, for a fixture that was incomplete.
+        payrollDebitAccountNumber: '00112233445566',
       },
     });
     companyId = company.id;
@@ -339,6 +345,15 @@ describe('Payroll approval chain (e2e)', () => {
 
     period = periodItDraws;
   }, 90_000);
+
+  // Releases the database pool. Added 2026-10-04: 19 of the 33 e2e suites never closed
+  // their app, and `app.close()` alone was not enough either — `PrismaService` has no
+  // `onModuleDestroy`, so `PrismaShutdownService` had to be added to make closing work.
+  // Together these are why the suites could not all run in one go: Postgres refused new
+  // connections part-way through, 158 failures with no product defect behind any of them.
+  afterAll(async () => {
+    await app.close();
+  });
 
   afterAll(async () => {
     await sys.approvalDecision.deleteMany({ where: { companyId } });

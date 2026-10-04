@@ -6,6 +6,8 @@ import * as request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { configureApp } from '../src/common/configure-app';
+import { effectiveCompanyIdFor } from './fixtures/effective-company';
+import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 
 /**
  * End-to-end coverage of `/partners/*` against a real database (007 T019, T023,
@@ -30,7 +32,6 @@ describe('Partners module (e2e)', () => {
   let token: string;
   let companyId: string;
   /** The signed-in admin's OWN company, which is not `companyId` above. */
-  let callerCompanyId: string;
 
   const auth = () => ({ Authorization: `Bearer ${token}` });
   const createdVendorIds: string[] = [];
@@ -75,16 +76,10 @@ describe('Partners module (e2e)', () => {
       .expect(201);
     token = login.body.accessToken;
 
-    const company = await sys.company.findFirst({
-      orderBy: { createdAt: 'asc' },
-    });
-    companyId = company.id;
-
-    const caller = await sys.user.findFirst({
-      where: { email: 'admin@buildcore.dev' },
-      select: { companyId: true },
-    });
-    callerCompanyId = caller.companyId;
+    // Not the oldest company: the one the API will actually write to. Corrected 2026-10-04
+    // — a single `UserCompanySelection` row for this account overrides every `?companyId=`
+    // this suite sends, which is 019's intended behaviour and was news to this file.
+    companyId = await effectiveCompanyIdFor(sys);
   });
 
   afterAll(async () => {
@@ -165,14 +160,25 @@ describe('Partners module (e2e)', () => {
      * This calls the endpoints exactly as the browser does — no query param — and
      * pins where the row lands.
      */
-    it("scopes a create with no companyId to the caller's own company", async () => {
+    /**
+     * Retargeted 2026-10-04, because 019 changed what "the caller's own company" means.
+     *
+     * The assertion used to be the account's `companyId` column. Since 019 a create with no
+     * `companyId` is scoped to the company the caller has **selected**, and only falls back to
+     * the account's own when nothing is selected. `admin@buildcore.dev` has a selection, so the
+     * old assertion was comparing the write against a company the caller was not working in.
+     *
+     * The claim worth keeping is unchanged and is the one in the title: omitting `companyId`
+     * does not create an unscoped row. What it is scoped *to* is now the switcher's business.
+     */
+    it('scopes a create with no companyId to the company in effect', async () => {
       const category = await http()
         .post('/partners/vendor-categories')
         .set(auth())
         .send({ name: unique('NoScope') })
         .expect(201);
       createdCategoryIds.push(category.body.id);
-      expect(category.body.companyId).toBe(callerCompanyId);
+      expect(category.body.companyId).toBe(companyId);
 
       const vendor = await http()
         .post('/partners/vendors')
@@ -180,7 +186,7 @@ describe('Partners module (e2e)', () => {
         .send({ name: unique('NoScope'), type: 'material' })
         .expect(201);
       createdVendorIds.push(vendor.body.id);
-      expect(vendor.body.companyId).toBe(callerCompanyId);
+      expect(vendor.body.companyId).toBe(companyId);
     });
 
     it('returns only the TDS terms from the TDS endpoint', async () => {
@@ -419,16 +425,21 @@ describe('Partners module (e2e)', () => {
         .set(auth())
         .send({ name: unique('CessClient') })
         .expect(201);
-      const project = await http()
-        .post(`/projects?companyId=${companyId}`)
-        .set(auth())
-        .send({
+      // 017 FR-009 refuses creation while a mandatory kind has no document attached, and the
+      // seeded company marks four. This project is a fixture for the cess listing, so the
+      // documents are staged the way a project manager stages them — see the helper.
+      const project = await createProjectWithMandatoryDocuments({
+        http,
+        headers: auth(),
+        companyId,
+        body: {
           name: unique('CessProject'),
           clientId: client.body.id,
           contractValue: 10000000,
           startDate: '2026-01-01',
-        })
-        .expect(201);
+        },
+      });
+      expect(project.status).toBe(201);
 
       const res = await http()
         .get(`/partners/bocw?companyId=${companyId}`)

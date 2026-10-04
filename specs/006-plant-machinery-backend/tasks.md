@@ -343,3 +343,43 @@ from the task text, and what was verified.
   the notifications surface is 004's US4, which is not built.
 - `TODO(VIRUS_SCAN)`: equipment documents are stored unscanned, the same gap 005's and
   007's uploads carry.
+
+---
+
+## Reopened 2026-10-04 — the machinery masters are seeded for nobody
+
+- [ ] T058 **`CompaniesService.create` does not seed the two machinery masters, so a new
+      company has no equipment categories and no equipment document types.** Every other master
+      is seeded there: document types, vendor categories, item categories, asset categories,
+      asset document types and condition grades. `EquipmentCategoriesService.seedDefaultsForCompany`
+      and `EquipmentDocTypesService.seedDefaultsForCompany` both exist, are correct, and are
+      **called by nothing** outside `prisma/seed-demo.ts`.
+
+      Measured, not inferred: `SELECT count(*) FROM settings."EquipmentCategory"` returns **zero
+      rows for both companies** in the development database. The consequence is that the first
+      person to register a machine in a new company is refused until they hand-create a category,
+      and the ten defaults carry the fuel benchmarks item 13's variance alerts are computed from —
+      so a company that creates its own categories by hand starts with no benchmarks either.
+
+      The cause is structural rather than an oversight, which is why this is a task and not a
+      patch: `EquipmentCategoriesService` lives in `src/settings/machinery-masters/` and is
+      provided by `PlantModule`, so `CompaniesService` cannot inject it without a module cycle.
+      Two ways out, and the choice is a boundary decision — move the two services into
+      `SettingsModule` where their folder already sits, or have `PlantModule` seed them from a
+      `company.created` event. The event route is decoupled and introduces a window in which a
+      new company has no categories, plus a listener whose failure is silent; the other six
+      masters are seeded inside the creation transaction and this should match them.
+
+- [ ] T059 **A guard that fails when a `seedDefaultsForCompany` exists and nothing calls it from
+      company creation.** This is the third defect of its exact class in two days — the approval
+      chain list drifted three chains behind, the chain *slots* were mapped for nobody, and now
+      two masters are seeded for nobody. All three share one symptom: whether a company works
+      depends on **when it was created**, because a backfill migration reached the old ones and
+      the creation path does not reach the new ones. A source scan over `src/settings/**` for the
+      method, checked against the calls in `CompaniesService.create`, costs little and catches the
+      fourth.
+
+- [ ] T060 Found while fixing this: `test/plant.e2e-spec.ts`'s "seeds a company with the ten
+      default categories" asserted a migration that does not exist. It was **corrected rather
+      than loosened** — it now asserts what the endpoint guarantees, and names this gap. Re-point
+      it at the defaults once T058 lands, so the original claim is actually tested.

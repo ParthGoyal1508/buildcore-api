@@ -25,6 +25,8 @@ describe('Settings module (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let http: () => request.SuperTest<request.Test>;
+  /** The company selection taken away in `beforeAll` — see the note there. */
+  let savedSelection: { userId: string; companyId: string } | null = null;
 
   /**
    * Fixture access that sets the same system/bypass RLS context the application
@@ -89,6 +91,51 @@ describe('Settings module (e2e)', () => {
       .expect(201);
     superAdminToken = login.body.accessToken;
 
+    /**
+     * **This suite needs a caller who is genuinely cross-company, and had stopped having
+     * one.** Its whole subject is company scoping: "same name under a different company is
+     * allowed", "sees only its own company's departments". Those claims require a caller whose
+     * requested `companyId` is honoured.
+     *
+     * Since 019 a cross-company caller who has **selected** a company arrives with
+     * `isSuperAdmin` false, and `companyScope` then ignores the requested company and pins the
+     * write to the selection — deliberately, so a query parameter can never widen scope.
+     * `admin@buildcore.dev` has a selection row in the development database, so every create
+     * below was landing in one company regardless of which one it named. The symptom was a 409
+     * on "same name under a different company", which reads as the uniqueness rule being wrong
+     * when in fact both rows went to the same company.
+     *
+     * Cleared for the duration, and restored in `afterAll` — the only honest option for a suite
+     * that tests cross-company behaviour. Recorded here because it is shared state and the
+     * restore is what makes taking it acceptable.
+     */
+    const adminUser = await sys.user.findFirst({
+      where: { email: 'admin@buildcore.dev' },
+      select: { id: true },
+    });
+    if (adminUser) {
+      savedSelection = await sys.userCompanySelection.findFirst({
+        where: { userId: adminUser.id },
+        select: { userId: true, companyId: true },
+      });
+      if (savedSelection) {
+        await sys.userCompanySelection.delete({
+          where: { userId: adminUser.id },
+        });
+        // Re-issued: the selection is read per request from the database, but the login above
+        // happened while it was still set, so anything cached on the token would be stale.
+        const reLogin = await http()
+          .post('/auth/login')
+          .send({
+            identifier: 'admin@buildcore.dev',
+            password: 'secret42',
+            rememberMe: false,
+          })
+          .expect(201);
+        superAdminToken = reLogin.body.accessToken;
+      }
+    }
+
     // A second account holding only the Viewer role — the "any other role" case
     // FR-014 requires to be rejected.
     const viewer = await sys.role.findUniqueOrThrow({
@@ -120,6 +167,18 @@ describe('Settings module (e2e)', () => {
   });
 
   afterAll(async () => {
+    // Put the company selection back before anything else, so a failure in the deletions
+    // below cannot leave this account switched out of the company somebody left it in.
+    if (savedSelection) {
+      await sys.userCompanySelection
+        .upsert({
+          where: { userId: savedSelection.userId },
+          create: savedSelection,
+          update: { companyId: savedSelection.companyId },
+        })
+        .catch(() => undefined);
+    }
+
     // Children first — every settings table FKs back to Company.
     const companies = await sys.company.findMany({
       where: { shortCode: { startsWith: PREFIX } },
