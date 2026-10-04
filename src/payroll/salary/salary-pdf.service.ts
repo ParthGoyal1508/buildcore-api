@@ -1,5 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import * as PDFDocument from 'pdfkit';
+// `import = require` deliberately, not `import * as`. The app is built by SWC
+// (nest-cli.json), which gives `import * as` true ESM semantics and hands back a
+// namespace object that cannot be constructed; the tests are built by ts-jest, which
+// emits a bare require and constructs fine. The namespace form therefore passes every
+// test and throws "_pdfkit is not a constructor" in the running server. This form emits
+// a bare require under both.
+import PDFDocument = require('pdfkit');
 import type { SalarySlipView, SlipIdentity } from './salary.service';
 
 /** Page geometry, in PDF points. Named because a bare `50` scattered through the
