@@ -1,6 +1,10 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
+// Shared with `swc-interop.spec.ts`, which made the same mistake in the opposite direction —
+// see the note there. The function used to live in this file.
+import { stripComments } from '../strip-comments';
+
 /**
  * Every end-to-end suite releases its database connections when it finishes.
  *
@@ -37,17 +41,6 @@ import { join } from 'path';
  * miniature as the one it is here to catch.
  */
 
-/**
- * Source with comments removed, so a call that has been commented out does not satisfy the
- * check that it exists. Crude — it does not know about strings containing `//` — and crude
- * is right here: a false positive names a file for a human to look at, while the false
- * negative it replaces is what let the first version of this file pass.
- */
-function stripComments(source: string): string {
-  return source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1');
-}
 const E2E_DIR = join(process.cwd(), 'test');
 
 interface Suite {

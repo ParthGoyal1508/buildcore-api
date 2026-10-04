@@ -1,6 +1,8 @@
 import { execFileSync } from 'child_process';
 import { readFileSync } from 'fs';
 
+import { stripComments } from './strip-comments';
+
 /**
  * A CommonJS module that *is* a function is imported with `import = require`, never
  * `import * as`.
@@ -36,6 +38,13 @@ import { readFileSync } from 'fs';
  *
  * Deliberately a source scan. No test run under ts-jest can reproduce an SWC emit, so the
  * only thing a runtime check could prove here is the thing that was never in doubt.
+ *
+ * **This guard's first version failed against itself, and only after it was committed.** The
+ * docblock above quotes the forbidden form in order to explain it, and `git ls-files` does not
+ * list an untracked file — so it was green while it was being written and red one commit later,
+ * naming itself. Comments are stripped below for that reason, which is exactly what
+ * `e2e-teardown.spec.ts` already did and what this should have done from the start: a comment is
+ * not an import, in either direction.
  */
 
 /** Modules whose CommonJS export is the callable itself, so the namespace form breaks. */
@@ -54,11 +63,16 @@ function trackedSources(): string[] {
 describe('callable CommonJS modules survive the SWC build', () => {
   const files = trackedSources();
 
+  /** Read once, comments removed. Prose discussing an import is not an import. */
+  const sourceOf = new Map(
+    files.map((f) => [f, stripComments(readFileSync(f, 'utf8'))] as const),
+  );
+
   for (const moduleName of CALLABLE_MODULES) {
     describe(moduleName, () => {
       const importers = files.filter((f) =>
         new RegExp(`(from|require\\()\\s*'${moduleName}'`).test(
-          readFileSync(f, 'utf8'),
+          sourceOf.get(f) ?? '',
         ),
       );
 
@@ -72,7 +86,7 @@ describe('callable CommonJS modules survive the SWC build', () => {
       it('is never imported as a namespace', () => {
         const offenders = importers.filter((f) =>
           new RegExp(`import \\* as \\w+ from '${moduleName}'`).test(
-            readFileSync(f, 'utf8'),
+            sourceOf.get(f) ?? '',
           ),
         );
 
