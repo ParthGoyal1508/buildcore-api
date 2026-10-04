@@ -246,6 +246,24 @@ measurement against it.
   "discrepancies": 0 }
 ```
 
+### `POST /projects/:projectId/dwr/reconciliation/repair` → 200
+
+FR-039c. Sets the stored counter to the authoritative sum for the lines named, as an **explicit
+act**: `Permission.DWR`, a required reason, and an audit entry carrying the previous value.
+
+```jsonc
+{ "boqItemIds": ["clx…"], "reason": "drift of 5.000 traced to the 14 Jan partial failure" }
+```
+
+| Refusal | Code | When |
+|---|---|---|
+| 400 | `DWR_REPAIR_NEEDS_REASON` | no reason given |
+| 409 | `DWR_NOTHING_TO_REPAIR` | the named lines have no discrepancy — refused rather than silently succeeding, so a caller learns the drift they were chasing is gone |
+
+**There is deliberately no automatic repair.** A discrepancy is the only symptom of whatever moved
+the counter without a report, and a system that silently corrects it destroys that evidence every
+time, so the underlying fault is never found (decision D3).
+
 `doneQty` **is** a denormalised counter — maintained by this feature's approvals and reversals, and
 therefore capable of drifting through a partial failure, a hand-edit or a bug in reversal. This
 endpoint is not a convenience beside it; it is the only thing that can say the counter is wrong. A

@@ -225,8 +225,13 @@ Every later phase calls `quantityInForce` — create, read, approval, reversal a
   - **Every BOQ line present, including zeros** (FR-037) — so nothing composing a bill can drop a
     line by failing to find it, which is the silent-failure shape this repository keeps meeting.
   - `reconcile(projectId)` for FR-039: the difference between each line's stored `doneQty` and the
-    sum of approved measurement against it. The aggregate is the check on the counter; FR-039 exists
-    because `doneQty` is denormalised and therefore capable of drifting.
+    sum of approved measurement against it, at an exact tolerance (FR-039a). The aggregate is the
+    check on the counter; FR-039 exists because `doneQty` is denormalised and therefore capable of
+    drifting.
+  - `repair(boqItemIds, reason)` for FR-039c — explicit, permissioned, audited with the previous
+    value, and **never automatic**. Decision D3 records why: the discrepancy is the only symptom of
+    whatever moved the counter without a report, and a silent self-heal destroys that evidence each
+    time it runs. The aggregate is authoritative and the counter is a cache of it (FR-039b).
 - The logbook read (FR-032, FR-033) goes through a new `ProjectLogbookSource` on
   `ProjectSourcesRegistry`, registered by `PlantService.onModuleInit`. Research §5 explains why the
   direction is forced rather than chosen, and why the return type is a map.

@@ -278,10 +278,22 @@ report appears in neither.
   date, carrying supervisor, weather, worker count, machinery count, a progress assessment, and
   optional location, description, contract reference, request-for-inspection number and layer.
 - **FR-002**: System MUST generate each report's number without the caller supplying it, unique
-  within the company. **The number MUST derive from the project**, not the site: a report
-  references a project and not a site, and a site carries no code to build a number from.
-- **FR-003**: System MUST compute every measurement line's quantity itself, as the product of the
-  six factors, and MUST ignore any quantity the caller supplies.
+  within the company — a uniqueness this requirement asserts in its own right and does not merely
+  inherit from an existing constraint. **The number MUST derive from the project**, not the site: a
+  report references a project and not a site, and a site carries no code to build a number from.
+- **FR-002a**: The number MUST be the project's code, a separator, and a per-project sequence, in
+  that order. Specified to one rendering because a report number is printed and filed.
+- **FR-002b**: Two reports created for one project at the same instant MUST NOT both be given the
+  same number, and neither attempt may be lost: a collision MUST be resolved and retried, not
+  reported to the caller.
+- **FR-002c**: Gaps in a project's sequence ARE permitted and carry no meaning — a refused creation
+  and a deleted draft both leave one. Stated because a gap in a numbered site register is otherwise
+  the first thing an auditor asks about.
+- **FR-003**: System MUST compute every **work-measured** line's quantity itself, as the product of
+  the six factors, and MUST ignore any quantity the caller supplies. A presence-paid line is
+  governed by FR-030 to FR-030c instead; this requirement does not reach it. (Narrowed on
+  2026-10-04: as first written this said "every measurement line", which contradicted FR-030b
+  outright — see `checklists/silent-failure.md` CHK003.)
 - **FR-004**: System MUST treat an unsupplied factor as 1 and MUST refuse a factor supplied as 0,
   naming the factor refused.
 - **FR-005**: System MUST record a measurement line's position — chainage from and to, layer, road
@@ -307,19 +319,40 @@ report appears in neither.
   project makes routing disproportionate and because a chain left unconfigured would block the
   site's measurement rather than review it.
 - **FR-013**: System MUST apply every one of a report's increments or none of them, and MUST leave
-  the report submitted if any part fails.
+  the report submitted — that being the **only** permitted outcome of a failed approval, not one of
+  several.
+- **FR-013a**: System MUST make a failed approval observable rather than merely prevented: the
+  refusal MUST name the line that could not be moved and the reason, and the attempt MUST be
+  recorded. An all-or-nothing rule that reports nothing leaves an operator retrying a write that
+  will fail again for a reason nobody has been told.
 - **FR-014**: System MUST move each report's quantities at most once, however many times approval
   is attempted.
 - **FR-015**: System MUST apply each increment as a relative change to the stored counter and MUST
   NOT write a value derived from one read earlier in the same operation.
+- **FR-015a**: Where two reports measuring the same BOQ line are approved concurrently, **both**
+  increments MUST be applied. Stated as a required outcome and not only as the mechanism of
+  FR-015, because a read-then-write loop would lose one of the two and lose it silently.
+- **FR-014a**: Where the same report is approved twice concurrently, exactly one attempt MUST
+  succeed and the counter MUST move once — the same guarantee as FR-014's sequential case, which it
+  does not by itself imply.
 - **FR-016**: System MUST refuse approval of a report that has not been submitted, naming its
   status.
 - **FR-017**: System MUST allow a submitted report to be returned to draft.
 - **FR-018**: System MUST refuse to edit an approved report, naming the reversal path.
 - **FR-019**: System MUST allow an approved report to be reversed with a stated reason, taking back
   exactly the quantities its approval added and returning it to draft.
-- **FR-020**: System MUST refuse to reverse an approved report whose measurement has been claimed
-  on a bill that has left draft, naming the bill.
+- **FR-020**: System MUST refuse a reversal that would reduce a BOQ line's done quantity **below
+  the quantity already billed against that line** on a bill that has left draft, naming the bill.
+  The bills that count are a client bill that is submitted or certified, and a subcontractor bill
+  that is submitted or approved, including one reaching the line through a work-order award line.
+  (Rewritten on 2026-10-04. As first written this required refusal of "a report whose measurement
+  has been claimed on a bill", which **no implementation can determine**: nothing in the data links
+  a bill line to the measurement it consumed. A reader of this requirement alone would have
+  believed provenance was implemented — see `checklists/silent-failure.md` CHK029 and research §4.)
+- **FR-020a**: The system MUST NOT claim to know *which* report's measurement a given bill line
+  consumed. That linkage does not exist, and feature 023 — which composes a bill from a period's
+  approved measurement — MUST decide whether to record it. Written as an obligation on 023 rather
+  than as a remark, so that it is asked rather than inherited.
 - **FR-021**: System MUST NOT allow any BOQ line's done quantity to become negative by any path.
 - **FR-022**: System MUST record an audit entry for each submission, approval and reversal, naming
   the actor, the report and the quantities moved.
@@ -349,10 +382,19 @@ report appears in neither.
 - **FR-030a**: System MUST hold exactly one quantity in force per measurement line, decided by that
   line's payment basis: the factor-computed quantity for a line measured by work, the served
   quantity for one paid by presence. The quantity in force is the one that moves the BOQ line's
-  done quantity and the one that feeds the period figures.
+  done quantity and the one that feeds the period figures. **Exactly one of the two MUST be
+  present**: a line carrying both, or neither, MUST be impossible to store — enforced where the
+  data lives and not only where it is written, because an invariant held solely by a service is one
+  direct write away from being bypassed.
 - **FR-030b**: System MUST NOT read the six factors for a presence-based line. With every factor
   defaulting to 1 their product is 1, which resembles one day served while being only an artefact
   of the defaults — a figure that would be right by accident and wrong the moment a factor is set.
+- **FR-030d**: Where a presence-paid line carries factor values other than 1 — set by a seed, a
+  migration, a hand-edit or any path other than this feature's own input — the quantity in force
+  MUST still be the served quantity, unchanged. Stated as an expected **answer** and not only as a
+  prohibition, so that it can be asserted rather than reviewed.
+- **FR-030e**: System MUST treat a served quantity of 1 as one full day. Any other basis for "a
+  full day" MUST NOT be inferred from the line's unit or rate.
 - **FR-030c**: System MUST require a remark on any presence-based day whose served quantity is less
   than a full day, because that shortfall is the fact a client's deduction is later argued from.
 - **FR-031**: System MUST accept a presence-based day of zero with a remark, distinguishably from
@@ -372,20 +414,47 @@ report appears in neither.
   reversed ones entirely.
 - **FR-036**: System MUST attribute measurement to a range by the report's **work date**, not by
   its approval date.
-- **FR-037**: System MUST return every BOQ line in the project, including lines with no approved
-  measurement, carrying zeros.
+- **FR-037**: System MUST return every BOQ line in the project — every line under every group,
+  **including lines that are still unpriced and lines already measured past their scope** — and
+  MUST return a line with no approved measurement carrying zeros rather than omitting it. An
+  unpriced line is "nobody has priced this", not "this is not billable", and a bill needs to see it.
+- **FR-037a**: The count of lines returned MUST equal the project's own count of BOQ lines, and that
+  equality MUST be assertable. An assertion over a returned list passes just as happily over a
+  short list, which is the vacuity this feature's other guards exist to prevent.
+- **FR-037b**: System MUST return an empty set of lines, and not an error, for a project with no
+  BOQ lines, and for a range in which the project had none.
 - **FR-038**: System MUST refuse a range whose end precedes its start.
-- **FR-039**: System MUST be able to report any discrepancy between a BOQ line's stored done
-  quantity and the sum of approved measurement against it, rather than leaving the two to disagree
-  unobserved.
+- **FR-039**: System MUST report, on demand and per BOQ line, any discrepancy between the stored
+  done quantity and the sum of approved measurement against it. "On demand" means a caller can ask
+  and be answered — a log line nobody reads does not satisfy this.
+- **FR-039a**: The tolerance MUST be exact. Both figures are decimal quantities to three places and
+  the increments are exact, so any non-zero difference is a defect and MUST be reported as one.
+- **FR-039b**: **The sum of approved measurement is authoritative; the stored done quantity is a
+  cache of it.** When the two disagree, the sum is right by construction — it is derived from the
+  reports that are the record of what happened — and the counter is what has drifted.
+- **FR-039c**: System MUST allow the counter to be repaired to the authoritative sum as an explicit
+  act by a permission holder, recorded with actor, time and the previous value, and MUST NOT repair
+  it automatically. A silent self-heal erases the evidence that something moved the counter without
+  a report, which is the only symptom that bug would ever have.
 
 #### Isolation
 
-- **FR-040**: Every table this feature writes MUST carry the tenant isolation policy, **and** MUST
-  be covered by a test that exercises that policy under a database role which cannot bypass it.
-  The development and continuous-integration role is a superuser, and a database superuser is
-  exempt from row-level security unconditionally — so a policy without such a test has never been
-  in force in any test run, and is not evidence of anything.
+- **FR-040**: The daily work report and measurement line tables MUST each be covered by a test that
+  exercises their tenant isolation policy under a database role which **cannot bypass it**. Both
+  already carry the policy; neither has ever had it in force in a test run, because the development
+  and continuous-integration role is a superuser and a database superuser is exempt from row-level
+  security unconditionally. The tables are named rather than described, because "every table this
+  feature writes" is satisfied by doing nothing when the feature creates no table.
+- **FR-040a**: Such a test MUST assert that the non-bypassing role was actually created, **before
+  asserting anything else**. Without it every later assertion runs against a privileged connection
+  and passes while proving nothing.
+- **FR-040b**: Where the probe role cannot be created, the test MUST report as **skipped**, never as
+  passed, and MUST say why. The visibility is the requirement, not a courtesy: this feature carries
+  FR-040 at all because for two months an isolation policy that was never in force looked exactly
+  like one that was.
+- **FR-040c**: The BOQ line table, whose done quantity this feature writes, is **out of** FR-040's
+  scope. It is written through an existing service that owns it, and its isolation is that feature's
+  to prove; naming it here would claim coverage this feature does not deliver.
 
 ### Key Entities
 
@@ -502,3 +571,24 @@ their own claim.
 
 **Why not a threshold** above which it routes: two mechanisms and a number to argue about, and the
 first question anybody asks of a report becomes which path it took rather than whether it is right.
+
+### D3 — The aggregate is authoritative and repair is an explicit act (FR-039b, FR-039c)
+
+Decided on 2026-10-04 while answering `checklists/silent-failure.md` CHK016, which found that
+FR-039 obliged a reconciliation report and specified no response to it — a number returned to
+nobody with any duty to act on it.
+
+**The sum of approved measurement is authoritative.** It is derived from the reports that are the
+record of what happened; the stored done quantity is a cache of that sum, maintained by this
+feature's approvals and reversals for the sake of fast reads. When they disagree it is the cache
+that has drifted, by construction.
+
+**Repair is explicit, permissioned and recorded, never automatic.** An automatic self-heal would be
+easy and is the wrong choice: the discrepancy is the *only* symptom of whatever moved the counter
+without a report — a partial transaction, a hand-edit, a bug in reversal — and a system that
+silently corrects it destroys the evidence each time, so the underlying fault is never found. A
+repair that must be asked for leaves a trail saying somebody found a drift of this size on this day.
+
+**Why not make the counter authoritative**, which would make repair meaningless: the counter is
+written by this feature and nothing else validates it, while the sum can be rebuilt from the
+reports at any time. A cache cannot outrank the thing it caches.
