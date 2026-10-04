@@ -220,25 +220,47 @@ submit → BOQ doneQty unchanged, approve → status = approved and BOQ doneQty 
 
 ### Implementation for User Story 5
 
-- [ ] T031 [P] [US5] Create DWR DTOs: `create-dwr.dto.ts` (with nested `DWRTaskInput[]`),
-      `update-dwr.dto.ts` in `src/projects/dwr/dto/`
-- [ ] T032 [P] [US5] Implement `DWRTaskService.computeActualQty(nos1, nos2, length, breadth,
-      depth, density): number` in `src/projects/dwr/dwr-task.service.ts`: formula = nos1 × nos2
-      × length × breadth × depth × density; zero-value handling (→ 0); `exceedsScope` flag check
-      against BOQ item's scopeQty — research.md §5
-- [ ] T033 [P] [US5] Unit test `DWRTaskService.computeActualQty()`: normal case, zero-value
-      case, exceedsScope true and false — `src/projects/dwr/dwr-task.service.spec.ts`
-- [ ] T034 [US5] Implement `DWRService` in `src/projects/dwr/dwr.service.ts`: `create` (auto-
-      DPR number `{siteCode}-{seq}`, compute actualQty per task), `submit` (status → submitted
-      only — does **not** call `BOQService.updateDoneQty()`), `approve` (status → approved,
-      audit-log, **then** calls `BOQService.updateDoneQty()` — research.md §13), `findAll`
-      (paginated, filtered), `findOne`, `delete` (draft only), `addAttachment`
-- [ ] T035 [US5] Implement `DWRController` in `src/projects/dwr/dwr.controller.ts`: all DWR
-      endpoints — `Permission.DWR`, `ProjectLockGuard` on writes
-- [ ] T036 [US5] E2e test: create DWR → verify actualQty, submit → BOQ doneQty **unchanged**,
-      approve → BOQ doneQty increments, locked project → 423 — `test/projects.e2e-spec.ts`
+> **Built by feature 022 on 2026-10-05, not here.** These six tasks sat unchecked from August
+> while the tables, the `DWR` permission, the audit entity type and `BoqService.updateDoneQty`
+> all existed — so **every BOQ line in the system reported 0% executed**, because `doneQty` moves
+> only on approval and nothing could approve anything. See
+> `specs/022-daily-work-reports-backend/`. Three of the six were specified in a form that could
+> not be built, and 022 records what replaced each and why.
 
-**Checkpoint**: DWR lifecycle and BOQ progress tracking fully functional.
+- [X] T031 [P] [US5] ✅ Done by 022 (T015, T015a, T016, T029) — `create-dwr.dto.ts`,
+      `update-dwr.dto.ts`, `dwr-query.dto.ts`, `dwr-lifecycle.dto.ts` in
+      `src/projects/dwr/dto/`. **The create DTO is two line shapes, not one with a nested
+      `DWRTaskInput[]`**: a presence-paid line cannot carry the six factors at all (022 FR-030b)
+- [X] T032 [P] [US5] ✅ Done by 022 (T008–T010) as `src/projects/dwr/dwr-quantity.ts`, with two
+      departures. **Zero-value handling is a refusal, not `→ 0`**: a product of zero is a
+      data-entry error, and a line asserting that measured work amounted to nothing is
+      indistinguishable in every later report from work that was measured and came to nothing
+      (022 FR-004). And the result is a `Prisma.Decimal`, never a `number` — six multiplications
+      in binary floating point err in the third decimal place of a figure a client is invoiced
+      from
+- [X] T033 [P] [US5] ✅ Done by 022 (T011–T013) — `src/projects/dwr/dwr-quantity.spec.ts`, 19
+      tests, including the one this task could not have asked for: a presence line with all six
+      factors set to **7** must still yield its served quantity. The factors default to 1, so
+      their product is 1 — identical to one day served — and an implementation that read them
+      would be right for every row entered by hand and wrong the instant a factor moved
+- [X] T034 [US5] ✅ Done by 022 (T017–T027, T030–T040), with three corrections.
+      **`{siteCode}-{seq}` is impossible**: a report references a project and not a site, and
+      `Site` has no code field at all — the number derives from `Project.code` (022 FR-002,
+      research §2). **Approval does not call `updateDoneQty`**: that method opens its own
+      transaction, so a report's increments would each commit separately, which is the opposite
+      of all-or-nothing — 022 added `applyDoneQtyDeltas` for the caller `updateDoneQty` was
+      written for. And **`reverse` is new**: 008 said approval moves the counter and never said
+      what undoes it, leaving a wrong approval with no remedy but a hand-edit
+- [X] T035 [US5] ✅ Done by 022 (T054–T056) — `src/projects/dwr/dwr.controller.ts`,
+      `Permission.DWR` on every route, `ProjectLockGuard` on every write (423, not 403).
+      Registered **before** `ProjectsController`, because `GET projects/dwr` is a literal path and
+      `GET projects/:id` would otherwise swallow it
+- [X] T036 [US5] ✅ Done by 022 (T061–T066a) as `test/dwr.e2e-spec.ts` — 25 tests, its own suite
+      rather than inside `test/projects.e2e-spec.ts`. The assertion this task names is the one
+      nothing could run for two months: submit → `doneQty` unchanged, approve → it increments,
+      approve again → refused and it does not move twice
+
+**Checkpoint**: DWR lifecycle and BOQ progress tracking fully functional — **reached 2026-10-05**.
 
 ---
 
