@@ -4,6 +4,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
+import { PrismaShutdownService } from './common/prisma/prisma-shutdown.service';
 import { AppController } from './app.controller';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AppService } from './app.service';
@@ -103,6 +104,10 @@ import type { SecurityConfig } from './common/configs/config.interface';
   ],
   controllers: [AppController],
   providers: [
+    // Releases the database pool on shutdown. `nestjs-prisma`'s PrismaService
+    // implements OnModuleInit and nothing else, so `app.close()` does not disconnect
+    // on its own — see the service's docblock for how that was found.
+    PrismaShutdownService,
     AppService,
     {
       // 019 FR-014, FR-015. Global, because "across the application" is the requirement: a
