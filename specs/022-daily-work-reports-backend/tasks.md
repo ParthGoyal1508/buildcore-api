@@ -123,6 +123,13 @@ quantity is unchanged.
 - [ ] T015 [US1] Create `src/projects/dwr/dto/create-dwr.dto.ts` as **two line shapes**
       discriminated by `paymentMode` via `class-validator` + `@Type`, so a presence line cannot
       carry factors at all and a work line cannot carry a served quantity (FR-030b, Principle II)
+- [ ] T014a Add `model DWRAttachment` to `prisma/schema.prisma` (companyId, dwrId, fileRef,
+      fileName, mimeType, sizeBytes, uploadedByUserId, uploadedAt) with its `tenant_isolation`
+      policy, in a second migration. **FR-009 requires the name a file was uploaded under and
+      `DailyWorkReport.fileRefs String[]` cannot hold it** — 017 fixed exactly this defect for
+      project documents, where files downloaded as a bare UUID with no extension and a browser
+      refused to open them, and the fix was columns for the name and the type. `fileRefs` is left in
+      place, empty, documented as superseded (FR-009a, found while implementing Phase C)
 - [ ] T015a [US1] In `src/projects/dwr/dto/create-dwr.dto.ts` and `src/projects/dwr/dwr.service.ts`,
       carry and persist a measurement line's **position**: `chainageFrom`, `chainageTo`, `layer`,
       `roadSide`, `section`, `engineerName`, `remark` and `paymentMode` (FR-005). All eight columns
@@ -329,7 +336,8 @@ and paginates; seed approved reports across two months and confirm the period fi
 - [ ] T057 Create `test/dwr-rls.e2e-spec.ts` following `test/company-selection-rls.e2e-spec.ts`:
       a `NOSUPERUSER NOBYPASSRLS` probe role, covering **both** `projects."DailyWorkReport"` and
       `projects."DWRTask"` by name (FR-040). Both have carried `tenant_isolation` since August and
-      **neither has ever had it in force in a test run**. Docblock FR-040c: the BOQ line table,
+      **neither has ever had it in force in a test run** — and `projects."DWRAttachment"`, created
+      by T014a, whose policy is new. Docblock FR-040c: the BOQ line table,
       whose counter this feature moves, is deliberately **out** of this suite's scope — it is owned
       by another feature's service, and naming it here would claim coverage this feature does not
       deliver

@@ -215,6 +215,25 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // half of the same rule: running it is only useful if its refusal is then acted on rather
           // than read. The refusal names the file; adding it takes a line.
           ':(exclude)src/projects/route-shadowing.spec.ts',
+          // Owned by 022: daily work reports, which 008 specified in August, created tables for,
+          // and never built — leaving every BOQ line in the system reporting 0% executed, because
+          // `doneQty` moves only on approval and nothing could approve anything. Recording,
+          // lifecycle and reads; **nothing here calls `ApprovalService`**. 022 decision D2 settled
+          // that deliberately: approval is a direct transition by somebody other than the author,
+          // because one report a day per project makes routing disproportionate and a chain left
+          // unconfigured would block the site's measurement rather than review it. The per-file
+          // assertions above still enforce that `src/projects` keeps no approval mechanism of its
+          // own.
+          //
+          // **Fired a commit late for the fifth time, and this one is worth being precise about.**
+          // 022's tasks.md carries running this spec before each phase commit as T067, and it *was*
+          // run before both the Phase A and Phase B commits — passing each time, because
+          // `git diff` between two commits cannot see an untracked file. So the habit named above
+          // is necessary and not sufficient: the only run that can see a new directory is the one
+          // *after* its first commit. The rule that actually works is narrower than "run it before
+          // committing" — it is **run it again straight after the first commit of any new directory
+          // under these paths**, which is the one moment the check can finally see it.
+          ':(exclude)src/projects/dwr',
         ],
         {
           cwd: REPO_ROOT,

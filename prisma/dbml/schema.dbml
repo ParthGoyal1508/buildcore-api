@@ -951,7 +951,14 @@ the BOQ computes — the two are reported separately rather than reconciled.']
   layer String
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
-  fileRefs String[] [not null, note: 'Object-storage references, same pattern as `hr.EmployeeDocument`.']
+  fileRefs String[] [not null, note: 'Object-storage references, as 008 created them.
+
+**Superseded by `attachments` in 022 and kept only because dropping a column is not something
+an additive migration does.** A bare array of references cannot hold the name a file was
+uploaded under or the type it is, which 022 FR-009 requires — a download that arrives as a
+bare UUID with no extension is a defect this repository fixed once already, in 017, and the
+fix was columns for the name and the type. Empty in every row, and nothing reads it.']
+  attachments DWRAttachment [not null]
   reversedAt DateTime [note: 'The **latest** reversal of an approval (022 FR-019, FR-022).
 
 A report in `draft` carrying `reversedAt` was approved and taken back, which is a different
@@ -1045,6 +1052,30 @@ Carries **one of two quantities**, decided by `paymentMode`: `actualQty` for wor
 the six factors, computed server-side so the arithmetic cannot differ between clients, or
 `servedQty` for a line paid by presence. Exactly one is non-null, enforced by the
 `DWRTask_quantity_matches_basis` constraint (022 FR-030a).'
+}
+
+Table DWRAttachment {
+  id String [pk]
+  companyId String [not null]
+  dwrId String [not null]
+  dwr DailyWorkReport [not null]
+  fileRef String [not null, note: 'Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.']
+  fileName String [not null, note: 'As the uploader\'s own filesystem spelled it, so the download arrives named.']
+  mimeType String [not null, note: 'Detected from the bytes by `detectContentType`, not taken from the client\'s claim.']
+  sizeBytes Int [not null]
+  uploadedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'One file attached to a day\'s work report (022 FR-009).
+
+**A table rather than another string in `DailyWorkReport.fileRefs`.** An attachment is three
+facts, not one: where the bytes are, what the file was called, and what type it is. 017 fixed
+exactly this defect for project and company documents — files downloading as a bare UUID with
+no extension, which a browser then refused to open — and the fix was to store the name and the
+type rather than to sniff them back later. Repeating the array here would repeat the defect.
+
+`uploadedByUserId` and `uploadedAt` are here because a photograph of a day\'s work is evidence,
+and evidence whose provenance is unrecorded is weaker than evidence that has none.'
 }
 
 Table Revenue {
@@ -5294,6 +5325,8 @@ Ref: DailyWorkReport.projectId > Project.id [delete: Cascade]
 Ref: DWRTask.dwrId > DailyWorkReport.id [delete: Cascade]
 
 Ref: DWRTask.boqItemId > BOQTaskItem.id
+
+Ref: DWRAttachment.dwrId > DailyWorkReport.id [delete: Cascade]
 
 Ref: Revenue.projectId > Project.id [delete: Cascade]
 

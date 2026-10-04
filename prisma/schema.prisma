@@ -1810,8 +1810,16 @@ model DailyWorkReport {
   approvedByUserId String?
   approvedAt       DateTime?
 
-  /// Object-storage references, same pattern as `hr.EmployeeDocument`.
+  /// Object-storage references, as 008 created them.
+  ///
+  /// **Superseded by `attachments` in 022 and kept only because dropping a column is not something
+  /// an additive migration does.** A bare array of references cannot hold the name a file was
+  /// uploaded under or the type it is, which 022 FR-009 requires — a download that arrives as a
+  /// bare UUID with no extension is a defect this repository fixed once already, in 017, and the
+  /// fix was columns for the name and the type. Empty in every row, and nothing reads it.
   fileRefs String[]
+
+  attachments DWRAttachment[]
 
   /// The **latest** reversal of an approval (022 FR-019, FR-022).
   ///
@@ -1926,6 +1934,40 @@ model DWRTask {
 
   @@index([dwrId])
   @@index([boqItemId])
+  @@schema("projects")
+}
+
+/// One file attached to a day's work report (022 FR-009).
+///
+/// **A table rather than another string in `DailyWorkReport.fileRefs`.** An attachment is three
+/// facts, not one: where the bytes are, what the file was called, and what type it is. 017 fixed
+/// exactly this defect for project and company documents — files downloading as a bare UUID with
+/// no extension, which a browser then refused to open — and the fix was to store the name and the
+/// type rather than to sniff them back later. Repeating the array here would repeat the defect.
+///
+/// `uploadedByUserId` and `uploadedAt` are here because a photograph of a day's work is evidence,
+/// and evidence whose provenance is unrecorded is weaker than evidence that has none.
+model DWRAttachment {
+  id        String @id @default(cuid())
+  companyId String
+
+  dwrId String
+  dwr   DailyWorkReport @relation(fields: [dwrId], references: [id], onDelete: Cascade)
+
+  /// Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.
+  fileRef   String
+  /// As the uploader's own filesystem spelled it, so the download arrives named.
+  fileName  String
+  /// Detected from the bytes by `detectContentType`, not taken from the client's claim.
+  mimeType  String
+  sizeBytes Int
+
+  /// `shared.User.id`. Bare id — see the schema-level note above.
+  uploadedByUserId String?
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([dwrId])
   @@schema("projects")
 }
 

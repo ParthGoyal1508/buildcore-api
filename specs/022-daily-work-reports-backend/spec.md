@@ -451,9 +451,14 @@ report appears in neither.
 
 #### Isolation
 
-- **FR-040**: The daily work report and measurement line tables MUST each be covered by a test that
-  exercises their tenant isolation policy under a database role which **cannot bypass it**. Both
-  already carry the policy; neither has ever had it in force in a test run, because the development
+- **FR-009a**: An attachment MUST be stored with the name it was uploaded under, the content type
+  detected from its own bytes, and who uploaded it when. A bare array of storage references cannot
+  hold any of those, and 017 already fixed the resulting defect once — files downloading as a UUID
+  with no extension, which a browser then refused to open. (Added 2026-10-05: FR-009 required the
+  uploaded name and the schema had nowhere to put it.)
+- **FR-040**: The daily work report, measurement line **and attachment** tables MUST each be covered
+  by a test that exercises their tenant isolation policy under a database role which **cannot bypass
+  it**. The first two already carry the policy and neither has ever had it in force in a test run; because the development
   and continuous-integration role is a superuser and a database superuser is exempt from row-level
   security unconditionally. The tables are named rather than described, because "every table this
   feature writes" is satisfied by doing nothing when the feature creates no table.
