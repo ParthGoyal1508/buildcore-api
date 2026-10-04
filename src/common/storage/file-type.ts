@@ -176,3 +176,40 @@ export function describeStoredFile(input: {
     contentType,
   };
 }
+
+/**
+ * A `Content-Disposition` value for a filename that came from a person.
+ *
+ * **This is not a nicety.** `res.setHeader` throws `ERR_INVALID_CHAR` for any byte outside
+ * latin1, so the first document uploaded with an em dash in its name — "Mining permission —
+ * Karnataka 2026.pdf", typed by somebody doing nothing unusual — made its own download a 500.
+ * Found by uploading one, which is the only way it was going to be found: every filename in the
+ * repository's own fixtures is ASCII.
+ *
+ * Both forms are emitted, as RFC 6266 recommends: the plain `filename=` for anything that reads
+ * only that, and `filename*=UTF-8''…` percent-encoded, which every current browser prefers and
+ * which is where the real name survives. `buildcore-web` reads the starred form first.
+ *
+ * The ASCII fallback is a transliteration of last resort, not a translation — a name in a script
+ * with no ASCII at all collapses to the extension alone, which is why the starred form is the one
+ * that matters.
+ *
+ * It also closes a header injection: a filename is user-supplied, and one containing CR or LF
+ * would otherwise be an attempt to append headers of the attacker's choosing. Percent-encoding
+ * removes the possibility rather than detecting it.
+ */
+export function contentDispositionFor(filename: string): string {
+  const stripped = filename
+    // Control characters, CR/LF and the quote that would end the quoted string.
+    .replace(/[\u0000-\u001f\u007f"\\]/g, '')
+    .replace(/[^\u0020-\u007e]/g, '_')
+    .trim();
+  // A name with no ASCII letter or digit left is not a name. `发票` transliterates to `__`,
+  // which is worse than saying nothing: the starred form below carries the real one.
+  const ascii = /[A-Za-z0-9]/.test(stripped) ? stripped : 'document';
+  const encoded = encodeURIComponent(filename)
+    // RFC 5987 allows these unescaped and they read better unescaped.
+    .replace(/['()]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
+
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+}

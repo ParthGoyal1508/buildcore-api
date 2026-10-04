@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import {
+  contentDispositionFor,
   describeStoredFile,
   detectContentType,
   extensionFor,
@@ -204,5 +205,60 @@ describe('describeStoredFile', () => {
       filename: 'Work-order-abc',
       contentType: 'application/octet-stream',
     });
+  });
+});
+
+describe('contentDispositionFor', () => {
+  it('survives a name a person would actually type', () => {
+    // The defect this function exists for. `res.setHeader` throws ERR_INVALID_CHAR on the em
+    // dash, so the first document uploaded with one made its own download a 500 — found by
+    // uploading one, because every filename in this repository's fixtures is ASCII.
+    const header = contentDispositionFor(
+      'Mining permission — Karnataka 2026.pdf',
+    );
+
+    expect(header).toBe(
+      'attachment; filename="Mining permission _ Karnataka 2026.pdf"; ' +
+        "filename*=UTF-8''Mining%20permission%20%E2%80%94%20Karnataka%202026.pdf",
+    );
+    // The thing that actually broke: every byte must be representable in a header.
+    expect(Buffer.from(header, 'latin1').toString('latin1')).toBe(header);
+  });
+
+  it('emits a header that is latin1-safe for any name', () => {
+    for (const name of [
+      'खनन अनुमति.pdf',
+      'façade détail.png',
+      'ordinary.pdf',
+      '发票.xlsx',
+    ]) {
+      const header = contentDispositionFor(name);
+      expect(/^[ -~]*$/.test(header)).toBe(true);
+    }
+  });
+
+  it('closes the header injection a filename would otherwise open', () => {
+    // A filename is user-supplied and goes straight into a response header, so a name carrying
+    // CR/LF is an attempt to append headers of the sender's choosing.
+    const header = contentDispositionFor(
+      'invoice.pdf"\r\nSet-Cookie: session=stolen',
+    );
+
+    // The two properties that actually matter, asserted as themselves: no line break can start
+    // a new header, and no quote can close the quoted string early. The attacker's *text* does
+    // survive inside the quoted filename, which is harmless — it is a filename, and a confusing
+    // one is not a vulnerability. Asserting its absence instead would be asserting the wrong
+    // thing and would pass for the wrong reason.
+    expect(header).not.toMatch(/[\r\n]/);
+    expect(header.split(';')[1]).toBe(
+      ' filename="invoice.pdfSet-Cookie: session=stolen"',
+    );
+    expect(/^[ -~]*$/.test(header)).toBe(true);
+  });
+
+  it('keeps a usable name when nothing survives the ASCII fallback', () => {
+    // A name with no ASCII at all collapses — which is why the starred form is the one that
+    // matters, and why this does not pretend the fallback is a translation.
+    expect(contentDispositionFor('发票')).toContain('filename="document"');
   });
 });

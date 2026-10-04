@@ -19,6 +19,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
+import { contentDispositionFor } from '../../common/storage/file-type';
 import {
   StageProjectDocumentDto,
   UploadProjectDocumentDto,
@@ -138,10 +139,9 @@ export class ProjectDocumentUploadController {
     // The real type, not `application/octet-stream`. Serving every document as opaque bytes is
     // why a PDF opened in a text editor: the browser cannot render what it has not been told.
     res.setHeader('Content-Type', contentType);
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename.replace(/"/g, '')}"`,
-    );
+    // Both the plain and the RFC 5987 forms — and never the raw name. A filename is typed by a
+    // person, and `setHeader` throws on any byte outside latin1.
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     // For a cross-origin caller, which cannot read `Content-Disposition` off a `fetch`
     // otherwise — and the name is the only place the filename exists, since a blob URL carries
     // none of its own. `buildcore-web` reaches this through its own `/bff` rewrite and is
