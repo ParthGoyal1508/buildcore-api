@@ -367,22 +367,24 @@ readable as issued alongside the revised ones.
   schedule's footer are the same number and MUST come from the same stored amounts — a work-done
   figure computed as quantity times rate alone would disagree with the schedule it totals on every
   tender quoted above or below its rates.
-- **FR-012a**: System MUST state the rounding applied to money — the unit and the direction — and
-  MUST distinguish two cases, because they round in opposite places and only one of them is a
-  matter of taste:
-  - **A total of printed lines is the sum of those lines as printed.** The priced schedule's footer
-    and the abstract's work-done figure are the same number, and both must equal the column a
-    reviewer adds up by hand. Rounding each line and summing is therefore correct here, which is
-    the judgement 018 already made and recorded in `bill-totals.ts`.
-  - **A figure derived from a rate is one rounding of one multiplication over the total**, never a
-    sum of per-line roundings. Tax, retention and tax deducted are each computed once, over the
-    work done — the real document's half-rate tax of 1,65,751.74 appears as 1,65,752, a single
-    rounding of a single product. Summing per-line roundings would drift by rupees and FR-021's
-    balance would fail for a reason nobody could locate.
+- **FR-012a**: Every money figure MUST be computed and stored at full precision, and rounded **only
+  for display**, to the rupee, half away from zero. No figure may be computed from a rounded one,
+  and no total may be formed by summing displayed values.
 
-  *Amended 2026-10-05 during Phase B.* The first version required every total to be rounded from
-  unrounded components, which would have made the schedule's footer disagree with the column above
-  it — the exact defect 018's own comment exists to prevent.
+  **The client's own document settles this, and proves it on its own face.** Block A of the real
+  RA-12 reads work done 18,41,686, tax 1,65,752, tax 1,65,752, and *Total Amount (A)* **21,73,189**
+  — not 21,73,190. Nine per cent of 18,41,686 is 1,65,751.74; each tax cell displays that rounded,
+  and the total displays the rounding of the unrounded sum. The cumulative column does the same in
+  the opposite direction: 26,74,572.57 + 1,65,751.74 is 28,40,324.31, shown as 28,40,324, where the
+  displayed figures would sum to 28,40,325.
+
+  An implementation that re-sums displayed values satisfies every percentage assertion anybody would
+  write and disagrees with the signed paper by a rupee in four places.
+
+  *Amended twice before this, both times wrongly.* The first version required every total to be
+  rounded from unrounded components, which would have made the priced schedule's footer disagree
+  with the column above it. The second said a total of printed lines is the sum of those lines as
+  printed, which produces 21,73,190. The document's rule is neither, and is simpler than both.
 - **FR-012b**: System MUST report a cumulative claim that has passed its line's scope or awarded
   quantity, and MUST show the quantity remaining as the negative figure it is rather than as its
   magnitude.

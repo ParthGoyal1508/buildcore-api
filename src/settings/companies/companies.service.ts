@@ -293,6 +293,45 @@ export class CompaniesService {
   }
 
   /**
+   * The company's own statutory identity, as a bill's header states it (023 FR-026).
+   *
+   * The slice `projects` needs to put the company in a bill's issuing or
+   * receiving slot, deliberately not the whole company — the same judgement
+   * `VendorsService.getTds` made for the slice Inventory needs.
+   *
+   * Exported rather than read across the schema boundary, which Principle I
+   * forbids. Read **once per bill and frozen onto it** (023 FR-028), so an
+   * address corrected next year does not change a document that was signed.
+   */
+  async getBillingIdentity(companyId: string): Promise<{
+    name: string;
+    gstin: string | null;
+    pan: string | null;
+    state: string | null;
+    address: string | null;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            name: true,
+            gstin: true,
+            pan: true,
+            state: true,
+            address: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
+  }
+
+  /**
    * The per-company payroll rates the engine applies (005 FR-014/FR-014a).
    *
    * Exported for `payroll` for the same reason `getPayrollLockDay` is exported for

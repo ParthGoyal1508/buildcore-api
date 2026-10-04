@@ -14,6 +14,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import type { RlsContext } from '../../common/prisma/rls-context';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -430,6 +431,47 @@ export class VendorsService {
     }
     assertInScope(caller, vendor, `Vendor ${id}`);
     return { tdsSection: vendor.tdsSection, tdsRate: decimal(vendor.tdsRate) };
+  }
+
+  /**
+   * A vendor's statutory identity, as a bill's header states it (023 FR-026).
+   *
+   * The slice `projects` needs to put a subcontractor in a bill's receiving slot — deliberately not
+   * the whole vendor, the same judgement `getTds` above made for Inventory's slice.
+   *
+   * **Takes an `RlsContext` rather than a caller**, unlike its neighbours here. The consumer is a
+   * composition that already holds one, and `rlsContextFor(caller)` only builds the same thing — so
+   * accepting it directly is strictly more general and saves threading an authenticated user through
+   * a pure-ish service that has no other use for one. Scope is still enforced by the context.
+   */
+  async getBillingIdentity(
+    ctx: RlsContext,
+    id: string,
+  ): Promise<{
+    code: string;
+    name: string;
+    gstin: string | null;
+    pan: string | null;
+    state: string | null;
+    address: string | null;
+  }> {
+    const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.vendor.findUnique({
+        where: { id },
+        select: {
+          code: true,
+          name: true,
+          gstin: true,
+          pan: true,
+          state: true,
+          address: true,
+        },
+      }),
+    );
+    if (!vendor) {
+      throw new NotFoundException(`Vendor ${id} not found`);
+    }
+    return vendor;
   }
 
   /** How many vendors are tagged with a category — the delete guard's input (FR-014). */

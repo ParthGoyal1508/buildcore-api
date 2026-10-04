@@ -89,6 +89,7 @@ function build(opts: {
       findFirst: async () => ({
         id: 'p-1',
         clientId: 'client-1',
+        cgstApplicable: true,
         quotedPercentage: dec(0),
         clientRetentionFraction:
           opts.clientRetentionFraction === null
@@ -97,7 +98,14 @@ function build(opts: {
       }),
     },
     workOrder: {
-      findFirst: async () => ({ id: 'wo-1', retentionPercent: dec(0.05) }),
+      findFirst: async () => ({
+        id: 'wo-1',
+        retentionPercent: dec(0.05),
+        partnerId: 'vendor-1',
+      }),
+    },
+    client: {
+      findFirst: async () => ({ gstin: '08AABCNHAI1D1ZX' }),
     },
     bOQTaskItem: {
       findMany: async () =>
@@ -183,6 +191,8 @@ function build(opts: {
           igstFraction: dec(String(args.data.igstFraction)),
           tdsFraction: dec(String(args.data.tdsFraction)),
           counterpartyKey: args.data.counterpartyKey,
+          taxBasis: args.data.taxBasis,
+          taxBasisSource: args.data.taxBasisSource,
           claims: [],
         };
         return { id: 'pkg-1' };
@@ -317,12 +327,32 @@ function build(opts: {
       igstFraction: '0.180000',
       tdsFraction: '0.020000',
     }),
+    // Both parties in Rajasthan, as the client's own package has them.
+    getBillingIdentity: async () => ({
+      name: 'H.G. Infra Engineering Ltd',
+      gstin: '08AABCH1234D1ZX',
+      pan: 'AABCH1234D',
+      state: 'Rajasthan',
+      address: 'Jaipur',
+    }),
+  };
+
+  const vendors = {
+    getBillingIdentity: async () => ({
+      code: 'V-001',
+      name: 'Parth Realcon Private Limited',
+      gstin: '08AAMCP8659H1Z2',
+      pan: 'AAMCP8659H',
+      state: 'Rajasthan',
+      address: 'Jaipur',
+    }),
   };
 
   const service = new BillPackageService(
     prisma as never,
     periodFigures as never,
     companies as never,
+    vendors as never,
   );
 
   return {
@@ -469,6 +499,37 @@ describe('composing a bill package', () => {
         periodTo: '2025-12-21',
       }),
     ).rejects.toMatchObject({ response: { code: 'BILL_PERIOD_INVERTED' } });
+  });
+
+  it('records the tax basis it derived, and that it derived it', async () => {
+    // T044a. Both parties' registration numbers begin 08, as the client's own package has them, so
+    // the half-rate pair applies and the source says the numbers decided it — not the project's
+    // flag, which a bill cannot trust because it was set before anybody knew which subcontractor
+    // this would be.
+    const built = build({
+      direction: BillDirection.to_subcontractor,
+      award: [
+        {
+          id: 'award-1',
+          description: 'Mapped',
+          rate: 1000,
+          boqTaskItemId: 'boq-1',
+          awardedQty: 10,
+        },
+      ],
+      approved: { 'boq-1': '1.000' },
+    });
+
+    await built.service.compose({ isSuperAdmin: true }, 'c-1', {
+      ...period,
+      direction: BillDirection.to_subcontractor,
+      workOrderId: 'wo-1',
+    });
+
+    expect(built.pkg()).toMatchObject({
+      taxBasis: 'intra_state',
+      taxBasisSource: 'derived_from_gstin',
+    });
   });
 
   it('numbers a package from its counterparty’s own series', async () => {

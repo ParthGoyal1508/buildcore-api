@@ -16,9 +16,13 @@ import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
+import { VendorsService } from '../../../partners/vendors/vendors.service';
 import { CompaniesService } from '../../../settings/companies/companies.service';
 import { DwrPeriodFiguresService } from '../../dwr/dwr-period-figures.service';
 import { lineTotals, money } from '../bill-totals';
+import type { AbstractColumn, BillAbstract } from './bill-abstract';
+import { billAbstract, displayRupees, zeroColumn } from './bill-abstract';
+import { decideTaxBasis } from './bill-tax';
 import { PACKAGE_ERRORS } from './package-error-codes';
 
 /**
@@ -167,6 +171,7 @@ export class BillPackageService {
     private readonly prisma: PrismaService,
     private readonly periodFigures: DwrPeriodFiguresService,
     private readonly companies: CompaniesService,
+    private readonly vendors: VendorsService,
   ) {}
 
   /**
@@ -323,6 +328,7 @@ export class BillPackageService {
         select: {
           id: true,
           clientId: true,
+          cgstApplicable: true,
           quotedPercentage: true,
           clientRetentionFraction: true,
         },
@@ -335,7 +341,7 @@ export class BillPackageService {
         input.direction === BillDirection.to_subcontractor && input.workOrderId
           ? await tx.workOrder.findFirst({
               where: { id: input.workOrderId, projectId: input.projectId },
-              select: { id: true, retentionPercent: true },
+              select: { id: true, retentionPercent: true, partnerId: true },
             })
           : null;
       if (input.direction === BillDirection.to_subcontractor && !workOrder) {
@@ -407,6 +413,24 @@ export class BillPackageService {
         project,
         workOrder,
       );
+
+      // FR-016: derived from the two parties' own registration numbers, with the project's flag as
+      // the fallback and **the derivation reported either way** (FR-016a). Decided at composition
+      // because the rate it selects is frozen onto the bill; a basis chosen at render time would
+      // change an issued document the first time a party's registration was corrected.
+      const parties = await this.partyGstins(
+        ctx,
+        tx,
+        companyId,
+        input.direction,
+        project.clientId,
+        workOrder?.partnerId ?? null,
+      );
+      const taxDecision = decideTaxBasis({
+        issuerGstin: parties.issuerGstin,
+        receiverGstin: parties.receiverGstin,
+        projectCgstApplicable: project.cgstApplicable,
+      });
 
       const sequenceNo = await this.nextSequenceNo(
         tx,
@@ -531,10 +555,8 @@ export class BillPackageService {
           sgstFraction: rates.sgstFraction,
           igstFraction: rates.igstFraction,
           tdsFraction: rates.tdsFraction,
-          // Phase C decides which applies and records how. Until then the project's own flag is the
-          // honest answer and the source says so, rather than a derivation nobody performed.
-          taxBasis: 'intra_state',
-          taxBasisSource: 'from_project_flag',
+          taxBasis: taxDecision.basis,
+          taxBasisSource: taxDecision.source,
           externalBillNo: input.externalBillNo ?? null,
           externalWorkOrderNo: input.externalWorkOrderNo ?? null,
           missingHeaderFields: [],
@@ -819,6 +841,214 @@ export class BillPackageService {
     });
   }
 
+  /**
+   * The two parties' registration numbers, in the positions the bill's direction puts them (FR-025).
+   *
+   * **The issuing slot is not always us.** For a bill the company issues to a subcontractor, the
+   * company issues it. For a bill issued to a government client, the authority occupies the
+   * "Company Name" slot and the company is the contractor beneath it — which is the client's own
+   * layout and the reason the renderer has two bindings rather than two renderers.
+   *
+   * Each party is read through the service that owns its table, never across the schema boundary
+   * (Principle I). `projects.Client` is this module's own, so it is read directly.
+   */
+  private async partyGstins(
+    ctx: RlsContext,
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    direction: BillDirection,
+    clientId: string,
+    partnerId: string | null,
+  ): Promise<{ issuerGstin: string | null; receiverGstin: string | null }> {
+    const company = await this.companies.getBillingIdentity(companyId);
+
+    if (direction === BillDirection.to_client) {
+      const client = await tx.client.findFirst({
+        where: { id: clientId },
+        select: { gstin: true },
+      });
+      return {
+        issuerGstin: client?.gstin ?? null,
+        receiverGstin: company.gstin,
+      };
+    }
+
+    // A work order with no partner on it is possible — the column is nullable — so the receiver's
+    // number is simply unknown rather than an error, and the fallback reports itself.
+    const vendor = partnerId
+      ? await this.vendors.getBillingIdentity(ctx, partnerId)
+      : null;
+    return {
+      issuerGstin: company.gstin,
+      receiverGstin: vendor?.gstin ?? null,
+    };
+  }
+
+  /**
+   * The abstract: four blocks, three columns (FR-012 to FR-023).
+   *
+   * **The up-to-previous column is read from the previous package's stored figures** (FR-013a,
+   * FR-014) — the previous being the highest sequence number below this one, to the same
+   * counterparty, that has been **issued**. Never derived from this bill's own up-to-date figure
+   * less its own amount: that is numerically equal only while the chain is unbroken, and it makes
+   * FR-035's footer identity a restatement of its own definition.
+   *
+   * A package that has not been issued has no frozen cumulative position (FR-014a), so its
+   * up-to-date column is marked **provisional** (FR-013b). A figure that changes when the engineer
+   * presses Issue is a figure they did not approve.
+   */
+  async abstractFor(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<{
+    packageId: string;
+    label: string;
+    periodFrom: string;
+    periodTo: string;
+    taxBasis: string;
+    /** How the basis was decided, reported rather than merely stored (FR-016a). */
+    taxBasisSource: string;
+    /** True while the package is a draft: the cumulative column is not yet frozen (FR-013b). */
+    cumulativeProvisional: boolean;
+    rates: FrozenRates;
+    columns: {
+      thisBill: Record<string, string>;
+      uptoPrevious: Record<string, string>;
+      uptoDate: Record<string, string>;
+    };
+  }> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        include: {
+          clientBill: { select: { grossAmount: true } },
+          raBill: { select: { grossAmount: true } },
+        },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+
+      const previous = await this.previousIssuedColumn(tx, pkg);
+
+      const abstract = billAbstract({
+        workDone:
+          pkg.clientBill?.grossAmount ?? pkg.raBill?.grossAmount ?? dec(0),
+        entered: {
+          releaseWithheld: pkg.releaseWithheld,
+          recoveryDiesel: pkg.recoveryDiesel,
+          debitAgainstCivil: pkg.debitAgainstCivil,
+          otherRecoveries: pkg.otherRecoveries,
+          mechanicalDebit: pkg.mechanicalDebit,
+          mobilizationAdvance: pkg.mobilizationAdvance,
+          performanceSecurity: pkg.performanceSecurity,
+          theftWithheld: pkg.theftWithheld,
+        },
+        rates: {
+          retentionFraction: pkg.retentionFraction,
+          cgstFraction: pkg.cgstFraction,
+          sgstFraction: pkg.sgstFraction,
+          igstFraction: pkg.igstFraction,
+          tdsFraction: pkg.tdsFraction,
+        },
+        taxBasis: pkg.taxBasis,
+        previous,
+        oneTime: {
+          mobilizationAdvance: {
+            total: pkg.mobilizationAdvanceTotal,
+            recoveredBefore: previous?.mobilizationAdvance ?? dec(0),
+          },
+          performanceSecurity: {
+            total: pkg.performanceSecurityTotal,
+            recoveredBefore: previous?.performanceSecurity ?? dec(0),
+          },
+        },
+      });
+
+      return {
+        packageId: pkg.id,
+        label: packageLabel(pkg.sequenceNo),
+        periodFrom: iso(pkg.periodFrom),
+        periodTo: iso(pkg.periodTo),
+        taxBasis: pkg.taxBasis,
+        taxBasisSource: pkg.taxBasisSource,
+        cumulativeProvisional: pkg.status === BillPackageStatus.draft,
+        rates: {
+          retentionFraction: pkg.retentionFraction.toFixed(6),
+          cgstFraction: pkg.cgstFraction.toFixed(6),
+          sgstFraction: pkg.sgstFraction.toFixed(6),
+          igstFraction: pkg.igstFraction.toFixed(6),
+          tdsFraction: pkg.tdsFraction.toFixed(6),
+        },
+        columns: {
+          thisBill: renderColumn(abstract.thisBill),
+          uptoPrevious: renderColumn(abstract.uptoPrevious),
+          uptoDate: renderColumn(abstract.uptoDate),
+        },
+      };
+    });
+  }
+
+  /**
+   * The previous **issued** package's stored cumulative column, or null where there is none
+   * (FR-014).
+   *
+   * A draft between two issued packages is skipped rather than read: FR-014a freezes the cumulative
+   * position at issue, so a draft has no stored position to read and treating its zeros as a
+   * position would reset the chain.
+   */
+  private async previousIssuedColumn(
+    tx: Prisma.TransactionClient,
+    pkg: {
+      projectId: string;
+      direction: BillDirection;
+      counterpartyKey: string;
+      sequenceNo: number;
+    },
+  ): Promise<AbstractColumn | null> {
+    const previous = await tx.billPackage.findFirst({
+      where: {
+        projectId: pkg.projectId,
+        direction: pkg.direction,
+        counterpartyKey: pkg.counterpartyKey,
+        sequenceNo: { lt: pkg.sequenceNo },
+        status: { in: [BillPackageStatus.issued, BillPackageStatus.certified] },
+      },
+      orderBy: { sequenceNo: 'desc' },
+    });
+    if (!previous) return null;
+
+    return {
+      workDone: previous.workDoneUptoDate,
+      releaseWithheld: previous.releaseWithheldUptoDate,
+      cgstAmount: previous.cgstAmountUptoDate,
+      sgstAmount: previous.sgstAmountUptoDate,
+      igstAmount: previous.igstAmountUptoDate,
+      workTotal: previous.workDoneUptoDate
+        .plus(previous.releaseWithheldUptoDate)
+        .plus(previous.cgstAmountUptoDate)
+        .plus(previous.sgstAmountUptoDate)
+        .plus(previous.igstAmountUptoDate),
+      recoveryDiesel: previous.recoveryDieselUptoDate,
+      debitAgainstCivil: previous.debitAgainstCivilUptoDate,
+      otherRecoveries: previous.otherRecoveriesUptoDate,
+      mechanicalDebit: previous.mechanicalDebitUptoDate,
+      recoveriesTotal: previous.recoveryDieselUptoDate
+        .plus(previous.debitAgainstCivilUptoDate)
+        .plus(previous.otherRecoveriesUptoDate)
+        .plus(previous.mechanicalDebitUptoDate),
+      mobilizationAdvance: previous.mobilizationAdvanceUptoDate,
+      retentionAmount: previous.retentionAmountUptoDate,
+      performanceSecurity: previous.performanceSecurityUptoDate,
+      theftWithheld: previous.theftWithheldUptoDate,
+      deductionsTotal: previous.mobilizationAdvanceUptoDate
+        .plus(previous.retentionAmountUptoDate)
+        .plus(previous.performanceSecurityUptoDate)
+        .plus(previous.theftWithheldUptoDate),
+      tdsAmount: previous.tdsAmountUptoDate,
+      taxDeductionsTotal: previous.tdsAmountUptoDate,
+      payable: previous.payableUptoDate,
+    };
+  }
+
   /** A package and its claims, as a caller reads them. */
   async view(ctx: RlsContext, packageId: string): Promise<BillPackageView> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
@@ -942,4 +1172,19 @@ export class BillPackageService {
 /** A stored date as the day it is, with no timezone in the way. */
 function iso(value: Date): string {
   return value.toISOString().slice(0, 10);
+}
+
+/**
+ * A column as a caller reads it: **every figure rendered to the rupee, once** (FR-012a).
+ *
+ * The single display rounding, applied here and nowhere upstream. `bill-abstract.ts`'s docblock
+ * carries the proof that this is the client's own rule — block A of the real RA-12 totals 21,73,189
+ * while its two displayed taxes sum to 21,73,190.
+ */
+function renderColumn(column: AbstractColumn): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(column)) {
+    out[key] = displayRupees(value);
+  }
+  return out;
 }

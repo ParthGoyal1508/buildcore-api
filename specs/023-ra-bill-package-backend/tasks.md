@@ -240,61 +240,61 @@ package rather than creating another.
 **Independent test**: `GET /projects/bill-packages/:packageId/abstract` reproduces the client's real
 figures, and each of the three columns balances on its own.
 
-- [ ] T034 [P] [US2] Create `src/projects/billing/package/bill-tax.ts`: decide `intra_state` versus
+- [X] T034 [P] [US2] Create `src/projects/billing/package/bill-tax.ts`: decide `intra_state` versus
       `inter_state` from the two parties' registration numbers, whose first two digits are the state
       code, with the project's existing flag as the fallback — and **return which source decided it**
       (FR-016, research §5). Pure function, no Nest, no Prisma
-- [ ] T035 [P] [US2] Create `src/projects/billing/package/bill-tax.spec.ts`: same state codes yield
+- [X] T035 [P] [US2] Create `src/projects/billing/package/bill-tax.spec.ts`: same state codes yield
       the two half-rate taxes and a zero full-rate figure; different codes the reverse; **never both
       and never neither** (FR-015); a missing registration number falls back to the flag and reports
       `from_project_flag`; and a missing registration number on *both* sides is refused rather than
       guessed
-- [ ] T036 [US2] Create `src/projects/billing/package/bill-abstract.ts` as a pure function taking
+- [X] T036 [US2] Create `src/projects/billing/package/bill-abstract.ts` as a pure function taking
       every rate as an **argument with no default**: the retention fraction, the three tax
       fractions, the tax-deducted fraction, and the one-time recoveries' totals. A bill issued in
       March must recompute identically in September after a rate change, which is only true if the
       rate travels with the bill (FR-023, research §4)
-- [ ] T037 [US2] Implement block A in `bill-abstract.ts` — work done, release withheld, the three
+- [X] T037 [US2] Implement block A in `bill-abstract.ts` — work done, release withheld, the three
       taxes, total — with the **taxable base stated in the code and its docblock**: the work done
       before any recovery, deduction or withholding, and what the withheld amount does to it,
       applied identically in all three columns (FR-015a). The sample bill withholds nothing, so no
       test drawn from it constrains this path at all
-- [ ] T038 [US2] Implement blocks B and C in `bill-abstract.ts` — the four named recoveries and the
+- [X] T038 [US2] Implement blocks B and C in `bill-abstract.ts` — the four named recoveries and the
       four named deductions, **each reported in its own right whether or not it carries an amount**
       (FR-017) — with retention computed from the contract's percentage over the work done before
       tax and other deductions (FR-018, FR-018a)
-- [ ] T039 [US2] Implement block D in `bill-abstract.ts` — tax deducted at source over the work done
+- [X] T039 [US2] Implement block D in `bill-abstract.ts` — tax deducted at source over the work done
       before tax, recoveries and other deductions, **not over the payable it is subtracted from**
       (FR-019, FR-019a)
-- [ ] T040 [US2] Implement the one-time recovery rule in `bill-abstract.ts` (FR-020): compare the
+- [X] T040 [US2] Implement the one-time recovery rule in `bill-abstract.ts` (FR-020): compare the
       amount recovered to date against the **recorded total**, show a fully-recovered deduction in
       the cumulative columns and blank in this bill's (FR-020a), and refuse a recovery that would
       carry the recovered-to-date past the total, naming what remains (FR-020b)
-- [ ] T041 [US2] Implement the rounding rule in **one** place in `bill-abstract.ts` (FR-012a): the
+- [X] T041 [US2] Implement the rounding rule in **one** place in `bill-abstract.ts` (FR-012a): the
       unit, the direction, and totals rounded from unrounded components rather than summed from
       rounded ones. 9 % of 18,41,686 is 1,65,751.74 against a document showing 1,65,752, so the rule
       is load-bearing — and rounding each row before summing breaks FR-021's balance by a few rupees
       a column, which on a money document is a figure somebody has to explain
-- [ ] T042 [US2] Implement the payable in `bill-abstract.ts`: work total less recoveries, less
+- [X] T042 [US2] Implement the payable in `bill-abstract.ts`: work total less recoveries, less
       deductions, less tax deducted, with **each of the three columns balancing independently**
       (FR-021) and a **negative payable permitted** rather than clamped (FR-022) — a bill whose
       debits exceed its work is a real outcome the client's own format expresses
-- [ ] T043 [US2] Read the up-to-date column from the previous package's **stored** figure in
+- [X] T043 [US2] Read the up-to-date column from the previous package's **stored** figure in
       `bill-package.service.ts` (FR-014): the previous package is the one with the highest sequence
       number below this on the same schedule to the same counterparty that has been **issued**, and
       where there is none every up-to-previous figure is **zero — a position — and not absent**
-- [ ] T044 [US2] Mark a draft's up-to-date column **provisional** in the abstract response
+- [X] T044 [US2] Mark a draft's up-to-date column **provisional** in the abstract response
       (FR-013b): a package that has not been issued has no frozen cumulative position, and a figure
       that changes when the engineer presses Issue is a figure they did not approve
-- [ ] T044a [US2] Report the tax basis **and how it was decided** in the abstract response
+- [X] T044a [US2] Report the tax basis **and how it was decided** in the abstract response
       (FR-016a): `derived_from_gstin` or `from_project_flag`. A client record carries no `state`
       today, so for a bill to a client the fallback is the likely path rather than the exceptional
       one — and a fallback recorded on a row and shown to nobody is a tax decision nobody made
-- [ ] T045 [P] [US2] Create `src/projects/billing/package/bill-abstract.spec.ts` with the structural
+- [X] T045 [P] [US2] Create `src/projects/billing/package/bill-abstract.spec.ts` with the structural
       tests: every named recovery and deduction present whether or not it carries an amount; the
       three columns each balancing; a negative payable surviving; and a rate omitted from the
       arguments being a type error rather than a silent zero
-- [ ] T046 [US2] **The client's real arithmetic** — its own test in `bill-abstract.spec.ts`. From a
+- [X] T046 [US2] **The client's real arithmetic** — its own test in `bill-abstract.spec.ts`. From a
       work-done amount of 18,41,686 assert two half-rate taxes of 1,65,752 each, retention of
       92,084 and tax deducted of 36,834, each exact to the rupee. Then assert the payable of
       11,39,971 **with the sample's own recoveries transcribed from
@@ -303,11 +303,11 @@ figures, and each of the three columns balances on its own.
       and a figure back-solved to close the gap tests nothing (SC-003, checklist CHK013).
       Reproducing a real document is what catches **a rate applied to the wrong base**; "9 % was
       applied" is satisfied by 9 % of anything
-- [ ] T047 [P] [US2] Add the withheld-amount tests to `bill-abstract.spec.ts`: a non-zero release
+- [X] T047 [P] [US2] Add the withheld-amount tests to `bill-abstract.spec.ts`: a non-zero release
       withheld, with the stated answer about whether it leaves the taxable base asserted in all
       three columns (FR-015a). The sample bill withholds nothing, which is exactly why this needs
       writing by hand
-- [ ] T048 [P] [US2] Add the one-time recovery tests to `bill-abstract.spec.ts`: a partly-recovered
+- [X] T048 [P] [US2] Add the one-time recovery tests to `bill-abstract.spec.ts`: a partly-recovered
       advance, a fully-recovered performance security blank in this bill and present in the
       cumulative column, and a recovery past the total refused naming what remains (FR-020,
       FR-020a, FR-020b)
