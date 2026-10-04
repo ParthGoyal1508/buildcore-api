@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -31,17 +31,25 @@
 
 ## Notes
 
-**Three [NEEDS CLARIFICATION] markers remain, deliberately**, set out as Questions 1–3 with options
-and consequences. Each would change what gets built and none has a safe default:
+**All three [NEEDS CLARIFICATION] markers are resolved.** Put to the user on 2026-10-05 and
+answered: the cumulative position is frozen at issue (D1), a claim may exceed the approved
+measurement with a reason and a flag (D2), and provenance is the period rather than a recorded link
+(D3). The reasoning and the rejected options are in the spec's Decisions section.
 
-- **Q1 (FR-014)** — whether the cumulative position is frozen at issue or recomputed. The two
-  readings diverge the first time anything behind an issued bill changes, and one of them makes an
-  issued bill's successor disagree with the signed copy the client holds.
-- **Q2 (FR-006)** — whether a claim may exceed the approved measurement. This decides whether the
-  measurement feature 022 just built is a control or a suggestion.
-- **Q3 (FR-049)** — whether a bill line records the measurement it consumed. 022 explicitly deferred
-  this here (022 FR-020a), and the answer determines whether 022's reversal guard can be tightened
-  from a quantity floor to provenance.
+**Five requirements were added that no question asked for**, because each answer created an
+obligation the question did not mention — and these are the items a reviewer should look hardest at:
+
+- **FR-014b** exists because freezing the cumulative position makes it possible for a late-approved
+  report to belong to an already-billed period. Freezing without requiring the understatement to be
+  reportable would trade a reconciliation problem for a silent revenue leak, which is worse.
+- **FR-006a** exists because the stated risk of permitting over-claims is that the reason field
+  becomes the route around the control. The mitigation is visibility rather than a stricter rule: the
+  flag is countable per bill and per project, because a reason nobody aggregates is a reason nobody
+  reads.
+- **FR-049a** closes 022 FR-020a explicitly — 022's reversal guard stays a quantity floor and is not
+  tightened — so the question is not left open in two features at once.
+- **FR-049b** and **FR-014a** carry the remaining consequences: the one case the period cannot
+  answer, and the storage that makes every bill reproducible from itself.
 
 **Deliberate deviations from "no implementation details", consistent with features 008, 018 and 022.**
 The specification is written in domain language throughout — *the two half-rate taxes* rather than

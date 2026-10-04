@@ -66,8 +66,10 @@ reduce one with a reason and confirm the reduction, the reason and the variance 
    required, and the claim, the reason and the variance against the approved figure are stored
    against that line.
 4. **Given** a proposed claim, **When** the engineer raises it above the approved measurement,
-   **Then** [NEEDS CLARIFICATION: see Question 2 — whether over-claiming is refused, permitted with
-   a reason, or permitted and flagged].
+   **Then** it is **accepted with a written reason**, the line is flagged as over-claimed, and the
+   flag appears on that item's measurement sheet. The site does work that the paperwork has not
+   caught up with, and refusing at entry means the claim is recorded nowhere — but the flag is
+   counted and reportable, so the reason field cannot quietly become the route around the control.
 5. **Given** a bill under composition, **When** the same period is opened again for the same
    project, **Then** the existing bill is returned rather than a second one created — a period is
    billed once.
@@ -112,9 +114,13 @@ less recoveries, deductions and tax deducted — reproducing the real bill's own
 5. **Given** a retention percentage set on the contract, **When** the abstract is produced, **Then**
    retention is computed from it rather than from a rate written into the system, because 5 % is a
    contract term and contracts differ.
-6. **Given** a bill, **When** the up-to-previous column is produced, **Then**
-   [NEEDS CLARIFICATION: see Question 1 — whether it is the sum of what previous bills actually
-   stated, frozen, or recomputed from current data].
+6. **Given** a bill, **When** the up-to-previous column is produced, **Then** it is read from the
+   **previous bill's stored up-to-date figures**, not recomputed — so the package always agrees
+   with the signed copy the client holds.
+7. **Given** an issued bill, **When** measurement for its period is approved afterwards, **Then**
+   that bill does not move, the measurement falls to the next bill, and the bill is **reportable as
+   having understated its period** — the shortfall is a fact somebody must be able to find, not a
+   silent gap.
 
 ---
 
@@ -264,8 +270,8 @@ readable as issued alongside the revised ones.
    figure is kept **beside** the billed one and never instead of it — the variance between them is
    what a project manager chases.
 4. **Given** an issued bill, **When** measurement for its period is approved afterwards, **Then**
-   [NEEDS CLARIFICATION: see Question 1 — whether the issued bill is unaffected and the measurement
-   falls to the next bill, or the bill is flagged as understating its period].
+   the bill is unaffected, the measurement is available to the next bill, and the understatement is
+   reportable against the bill that missed it.
 5. **Given** an issued bill, **When** a daily work report underlying it is reversed, **Then** the
    bill is unaffected and the discrepancy is reportable — a bill that changed because somebody
    corrected a site record is a bill nobody can reconcile against the payment that came back.
@@ -310,8 +316,12 @@ readable as issued alongside the revised ones.
   for each reduction.
 - **FR-005**: System MUST store, per line, the claimed quantity, the approved measurement it was
   proposed from, the reason where one was given, and the variance between the two.
-- **FR-006**: System MUST handle a claim above the approved measurement as
-  [NEEDS CLARIFICATION: see Question 2].
+- **FR-006**: System MUST accept a claim above the approved measurement, MUST require a written
+  reason for it, and MUST flag the line as over-claimed.
+- **FR-006a**: An over-claim's flag MUST appear on that item's measurement sheet, and MUST be
+  countable per bill and per project, so that over-claiming can be observed as a pattern rather than
+  only inspected one line at a time. This is what keeps the reason field from becoming the route
+  around the control: a reason nobody aggregates is a reason nobody reads.
 - **FR-007**: System MUST return the existing bill rather than creating a second when the same
   project and period are opened again.
 - **FR-008**: System MUST refuse more than one line per BOQ item per bill.
@@ -328,7 +338,14 @@ readable as issued alongside the revised ones.
   claimed quantity at its frozen rate.
 - **FR-013**: System MUST carry every money figure in three forms: the position up to date, the
   position up to the previous bill, and the amount in this bill alone.
-- **FR-014**: The up-to-previous position MUST be [NEEDS CLARIFICATION: see Question 1].
+- **FR-014**: The up-to-previous position MUST be read from the previous bill's stored up-to-date
+  position, and MUST NOT be recomputed from current data.
+- **FR-014a**: System MUST store each bill's own cumulative position when the bill is issued, so
+  that every bill is reproducible from itself for ever.
+- **FR-014b**: System MUST report any bill whose period's approved measurement has since grown
+  beyond what the bill claimed — the understatement a frozen cumulative position makes possible.
+  Without this, choosing to freeze would turn a late-approved report into a quantity nobody ever
+  bills.
 - **FR-015**: System MUST compute tax on the work done at the rates in force for the bill, and MUST
   apply either the two half-rate taxes or the single full-rate tax according to whether the two
   parties are in the same state — never both, and never neither.
@@ -407,8 +424,18 @@ readable as issued alongside the revised ones.
 - **FR-047**: System MUST keep a certified amount beside the billed amount and never instead of it.
 - **FR-048**: System MUST leave an issued bill unaffected by a later reversal of measurement
   underlying it, and MUST make the resulting discrepancy reportable.
-- **FR-049**: System MUST record, per bill line, the provenance of its claimed quantity as
-  [NEEDS CLARIFICATION: see Question 3].
+- **FR-049**: A bill line's provenance **is its item and its bill's period**. System MUST NOT
+  create a link between a bill line and the individual daily work reports it drew on. A line names
+  one BOQ item, its bill names one period, and a period is billed once (FR-002, FR-007) — so the
+  measurement it consumed is exactly the approved measurement for that item in that period, true by
+  construction rather than by maintenance.
+- **FR-049a**: Because provenance is the period rather than a recorded link, feature 022's reversal
+  guard **stays a quantity floor and is not tightened**. Recorded here as the answer to 022
+  FR-020a, so the question is closed rather than left open in two features at once.
+- **FR-049b**: System MUST be able to detect the one case the period cannot answer: a daily work
+  report whose work date is corrected across a period boundary after the earlier period was billed.
+  Rare, and detectable by comparing a billed period's claimed quantities against its approved
+  measurement — which FR-014b already requires for its own reason.
 
 #### Isolation and permissions
 
@@ -489,45 +516,58 @@ readable as issued alongside the revised ones.
 - **Feature 022 is complete and unchanged by this.** This feature reads its period figures and adds
   nothing to how a day's work is recorded or approved.
 
-## Open Questions
+## Decisions
 
-Three decisions change what gets built and have no safe default.
+All three open questions were put to the user on 2026-10-05 and answered. Recorded with their
+consequences, because each answer creates an obligation that the question itself did not mention.
 
-### Question 1: Is the cumulative position frozen or recomputed? (FR-014, Story 2 AC6, Story 7 AC4)
+### D1 — The cumulative position is frozen when a bill is issued (FR-014, FR-014a, FR-014b)
 
-**Context**: every figure appears as *Upto Date*, *Upto Previous* and *This Month*, and the second
-must be the position as at the previous bill. Two readings, and they diverge the first time anything
-behind an issued bill changes — a late-approved measurement, a revision, a reversal.
+Each bill stores its own up-to-date figures at issue, and the next bill reads them. The package
+therefore always agrees with the signed copy the client holds, and every bill is reproducible from
+itself for ever.
 
-| Option | Answer | Implications |
-|--------|--------|--------------|
-| A | **Frozen.** Each bill stores its own cumulative figures when issued, and *Upto Previous* is read from the previous bill's stored *Upto Date*. | The package always agrees with the paper the client holds. Each bill is self-contained and reproducible for ever. The cost: a late-approved measurement for a billed period does not appear in that bill and must fall to the next, so a bill can be permanently short — and the system must be able to say so (Story 7 AC4). |
-| B | **Recomputed** from current data each time a package is produced. | A bill always reflects what is now known to be true, and nothing is ever short. But an issued bill's successor would disagree with the signed copy of its predecessor, and reconciling a payment against a bill whose history has moved is the thing nobody can do. |
-| C | **Frozen, with a restatement mechanism**: a bill can be explicitly restated, which records the change and re-freezes. | Honest about both. Also the largest: it needs a restatement to be a first-class act with its own trail, and a reader must be able to tell a restated bill from an original. |
-| Custom | Provide your own answer | |
+**Why not recompute**, which would mean no bill was ever short: a later bill's *Upto Previous* would
+disagree with the signed predecessor sitting in the client's file, and reconciling a payment against
+a bill whose history has moved is the one thing nobody can do. A bill is a document that was sent.
 
-### Question 2: May a claim exceed the approved measurement? (FR-006, Story 1 AC4)
+**The obligation this creates**, and the reason FR-014b exists: freezing makes it possible for a
+late-approved report to belong to a period that has already been billed, so the quantity falls to
+the next bill — or, if nobody notices, to no bill at all. Choosing to freeze without also requiring
+the understatement to be *reportable* would trade a reconciliation problem for a revenue leak, which
+is the worse of the two because it is silent.
 
-**Context**: the real sheets only ever reduce — every remark is a deduction. But the question is
-what the system does when somebody claims more than the daily reports support, and the answer
-decides whether the measurement is a control or a suggestion.
+### D2 — A claim may exceed the approved measurement, with a reason, flagged (FR-006, FR-006a)
 
-| Option | Answer | Implications |
-|--------|--------|--------------|
-| A | **Refused.** A claim cannot exceed the measurement approved for the period. | The measurement becomes a real control: nothing can be billed that was not approved on site. It also means a genuine site error — work done and the report never filed — blocks the bill until the report is filed and approved, which is arguably correct and will be unpopular in the last week of a billing cycle. |
-| B | **Permitted with a reason**, flagged on the line and visible on the sheet. | Matches how over-scope is already handled elsewhere in this system: the site did the work, and refusing at entry means it is recorded nowhere. The risk is that the reason field becomes the route around the control. |
-| C | **Permitted and flagged, no reason required.** | Least friction, least value: a flag nobody has to justify is a flag nobody reads. |
-| Custom | Provide your own answer | |
+The site does work the paperwork has not caught up with, and the alternative — refusing the claim —
+means the work is recorded nowhere and the bill waits on a report somebody has to go and file in the
+last week of a billing cycle. This is the same judgement the system already makes about over-scope:
+flag, never refuse, because a refusal at entry loses the measurement entirely.
 
-### Question 3: Does a bill line record which measurement it consumed? (FR-049)
+**The obligation this creates**, and the reason FR-006a exists: the stated risk of permitting it is
+that the reason field becomes the route around the control. The mitigation is not a stricter rule but
+**visibility** — the flag appears on the measurement sheet and is countable per bill and per project.
+A reason nobody aggregates is a reason nobody reads, and an over-claim that can only be found by
+inspecting lines one at a time is an over-claim that will not be found.
 
-**Context**: feature 022 declined to invent this link and made deciding it an obligation here
-(022 FR-020a). 022's reversal is currently guarded by a quantity floor rather than by provenance, so
-whatever is decided here determines whether that can be tightened.
+### D3 — Provenance is the period, not a recorded link (FR-049, FR-049a, FR-049b)
 
-| Option | Answer | Implications |
-|--------|--------|--------------|
-| A | **The period is the link.** A bill line names its item and its bill names its period, so the measurement it consumed is exactly the approved measurement for that item in that period — no new column. | Nothing to maintain, and it is true by construction given that a period is billed once (FR-002, FR-007). It cannot answer "which reports did this line consume" after a report's work date is corrected across a period boundary, which is rare and detectable. |
-| B | **Explicit links**, one row per report a line drew on, recorded at composition. | Exact provenance for ever, and it would let 022 refuse a reversal by naming the bill that consumed it. Also a row per report per line per bill — for a 312-line tender over a year, hundreds of thousands of rows whose only consumer is an audit question nobody has asked yet. |
-| C | **Store the measurement figure and the period on the line** — the figure as proposed, not the reports behind it. | A middle: enough to show the claim against what was approved at the time, and to detect later divergence, without a link table. This is what FR-005 already requires, so the question becomes whether anything more is needed. |
-| Custom | Provide your own answer | |
+A bill line names one BOQ item; its bill names one period; a period is billed once. So what the line
+consumed is exactly the approved measurement for that item in that period — true by construction,
+with nothing to maintain and nothing that can drift.
+
+**Why not explicit links**, which would give exact provenance for ever: a row per report per line per
+bill is, for a 312-line tender over a year of daily reporting, hundreds of thousands of rows whose
+only consumer is an audit question nobody has yet asked. The real sheets claim a **month** against a
+line, not a set of days, which is why feature 022 declined to design the link from inside itself.
+
+**This closes 022 FR-020a.** That requirement made deciding the linkage an obligation on this
+feature, and the decision is: no linkage. 022's reversal guard therefore stays a quantity floor —
+refusing a reversal that would drop a line's executed quantity below what has been billed — and is
+not tightened to provenance. Written down in both places so the question is closed rather than left
+open in two features at once.
+
+**The one case the period cannot answer** is a report whose work date is corrected across a period
+boundary after the earlier period was billed. FR-049b requires it to be detectable, by the same
+comparison FR-014b already needs for a different reason — which is why the two requirements share a
+mechanism rather than each having their own.
