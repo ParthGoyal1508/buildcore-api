@@ -344,10 +344,24 @@ than the month's net. What it must **not** inherit is the advance's meaning — 
 loss, not money lent — so it is a distinct record that settles through the same machinery, and the
 payroll line names it as a fuel recovery.
 
-### D30 — the recovery cap is unanswered, and Phase 7 is where the answer lands
+### D30 — the recovery cap was answered on 2026-10-02, and is built
 
-The one open `[NEEDS CLARIFICATION]` in this spec is the cap on operator salary recovery. It is the
-client's decision and remains open.
+**Amended 2026-10-04.** This entry said the cap was open; it has not been open since 2026-10-02. The
+client's answer was *half that month's wages* — and, decisively, **shared with every other deduction
+on the payslip** rather than a separate 50% of its own, because a rule capping the fuel recovery
+alone would satisfy itself while the payslip's combined deductions passed the statutory limit. It is
+implemented in `src/payroll/engine/deduction-ceiling.ts` (FR-007a to FR-007c), configured per company
+through `CompaniesService.getDeductionCeilingPercent`, and bounded at 50 by the database so no caller
+has to defend against an unlawful value. Anything above the ceiling carries to the next month and is
+never written off quietly.
+
+The text below is kept as the record of how it was planned while open, because the ordering argument
+it makes is the reusable part. **It is not a live open question.** Left uncorrected, it is the kind of
+stale marker that gets reported to a client as outstanding work two days after it shipped — which is
+exactly what happened to feature 019's cash-entry phase, and is corrected there on the same date.
+
+The one `[NEEDS CLARIFICATION]` that was in this spec is the cap on operator salary recovery. It was
+the client's decision and was answered on 2026-10-02.
 
 Per the 2026-09-29 decision to plan open questions and phase them last: the recovery is built without a
 cap in Phase 6, and Phase 7 adds the cap as a company setting once the figure is known. Building it

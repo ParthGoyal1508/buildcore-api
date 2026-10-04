@@ -5,9 +5,11 @@
 ## Scope
 
 **User Story 3 only.** User Stories 1 and 2 — fuel variance consequences, hire deductions, operator
-recoveries — are `bugs.md` item 13 and get their tasks when that batch is worked. The one open
-`[NEEDS CLARIFICATION]` in the spec (the cap on operator salary recovery) is theirs, and does not
-block anything below.
+recoveries — are `bugs.md` item 13 and get their tasks when that batch is worked. The one
+`[NEEDS CLARIFICATION]` that was in the spec (the cap on operator salary recovery) was theirs, did not
+block anything below, and was **answered on 2026-10-02 and built** — half that month's wages, shared
+with every other deduction on the payslip, in `src/payroll/engine/deduction-ceiling.ts`. Noted here
+on 2026-10-04 because this line still described it as open.
 
 Said explicitly because a task file covering half its spec would otherwise read as an omission.
 

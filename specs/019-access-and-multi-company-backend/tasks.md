@@ -360,19 +360,29 @@ concealing nothing anybody wanted concealed.
 constant does not name. Verified by adding one: it failed naming `ScratchCashMode`, and passed on
 removal.
 
-## Phase 6: Cash entry restriction ⚠️ RESTS ON AN UNANSWERED CLIENT QUESTION
+## Phase 6: Cash entry restriction — **ANSWERED 2026-10-02, SUPERSEDED BY PHASE 8**
 
-Do not start this phase until the client has answered whether cash may still be **entered** while
-hiding is on. FR-014 assumes display only. The reason for the assumption is recorded in plan D7:
-preventing entry stops site cash disbursement working, so a visibility toggle would silently halt wage
-payment. If the client wants the other reading, this phase is where it is built.
+The client answered on 2026-10-02: *hide the figures **and** block entry — but as two separate
+controls.* That answer does not make T062 implementable; it **rejects what T062 describes.** T062
+would have hung the refusal on `hideCashTransactions`, and that setting is company-wide, so turning it
+on would have stopped every site cashier in the company from paying labour for as long as it was on
+— the exact failure plan D7 warned about, and the reason the phase was held rather than guessed.
 
-- [ ] T062 [US3] Refuse the creation of a cash-mode payment and a cash disbursement while hiding is
-  on, with a code naming the setting as the reason — a refusal that does not say which setting caused
-  it is unactionable by the person who hit it.
-- [ ] T063 [P] [US3] Unit tests for both refusals, and for non-cash entry being unaffected.
-- [ ] T064 [US3] Update the spec's Clarifications with the client's answer and the date, and remove
-  the marker.
+Entry is therefore gated on a **permission** (`CASH_ENTRY`), not on the hiding setting, and that is
+Phase 8's T073–T079, all complete: the enum value and its migration, every cash write enumerated and
+gated, the staleness guard that fails when a new cash write arrives ungated, and the refusal code
+`CASH_ENTRY_DENIED` in `src/common/cash/cash-entry.interceptor.ts`. The spec records the answer in
+Clarifications and in FR-017a/FR-017b.
+
+**Recorded as superseded rather than ticked**, because ticking T062 would claim we built the thing it
+describes. We built the thing the client asked for instead, and the two are different designs.
+
+- [ ] ~~T062~~ **SUPERSEDED by T074** (answered 2026-10-02) — a refusal hung on the hiding setting is
+  the design the client's answer rules out. Gating is per-caller, by permission.
+- [ ] ~~T063~~ **SUPERSEDED by T076–T077** — the unit tests exist against the permission, including
+  the surface guard that fails when a cash write is added without declaring it.
+- [ ] ~~T064~~ **DONE as part of T073** — the Clarifications entry and FR-017a/FR-017b carry the
+  answer and its date; no marker remains in the spec.
 
 ## Phase 7: Verification
 
@@ -420,9 +430,13 @@ payment. If the client wants the other reading, this phase is where it is built.
     was already satisfied before this feature (research §2); what 019 added is the read/write
     separation over it. Recorded here rather than counted as new, because claiming it would overstate
     what this feature delivered.
-  * **Phase 6 (FR-014, cash entry)** is open and stays open: it rests on an unanswered client
-    question — whether cash may still be **entered** while hiding is on — and the phase header says
-    so. Building either reading would be answering it on the client's behalf.
+  * **Phase 6 (FR-014, cash entry)** was open on that date and is now closed — the client answered
+    on 2026-10-02, and the answer superseded the phase rather than unblocking it. Entry is gated by
+    the `CASH_ENTRY` permission (Phase 8), not by the hiding setting. **Corrected 2026-10-04**: this
+    note and the Phase 6 header both still said the question was unanswered two days after it was
+    answered and built, which is how it came to be reported to the client as the one outstanding
+    question. A phase header is not a safe place to record a client dependency, because nothing fails
+    when it goes stale.
 
   Everything else is built. The one divergence found by the re-read is recorded under T071 below.
 - [X] T071 Record in the spec that roles remain globally named, not company-scoped, contradicting its
