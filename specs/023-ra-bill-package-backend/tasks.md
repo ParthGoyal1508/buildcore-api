@@ -55,85 +55,85 @@ this the hard way five times.
 **Purpose**: four new tables and six enums. Additive, no backfill — `ClientBill`, `RABill`,
 `WorkOrder` and `BOQTaskItem` all held 0 rows on 2026-10-05, measured.
 
-- [ ] T001 [P] [—] Add enums `BillDirection` (`to_client`, `to_subcontractor`), `BillTaxBasis`
+- [X] T001 [P] [—] Add enums `BillDirection` (`to_client`, `to_subcontractor`), `BillTaxBasis`
       (`intra_state`, `inter_state`) and `BillTaxBasisSource` (`derived_from_gstin`,
       `from_project_flag`) to the `projects` schema in `prisma/schema.prisma`
-- [ ] T002 [P] [—] Add enum `BillPackageStatus` (`draft`, `issued`, `certified`, **`abandoned`**) to
+- [X] T002 [P] [—] Add enum `BillPackageStatus` (`draft`, `issued`, `certified`, **`abandoned`**) to
       `prisma/schema.prisma`, with a docblock recording that `abandoned` exists because a package in
       any status occupies its period (FR-002a), so without it one mistaken draft holds a period for
       ever and the only remedy is deleting the row that proves the period was billed (FR-002b,
       FR-044a, checklist CHK032)
-- [ ] T003 [P] [—] Add enums `ClaimProposalSource` (`approved_measurement`, `no_measurement_source`)
+- [X] T003 [P] [—] Add enums `ClaimProposalSource` (`approved_measurement`, `no_measurement_source`)
       and `CheckListAnswer` (`yes`, `no`, `not_required`) to `prisma/schema.prisma`. The docblock on
       `ClaimProposalSource` states the distinction it carries: zero means the measurement was read
       and was nothing, absent means there was nothing to read (FR-003a)
-- [ ] T004 [US1] Add `model BillPackage` to `prisma/schema.prisma` — `companyId`, `projectId`,
+- [X] T004 [US1] Add `model BillPackage` to `prisma/schema.prisma` — `companyId`, `projectId`,
       `direction`, nullable `clientBillId`/`raBillId`, `periodFrom`/`periodTo` as `@db.Date` **both
       inclusive** (FR-001), `sequenceNo`. The client's cycle runs the 21st to the 20th, so a period
       is two stored dates and not a month anybody can derive (data-model.md §BillPackage)
-- [ ] T005 [US2] Add `BillPackage`'s **frozen rate** columns — `retentionFraction`, `cgstFraction`,
+- [X] T005 [US2] Add `BillPackage`'s **frozen rate** columns — `retentionFraction`, `cgstFraction`,
       `sgstFraction`, `igstFraction`, `tdsFraction` as `Decimal(8,6)`, `taxBasis`,
       `taxBasisSource` — each with a docblock stating it is recorded **per bill** so a statute or
       contract change cannot move an issued bill (FR-019, FR-023, research §4)
-- [ ] T006 [US2] Add `BillPackage`'s this-period figures and its `…UptoDate` cumulative twins as
+- [X] T006 [US2] Add `BillPackage`'s this-period figures and its `…UptoDate` cumulative twins as
       `Decimal(18,2)`: `workDone`, `releaseWithheld`, the three taxes, the four recoveries, the four
       deductions, `tdsAmount`, `payable` (FR-013, FR-014a, FR-017)
-- [ ] T007 [US2] Add `mobilizationAdvanceTotal` and `performanceSecurityTotal` as `Decimal(18,2)?`
+- [X] T007 [US2] Add `mobilizationAdvanceTotal` and `performanceSecurityTotal` as `Decimal(18,2)?`
       to `BillPackage`, with a docblock stating that without a recorded total nothing distinguishes
       a fully-recovered deduction from one entered as zero this month — so FR-020 would be satisfied
       by an implementation that does nothing (checklist CHK021)
-- [ ] T008 [US3] Add `BillPackage`'s frozen statutory header as nullable strings (issuer and
+- [X] T008 [US3] Add `BillPackage`'s frozen statutory header as nullable strings (issuer and
       receiver name, registration number, permanent account number, state, address; receiver code,
       nature of work, location, external work-order and bill numbers) plus
       `missingHeaderFields String[]`, with a docblock stating these are copied at **issue** and
       never re-read, which is what makes FR-028's "produced twice is identical" true rather than
       hoped for
-- [ ] T009 [US7] Add `BillPackage`'s lifecycle columns — `status`, `issuedAt`, `issuedByUserId`,
+- [X] T009 [US7] Add `BillPackage`'s lifecycle columns — `status`, `issuedAt`, `issuedByUserId`,
       `revisionCount`, `lastRevisedAt`, `lastRevisedByUserId`, `lastRevisionReason` — following
       `RABill.revisionCount`'s precedent (FR-044 to FR-046)
-- [ ] T010 [US1] Add `model BillPackageLineClaim` to `prisma/schema.prisma`: `packageId` with
+- [X] T010 [US1] Add `model BillPackageLineClaim` to `prisma/schema.prisma`: `packageId` with
       `onDelete: Cascade`, nullable `clientBillLineId`/`raBillLineId`, **nullable** `proposedQty`,
       `proposalSource`, `claimedQty`, **nullable** `varianceQty`, `reason`, `overClaimed`. The
       docblocks state that `proposedQty` and `varianceQty` are null together, and that a claim
       against `no_measurement_source` is **not** an over-claim — counting it would turn FR-006a's
       count into a count of unmapped award lines (FR-003a, FR-005, FR-006)
-- [ ] T011 [P] [US5] Add `model BillPackageDebit` to `prisma/schema.prisma` with `groupHeading`,
+- [X] T011 [P] [US5] Add `model BillPackageDebit` to `prisma/schema.prisma` with `groupHeading`,
       `description`, `location`, the four optional dimensions, `unit`, `rate`, `amount`,
       `amountWithTax`, nullable `recoveredOnPackageId`, `recordedByUserId`, `recordedAt`. The
       docblock on `recordedAt` states it is also what makes an issued bill's register the register
       *as at issue* (FR-039a)
-- [ ] T012 [P] [US6] Add `model BillPackageCheckListAnswer` to `prisma/schema.prisma` with
+- [X] T012 [P] [US6] Add `model BillPackageCheckListAnswer` to `prisma/schema.prisma` with
       `packageId`, `questionKey`, **nullable** `answer`, `answeredByUserId`, `answeredAt`. The
       docblock states the nullability is FR-042 — an unanswered question is not an answer of no,
       which a boolean could not express — and that the six questions themselves are a constant in
       code because their wording is the client's format and not this system's data
-- [ ] T013 [—] Add the indexes data-model.md names: `@@unique([projectId, direction, sequenceNo])`,
+- [X] T013 [—] Add the indexes data-model.md names: `@@unique([projectId, direction, sequenceNo])`,
       `@@unique([clientBillId])`, `@@unique([raBillId])`,
       `@@index([projectId, periodFrom, periodTo])` for FR-002's overlap check,
       `@@unique([packageId, clientBillLineId])`, `@@unique([packageId, raBillLineId])`,
       `@@index([packageId, overClaimed])` so FR-006a's count is a query rather than a scan,
       `@@index([companyId, projectId])`, `@@index([recoveredOnPackageId])`,
       `@@unique([packageId, questionKey])`, and `@@index([companyId])` on all four
-- [ ] T014 [—] Generate the migration into `prisma/migrations/`. **`npm run migrate:dev:create` is
+- [X] T014 [—] Generate the migration into `prisma/migrations/`. **`npm run migrate:dev:create` is
       non-interactive in this environment** — 022 hit this — so use
       `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script`, expanding
       `.env`'s `${VAR}` interpolation by hand to build the shadow URL. Inspect the output and
       **exclude the nine pre-existing index-name drifts** between the development database and the
       committed schema: they predate this work, they appear against `HEAD`'s schema too, and they
       need their own fix
-- [ ] T015 [—] Append the `BillPackage_one_bill_matching_direction` CHECK from
+- [X] T015 [—] Append the `BillPackage_one_bill_matching_direction` CHECK from
       [data-model.md](./data-model.md) to the generated migration. **This is plan.md's first tracked
       deviation** from "migrations are generated and never hand-edited" — the task exists separately
       so the deviation is visible in review, and the reason is that Prisma's schema language cannot
       express a constraint spanning two nullable references while the thing it protects is a money
       document
-- [ ] T016 [—] Add `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and a `tenant_isolation` policy to each
+- [X] T016 [—] Add `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and a `tenant_isolation` policy to each
       of the four new tables in the same migration, with `USING` **and** `WITH CHECK` stated
       explicitly. **Read each neighbouring policy rather than copying one** (research §7): both of
       008's policies omit `WITH CHECK`, and `projects."DWRTask"` has no `companyId` at all and is
       protected by a correlated parent lookup — a `companyId`-keyed policy added beside one of those
       would `AND` with it and hide every row (FR-050)
-- [ ] T017 [—] Run `npx prisma generate` and `npm run build`, then confirm with
+- [X] T017 [—] Run `npx prisma generate` and `npm run build`, then confirm with
       `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script` that the only
       remaining differences are the nine known index-name drifts and nothing this feature introduced
 
