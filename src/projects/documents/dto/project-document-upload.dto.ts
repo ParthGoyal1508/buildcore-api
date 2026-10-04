@@ -38,6 +38,18 @@ export class StageProjectDocumentDto {
   @IsString()
   @MaxLength(100)
   contentType: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The uploader's own file name, kept so the download is what they recognise rather than " +
+      '`<kind>-<id>` with no extension. Optional: a document filed before 2026-10-04 has none, ' +
+      'and the download sniffs the stored bytes for an extension in that case.',
+    example: 'Tender — Whitefield Phase II.pdf',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  fileName?: string;
 }
 
 /** Filing a document against an existing project (017 FR-008a). */

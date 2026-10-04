@@ -297,6 +297,8 @@ export class ProjectsService {
               documentTypeId: staged.documentTypeId,
               fileRef: staged.fileRef,
               filePath: staged.filePath,
+              fileName: staged.fileName,
+              mimeType: staged.mimeType,
               uploadedByUserId: caller.id,
             })),
           });

@@ -565,6 +565,14 @@ Table CompanyDocument {
 both models live in `settings` — no schema boundary is crossed.']
   documentType DocumentType [not null]
   fileRef String [not null, note: 'Encrypted object-storage reference. Opaque: never a path a client supplies.']
+  fileName String [note: 'The uploader\'s own file name, and what their browser said the file was.
+
+Nullable because every row filed before 2026-10-04 predates these columns: both routes
+received a content type and discarded it, so the download served `application/octet-stream`
+under a name with no extension and a PDF opened as text. `describeStoredFile` sniffs the
+bytes when `mimeType` is null, which is why no backfill was attempted — the bytes are the
+only honest source, and they are already there.']
+  mimeType String
   documentNumber String [note: 'The GSTIN/PAN/TAN itself, when the kind carries one (`DocumentType.needsNumber`).']
   expiresAt DateTime [note: 'Required when `DocumentType.hasExpiry` — enforced in the service (FR-004).']
   supersedesId String [unique, note: 'Points back at the document this one replaced — the history chain FR-006 preserves.']
@@ -1243,6 +1251,9 @@ Table StagedProjectDocument {
 type is renamed or removed between staging and creation.']
   fileRef String [not null]
   filePath String
+  fileName String [note: 'Carried through to the `ProjectDocument` the creation promotes this into, so a document
+staged before its project existed is not the one that downloads without a name.']
+  mimeType String
   uploadedBy String [not null, note: 'Who staged it. Checked on use, not merely recorded — see the note above.']
   createdAt DateTime [default: `now()`, not null]
 
@@ -1286,6 +1297,14 @@ required kind is accepted and filed as supplementary, and null is what
   fileRef String [not null]
   filePath String
   remark String
+  fileName String [note: 'The uploader\'s own file name, and what their browser said the file was.
+
+Nullable because every row filed before 2026-10-04 predates these columns: both routes
+received a content type and discarded it, so the download served `application/octet-stream`
+under a name with no extension and a PDF opened as text. `describeStoredFile` sniffs the
+bytes when `mimeType` is null, which is why no backfill was attempted — the bytes are the
+only honest source, and they are already there.']
+  mimeType String
   uploadedByUserId String [not null, note: '`shared.User.id`. Bare id — see the schema-level note above.']
   uploadedAt DateTime [default: `now()`, not null]
 }

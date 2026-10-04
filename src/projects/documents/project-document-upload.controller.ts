@@ -75,6 +75,7 @@ export class ProjectDocumentUploadController {
         documentType: dto.documentType,
         data: Buffer.from(dto.data, 'base64'),
         contentType: dto.contentType,
+        fileName: dto.fileName,
       },
       caller.id,
     );
@@ -103,6 +104,7 @@ export class ProjectDocumentUploadController {
         documentType: dto.documentType,
         data: Buffer.from(dto.data, 'base64'),
         contentType: dto.contentType,
+        fileName: dto.fileName,
         remark: dto.remark,
       },
       caller.id,
@@ -126,14 +128,26 @@ export class ProjectDocumentUploadController {
     @Res() res: Response,
     @Query('companyId') companyId?: string,
   ) {
-    const { data, filename } = await this.documents.downloadForProject(
-      rlsContextFor(caller),
-      resolveCompanyId(caller, companyId),
-      projectId,
-      documentId,
+    const { data, filename, contentType } =
+      await this.documents.downloadForProject(
+        rlsContextFor(caller),
+        resolveCompanyId(caller, companyId),
+        projectId,
+        documentId,
+      );
+    // The real type, not `application/octet-stream`. Serving every document as opaque bytes is
+    // why a PDF opened in a text editor: the browser cannot render what it has not been told.
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${filename.replace(/"/g, '')}"`,
     );
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    // For a cross-origin caller, which cannot read `Content-Disposition` off a `fetch`
+    // otherwise — and the name is the only place the filename exists, since a blob URL carries
+    // none of its own. `buildcore-web` reaches this through its own `/bff` rewrite and is
+    // therefore same-origin, so this is not what makes it work there; it is what stops a
+    // direct caller from being quietly unable to name the file.
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.send(data);
   }
 
