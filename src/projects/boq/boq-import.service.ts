@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -523,39 +527,64 @@ export class BoqImportService {
         if (existing > 0)
           throw this.alreadyPopulated(existing, batch.isEstimate);
 
-        let lines = 0;
-        for (const group of batch.groups) {
-          const created = await tx.bOQTaskGroup.create({
-            data: {
-              companyId: input.companyId,
-              projectId: input.projectId,
-              boqNo: group.boqNo,
-              name: group.name,
-              isEstimate: batch.isEstimate,
-              // The group's scope is the sum of its lines; a tender states no group quantity.
-              scopeQty: group.items
-                .reduce(
-                  (sum, item) => sum.plus(new Prisma.Decimal(item.scopeQty)),
-                  new Prisma.Decimal(0),
-                )
-                .toFixed(3),
-            },
-            select: { id: true },
-          });
-          await tx.bOQTaskItem.createMany({
-            data: group.items.map((item) => ({
-              companyId: input.companyId,
-              groupId: created.id,
-              boqNo: item.boqNo,
-              taskName: item.taskName,
-              unit: item.unit,
-              scopeQty: item.scopeQty,
-              rate: item.rate,
-              isEstimate: batch.isEstimate,
-            })),
-          });
-          lines += group.items.length;
+        // **Two statements, not two per group** (fixed 2026-10-04). This was a loop issuing a
+        // `create` and a `createMany` for each group: 132 sequential round trips for the client's
+        // own 66-group file, inside one interactive transaction whose budget is Prisma's default
+        // **five seconds**. On a local database that is 0.17s and invisible. Against a hosted one
+        // at 35-50ms of round-trip latency it is 5-7s, and the transaction expires mid-write with
+        // `P2028` — which reached the browser as a bare `{"statusCode":500,"message":"Internal
+        // server error"}` and nothing else.
+        //
+        // The number of round trips scaled with the file, so the bigger the tender the likelier
+        // it was to fail: the schedules most worth importing were the ones that could not be.
+        const created = await tx.bOQTaskGroup.createManyAndReturn({
+          data: batch.groups.map((group) => ({
+            companyId: input.companyId,
+            projectId: input.projectId,
+            boqNo: group.boqNo,
+            name: group.name,
+            isEstimate: batch.isEstimate,
+            // The group's scope is the sum of its lines; a tender states no group quantity.
+            scopeQty: group.items
+              .reduce(
+                (sum, item) => sum.plus(new Prisma.Decimal(item.scopeQty)),
+                new Prisma.Decimal(0),
+              )
+              .toFixed(3),
+          })),
+          select: { id: true, boqNo: true },
+        });
+
+        // A single multi-row `INSERT ... RETURNING` gives its rows back in the order they were
+        // supplied, which is what makes the positional match below correct. It is **checked**
+        // rather than assumed: if that ever stopped holding, every line would be filed under the
+        // wrong section — a schedule that imports successfully and is quietly wrong, which is the
+        // one outcome this whole feature is built to refuse.
+        if (created.length !== batch.groups.length) {
+          throw new Error(
+            `BOQ import wrote ${created.length} groups for ${batch.groups.length} staged — refusing to attach lines.`,
+          );
         }
+        const rows = created.flatMap((group, index) => {
+          const staged = batch.groups[index];
+          if (group.boqNo !== staged.boqNo) {
+            throw new Error(
+              `BOQ import groups came back out of order at ${index} (${group.boqNo} for ${staged.boqNo}) — refusing to attach lines.`,
+            );
+          }
+          return staged.items.map((item) => ({
+            companyId: input.companyId,
+            groupId: group.id,
+            boqNo: item.boqNo,
+            taskName: item.taskName,
+            unit: item.unit,
+            scopeQty: item.scopeQty,
+            rate: item.rate,
+            isEstimate: batch.isEstimate,
+          }));
+        });
+        await tx.bOQTaskItem.createMany({ data: rows });
+        const lines = rows.length;
 
         // FR-040, the last place this could go wrong: written **only** when the figure was
         // located. A zero here would under-bill every line on the project by the real percentage,
@@ -579,7 +608,7 @@ export class BoqImportService {
       // Nothing was written, so the batch is valid to retry — and losing it here would mean
       // re-uploading and re-reading the whole report for a failure that was not the operator's.
       this.batches.release(input.batchId);
-      throw error;
+      throw this.writeFailure(error);
     }
 
     this.batches.markConfirmed(input.batchId);
@@ -607,6 +636,37 @@ export class BoqImportService {
       isEstimate: batch.isEstimate,
       quotedPercentageSet: !batch.isEstimate && batch.quotedPercentage !== null,
     };
+  }
+
+  /**
+   * A database-level failure during the write, turned into a sentence (2026-10-04).
+   *
+   * Only two Prisma codes are translated, and the rest are re-thrown untouched: a bug in this
+   * service must keep surfacing as a 500 with a stack trace in the log, because that is what gets
+   * it fixed. These two are not bugs in the write — they are the database declining to finish it.
+   *
+   * - **P2028** the interactive transaction expired. What a deployed confirm hit on 2026-10-04:
+   *   132 sequential round trips against Prisma's five-second default.
+   * - **P2024** no connection could be taken from the pool in time, which the same write
+   *   provokes by holding one for seconds at a stretch.
+   *
+   * Both roll the transaction back, so "nothing was written" is a fact rather than a hope — and
+   * saying so is the whole value, since the operator's real question is whether half a tender is
+   * now sitting on the project.
+   */
+  private writeFailure(error: unknown): unknown {
+    const code = (error as { code?: string } | null)?.code;
+    if (code !== 'P2028' && code !== 'P2024') return error;
+
+    return new ServiceUnavailableException({
+      statusCode: 503,
+      code: BOQ_ERRORS.writeInterrupted,
+      message:
+        'The database did not finish writing this schedule in time, so nothing was saved — ' +
+        'the project is exactly as it was. The import is still held: press Confirm again. If it ' +
+        'fails a second time, the schedule is too large for one write and its sections should be ' +
+        'imported separately.',
+    });
   }
 
   /** FR-049, worded once and raised from both steps. */

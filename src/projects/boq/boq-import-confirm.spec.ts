@@ -43,7 +43,12 @@ const GROUPS: StagedGroup[] = [
 
 /** A transaction client recording what was asked of it, with `existingItems` controllable. */
 function fakePrisma(
-  options: { existingItems?: number; failOnCreate?: boolean } = {},
+  options: {
+    existingItems?: number;
+    failOnCreate?: boolean;
+    /** Fails the write with a Prisma error code, as a real database would. */
+    failWithCode?: string;
+  } = {},
 ) {
   const created = {
     groups: [] as unknown[],
@@ -56,15 +61,38 @@ function fakePrisma(
       count: jest.fn().mockResolvedValue(options.existingItems ?? 0),
       createMany: jest.fn(({ data }: { data: unknown[] }) => {
         if (options.failOnCreate) throw new Error('constraint violation');
+        if (options.failWithCode) {
+          throw Object.assign(new Error('transaction closed'), {
+            code: options.failWithCode,
+          });
+        }
         created.items.push(...data);
         return Promise.resolve({ count: data.length });
       }),
     },
     bOQTaskGroup: {
-      create: jest.fn(({ data }: { data: unknown }) => {
-        created.groups.push(data);
-        return Promise.resolve({ id: `group-${created.groups.length}` });
-      }),
+      createManyAndReturn: jest.fn(
+        ({ data }: { data: { boqNo: string }[] }) => {
+          if (options.failOnCreate) throw new Error('constraint violation');
+          created.groups.push(...data);
+          return Promise.resolve(
+            data.map((group, index) => ({
+              id: `group-${created.groups.length - data.length + index + 1}`,
+              // The order the write relies on, honoured here — and reversed by
+              // `options.returnGroupsOutOfOrder` so the guard against it can be tested.
+              boqNo: group.boqNo,
+            })),
+          );
+        },
+      ),
+      /**
+       * Present only so a test can assert it is **never called**.
+       *
+       * The write used to call this once per group, with a `createMany` for that group's lines
+       * beside it — 132 sequential round trips for the client's 66-group tender, which outran the
+       * transaction budget on a hosted database and reached the browser as a bare 500.
+       */
+      create: jest.fn(),
     },
     project: {
       update: jest.fn(({ data }: { data: unknown }) => {
@@ -98,6 +126,25 @@ async function expectRefusal(
       ).toBe(code);
     },
   );
+}
+
+/** The client's own tender is 66 groups. This is that shape, in miniature-but-plural. */
+function manyGroups(count: number): StagedGroup[] {
+  return Array.from({ length: count }, (_, index) => ({
+    name: `Section ${index + 1}`,
+    boqNo: String(index + 1),
+    items: [
+      {
+        boqNo: `${index + 1}.1`,
+        taskName: 'Excavation',
+        unit: 'Cum',
+        scopeQty: '100.000',
+        rate: '251.00',
+        amount: '25100.00',
+        sourceRow: 13 + index,
+      },
+    ],
+  }));
 }
 
 describe('BoqImportService.confirm', () => {
@@ -192,6 +239,106 @@ describe('BoqImportService.confirm', () => {
     expect(batches.lookup(batch.id).batch).not.toBeNull();
   });
 
+  it('writes the whole schedule in two statements, however many groups it has', async () => {
+    // **The deployed failure of 2026-10-04.** This was a `create` plus a `createMany` per group:
+    // 132 sequential round trips for the client's 66-group tender, inside one interactive
+    // transaction whose budget is Prisma's five-second default. Locally that is 0.17s and
+    // invisible; against a hosted database at 35-50ms latency it is 5-7s, and the transaction
+    // expired mid-write. The browser got `{"statusCode":500,"message":"Internal server error"}`.
+    //
+    // Counted rather than timed: a timing assertion against a mock proves nothing, and the
+    // round-trip count is the thing that actually scaled with the file.
+    const { prisma, tx, created } = fakePrisma();
+    const batch = seed({ groups: manyGroups(66) });
+
+    const result = await serviceWith(prisma).confirm({
+      batchId: batch.id,
+      ...CALLER,
+    });
+
+    expect(result.groups).toBe(66);
+    expect(result.lines).toBe(66);
+    expect(created.groups).toHaveLength(66);
+    expect(created.items).toHaveLength(66);
+
+    // Two writes, not 132. Constant in the size of the schedule, which is the property that
+    // matters — the old shape failed *worse* the larger the tender, so the schedules most worth
+    // importing were the ones that could not be.
+    expect(tx.bOQTaskGroup.createManyAndReturn).toHaveBeenCalledTimes(1);
+    expect(tx.bOQTaskItem.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.bOQTaskGroup.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to attach lines if the groups come back in a different order', async () => {
+    // The positional match between created groups and staged groups rests on a single multi-row
+    // INSERT ... RETURNING giving its rows back in the order supplied. That holds — and is
+    // checked anyway, because if it ever stopped holding, every line would be filed under the
+    // wrong section and the import would *succeed*. A schedule that is quietly wrong is the one
+    // outcome this feature exists to refuse.
+    const { prisma, tx } = fakePrisma();
+    (tx.bOQTaskGroup.createManyAndReturn as jest.Mock).mockImplementationOnce(
+      ({ data }: { data: { boqNo: string }[] }) =>
+        Promise.resolve(
+          data
+            .map((group, index) => ({
+              id: `group-${index + 1}`,
+              boqNo: group.boqNo,
+            }))
+            .reverse(),
+        ),
+    );
+    const batch = seed({ groups: manyGroups(3) });
+
+    await expect(
+      serviceWith(prisma).confirm({ batchId: batch.id, ...CALLER }),
+    ).rejects.toThrow(/out of order/);
+  });
+
+  it.each([
+    ['P2028', 'the transaction expired'],
+    ['P2024', 'no connection could be taken from the pool'],
+  ])(
+    'turns %s into a refusal that says nothing was written, not a bare 500',
+    async (code) => {
+      // Before this, both reached the browser as `{"statusCode":500,"message":"Internal server
+      // error"}` — which answers neither "what happened" nor the operator's real question,
+      // "is half my tender now on the project". It is not: the transaction rolls back.
+      const { prisma } = fakePrisma({ failWithCode: code });
+      const batch = seed();
+
+      await serviceWith(prisma)
+        .confirm({ batchId: batch.id, ...CALLER })
+        .then(
+          () => {
+            throw new Error('expected a refusal, but the confirm resolved');
+          },
+          (error: unknown) => {
+            const body = (
+              error as {
+                getResponse: () => { code?: string; message?: string };
+              }
+            ).getResponse();
+            expect(body.code).toBe(BOQ_ERRORS.writeInterrupted);
+            expect(body.message).toContain('nothing was saved');
+          },
+        );
+
+      // Still retryable, which is the point of saying so.
+      expect(batches.lookup(batch.id).batch).not.toBeNull();
+    },
+  );
+
+  it('lets an unrecognised database error stay a 500, so a real bug is not disguised', async () => {
+    // Only the two codes above are translated. A constraint violation is a bug in this service
+    // and must keep surfacing with its stack trace, because that is what gets it fixed.
+    const { prisma } = fakePrisma({ failOnCreate: true });
+    const batch = seed();
+
+    await expect(
+      serviceWith(prisma).confirm({ batchId: batch.id, ...CALLER }),
+    ).rejects.toThrow('constraint violation');
+  });
+
   it('leaves quotedPercentage untouched when the figure was never located', async () => {
     const { prisma, created } = fakePrisma();
     const batch = seed({ quotedPercentage: null });
@@ -260,7 +407,7 @@ describe('BoqImportService.confirm', () => {
     // has to share the transaction with the writes for the refusal to mean anything.
     expect(tx.bOQTaskItem.count).toHaveBeenCalled();
     expect(tx.bOQTaskItem.count.mock.invocationCallOrder[0]).toBeLessThan(
-      tx.bOQTaskGroup.create.mock.invocationCallOrder[0],
+      tx.bOQTaskGroup.createManyAndReturn.mock.invocationCallOrder[0],
     );
   });
 

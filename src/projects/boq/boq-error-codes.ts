@@ -35,6 +35,17 @@ export const BOQ_ERRORS = {
   batchAlreadyConfirmed: 'BOQ_BATCH_ALREADY_CONFIRMED',
   /** A different user, or a different project, than the one that validated it (FR-050). */
   batchNotYours: 'BOQ_BATCH_NOT_YOURS',
+  /**
+   * The database gave up part-way through the write — nothing was committed (2026-10-04).
+   *
+   * Added because the condition already existed and had no name: a confirm that outran its
+   * transaction budget reached the browser as `{"statusCode":500,"message":"Internal server
+   * error"}`, which tells the operator neither what happened nor whether half their schedule is
+   * now on the project. It is not: the transaction rolls back and the batch is released, so the
+   * honest message is "nothing was written, press it again" — and that is a sentence only a
+   * named code can carry.
+   */
+  writeInterrupted: 'BOQ_IMPORT_WRITE_INTERRUPTED',
 } as const;
 
 export type BoqErrorCode = (typeof BOQ_ERRORS)[keyof typeof BOQ_ERRORS];

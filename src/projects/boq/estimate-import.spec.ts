@@ -60,10 +60,15 @@ function prismaWith(counts: { tender: number; estimate: number }) {
       }),
     },
     bOQTaskGroup: {
-      create: jest.fn(async (args: { data: Record<string, unknown> }) => {
-        written.groups.push(args.data);
-        return { id: `group-${written.groups.length}` };
-      }),
+      createManyAndReturn: jest.fn(
+        async (args: { data: Record<string, unknown>[] }) => {
+          written.groups.push(...args.data);
+          return args.data.map((group, index) => ({
+            id: `group-${written.groups.length - args.data.length + index + 1}`,
+            boqNo: group.boqNo as string,
+          }));
+        },
+      ),
     },
     project: {
       update: jest.fn(async (args: { data: Record<string, unknown> }) => {
