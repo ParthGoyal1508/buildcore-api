@@ -216,7 +216,15 @@ Email already exists — `src/shared/email/` with a Resend adapter, a console ad
 - [x] T040 [P] [US2] Unit test: several employees sharing one site mailbox each get their own row and
   their own slip — the spec's edge case. Keying on the employee rather than the address is why this
   works, and this test is what stops somebody "de-duplicating" it later.
-- [ ] T041 **NOT RUN** [P] [US2] e2e: an unapproved run refuses delivery; approving it then permits delivery.
+- [X] T041 [P] [US2] e2e: an unapproved run refuses delivery; approving it then permits delivery.
+      **Run 2026-10-04** — two tests in `test/payroll-approval.e2e-spec.ts`, placed in that suite
+      rather than a new one because it already builds a payroll run and walks its three-level chain.
+      The refusal is a 409 naming the level the run is waiting at, and nothing is queued by it — a
+      refusal that still wrote delivery rows would send on the next retry, which is the quiet version
+      of this failure. The permission is the same call, same caller, same run, after approval.
+
+      `requireApprovedRun` shares `outstandingApproval` with the bank sheet deliberately so the two
+      cannot disagree, and this test plus scenario 2 are what make that sharing observable.
 - [x] T042 [US2] **Resolve the open question before building a send trigger**: FR-005 assumes automatic
   delivery on payment, and the client asked "please check this". If unanswered, build the explicit action
   and schedule the automatic trigger behind it — an explicit send can be automated later, while an
@@ -467,9 +475,30 @@ already, so a waiver joins the chain that governs the thing it unblocks.
       create — "HR waived this" and "HR asked and the Director agreed" are different facts.
 - [x] T091 Refuse `waive()` outright for a caller who may not propose one. Write access on Employees is
       no longer sufficient on its own; proposing is an HR act and the chain decides the rest.
-- [ ] T092 **NOT RUN** [P] e2e: an exit with an outstanding item cannot settle while the waiver is pending, settles
+- [X] T092 [P] e2e: an exit with an outstanding item cannot settle while the waiver is pending, settles
       once it is approved, and stays blocked when it is rejected. The middle case is the one that proves
       the wiring; the other two prove it did not open a hole.
+
+      **Run 2026-10-04** — `test/exit-clearance-waiver.e2e-spec.ts`, six tests. All three cases run in
+      sequence over **one** obligation rather than in parallel over two, because `SalaryAdvance`
+      carries a unique constraint on `employeeId`. That ordering turned out better: refusal first, so
+      the route back out of a refusal is exercised rather than assumed, and the exit ends settled.
+
+      Two things found by writing it, neither a defect:
+
+      **The waiver is written after the response.** `decide()` emits on the event bus once its
+      transaction commits, and the bus does not await its listeners — correctly, since a handler
+      inside the transaction would apply a decision a rollback then undid. The consequence is that a
+      screen re-reading the clearance the instant an approval returns may still see it blocked. The
+      window is milliseconds and it is real; the test polls for it rather than sleeping, and says so.
+      Worth knowing for web T054's manual pass.
+
+      **A refused proposal is reaped lazily, not by an event.** `settleStaleProposal` reads the
+      instance's state on the next `waive()` attempt and marks the old proposal rejected then. So the
+      route back after a refusal exists, and this is the test that proves it runs — without it,
+      `EXIT_WAIVER_ALREADY_PENDING` would be permanent and the exit could be neither settled nor
+      waived. That is the same shape of trap found in feature 020's fuel recovery on the same day,
+      avoided here by a different mechanism.
 - [x] T093 [P] Unit test: `waive()` writes no `ExitClearanceWaiver` row at submission time. The
       structural assertion behind T087 — a test on behaviour would pass while the row was still written
       by a path nobody looked at.
@@ -557,9 +586,32 @@ path, which is not the same thing and is recorded as not the same thing.
       employee. A blank beneficiary name is a transfer that fails at the bank.
 - [x] T102 [US3] Header row and payment rows only. **No totals row** — the sample has none, and a total
       appended to a file read row-by-row becomes a payment instruction.
-- [ ] T103 **NOT RUN** [P] [US3] e2e: generate a sheet for a seeded run and compare it cell-for-cell and
+- [X] T103 [P] [US3] e2e: generate a sheet for a seeded run and compare it cell-for-cell and
       **cell-type-for-cell-type** against the sample's shape. The types are the contract here, not just
       the values.
+
+      **Run 2026-10-04**, in `test/payroll-approval.e2e-spec.ts`. 16 columns; `Value Date` asserted as
+      a **string** by `typeof`, not by its rendered characters — exceljs returns a `Date` object for a
+      real date cell and a string for text, and a test reading only the characters would pass for
+      both; the account number likewise, because a numeric cell drops a leading zero silently. The
+      **amount is asserted as a number**, and that asymmetry is the contract: a bank summing a column
+      of text gets nothing.
+
+      No totals row, asserted as "every row has a beneficiary account" rather than by searching for
+      the word Total — a totals row has the amount filled and the account empty, which is exactly the
+      shape a bank reads as a payment to nobody.
+
+      **Its vacuity guard earned its place twice.** The first run asserted over a sheet with one row —
+      the header — because the fixture employee had no bank details, so every line landed on the
+      unpayable tab instead; FR-008e refuses a row whose account holder name is unset rather than
+      falling back to the employee's own name, which is right. The second run had a payment row with
+      an amount of **zero**, because the employee had no salary. Both would have passed every
+      assertion in the test. The fixture now carries a salary and bank details, with the holder name
+      deliberately *not* matching the employee's — as in the client's own sample, where the
+      beneficiary names are misspelled against any HR record because they are what the beneficiary's
+      bank holds.
+
+      Proven non-vacuous by writing the value date as a real date: the test fails.
 - [x] T104 [US3] Payslip layout per `docs/NC0060_Payslip_Feb 2026.pdf`: company address block, the
       two-column employee panel (bank, PAN, PF UAN, location, effective work days, LOP), earnings as
       **Full and Actual** side by side, deductions, totals, net pay in words, and the "system generated"

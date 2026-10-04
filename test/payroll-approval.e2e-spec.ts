@@ -13,7 +13,16 @@ import { ACTION_PAYROLL_RUN } from '../src/approvals/default-chains';
 import { AuthenticatedUser } from '../src/auth/authenticated-user';
 import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
-import { BankSheetService } from '../src/payroll/runs/bank-sheet.service';
+import * as ExcelJS from 'exceljs';
+
+import { PiiCipherService } from '../src/hr/employees/pii-cipher.service';
+
+import {
+  BANK_SHEET_COLUMN,
+  BANK_SHEET_COLUMN_COUNT,
+  BankSheetService,
+  IFSC_PATTERN,
+} from '../src/payroll/runs/bank-sheet.service';
 import { PayrollScheduleService } from '../src/payroll/runs/payroll-schedule.service';
 
 /**
@@ -297,6 +306,31 @@ describe('Payroll approval chain (e2e)', () => {
         firstName: 'Sneha',
         lastName: 'Iyer',
         dateOfJoining: new Date('2026-01-01'),
+        // Bank details, added 2026-10-04 for 021 T103. Without them the bank sheet's payment
+        // tab is empty and every row lands on the unpayable tab instead — correctly, since
+        // FR-008e refuses a row whose account holder name is unset rather than falling back to
+        // the employee's own name. A cell-for-cell test against an empty sheet would pass every
+        // assertion and prove nothing, which is what its vacuity guard caught.
+        //
+        // The holder name is deliberately **not** "Sneha Iyer": in the client's own sample the
+        // beneficiary names are misspelled against any HR record, because they are what the
+        // beneficiary's bank has on file. A fixture that made the two agree would hide the
+        // distinction the column exists for.
+        // A salary, so the run produces a payable line. Without it net pay is zero and the sheet
+        // carries a transfer instruction for nothing — which the vacuity guard in T103 catches
+        // as an amount of 0 rather than letting the test pass over an empty figure.
+        basic: 30000,
+        hra: 12000,
+        conveyanceAllowance: 1600,
+        bankName: 'E2E Bank',
+        // Encrypted through the same service the application uses, not written as plaintext: the
+        // column is regulated PII and the bank sheet decrypts it. A plaintext fixture fails at the
+        // decrypt with "stored blob is truncated", which is the cipher refusing honestly.
+        bankAccountNumberEncrypted: app
+          .get(PiiCipherService)
+          .encrypt('0001234567890'),
+        ifscCode: 'HDFC0001234',
+        bankAccountHolderName: 'SNEHA S IYER',
       },
     });
     employeeId = employee.id;
@@ -432,6 +466,40 @@ describe('Payroll approval chain (e2e)', () => {
     // Naming the level is the difference between "go and find out whose desk this is on"
     // and "go to the site in-charge".
     expect(error.response.message).toContain('Site Incharge');
+  }, 60_000);
+
+  it('021 T041 — slips are refused while the run is unapproved, naming the level', async () => {
+    /**
+     * The refusal and the permission are the same claim read twice, and the task was recorded
+     * `NOT RUN` because the e2e harness could not finish a run. The second half is below, after
+     * scenario 5 has approved the run.
+     *
+     * `requireApprovedRun` shares `outstandingApproval` with the bank sheet deliberately, so the
+     * two cannot disagree about whether a run is approved. This test and scenario 2 are what make
+     * that sharing observable: both refuse, with the same reason, from the same source.
+     *
+     * Emailing a slip is the one action here that **cannot be undone** — a bank sheet downloaded
+     * early can be deleted, and 500 emails sent against an unapproved run cannot be recalled.
+     */
+    const run = await runForPeriod();
+
+    const res = await http()
+      .post(`/hr/payroll/runs/${run.id}/slip-deliveries`)
+      .set(auth(hrUser.token))
+      .send({});
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
+    // The level, not just "not approved": an administrator who is told which desk the run is
+    // waiting at can go and ask. One who is told only that it is unapproved cannot.
+    expect(res.body.message).toMatch(/awaiting/i);
+
+    // And nothing was queued. A refusal that still wrote delivery rows would send on the next
+    // retry, which is the quiet version of this failure.
+    const deliveries = await sys.slipDelivery.findMany({
+      where: { payrollRunId: run.id },
+    });
+    expect(deliveries).toEqual([]);
   }, 60_000);
 
   it('scenario 3 — a non-HR user cannot edit attendance for the period under review', async () => {
@@ -602,6 +670,113 @@ describe('Payroll approval chain (e2e)', () => {
       'HR Office',
       'Director',
     ]);
+  }, 60_000);
+
+  it('021 T041 — slips send once the run is approved', async () => {
+    // Runs after scenario 5, which approved this period's run. The pairing is the point: the same
+    // call, the same caller, the same run — only the approval state differs.
+    const run = await runForPeriod();
+    const state = await approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      run.id,
+      companyId,
+    );
+    expect(state.state).toBe('approved');
+
+    const res = await http()
+      .post(`/hr/payroll/runs/${run.id}/slip-deliveries`)
+      .set(auth(hrUser.token))
+      .send({});
+
+    // Permitted. Not asserting that mail left the building — there is no mail server in this
+    // environment and the delivery rows record the attempt either way, which is what FR-007's
+    // retry is built on.
+    expect(res.status).toBe(201);
+    expect(res.body.code).toBeUndefined();
+  }, 60_000);
+
+  it('021 T103 — the bank sheet matches the sample cell for cell, and type for type', async () => {
+    /**
+     * The task's own words: *"the types are the contract here, not just the values."*
+     *
+     * A bank reads this file by **position**, and three of the columns fail in ways a
+     * value-only test cannot see. `Value Date` written as a real date is re-rendered by the
+     * reader's locale, so `21/08/2026` read as month 21 is a rejected file — it must be text. An
+     * account number written as a number loses a leading zero, silently, and the payment goes
+     * nowhere. And a totals row appended to a file read row-by-row becomes a payment instruction.
+     *
+     * The shape is taken from `docs/RING ROAD JULY SALARY.xls`: 16 columns, blanks included.
+     */
+    const run = await runForPeriod();
+    const sheet = await bankSheet.build(
+      callerFor(directorUser.userId, [finalRoleId]) as never,
+      run.id,
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(sheet.buffer as never);
+    const ws = workbook.worksheets[0];
+
+    // Sixteen columns, blanks included — the sample's width, not the number of columns that
+    // happen to carry data.
+    expect(ws.getRow(1).cellCount).toBe(BANK_SHEET_COLUMN_COUNT);
+    expect(ws.getRow(1).getCell(1).value).toBe('CUSTOM_DETAILS1');
+    expect(ws.getRow(1).getCell(BANK_SHEET_COLUMN.valueDate + 1).value).toBe(
+      'Value Date',
+    );
+    expect(ws.getRow(1).getCell(BANK_SHEET_COLUMN.ifsc + 1).value).toBe(
+      'Beneficiary Bank Swift Code / IFSC Code',
+    );
+
+    // At least one payment row, or everything below is vacuous.
+    expect(ws.rowCount).toBeGreaterThan(1);
+
+    for (let r = 2; r <= ws.rowCount; r += 1) {
+      const row = ws.getRow(r);
+
+      // **A text date, not a date cell.** `typeof` on the value is the assertion: exceljs gives a
+      // `Date` object for a real date cell, and a string for text. A test that only checked the
+      // rendered characters would pass for both.
+      const valueDate = row.getCell(BANK_SHEET_COLUMN.valueDate + 1).value;
+      expect(typeof valueDate).toBe('string');
+      expect(valueDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
+
+      // **A text account number.** A leading zero is part of the account, and a numeric cell
+      // drops it without saying so.
+      expect(
+        typeof row.getCell(BANK_SHEET_COLUMN.beneficiaryAccount + 1).value,
+      ).toBe('string');
+
+      // The IFSC in the column whose label offers a choice the bank does not make.
+      expect(row.getCell(BANK_SHEET_COLUMN.ifsc + 1).value).toMatch(
+        IFSC_PATTERN,
+      );
+
+      // **The amount IS a number**, unlike the two above — it is arithmetic, and a bank summing a
+      // column of text gets nothing. The asymmetry is the contract.
+      expect(
+        typeof row.getCell(BANK_SHEET_COLUMN.paymentAmount + 1).value,
+      ).toBe('number');
+      expect(
+        row.getCell(BANK_SHEET_COLUMN.paymentAmount + 1).value as number,
+      ).toBeGreaterThan(0);
+
+      expect(
+        row.getCell(BANK_SHEET_COLUMN.beneficiaryName + 1).value,
+      ).toBeTruthy();
+      expect(
+        row.getCell(BANK_SHEET_COLUMN.debitAccount + 1).value,
+      ).toBeTruthy();
+    }
+
+    // **No totals row.** Asserted as "every row has a beneficiary account" rather than by looking
+    // for the word "Total": a totals row would have the amount column filled and the account
+    // column empty, which is exactly the shape a bank would read as a payment to nobody.
+    for (let r = 2; r <= ws.rowCount; r += 1) {
+      expect(
+        ws.getRow(r).getCell(BANK_SHEET_COLUMN.beneficiaryAccount + 1).value,
+      ).toBeTruthy();
+    }
   }, 60_000);
 
   it('lets attendance be edited again once the run is approved', async () => {
