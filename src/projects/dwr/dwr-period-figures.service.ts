@@ -327,17 +327,37 @@ export class DwrPeriodFiguresService {
   ): Promise<Map<string, Prisma.Decimal>> {
     if (itemIds.length === 0) return new Map();
 
-    const bounds: Prisma.Sql[] = [];
-    if (workDate?.gte)
-      bounds.push(Prisma.sql`AND r."workDate" >= ${workDate.gte}`);
-    if (workDate?.lte)
-      bounds.push(Prisma.sql`AND r."workDate" <= ${workDate.lte}`);
-    if (workDate?.lt)
-      bounds.push(Prisma.sql`AND r."workDate" < ${workDate.lt}`);
+    // Built as **one** `Prisma.Sql` fragment, not as an array of them.
+    //
+    // Interpolating a plain array into a tagged template makes Prisma bind it as a single
+    // *parameter value* rather than splicing it as SQL, which emits `$5` where a fragment belongs
+    // and fails with `42601 syntax error at or near "$5"`. `Prisma.join` is the usual answer and
+    // cannot be used either: it throws on an empty array, and the empty case is the common one
+    // here because `reconcile` deliberately passes no bounds at all.
+    //
+    // Both were found by running this against a real database. Neither would have shown up in a
+    // unit test, and the first of them affected every call — so the figures endpoint and the
+    // reconciliation endpoint were both returning a 500 while every other test in the feature
+    // passed.
+    const bounds = Prisma.sql`
+      ${
+        workDate?.gte
+          ? Prisma.sql`AND r."workDate" >= ${workDate.gte}`
+          : Prisma.empty
+      }
+      ${
+        workDate?.lte
+          ? Prisma.sql`AND r."workDate" <= ${workDate.lte}`
+          : Prisma.empty
+      }
+      ${
+        workDate?.lt
+          ? Prisma.sql`AND r."workDate" < ${workDate.lt}`
+          : Prisma.empty
+      }
+    `;
 
-    const rows = await tx.$queryRaw<
-      { boqItemId: string; total: Prisma.Decimal }[]
-    >`
+    const query = Prisma.sql`
       SELECT t."boqItemId" AS "boqItemId",
              SUM(
                CASE t."paymentMode"
@@ -348,10 +368,14 @@ export class DwrPeriodFiguresService {
         FROM "projects"."DWRTask" t
         JOIN "projects"."DailyWorkReport" r ON r."id" = t."dwrId"
        WHERE t."boqItemId" IN (${Prisma.join(itemIds)})
-         AND r."status" = ${DwrStatus.approved}::"projects"."DwrStatus"
+         AND r."status"::text = ${DwrStatus.approved}
          ${bounds}
        GROUP BY t."boqItemId"
     `;
+
+    const rows = await tx.$queryRaw<
+      { boqItemId: string; total: Prisma.Decimal }[]
+    >(query);
 
     return new Map(
       rows.map((row) => [row.boqItemId, new Prisma.Decimal(row.total ?? 0)]),
