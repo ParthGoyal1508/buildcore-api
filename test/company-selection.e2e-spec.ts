@@ -220,6 +220,33 @@ describe('Company selection and cash visibility (e2e)', () => {
     expect(res.body[0].selected).toBe(true);
   });
 
+  it('switches from one company to another, not only from none to one', async () => {
+    // **Every test in this suite selected exactly once**, so the row was only ever inserted and
+    // the conflict path was never taken. On the deployment that path was a 42501: the upsert ran
+    // scoped to the company being switched *to*, and Postgres applied the policy's USING to the
+    // row already there, which still held the previous one.
+    //
+    // This test would **not** have caught it. The local and CI role is a superuser and Postgres
+    // exempts superusers from RLS unconditionally, so the policy is not in force here — see
+    // `company-selection-rls.e2e-spec.ts`, which asks under a role that cannot bypass it. This
+    // covers the half that is observable from the API: that a second switch is honoured and
+    // reported.
+    await http()
+      .put('/my/company-selection')
+      .set(auth(crossToken))
+      .send({ companyId: companyA })
+      .expect(200);
+
+    const res = await http()
+      .put('/my/company-selection')
+      .set(auth(crossToken))
+      .send({ companyId: companyB })
+      .expect(200);
+
+    const selected = res.body.find((c: { selected: boolean }) => c.selected);
+    expect(selected.id).toBe(companyB);
+  });
+
   it('scopes every list to the selected company (FR-010)', async () => {
     await http()
       .put('/my/company-selection')

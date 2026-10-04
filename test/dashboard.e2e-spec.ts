@@ -389,6 +389,13 @@ describe('Dashboard reminders (e2e)', () => {
       expect(res.body).toEqual({
         total: 3,
         bySeverity: { overdue: 1, warning: 1, info: 1 },
+        // Added when the badge was fixed: `total` counts every matching reminder while
+        // `bySeverity` is computed from the capped page, so the response says when the two can
+        // disagree rather than letting a reader assume they never do. False here — three
+        // reminders is nowhere near the cap — and asserted rather than ignored, because a
+        // `toEqual` that silently tolerated extra fields would not have caught the field
+        // arriving in the first place.
+        breakdownTruncated: false,
       });
     });
   });
