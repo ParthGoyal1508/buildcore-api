@@ -13,6 +13,7 @@ import { BoqImportService } from './boq/boq-import.service';
 import { BoqWorkbookReader } from './boq/boq-workbook.reader';
 import { BoqController } from './boq/boq.controller';
 import { BoqService } from './boq/boq.service';
+import { DwrController } from './dwr/dwr.controller';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
 import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
@@ -94,6 +95,13 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // the company. Found by `test/client-bills.e2e-spec.ts` on its first run; `route-shadowing.spec.ts`
     // asserts the ordering rather than trusting this comment to be read.
     BoqController,
+    // 022. **Before `ProjectsController`, and that ordering is load-bearing.** `GET projects/dwr`
+    // is a literal path, and the portfolio registers the parameterised `GET projects/:id` — Nest
+    // matches in registration order, so listing this controller second made every request for the
+    // report list arrive at `ProjectsController.findOne` looking for a project with the id "dwr".
+    // `route-shadowing.spec.ts` caught it, which is what that spec was written for after
+    // `GET /projects/:id/boq` shadowed `GET /projects/client-bills/boq`.
+    DwrController,
     ProjectsController,
   ],
   providers: [

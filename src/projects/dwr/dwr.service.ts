@@ -393,7 +393,7 @@ export class DwrService {
     ctx: RlsContext,
     dwrId: string,
     companyId: string,
-    file: { buffer: Buffer; originalname: string },
+    file: { data: Buffer; fileName: string },
     actor: { userId: string; ipAddress?: string },
   ): Promise<{
     id: string;
@@ -413,11 +413,11 @@ export class DwrService {
     // extension, and which a browser then honours by offering a download instead of opening the
     // photograph somebody wants to look at.
     const mimeType =
-      detectContentType(file.buffer)?.contentType ?? 'application/octet-stream';
+      detectContentType(file.data)?.contentType ?? 'application/octet-stream';
 
     const fileRef = await this.storage.put(
       `dwr-attachments/${companyId}`,
-      file.buffer,
+      file.data,
       mimeType,
     );
 
@@ -427,9 +427,9 @@ export class DwrService {
           companyId,
           dwrId,
           fileRef,
-          fileName: file.originalname,
+          fileName: file.fileName,
           mimeType,
-          sizeBytes: file.buffer.length,
+          sizeBytes: file.data.length,
           uploadedByUserId: actor.userId,
         },
         select: {

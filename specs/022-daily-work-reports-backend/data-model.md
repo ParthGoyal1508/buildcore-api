@@ -141,8 +141,20 @@ of record for an odometer reading would disagree the first time one was correcte
 
 ## Row-level security
 
-No new table, so no new policy: `projects."DailyWorkReport"` and `projects."DWRTask"` have carried
-`tenant_isolation` since 008's migration.
+`projects."DailyWorkReport"` and `projects."DWRTask"` have carried `tenant_isolation` since 008's
+migration, and `projects."DWRAttachment"` gains one with its own migration.
+
+**The three are not keyed the same way**, and the difference is load-bearing:
+
+| Table | Policy keyed on |
+|---|---|
+| `DailyWorkReport` | its own `companyId` |
+| `DWRTask` | a correlated lookup on its parent report's `companyId` — **it has no `companyId` column at all** |
+| `DWRAttachment` | its own `companyId` |
+
+Neither of 008's policies carries a `WITH CHECK`, which is sound rather than an omission: Postgres
+applies the `USING` expression to new rows when `WITH CHECK` is absent, so an INSERT is filtered by
+the same predicate. `DWRAttachment` states both explicitly, matching 018's tables.
 
 What they have never had is a test proving it. The development and continuous-integration database
 role is a superuser, and **Postgres exempts superusers from row-level security unconditionally** —
