@@ -952,6 +952,22 @@ the BOQ computes — the two are reported separately rather than reconciled.']
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
   fileRefs String[] [not null, note: 'Object-storage references, same pattern as `hr.EmployeeDocument`.']
+  reversedAt DateTime [note: 'The **latest** reversal of an approval (022 FR-019, FR-022).
+
+A report in `draft` carrying `reversedAt` was approved and taken back, which is a different
+thing from one never approved — and 022 FR-019 needs the two distinguishable. `approvedAt`
+and `approvedByUserId` are deliberately **not** cleared when this is set: the approval
+happened, and erasing it would leave a reversal reason referring to an approval nobody can
+see.
+
+Only the latest reversal lives here; the full sequence is in the audit log, which is the
+system of record for who did what. The count is kept rather than left to be reconstructed by
+counting audit entries, for the reason `RABill.revisionCount` gives: "this has been round
+three times" is what a reader wants, and having to count by hand is how a reader stops asking.']
+  reversedByUserId String
+  reversalReason String [note: 'Required by the service rather than by the column: a reversal moves a quantity a bill may
+already depend on.']
+  reversalCount Int [not null, default: 0]
   tasks DWRTask [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -982,7 +998,40 @@ multiplicatively neutral rather than zeroing the result.']
   breadth Decimal [not null, default: 1]
   depth Decimal [not null, default: 1]
   density Decimal [not null, default: 1]
-  actualQty Decimal [not null, note: 'nos1 × nos2 × length × breadth × depth × density, computed by the server.']
+  actualQty Decimal [note: 'nos1 × nos2 × length × breadth × depth × density, computed by the server.
+
+**Nullable since 022 (T002), and the nullability carries meaning.** This is the quantity of a
+*measured* line, and a presence-paid line has none — absence says "not measured", while 0
+says "measured as nothing". The client\'s real measurement sheets contain both, side by side,
+and collapsing them would lose the distinction every performance deduction is argued from.
+Non-null exactly when `paymentMode = work_basis`, enforced by
+`DWRTask_quantity_matches_basis` rather than by a service (022 FR-030a).
+
+Safe to loosen without a backfill: the table held 0 rows on 2026-10-04, because nothing could
+write one until 022 built the module 008 specified and left unimplemented.']
+  servedQty Decimal [note: 'The day served on a presence-paid line: 1 for a full day, less for a part day (022 FR-030).
+
+**Why this is its own column and not `actualQty`.** Eleven of the seventeen line types in the
+client\'s real tender are paid for presence rather than measurement — an ambulance or a
+patrolling vehicle on a monthly rate, forty security guards a day — and the quantity claimed
+for a month is a fraction of it. The six factors above cannot express that: they all default
+to 1, so their product is 1, which *looks* exactly like one day served while being only an
+artefact of the defaults. A figure that is right by coincidence passes every test written the
+obvious way and turns wrong the moment somebody sets a factor.
+
+So the quantity in force is a stated property of the line (`paymentMode`) rather than an
+inference about which fields happen to be filled, and `dwr-quantity.ts` never reads the
+factors for a presence line at all (022 FR-030b, FR-030d).
+
+Non-null exactly when `paymentMode = day_basis`.']
+  equipmentId String [note: '`plant.Equipment.id`. Bare id — see the schema-level note above.
+
+The key the equipment\'s own logbook entry for the work date is read by (022 FR-032).
+`plant.LogbookEntry` already holds the opening and closing readings, the run and the day\'s
+remarks, unique per machine per date — which is precisely the odometer register printed
+beneath each of the client\'s measurement sheets. It is read across the module boundary through
+`ProjectSourcesRegistry` and **never copied here**: a second system of record for an odometer
+disagrees with the first the moment one is corrected.']
   exceedsScope Boolean [not null, default: false, note: 'Flagged, not refused: the site did the work, and a BOQ line that turns out to
 have been under-scoped is a commercial question, not a data-entry error.']
   engineerName String
@@ -990,8 +1039,12 @@ have been under-scoped is a commercial question, not a data-entry error.']
   layerNo String
   section String
 
-  Note: 'One measurement line within a work report. `actualQty` is computed server-side
-from the six factors so the arithmetic cannot differ between clients.'
+  Note: 'One measurement line within a work report.
+
+Carries **one of two quantities**, decided by `paymentMode`: `actualQty` for work measured by
+the six factors, computed server-side so the arithmetic cannot differ between clients, or
+`servedQty` for a line paid by presence. Exactly one is non-null, enforced by the
+`DWRTask_quantity_matches_basis` constraint (022 FR-030a).'
 }
 
 Table Revenue {
