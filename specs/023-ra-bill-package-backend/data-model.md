@@ -3,6 +3,11 @@
 Phase 1 of [plan.md](./plan.md). The decisions behind each table are in
 [research.md](./research.md).
 
+**Amended 2026-10-05 after `checklists/silent-failure.md`.** Four of its findings land here: a
+status for an abandoned draft (FR-002b), a proposed quantity that can be *absent* rather than zero
+(FR-003a), the one-time recoveries' frozen totals (FR-020), and the account of the up-to-previous
+column, which this file had derived the one way FR-013a now forbids. Each is marked below.
+
 Four new tables; **nothing is added to or removed from the four existing ones**. Measured against
 the development database on 2026-10-05: `ClientBill` 0 rows, `RABill` 0 rows, `WorkOrder` 0 rows,
 `BOQTaskItem` 0 rows — nothing in the billing chain has ever held a row, so every change here is
@@ -30,10 +35,11 @@ One row per bill that has been made into a package. Holds **only what the two bi
 | `tdsFraction` | `Decimal(8,6)` | |
 | `taxBasis` | `BillTaxBasis` | `intra_state` or `inter_state`, and **how it was decided** — `derived_from_gstin` or `from_project_flag` (research §5). |
 | **This period's figures** | `Decimal(18,2)` each | `workDone`, `releaseWithheld`, `cgstAmount`, `sgstAmount`, `igstAmount`, and the four recoveries (`recoveryDiesel`, `debitAgainstCivil`, `otherRecoveries`, `mechanicalDebit`), the four deductions (`mobilizationAdvance`, `retentionAmount`, `performanceSecurity`, `theftWithheld`), `tdsAmount`, `payable`. Each reported in its own right (FR-017). |
-| **Frozen cumulative** (FR-014a, D1) | `Decimal(18,2)` each | The same figures again as `…UptoDate`. The *up-to-previous* column is **not stored**: it is this bill's up-to-date minus this bill's own amount, and storing a third copy of a figure determined by the other two is the pattern §3 refuses. |
+| `mobilizationAdvanceTotal`, `performanceSecurityTotal` | `Decimal(18,2)?` | **Added by the checklist (FR-020).** What each one-time recovery totals, frozen at composition. Without them "fully recovered" has nothing to compare against, and FR-020 is satisfied by an implementation that does nothing: a deduction that is complete and one somebody entered as zero this month are the same row. Recovered-to-date is the `…UptoDate` cumulative already stored, so only the target was missing. Nullable because a contract may carry neither, and the source of each is recorded with it. |
+| **Frozen cumulative** (FR-014a, D1) | `Decimal(18,2)` each | The same figures again as `…UptoDate`. The *up-to-previous* column is **not a column on this row**: it is **the previous bill's stored `…UptoDate`**, read across the chain (FR-014). **Corrected by the checklist (FR-013a).** This file previously derived it as this bill's up-to-date minus this bill's own amount, which is numerically equal only while the chain is unbroken — and which makes FR-035's footer identity a rearrangement of its own definition, true for any values whatever. The reason for not storing a third copy still stands; the reason it is read from the predecessor rather than subtracted from itself is that the identity must be able to fail. |
 | **Frozen statutory header** (FR-026, FR-028) | `String?` each | `issuerName`, `issuerGstin`, `issuerPan`, `issuerState`, `issuerAddress`, `receiverName`, `receiverGstin`, `receiverPan`, `receiverState`, `receiverAddress`, `receiverCode`, `natureOfWork`, `location`, `externalWorkOrderNo`, `externalBillNo`. Copied from `settings.Company`, `partners.Vendor` or `projects.Client` **at issue** and never re-read — which is what makes FR-028's "produced twice is identical" true rather than hoped for. |
 | `missingHeaderFields` | `String[]` | What could not be filled (FR-027). Reported, never a refusal. |
-| `status` | `BillPackageStatus` | `draft` → `issued` → `certified`. |
+| `status` | `BillPackageStatus` | `draft` → `issued` → `certified`, and `draft` → `abandoned`. **`abandoned` added by the checklist (FR-002b, FR-044a):** a period is occupied by a bill in any status, so without a way out a mistakenly-opened draft holds its period for ever and the only remedy is deleting the row that records the period was billed. An issued bill is never deletable. |
 | `issuedAt`, `issuedByUserId` | | FR-044. |
 | `revisionCount`, `lastRevisedAt`, `lastRevisedByUserId`, `lastRevisionReason` | | FR-046, following `RABill.revisionCount`'s precedent. |
 | `createdAt`, `updatedAt` | | |
@@ -69,11 +75,12 @@ How each line's quantity came to be chosen (research §2).
 | `packageId` | `String` | Relation, `onDelete: Cascade`. |
 | `clientBillLineId` | `String?` | Exactly one of these two, matching the package's direction. |
 | `raBillLineId` | `String?` | |
-| `proposedQty` | `Decimal(18,3)` | What 022's approved measurement proposed, **as at composition**. A point-in-time fact. |
+| `proposedQty` | `Decimal(18,3)?` | What 022's approved measurement proposed, **as at composition**. A point-in-time fact. **Nullable, by the checklist (FR-003a)**: null is *no measurement source*, which is not the same fact as zero. |
+| `proposalSource` | `ClaimProposalSource` | **Added by the checklist (FR-003a).** `approved_measurement` or `no_measurement_source`. A subcontractor bill measures award lines, and `WorkOrderBOQItem.boqTaskItemId` is nullable by design — so an unmapped award line has nothing to propose from. Proposing zero would make "the measurement was read and was nothing" and "there is no measurement to read" the same number, on the direction billed every month. |
 | `claimedQty` | `Decimal(18,3)` | What is being billed. |
-| `varianceQty` | `Decimal(18,3)` | `claimedQty − proposedQty`. **Stored, not derived** — the proposed figure can move afterwards, which is the case FR-014b exists for, so a recomputed variance would answer a different question than the engineer was looking at. |
+| `varianceQty` | `Decimal(18,3)?` | `claimedQty − proposedQty`. **Stored, not derived** — the proposed figure can move afterwards, which is the case FR-014b exists for, so a recomputed variance would answer a different question than the engineer was looking at. Null exactly when `proposedQty` is null: there is no variance from a figure that was never proposed, and zero would say the claim matched a proposal it did not have. |
 | `reason` | `String?` | Required when the variance is non-zero (FR-004, FR-006). |
-| `overClaimed` | `Boolean @default(false)` | Set when `claimedQty > proposedQty` (FR-006, D2). Countable per bill and per project, which is the mitigation D2 depends on (FR-006a). |
+| `overClaimed` | `Boolean @default(false)` | Set when `claimedQty > proposedQty` (FR-006, D2). A claim against `no_measurement_source` is **not** an over-claim — nothing was exceeded — and must not be counted as one, or FR-006a's count becomes a count of unmapped award lines instead. Countable per bill and per project, which is the mitigation D2 depends on (FR-006a). |
 
 **Index**: `@@unique([packageId, clientBillLineId])`, `@@unique([packageId, raBillLineId])`,
 `@@index([companyId])`, `@@index([packageId, overClaimed])` — the last one so FR-006a's count is a
@@ -99,6 +106,13 @@ bill.
 | `amountWithTax` | `Decimal(18,2)` | Carried rather than computed: the real register shows both, and the tax on a debit is not always the bill's own rate. |
 | `recoveredOnPackageId` | `String?` | Null until applied. **Unique**, so a debit cannot be recovered twice (FR-037) — enforced by the index and not only by the service, because a debit recovered twice is money taken twice. |
 | `recordedByUserId`, `recordedAt` | | |
+
+`recordedAt` carries a second weight after the checklist: **FR-039a** makes an issued bill's
+register the register *as at issue*, which is `recordedAt <= BillPackage.issuedAt` and needs no new
+column. Without it FR-039's running total and FR-028's frozen workbook contradict each other — a
+debit recorded between two productions of one issued bill would change a signed document.
+**FR-037b** confines application to a bill that has not been issued, for the same reason from the
+other side.
 
 **Index**: `@@index([companyId, projectId])`, `@@index([recoveredOnPackageId])`. The one-bill rule is
 a partial unique index on `(id)` where `recoveredOnPackageId` is not null — in practice a plain
@@ -128,7 +142,8 @@ Six per package (FR-041, FR-042).
 - `BillDirection`: `to_client`, `to_subcontractor`
 - `BillTaxBasis`: `intra_state`, `inter_state`
 - `BillTaxBasisSource`: `derived_from_gstin`, `from_project_flag`
-- `BillPackageStatus`: `draft`, `issued`, `certified`
+- `BillPackageStatus`: `draft`, `issued`, `certified`, `abandoned`
+- `ClaimProposalSource`: `approved_measurement`, `no_measurement_source`
 - `CheckListAnswer`: `yes`, `no`, `not_required`
 
 ---
@@ -149,9 +164,11 @@ read them.
 
 ## Not stored, and deliberately
 
-- **The up-to-previous column.** Determined by this bill's up-to-date figure minus this bill's own
-  amount. A third stored copy of a figure fixed by the other two is the pattern 018 research §3 and
-  022 research §6 both refused.
+- **The up-to-previous column.** It is the **previous bill's** stored up-to-date figure, read across
+  the chain (FR-014) — not a column here, and explicitly **not** this bill's up-to-date less its own
+  amount, which FR-013a forbids. A third stored copy of a figure fixed by the other two is the
+  pattern 018 research §3 and 022 research §6 both refused; reading the predecessor costs nothing and
+  leaves FR-035's identity able to fail, which is the only reason to assert it.
 - **The approved measurement.** Read from feature 022 per BOQ line per period at composition, and
   what `proposedQty` was taken from. 023 stores the figure it proposed, not the measurement.
 - **Which daily reports a bill line consumed.** Decision D3: the provenance is the line's item plus

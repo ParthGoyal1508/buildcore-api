@@ -38,15 +38,30 @@ Opens a package for a period and proposes every line from feature 022's approved
 project's BOQ for a client bill, the work order's award lines for a subcontractor bill (research §1:
 these are different schedules, which is why there are two bill tables and one package table).
 
-Every line comes back, including lines with no measurement, at a proposed quantity of zero (FR-003).
-The count of lines returned equals the count of schedule lines, and that equality is assertable — an
-assertion over a returned list passes just as happily over a short one, and a bill missing an item is
-a smaller invoice.
+Every line comes back, including lines with no measurement (FR-003). The count of lines returned
+equals the count of schedule lines, and that equality is assertable — an assertion over a returned
+list passes just as happily over a short one, and a bill missing an item is a smaller invoice.
+
+**A line carries one of two proposals, and they are different facts** (FR-003a, from
+`checklists/silent-failure.md`):
+
+```jsonc
+{ "proposedQty": "0.000", "proposalSource": "approved_measurement" }   // read, and it was nothing
+{ "proposedQty": null,    "proposalSource": "no_measurement_source" }  // there was nothing to read
+```
+
+The second happens on a subcontractor bill whose award line maps to no BOQ line — which the
+subcontract model permits, because a subcontract may itemise work differently. Measurement is
+attributed to BOQ lines, so such a line has no source at all, and a proposal of zero would say "no
+work was done this month" for every unmapped line of every bill.
+
+`varianceQty` is null exactly when `proposedQty` is, and such a line is **never** `overClaimed`:
+nothing was exceeded, and counting it would turn FR-006a's count into a count of unmapped lines.
 
 | Refusal | Code | When |
 |---|---|---|
 | 400 | `BILL_PERIOD_INVERTED` | `periodTo` precedes `periodFrom` |
-| 409 | `BILL_PERIOD_OVERLAPS` | the period overlaps one already billed on this project, **naming the package** (FR-002) — a day's measurement claimed on two bills is claimed twice |
+| 409 | `BILL_PERIOD_OVERLAPS` | the period overlaps one already billed **on this schedule to this counterparty** — the project for a client bill, the work order for a subcontractor bill — **naming the package** (FR-002). A day's measurement claimed on two bills is claimed twice. The check is deliberately not per project: one project is billed to its client and to several subcontractors over the same month, and a per-project rule would refuse the second of those (CHK029). A package in **any** status occupies its period, draft included (FR-002a) |
 | 409 | `BILL_PACKAGE_EXISTS` | this project and period already have a package; the existing one is returned in the body rather than a second created (FR-007) |
 | 400 | `BILL_NO_SCHEDULE` | the project has no BOQ lines, or the work order no award lines (FR-011) |
 | 400 | `BILL_RATE_MISSING` | a required rate — retention, tax, tax deducted — is not available. **Refused rather than defaulted to zero**: a silent zero produces a bill with no retention and a payable 5 % too high, which is the error most likely to be paid before anybody notices (research §4) |
@@ -72,6 +87,20 @@ Sets one line's claimed quantity.
 |---|---|---|
 | 400 | `BILL_CLAIM_NEEDS_REASON` | the claim differs from the proposal and no reason was given |
 | 409 | `BILL_PACKAGE_ISSUED` | the package has been issued; revise it instead (FR-044) |
+
+A reason is **cleared** when a later edit returns the claim to its proposal (FR-004a). A reason left
+beside a zero variance argues on the measurement sheet for a deduction the bill does not make.
+
+### `POST /projects/bill-packages/:packageId/abandon` → 200
+
+Releases a draft's period (FR-002b). The only way out of a mistakenly-opened draft: a package in any
+status occupies its period, and without this the alternative is deleting the row that records the
+period was billed — which FR-044a forbids for an issued bill and this endpoint makes unnecessary for
+a draft.
+
+| Refusal | Code | When |
+|---|---|---|
+| 409 | `BILL_PACKAGE_ISSUED` | only a draft can be abandoned; an issued bill is revised or certified, never removed (FR-044a) |
 
 ---
 
@@ -148,25 +177,39 @@ One item's claim history across every package, in period order, with the daily r
 
 - Reasons appear **verbatim** as the engineer wrote them (FR-032). They are the argument the document
   exists to settle.
-- The footer satisfies `thisBillQty + uptoPreviousQty = uptoDateQty`, **exactly** (FR-035). This is
-  the one property of the package nobody can check by reading a single bill.
+- The footer satisfies `thisBillQty + uptoPreviousQty = uptoDateQty`, **exactly** (FR-035), where
+  `uptoPreviousQty` is **read from the previous package's stored up-to-date figure** (FR-013a,
+  FR-014) and not derived as this package's up-to-date less its own quantity. The distinction is the
+  whole value of the assertion: against a stored figure it can fail, against a derived one it is a
+  rearrangement of its own definition. Where there is no previous package the figure is `"0.000"`,
+  which is a position, and not `null`, which is not.
 - A date with no logbook entry is `logbookMissing: true` rather than a run of zero (FR-034) — read
   through `ProjectSourcesRegistry`, never by querying the plant schema, as 022 established.
 
 ### `GET /projects/:projectId/bill-packages/:packageId/debits` → 200 · `POST /projects/:projectId/bill-package-debits` → 201 · `POST /projects/bill-package-debits/:debitId/apply` → 200
 
-The register shows **every** debit on the project from any package, including those recovered
+A **draft's** register shows every debit on the project from any package, including those recovered
 earlier, because the running total is the point (FR-039), grouped under its heading (FR-040).
+
+An **issued** package's register is the register **as at issue** — `recordedAt <= issuedAt` (FR-039a).
+Without that, FR-039 and FR-028 contradict each other: a debit recorded between two productions of a
+signed bill would change it. The running total stays live where it is useful and freezes where the
+document was signed.
 
 | Refusal | Code | When |
 |---|---|---|
-| 409 | `DEBIT_ALREADY_RECOVERED` | applied to a package already, **naming it** (FR-037) — a debit recovered twice is money taken twice |
+| 409 | `DEBIT_ALREADY_RECOVERED` | applied to a package already, **naming it** (FR-037) — a debit recovered twice is money taken twice. Holds under two simultaneous applications and not only against a second attempt (FR-037a) |
+| 409 | `BILL_PACKAGE_ISSUED` | the target package has been issued (FR-037b) — applying a debit afterwards either moves a figure FR-044 froze or records a recovery the bill never made |
 
 ### `PUT /projects/bill-packages/:packageId/check-list` → 200
 
 Six fixed questions in a fixed order with fixed wording; an answer of `yes`, `no`, `not_required`, or
 **absent**, which is distinguishable from `no` (FR-041, FR-042). It never refuses an issue (FR-043) —
 the check list records a fact, and the real document says only that gaps "may delay the process".
+
+The gaps are **returned to the caller that issues the package** (FR-043a), in its response body
+beside `missingHeaderFields`, not merely recorded against the row. "MUST report the gaps" with no
+addressee is satisfied by storing them where nobody looks.
 
 ---
 
@@ -182,8 +225,17 @@ Every figure comes from the stored package; **nothing is recomputed at productio
 the same package downloaded twice is identical. That is a property of the renderer's inputs rather
 than a rule it follows: it receives a view type and holds no database client (research §6).
 
-A missing party identifier is **reported, not refused** (FR-027) — the response header names what was
-missing, and the sheet leaves the cell blank. A bill that cannot be produced because a PAN is
+Sheet names follow a stated rule that **cannot lose a sheet** (FR-024a): a name is capped at 31
+characters, excludes the characters a path uses, and must be unique in the workbook, so a name drawn
+from a BOQ number or a description collides or truncates on a 312-item schedule. Each sheet is named
+by its line's position and identifies its item **inside** the sheet. A description too long for a
+single cell is reported rather than silently truncated (FR-029a), and the number of measurement
+sheets equals the number of schedule lines, assertable as a count (FR-030a).
+
+A missing party identifier is **reported, not refused** (FR-027) — the response header
+`X-Bill-Package-Missing-Fields` names what was missing, and the issue response carries the same list
+in its body (FR-027a), because a workbook is a file download and a list absent from the response is a
+gap nobody is told about. The sheet leaves the cell blank. A bill that cannot be produced because a PAN is
 unrecorded is worse than one produced with a gap somebody fills by hand. Note from the spec's
 assumptions: a client record carries no `state` and no `pan` today, so those are the likeliest gaps
 for a bill issued to a client.
@@ -195,7 +247,9 @@ for a bill issued to a client.
 ### `POST /projects/bill-packages/:packageId/issue` → 200
 
 Freezes every figure and the statutory header (FR-044). Refuses an unpriced line carrying a non-zero
-claim (FR-009).
+claim (FR-009). The response carries `missingHeaderFields` and the check-list gaps (FR-027a,
+FR-043a) — reported, never a refusal. An issued package can never be deleted (FR-044a); a draft is
+abandoned instead.
 
 ### `POST /projects/bill-packages/:packageId/revise` → 200 · `POST /projects/bill-packages/:packageId/certify` → 200
 
@@ -216,6 +270,12 @@ to the next package — or, if nobody looks, to no package at all.
                   "lines": [ { "boqNo": "30.10", "claimed": "1.000", "approvedNow": "1.300",
                                "understatedBy": "0.300" } ] } ] }
 ```
+
+Each line carries the remedy, because the report alone is not one (FR-014c): 022 attributes
+measurement by **work date**, so a quantity approved late whose work date sits inside an
+already-billed period never appears in any later period's proposal either — it is unreachable rather
+than deferred. The route back is an over-claim under FR-006 on a later package, carrying this report
+as its written reason, and the response says so rather than leaving each engineer to work it out.
 
 Choosing to freeze without this report would trade a reconciliation problem for a **silent revenue
 leak**, which is worse because nothing surfaces it. FR-049b's cross-period work-date correction

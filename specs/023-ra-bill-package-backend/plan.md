@@ -16,6 +16,14 @@ so they are not one table with a flag. But the ~30 columns the *package* adds ar
 both, so those columns live once, in a `BillPackage` row attached to whichever bill it belongs to.
 Research §1 sets out why each of the three alternatives was rejected.
 
+**Amended 2026-10-05, after `checklists/silent-failure.md`.** The checklist ran against this plan
+and found nine defects in the written requirements, four of which land in the design: the
+up-to-previous column was defined so that FR-035's footer identity could not fail; FR-003 named the
+project's BOQ for both directions when a subcontractor bill measures award lines, which are nullably
+mapped and so may have no measurement source at all; FR-020's "fully recovered" had nothing recorded
+to compare against; and FR-039's live debit register contradicted FR-028's frozen workbook. The
+phases below carry the consequences, each marked. `spec.md` went from 58 requirements to 89.
+
 The other work that needed real thought is the pair of reports the spec's own decisions oblige
 (**Phase F**): freezing the cumulative position makes a late-approved report able to belong to an
 already-billed period, and permitting an over-claim makes the reason field a potential route around
@@ -83,7 +91,7 @@ touched.
 
 ```text
 specs/023-ra-bill-package-backend/
-├── spec.md              # 58 requirements, decisions D1–D3
+├── spec.md              # 89 requirements (58 at plan time), decisions D1–D3
 ├── plan.md              # This file
 ├── research.md          # Phase 0 — eight decisions
 ├── data-model.md         # Phase 1 — four new tables, four extended
@@ -91,7 +99,8 @@ specs/023-ra-bill-package-backend/
 ├── contracts/
 │   └── bill-package-api.md
 ├── checklists/
-│   └── requirements.md   # Spec quality checklist
+│   ├── requirements.md   # Spec quality checklist
+│   └── silent-failure.md # 52 items, nine findings — amended spec.md, this file and data-model.md
 └── tasks.md              # Phase 2 — NOT created by /speckit-plan
 ```
 
@@ -167,6 +176,15 @@ direction), `BillPackageDebit` (the register), `BillPackageCheckListAnswer` (six
 `BillPackageLineClaim` (the per-line proposal, reason, variance and over-claim flag — see research
 §2 for why this is not columns on the two existing line tables).
 
+**Four additions from the checklist**, each carrying its reason into the migration: an `abandoned`
+status (FR-002b — a period is occupied by a bill in any status, so without a way out one bad draft
+holds a period for ever and the only remedy is deleting the row that proves the period was billed);
+a **nullable** `proposedQty` with a `proposalSource` enum (FR-003a — null is *no measurement source*,
+which is not the fact zero states); `mobilizationAdvanceTotal` and `performanceSecurityTotal`
+(FR-020 — without a recorded total, "fully recovered" and "entered as zero this month" are the same
+row and the requirement is satisfied by doing nothing); and `varianceQty` made nullable to match a
+null proposal.
+
 Extended: nothing on `ClientBill`/`RABill` beyond what already exists. **Their `grossAmount`,
 `retentionAmount` and `netAmount` stay the only home for those three figures** — `BillPackage` holds
 only what they lack. Research §3 is explicit that this is to avoid the two-counters problem this
@@ -207,11 +225,25 @@ fact that 022's measurement may move afterwards.
   re-recovers money.
 - **The payable may be negative** (FR-022), because a bill whose debits exceed its work is a real
   outcome the client's own format expresses.
+- **Every base is stated, and the rounding rule with it** (FR-012a, FR-015a, FR-018a, FR-019a).
+  The checklist found that FR-015/FR-018/FR-019 each fixed where a *rate* comes from and said
+  nothing about what it multiplies, and that the sample bill withholds nothing — so the one document
+  the tests reproduce constrains none of the withholding arithmetic. The base is the work done
+  before any recovery, deduction or withholding, in all three columns; totals are rounded from
+  unrounded components, because rounding rows and then summing breaks FR-021's balance by a few
+  rupees per column, which on a money document is a figure somebody has to explain.
+- **One-time recoveries compare against a recorded total** (FR-020, FR-020b). The frozen totals are
+  inputs to the abstract like every rate, and a recovery that would pass the total is refused naming
+  what remains.
 - **SC-003 is a test, with the client's own figures.** 18,41,686 of work done must yield 1,65,752
-  and 1,65,752, retention 92,084, tax deducted 36,834, payable 11,39,971. Reproducing a real
-  document catches **a rate applied to the wrong base** — tax on the post-retention figure rather
-  than the gross, say, or retention on the tax-inclusive total — which an assertion that "9 % was
-  applied" cannot, because it is satisfied by 9 % of anything.
+  and 1,65,752, retention 92,084, tax deducted 36,834. Reproducing a real document catches **a rate
+  applied to the wrong base** — tax on the post-retention figure rather than the gross, say, or
+  retention on the tax-inclusive total — which an assertion that "9 % was applied" cannot, because it
+  is satisfied by 9 % of anything. **The payable of 11,39,971 does not follow from those figures**:
+  the checklist worked the arithmetic and the work total less retention and tax deducted leaves
+  20,44,272, so 9,04,301 of recoveries is unaccounted for and must be transcribed from the source
+  rather than inferred. SC-003 was rewritten to say so, because a figure back-solved to make a test
+  pass tests nothing.
 
 ### Phase D — the sheets' data (FR-031 to FR-043)
 
@@ -224,9 +256,13 @@ holding a workbook**.
   none rather than as nothing done (FR-033, FR-034) — the distinction 022 established.
 - The footer identity (FR-035) is asserted rather than computed twice: this bill plus up to previous
   must equal up to date, exactly, and the test for it runs over every item on every bill.
-- The debit register: one bill per debit, refused twice over (FR-037), grouped under headings
-  (FR-040), and every debit on the project visible from any bill (FR-039) because the running total
-  is the point.
+- The debit register: one bill per debit, refused twice over (FR-037) **and under two simultaneous
+  applications** (FR-037a — the rule belongs where concurrent writers meet it, not only in the
+  service that looks first), grouped under headings (FR-040), applied only to a bill not yet issued
+  (FR-037b), and every debit on the project visible from a draft's register (FR-039). **An issued
+  bill's register is the register as at issue** (FR-039a, `recordedAt <= issuedAt`), which is how
+  FR-039's running total stops contradicting FR-028's frozen workbook — the checklist's CHK025, and
+  quickstart Pass 6 was expecting the live behaviour.
 - The check list is **six fixed questions in a fixed order with fixed wording**, in a constant
   rather than a table, because the client reads them by position (FR-041, FR-043). An unanswered
   question is distinguishable from one answered "no" (FR-042), which is a nullable answer and not a
@@ -252,6 +288,14 @@ cells that span. There is no shared abstraction to extract that would not be an 
 computed and stored; a renderer that could query could recompute, and a bill produced twice must be
 identical.
 
+**Sheet names are a rule, not an accident** (FR-024a). A sheet name is capped at 31 characters,
+excludes the characters a path uses, and must be unique in the workbook — so names drawn from BOQ
+numbers or descriptions collide or truncate on a 312-item schedule, and what the writer does with a
+collision decides whether an item's sheet silently disappears. The rule guarantees uniqueness and
+every sheet names its own item **inside** the sheet. A description too long for a cell is reported
+rather than truncated (FR-029a), and the sheet count is asserted against the schedule's line count
+(FR-030a).
+
 Missing party identifiers are reported, not refused (FR-027) — a bill that cannot be produced
 because a PAN is unrecorded is worse than one produced with a gap somebody fills by hand. Note from
 the spec's assumptions: `Client` carries no `state` and no `pan`, so for a bill issued to a client
@@ -275,7 +319,18 @@ Then the two reports, and they are the reason this phase is not merely bookkeepi
 
 FR-049b's cross-period work-date correction **shares the understatement report's mechanism** rather
 than having its own: both are "compare a billed period's claims against that period's approved
-measurement as it now stands", and two implementations of one comparison would disagree.
+measurement as it now stands", and two implementations of one comparison would disagree. FR-048a now
+states that as a requirement rather than leaving it a plan note.
+
+**And the understatement report alone was not enough** (FR-014c, from the checklist). 022 attributes
+measurement by work date, so a quantity approved after a bill went out whose work date sits inside
+that bill's period never appears in any later period's proposal either — it is not deferred, it is
+unreachable. The route back is an over-claim under FR-006 carrying the report as its reason, and
+stating it is the difference between one engineer finding it and the next writing the quantity off.
+
+Abandoning a draft (FR-002b) and refusing to delete an issued bill (FR-044a) belong here too: a
+period is occupied by a bill in any status, so the abandon path is the only thing standing between a
+mistaken draft and somebody deleting the row that records the period was billed.
 
 ### Phase G — controller, permissions, and the isolation proof (FR-050 to FR-053)
 
@@ -300,6 +355,11 @@ wrong while looking right.
 |---|---|---|
 | The client's real arithmetic: 18,41,686 → 1,65,752 / 1,65,752 / 92,084 / 36,834 / 11,39,971 | `bill-abstract.spec.ts` | **Catches a rate applied to the wrong base.** "9 % was applied" is satisfied by 9 % of anything; the real document is only satisfied by 9 % of the right thing. |
 | This bill + up to previous = up to date, exactly, for every item on every bill | `measurement-sheet.service.spec.ts` + e2e | FR-035. The one property of the package nobody can check by reading a single bill. |
+| Up to previous is **read from the previous bill's stored figure**, not derived from this one | `measurement-sheet.service.spec.ts` | FR-013a. The test above is a rearrangement of its own definition unless this holds — the checklist's sharpest finding, and the reason the row above is worth anything. |
+| An award line mapped to no BOQ line proposes *no measurement available*, not zero | `bill-package.service.spec.ts` + e2e | FR-003a. On the direction billed every month, zero would mean "nothing was done" for every unmapped line. |
+| A rate applied to a withheld amount, and a total rounded from rounded rows | `bill-abstract.spec.ts` | FR-012a, FR-015a. The sample bill withholds nothing, so SC-003 leaves both paths untested. |
+| An issued bill's register does not grow when a debit is recorded afterwards | `debit-note.service.spec.ts` + e2e | FR-039a. The resolution of FR-039 against FR-028; quickstart Pass 6 expected the opposite. |
+| A one-time recovery refused past its recorded total | `bill-abstract.spec.ts` | FR-020b. Without a total, FR-020 is satisfied by doing nothing. |
 | The count of measurement sheets equals the count of items, including empty ones | `bill-workbook.renderer.spec.ts` | FR-030, asserted as a **count**: an assertion over a list of sheets passes just as happily over a short list, and a missing item is a smaller invoice. 022's T052 is the precedent. |
 | A bill produced twice is identical in every figure | `bill-workbook.renderer.spec.ts` | FR-028. A renderer that could recompute would drift from the signed copy. |
 | The cumulative position across three consecutive bills, with measurement approved between the second and the third | e2e | D1's whole point, and the case that distinguishes frozen from recomputed. |

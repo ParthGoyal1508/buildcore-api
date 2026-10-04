@@ -111,6 +111,12 @@ order, each against its own package label (RA-10, RA-11, RA-12), with the reason
 `uptoDateQty` **exactly** — not to within a rounding difference (FR-035). This is the one property of
 the package that cannot be checked by reading a single bill.
 
+**And check that `uptoPreviousQty` came from the previous package** (FR-013a, FR-014). If it was
+derived as this package's up-to-date less its own quantity, the assertion above holds for any values
+whatever and proves nothing — which is what `checklists/silent-failure.md` CHK002 found. The way to
+see it: read the second package's stored up-to-date figure, then read the third's up-to-previous. They
+are the same number because one was copied from the other, not because two subtractions agreed.
+
 Where a line names equipment, confirm the daily record appears beneath, and that a date with no
 logbook entry reads `logbookMissing: true` rather than a run of zero (FR-034).
 
@@ -118,12 +124,20 @@ logbook entry reads `logbookMissing: true` rather than a run of zero (FR-034).
 
 Record three debits under two headings. Apply two to this package.
 
-**Expect** the register to show all three — including from a *later* package, because the running
-total is the point (FR-039) — grouped under their headings, with the two applied naming this package.
-The bill's mechanical-debit recovery equals the two applied.
+**Expect** the register of a **draft** package to show all three — including one recorded against a
+later package, because the running total is the point (FR-039) — grouped under their headings, with
+the two applied naming this package. The bill's mechanical-debit recovery equals the two applied.
+
+**Then issue the package and record a fourth debit.** Expect the issued package's register to show
+three and not four: an issued bill's register is the register **as at issue** (FR-039a). This is the
+amendment `checklists/silent-failure.md` CHK025 forced — FR-039's live running total and FR-028's
+"produced twice is identical" contradict each other outright, and a debit recorded between two
+productions of a signed bill must not change it.
 
 Apply one of them to a second package. **Expect** 409 `DEBIT_ALREADY_RECOVERED`, naming the first. A
-debit recovered twice is money taken twice.
+debit recovered twice is money taken twice. **Then apply one to the issued package**: expect 409
+`PACKAGE_ALREADY_ISSUED` (FR-037b), because applying it would either move a frozen figure or record a
+recovery the bill never made.
 
 ## Pass 7 — The workbook
 
