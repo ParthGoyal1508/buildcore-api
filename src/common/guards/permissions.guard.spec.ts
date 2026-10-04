@@ -254,6 +254,41 @@ describe('PermissionsGuard — levels', () => {
     expect(guard.canActivate(context)).toBe(true);
   });
 
+  it('falls back per AREA, so one backfilled role does not disable another', () => {
+    /**
+     * The defect this was changed for, 2026-10-04.
+     *
+     * The fallback used to be per *caller* — it applied only when `grants` was entirely
+     * empty. An account holding one backfilled role and one role whose permissions live only
+     * in the `Role.permissions` array therefore lost the second role's areas: the first
+     * role's grants made the list non-empty, and the un-backfilled area had no level to
+     * match. Silent, and in the direction of refusing something the caller holds.
+     *
+     * Found by `settings.e2e-spec.ts`, where a role granted `EMPLOYEES` was given to an
+     * account that already held Viewer, and the test asserting that deleting the role
+     * *revokes* access failed because the access had never been granted.
+     */
+    const { guard, context } = contextFor('GET', [Permission.EMPLOYEES], {
+      permissions: [Permission.MACHINERY, Permission.EMPLOYEES],
+      // MACHINERY is backfilled; EMPLOYEES is not.
+      grants: [grant(Permission.MACHINERY, AccessLevel.read)],
+    });
+    expect(guard.canActivate(context)).toBe(true);
+  });
+
+  it('does NOT let the fallback lift a read-only area to write', () => {
+    // The reason narrowing the fallback to the area is safe, asserted rather than argued.
+    // A read-only role has a `read` row for the area, so the area *is* backfilled, so no
+    // fallback applies and the write is refused — even though the area is present in
+    // `permissions`, which is what the fallback reads.
+    const readOnly: Partial<AuthenticatedUser> = {
+      permissions: [Permission.MACHINERY],
+      grants: [grant(Permission.MACHINERY, AccessLevel.read)],
+    };
+    const write = contextFor('PATCH', [Permission.MACHINERY], readOnly);
+    expect(() => write.guard.canActivate(write.context)).toThrow();
+  });
+
   it('treats the client’s Note 22 role correctly', () => {
     // LOGBOOK and FUEL at both levels, MACHINERY at read only. The operator may enter
     // readings, may see the register, and may not change it — which is the example the
