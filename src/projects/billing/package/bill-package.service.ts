@@ -31,6 +31,7 @@ import {
   checkListGaps,
   mergeCheckList,
 } from './check-list';
+import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { PACKAGE_ERRORS } from './package-error-codes';
 
 /** One party's statutory details, however they were sourced. */
@@ -148,6 +149,28 @@ export interface BillPackageView {
 export function packageLabel(sequenceNo: number): string {
   return `RA-${String(sequenceNo).padStart(2, '0')}`;
 }
+
+/**
+ * The columns `setAdjustments` may write (025 FR-044).
+ *
+ * A list rather than `Object.keys(dto)`: the DTO's shape is a wire contract and this is the set of
+ * columns a caller is permitted to move, and conflating the two is how a field added to the DTO for
+ * display would silently become writable. `retentionAmount`, `tdsAmount` and `workDone` are absent
+ * because each is computed — accepting one would let a bill state a retention its own frozen rate
+ * does not produce.
+ */
+const ADJUSTABLE = [
+  'releaseWithheld',
+  'recoveryDiesel',
+  'debitAgainstCivil',
+  'otherRecoveries',
+  'mechanicalDebit',
+  'mobilizationAdvance',
+  'performanceSecurity',
+  'theftWithheld',
+  'mobilizationAdvanceTotal',
+  'performanceSecurityTotal',
+] as const satisfies readonly (keyof SetBillAdjustmentsDto)[];
 
 const dec = (value: Prisma.Decimal | string | number): Prisma.Decimal =>
   new Prisma.Decimal(value);
@@ -1212,6 +1235,55 @@ export class BillPackageService {
       tdsAmountUptoDate: uptoDate.tdsAmount,
       payableUptoDate: uptoDate.payable,
     };
+  }
+
+  /**
+   * Sets the month's entered recoveries, deductions and withholdings (025 FR-044).
+   *
+   * **Draft only.** Issue freezes every figure on this bill, and a recovery changed afterwards is
+   * either an edit to a signed document or a deduction the bill never actually made — the same
+   * reasoning that refuses a debit applied after issue.
+   *
+   * **Omission leaves a column unchanged; an explicit `0` sets it to zero.** A caller that posted
+   * the whole set every time would be indistinguishable from one clearing the fields it did not
+   * render, and these are money columns.
+   */
+  async setAdjustments(
+    ctx: RlsContext,
+    packageId: string,
+    input: SetBillAdjustmentsDto,
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true, status: true, sequenceNo: true },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.packageIssued,
+          message:
+            `${packageLabel(
+              pkg.sequenceNo,
+            )} has been issued, so its recoveries and ` +
+            'deductions cannot change. Record them on the next bill — a deduction added after ' +
+            'issue is either a change to a signed document or one this bill never made.',
+        });
+      }
+
+      // Built field by field rather than spread, so a key the caller omitted never reaches the
+      // update as `undefined` and a key it sent as "0" always does.
+      const data: Prisma.BillPackageUpdateInput = {};
+      for (const key of ADJUSTABLE) {
+        const value = input[key];
+        if (value !== undefined) data[key] = dec(value);
+      }
+      if (Object.keys(data).length > 0) {
+        await tx.billPackage.update({ where: { id: pkg.id }, data });
+      }
+    });
+    return this.view(ctx, packageId);
   }
 
   /**

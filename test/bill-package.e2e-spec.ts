@@ -399,6 +399,71 @@ describe('The running-account bill package (e2e)', () => {
 
   // ── Pass 4 — issue, and the frozen header ────────────────────────────────
 
+  /**
+   * 025 FR-044. **The entered recoveries reach the payable.**
+   *
+   * Every one of these columns was read by the abstract, printed on both documents and carried
+   * into the next bill's cumulative position, and written by nothing — so each was permanently
+   * zero and the bill printed a *Recovery of Diesel* row that could only ever say nothing.
+   *
+   * Asserted against the payable rather than against the stored column: a test that read the
+   * column back would pass against an endpoint that wrote a number nothing subsequently used,
+   * which is the state this fixes.
+   */
+  it('sets the month’s recoveries, and the payable moves by them', async () => {
+    const before = await http()
+      .get(`/projects/bill-packages/${packageId}/abstract`)
+      .set(auth())
+      .expect(200);
+
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '1000.00', theftWithheld: '250.00' })
+      .expect(200);
+
+    const after = await http()
+      .get(`/projects/bill-packages/${packageId}/abstract`)
+      .set(auth())
+      .expect(200);
+
+    expect(Number(after.body.columns.thisBill.recoveryDiesel)).toBe(1000);
+    expect(Number(after.body.columns.thisBill.theftWithheld)).toBe(250);
+    expect(Number(after.body.columns.thisBill.payable)).toBe(
+      Number(before.body.columns.thisBill.payable) - 1250,
+    );
+
+    // Omission leaves a column alone; an explicit zero sets it. A caller posting the whole set
+    // every time would otherwise be indistinguishable from one clearing what it did not render.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ theftWithheld: '0.00' })
+      .expect(200);
+
+    const third = await http()
+      .get(`/projects/bill-packages/${packageId}/abstract`)
+      .set(auth())
+      .expect(200);
+    expect(Number(third.body.columns.thisBill.recoveryDiesel)).toBe(1000);
+    expect(Number(third.body.columns.thisBill.theftWithheld)).toBe(0);
+
+    // A computed figure is not an adjustable one: a bill stating a retention its own frozen rate
+    // does not produce is a bill whose arithmetic has stopped being checkable.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ retentionAmount: '1.00' })
+      .expect(400);
+
+    // Put it back, so the issue tests below read the figures they were written against.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '0.00' })
+      .expect(200);
+  });
+
   it('issues the bill, reporting the header gaps rather than refusing', async () => {
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
@@ -480,6 +545,16 @@ describe('The running-account bill package (e2e)', () => {
     expect(bill).toBeDefined();
     expect(bill.status).toBe('submitted');
     expect(bill.submittedAt).not.toBeNull();
+  });
+
+  it('refuses recoveries changed after the bill has been issued', async () => {
+    // The same reasoning that refuses a debit applied after issue: a deduction recorded afterwards
+    // is either an edit to a signed document or one the bill never actually made.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '500.00' })
+      .expect(409);
   });
 
   it('refuses a debit applied to a bill that has been issued', async () => {

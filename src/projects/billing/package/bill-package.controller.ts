@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -23,6 +24,7 @@ import { ProjectLockGuard } from '../../guards/project-lock.guard';
 import { BillPackageService } from './bill-package.service';
 import { BillPackageViewBuilder } from './bill-package-view.builder';
 import { DebitNoteService } from './debit-note.service';
+import { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { SetBillLineClaimDto } from './dto/bill-line.dto';
 import { SetCheckListDto } from './dto/check-list.dto';
 import { ComposeBillPackageDto } from './dto/compose-bill.dto';
@@ -121,6 +123,38 @@ export class BillPackageController {
       claimId,
       dto,
     );
+  }
+
+  @Patch('projects/bill-packages/:packageId/adjustments')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Set the month’s recoveries, deductions and withholdings',
+    description:
+      'The figures a person decides, as distinct from the ones a rate produces. Every one of ' +
+      'these columns was read by the abstract, printed on the workbook and the PDF, and carried ' +
+      'into the next bill’s cumulative position — and **written by nothing**, so each was ' +
+      'permanently zero and the bill rendered a *Recovery of Diesel* row that could only ever say ' +
+      'nothing.\n\n' +
+      '**Omitting a field leaves it unchanged; sending `0` sets it to zero.** A caller that posted ' +
+      'the whole set every time would be indistinguishable from one clearing what it did not ' +
+      'render.\n\n' +
+      '`retentionAmount`, `tdsAmount` and `workDone` are **not accepted**: each is computed from ' +
+      'the frozen fractions and the claims, and a bill stating a retention its own rate does not ' +
+      'produce is a bill whose arithmetic has stopped being checkable.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'The package has been issued. Record it on the next bill — a deduction added after issue is ' +
+      'either a change to a signed document or one this bill never made.',
+  })
+  @ApiResponse({ status: 423, description: 'The project is locked.' })
+  async setAdjustments(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: SetBillAdjustmentsDto,
+  ) {
+    return this.packages.setAdjustments(rlsContextFor(caller), packageId, dto);
   }
 
   @Post('projects/bill-packages/:packageId/abandon')
