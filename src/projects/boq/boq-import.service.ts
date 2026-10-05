@@ -75,6 +75,34 @@ export interface ValidationReport {
   };
 }
 
+/**
+ * A schedule's own item number, as the spreadsheet shows it (FR-041).
+ *
+ * **A numeric cell is formatted, not stringified.** These numbers are typically a fill series —
+ * `=above+0.01` — so the cached result carries accumulated float error, and the client's own file
+ * holds `88.02000000000001` where every human reading it sees `88.02`. Excel renders at fifteen
+ * significant digits, which is exactly what hides the drift; `String()` does not, and 33 of the 231
+ * lines in that file imported with a tail of noise onto a document sent to a client.
+ *
+ * A text cell passes through verbatim. Plenty of real item numbers are text — `3.19.1`, `88(a)` —
+ * and reformatting those would be inventing a number the file does not contain.
+ */
+function itemNumber(cell: unknown, fallback: number): string {
+  if (typeof cell !== 'number' || !Number.isFinite(cell)) {
+    return String(cell ?? fallback);
+  }
+  const rendered = cell.toPrecision(15);
+  // Exponent form means a magnitude no item number has; keep the plain spelling rather than
+  // putting `8.8e+21` on a schedule.
+  if (rendered.includes('e')) return String(cell);
+  return rendered.includes('.')
+    ? rendered.replace(/0+$/, '').replace(/\.$/, '')
+    : rendered;
+}
+
+/** Exported for its unit test only — the rule is too easy to get right by accident in an e2e. */
+export const itemNumberForTest = itemNumber;
+
 function refuse(code: string, message: string): BadRequestException {
   return new BadRequestException({ statusCode: 400, code, message });
 }
@@ -292,7 +320,7 @@ export class BoqImportService {
       unitCounts.set(unit, (unitCounts.get(unit) ?? 0) + 1);
 
       groups[groups.length - 1].items.push({
-        boqNo: String(row.cells[0] ?? row.rowNumber),
+        boqNo: itemNumber(row.cells[0], row.rowNumber),
         taskName: description,
         unit,
         scopeQty: DEC(quantity).toFixed(3),
