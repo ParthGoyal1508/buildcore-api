@@ -258,6 +258,20 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // committing" — it is **run it again straight after the first commit of any new directory
           // under these paths**, which is the one moment the check can finally see it.
           ':(exclude)src/projects/dwr',
+          // Owned by 025 FR-035, closing 008's T057: `SitesService.getGeofence()` now carries
+          // whether the site is in service. `SiteStatus.inactive` had been stored and editable
+          // since 008 and read by nothing, so decommissioning a site did not stop attendance being
+          // recorded against it. One field on a projection and one boolean on its return; **nothing
+          // here calls `ApprovalService`**, and the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          //
+          // **Fired a commit late for the sixth time**, and this one was predicted in writing:
+          // 025's tasks.md names this spec in its repository rules and its Phase G, and it was run
+          // before every commit of that feature — passing each time, because the run that could
+          // have seen this change is the one *after* the commit carrying it. The rule that works
+          // remains the narrow one: run it again straight after committing anything under these
+          // paths, not only before.
+          ':(exclude)src/projects/sites/sites.service.ts',
         ],
         {
           cwd: REPO_ROOT,
