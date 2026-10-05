@@ -1200,8 +1200,23 @@ Table WorkOrder {
   companyId String [not null]
   projectId String [not null]
   project Project [not null]
+  code String [note: 'The work order\'s own number — `PRPL-WO-0001` (027).
+
+**Nullable, and that is a migration artefact rather than a design choice.** The table is
+populated, so a required unique column cannot simply be added to it; the rows that predate
+this carry none and read by their detail as they always did. Every work order raised from
+here on is numbered, and the service allocates it the way every other series in this product
+is allocated.
+
+Unique per company, not globally: two companies number their own work orders independently,
+exactly as they do projects and vendors.']
   partnerId String [note: '`partners.Vendor.id`, read through `PartnersService`. Bare id — see the
-schema-level note above.']
+schema-level note above.
+
+Nullable because it always has been and the existing rows carry nothing. 027 added the picker
+that sets it: the column shipped with 018 and **no screen ever wrote to it**, so every work
+order in the product was anonymous — the award, the bills and the retention all belonged to
+nobody in particular.']
   workDetail String [not null]
   terms String
   requirements String
@@ -1215,6 +1230,10 @@ schema-level note above.']
   retentionReleases RetentionRelease [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
 
   Note: 'Work subcontracted on a project.'
 }
@@ -5200,6 +5219,7 @@ Enum CodeSeriesType {
   REQUISITION
   ASSETS
   ASSET_REQUEST
+  WORK_ORDER
 }
 
 Enum VendorType {
