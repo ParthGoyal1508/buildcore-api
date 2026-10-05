@@ -697,6 +697,29 @@ describe('The running-account bill package (e2e)', () => {
     expect(frozen.issuerPan).toBe('AABCP1234F');
   });
 
+  it('produces the same bill as a PDF, from the same figures', async () => {
+    // 025 FR-042. The `.xlsx` is what a client edits before signing; this is what gets attached to
+    // an email and filed. **Two readings of one bill**, which is why both render from the same
+    // view — a second path reading its own figures would eventually produce two documents for one
+    // bill, and a client holding both would be right to believe whichever is worse for us.
+    const pdf = await http()
+      .get(`/projects/bill-packages/${packageId}/bill.pdf`)
+      .set(auth())
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+
+    expect(pdf.headers['content-type']).toContain('application/pdf');
+    expect(pdf.headers['content-disposition']).toContain('.pdf');
+    // A real PDF, not an error page with a hopeful content type.
+    expect((pdf.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+    expect((pdf.body as Buffer).length).toBeGreaterThan(1000);
+  });
+
   // ── A statutory rate can change, and an issued bill cannot (025 US4) ──────
 
   /**

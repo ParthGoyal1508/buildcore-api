@@ -4,6 +4,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
+import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from '../workbook/bill-workbook.renderer';
 import type {
   BillWorkbookView,
@@ -35,6 +36,7 @@ export class BillPackageViewBuilder {
     private readonly sheets: MeasurementSheetService,
     private readonly debits: DebitNoteService,
     private readonly renderer: BillWorkbookRenderer,
+    private readonly pdf: BillPdfRenderer,
   ) {}
 
   /** The workbook, its filename, and the gaps the caller must be told about (FR-027a). */
@@ -49,6 +51,28 @@ export class BillPackageViewBuilder {
       filename: `${sanitise(view.header.receiver.name ?? 'Bill')} ${
         view.header.billLabel
       }.xlsx`,
+      missingFields: view.header.missingFields,
+    };
+  }
+
+  /**
+   * The same package as a PDF (025 FR-042).
+   *
+   * **Calls `viewFor`, exactly as `workbookFor` does.** That is the point: the spreadsheet and the
+   * PDF of one bill are two readings of a single set of already-rounded figures, so they cannot
+   * disagree. A second path that read its own figures would eventually produce two documents for
+   * one bill, and a client holding both would be right to believe whichever is worse for us.
+   */
+  async pdfFor(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<{ bytes: Buffer; filename: string; missingFields: string[] }> {
+    const view = await this.viewFor(ctx, packageId);
+    return {
+      bytes: await this.pdf.render(view),
+      filename: `${sanitise(view.header.receiver.name ?? 'Bill')} ${
+        view.header.billLabel
+      }.pdf`,
       missingFields: view.header.missingFields,
     };
   }

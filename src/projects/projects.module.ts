@@ -20,6 +20,7 @@ import { BillPackageService } from './billing/package/bill-package.service';
 import { DebitNoteService } from './billing/package/debit-note.service';
 import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
 import { PackageReportsService } from './billing/package/package-reports.service';
+import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
 import { DwrService } from './dwr/dwr.service';
@@ -156,6 +157,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     PackageReportsService,
     BillPackageViewBuilder,
     BillWorkbookRenderer,
+    BillPdfRenderer,
     ImportBatchStore,
     // 022 US5, which 008 specified in August and never built. `BoqService.updateDoneQty` was
     // written then, exported from this module **for this caller**, and had no caller for two

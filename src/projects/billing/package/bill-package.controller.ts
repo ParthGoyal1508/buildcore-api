@@ -311,6 +311,36 @@ export class BillPackageController {
     res.send(bytes);
   }
 
+  @Get('projects/bill-packages/:packageId/bill.pdf')
+  @ApiOperation({
+    summary: 'The same package as a PDF',
+    description:
+      'The same sections in the same order as the workbook — check list, abstract, priced ' +
+      'schedule, one measurement sheet per schedule line, debit register — rendered from the ' +
+      '**same view**, so the spreadsheet and the PDF of one bill cannot disagree.\n\n' +
+      'The `.xlsx` is what a client edits before signing; this is what gets attached to an email, ' +
+      'filed and printed. Two readings of one bill, not two bills.\n\n' +
+      'A missing party identifier is reported in `X-Bill-Package-Missing-Fields` and prints blank, ' +
+      'never refused.',
+  })
+  async pdf(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { bytes, filename, missingFields } = await this.views.pdfFor(
+      rlsContextFor(caller),
+      packageId,
+    );
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (missingFields.length > 0) {
+      res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
+    }
+    res.send(bytes);
+  }
+
   // ── Lifecycle ────────────────────────────────────────────────────────────
 
   @Post('projects/bill-packages/:packageId/issue')
