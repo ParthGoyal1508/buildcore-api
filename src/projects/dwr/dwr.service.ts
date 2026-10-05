@@ -506,6 +506,14 @@ export class DwrService {
       machineryCount: number;
       progress: number;
       lineCount: number;
+      /**
+       * Carried so a caller can show FR-012a **before** the action rather than after it (025
+       * FR-006). The rule — the author of a report may not approve it — is enforced here and was
+       * invisible on every screen, so each submitted report offered an Approve button that would be
+       * refused, and the author learnt the rule by pressing it.
+       */
+      createdByUserId: string | null;
+      submittedByUserId: string | null;
     }[];
     total: number;
     page: number;
@@ -545,6 +553,8 @@ export class DwrService {
             workerCount: true,
             machineryCount: true,
             progress: true,
+            createdByUserId: true,
+            submittedByUserId: true,
             _count: { select: { tasks: true } },
           },
         }),

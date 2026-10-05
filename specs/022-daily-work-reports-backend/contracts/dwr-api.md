@@ -95,7 +95,12 @@ Partial update. Quantities recompute from the new factors (US3 AC1).
 |---|---|---|
 | 409 | `DWR_APPROVED_NOT_EDITABLE` | the report is approved — the message names the reversal path (FR-018) |
 
-### `POST /projects/dwr/:dwrId/attachments` → 201 · `GET /projects/dwr/:dwrId/attachments/:ref`
+### `POST /projects/dwr/:dwrId/attachments` → 201 · `GET /projects/dwr/attachments/:attachmentId`
+
+**The download is not nested under the report.** An attachment id is unique on its own, and the
+route is registered flat — this line said `/projects/dwr/:dwrId/attachments/:ref` until 2026-10-05,
+which no client could have called successfully. Corrected against the live route.
+
 
 Through the existing `StorageService`. The download carries the uploaded file name and a content
 type detected from the bytes, via `detectContentType` / `describeStoredFile` /
@@ -166,6 +171,34 @@ one is reversed first.
 
 Ordered by work date, server-paginated, with a `total` that does not depend on the page returned
 (FR-026).
+
+**A page of summaries, stated field for field** — because a client written against a guess of this
+shape is exactly what feature 025 was opened to repair:
+
+```jsonc
+{
+  "items": [{
+    "id": "…",
+    "dprNumber": "PRPL-2401-0001",   // the identifier. There is no `reportNumber` in this system.
+    "workDate": "2026-10-05T00:00:00.000Z",
+    "status": "draft",               // draft | submitted | approved | returned
+    "workerCount": 3,
+    "machineryCount": 4,
+    "progress": 0,
+    "lineCount": 2,                  // a COUNT. The lines themselves are on the detail read.
+    "createdByUserId": "…",          // 025 FR-006
+    "submittedByUserId": null        // 025 FR-006
+  }],
+  "total": 1, "page": 1, "pageSize": 20
+}
+```
+
+**`createdByUserId` and `submittedByUserId` are carried so a caller can show FR-012a before the
+action** (added by 025 FR-006). The rule that the author may not approve their own report is
+enforced on approval; a list that did not carry the author left every screen offering an Approve
+button that would be refused.
+
+**There is no lines array here.** `lineCount` is the count, and it is all a list page carries.
 
 ### `GET /projects/dwr/:dwrId` → 200
 
