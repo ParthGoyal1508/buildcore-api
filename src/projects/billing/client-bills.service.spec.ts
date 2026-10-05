@@ -45,12 +45,15 @@ function build(opts: {
   const updated: Record<string, unknown>[] = [];
   let stored: Record<string, unknown> | null = opts.bill ?? null;
 
+  // `group` is selected by `view()` so a bill can print the heading its lines sit under — a BOQ
+  // line's own text is only the qualifier ("suspended floors …"), and the work is in the heading.
   const hydrate = (i: ItemFixture) => ({
     ...i,
     scopeQty: dec(i.scopeQty),
     rate: dec(i.rate),
     isVariation: i.isVariation ?? false,
     variationRef: null,
+    group: { id: 'grp-1', name: 'Earthwork' },
   });
 
   const tx = {
@@ -290,6 +293,7 @@ describe('submitting', () => {
           rate: dec(251),
           isVariation: false,
           variationRef: null,
+          group: { id: 'grp-1', name: 'Earthwork' },
         },
       },
     ],
@@ -353,6 +357,7 @@ describe('certification keeps both figures (FR-005)', () => {
           rate: dec(251),
           isVariation: false,
           variationRef: null,
+          group: { id: 'grp-1', name: 'Earthwork' },
         },
       },
     ],

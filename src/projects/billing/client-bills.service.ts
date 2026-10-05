@@ -43,6 +43,19 @@ export interface ClientBillLineView {
   boqTaskItemId: string;
   boqNo: string;
   taskName: string;
+  /**
+   * The heading this line sits under, and half of what it says it is.
+   *
+   * A tender schedule carries the work in the heading and the qualifier in the child: item 12 is
+   * *"centering and shuttering … and removal of formwork"* and 12.01 is only *"suspended floors,
+   * roofs, landings …"*. Read on its own, that line names a place and no work — a client cannot tell
+   * whether the ₹340 a square metre was for shuttering it, concreting it or plastering it.
+   *
+   * Carried per line rather than returned as a tree because a bill measures an arbitrary handful of
+   * lines out of two hundred, and a tree would mean shipping headings with nothing under them.
+   */
+  groupId: string;
+  groupName: string;
   unit: string;
   scopeQty: number;
   quantity: number;
@@ -557,7 +570,11 @@ export class ClientBillsService {
         where: { id: billId },
         include: {
           lines: {
-            include: { boqTaskItem: true },
+            include: {
+              boqTaskItem: {
+                include: { group: { select: { id: true, name: true } } },
+              },
+            },
             orderBy: { boqTaskItem: { boqNo: 'asc' } },
           },
         },
@@ -587,6 +604,8 @@ export class ClientBillsService {
           boqTaskItemId: line.boqTaskItemId,
           boqNo: line.boqTaskItem.boqNo,
           taskName: line.boqTaskItem.taskName,
+          groupId: line.boqTaskItem.group.id,
+          groupName: line.boqTaskItem.group.name,
           unit: line.boqTaskItem.unit,
           scopeQty,
           quantity: line.quantity.toNumber(),
