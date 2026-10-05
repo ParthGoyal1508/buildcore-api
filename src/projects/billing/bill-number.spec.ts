@@ -1,16 +1,21 @@
 import type { Prisma } from '@prisma/client';
 
-import { nextRaBillNumber, packageLabel } from './bill-number';
+import {
+  nextClientBillNumber,
+  nextRaBillNumber,
+  packageLabel,
+} from './bill-number';
 
-/** Only `rABill.findMany` is reached, so only that is stood up. */
-const txWith = (billNumbers: string[]) =>
-  ({
-    rABill: {
-      findMany: jest
-        .fn()
-        .mockResolvedValue(billNumbers.map((billNumber) => ({ billNumber }))),
-    },
-  } as unknown as Prisma.TransactionClient);
+/** Only the one `findMany` each allocator reaches is stood up. */
+const txWith = (billNumbers: string[]) => {
+  const findMany = jest
+    .fn()
+    .mockResolvedValue(billNumbers.map((billNumber) => ({ billNumber })));
+  return {
+    rABill: { findMany },
+    clientBill: { findMany },
+  } as unknown as Prisma.TransactionClient;
+};
 
 describe('packageLabel', () => {
   it('pads to two digits and keeps going past ninety-nine', () => {
@@ -61,6 +66,38 @@ describe('nextRaBillNumber', () => {
     await nextRaBillNumber(tx, 'wo-42');
     expect(tx.rABill.findMany).toHaveBeenCalledWith({
       where: { workOrderId: 'wo-42' },
+      select: { billNumber: true },
+    });
+  });
+});
+
+/**
+ * The client's sequence is the same rule over a different table. Its own cases rather than a shared
+ * loop: the two take different arguments and read different columns, and a loop passing both
+ * through one assertion would stop testing the thing that differs between them.
+ */
+describe('nextClientBillNumber', () => {
+  it('starts at RA-01 on a project with no bills', async () => {
+    await expect(nextClientBillNumber(txWith([]), 'p1')).resolves.toBe('RA-01');
+  });
+
+  it('continues the sequence and skips what it does not recognise', async () => {
+    await expect(
+      nextClientBillNumber(txWith(['RA-01', 'INV/2026/7', 'RA-02']), 'p1'),
+    ).resolves.toBe('RA-03');
+  });
+
+  it('takes the highest, so a deleted bill never re-issues a number', async () => {
+    await expect(
+      nextClientBillNumber(txWith(['RA-01', 'RA-07']), 'p1'),
+    ).resolves.toBe('RA-08');
+  });
+
+  it('scopes the read to the one project', async () => {
+    const tx = txWith([]);
+    await nextClientBillNumber(tx, 'proj-9');
+    expect(tx.clientBill.findMany).toHaveBeenCalledWith({
+      where: { projectId: 'proj-9' },
       select: { billNumber: true },
     });
   });

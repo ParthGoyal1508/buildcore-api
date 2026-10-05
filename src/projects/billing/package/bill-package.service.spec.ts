@@ -200,6 +200,10 @@ function build(opts: {
       updateMany: async () => ({ count: 1 }),
     },
     clientBill: {
+      // Read by `nextClientBillNumber` (027) to continue this project's sequence. A read, so it
+      // deliberately does not touch `writes` — the "one statement for the bill" assertion counts
+      // writes, and allocating a number is not one.
+      findMany: async () => [],
       create: async () => {
         writes += 1;
         return { id: 'bill-1' };

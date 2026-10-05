@@ -47,6 +47,34 @@ const SEQUENCE = /^RA-(\d+)$/;
  * atomic allocator (`CodeSeriesService`) is for codes that must never repeat across a whole
  * company; this one is scoped to a single work order's handful of bills.
  */
+/**
+ * The next running account bill number for a project's **client** (027).
+ *
+ * The same rule as {@link nextRaBillNumber} and for the same reason: two screens compose a client
+ * bill — the bill sheet and the 023 bill package — and until 027 the sheet asked a person to type
+ * one while the package path minted `RA-nn` from `BillPackage.sequenceNo`. `ClientBill` has carried
+ * `@@unique([projectId, billNumber])` since 018, so the collision was refused rather than silent;
+ * it was still a refusal nobody could have predicted, on a number nobody should have been inventing.
+ *
+ * Scoped to the project rather than to the client. A project has one client, so the package path's
+ * `(projectId, direction, counterpartyKey)` sequence and this agree — and the unique constraint is
+ * per project, so this is the scope that has to be right.
+ *
+ * A client's `RA-01` and a subcontractor's `RA-01` are different documents in different tables, and
+ * both are correct: one is the first bill to the client, the other the first against that work
+ * order. That is already how the package path numbers them.
+ */
+export async function nextClientBillNumber(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+): Promise<string> {
+  const existing = await tx.clientBill.findMany({
+    where: { projectId },
+    select: { billNumber: true },
+  });
+  return packageLabel(highestSequence(existing) + 1);
+}
+
 export async function nextRaBillNumber(
   tx: Prisma.TransactionClient,
   workOrderId: string,
@@ -55,9 +83,13 @@ export async function nextRaBillNumber(
     where: { workOrderId },
     select: { billNumber: true },
   });
-  const highest = existing.reduce((max, row) => {
+  return packageLabel(highestSequence(existing) + 1);
+}
+
+/** 0 when nothing in the set is a recognisable sequence number. */
+function highestSequence(rows: { billNumber: string }[]): number {
+  return rows.reduce((max, row) => {
     const match = SEQUENCE.exec(row.billNumber);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
-  return packageLabel(highest + 1);
 }

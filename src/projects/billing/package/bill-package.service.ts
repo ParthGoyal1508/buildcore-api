@@ -33,7 +33,11 @@ import {
 } from './check-list';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { PACKAGE_ERRORS } from './package-error-codes';
-import { nextRaBillNumber, packageLabel } from '../bill-number';
+import {
+  nextClientBillNumber,
+  nextRaBillNumber,
+  packageLabel,
+} from '../bill-number';
 
 /**
  * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
@@ -521,7 +525,10 @@ export class BillPackageService {
               data: {
                 companyId,
                 projectId: input.projectId,
-                billNumber: packageLabel(sequenceNo),
+                // Counted from the bills on this project, not from `sequenceNo` — the bill sheet
+                // composes into the same table, and numbering from the package's own sequence
+                // could not see what the sheet had already raised (027).
+                billNumber: await nextClientBillNumber(tx, input.projectId),
                 billingDate: new Date(input.periodTo),
                 quotedPercentage,
                 grossAmount: gross,

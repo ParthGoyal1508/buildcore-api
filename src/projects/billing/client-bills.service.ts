@@ -11,6 +11,7 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
 import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
+import { nextClientBillNumber } from './bill-number';
 
 /** A line as the caller composes it. */
 export interface ComposeBillLineInput {
@@ -21,7 +22,13 @@ export interface ComposeBillLineInput {
 
 export interface ComposeBillInput {
   projectId: string;
-  billNumber: string;
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this project (027).
+   *
+   * Optional rather than removed, for an importer bringing historical bills across — those numbers
+   * already exist on paper. No screen sends it.
+   */
+  billNumber?: string;
   description?: string | null;
   billingDate: string;
   lines: ComposeBillLineInput[];
@@ -279,12 +286,18 @@ export class ClientBillsService {
         },
       );
 
+      // Allocated rather than typed, and inside the transaction so a failed compose does not
+      // consume a number. See `nextClientBillNumber` for why it counts bills rather than a counter.
+      const billNumber =
+        input.billNumber?.trim() ||
+        (await nextClientBillNumber(tx, input.projectId));
+
       try {
         return await tx.clientBill.create({
           data: {
             companyId,
             projectId: input.projectId,
-            billNumber: input.billNumber.trim(),
+            billNumber,
             description: input.description ?? null,
             billingDate: new Date(input.billingDate),
             // Frozen, like the rates. The project's percentage can be corrected; a bill that was
@@ -314,7 +327,9 @@ export class ClientBillsService {
           throw new ConflictException({
             statusCode: 409,
             code: BILLING_ERRORS.duplicateNumber,
-            message: `This project already has a bill numbered ${input.billNumber}.`,
+            message:
+              `This project already has a bill numbered ${billNumber}. It was raised while ` +
+              'this one was being composed — compose it again and it will take the next number.',
           });
         }
         throw error;
