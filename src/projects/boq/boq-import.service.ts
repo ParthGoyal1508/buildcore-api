@@ -103,6 +103,27 @@ function itemNumber(cell: unknown, fallback: number): string {
 /** Exported for its unit test only — the rule is too easy to get right by accident in an e2e. */
 export const itemNumberForTest = itemNumber;
 
+/**
+ * A heading row's own number, where it has one.
+ *
+ * Headings in a real tender are numbered like their lines — `85` above `85.01` and `85.02` — and
+ * that number is the only thing in the file that says where the section **ends**. Null for a
+ * heading with a blank number, which is common and must leave the old behaviour untouched.
+ */
+function headingNumber(cell: unknown): string | null {
+  if (cell === null || cell === undefined) return null;
+  const text =
+    typeof cell === 'number' && Number.isFinite(cell)
+      ? itemNumber(cell, 0)
+      : String(cell).trim();
+  return text === '' ? null : text;
+}
+
+/** `85.01` is under `85`; `86` and `850` are not. */
+function isUnder(itemNo: string, headingNo: string): boolean {
+  return itemNo.startsWith(`${headingNo}.`);
+}
+
 function refuse(code: string, message: string): BadRequestException {
   return new BadRequestException({ statusCode: 400, code, message });
 }
@@ -272,6 +293,23 @@ export class BoqImportService {
     const unitCounts = new Map<string, number>();
     /** Heading text seen since the last group, for the deeper-than-two-levels fold (FR-038). */
     let pendingHeadings: string[] = [];
+    /** The nearest pending heading's own number, where it had one. */
+    let pendingHeadingNo: string | null = null;
+    /** That number, carried onto the group it opened, until the first item decides what it means. */
+    let openHeadingNo: string | null = null;
+    /**
+     * Set once a group's **first item** proves to be a dotted child of its heading's number —
+     * `85.01` under `85`. From then on, a line that is not a child of it ends the section.
+     *
+     * Reported 2026-10-06: without this, a group ran until the *next heading*, so `86` and `87` —
+     * lines with their own quantities, belonging to nobody — were swallowed into section `85`.
+     *
+     * Conditional on the first item, deliberately. Plenty of schedules number their lines `1, 2, 3`
+     * under a heading numbered something else entirely, or under one with no number at all; in
+     * those the prefix never establishes itself and the old rule stands untouched. The split only
+     * happens where the file has already demonstrated that it nests by number.
+     */
+    let groupPrefix: string | null = null;
 
     for (const row of schedule.candidates) {
       const description = String(row.cells[columns.description] ?? '').trim();
@@ -281,10 +319,16 @@ export class BoqImportService {
         // FR-038: a description with no quantity is a heading. Collected rather than applied
         // immediately, because a run of them is a nested section and the model holds two levels.
         pendingHeadings.push(description);
+        // The nearest one wins: in a run, the last heading is the lines' actual parent.
+        pendingHeadingNo = headingNumber(row.cells[0]);
         continue;
       }
 
-      if (groups.length === 0 || pendingHeadings.length > 0) {
+      const boqNo = itemNumber(row.cells[0], row.rowNumber);
+      const leavesSection =
+        groupPrefix !== null && !isUnder(boqNo, groupPrefix);
+
+      if (groups.length === 0 || pendingHeadings.length > 0 || leavesSection) {
         groups.push({
           // Folded, not dropped: "Electrical > Light fittings" keeps both facts in the one name
           // the schema has room for.
@@ -297,16 +341,24 @@ export class BoqImportService {
         });
         if (pendingHeadings.length === 0) {
           // FR-038: good rows, unstated structure. A warning, not an error — rejecting them would
-          // discard real schedule lines over a missing heading.
+          // discard real schedule lines over a missing heading. Two ways to arrive here now: a
+          // line before any heading at all, and a line that left the numbered section above it
+          // without a heading of its own to land in.
           warnings.push({
             row: row.rowNumber,
             column: 'Item Description',
-            reason:
-              'This line appears before any section heading, so it has been grouped under the ' +
-              `sheet name ("${schedule.sheetName}").`,
+            reason: leavesSection
+              ? `This line is numbered ${boqNo}, which is not under the section above it, and it ` +
+                'has no heading of its own — so it has been grouped under the sheet name ' +
+                `("${schedule.sheetName}").`
+              : 'This line appears before any section heading, so it has been grouped under the ' +
+                `sheet name ("${schedule.sheetName}").`,
           });
         }
+        openHeadingNo = pendingHeadings.length > 0 ? pendingHeadingNo : null;
+        groupPrefix = null;
         pendingHeadings = [];
+        pendingHeadingNo = null;
       }
 
       const problem = this.rowProblem(row, columns, description, quantity);
@@ -319,8 +371,19 @@ export class BoqImportService {
       const rate = this.rateFor(row, columns) as number;
       unitCounts.set(unit, (unitCounts.get(unit) ?? 0) + 1);
 
-      groups[groups.length - 1].items.push({
-        boqNo: itemNumber(row.cells[0], row.rowNumber),
+      const group = groups[groups.length - 1];
+      // The first good line decides whether this section nests by number. A later line that is
+      // not under the same number then starts a section of its own.
+      if (
+        group.items.length === 0 &&
+        openHeadingNo !== null &&
+        isUnder(boqNo, openHeadingNo)
+      ) {
+        groupPrefix = openHeadingNo;
+      }
+
+      group.items.push({
+        boqNo,
         taskName: description,
         unit,
         scopeQty: DEC(quantity).toFixed(3),
