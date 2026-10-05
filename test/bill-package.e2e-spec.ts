@@ -6,7 +6,9 @@ import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
+import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-codes';
 import { withRlsContext } from '../src/common/prisma/rls-context';
+import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 
 /**
  * The running-account bill package, end to end (023, quickstart passes 1–8 — tasks T096, T097).
@@ -578,5 +580,132 @@ describe('The running-account bill package (e2e)', () => {
     // Zero out of twelve is a fact worth reporting; an empty report is not the same statement.
     expect(report.body.totalLines).toBeGreaterThan(0);
     expect(typeof report.body.totalOverClaimed).toBe('number');
+  });
+
+  // ── The retention term, through the API rather than around it (025 US3) ───
+
+  /**
+   * **Why this exists even though the suite above composes a client bill on every test.**
+   *
+   * That project is created directly in the database with its retention term already set. It
+   * proves composition works; it proves nothing about whether anybody can *put a figure in that
+   * column* — and until 025 nobody could. The column was nullable with no default, the composer
+   * refused without it, and no DTO and no screen accepted it, so the client half of this feature
+   * was unreachable from the product while passing every test here.
+   *
+   * Both halves are asserted. A test that only composes *with* the term would pass equally well
+   * against a service that had quietly started defaulting it to zero — which is the one outcome
+   * the refusal exists to prevent, because a payable five per cent too high is the error most
+   * likely to be paid before anybody notices.
+   */
+  describe('the client retention term (025 FR-016 to FR-020)', () => {
+    let bareProjectId: string;
+
+    beforeAll(async () => {
+      const project = await createProjectWithMandatoryDocuments({
+        http,
+        headers: auth(),
+        body: {
+          code: unique('RET').slice(0, 14),
+          name: unique('RetProject'),
+          clientId,
+          contractValue: 5_000_000,
+          startDate: '2025-10-01',
+        },
+        companyId,
+      });
+      expect(project.status).toBe(201);
+      bareProjectId = project.body.id;
+
+      const group = await http()
+        .post(`/projects/${bareProjectId}/boq/groups`)
+        .set(auth())
+        .send({ boqNo: '1', name: 'Works', scopeQty: '0' })
+        .expect(201);
+
+      await http()
+        .post(`/projects/${bareProjectId}/boq/items`)
+        .set(auth())
+        .send({
+          groupId: group.body.id,
+          boqNo: '1.10',
+          taskName: 'Works',
+          unit: 'Cum',
+          scopeQty: '100',
+          rate: '1000',
+        })
+        .expect(201);
+    });
+
+    afterAll(async () => {
+      await sys.billPackage.deleteMany({ where: { projectId: bareProjectId } });
+      // Composing a client-direction package writes a `ClientBill` too, and the client fixture the
+      // outer teardown removes cannot go while one points at it.
+      await sys.clientBillLine.deleteMany({
+        where: { clientBill: { projectId: bareProjectId } },
+      });
+      await sys.clientBill.deleteMany({ where: { projectId: bareProjectId } });
+      await sys.bOQTaskItem.deleteMany({
+        where: { group: { projectId: bareProjectId } },
+      });
+      await sys.bOQTaskGroup.deleteMany({
+        where: { projectId: bareProjectId },
+      });
+      await sys.projectDocument.deleteMany({
+        where: { projectId: bareProjectId },
+      });
+      await sys.project.deleteMany({ where: { id: bareProjectId } });
+    });
+
+    it('refuses a client bill while the term is unrecorded, naming what is missing', async () => {
+      const refused = await http()
+        .post(`/projects/${bareProjectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+        })
+        .expect(400);
+
+      expect(refused.body.code).toBe(PACKAGE_ERRORS.rateMissing);
+      expect(refused.body.missingRate).toBe('retentionFraction');
+    });
+
+    it('composes once the term is recorded through the project itself', async () => {
+      // Through the API, which is the whole point: the column has existed since 023 and this is
+      // the first route that can write it.
+      await http()
+        .patch(`/projects/${bareProjectId}`)
+        .set(auth())
+        .send({ clientRetentionFraction: 0.05 })
+        .expect(200);
+
+      const reread = await http()
+        .get(`/projects/${bareProjectId}`)
+        .set(auth())
+        .expect(200);
+      // FR-020: a round trip may not drift. A term that reads back as 0.049999 is a bill that
+      // disagrees with the contract by a rupee nobody can explain.
+      expect(Number(reread.body.project.clientRetentionFraction)).toBe(0.05);
+
+      await http()
+        .post(`/projects/${bareProjectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+        })
+        .expect(201);
+    });
+
+    it('refuses a term above one as the typo it is', async () => {
+      await http()
+        .patch(`/projects/${bareProjectId}`)
+        .set(auth())
+        .send({ clientRetentionFraction: 5 })
+        .expect(400);
+    });
   });
 });
