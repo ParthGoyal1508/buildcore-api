@@ -92,11 +92,23 @@ export class ComposeRaBillDto {
   @MinLength(1)
   workOrderId: string;
 
-  @ApiProperty({ example: 'SC-01' })
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this work order (027).
+   *
+   * Was required and typed, which made this the only document in the product whose number a person
+   * invents — and `RABill.billNumber` carried no unique constraint, so a number typed here could
+   * silently duplicate one the 023 package path had already minted into the same column.
+   *
+   * Still accepted, for an importer bringing historical bills across: those numbers already exist
+   * on paper, and inventing new ones would make the record disagree with the documents it
+   * describes. No screen sends it.
+   */
+  @ApiPropertyOptional({ example: 'RA-01' })
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(60)
-  billNumber: string;
+  billNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

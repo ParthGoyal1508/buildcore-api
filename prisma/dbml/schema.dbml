@@ -1191,6 +1191,10 @@ project cost** — a summary that treated net as spend would understate the proj
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
+  indexes {
+    (projectId, billNumber) [unique]
+  }
+
   Note: 'A running account bill. `draft → submitted → approved`, with `submitted → draft`
 via reject; approved bills are immutable (research.md §7).'
 }

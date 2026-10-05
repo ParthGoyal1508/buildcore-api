@@ -2115,6 +2115,11 @@ model RABill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Added by 027. A bill number was free text with nothing enforcing it, so two bills on one
+  /// project could carry the same number — and two paths mint them: the RA bill sheet, where a
+  /// person typed one, and 023's package path, which writes `RA-nn` into this column. `ClientBill`
+  /// has carried the equivalent constraint since 018; this side simply never got it.
+  @@unique([projectId, billNumber])
   @@index([companyId])
   @@index([projectId])
   @@index([workOrderId])

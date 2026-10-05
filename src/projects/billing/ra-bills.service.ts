@@ -18,6 +18,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
+import { nextRaBillNumber } from './bill-number';
 import {
   billTotals,
   lineTotals,
@@ -54,7 +55,14 @@ export interface ReviseRaBillInput {
 export interface ComposeRaBillInput {
   projectId: string;
   workOrderId: string;
-  billNumber: string;
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this work order (027).
+   *
+   * Optional rather than removed, because an importer bringing historical bills across has numbers
+   * that already exist on paper and inventing new ones for them would make the record disagree with
+   * the documents it describes. No screen sends it.
+   */
+  billNumber?: string;
   description?: string | null;
   billingDate: string;
   lines: MeasureLineInput[];
@@ -268,35 +276,57 @@ export class RaBillsService {
         otherDeductions: input.otherDeductions,
       });
 
-      return tx.rABill.create({
-        data: {
-          companyId,
-          projectId: input.projectId,
-          workOrderId: input.workOrderId,
-          billNumber: input.billNumber.trim(),
-          description: input.description ?? null,
-          billingDate: new Date(input.billingDate),
-          // `amount` is the pre-018 column. Set to **gross**, matching the migration's backfill, so a
-          // screen still reading it sees the work rather than the net — and the two cannot disagree
-          // about what `amount` meant for bills raised either side of this change.
-          amount: totals.gross,
-          grossAmount: totals.gross,
-          retentionAmount: totals.retention,
-          advanceRecovery: totals.advanceRecovery,
-          otherDeductions: totals.otherDeductions,
-          netPayable: totals.net,
-          status: RaBillStatus.draft,
-          lines: {
-            create: priced.map(({ line, item, totals: lineAmount }) => ({
-              companyId,
-              workOrderBoqItemId: item.id,
-              quantity: line.quantity,
-              rate: item.rate,
-              amount: lineAmount.amount,
-            })),
+      // Allocated here rather than typed, and inside the transaction so a failed compose does not
+      // consume a number. See `nextRaBillNumber` for why it counts bills rather than keeping one.
+      const billNumber =
+        input.billNumber?.trim() ||
+        (await nextRaBillNumber(tx, input.workOrderId));
+
+      try {
+        return await tx.rABill.create({
+          data: {
+            companyId,
+            projectId: input.projectId,
+            workOrderId: input.workOrderId,
+            billNumber,
+            description: input.description ?? null,
+            billingDate: new Date(input.billingDate),
+            // `amount` is the pre-018 column. Set to **gross**, matching the migration's backfill,
+            // so a screen still reading it sees the work rather than the net — and the two cannot
+            // disagree about what `amount` meant for bills raised either side of this change.
+            amount: totals.gross,
+            grossAmount: totals.gross,
+            retentionAmount: totals.retention,
+            advanceRecovery: totals.advanceRecovery,
+            otherDeductions: totals.otherDeductions,
+            netPayable: totals.net,
+            status: RaBillStatus.draft,
+            lines: {
+              create: priced.map(({ line, item, totals: lineAmount }) => ({
+                companyId,
+                workOrderBoqItemId: item.id,
+                quantity: line.quantity,
+                rate: item.rate,
+                amount: lineAmount.amount,
+              })),
+            },
           },
-        },
-      });
+        });
+      } catch (error) {
+        // Two composes racing on one work order read the same highest number; 027's unique
+        // constraint refuses the second. Named rather than surfaced as a bare 409, because the
+        // caller's remedy is simply to compose again — nothing they entered was wrong.
+        if ((error as { code?: string }).code === 'P2002') {
+          throw new ConflictException({
+            statusCode: 409,
+            code: BILLING_ERRORS.duplicateNumber,
+            message:
+              `This project already has a bill numbered ${billNumber}. It was raised while this ` +
+              'one was being composed — compose it again and it will take the next number.',
+          });
+        }
+        throw error;
+      }
     });
 
     return this.view(ctx, created.id);

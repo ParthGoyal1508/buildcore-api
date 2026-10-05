@@ -206,6 +206,10 @@ function build(opts: {
       },
     },
     rABill: {
+      // Read by `nextRaBillNumber` (027) to continue this work order's sequence. A read, so it
+      // deliberately does not touch `writes` — the "one statement for the bill" assertion below
+      // counts writes, and allocating a number is not one.
+      findMany: async () => [],
       create: async () => {
         writes += 1;
         return { id: 'bill-1' };

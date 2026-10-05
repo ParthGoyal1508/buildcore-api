@@ -33,6 +33,13 @@ import {
 } from './check-list';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { PACKAGE_ERRORS } from './package-error-codes';
+import { nextRaBillNumber, packageLabel } from '../bill-number';
+
+/**
+ * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
+ * `bill-package-view.builder.ts` has imported it from here since 023.
+ */
+export { packageLabel };
 
 /** One party's statutory details, however they were sourced. */
 interface PartyIdentity {
@@ -146,9 +153,6 @@ export interface BillPackageView {
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
-export function packageLabel(sequenceNo: number): string {
-  return `RA-${String(sequenceNo).padStart(2, '0')}`;
-}
 
 /**
  * The columns `setAdjustments` may write (025 FR-044).
@@ -531,7 +535,13 @@ export class BillPackageService {
               data: {
                 companyId,
                 projectId: input.projectId,
-                billNumber: packageLabel(sequenceNo),
+                // Counted from the bills on this work order, not from `sequenceNo` — the RA bill
+                // sheet composes into the same table, and numbering from the package's own
+                // sequence could not see what the sheet had already raised (027).
+                billNumber: await nextRaBillNumber(
+                  tx,
+                  (workOrder as { id: string }).id,
+                ),
                 amount: gross,
                 billingDate: new Date(input.periodTo),
                 status: RaBillStatus.draft,
