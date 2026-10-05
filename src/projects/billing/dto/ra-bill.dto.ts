@@ -159,17 +159,29 @@ export class ReviseRaBillDto {
   @Type(() => MeasureLineDto)
   lines: MeasureLineDto[];
 
-  @ApiProperty({
+  /**
+   * Why the quantities changed. **Required on a bill that has been submitted or approved, and only
+   * then** — the service enforces it, because only the service knows the bill's status.
+   *
+   * The reason exists for the person deciding the bill a *second* time. A draft has been decided by
+   * nobody: demanding a justification for editing your own unsent working document asks somebody to
+   * invent one, and an invented reason devalues the field everywhere it actually matters.
+   *
+   * Note that omission and an empty string differ here: `@IsOptional()` skips `undefined`, so `''`
+   * still fails `@MinLength(3)` rather than quietly passing as "no reason given".
+   */
+  @ApiPropertyOptional({
     description:
-      'Why the quantities changed. **Required**: a certified bill going round again costs somebody a ' +
-      'second decision, and “why” is the first thing they will ask.',
+      'Why the quantities changed. Required once the bill has been submitted or approved: it going ' +
+      'round again costs somebody a second decision, and “why” is the first thing they will ask.',
     example:
       'Re-measured after joint survey on 3 Oct; excavation 40 Cum not 48.',
   })
+  @IsOptional()
   @IsString()
   @MinLength(3)
   @MaxLength(500)
-  reason: string;
+  reason?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

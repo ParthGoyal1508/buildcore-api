@@ -48,8 +48,8 @@ export interface ReviseRaBillInput {
   lines: MeasureLineInput[];
   advanceRecovery?: number;
   otherDeductions?: number;
-  /** Why the quantities changed. Required — see `revise`. */
-  reason: string;
+  /** Why the quantities changed. Required once the bill has left draft — see `revise`. */
+  reason?: string;
 }
 
 export interface ComposeRaBillInput {
@@ -662,16 +662,6 @@ export class RaBillsService {
         message: 'A measured bill needs at least one line.',
       });
     }
-    if (!input.reason?.trim()) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: BILLING_ERRORS.revisionReasonRequired,
-        message:
-          'Say why the quantities changed. A certified bill going round again costs somebody a ' +
-          'second decision, and “why” is the first thing they will ask.',
-      });
-    }
-
     const bill = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findFirst({
         where: { id: billId },
@@ -698,6 +688,20 @@ export class RaBillsService {
     }
 
     const wasDecided = bill.status !== RaBillStatus.draft;
+
+    // Asked for only where somebody has already decided this bill. A draft has been decided by
+    // nobody, so there is no second decider to read the reason and nothing for it to explain —
+    // demanding one asks the author to invent a justification for editing their own unsent
+    // document, and an invented reason devalues the field on the bills where it carries weight.
+    if (wasDecided && !input.reason?.trim()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.revisionReasonRequired,
+        message:
+          'Say why the quantities changed. A certified bill going round again costs somebody a ' +
+          'second decision, and “why” is the first thing they will ask.',
+      });
+    }
 
     if (wasDecided) {
       // Closes a *pending* instance so nobody is left deciding a superseded version. A completed
