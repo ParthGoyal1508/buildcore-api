@@ -582,6 +582,67 @@ describe('The running-account bill package (e2e)', () => {
     expect(typeof report.body.totalOverClaimed).toBe('number');
   });
 
+  // ── A statutory rate can change, and an issued bill cannot (025 US4) ──────
+
+  /**
+   * **The assertion that keeps 025 from undoing 023.**
+   *
+   * Issue freezes the four tax rates onto the package, which is the whole reason a document already
+   * sent to a client reproduces identically. Feature 025 makes those rates editable — and a feature
+   * that makes a frozen figure editable is exactly the kind that unfreezes one by accident.
+   *
+   * **The package must be issued before the rate moves.** A test that changed a rate and re-read a
+   * *draft* would prove the opposite of what is wanted: a draft is supposed to move, and such a
+   * test would pass against an implementation that recomputed issued bills too.
+   */
+  it('leaves an issued bill untouched when a statutory rate changes', async () => {
+    const before = await http()
+      .get(`/projects/bill-packages/${packageId}/abstract`)
+      .set(auth())
+      .expect(200);
+
+    const rates = await http()
+      .get(`/settings/companies/${companyId}/billing-rates`)
+      .set(auth())
+      .expect(200);
+    expect(rates.body.tdsFraction).toBe('0.020000');
+
+    await http()
+      .patch(`/settings/companies/${companyId}/billing-rates`)
+      .set(auth())
+      .send({ tdsFraction: 0.025 })
+      .expect(200);
+
+    try {
+      const after = await http()
+        .get(`/projects/bill-packages/${packageId}/abstract`)
+        .set(auth())
+        .expect(200);
+
+      // Every cell, not just the TDS row: a recomputation would move the deduction total and the
+      // payable with it, and asserting one figure would miss the two it drags.
+      expect(after.body).toEqual(before.body);
+    } finally {
+      // Restored whatever the assertion did — the company fixture is shared with every other suite
+      // in this repository, and a test that leaves TDS at 2.5% breaks them somewhere else entirely.
+      await http()
+        .patch(`/settings/companies/${companyId}/billing-rates`)
+        .set(auth())
+        .send({ tdsFraction: 0.02 })
+        .expect(200);
+    }
+  });
+
+  it('refuses a rate above one, which is a percentage in a fraction’s column', async () => {
+    // `9` meaning nine per cent multiplies every tax on every bill by a hundred. Large enough that
+    // somebody would notice — after it had been on a document sent to a client.
+    await http()
+      .patch(`/settings/companies/${companyId}/billing-rates`)
+      .set(auth())
+      .send({ cgstFraction: 9 })
+      .expect(400);
+  });
+
   // ── The retention term, through the API rather than around it (025 US3) ───
 
   /**
