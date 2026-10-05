@@ -272,6 +272,19 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // remains the narrow one: run it again straight after committing anything under these
           // paths, not only before.
           ':(exclude)src/projects/sites/sites.service.ts',
+          // Owned by 025 FR-039: `Client.pan` and `Client.state`, the two rows the running-account
+          // bill's statutory header prints and this table carried neither — so every bill issued to
+          // a client reported both as missing and somebody filled them in by hand on the printed
+          // sheet. Two nullable columns, their validation, and a spec that exercises both DTOs
+          // under the global pipe's own settings. **Nothing here calls `ApprovalService`**, and the
+          // per-file assertions above still enforce that `src/projects` keeps no approval mechanism
+          // of its own.
+          //
+          // **Fired a commit late for the seventh time, two commits after the sixth.** The note on
+          // the exclusion above says the rule plainly — run it again *after* committing anything
+          // under these paths — and it was not followed here either. Written down a seventh time
+          // because the alternative is pretending the habit works.
+          ':(exclude)src/projects/clients',
         ],
         {
           cwd: REPO_ROOT,
