@@ -35,6 +35,7 @@ import {
 } from './letter-error-codes';
 import { permissionForKind } from './letter-permissions';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
+import { webRoutes } from '../common/web-routes';
 
 /** Where letter PDFs live in blob storage. */
 export const LETTER_NAMESPACE = 'letter';
@@ -587,7 +588,15 @@ export class LettersService {
         entityId: letter.id,
         originatorUserId: caller.id,
         subject,
-        href: `/dashboard/letters/${letter.id}`,
+        // Two different pages list letters, and which one depends on what the letter is
+        // addressed to: a project's letters are filtered by `subjectType: 'project'` on the
+        // project's own tab, everything else is listed under Recruitment. Neither has a page
+        // per letter, so both land on the list that contains it. `/dashboard/letters/:id`,
+        // which this was, is a page that exists in neither place.
+        href:
+          letter.subjectType === 'project' && letter.subjectId
+            ? webRoutes.projectLetters(letter.subjectId)
+            : webRoutes.recruitmentLetters(),
         viewPermission: permissionForKind(letter.letterKind.key),
       });
     } catch (error) {

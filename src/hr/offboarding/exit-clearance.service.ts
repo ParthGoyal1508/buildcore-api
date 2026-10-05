@@ -25,6 +25,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { ExitCustodyRegistry } from './exit-custody.registry';
+import { webRoutes } from '../../common/web-routes';
 
 /** A proposal's lifecycle, as this service records it. The spine owns the real one. */
 export const WAIVER_PROPOSAL_STATUS = {
@@ -527,7 +528,7 @@ export class ExitClearanceService {
       // What the Director's queue row says. The spine cannot read the item, so the subject has to
       // carry the facts the decision turns on: what is being written off, and why.
       subject: `Waive ${item.label} on exit — ${input.reason}`,
-      href: `/hr/employees/${employeeId}/exit`,
+      href: webRoutes.employee(employeeId),
       // `PAYROLL`, matching the permission that may propose one. A waiver's history names who
       // asked for company money to be written off; that is not a thing to publish to every
       // colleague who can read an employee record.

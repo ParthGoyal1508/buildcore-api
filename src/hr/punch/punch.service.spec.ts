@@ -651,7 +651,15 @@ describe('PunchService', () => {
       const submitted = approvals.submit.mock.calls[0][0];
       expect(submitted.subject).toContain('Rajesh Kulkarni');
       expect(submitted.subject).toContain('outside the site geofence');
-      expect(submitted.href).toContain(created[0].id);
+
+      // The href no longer carries the record id, and that is the fix rather than a
+      // regression: it used to read `/dashboard/hr/attendance/exceptions/:id`, and no such
+      // page has ever existed in buildcore-web — the queue link 404'd. This assertion was
+      // what made the broken URL look tested, because containing the id was the only thing
+      // it checked. `entityId` above is what identifies the record; the subject is what
+      // tells the approver what they are looking at; the href only has to land somewhere
+      // that shows it.
+      expect(submitted.href).toBe('/dashboard/hr/attendance');
     });
 
     it('names both reasons when a punch fails the face check and the geofence', async () => {

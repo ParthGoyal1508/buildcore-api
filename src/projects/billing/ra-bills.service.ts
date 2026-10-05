@@ -25,6 +25,7 @@ import {
   retentionBalance,
   retentionOn,
 } from './bill-totals';
+import { webRoutes } from '../../common/web-routes';
 
 /** One award line as the work order captures it. */
 export interface AwardLineInput {
@@ -607,7 +608,7 @@ export class RaBillsService {
       entityId: bill.id,
       originatorUserId: caller.id,
       subject: `RA bill ${bill.billNumber}`,
-      href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+      href: webRoutes.projectRaBills(bill.projectId),
       viewPermission: Permission.PROJECT_FINANCIALS,
     });
 
@@ -722,7 +723,7 @@ export class RaBillsService {
         entityId: bill.id,
         originatorUserId: caller.id,
         subject: `RA bill ${bill.billNumber} (revised)`,
-        href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+        href: webRoutes.projectRaBills(bill.projectId),
         viewPermission: Permission.PROJECT_FINANCIALS,
       });
     }

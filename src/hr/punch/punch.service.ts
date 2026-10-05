@@ -47,6 +47,7 @@ import { checkGeofence } from './geofence.util';
 import { PunchRefusalsService } from './punch-refusals.service';
 import { punchRefusedException } from './punch-refusal-response';
 import { isPayrollLocked } from './payroll-lock';
+import { webRoutes } from '../../common/web-routes';
 
 const PUNCH_NAMESPACE = 'punch';
 
@@ -617,7 +618,7 @@ export class PunchService {
         subject: `${name} — ${day}, ${
           reasons.join(' and ') || 'flagged punch'
         }`,
-        href: `/dashboard/hr/attendance/exceptions/${record.id}`,
+        href: webRoutes.hrAttendance(),
         // Who may read this exception's approval history (FR-009). The spine cannot ask
         // us, so we tell it: the same permission that guards every other attendance
         // screen.

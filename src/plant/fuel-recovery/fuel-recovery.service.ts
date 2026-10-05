@@ -32,6 +32,7 @@ import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { computeFuelShortfall } from '../fuel/fuel.service';
 import { PlantRefsService } from '../plant-refs.service';
 import { computeHireBillAmounts } from '../hire-bills/hire-bills.service';
+import { webRoutes } from '../../common/web-routes';
 
 /**
  * Recovering a confirmed fuel loss — from the hire bill, or from the operator (020 FR-003 to FR-007,
@@ -414,7 +415,7 @@ export class FuelRecoveryService {
       entityId: recovery.id,
       originatorUserId: caller.id,
       subject: `${exception.fuelEntry.equipment.code} — fuel recovery of ${shortfall.shortfallAmount} from operator`,
-      href: `/plant/fuel-exceptions/${exception.id}`,
+      href: webRoutes.plantFuel(),
       viewPermission: Permission.MACHINERY,
     });
 
