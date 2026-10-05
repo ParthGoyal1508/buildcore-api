@@ -206,9 +206,18 @@ export class DwrController {
       'however many times this is called and even from two requests at the same instant. And ' +
       '**not by the person who submitted it** — approval is a direct transition rather than a ' +
       'routed chain, because one report a day per project makes routing disproportionate, so ' +
-      'segregation of duty is the control that remains.',
+      'segregation of duty is the control that remains.\n\n' +
+      '**A caller holding `CROSS_COMPANY_ACCESS` may approve their own report** (025 FR-040). On a ' +
+      'small site the person who records the day is often the only one who can approve it, and ' +
+      'the rule as written left a day\u2019s measurement waiting on nobody. The response carries ' +
+      '`selfApproved`, and the audit entry records it either way — an override nobody can find ' +
+      'afterwards is an override that cannot be reviewed.',
   })
-  @ApiResponse({ status: 403, description: 'You submitted this report.' })
+  @ApiResponse({
+    status: 403,
+    description:
+      'You submitted this report, and you do not hold the permission that overrides the rule.',
+  })
   @ApiResponse({
     status: 409,
     description: 'Already approved, or not submitted.',
@@ -223,7 +232,19 @@ export class DwrController {
       rlsContextFor(caller),
       dwrId,
       resolveCompanyId(caller, companyId),
-      { userId: caller.id, ipAddress: ip },
+      {
+        userId: caller.id,
+        ipAddress: ip,
+        // 025 FR-040. The segregation-of-duty rule is overridden for a caller holding
+        // `CROSS_COMPANY_ACCESS` — which is what `rlsContextFor` already treats as super admin, and
+        // is held by exactly one seeded role. **Not the role name "Super Admin"**: this repository
+        // keyed a capability to a display string once and `users-admin.service.ts` records why it
+        // stopped — an administrator renaming a role silently removed the capability from everyone
+        // holding it, with no error anywhere.
+        mayApproveOwn: caller.permissions.includes(
+          Permission.CROSS_COMPANY_ACCESS,
+        ),
+      },
     );
   }
 

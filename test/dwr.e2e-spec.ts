@@ -1,5 +1,7 @@
 import { INestApplication } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
+import { hash } from 'argon2';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 
@@ -277,29 +279,18 @@ describe('Daily work reports (e2e)', () => {
       // **The assertion 008 wrote in August and nothing has ever been able to run.**
       expect(await doneQty(itemA)).toBe(before);
 
-      // The seeded administrator submitted it, so they may not approve it (FR-012a). Asserted
-      // before the happy path, because a segregation rule that is only tested by its absence is a
-      // rule nobody has checked.
-      const selfApprove = await http()
-        .post(`/projects/dwr/${id}/approve?companyId=${companyId}`)
-        .set(auth());
-      expect(selfApprove.status).toBe(403);
-      expect(selfApprove.body.message).toContain('somebody else');
-      expect(await doneQty(itemA)).toBe(before);
-
-      // Approve as somebody else. The segregation rule compares `submittedByUserId`, so clearing
-      // it is the smallest honest way to stand in for a second reviewer — the alternative is
-      // provisioning a second account, which tests account creation rather than approval.
-      await sys.dailyWorkReport.update({
-        where: { id },
-        data: { submittedByUserId: null },
-      });
-
+      // The seeded administrator submitted it **and** holds `CROSS_COMPANY_ACCESS`, so 025 FR-040
+      // lets them approve it. This assertion read 403 until 2026-10-05; the override is what
+      // changed it, and the rule it overrides is asserted in its own test below — against a caller
+      // who does not hold that permission, which is the only way to test a rule whose exception
+      // this suite's own account qualifies for.
       const approved = await http()
         .post(`/projects/dwr/${id}/approve?companyId=${companyId}`)
         .set(auth())
         .expect(201);
       expect(approved.body.status).toBe('approved');
+      // Reported, not silent: the caller approved what they submitted, and the response says so.
+      expect(approved.body.selfApproved).toBe(true);
 
       const after = await doneQty(itemA);
       expect(after).toBe('0.700');
@@ -335,6 +326,97 @@ describe('Daily work reports (e2e)', () => {
   });
 
   // ── Pass 3 — reversal ─────────────────────────────────────────────────────
+
+  /**
+   * Segregation of duty, and the permission that overrides it (022 FR-012a, 025 FR-040).
+   *
+   * **This test exists because the suite's own account qualifies for the exception.** Every other
+   * test here logs in as the seeded administrator, who holds `CROSS_COMPANY_ACCESS` and may
+   * therefore approve what they submitted — so the rule itself cannot be observed from that
+   * account at all, and asserting it needs a caller who does not hold the permission.
+   *
+   * Without this, FR-012a would be a rule with no test that still *reads* as tested, because the
+   * happy path next door would keep passing whether or not the refusal existed.
+   */
+  describe('the approver is not the author, unless they may be', () => {
+    it('refuses a self-approval by a caller without the override', async () => {
+      const email = `${unique('Eng')}@example.test`.toLowerCase();
+      const user = await sys.user.create({
+        data: {
+          email,
+          username: unique('Eng'),
+          password: await hash('secret42'),
+          displayName: unique('Eng'),
+          companyId,
+          status: 'active',
+        },
+      });
+      // DWR and nothing else: enough to record, submit and attempt an approval, without the
+      // cross-company permission that 025 FR-040 keys the override to.
+      const role = await sys.role.create({
+        data: { name: unique('EngRole'), permissions: [Permission.DWR] },
+      });
+      await sys.userRole.create({
+        data: { userId: user.id, roleId: role.id, companyId },
+      });
+
+      try {
+        const login = await http()
+          .post('/auth/login')
+          .send({ identifier: email, password: 'secret42', rememberMe: false })
+          .expect(201);
+        const engineer = { Authorization: `Bearer ${login.body.accessToken}` };
+
+        const created = await http()
+          .post(`/projects/${projectId}/dwr?companyId=${companyId}`)
+          .set(engineer)
+          .send({
+            workDate: yesterday(),
+            lines: [
+              { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+            ],
+          })
+          .expect(201);
+
+        await http()
+          .post(
+            `/projects/dwr/${created.body.id}/submit?companyId=${companyId}`,
+          )
+          .set(engineer)
+          .expect(201);
+
+        const before = await doneQty(itemA);
+
+        const refused = await http()
+          .post(
+            `/projects/dwr/${created.body.id}/approve?companyId=${companyId}`,
+          )
+          .set(engineer);
+
+        expect(refused.status).toBe(403);
+        expect(refused.body.message).toContain('somebody else');
+        // The counter did not move, which is the half that matters: a refusal that still applied
+        // the increments would be worse than no refusal at all.
+        expect(await doneQty(itemA)).toBe(before);
+
+        // And the override does work on the same report, from an account that holds it — so this
+        // test fails if the permission check is inverted, not only if it is missing.
+        const approved = await http()
+          .post(
+            `/projects/dwr/${created.body.id}/approve?companyId=${companyId}`,
+          )
+          .set(auth())
+          .expect(201);
+        // Approved by somebody who did not submit it: an ordinary approval, not an override.
+        expect(approved.body.selfApproved).toBe(false);
+      } finally {
+        await sys.refreshToken.deleteMany({ where: { accountId: user.id } });
+        await sys.userRole.deleteMany({ where: { userId: user.id } });
+        await sys.role.deleteMany({ where: { id: role.id } });
+        await sys.user.deleteMany({ where: { id: user.id } });
+      }
+    });
+  });
 
   describe('Pass 3 — reversal returns the counter exactly', () => {
     it('takes back precisely what the approval added', async () => {

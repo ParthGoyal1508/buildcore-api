@@ -824,16 +824,47 @@ export class DwrService {
    * disproportionate and a chain nobody has configured would block the site's measurement rather
    * than review it. Segregation of duty is the control that remains, so a site engineer still
    * cannot certify their own claim.
+   *
+   * ## The override, and what it costs (025 FR-040)
+   *
+   * A caller holding `CROSS_COMPANY_ACCESS` **may** approve a report they submitted. The client
+   * asked for it in those words — a super admin should not be blocked by their own report — and on
+   * a small site the person who records the day is often the only person who can approve it, so
+   * the rule as written could leave a day's measurement stuck behind nobody.
+   *
+   * **Keyed to a permission, never to the role name "Super Admin".** This repository already made
+   * that mistake and fixed it: `users-admin.service.ts` records why a capability keyed to a display
+   * string silently disappears the day an administrator tidies up a role name. `CROSS_COMPANY_ACCESS`
+   * is what `rlsContextFor` already treats as super admin, and it is held by exactly one seeded
+   * role — so this means "super admin" today and stays configurable tomorrow.
+   *
+   * **It is recorded, not silent.** Segregation of duty is the only control on a transition that
+   * moves the quantities a bill is later built from, and an override nobody can see afterwards is
+   * an override that cannot be reviewed. The audit entry says the approval was a self-approval, so
+   * the question "who checked this?" has an answer — even when the answer is "nobody else".
    */
   async approve(
     ctx: RlsContext,
     dwrId: string,
     companyId: string,
-    actor: { userId: string; ipAddress?: string },
+    actor: {
+      userId: string;
+      ipAddress?: string;
+      /**
+       * Whether this caller may approve their own report (025 FR-040).
+       *
+       * Passed in rather than read from a `Permission` here, so the service keeps taking an actor
+       * it is told about rather than an `AuthenticatedUser` it has to interpret — the same shape
+       * every other method on this class uses.
+       */
+      mayApproveOwn?: boolean;
+    },
   ): Promise<{
     id: string;
     status: DwrStatus;
     moved: { boqNo: string; delta: string }[];
+    /** True where FR-012a was overridden — the caller approved what they submitted. */
+    selfApproved: boolean;
   }> {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
       const report = await tx.dailyWorkReport.findFirst({
@@ -866,10 +897,11 @@ export class DwrService {
       }
       assertStatus(report.status, DwrStatus.submitted, 'approve');
 
-      if (
-        report.submittedByUserId &&
-        report.submittedByUserId === actor.userId
-      ) {
+      const isOwnReport = Boolean(
+        report.submittedByUserId && report.submittedByUserId === actor.userId,
+      );
+
+      if (isOwnReport && !actor.mayApproveOwn) {
         throw new ForbiddenException({
           code: DWR_ERRORS.approverIsAuthor,
           message:
@@ -877,6 +909,10 @@ export class DwrService {
             'the executed quantities a bill is later built from.',
         });
       }
+
+      // Recorded below whether or not it was overridden, so a reviewer can tell a self-approval
+      // from an ordinary one without reconstructing who submitted what.
+      const selfApproved = isOwnReport;
 
       const deltas = groupDeltas(report.tasks);
 
@@ -920,6 +956,7 @@ export class DwrService {
       return {
         id: dwrId,
         status: DwrStatus.approved,
+        selfApproved,
         moved: deltas.map((d) => ({
           boqNo:
             report.tasks.find((t) => t.boqItemId === d.itemId)?.boqItem
@@ -937,6 +974,13 @@ export class DwrService {
       // are the durable record of the approval itself.
       action: AuditAction.UPDATE,
       entityId: dwrId,
+      // 025 FR-040. A self-approval is recorded as one. Segregation of duty is the only control on
+      // a transition that moves the quantities a bill is built from, so where it is overridden the
+      // override has to be visible — an exception nobody can find afterwards is an exception that
+      // cannot be reviewed. Written on every approval, not only the overridden ones: a field that
+      // appears only when something irregular happened is a field whose absence proves nothing,
+      // because absence is also what an older entry looks like.
+      changes: { selfApproved: result.selfApproved },
       accountId: actor.userId,
       companyId,
       ipAddress: actor.ipAddress,
