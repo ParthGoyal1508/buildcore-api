@@ -354,10 +354,6 @@ export class ClientBillsService {
       });
       if (!bill) throw new NotFoundException('Bill not found');
 
-      // Through the schedule line each one measures. Text order puts 10 before 2 — `boq-order.ts`.
-      bill.lines.sort((a, b) =>
-        compareBoqNo(a.boqTaskItem.boqNo, b.boqTaskItem.boqNo),
-      );
       if (bill.status !== ClientBillStatus.draft) {
         throw new ConflictException({
           statusCode: 409,
@@ -567,6 +563,13 @@ export class ClientBillsService {
         },
       });
       if (!bill) throw new NotFoundException('Bill not found');
+
+      // Through the schedule line each one measures. The `orderBy` above is the database's text
+      // order, which puts 10 before 2 — see `boq-order.ts`. This is the read every screen uses,
+      // `listForProject` included, so it is the one place the order has to be right.
+      bill.lines.sort((a, b) =>
+        compareBoqNo(a.boqTaskItem.boqNo, b.boqTaskItem.boqNo),
+      );
 
       // Cumulative **up to and including** this bill, so a historical bill reads as it did when it was
       // raised rather than showing today's running total against a figure from last quarter.
