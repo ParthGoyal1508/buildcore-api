@@ -16,6 +16,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { BoqService } from '../boq/boq.service';
 import { DWR_ERRORS } from './dwr-error-codes';
+import { sortByBoqNo } from '../boq/boq-order';
 
 /** One BOQ line's approved measurement, for one billing period. */
 export interface PeriodFigureLine {
@@ -136,6 +137,10 @@ export class DwrPeriodFiguresService {
         orderBy: [{ group: { boqNo: 'asc' } }, { boqNo: 'asc' }],
       });
 
+      // Text order puts 10 before 2 — see `boq-order.ts`. The group is already ordered by the
+      // query; this orders the lines within whatever that produced.
+      sortByBoqNo(items);
+
       if (items.length === 0) {
         // FR-037b. Empty, not an error: a project whose BOQ has not been imported yet is an
         // ordinary state, and a 404 here would be read as "the project does not exist".
@@ -197,6 +202,8 @@ export class DwrPeriodFiguresService {
         select: { id: true, boqNo: true, doneQty: true },
         orderBy: [{ group: { boqNo: 'asc' } }, { boqNo: 'asc' }],
       });
+      // Text order puts 10 before 2 — see `boq-order.ts`.
+      sortByBoqNo(items);
       if (items.length === 0) return { lines: [], discrepancies: 0 };
 
       const sums = await this.sumApproved(

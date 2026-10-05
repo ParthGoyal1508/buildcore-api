@@ -14,6 +14,7 @@ import {
   CreateBoqItemDto,
   PlanBoqItemDto,
 } from './dto/boq.dto';
+import { sortByBoqNo } from './boq-order';
 
 const DEC = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
@@ -209,6 +210,10 @@ export class BoqService {
         },
       }),
     );
+
+    // Text order puts 10 before 2. Re-ordered here rather than in the query — see `boq-order.ts`.
+    sortByBoqNo(groups);
+    for (const group of groups) sortByBoqNo(group.items);
 
     return groups.map((group) => ({
       id: group.id,

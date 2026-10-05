@@ -38,6 +38,7 @@ import {
   nextRaBillNumber,
   packageLabel,
 } from '../bill-number';
+import { sortByBoqNo } from '../../boq/boq-order';
 
 /**
  * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
@@ -255,6 +256,8 @@ export class BillPackageService {
           rate: true,
         },
       });
+      // Text order puts 10 before 2 — see `boq-order.ts`.
+      sortByBoqNo(items);
       return items.map((item) => ({
         id: item.id,
         boqNo: item.boqNo,

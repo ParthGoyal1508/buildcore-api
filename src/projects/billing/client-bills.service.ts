@@ -12,6 +12,7 @@ import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
 import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
 import { nextClientBillNumber } from './bill-number';
+import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
 
 /** A line as the caller composes it. */
 export interface ComposeBillLineInput {
@@ -352,6 +353,11 @@ export class ClientBillsService {
         include: { lines: { include: { boqTaskItem: true } } },
       });
       if (!bill) throw new NotFoundException('Bill not found');
+
+      // Through the schedule line each one measures. Text order puts 10 before 2 — `boq-order.ts`.
+      bill.lines.sort((a, b) =>
+        compareBoqNo(a.boqTaskItem.boqNo, b.boqTaskItem.boqNo),
+      );
       if (bill.status !== ClientBillStatus.draft) {
         throw new ConflictException({
           statusCode: 409,
@@ -494,6 +500,10 @@ export class ClientBillsService {
         },
         orderBy: { boqNo: 'asc' },
       });
+
+      // Text order puts 10 before 2 — see `boq-order.ts`.
+      sortByBoqNo(groups);
+      for (const group of groups) sortByBoqNo(group.items);
 
       const allItemIds = groups.flatMap((group) =>
         group.items.map((item) => item.id),
