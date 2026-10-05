@@ -104,11 +104,22 @@ export class BillPackageViewBuilder {
       this.debits.registerFor(ctx, packageId),
     ]);
 
-    // **One per schedule line, in schedule order, including lines with nothing claimed** (FR-030).
+    // **One per line claimed on this bill, in schedule order** (FR-030, amended 2026-10-05).
+    //
+    // Was one per schedule line, claimed or not. That is right for the three-line bill the format
+    // was drawn from and wrong at any real scale: a 231-line tender with six lines measured
+    // produced a 246-page PDF of which 225 pages carried a nil claim. A measurement sheet argues a
+    // quantity being claimed, and there is nothing to argue about a line this bill does not claim —
+    // the schedule annexure still lists every line, which is where a reader checks nothing is
+    // missing.
+    //
     // Sequential rather than parallel: a 312-line tender would otherwise open 312 transactions at
     // once, which is the shape of the problem research §8 records rather than a different one.
+    const claimed = packageView.claims.filter(
+      (claim) => claim.claimedQty != null && Number(claim.claimedQty) !== 0,
+    );
     const measurementSheets: WorkbookMeasurementSheet[] = [];
-    for (const [index, claim] of packageView.claims.entries()) {
+    for (const [index, claim] of claimed.entries()) {
       const sheet = await this.sheets.sheetFor(
         ctx,
         packageId,
@@ -139,6 +150,10 @@ export class BillPackageViewBuilder {
         footer: sheet.footer,
       });
     }
+
+    const sheetByLine = new Map(
+      measurementSheets.map((sheet) => [sheet.scheduleLineId, sheet]),
+    );
 
     const header = {
       // FR-025's two bindings, resolved **here** and not in the renderer. By the time the sheet
@@ -282,6 +297,9 @@ export class BillPackageViewBuilder {
         taxBasisSource: abstract.taxBasisSource,
       },
       schedule: {
+        // Keyed by schedule line, never by position. The sheets are now a subset of the claims, and
+        // `measurementSheets[index]` would have silently handed each line a different line's
+        // cumulative figures — a wrong number on a money document that reads as a right one.
         lines: packageView.claims.map((claim, index) => ({
           srNo: index + 1,
           boqNo: claim.boqNo,
@@ -292,9 +310,11 @@ export class BillPackageViewBuilder {
           scopeAmount: claim.amount,
           balanceQty: claim.remainingQty,
           qtyUptoDate:
-            measurementSheets[index]?.footer.uptoDateQty ?? claim.claimedQty,
+            sheetByLine.get(claim.scheduleLineId)?.footer.uptoDateQty ??
+            claim.claimedQty,
           qtyUptoPrevious:
-            measurementSheets[index]?.footer.uptoPreviousQty ?? '0.000',
+            sheetByLine.get(claim.scheduleLineId)?.footer.uptoPreviousQty ??
+            '0.000',
           qtyThisBill: claim.claimedQty,
           amountUptoDate: claim.amount,
           amountUptoPrevious: '0.00',

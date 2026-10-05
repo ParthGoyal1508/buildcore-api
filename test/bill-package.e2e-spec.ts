@@ -490,7 +490,7 @@ describe('The running-account bill package (e2e)', () => {
 
   // ── Pass 7 — the workbook ────────────────────────────────────────────────
 
-  it('produces a workbook with one measurement sheet per schedule line', async () => {
+  it('produces a workbook with one measurement sheet per CLAIMED line', async () => {
     const response = await http()
       .get(`/projects/bill-packages/${packageId}/workbook.xlsx`)
       .set(auth())
@@ -513,14 +513,35 @@ describe('The running-account bill package (e2e)', () => {
     await workbook.xlsx.load(response.body);
     const names = workbook.worksheets.map((sheet) => sheet.name);
 
-    // The five kinds, in the client's order, and **the count against the schedule's own length**.
+    // The five kinds, in the client's order.
     expect(names.slice(0, 3)).toEqual([
       'Check List',
       'Abstract',
       'BOQ Annexure-I',
     ]);
     expect(names[names.length - 1]).toBe('Debit Note');
-    expect(names.filter((name) => name.startsWith('M-'))).toHaveLength(LINES);
+
+    // **Counted against the claims, not against the schedule** (amended 2026-10-05). A sheet per
+    // schedule line is right for the three-line bill this format was drawn from and wrong at any
+    // real scale: a 231-line tender with six lines measured produced a 246-page document of which
+    // 225 pages carried a nil claim. Asserting against `LINES` would pass either way here, because
+    // this fixture claims every line — so the count is derived from the package's own claims.
+    const view = await http()
+      .get(`/projects/bill-packages/${packageId}`)
+      .set(auth())
+      .expect(200);
+    const claimed = view.body.claims.filter(
+      (claim: { claimedQty: string | null }) =>
+        claim.claimedQty != null && Number(claim.claimedQty) !== 0,
+    );
+    expect(claimed.length).toBeLessThan(view.body.claims.length);
+    expect(names.filter((name) => name.startsWith('M-'))).toHaveLength(
+      claimed.length,
+    );
+
+    // And the schedule annexure still carries every line, claimed or not — that is where a reader
+    // checks nothing has gone missing.
+    expect(view.body.claims).toHaveLength(LINES);
   });
 
   // ── Pass 8 — locks, permissions, tenancy ─────────────────────────────────
