@@ -124,6 +124,18 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // makes it. Phase B did not touch `src/partners` and Phase C did, so the guard fired on
           // Phase C — which is the earliest it could have.
           ':(exclude)src/partners/vendors/vendors.service.ts',
+          // Owned by 023 Phase G. A **read-only** source registering itself with
+          // `ProjectSourcesRegistry` so a bill's header can print a subcontractor's statutory
+          // details — the same registry pattern `plant` uses for the equipment logbook and
+          // `search` for its registers, and for the same cycle reason: `PartnersModule` imports
+          // `ProjectsModule`, so the dependency has to be inverted. No approval path of any kind,
+          // and the per-file `approve()` assertions above still enforce that `src/partners` keeps
+          // its own approval mechanism.
+          //
+          // A commit late for the seventh time, and still the earliest it could be: the check
+          // diffs two commits, so an untracked file is invisible to it until the commit that adds
+          // it. Worth knowing rather than worth apologising for.
+          ':(exclude)src/partners/vendors/vendor-identity.source.ts',
           ':(exclude)src/plant/plant.module.ts',
           ':(exclude)src/plant/equipment/equipment-search.source.ts',
           ':(exclude)src/projects/portfolio/project-search.source.ts',
