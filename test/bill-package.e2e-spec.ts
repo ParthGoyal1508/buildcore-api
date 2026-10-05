@@ -146,8 +146,19 @@ describe('The running-account bill package (e2e)', () => {
 
   afterAll(async () => {
     if (prisma) {
-      await sys.billPackageLineClaim.deleteMany({ where: { companyId } });
-      await sys.billPackageCheckListAnswer.deleteMany({ where: { companyId } });
+      // **Nothing here is scoped to the company**, and two rows once were.
+      //
+      // `billPackageLineClaim` and `billPackageCheckListAnswer` were deleted by `companyId` while
+      // every other line scoped to this suite's own project. This fixture creates its client
+      // through the API, so its company is whichever company the caller belongs to — on a
+      // developer's machine, the seeded one they are using. Running the suite therefore deleted
+      // every line claim and every check-list answer belonging to every bill in that company,
+      // leaving real issued bills with frozen totals and no lines behind them. It did exactly
+      // that on 2026-10-05.
+      //
+      // Both cascade from `BillPackage`, which the next line already deletes by project, so the
+      // two statements were never needed for the cleanup to be complete — only for it to be
+      // destructive.
       await sys.billPackageDebit.deleteMany({ where: { projectId } });
       await sys.billPackage.deleteMany({ where: { projectId } });
       await sys.clientBillLine.deleteMany({
