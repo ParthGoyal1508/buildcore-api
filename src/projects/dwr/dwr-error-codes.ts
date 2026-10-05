@@ -31,6 +31,16 @@ export const DWR_ERRORS = {
   workDateInFuture: 'DWR_WORK_DATE_IN_FUTURE',
   /** The BOQ line belongs to another project. Names both. */
   boqItemOtherProject: 'DWR_BOQ_ITEM_OTHER_PROJECT',
+  /**
+   * The BOQ line is on the project's **internal estimate**, not its contract schedule (027).
+   *
+   * A project may carry two schedules describing the same work, and a tender section and its
+   * costing twin read identically in a picker. Measuring against the costing one moves a `doneQty`
+   * that no bill will ever draw on, that the alerts deliberately ignore, and that no client has
+   * agreed to — so the day's work is recorded and then absent from progress, which is worse than
+   * refusing it.
+   */
+  boqItemIsEstimate: 'DWR_BOQ_ITEM_IS_ESTIMATE',
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   /** Nothing to assert — refused at submission, accepted as a draft (FR-024). */

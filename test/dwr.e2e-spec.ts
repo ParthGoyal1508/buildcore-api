@@ -849,6 +849,93 @@ describe('Daily work reports (e2e)', () => {
     });
   });
 
+  /**
+   * Reported 2026-10-06: a project carrying both a tender workbook and an internal estimate listed
+   * every BOQ line twice in the daily-work picker, the two indistinguishable — the same sentence,
+   * the same unit, the same number.
+   *
+   * The picker was where it showed; this is where it mattered. A measurement filed against the
+   * costing twin moves a `doneQty` no bill will ever draw on and that `getAlerts` deliberately
+   * skips, so the day's work is accepted and then absent from progress. Recorded and lost is worse
+   * than refused.
+   */
+  describe('the internal estimate is not measurable (027)', () => {
+    let estimateGroupId = '';
+    let estimateItemId = '';
+
+    beforeAll(async () => {
+      // Written directly: the only route to an estimate line is the estimate import, which needs a
+      // workbook — and what is under test is the refusal, not the import.
+      estimateGroupId = (
+        await sys.bOQTaskGroup.create({
+          data: {
+            companyId,
+            projectId,
+            boqNo: '31',
+            name: 'Routine maintenance — our own costing',
+            scopeQty: '0',
+            isEstimate: true,
+          },
+          select: { id: true },
+        })
+      ).id;
+      estimateItemId = (
+        await sys.bOQTaskItem.create({
+          data: {
+            companyId,
+            groupId: estimateGroupId,
+            boqNo: '31.10',
+            taskName: 'Line 30.10 at our own cost rate',
+            unit: 'MON',
+            scopeQty: '12',
+            rate: '640.00',
+            isEstimate: true,
+          },
+          select: { id: true },
+        })
+      ).id;
+    });
+
+    afterAll(async () => {
+      await sys.bOQTaskItem
+        .deleteMany({ where: { groupId: estimateGroupId } })
+        .catch(() => undefined);
+      await sys.bOQTaskGroup
+        .deleteMany({ where: { id: estimateGroupId } })
+        .catch(() => undefined);
+    });
+
+    it('refuses the line and names the BOQ number, rather than recording work nothing reads', async () => {
+      const res = await createReport([
+        { paymentMode: 'day_basis', boqItemId: estimateItemId, servedQty: '1' },
+      ]);
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('DWR_BOQ_ITEM_IS_ESTIMATE');
+      // By number: the costing line and the contract line it twins read identically, so "one of
+      // your lines is wrong" leaves somebody comparing two schedules row by row.
+      expect(res.body.message).toContain('31.10');
+    });
+
+    it('still accepts the contract line that says the same thing', async () => {
+      // The other half of the pair, and the one that stops the guard being "refuse everything".
+      const res = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      expect(res.status).toBe(201);
+    });
+
+    it('records nothing against the costing line', async () => {
+      // The consequence, not the status code. A refusal that still wrote the row would pass the
+      // test above.
+      const row = await sys.bOQTaskItem.findUnique({
+        where: { id: estimateItemId },
+        select: { doneQty: true },
+      });
+      expect(Number(row?.doneQty)).toBe(0);
+    });
+  });
+
   // ── What this API promises a client, asserted on the wire (025 FR-008) ────
 
   /**

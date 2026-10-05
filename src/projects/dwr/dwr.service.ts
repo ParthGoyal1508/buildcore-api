@@ -1382,12 +1382,14 @@ export class DwrService {
         boqNo: true,
         scopeQty: true,
         doneQty: true,
-        group: { select: { projectId: true } },
+        isEstimate: true,
+        group: { select: { projectId: true, isEstimate: true } },
       },
     });
 
     const found = new Map<string, BoqItemForLine>();
     const foreign: { boqItemId: string; belongsToProjectId: string }[] = [];
+    const costing: { boqItemId: string; boqNo: string }[] = [];
 
     for (const item of items) {
       if (item.group.projectId !== projectId) {
@@ -1395,6 +1397,12 @@ export class DwrService {
           boqItemId: item.id,
           belongsToProjectId: item.group.projectId,
         });
+        continue;
+      }
+      // The costing schedule, not the contract one. Checked on both the line and its section
+      // because the estimate import sets both, and a line moved between them must not slip through.
+      if (item.isEstimate || item.group.isEstimate) {
+        costing.push({ boqItemId: item.id, boqNo: item.boqNo });
         continue;
       }
       found.set(item.id, {
@@ -1413,6 +1421,22 @@ export class DwrService {
           'project. A measurement filed against a schedule its author cannot see surfaces months ' +
           "later in somebody else's bill.",
         detail: { reportingProjectId: projectId, lines: foreign },
+      });
+    }
+
+    if (costing.length > 0) {
+      // Named by BOQ number, because the costing line and the contract line it twins are the same
+      // sentence in a picker — "one of your lines is wrong" leaves somebody comparing two schedules
+      // of 231 rows each.
+      throw new BadRequestException({
+        code: DWR_ERRORS.boqItemIsEstimate,
+        message:
+          `${costing.length} measured line(s) reference the internal estimate rather than the ` +
+          'contract schedule: ' +
+          costing.map((line) => line.boqNo).join(', ') +
+          '. Work recorded against a costing line is never billed and never appears in progress. ' +
+          'Pick the same item from the contract schedule.',
+        detail: { reportingProjectId: projectId, lines: costing },
       });
     }
 

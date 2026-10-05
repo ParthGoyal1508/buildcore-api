@@ -76,6 +76,7 @@ Each line comes back with `quantityInForce`, `exceedsScope`, and — where it ap
 | 400 | `DWR_SHORT_DAY_NEEDS_REMARK` | `servedQty < 1` with no remark (FR-030c) |
 | 400 | `DWR_WORK_DATE_IN_FUTURE` | a report describes a day that happened (FR-025) |
 | 400 | `DWR_BOQ_ITEM_OTHER_PROJECT` | the BOQ line belongs to another project, naming both |
+| 400 | `DWR_BOQ_ITEM_IS_ESTIMATE` | the BOQ line is on the project's internal estimate, not its contract schedule, naming the BOQ numbers (027) |
 | 404 | — | the project is another company's (FR-029) |
 | 423 | `PROJECT_LOCKED` | the project is locked (FR-008) — not 403; the same caller may write once it is unlocked |
 
