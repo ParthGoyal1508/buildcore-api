@@ -449,6 +449,39 @@ describe('The running-account bill package (e2e)', () => {
     expect(second.body.label).toBe('RA-02');
   });
 
+  /**
+   * 025 FR-043. **The bill under the package leaves draft when the package is issued.**
+   *
+   * Composing creates it in `draft` and nothing moved it, so a package that had been issued —
+   * every figure frozen, a PDF emailed — sat on a bill the rest of the product read as unsent. The
+   * project position counts bills that have left draft, so Position reported no revenue at all for
+   * every running-account bill ever issued.
+   *
+   * Asserted through the 018 read rather than on the package, because that read is what Position
+   * and the Client bills tab both go through: a test on the package's own status would pass while
+   * the figure a user is looking at stayed zero.
+   */
+  it('submits the client bill under the package it issues', async () => {
+    const pkg = await http()
+      .get(`/projects/bill-packages/${packageId}`)
+      .set(auth())
+      .expect(200);
+    expect(pkg.body.status).toBe('issued');
+
+    const bills = await http()
+      .get(`/projects/client-bills?projectId=${projectId}`)
+      .set(auth())
+      .expect(200);
+
+    // The 018 bill carries the package's own label as its number.
+    const bill = bills.body.find(
+      (row: { billNumber: string }) => row.billNumber === pkg.body.label,
+    );
+    expect(bill).toBeDefined();
+    expect(bill.status).toBe('submitted');
+    expect(bill.submittedAt).not.toBeNull();
+  });
+
   it('refuses a debit applied to a bill that has been issued', async () => {
     const another = await http()
       .post(`/projects/${projectId}/bill-package-debits`)

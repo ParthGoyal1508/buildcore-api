@@ -979,6 +979,26 @@ export class BillPackageService {
         },
       });
 
+      // **The 018 bill this package is built on leaves draft here too** (025 FR-043).
+      //
+      // Composing creates it in `draft`, which is right while the package is a draft. Nothing then
+      // moved it, so an issued package — a bill that has gone out, with every figure frozen and a
+      // PDF emailed — sat on a bill the rest of the product still read as unsent. The project
+      // position counts bills that have left draft, so Position reported no revenue at all for
+      // every running-account bill ever issued, and the Client bills tab showed it as a draft
+      // beside it. Issuing is the act of sending; one act, one status, in one transaction.
+      if (pkg.clientBillId) {
+        await tx.clientBill.update({
+          where: { id: pkg.clientBillId },
+          data: { status: ClientBillStatus.submitted, submittedAt: new Date() },
+        });
+      } else if (pkg.raBillId) {
+        await tx.rABill.update({
+          where: { id: pkg.raBillId },
+          data: { status: RaBillStatus.submitted, submittedAt: new Date() },
+        });
+      }
+
       return {
         missing: header.missing,
         gaps: checkListGaps(mergeCheckList(pkg.checkListAnswers)),
@@ -1268,11 +1288,18 @@ export class BillPackageService {
         where: { id: pkg.id },
         data: { status: BillPackageStatus.certified },
       });
-      // The certified figure lives on the bill 018 already owns, beside its gross and net.
+      // The certified figure lives on the bill 018 already owns, beside its gross and net — and
+      // the bill's own status moves with the package's, for the reason `issue` does the same: a
+      // package and the bill under it describing different stages of the same claim is how the
+      // Client bills tab came to show a draft beside a bill that had been issued and emailed.
       if (pkg.clientBillId) {
         await tx.clientBill.update({
           where: { id: pkg.clientBillId },
-          data: { certifiedAmount, certifiedAt: new Date() },
+          data: {
+            status: ClientBillStatus.certified,
+            certifiedAmount,
+            certifiedAt: new Date(),
+          },
         });
       }
     });
