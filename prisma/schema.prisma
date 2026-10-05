@@ -1603,6 +1603,19 @@ model Client {
   /// therefore admit unlimited GSTIN-less clients — correct here, but only by
   /// accident. The partial index in the migration states the rule explicitly.
   gstin         String?
+  /// The two the running-account bill's statutory header needs and this table did not carry
+  /// (025 FR-039). Until they existed, every bill issued to a client reported `issuerPan` and
+  /// `issuerState` as missing, and the intra/inter-state tax decision had no client state code to
+  /// read — so it fell back to `Project.cgstApplicable` on every single bill rather than deriving
+  /// the basis from the two parties' GSTINs the way 023 FR-015 describes.
+  ///
+  /// Both nullable: a client recorded before this existed is not wrong, and refusing to issue a
+  /// bill for a missing PAN is worse than issuing one with a blank somebody fills in by hand —
+  /// which is the rule the header has followed since 023 and this does not change.
+  pan           String?
+  /// Two-digit GST state code, as the GSTIN's own first two characters spell it (`08` is
+  /// Rajasthan). Stored as text, never an integer: `08` is not 8.
+  state         String?
 
   status ClientStatus @default(active)
 

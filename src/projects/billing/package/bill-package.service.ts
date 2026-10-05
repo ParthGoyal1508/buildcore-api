@@ -1020,17 +1020,34 @@ export class BillPackageService {
     if (pkg.direction === BillDirection.to_client) {
       const client = await tx.client.findFirst({
         where: { id: pkg.project.clientId },
-        select: { name: true, gstin: true, address: true },
+        select: {
+          name: true,
+          gstin: true,
+          address: true,
+          pan: true,
+          state: true,
+        },
       });
       // The authority occupies the "Company Name" slot and the company is the contractor beneath
       // it — the client's own layout, and the reason this is a binding rather than a second
-      // renderer. `Client` carries no state and no permanent account number, which is why both
-      // come back null and are reported.
+      // renderer.
+      //
+      // **`pan` and `state` read from the client since 025 FR-039.** Both were hardcoded null here
+      // because the table carried neither column, so every bill issued to a client reported two
+      // missing header fields — on the real RA-12 those two rows are filled in by hand.
+      //
+      // They do **not** move the tax decision: `decideTaxBasis` reads the two GSTINs, whose first
+      // two characters are the state code, so a client with a GSTIN has always been taxed
+      // correctly. These are what the header *prints*, which is a smaller claim than it looks and
+      // worth stating precisely rather than overselling.
+      //
+      // A client recorded before these columns existed still reports them missing, which is the
+      // right answer: unrecorded is not the same as absent from the model.
       issuer = {
         name: client?.name ?? null,
         gstin: client?.gstin ?? null,
-        pan: null,
-        state: null,
+        pan: client?.pan ?? null,
+        state: client?.state ?? null,
         address: client?.address ?? null,
         code: null,
       };

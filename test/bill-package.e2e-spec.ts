@@ -406,10 +406,13 @@ describe('The running-account bill package (e2e)', () => {
       .expect(201);
 
     expect(issued.body.package.status).toBe('issued');
-    // FR-027a, and the gap the spec predicted: `Client` carries no `state` and no `pan`, so on a
-    // bill issued to a client those are exactly the two fields that cannot be filled. Reported,
-    // never a refusal — a bill that cannot be produced because a PAN is unrecorded is worse than
-    // one produced with a blank somebody fills in by hand.
+    // FR-027a. This client carries no PAN and no state — the columns exist as of 025 FR-039 and
+    // this fixture leaves them unset, which is the ordinary case for a client recorded before they
+    // did. Reported, never a refusal: a bill that cannot be produced because a PAN is unrecorded
+    // is worse than one produced with a blank somebody fills in by hand.
+    //
+    // **Unrecorded, not unrecordable** — which is the whole difference 025 made, and the case
+    // below proves the other half.
     expect(issued.body.missingHeaderFields).toContain('issuerPan');
     expect(issued.body.missingHeaderFields).toContain('issuerState');
     // FR-043a. Three questions were never answered and one was answered no, and none of that
@@ -649,6 +652,49 @@ describe('The running-account bill package (e2e)', () => {
     // Zero out of twelve is a fact worth reporting; an empty report is not the same statement.
     expect(report.body.totalLines).toBeGreaterThan(0);
     expect(typeof report.body.totalOverClaimed).toBe('number');
+  });
+
+  /**
+   * The other half of the header gap (025 FR-039).
+   *
+   * Until this feature `Client` had no `pan` and no `state` column at all, so `issuerPan` and
+   * `issuerState` were hardcoded null and **every** bill ever issued to a client reported them
+   * missing. The test above asserts a client that has not recorded them still does; this one
+   * asserts a client that has recorded them does not — without which the two columns could be
+   * dropped again and the suite would not notice.
+   */
+  it('stops reporting the header gap once the client carries its PAN and state', async () => {
+    await sys.client.update({
+      where: { id: clientId },
+      data: { pan: 'AABCP1234F', state: '08' },
+    });
+
+    const second = await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2026-04-21',
+        periodTo: '2026-05-20',
+      })
+      .expect(201);
+
+    const issued = await http()
+      .post(`/projects/bill-packages/${second.body.id}/issue`)
+      .set(auth())
+      .expect(201);
+
+    expect(issued.body.missingHeaderFields).not.toContain('issuerPan');
+    expect(issued.body.missingHeaderFields).not.toContain('issuerState');
+
+    // Frozen onto the row, which the view does not carry — the workbook renders from the stored
+    // package, so this is where the figure that actually prints lives.
+    const frozen = await sys.billPackage.findUnique({
+      where: { id: second.body.id },
+      select: { issuerState: true, issuerPan: true },
+    });
+    expect(frozen.issuerState).toBe('08');
+    expect(frozen.issuerPan).toBe('AABCP1234F');
   });
 
   // ── A statutory rate can change, and an issued bill cannot (025 US4) ──────

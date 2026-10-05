@@ -134,6 +134,8 @@ export class ClientsService {
             email: dto.email ?? null,
             address: dto.address ?? null,
             gstin: dto.gstin ?? null,
+            pan: dto.pan ?? null,
+            state: dto.state ?? null,
             status: dto.status ?? ClientStatus.active,
           },
         });
@@ -255,6 +257,8 @@ export class ClientsService {
               ? { address: dto.address || null }
               : {}),
             ...(dto.gstin !== undefined ? { gstin: dto.gstin || null } : {}),
+            ...(dto.pan !== undefined ? { pan: dto.pan || null } : {}),
+            ...(dto.state !== undefined ? { state: dto.state || null } : {}),
             ...(dto.status !== undefined ? { status: dto.status } : {}),
           },
         });
