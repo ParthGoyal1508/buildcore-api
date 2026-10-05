@@ -716,6 +716,72 @@ describe('Daily work reports (e2e)', () => {
     });
   });
 
+  // ── What this API promises a client, asserted on the wire (025 FR-008) ────
+
+  /**
+   * **Written because a client guessed this shape and the guess reached a user.**
+   *
+   * buildcore-web's daily-work module demanded `reportNumber`, `projectId` and `workDate` back from
+   * a creation that sends none of them, and rendered an array of lines the list has never carried.
+   * The server was right every time; the screen reported a successful save as a failure, which is
+   * the worst available outcome — the day was recorded and believed lost.
+   *
+   * **Asserted as an exact key set, never as containment.** `expect(body).toHaveProperty(…)` passes
+   * just as happily against a response carrying everything, which makes it worthless as a guard
+   * against the field that quietly disappears. Equality fails on an addition too — deliberately:
+   * adding a field to a published response is a contract change, and this test is where somebody is
+   * reminded to move `contracts/dwr-api.md` in the same commit.
+   *
+   * What this cannot do is read any client. No automated check spans the two repositories; see
+   * `specs/025-projects-flow-completion/research.md` section 3 for why, and for the condition that
+   * should change the answer.
+   */
+  describe('the published shape (025 FR-008)', () => {
+    it('answers a creation with exactly an id, a number, a status and the warnings', async () => {
+      const res = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+
+      expect(res.status).toBe(201);
+      expect(Object.keys(res.body).sort()).toEqual([
+        'dprNumber',
+        'id',
+        'status',
+        'warnings',
+      ]);
+    });
+
+    it('answers each list row with exactly the summary a page carries', async () => {
+      const page = await http()
+        .get(`/projects/dwr?projectId=${projectId}&pageSize=1`)
+        .set(auth())
+        .expect(200);
+
+      expect(Object.keys(page.body).sort()).toEqual([
+        'items',
+        'page',
+        'pageSize',
+        'total',
+      ]);
+
+      // `lineCount` is a count and there is no lines array: the lines are on the detail read.
+      // `createdByUserId` and `submittedByUserId` are carried so a caller can show 022 FR-012a
+      // before the action rather than after it (025 FR-006).
+      expect(Object.keys(page.body.items[0]).sort()).toEqual([
+        'createdByUserId',
+        'dprNumber',
+        'id',
+        'lineCount',
+        'machineryCount',
+        'progress',
+        'status',
+        'submittedByUserId',
+        'workDate',
+        'workerCount',
+      ]);
+    });
+  });
+
   // ── The concurrency properties ───────────────────────────────────────────
 
   describe('concurrency', () => {
