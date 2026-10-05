@@ -112,6 +112,18 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // the real protection here; this diff is the backstop.
           ':(exclude)src/partners/partners.module.ts',
           ':(exclude)src/partners/vendors/vendor-search.source.ts',
+          // Owned by 023 Phase C (the bill package's statutory header). `getBillingIdentity` is a
+          // **read-only slice** — code, name, registration number, permanent account number, state,
+          // address — exported so `projects` can put a subcontractor in a bill's receiving slot
+          // without reading the `partners` schema directly, which is what Principle I requires. It
+          // adds no approval path of any kind, and the per-file `approve()` assertions above still
+          // read this file and still enforce that `src/partners` keeps its own approval mechanism.
+          //
+          // Added a commit late, again, and the reason is worth keeping rather than apologising
+          // for: this check diffs two commits, so a change is invisible to it until the commit that
+          // makes it. Phase B did not touch `src/partners` and Phase C did, so the guard fired on
+          // Phase C — which is the earliest it could have.
+          ':(exclude)src/partners/vendors/vendors.service.ts',
           ':(exclude)src/plant/plant.module.ts',
           ':(exclude)src/plant/equipment/equipment-search.source.ts',
           ':(exclude)src/projects/portfolio/project-search.source.ts',

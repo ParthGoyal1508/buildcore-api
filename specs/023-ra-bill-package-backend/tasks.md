@@ -325,67 +325,67 @@ them holding a workbook**.
 that balances; the register refuses a second application; the check list keeps unanswered apart
 from no.
 
-- [ ] T049 [US4] Create `src/projects/billing/package/measurement-sheet.service.ts` with
+- [X] T049 [US4] Create `src/projects/billing/package/measurement-sheet.service.ts` with
       `historyFor(packageId, lineId)`: every period the line has been claimed in, in period order,
       each with its quantity, its reason and the package it went out on (FR-031)
-- [ ] T050 [US4] Reproduce reasons **verbatim** in `measurement-sheet.service.ts` (FR-032) — no
+- [X] T050 [US4] Reproduce reasons **verbatim** in `measurement-sheet.service.ts` (FR-032) — no
       normalising, no trimming, no sentence-casing. The remarks are the argument the document
       exists to settle, misspellings included — and SC-005 requires one to be readable on that
       item's sheet a year later, which is why the history is a query across bills rather than a
       field on one
-- [ ] T051 [US4] Add the daily record to `measurement-sheet.service.ts`, read through
+- [X] T051 [US4] Add the daily record to `measurement-sheet.service.ts`, read through
       `ProjectSourcesRegistry.logbookSource()` — the registry 022 built, never by querying the plant
       schema (FR-033, plan.md Constitution Check I). Batched over the period's dates in one call
-- [ ] T052 [US4] Report a date with **no** daily record as `logbookMissing: true` in
+- [X] T052 [US4] Report a date with **no** daily record as `logbookMissing: true` in
       `measurement-sheet.service.ts`, distinguishably from a date on which nothing was done
       (FR-034). 022's source returns a map, so an absent date is absent rather than zero — keep that
       distinction rather than flattening it into a run of zeroes
-- [ ] T053 [US4] Compute the footer in `measurement-sheet.service.ts`: this bill, up to previous and
+- [X] T053 [US4] Compute the footer in `measurement-sheet.service.ts`: this bill, up to previous and
       up to date, where **up to previous is the previous package's stored figure** (FR-013a, FR-014)
       and not this package's up-to-date less its own quantity
-- [ ] T054 [P] [US5] Create `src/projects/billing/package/dto/debit-note.dto.ts` and
+- [X] T054 [P] [US5] Create `src/projects/billing/package/dto/debit-note.dto.ts` and
       `debit-note.service.ts` with `record`: description, location, the dimensions where the debit
       has them, quantity, rate, unit, amount, and amount including tax — the last carried rather
       than computed, because the tax on a debit is not always the bill's own rate (FR-036)
-- [ ] T055 [US5] Implement `apply` in `debit-note.service.ts` as a **conditional update whose row
+- [X] T055 [US5] Implement `apply` in `debit-note.service.ts` as a **conditional update whose row
       count the service checks** — `WHERE "recoveredOnPackageId" IS NULL` — so the one-bill rule is
       decided by the database and not by a read followed by a write (FR-037). A debit recovered
       twice is money taken twice
-- [ ] T056 [US5] Refuse application to an **issued** package in `debit-note.service.ts` with
+- [X] T056 [US5] Refuse application to an **issued** package in `debit-note.service.ts` with
       `BILL_PACKAGE_ISSUED` (FR-037b): applying one afterwards either moves a figure FR-044 froze or
       records a recovery the bill never made
-- [ ] T057 [US5] Include applied debits in the package's recoveries in `debit-note.service.ts`,
+- [X] T057 [US5] Include applied debits in the package's recoveries in `debit-note.service.ts`,
       under the **one named recovery kind FR-038a states** — so two compliant implementations cannot
       produce two different abstracts (FR-038)
-- [ ] T058 [US5] Implement `registerFor(packageId)` in `debit-note.service.ts`: every debit on the
+- [X] T058 [US5] Implement `registerFor(packageId)` in `debit-note.service.ts`: every debit on the
       project grouped under its heading for a **draft** (FR-039, FR-040), and for an **issued**
       package the register **as at issue** — `recordedAt <= issuedAt` (FR-039a). Without that split,
       FR-039's running total and FR-028's frozen workbook contradict each other and a debit recorded
       between two productions of a signed bill changes it
-- [ ] T059 [P] [US6] Create `src/projects/billing/package/check-list.ts` holding the **six fixed
+- [X] T059 [P] [US6] Create `src/projects/billing/package/check-list.ts` holding the **six fixed
       questions in a fixed order with fixed wording** as a constant, and
       `dto/check-list.dto.ts` accepting `yes`, `no`, `not_required` or **absent** per question
       (FR-041, FR-042). A constant rather than rows because the client reads them by position and
       their wording is the format rather than this system's data; absent rather than a boolean
       because an unanswered question is not an answer of no
-- [ ] T060 [US4] **Up to previous is read, not derived** — its own test in
+- [X] T060 [US4] **Up to previous is read, not derived** — its own test in
       `measurement-sheet.service.spec.ts`. Build three consecutive packages, then assert that the
       third's up-to-previous figure **equals the second's stored up-to-date column**, read directly
       from the second package's row. Without this, FR-035's footer identity — which the plan calls
       the one property of the package nobody can check by reading a single bill — is a rearrangement
       of its own definition and holds for any values whatever (FR-013a, checklist CHK002)
-- [ ] T061 [US4] Add the footer identity test to `measurement-sheet.service.spec.ts`: this bill plus
+- [X] T061 [US4] Add the footer identity test to `measurement-sheet.service.spec.ts`: this bill plus
       up to previous equals up to date **exactly**, for every item on every package, with no
       rounding difference (FR-035, SC-004)
-- [ ] T062 [P] [US5] Create `src/projects/billing/package/debit-note.service.spec.ts`: a debit
+- [X] T062 [P] [US5] Create `src/projects/billing/package/debit-note.service.spec.ts`: a debit
       applied to a second package refused **naming the first** (FR-037); two **simultaneous**
       applications of one debit, exactly one landing (FR-037a) — the rule has to hold where
       concurrent writers meet it and not only against a second attempt made afterwards; and
       application to an issued package refused (FR-037b). SC-007 is this test and nothing else
-- [ ] T063 [P] [US5] Add the register tests to `debit-note.service.spec.ts`: a draft's register
+- [X] T063 [P] [US5] Add the register tests to `debit-note.service.spec.ts`: a draft's register
       showing a debit recorded against a later package, an issued package's register **not** growing
       when a debit is recorded afterwards (FR-039a), and the grouping under headings (FR-040)
-- [ ] T064 [P] [US6] Create `src/projects/billing/package/check-list.spec.ts`: six questions in
+- [X] T064 [P] [US6] Create `src/projects/billing/package/check-list.spec.ts`: six questions in
       order with their exact wording, an unanswered question distinguishable from one answered no,
       and the gaps returned rather than refusing anything (FR-041 to FR-043a)
 
