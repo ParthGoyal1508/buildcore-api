@@ -680,6 +680,57 @@ describe('Daily work reports (e2e)', () => {
       expect(lineAfter.approvedUpToDate).toBe(lineBefore.approvedUpToDate);
     });
 
+    /**
+     * **A single day, which is the window the wide ones could never fail on** (025 FR-041).
+     *
+     * Found by asking a running server for one day's measurement and being told nothing had
+     * happened. Every `DateTime` column here is `timestamp without time zone`; Prisma binds a JS
+     * `Date` as `timestamptz`; and comparing the two makes Postgres convert the stored value using
+     * the **session time zone**, which on the development database is `Asia/Kolkata`. A work date
+     * stored as `2026-10-04 00:00:00` was therefore read as 18:30 on the 3rd, and a period
+     * beginning on the 4th excluded it.
+     *
+     * The window did not lose an edge case — it **shifted by a day**. A bill for the 21st to the
+     * 20th claimed the 22nd to the 21st.
+     *
+     * Every existing assertion in this file passed throughout, because they all query a range wide
+     * enough that a one-day shift still contains the same reports. That is exactly the shape of
+     * defect this repository keeps meeting: an assertion that holds for a reason unrelated to the
+     * one it was written for.
+     */
+    it('counts a report on the first day of a one-day period', async () => {
+      const day = yesterday();
+      const created = await createReport(
+        [
+          {
+            paymentMode: 'day_basis',
+            boqItemId: itemUnmeasured,
+            servedQty: '1',
+          },
+        ],
+        { workDate: day },
+      );
+      await http()
+        .post(`/projects/dwr/${created.body.id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      await http()
+        .post(`/projects/dwr/${created.body.id}/approve?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+
+      const figures = await http()
+        .get(`/projects/${projectId}/dwr/period-figures?from=${day}&to=${day}`)
+        .set(auth())
+        .expect(200);
+
+      const line = figures.body.lines.find(
+        (l: { boqItemId: string }) => l.boqItemId === itemUnmeasured,
+      );
+      // The period is the day the work happened. Both ends inclusive, both ends the same date.
+      expect(line.approvedInPeriod).toBe('1.000');
+    });
+
     it('refuses a period that ends before it begins', async () => {
       const res = await http()
         .get(

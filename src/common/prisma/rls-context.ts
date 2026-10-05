@@ -65,6 +65,27 @@ export function withRlsContext<T>(
       isSuperAdmin ? 'true' : 'false'
     }, true)`;
     await tx.$executeRaw`SELECT set_config('app.current_company_id', ${companyId}, true)`;
+    // The session's time zone, pinned to UTC for the length of this transaction (025 FR-041).
+    //
+    // **Found on 2026-10-05 by asking a running server for one day's measurement and being told
+    // nothing had happened.** Every `DateTime` column in this schema is `timestamp without time
+    // zone`, and Prisma binds a JS `Date` as `timestamptz` — so comparing one against the other
+    // makes Postgres convert the stored value *using the session time zone*. The developer
+    // database runs `Asia/Kolkata`, so a work date stored as `2026-10-04 00:00:00` was read as
+    // 18:30 the previous day, and a period beginning on the 4th excluded it.
+    //
+    // The effect was not a missing row here and there: **the whole window shifted by a day**. A
+    // bill for the 21st to the 20th claimed the 22nd to the 21st, quietly, and the first day's
+    // measurement fell out of the claim entirely. Nothing failed; the figures were simply wrong.
+    //
+    // Pinned here rather than patched at each query because this is not one query's bug — it is
+    // every comparison between a bound `Date` and a naive column, in every module. Transaction
+    // local (`set_config(..., true)`), so no connection in the pool is left altered.
+    //
+    // Safe because this codebase computes every date in JavaScript — `zonedDateOnly` does the one
+    // genuine time-zone conversion the product needs, against the configured company time zone, and
+    // no query reads the clock from the database except one `NOW()` writing an `updatedAt`.
+    await tx.$executeRaw`SELECT set_config('TimeZone', 'UTC', true)`;
     return fn(tx);
   });
 }
