@@ -14,6 +14,13 @@ import { BoqWorkbookReader } from './boq/boq-workbook.reader';
 import { BoqController } from './boq/boq.controller';
 import { BoqService } from './boq/boq.service';
 import { DwrController } from './dwr/dwr.controller';
+import { BillPackageViewBuilder } from './billing/package/bill-package-view.builder';
+import { BillPackageController } from './billing/package/bill-package.controller';
+import { BillPackageService } from './billing/package/bill-package.service';
+import { DebitNoteService } from './billing/package/debit-note.service';
+import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
+import { PackageReportsService } from './billing/package/package-reports.service';
+import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
 import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
@@ -102,6 +109,13 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // `route-shadowing.spec.ts` caught it, which is what that spec was written for after
     // `GET /projects/:id/boq` shadowed `GET /projects/client-bills/boq`.
     DwrController,
+    // 023. **Before `ProjectsController`, for exactly the reason `DwrController` is.** Every path
+    // here is a literal under `projects/` — `projects/bill-packages/:id`,
+    // `projects/bill-package-debits/:id/apply/:id` — and the portfolio registers the parameterised
+    // `GET projects/:id`. Registered second, a request for a package would arrive at
+    // `ProjectsController.findOne` looking for a project whose id is the string "bill-packages"
+    // and answer 404 as though the bill did not exist. `route-shadowing.spec.ts` asserts the order.
+    BillPackageController,
     ProjectsController,
   ],
   providers: [
@@ -133,6 +147,15 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     BoqService,
     BoqImportService,
     BoqWorkbookReader,
+    // 023. The package's four services, the view builder that reads the stored bill, and the
+    // renderer — which takes **no** constructor argument, so it cannot query and therefore cannot
+    // recompute a figure a client has already signed for (FR-028).
+    BillPackageService,
+    MeasurementSheetService,
+    DebitNoteService,
+    PackageReportsService,
+    BillPackageViewBuilder,
+    BillWorkbookRenderer,
     ImportBatchStore,
     // 022 US5, which 008 specified in August and never built. `BoqService.updateDoneQty` was
     // written then, exported from this module **for this caller**, and had no caller for two

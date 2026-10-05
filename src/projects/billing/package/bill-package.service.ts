@@ -8,6 +8,7 @@ import {
   BillDirection,
   BillPackageStatus,
   BillTaxBasis,
+  CheckListAnswer,
   ClaimProposalSource,
   ClientBillStatus,
   Prisma,
@@ -17,14 +18,19 @@ import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
-import { VendorsService } from '../../../partners/vendors/vendors.service';
 import { CompaniesService } from '../../../settings/companies/companies.service';
 import { DwrPeriodFiguresService } from '../../dwr/dwr-period-figures.service';
+import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
 import { lineTotals, money } from '../bill-totals';
 import type { AbstractColumn } from './bill-abstract';
 import { billAbstract, displayRupees } from './bill-abstract';
 import { decideTaxBasis } from './bill-tax';
-import { checkListGaps, mergeCheckList } from './check-list';
+import {
+  CHECK_LIST_FOOTER,
+  CHECK_LIST_SIGNATORIES,
+  checkListGaps,
+  mergeCheckList,
+} from './check-list';
 import { PACKAGE_ERRORS } from './package-error-codes';
 
 /** One party's statutory details, however they were sourced. */
@@ -183,7 +189,15 @@ export class BillPackageService {
     private readonly prisma: PrismaService,
     private readonly periodFigures: DwrPeriodFiguresService,
     private readonly companies: CompaniesService,
-    private readonly vendors: VendorsService,
+    /**
+     * A subcontractor's statutory details, read through the registry rather than by injecting
+     * `VendorsService` (023 FR-026).
+     *
+     * `PartnersModule` already imports `ProjectsModule`, so importing it back would close a cycle
+     * across five modules — the wall 018's `WorkOrdersService` documents. `partners` registers
+     * itself instead, exactly as `plant` registers the equipment logbook for 022.
+     */
+    private readonly sources: ProjectSourcesRegistry,
   ) {}
 
   /**
@@ -1028,9 +1042,11 @@ export class BillPackageService {
             select: { partnerId: true, workDetail: true },
           })
         : null;
-      const vendor = workOrder?.partnerId
-        ? await this.vendors.getBillingIdentity(ctx, workOrder.partnerId)
-        : null;
+      const source = this.sources.vendorIdentitySource();
+      const vendor =
+        workOrder?.partnerId && source
+          ? await source.getBillingIdentity(workOrder.partnerId, companyId)
+          : null;
       issuer = { ...company, code: null };
       receiver = vendor ?? {
         name: null,
@@ -1280,9 +1296,11 @@ export class BillPackageService {
 
     // A work order with no partner on it is possible — the column is nullable — so the receiver's
     // number is simply unknown rather than an error, and the fallback reports itself.
-    const vendor = partnerId
-      ? await this.vendors.getBillingIdentity(ctx, partnerId)
-      : null;
+    const source = this.sources.vendorIdentitySource();
+    const vendor =
+      partnerId && source
+        ? await source.getBillingIdentity(partnerId, companyId)
+        : null;
     return {
       issuerGstin: company.gstin,
       receiverGstin: vendor?.gstin ?? null,
@@ -1452,6 +1470,139 @@ export class BillPackageService {
       taxDeductionsTotal: previous.tdsAmountUptoDate,
       payable: previous.payableUptoDate,
     };
+  }
+
+  /** Every package on a project, newest first. */
+  async list(
+    ctx: RlsContext,
+    projectId: string,
+  ): Promise<
+    {
+      id: string;
+      label: string;
+      direction: BillDirection;
+      periodFrom: string;
+      periodTo: string;
+      status: BillPackageStatus;
+      issuedAt: string | null;
+      payable: string;
+    }[]
+  > {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const rows = await tx.billPackage.findMany({
+        where: { projectId },
+        orderBy: [{ direction: 'asc' }, { sequenceNo: 'desc' }],
+        select: {
+          id: true,
+          sequenceNo: true,
+          direction: true,
+          periodFrom: true,
+          periodTo: true,
+          status: true,
+          issuedAt: true,
+          payable: true,
+        },
+      });
+      return rows.map((row) => ({
+        id: row.id,
+        label: packageLabel(row.sequenceNo),
+        direction: row.direction,
+        periodFrom: iso(row.periodFrom),
+        periodTo: iso(row.periodTo),
+        status: row.status,
+        issuedAt: row.issuedAt?.toISOString() ?? null,
+        payable: displayRupees(row.payable),
+      }));
+    });
+  }
+
+  /**
+   * The six check-list questions and whatever has been answered (FR-041, FR-042, FR-043a).
+   *
+   * All six come back whether or not they carry an answer, and the gaps come back beside them — a
+   * question absent from a response and a question answered no are indistinguishable to the caller,
+   * and the caller is a document somebody signs.
+   */
+  async checkListFor(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<{
+    items: ReturnType<typeof mergeCheckList>;
+    gaps: ReturnType<typeof checkListGaps>;
+    footer: string;
+    signatories: readonly string[];
+  }> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          checkListAnswers: {
+            select: { questionKey: true, answer: true, answeredAt: true },
+          },
+        },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      const items = mergeCheckList(pkg.checkListAnswers);
+      return {
+        items,
+        gaps: checkListGaps(items),
+        footer: CHECK_LIST_FOOTER,
+        signatories: CHECK_LIST_SIGNATORIES,
+      };
+    });
+  }
+
+  /** Answers the check list. An omitted answer leaves the question unanswered (FR-042). */
+  async setCheckList(
+    ctx: RlsContext,
+    companyId: string,
+    userId: string | null,
+    packageId: string,
+    answers: { questionKey: string; answer?: CheckListAnswer }[],
+  ): Promise<ReturnType<BillPackageService['checkListFor']>> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true, status: true },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.packageIssued,
+          message:
+            'This package has been issued. The check list records what was attached when the ' +
+            'bill went out, so it does not change afterwards.',
+        });
+      }
+
+      // One statement per answer is at most six round trips, which is bounded by the format
+      // itself — there are six questions and there will always be six.
+      for (const answer of answers) {
+        await tx.billPackageCheckListAnswer.upsert({
+          where: {
+            packageId_questionKey: {
+              packageId,
+              questionKey: answer.questionKey,
+            },
+          },
+          create: {
+            companyId,
+            packageId,
+            questionKey: answer.questionKey,
+            answer: answer.answer ?? null,
+            answeredByUserId: answer.answer ? userId : null,
+            answeredAt: answer.answer ? new Date() : null,
+          },
+          update: {
+            answer: answer.answer ?? null,
+            answeredByUserId: answer.answer ? userId : null,
+            answeredAt: answer.answer ? new Date() : null,
+          },
+        });
+      }
+    });
+    return this.checkListFor(ctx, packageId);
   }
 
   /** A package and its claims, as a caller reads them. */

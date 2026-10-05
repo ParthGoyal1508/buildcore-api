@@ -337,14 +337,18 @@ function build(opts: {
     }),
   };
 
-  const vendors = {
-    getBillingIdentity: async () => ({
-      code: 'V-001',
-      name: 'Parth Realcon Private Limited',
-      gstin: '08AAMCP8659H1Z2',
-      pan: 'AAMCP8659H',
-      state: 'Rajasthan',
-      address: 'Jaipur',
+  // The registry, not an injected `VendorsService` — `PartnersModule` imports `ProjectsModule`, so
+  // the dependency is inverted and `partners` registers itself (023 FR-026).
+  const sources = {
+    vendorIdentitySource: () => ({
+      getBillingIdentity: async () => ({
+        code: 'V-001',
+        name: 'Parth Realcon Private Limited',
+        gstin: '08AAMCP8659H1Z2',
+        pan: 'AAMCP8659H',
+        state: 'Rajasthan',
+        address: 'Jaipur',
+      }),
     }),
   };
 
@@ -352,7 +356,7 @@ function build(opts: {
     prisma as never,
     periodFigures as never,
     companies as never,
-    vendors as never,
+    sources as never,
   );
 
   return {

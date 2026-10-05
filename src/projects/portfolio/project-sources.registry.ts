@@ -78,6 +78,41 @@ export interface EquipmentLogbookDay {
  * Batched over dates for the reason `ProjectCostSource` gives about projects: a per-date signature
  * would make a month's report an N+1 that no registrant could fix from their side.
  */
+/**
+ * A vendor's statutory details, as a bill's header states them (023 FR-026).
+ *
+ * ## Why this is a registry entry rather than an injected service
+ *
+ * `VendorsService.getBillingIdentity` exists and is exactly the right call — but **`PartnersModule`
+ * imports `ProjectsModule`** (its vendors resolve project sites), so importing it back would close
+ * a cycle across five modules. 018's `WorkOrdersService` met the same wall and chose to store
+ * `partnerId` without validating it, recording the consequence honestly.
+ *
+ * 023 cannot make that trade: a bill's header is not a validation, it is content the document
+ * prints. So the dependency is inverted the way 022 inverted the logbook — `partners` registers
+ * itself from its own side, and `projects` reads through this interface without knowing who
+ * answers.
+ *
+ * **Where nothing is registered the receiver's details are simply unknown**, which is already the
+ * behaviour FR-027 requires: the fields are listed in `missingHeaderFields` and the bill is
+ * produced with blanks for somebody to fill in, rather than refused.
+ */
+export interface VendorBillingIdentity {
+  code: string;
+  name: string;
+  gstin: string | null;
+  pan: string | null;
+  state: string | null;
+  address: string | null;
+}
+
+export interface ProjectVendorIdentitySource {
+  getBillingIdentity(
+    vendorId: string,
+    companyId: string,
+  ): Promise<VendorBillingIdentity | null>;
+}
+
 export interface ProjectLogbookSource {
   getLogbookDays(
     equipmentId: string,
@@ -232,6 +267,7 @@ export class ProjectSourcesRegistry {
   private machinery: ProjectMachinerySource | null = null;
   private materials: ProjectMaterialsSource | null = null;
   private logbook: ProjectLogbookSource | null = null;
+  private vendorIdentity: ProjectVendorIdentitySource | null = null;
 
   registerMachinerySource(source: ProjectMachinerySource): void {
     if (this.machinery) {
@@ -254,6 +290,28 @@ export class ProjectSourcesRegistry {
       return;
     }
     this.materials = source;
+  }
+
+  /**
+   * Registered by `VendorsService.onModuleInit` (023 FR-026).
+   *
+   * From the `partners` side, because `PartnersModule` already imports `ProjectsModule` and the
+   * reverse would close a five-module cycle — the same reason `PlantService` registers the logbook
+   * rather than `projects` importing `PlantModule`.
+   */
+  registerVendorIdentitySource(source: ProjectVendorIdentitySource): void {
+    if (this.vendorIdentity) {
+      this.logger.warn(
+        'A vendor identity source is already registered; the second registration is ignored.',
+      );
+      return;
+    }
+    this.vendorIdentity = source;
+  }
+
+  /** Null where `partners` has not registered. Then a bill reports the fields as missing. */
+  vendorIdentitySource(): ProjectVendorIdentitySource | null {
+    return this.vendorIdentity;
   }
 
   /**

@@ -20,6 +20,7 @@ import { PartnerVendorCategoriesService } from './vendor-categories/vendor-categ
 import { VendorsController } from './vendors/vendors.controller';
 import { VendorsService } from './vendors/vendors.service';
 import { VendorSearchSource } from './vendors/vendor-search.source';
+import { VendorIdentitySource } from './vendors/vendor-identity.source';
 
 /**
  * The `partners` module: vendors, the contractor compliance vault, monthly PF/ESIC
@@ -48,6 +49,10 @@ import { VendorSearchSource } from './vendors/vendor-search.source';
   providers: [
     // 021 US1 — see ProjectSearchSource.
     VendorSearchSource,
+    // 023 FR-026. Registers itself with `ProjectSourcesRegistry` on init, so a bill's header can
+    // print a subcontractor's statutory details without `projects` importing this module — which
+    // would close the five-module cycle `WorkOrdersService` documents.
+    VendorIdentitySource,
     PartnersService,
     VendorsService,
     PartnerVendorCategoriesService,

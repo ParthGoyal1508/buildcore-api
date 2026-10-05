@@ -537,49 +537,49 @@ return the cases their decisions create.
 
 **Goal**: every route reachable, permissioned, locked and proven isolated.
 
-- [ ] T090 [—] Create `src/projects/billing/package/bill-package.controller.ts` with every route
+- [X] T090 [—] Create `src/projects/billing/package/bill-package.controller.ts` with every route
       [contracts/bill-package-api.md](./contracts/bill-package-api.md) names, `Permission.PROJECT_FINANCIALS`
       on **all** of them (FR-051) — a bill is money, unlike a BOQ which is project work
-- [ ] T091 [—] Add `ProjectLockGuard` to every write route in `bill-package.controller.ts`,
+- [X] T091 [—] Add `ProjectLockGuard` to every write route in `bill-package.controller.ts`,
       returning **423 and not 403** (FR-052): the same caller may write once the project is
       unlocked, which is a different fact from not being allowed to
-- [ ] T092 [—] Report another company's package as **404 and not 403** throughout
+- [X] T092 [—] Report another company's package as **404 and not 403** throughout
       `bill-package.service.ts` (FR-053) — a 403 confirms the row exists
-- [ ] T093 [—] Register `BillPackageController` in `src/projects/projects.module.ts` **ahead of
+- [X] T093 [—] Register `BillPackageController` in `src/projects/projects.module.ts` **ahead of
       `ProjectsController`**, and its providers. During 022 `src/projects/route-shadowing.spec.ts`
       caught `GET projects/dwr` being swallowed by the parameterised `GET projects/:id` because the
       controller was registered second; these routes carry literal paths under `projects/` and have
       the same exposure
-- [ ] T094 [—] Run `npx jest src/projects/route-shadowing.spec.ts` and confirm it passes with the
+- [X] T094 [—] Run `npx jest src/projects/route-shadowing.spec.ts` and confirm it passes with the
       new literal paths. If it fails, the registration order is wrong and the guard will say which
       route is swallowed — my own comment during 022 said "after" when the answer was "before"
-- [ ] T095 [—] Add the workbook route's response wiring in `bill-package.controller.ts`:
+- [X] T095 [—] Add the workbook route's response wiring in `bill-package.controller.ts`:
       `contentDispositionFor`, the content type for a spreadsheet, and the
       `X-Bill-Package-Missing-Fields` header (FR-027a)
-- [ ] T096 [—] Create `test/bill-package.e2e-spec.ts` covering [quickstart.md](./quickstart.md)
+- [X] T096 [—] Create `test/bill-package.e2e-spec.ts` covering [quickstart.md](./quickstart.md)
       passes 1–3: compose with the count that must match, reduce and over-claim with their two
       reasons, and the abstract against the client's own figures. Note that the BOQ DTOs use
       `@IsNumberString`, so seeded quantities and rates are sent as **strings** — 022 had all 24 of
       its tests failing from one `beforeAll` line that did not
-- [ ] T097 [—] Extend `test/bill-package.e2e-spec.ts` with passes 4–7: the frozen cumulative
+- [X] T097 [—] Extend `test/bill-package.e2e-spec.ts` with passes 4–7: the frozen cumulative
       position across three consecutive packages with measurement approved between the second and
       the third (D1's whole point, and the case that distinguishes frozen from recomputed); the
       footer identity on every item of every package; the debits including the as-at-issue register;
       and the workbook's sheet count
-- [ ] T097a [—] Establish SC-011 in `test/bill-package.e2e-spec.ts`: compose a package against a
+- [X] T097a [—] Establish SC-011 in `test/bill-package.e2e-spec.ts`: compose a package against a
       **312-line** schedule inside one transaction's budget, and produce its workbook — 312
       measurement sheets — in under ten seconds and under twenty megabytes. Measured rather than
       assumed: `withRlsContext`'s interactive transaction defaults are `maxWait` 2000 ms and
       `timeout` 5000 ms, and 022 research §8 records 132 sequential round trips inside that budget
       returning a bare 500 on the deployment while passing every local run
-- [ ] T098 [—] **The isolation probe** — `test/ra-bill-package-rls.e2e-spec.ts`, following
+- [X] T098 [—] **The isolation probe** — `test/ra-bill-package-rls.e2e-spec.ts`, following
       `test/dwr-rls.e2e-spec.ts` and `test/company-selection-rls.e2e-spec.ts`. Create a
       `NOSUPERUSER NOBYPASSRLS` role, and assert **first** that the role was actually created
       (FR-050a) — every assertion after it is vacuous if it was not. A probe that cannot run reports
       as **skipped and never as passed** (FR-050b): the development and continuous-integration role
       is a superuser and Postgres exempts superusers from row-level security unconditionally, so a
       policy without this test has never been in force in any test run
-- [ ] T099 [—] Cover all **four** new tables in `test/ra-bill-package-rls.e2e-spec.ts` (FR-050), and
+- [X] T099 [—] Cover all **four** new tables in `test/ra-bill-package-rls.e2e-spec.ts` (FR-050), and
       exercise the **write** half of each policy as well as the read half (FR-050c, SC-010) — a probe that
       proves another company's rows are invisible says nothing about whether a row can be written
       *into* another company
@@ -596,26 +596,26 @@ return the cases their decisions create.
 
 ## Phase H: Verification
 
-- [ ] T102 [—] `npx prettier --write "src/**/*.ts" "test/**/*.ts"` — `buildcore-api` has
+- [X] T102 [—] `npx prettier --write "src/**/*.ts" "test/**/*.ts"` — `buildcore-api` has
       `.prettierrc.json`. **Never run prettier on `buildcore-web`**: it has no config and its
       defaults reformatted 2,400 lines of untouched code on 2026-10-01
-- [ ] T103 [—] `npm run lint`. Note it runs with `--fix` and may modify files this feature does not
+- [X] T103 [—] `npm run lint`. Note it runs with `--fix` and may modify files this feature does not
       own; revert anything outside it, as 022 had to for `test/account-creation.e2e-spec.ts`
-- [ ] T104 [—] `npm run build` — SWC, which is what the application is actually compiled by, and
+- [X] T104 [—] `npm run build` — SWC, which is what the application is actually compiled by, and
       therefore the only build that proves the imports work in production
-- [ ] T105 [—] `npx jest src/approvals/fr-022-unmigrated-modules.spec.ts` **before** each commit
+- [X] T105 [—] `npx jest src/approvals/fr-022-unmigrated-modules.spec.ts` **before** each commit
       touching `src/`, and **again immediately after** the first commit that creates
       `src/projects/billing/package/` or `src/projects/billing/workbook/`. It diffs two commits, so
       it cannot see an untracked directory and fires one commit late — that commit is the only
       moment it can see a new one. Add the two new directories to its exclusions with the reason in
       the comment, as 022 did
-- [ ] T106 [—] `npm test` — the full unit suite. 022 left it at 155 suites / 1732 tests; nothing
+- [X] T106 [—] `npm test` — the full unit suite. 022 left it at 155 suites / 1732 tests; nothing
       here should reduce either number
-- [ ] T107 [—] `npm run test:e2e` — the full e2e suite. 022 left it at 38 suites / 637 tests, and
+- [X] T107 [—] `npm run test:e2e` — the full e2e suite. 022 left it at 38 suites / 637 tests, and
       this feature adds two
-- [ ] T108 [—] `npx jest src/common/swc-interop.spec.ts` — the `exceljs` import form, which this
+- [X] T108 [—] `npx jest src/common/swc-interop.spec.ts` — the `exceljs` import form, which this
       feature adds a consumer of
-- [ ] T109 [—] Walk [quickstart.md](./quickstart.md)'s eight passes against a running server by
+- [X] T109 [—] Walk [quickstart.md](./quickstart.md)'s eight passes against a running server by
       hand, including Pass 3's arithmetic and Pass 6's two halves. A test suite proves the code does
       what the test says; the quickstart proves it does what the document needs
 

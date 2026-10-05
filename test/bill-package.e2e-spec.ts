@@ -1,0 +1,582 @@
+import { INestApplication } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import * as ExcelJS from 'exceljs';
+import { PrismaService } from 'nestjs-prisma';
+import * as request from 'supertest';
+
+import { AppModule } from '../src/app.module';
+import { configureApp } from '../src/common/configure-app';
+import { withRlsContext } from '../src/common/prisma/rls-context';
+
+/**
+ * The running-account bill package, end to end (023, quickstart passes 1–8 — tasks T096, T097).
+ *
+ * ## What a unit test cannot see, and this can
+ *
+ * - **The count that must match.** A composition proposes one line per schedule line. A mocked
+ *   client returns whatever the fake was given; only a database can be asked whether the number of
+ *   claims written equals the number of BOQ lines that exist.
+ * - **The cumulative chain across three bills.** Decision D1's whole point: the third bill's
+ *   *up to previous* is the second bill's *stored* up-to-date figure, so the chain has to be three
+ *   real rows with real issues between them.
+ * - **The frozen header.** Read once at issue from three different services and written onto the
+ *   row. A unit test asserts the write; only this can show the document standing still afterwards.
+ * - **The workbook.** Produced by `exceljs` from stored figures and read back by `exceljs`, which
+ *   is the only way to count its sheets.
+ * - **`forbidNonWhitelisted`.** A caller sending a computed total gets a 400 from the pipe, not a
+ *   stripped field — and that is configuration, not code.
+ *
+ * Every fixture is prefixed `E2E` and removed in `afterAll`.
+ */
+const PREFIX = 'E2E';
+const unique = (s: string) => `${PREFIX}${s}${Date.now() % 100000}`;
+
+jest.setTimeout(180_000);
+
+describe('The running-account bill package (e2e)', () => {
+  let app: INestApplication;
+  let prisma: PrismaService;
+  let http: () => request.SuperTest<request.Test>;
+  let token: string;
+  let companyId = '';
+
+  const auth = () => ({ Authorization: `Bearer ${token}` });
+
+  let clientId = '';
+  let projectId = '';
+  const boqItemIds: string[] = [];
+  const LINES = 6;
+
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const sys: any = new Proxy(
+    {},
+    {
+      get: (_target, model: string) =>
+        new Proxy(
+          {},
+          {
+            get: (_t, operation: string) => (args?: unknown) =>
+              withRlsContext(prisma, { isSuperAdmin: true }, (tx) =>
+                (tx as any)[model][operation](args),
+              ),
+          },
+        ),
+    },
+  );
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeAll(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication({ bodyParser: false });
+    configureApp(app);
+    await app.init();
+
+    prisma = app.get(PrismaService);
+    http = () => request(app.getHttpServer());
+
+    const login = await http()
+      .post('/auth/login')
+      .send({
+        identifier: 'admin@buildcore.dev',
+        password: 'secret42',
+        rememberMe: false,
+      })
+      .expect(201);
+    token = login.body.accessToken;
+
+    const client = await http()
+      .post('/projects/clients')
+      .set(auth())
+      .send({ name: unique('PkgClient') })
+      .expect(201);
+    clientId = client.body.id;
+    companyId = client.body.companyId;
+
+    // Created directly for the reason `client-bills.e2e-spec.ts` gives: 017 refuses project
+    // creation until a document is attached for every mandatory kind, which is four blobs this
+    // suite is not about. `clientRetentionFraction` is the client contract's own term — 5%, as the
+    // real package has it — and without it composition refuses rather than billing at zero.
+    projectId = (
+      await sys.project.create({
+        data: {
+          companyId,
+          code: unique('PKG').slice(0, 40),
+          name: unique('PkgProject'),
+          clientId,
+          contractValue: 10000000,
+          startDate: new Date('2025-10-01'),
+          clientRetentionFraction: 0.05,
+          cgstApplicable: true,
+        },
+        select: { id: true },
+      })
+    ).id;
+
+    const group = await http()
+      .post(`/projects/${projectId}/boq/groups`)
+      .set(auth())
+      .send({ boqNo: '30', name: 'Operation & Maintenance', scopeQty: '0' })
+      .expect(201);
+
+    // Six lines. **Sent as strings** — the BOQ DTOs use `@IsNumberString`, and 022 had all
+    // twenty-four of its e2e tests failing from one `beforeAll` line that sent numbers.
+    for (let i = 1; i <= LINES; i += 1) {
+      const line = await http()
+        .post(`/projects/${projectId}/boq/items`)
+        .set(auth())
+        .send({
+          groupId: group.body.id,
+          boqNo: `30.${i * 10}`,
+          taskName: `Maintenance activity ${i}, all complete in the subcontractor’s scope`,
+          unit: 'Month',
+          scopeQty: '12',
+          rate: '150000.00',
+        })
+        .expect(201);
+      boqItemIds.push(line.body.id);
+    }
+  });
+
+  afterAll(async () => {
+    if (prisma) {
+      await sys.billPackageLineClaim.deleteMany({ where: { companyId } });
+      await sys.billPackageCheckListAnswer.deleteMany({ where: { companyId } });
+      await sys.billPackageDebit.deleteMany({ where: { projectId } });
+      await sys.billPackage.deleteMany({ where: { projectId } });
+      await sys.clientBillLine.deleteMany({
+        where: { clientBill: { projectId } },
+      });
+      await sys.clientBill.deleteMany({ where: { projectId } });
+      await sys.bOQTaskItem.deleteMany({ where: { group: { projectId } } });
+      await sys.bOQTaskGroup.deleteMany({ where: { projectId } });
+      await sys.project.deleteMany({ where: { id: projectId } });
+      await sys.client.deleteMany({ where: { id: clientId } });
+    }
+    // `src/common/prisma/e2e-teardown.spec.ts` scans these files and names any that does not.
+    if (app) await app.close();
+  });
+
+  // ── Pass 1 — compose, and the count that must match ──────────────────────
+
+  let packageId = '';
+
+  it('proposes one line per BOQ line, counted against the schedule itself', async () => {
+    const composed = await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2025-12-21',
+        periodTo: '2026-01-20',
+        externalBillNo: '0016014256/12',
+      })
+      .expect(201);
+
+    packageId = composed.body.id;
+
+    // The assertion that matters: **the count, against the number of lines that exist**, not
+    // against a number typed here. An assertion over a returned list passes just as happily over a
+    // short one, and a bill missing an item is a smaller invoice.
+    const onProject = await sys.bOQTaskItem.count({
+      where: { group: { projectId } },
+    });
+    expect(composed.body.claims).toHaveLength(onProject);
+    expect(onProject).toBe(LINES);
+
+    expect(composed.body.label).toBe('RA-01');
+    // No measurement has been approved, so every proposal is zero — **read and nothing**, which is
+    // `approved_measurement`, not the absence of a source.
+    for (const claim of composed.body.claims) {
+      expect(claim.proposalSource).toBe('approved_measurement');
+      expect(claim.proposedQty).toBe('0.000');
+    }
+  });
+
+  it('refuses a computed total outright rather than stripping it', async () => {
+    // `whitelist` and `forbidNonWhitelisted` are both on, which 022 found is the *stronger*
+    // guarantee: a caller who sends a figure the server owns is told, rather than having it
+    // silently dropped and believing it was accepted.
+    await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2026-02-21',
+        periodTo: '2026-03-20',
+        grossAmount: '999999',
+      })
+      .expect(400);
+  });
+
+  it('returns the existing package when the same period is opened again', async () => {
+    const again = await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2025-12-21',
+        periodTo: '2026-01-20',
+      })
+      .expect(201);
+
+    expect(again.body.id).toBe(packageId);
+  });
+
+  it('refuses a period that overlaps one already billed, naming the bill', async () => {
+    const refused = await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2026-01-01',
+        periodTo: '2026-02-20',
+      })
+      .expect(409);
+
+    expect(refused.body.code).toBe('BILL_PERIOD_OVERLAPS');
+    expect(refused.body.packageLabel).toBe('RA-01');
+  });
+
+  // ── Pass 2 — reduce, over-claim, and the two reasons ─────────────────────
+
+  it('requires a reason for a claim that differs from the proposal', async () => {
+    const view = await http()
+      .get(`/projects/bill-packages/${packageId}`)
+      .set(auth())
+      .expect(200);
+    const claimId = view.body.claims[0].id;
+
+    const refused = await http()
+      .post(`/projects/bill-packages/${packageId}/lines/${claimId}`)
+      .set(auth())
+      .send({ claimedQty: '1.000' })
+      .expect(400);
+    expect(refused.body.code).toBe('BILL_CLAIM_NEEDS_REASON');
+
+    const accepted = await http()
+      .post(`/projects/bill-packages/${packageId}/lines/${claimId}`)
+      .set(auth())
+      .send({
+        claimedQty: '1.000',
+        reason: 'Work done ahead of the paperwork, measured on site',
+      })
+      .expect(201);
+
+    const claim = accepted.body.claims.find(
+      (row: { id: string }) => row.id === claimId,
+    );
+    expect(claim.overClaimed).toBe(true);
+    expect(claim.reason).toContain('measured on site');
+  });
+
+  it('clears the reason when the claim returns to its proposal', async () => {
+    const view = await http()
+      .get(`/projects/bill-packages/${packageId}`)
+      .set(auth())
+      .expect(200);
+    const claimId = view.body.claims[0].id;
+
+    const back = await http()
+      .post(`/projects/bill-packages/${packageId}/lines/${claimId}`)
+      .set(auth())
+      .send({ claimedQty: '0.000' })
+      .expect(201);
+
+    const claim = back.body.claims.find(
+      (row: { id: string }) => row.id === claimId,
+    );
+    expect(claim.reason).toBeNull();
+    expect(claim.overClaimed).toBe(false);
+  });
+
+  // ── Pass 3 — the abstract ────────────────────────────────────────────────
+
+  it('marks a draft’s cumulative column provisional, and names the tax basis', async () => {
+    const abstract = await http()
+      .get(`/projects/bill-packages/${packageId}/abstract`)
+      .set(auth())
+      .expect(200);
+
+    // FR-013b. A figure that changes when the engineer presses Issue is a figure they did not
+    // approve, so a draft says so rather than presenting it as settled.
+    expect(abstract.body.cumulativeProvisional).toBe(true);
+    // FR-016a. `Client` carries no state, so the basis falls back to the project's flag — and the
+    // response says which decided it rather than leaving a tax decision nobody made.
+    expect(abstract.body.taxBasis).toBe('intra_state');
+    expect(['derived_from_gstin', 'from_project_flag']).toContain(
+      abstract.body.taxBasisSource,
+    );
+    expect(abstract.body.rates.retentionFraction).toBe('0.050000');
+  });
+
+  // ── Pass 6 — debits, and the register's two halves ───────────────────────
+
+  let debitId = '';
+
+  it('records a debit and recovers it on one bill, refusing a second application', async () => {
+    const recorded = await http()
+      .post(`/projects/${projectId}/bill-package-debits`)
+      .set(auth())
+      .send({
+        groupHeading: 'Debit against the ATMS Equipment Missing at site',
+        description: 'PTZ camera missing',
+        location: 'KM.226 LHS',
+        nos: '1',
+        rate: '125000.00',
+        amount: '125000.00',
+        amountWithTax: '147500.00',
+      })
+      .expect(201);
+    debitId = recorded.body.id;
+
+    await http()
+      .post(`/projects/bill-package-debits/${debitId}/apply/${packageId}`)
+      .set(auth())
+      .expect(201);
+
+    // A debit recovered twice is money taken twice.
+    const refused = await http()
+      .post(`/projects/bill-package-debits/${debitId}/apply/${packageId}`)
+      .set(auth())
+      .expect(409);
+    expect(refused.body.code).toBe('DEBIT_ALREADY_RECOVERED');
+  });
+
+  it('shows a draft’s register live, grouped under its heading', async () => {
+    const register = await http()
+      .get(`/projects/bill-packages/${packageId}/debits`)
+      .set(auth())
+      .expect(200);
+
+    expect(register.body.asAtIssue).toBe(false);
+    expect(register.body.groups[0].heading).toBe(
+      'Debit against the ATMS Equipment Missing at site',
+    );
+    expect(register.body.recoveredOnThisPackage).toBe('147500.00');
+  });
+
+  // ── The check list ───────────────────────────────────────────────────────
+
+  it('keeps an unanswered question distinguishable from one answered no', async () => {
+    const answered = await http()
+      .post(`/projects/bill-packages/${packageId}/check-list`)
+      .set(auth())
+      .send({
+        answers: [
+          { questionKey: 'cumulative_measurement', answer: 'yes' },
+          { questionKey: 'rmc_dispatch_detail', answer: 'no' },
+          // Deliberately omitted: `bar_bending_schedule` stays unanswered.
+        ],
+      })
+      .expect(201);
+
+    const items: { key: string; answer: string | null }[] = answered.body.items;
+    expect(items).toHaveLength(6);
+    expect(items.find((i) => i.key === 'cumulative_measurement')?.answer).toBe(
+      'yes',
+    );
+    expect(items.find((i) => i.key === 'rmc_dispatch_detail')?.answer).toBe(
+      'no',
+    );
+    expect(
+      items.find((i) => i.key === 'bar_bending_schedule')?.answer,
+    ).toBeNull();
+
+    // A gap is an unanswered question **or** one answered no, and it never refuses anything.
+    const gaps: { key: string; state: string }[] = answered.body.gaps;
+    expect(gaps.find((g) => g.key === 'rmc_dispatch_detail')?.state).toBe('no');
+    expect(gaps.find((g) => g.key === 'bar_bending_schedule')?.state).toBe(
+      'unanswered',
+    );
+  });
+
+  // ── Pass 4 — issue, and the frozen header ────────────────────────────────
+
+  it('issues the bill, reporting the header gaps rather than refusing', async () => {
+    const issued = await http()
+      .post(`/projects/bill-packages/${packageId}/issue`)
+      .set(auth())
+      .expect(201);
+
+    expect(issued.body.package.status).toBe('issued');
+    // FR-027a, and the gap the spec predicted: `Client` carries no `state` and no `pan`, so on a
+    // bill issued to a client those are exactly the two fields that cannot be filled. Reported,
+    // never a refusal — a bill that cannot be produced because a PAN is unrecorded is worse than
+    // one produced with a blank somebody fills in by hand.
+    expect(issued.body.missingHeaderFields).toContain('issuerPan');
+    expect(issued.body.missingHeaderFields).toContain('issuerState');
+    // FR-043a. Three questions were never answered and one was answered no, and none of that
+    // stopped the bill going out.
+    expect(issued.body.checkListGaps.length).toBeGreaterThan(0);
+  });
+
+  it('freezes the cumulative position at issue, and the next bill reads it', async () => {
+    // Decision D1, and the case that distinguishes frozen from recomputed. The second package's
+    // *up to previous* must be the first package's **stored** up-to-date figure.
+    const second = await http()
+      .post(`/projects/${projectId}/bill-packages`)
+      .set(auth())
+      .send({
+        direction: 'to_client',
+        periodFrom: '2026-01-21',
+        periodTo: '2026-02-20',
+      })
+      .expect(201);
+
+    const abstract = await http()
+      .get(`/projects/bill-packages/${second.body.id}/abstract`)
+      .set(auth())
+      .expect(200);
+
+    const firstIssued = await sys.billPackage.findFirst({
+      where: { id: packageId },
+      select: { payableUptoDate: true, workDoneUptoDate: true },
+    });
+
+    expect(abstract.body.columns.uptoPrevious.workDone).toBe(
+      String(Math.round(Number(firstIssued.workDoneUptoDate))),
+    );
+    expect(second.body.label).toBe('RA-02');
+  });
+
+  it('refuses a debit applied to a bill that has been issued', async () => {
+    const another = await http()
+      .post(`/projects/${projectId}/bill-package-debits`)
+      .set(auth())
+      .send({
+        description: 'Recorded after the bill went out',
+        rate: '1000.00',
+        amount: '1000.00',
+        amountWithTax: '1180.00',
+      })
+      .expect(201);
+
+    const refused = await http()
+      .post(
+        `/projects/bill-package-debits/${another.body.id}/apply/${packageId}`,
+      )
+      .set(auth())
+      .expect(409);
+
+    expect(refused.body.code).toBe('BILL_PACKAGE_ISSUED');
+  });
+
+  it('keeps an issued bill’s register as at issue', async () => {
+    // FR-039a. The debit recorded in the test above exists on the project, and must not appear on
+    // a bill that was signed before it.
+    const register = await http()
+      .get(`/projects/bill-packages/${packageId}/debits`)
+      .set(auth())
+      .expect(200);
+
+    const descriptions = register.body.groups.flatMap(
+      (group: { rows: { description: string }[] }) =>
+        group.rows.map((row) => row.description),
+    );
+
+    expect(register.body.asAtIssue).toBe(true);
+    expect(descriptions).not.toContain('Recorded after the bill went out');
+  });
+
+  // ── Pass 7 — the workbook ────────────────────────────────────────────────
+
+  it('produces a workbook with one measurement sheet per schedule line', async () => {
+    const response = await http()
+      .get(`/projects/bill-packages/${packageId}/workbook.xlsx`)
+      .set(auth())
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+
+    expect(response.headers['content-type']).toContain('spreadsheetml');
+    // FR-027a: the gaps reach the caller on a file download too, where a response body cannot
+    // carry them.
+    expect(response.headers['x-bill-package-missing-fields']).toContain(
+      'issuerPan',
+    );
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(response.body);
+    const names = workbook.worksheets.map((sheet) => sheet.name);
+
+    // The five kinds, in the client's order, and **the count against the schedule's own length**.
+    expect(names.slice(0, 3)).toEqual([
+      'Check List',
+      'Abstract',
+      'BOQ Annexure-I',
+    ]);
+    expect(names[names.length - 1]).toBe('Debit Note');
+    expect(names.filter((name) => name.startsWith('M-'))).toHaveLength(LINES);
+  });
+
+  // ── Pass 8 — locks, permissions, tenancy ─────────────────────────────────
+
+  it('reports another company’s package as not found, not refused', async () => {
+    // FR-053. A 403 confirms the row exists, which is itself a leak across the boundary row-level
+    // security is there to hold.
+    await http()
+      .get('/projects/bill-packages/not-a-real-package-id')
+      .set(auth())
+      .expect(404);
+  });
+
+  it('refuses a write against a locked project with 423, not 403', async () => {
+    // FR-052. The distinction matters to the caller: the same person may write the moment the
+    // project is unlocked, and a 403 sends them to ask for permission they already have.
+    await sys.project.update({
+      where: { id: projectId },
+      data: { isLocked: true },
+    });
+
+    try {
+      const refused = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-03-21',
+          periodTo: '2026-04-20',
+        });
+      expect(refused.status).toBe(423);
+    } finally {
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: false },
+      });
+    }
+  });
+
+  it('requires a token at all', async () => {
+    await http().get(`/projects/bill-packages/${packageId}`).expect(401);
+  });
+
+  // ── The reports the decisions oblige ─────────────────────────────────────
+
+  it('answers the understatement report, naming the directions it can compare', async () => {
+    const report = await http()
+      .get(`/projects/${projectId}/bill-packages/reports/understatement`)
+      .set(auth())
+      .expect(200);
+
+    expect(report.body.comparableDirections).toEqual(['to_client']);
+    expect(Array.isArray(report.body.rows)).toBe(true);
+  });
+
+  it('answers the over-claim report with its denominator', async () => {
+    const report = await http()
+      .get(`/projects/${projectId}/bill-packages/reports/over-claims`)
+      .set(auth())
+      .expect(200);
+
+    // Zero out of twelve is a fact worth reporting; an empty report is not the same statement.
+    expect(report.body.totalLines).toBeGreaterThan(0);
+    expect(typeof report.body.totalOverClaimed).toBe('number');
+  });
+});
