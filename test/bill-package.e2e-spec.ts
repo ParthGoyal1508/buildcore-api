@@ -1,5 +1,7 @@
 import { INestApplication } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
+import { hash } from 'argon2';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
@@ -557,6 +559,73 @@ describe('The running-account bill package (e2e)', () => {
 
   it('requires a token at all', async () => {
     await http().get(`/projects/bill-packages/${packageId}`).expect(401);
+  });
+
+  /**
+   * 023 T100, closed by 025 FR-038. **The guard was declared and never exercised.**
+   *
+   * Every route on this controller carries `Permission.PROJECT_FINANCIALS` and nothing established
+   * that it holds. A declaration is not a proof: a decorator on the wrong class, a guard left out
+   * of the module, a permission renamed in one place — each leaves the annotation reading correctly
+   * above a route anybody can call.
+   *
+   * **The caller holds other permissions and lacks only this one.** A caller with no permissions at
+   * all would also be refused by a route guarded by nothing, which would make this test pass
+   * against precisely the defect it exists to catch.
+   */
+  it('refuses a caller who holds other permissions but not PROJECT_FINANCIALS', async () => {
+    const email = `${unique('NoFin')}@example.test`.toLowerCase();
+    const user = await sys.user.create({
+      data: {
+        email,
+        username: unique('NoFin'),
+        password: await hash('secret42'),
+        displayName: `${unique('NoFin')}`,
+        companyId,
+        status: 'active',
+      },
+    });
+    const role = await sys.role.create({
+      data: {
+        name: unique('NoFinRole'),
+        // Everything a project person plausibly has, minus the one under test. PROJECTS and DWR
+        // are the two that would most easily be mistaken for it.
+        permissions: [Permission.PROJECTS, Permission.DWR],
+      },
+    });
+    await sys.userRole.create({
+      data: { userId: user.id, roleId: role.id, companyId },
+    });
+
+    try {
+      const login = await http()
+        .post('/auth/login')
+        .send({ identifier: email, password: 'secret42', rememberMe: false })
+        .expect(201);
+      const limited = { Authorization: `Bearer ${login.body.accessToken}` };
+
+      // A read and a write, because they are guarded by different decorators on different methods.
+      await http()
+        .get(`/projects/bill-packages/${packageId}`)
+        .set(limited)
+        .expect(403);
+
+      await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(limited)
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-03-21',
+          periodTo: '2026-04-20',
+        })
+        .expect(403);
+    } finally {
+      // The login above issued a refresh token, which holds the account down.
+      await sys.refreshToken.deleteMany({ where: { accountId: user.id } });
+      await sys.userRole.deleteMany({ where: { userId: user.id } });
+      await sys.role.deleteMany({ where: { id: role.id } });
+      await sys.user.deleteMany({ where: { id: user.id } });
+    }
   });
 
   // ── The reports the decisions oblige ─────────────────────────────────────

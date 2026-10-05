@@ -583,9 +583,9 @@ return the cases their decisions create.
       exercise the **write** half of each policy as well as the read half (FR-050c, SC-010) — a probe that
       proves another company's rows are invisible says nothing about whether a row can be written
       *into* another company
-- [ ] T100 [—] Extend `test/bill-package.e2e-spec.ts` with pass 8: `Permission.PROJECT_FINANCIALS`
+- [X] T100 [—] Extend `test/bill-package.e2e-spec.ts` with pass 8: `Permission.PROJECT_FINANCIALS`
       refused without it, 423 against a locked project, and 404 for another company's package
-- [ ] T101 [—] Confirm every e2e suite this feature adds calls `app.close()` and disconnects any
+- [X] T101 [—] Confirm every e2e suite this feature adds calls `app.close()` and disconnects any
       `PrismaClient` it constructs — `src/common/prisma/e2e-teardown.spec.ts` scans the sources and
       names the file. It strips comments first, because its own first version passed against a
       commented-out `app.close()`

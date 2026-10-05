@@ -54,7 +54,13 @@ radius). Clients are a new master record type owned exclusively by this module."
   it extends the existing `Site` table with the fields it's still missing (`projectId` FK, `Address`,
   `Status`) via an additive migration. HR's attendance module continues reading geofence/holiday
   data via 003's existing exported methods — `SitesService.getGeofence(siteId)`,
-  `.getHolidayCalendar(siteId)`, `.getWeeklyOffDay(siteId)` — unchanged. This feature adds a new,
+  `.getWeeklyOffDay(siteId)` — unchanged.
+
+  > **Corrected 2026-10-05 (025 FR-037).** This line and FR-012 both cited
+  > `SitesService.getHolidayCalendar(siteId)`, which does not exist and cannot: migration
+  > `20260901194500_drop_site_holidays_column` removed `Site.holidays`, and the first-class
+  > `hr.Holiday` calendar superseded it. A site has no holiday calendar of its own to return.
+  > Holidays are read from `hr` directly by the services that need them. This feature adds a new,
   separate `getSiteById(siteId)` export (full Site row, not just geofence fields) for its own
   DWR/BOQ/project-detail consumers; HR does not switch to it (research.md §2).
 - Q: Where do the per-category Budget figures in the P&L Cost Breakdown table come from? → A:
@@ -172,8 +178,14 @@ each tab section returns data (even if empty arrays initially) — independent o
    the core project fields plus aggregated tab data: assigned employees (from `hr` via HR service),
    deployed machinery (from `plant` via Plant service), inventory items at the project store (from
    `inventory` via Inventory service), DWR count and latest date, bill/expense summary, revenue
-   summary, and costing breakdown — all read via exported service calls, never direct cross-schema
-   queries.
+   summary — all read via exported service calls, never direct cross-schema queries.
+
+   > **Amended 2026-10-05 (025 FR-036).** This scenario also named a *costing breakdown*, which
+   > `GET /projects/:id` has never returned and `contracts/projects-api.md` has never described.
+   > Costing is the P&L (FR-008, US7), which is its own endpoint with its own drill-down and its own
+   > export, and duplicating it into the project detail would put two figures for one cost on two
+   > screens. The scenario is amended rather than the contract extended: of the two documents the
+   > contract was right.
 4. **Given** a project, **When** `PATCH /projects/:id` sets `isLocked: true`, **Then** all
    subsequent DWR, Revenue, Bill, Expense, and BOQ-quantity write endpoints for that project return
    `423 Locked`, and the lock is enforced server-side regardless of client state.
@@ -419,9 +431,11 @@ one and confirming it no longer appears.
   created.
 - **FR-012**: `projects` schema already owns `Site` (built there by feature 003). This feature
   extends `Site` additively with `projectId`, `Address`, `Status` — it does not touch the existing
-  geofence columns. HR's attendance module continues reading geofence/holiday data via 003's
-  existing exported methods (`SitesService.getGeofence()`/`.getHolidayCalendar()`/
-  `.getWeeklyOffDay()`), unchanged. This feature adds a separate `getSiteById()` export for its own
+  geofence columns. HR's attendance module continues reading geofence data via 003's existing
+  exported methods (`SitesService.getGeofence()`/`.getWeeklyOffDay()`), unchanged — **holidays are
+  not among them** (see the correction at the top of this document: `Site.holidays` was dropped by
+  migration `20260901194500_drop_site_holidays_column` and the first-class `hr.Holiday` calendar
+  superseded it). This feature adds a separate `getSiteById()` export for its own
   consumers (Constitution Principle I — no direct cross-schema queries either way).
 - **FR-013**: Approved RA bills MUST contribute to `revenueBooked` in the P&L calculation
   alongside direct `revenue` entries.

@@ -523,7 +523,7 @@ Appended 2026-09-03 by `/speckit-converge`, assessing the shipped US1–US3 code
 spec.md, plan.md and contracts/projects-api.md. Scoped to those three stories — US4–US8
 and the `TA*` amendment are correctly unbuilt and are not reported here.
 
-- [ ] T057 Reject a punch at an inactive site per US2/AC4 (missing) — `SiteStatus.inactive`
+- [X] T057 Reject a punch at an inactive site per US2/AC4 (missing) — `SiteStatus.inactive`
       is stored and editable but nothing reads it: `SitesService.getGeofence()` does not
       select `status`, and `src/hr/punch/punch.service.ts` has no site-status check, so a
       decommissioned site still accepts attendance. Add `status` to the `getGeofence()`
@@ -533,13 +533,13 @@ and the `TA*` amendment are correctly unbuilt and are not reported here.
       is the one acceptance criterion of a P1 story that shipped unmet, and it has a real
       consequence: taking a site out of service does not stop attendance being recorded
       against it.
-- [ ] T058 Reconcile the project-detail "costing breakdown" per US3/AC3 (partial) —
+- [X] T058 Reconcile the project-detail "costing breakdown" per US3/AC3 (partial) —
       the acceptance scenario lists a costing breakdown among the aggregated tabs, but
       `contracts/projects-api.md`'s `GET /projects/:id` response shape does not, and
       `ProjectDetail` follows the contract with six tabs. Costing is the P&L (FR-008,
       US7). Decide which document is right and say so in one of them: either add costing
       to the contract as a US7 deliverable, or amend AC3 to stop naming it.
-- [ ] T059 Correct FR-012's reference to `SitesService.getHolidayCalendar()` (contradicts)
+- [X] T059 Correct FR-012's reference to `SitesService.getHolidayCalendar()` (contradicts)
       — that method does not exist and cannot, since migration
       `20260901194500_drop_site_holidays_column` removed `Site.holidays` and the
       first-class `hr.Holiday` calendar superseded it. FR-012 and data-model.md's Site
@@ -782,3 +782,28 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
       second block it excludes). Both are the money guards a reviewer will look for by ID, and both
       were covered in prose only — which is how a requirement survives a refactor in text and dies
       in code.
+
+---
+
+## Closed by feature 025 (2026-10-05)
+
+`specs/025-projects-flow-completion/` closed the three convergence items above:
+
+- **T057** — `SitesService.getGeofence()` now carries `isActive`, and `PunchService` refuses a punch
+  at a site out of service. **Refused rather than recorded as an exception**: a failed fence and a
+  failed face match are evidence about a punch that happened, and this is a punch that should not
+  have been offered. Covered in `punch.service.spec.ts` with its non-vacuity half — a test that a
+  live site still accepts one, without which a condition inverted by a typo would stop attendance
+  everywhere and pass.
+- **T058** — the contract was right and the acceptance scenario was not. US3/AC3 no longer names a
+  costing breakdown: costing is the P&L (FR-008, US7), with its own endpoint, drill-down and
+  export, and duplicating it into the project detail would put two figures for one cost on two
+  screens.
+- **T059** — FR-012 and the US2 note no longer cite `SitesService.getHolidayCalendar()`, which does
+  not exist and cannot: `Site.holidays` was dropped by `20260901194500_drop_site_holidays_column`
+  and the first-class `hr.Holiday` calendar superseded it.
+
+**T026–T030 and T037–T051 above remain superseded or delivered elsewhere**, as their own notes say.
+**TA001–TA020 remain genuinely unbuilt** — the schedule and progress module (phases, activities,
+dependencies, baselines, weightage, periodic targets, variance reporting). It is the largest unbuilt
+area of this module and 025 explicitly left it alone: that feature plans a *line*, not a *programme*.

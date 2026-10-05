@@ -310,6 +310,22 @@ export class PunchService {
       assignment?.siteId ?? employee.siteId,
     );
 
+    // 008 US2/AC4, closed by 025 FR-035. `SiteStatus.inactive` has been stored and editable since
+    // 008 and read by nothing, so decommissioning a site did not stop attendance being recorded
+    // against it — the one acceptance criterion of a P1 story that shipped unmet, and it kept a
+    // closed site accruing a payroll.
+    //
+    // Refused rather than recorded as an exception, unlike a failed fence or a failed face match.
+    // Those two are *evidence about a punch that happened*; this is a punch that should not have
+    // been offered at all, and recording it as an exception would leave somebody to decide later
+    // whether a day at a closed site counts.
+    if (!geofence.isActive) {
+      throw new BadRequestException(
+        'This site is no longer in service, so attendance cannot be recorded against it. ' +
+          'If work is still happening here, the site has to be made active again.',
+      );
+    }
+
     // 020 FR-012b. Read per request in the same call that already read the payroll lock day, so a
     // Super Admin raising the threshold takes effect on the next punch with no restart — which is
     // what "configurable from the settings" has to mean to be useful.

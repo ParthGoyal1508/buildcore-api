@@ -45,6 +45,18 @@ export interface SiteGeofence {
   latitude: number;
   longitude: number;
   geofenceRadiusMeters: number;
+  /**
+   * Whether the site is still in service (008 US2/AC4, 025 FR-035).
+   *
+   * **`SiteStatus.inactive` was stored, editable, and read by nothing.** This projection did not
+   * select it and the punch path never asked, so taking a site out of service did not stop
+   * attendance being recorded against it — a decommissioned site kept accruing a payroll.
+   *
+   * Carried here rather than through a second call because every caller that needs the fence is
+   * the caller that needs to know the site is live: the two facts are asked in the same breath,
+   * and a separate `isSiteActive()` would be a second round trip to answer half a question.
+   */
+  isActive: boolean;
 }
 
 /**
@@ -111,6 +123,7 @@ export class SitesService {
           latitude: true,
           longitude: true,
           geofenceRadiusMeters: true,
+          status: true,
         },
       }),
     );
@@ -122,6 +135,7 @@ export class SitesService {
       latitude: site.latitude.toNumber(),
       longitude: site.longitude.toNumber(),
       geofenceRadiusMeters: site.geofenceRadiusMeters,
+      isActive: site.status === SiteStatus.active,
     };
   }
 
