@@ -67,6 +67,16 @@ export interface ComposeRaBillInput {
 export interface RaBillLineView {
   id: string;
   workOrderBoqItemId: string;
+  /**
+   * The client BOQ line this award line corresponds to, where it corresponds to one.
+   *
+   * On the **read** side since 027, because it was accepted on the write side from the start and
+   * never returned — so a screen loading an award to edit it could not put back what it had not
+   * been told, and every re-save silently unlinked the line. `assertNotBilledBelow` reaches the
+   * subcontractor-billed quantity through exactly this id, so an unlink is not cosmetic: it drops
+   * that line out of the floor a daily-work reversal is checked against.
+   */
+  boqTaskItemId: string | null;
   description: string;
   unit: string;
   awardedQty: number;
@@ -218,6 +228,7 @@ export class RaBillsService {
       return stored.map((item) => ({
         id: item.id,
         workOrderBoqItemId: item.id,
+        boqTaskItemId: item.boqTaskItemId,
         description: item.description,
         unit: item.unit,
         awardedQty: item.awardedQty.toNumber(),
@@ -338,6 +349,7 @@ export class RaBillsService {
           return {
             id: item.id,
             workOrderBoqItemId: item.id,
+            boqTaskItemId: item.boqTaskItemId,
             description: item.description,
             unit: item.unit,
             awardedQty: awarded,
@@ -911,6 +923,7 @@ export class RaBillsService {
         return {
           id: line.id,
           workOrderBoqItemId: line.workOrderBoqItemId,
+          boqTaskItemId: line.workOrderBoqItem.boqTaskItemId,
           description: line.workOrderBoqItem.description,
           unit: line.workOrderBoqItem.unit,
           awardedQty: awarded,
