@@ -2129,8 +2129,25 @@ model WorkOrder {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  /// The work order's own number — `PRPL-WO-0001` (027).
+  ///
+  /// **Nullable, and that is a migration artefact rather than a design choice.** The table is
+  /// populated, so a required unique column cannot simply be added to it; the rows that predate
+  /// this carry none and read by their detail as they always did. Every work order raised from
+  /// here on is numbered, and the service allocates it the way every other series in this product
+  /// is allocated.
+  ///
+  /// Unique per company, not globally: two companies number their own work orders independently,
+  /// exactly as they do projects and vendors.
+  code String?
+
   /// `partners.Vendor.id`, read through `PartnersService`. Bare id — see the
   /// schema-level note above.
+  ///
+  /// Nullable because it always has been and the existing rows carry nothing. 027 added the picker
+  /// that sets it: the column shipped with 018 and **no screen ever wrote to it**, so every work
+  /// order in the product was anonymous — the award, the bills and the retention all belonged to
+  /// nobody in particular.
   partnerId String?
 
   workDetail   String
@@ -2153,6 +2170,7 @@ model WorkOrder {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([companyId, code])
   @@index([companyId])
   @@index([projectId])
   @@schema("projects")
@@ -4430,6 +4448,12 @@ enum CodeSeriesType {
   /// above is.
   ASSETS
   ASSET_REQUEST
+
+  /// Added by 027. Work order numbers (`{shortCode}-WO-0001`), per company.
+  ///
+  /// A work order had no identifier of its own — only its free-text detail — so the one screen
+  /// that has to name one, composing a bill to a subcontractor, had nothing to show but a cuid.
+  WORK_ORDER
 
   @@schema("settings")
 }

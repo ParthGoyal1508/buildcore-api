@@ -53,10 +53,72 @@ function build(opts: {
   const prisma = {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
-  return { service: new WorkOrdersService(prisma as never), updates };
+  // The code allocator, stubbed: `create` asks it for the work order's number inside the same
+  // transaction, and these tests are about what the service stores rather than how a series is
+  // advanced — `code-series.service.spec.ts` owns that.
+  const codeSeries = { next: async () => 'PRPL-WO-0001' };
+  return {
+    service: new WorkOrdersService(prisma as never, codeSeries as never),
+    updates,
+  };
 }
 
 const ctx = { isSuperAdmin: true } as never;
+
+describe('raising a work order', () => {
+  it('allocates it a number from the company series', async () => {
+    const created: Record<string, unknown>[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      project: { findFirst: async () => ({ id: 'p-1' }) },
+      workOrder: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          created.push(args.data);
+          return { id: 'wo-1' };
+        },
+        findFirst: async () => ({
+          id: 'wo-1',
+          projectId: 'p-1',
+          partnerId: null,
+          code: 'PRPL-WO-0007',
+          workDetail: 'Earthwork',
+          terms: null,
+          requirements: null,
+          hireContract: null,
+          labourAmount: { toNumber: () => 0 },
+          materialAmount: { toNumber: () => 0 },
+          retentionPercent: { toNumber: () => 0.05 },
+          status: 'draft',
+          createdAt: new Date(),
+          _count: { awardLines: 0, raBills: 0 },
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    // Asserted on the transaction it is handed, not merely on the string returned: a number
+    // allocated outside the write would survive a rolled-back create and leave a gap in the
+    // series, which reads as a deleted work order to whoever audits it later.
+    const seen: unknown[] = [];
+    const codeSeries = {
+      next: async (t: unknown) => {
+        seen.push(t);
+        return 'PRPL-WO-0007';
+      },
+    };
+    const service = new WorkOrdersService(prisma as never, codeSeries as never);
+
+    const view = await service.create(ctx, 'c-1', {
+      projectId: 'p-1',
+      workDetail: 'Earthwork',
+    } as never);
+
+    expect(created[0].code).toBe('PRPL-WO-0007');
+    expect(seen[0]).toBe(tx);
+    expect(view.code).toBe('PRPL-WO-0007');
+  });
+});
 
 describe('reading a work order', () => {
   it('says how many award lines and bills it has', async () => {
