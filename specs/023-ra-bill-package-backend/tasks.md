@@ -400,73 +400,73 @@ from no.
 **Independent test**: `GET /projects/bill-packages/:packageId/workbook.xlsx` opens in a spreadsheet,
 contains one measurement sheet per schedule line, and is identical when produced twice.
 
-- [ ] T065 [US3] Create `src/projects/billing/workbook/bill-workbook.types.ts` — the **view type**
+- [X] T065 [US3] Create `src/projects/billing/workbook/bill-workbook.types.ts` — the **view type**
       the renderer consumes and the only thing it can see. FR-028's "every figure comes from the
       stored bill and none is recomputed at production time" becomes a property of the renderer's
       inputs rather than a rule it follows (plan.md Structure Decision, research §6)
-- [ ] T066 [US3] Create `src/projects/billing/workbook/bill-workbook.renderer.ts` importing
+- [X] T066 [US3] Create `src/projects/billing/workbook/bill-workbook.renderer.ts` importing
       `exceljs` as `import * as ExcelJS` — which is **correct** under this repository's compiler
       split, because `exceljs` is read through its properties and a namespace object carries
       properties perfectly well. `src/common/swc-interop.spec.ts` guards the form that breaks, which
       is a module whose export *is* the callable. The renderer holds **no** Prisma client
-- [ ] T067 [US3] Implement the sheet-naming rule in `bill-workbook.renderer.ts` (FR-024a): names are
+- [X] T067 [US3] Implement the sheet-naming rule in `bill-workbook.renderer.ts` (FR-024a): names are
       capped at 31 characters, exclude the characters a file path uses, and must be unique in the
       workbook — so a name drawn from a BOQ number or a description collides or truncates on a
       312-item schedule, and what the writer does with a collision decides whether an item's sheet
       silently disappears. Name by position, guarantee uniqueness, and identify the item **inside**
       the sheet (checklist CHK040)
-- [ ] T068 [P] [US6] Create `src/projects/billing/workbook/sheets/check-list.sheet.ts` — the six
+- [X] T068 [P] [US6] Create `src/projects/billing/workbook/sheets/check-list.sheet.ts` — the six
       questions, their answers, the responsibility footer, and the two signature blocks
-- [ ] T069 [P] [US2] Create `src/projects/billing/workbook/sheets/abstract.sheet.ts` — four blocks,
+- [X] T069 [P] [US2] Create `src/projects/billing/workbook/sheets/abstract.sheet.ts` — four blocks,
       three money columns each, the full-rate tax row present and blank where it does not apply, and
       the payable and net payable lines
-- [ ] T070 [P] [US3] Create `src/projects/billing/workbook/sheets/schedule.sheet.ts` — the priced
+- [X] T070 [P] [US3] Create `src/projects/billing/workbook/sheets/schedule.sheet.ts` — the priced
       schedule with each item's scope, balance, and quantity and amount split three ways, footed by
       the totals. **Every sheet names the package it belongs to, from one source**: the sample
       workbook's own schedule sheet is headed "RA Bill - 09" inside package RA-12, an error from
       copying a sheet, and the system will not reproduce it (spec.md Assumptions)
-- [ ] T071 [P] [US4] Create `src/projects/billing/workbook/sheets/measurement.sheet.ts` — the
+- [X] T071 [P] [US4] Create `src/projects/billing/workbook/sheets/measurement.sheet.ts` — the
       monthly claim table with its remarks and the package each claim went out on, and the daily
       record beneath it where the line has one, with a missing date shown as missing
-- [ ] T072 [P] [US5] Create `src/projects/billing/workbook/sheets/debit-note.sheet.ts` — the
+- [X] T072 [P] [US5] Create `src/projects/billing/workbook/sheets/debit-note.sheet.ts` — the
       register's own header block and its lines grouped under their headings
-- [ ] T073 [US3] Bind the two party positions by direction in `bill-workbook.renderer.ts` (FR-025):
+- [X] T073 [US3] Bind the two party positions by direction in `bill-workbook.renderer.ts` (FR-025):
       for a bill to a subcontractor the company is the issuing party, for a bill to a client the
       client is. Identifiers come from the **frozen header** on the package (FR-026), and a missing
       one is reported through the `X-Bill-Package-Missing-Fields` response header and the issue
       response body, never refused (FR-027, FR-027a)
-- [ ] T073a [US3] **Both directions, one renderer** — its own test in
+- [X] T073a [US3] **Both directions, one renderer** — its own test in
       `bill-workbook.renderer.spec.ts` (SC-008, FR-025). Render the same figures as a bill to a
       client and as a bill to a subcontractor, and assert the **issuing and receiving party cells
       exchange** while every other cell is identical. This is the requirement the user stated first
       and in their own words — one renderer, two bindings, the two party names being the stated
       variables — and two renderers that drift apart is the failure it exists to prevent
-- [ ] T074 [US3] **The sheet count** — its own test in `bill-workbook.renderer.spec.ts`. Assert that
+- [X] T074 [US3] **The sheet count** — its own test in `bill-workbook.renderer.spec.ts`. Assert that
       the number of measurement sheets **equals** the number of lines the schedule holds, including
       lines with nothing claimed, as a count computed from the input rather than a number typed into
       the test (FR-030, FR-030a). An assertion over the sheets a workbook contains passes just as
       happily over a short list, and a missing sheet is a smaller invoice. 022's T052 is the
       precedent
-- [ ] T075 [US3] **Produced twice, identical** — its own test in `bill-workbook.renderer.spec.ts`.
+- [X] T075 [US3] **Produced twice, identical** — its own test in `bill-workbook.renderer.spec.ts`.
       Render the same view twice and assert **every cell value** is equal. Not byte-for-byte: a
       workbook file records when it was written, so two productions are never identical as bytes and
       a test written that way would fail for a reason that does not matter while hiding the one that
       does (FR-028, SC-009)
-- [ ] T076 [P] [US3] Add the long-description tests to `bill-workbook.renderer.spec.ts`: a
+- [X] T076 [P] [US3] Add the long-description tests to `bill-workbook.renderer.spec.ts`: a
       multi-paragraph item description carried whole (FR-029), and one exceeding what a single cell
       can hold **reported** rather than silently truncated (FR-029a)
-- [ ] T077 [P] [US3] Add the naming tests to `bill-workbook.renderer.spec.ts`: two items whose names
+- [X] T077 [P] [US3] Add the naming tests to `bill-workbook.renderer.spec.ts`: two items whose names
       would collide produce two distinct sheets, both present; a name over the character cap is
       shortened by the rule and the item is still identifiable from inside its sheet (FR-024a)
-- [ ] T077a [US3] Assert the **five sheet kinds are present in the client's own order** in
+- [X] T077a [US3] Assert the **five sheet kinds are present in the client's own order** in
       `bill-workbook.renderer.spec.ts` (FR-024, SC-002): check list, abstract, priced schedule, the
       measurement sheets, then the debit register. A reviewer finds each figure by where it sits,
       and a workbook carrying every sheet in a different order is a workbook they have to search
-- [ ] T078 [US3] Add a renderer test asserting it cannot query: the renderer's constructor takes no
+- [X] T078 [US3] Add a renderer test asserting it cannot query: the renderer's constructor takes no
       Prisma client and `bill-workbook.renderer.ts` imports none. A renderer that could query could
       recompute, and a bill produced twice must be identical (FR-028, research §6)
 
-- [ ] T078a [—] Add a guard test asserting **no model links a bill claim to an individual daily
+- [X] T078a [—] Add a guard test asserting **no model links a bill claim to an individual daily
       work report** (FR-049, decision D3) — scanning `prisma/schema.prisma` for a relation between
       the package tables and `DailyWorkReport` or `DWRTask`. A prohibition nothing checks is a
       prohibition a later "improvement" removes, and this one is load-bearing: 022's reversal guard
