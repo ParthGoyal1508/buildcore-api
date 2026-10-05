@@ -804,6 +804,13 @@ T026–T030 above are **superseded, not deleted** — each carries a note naming
   and the first-class `hr.Holiday` calendar superseded it.
 
 **T026–T030 and T037–T051 above remain superseded or delivered elsewhere**, as their own notes say.
-**TA001–TA020 remain genuinely unbuilt** — the schedule and progress module (phases, activities,
-dependencies, baselines, weightage, periodic targets, variance reporting). It is the largest unbuilt
-area of this module and 025 explicitly left it alone: that feature plans a *line*, not a *programme*.
+**TA001–TA020 are superseded by `specs/026-project-schedule-backend/`** (2026-10-05) — the schedule
+and progress module: phases, activities, dependencies, baselines, weightage, periodic targets and
+variance reporting. Specified, **not planned and not built**. 025 explicitly left it alone, because
+that feature plans a *line* and this one plans a *programme*; 026 FR-003 is where the two have to be
+reconciled.
+
+Three decisions are open in that spec and are deliberately not guessed: how an activity is weighted,
+whether a baseline freezes weights as well as dates, and where percent complete comes from for an
+activity that names no BOQ line. Each is a question about how this organisation plans work rather
+than about software, and each would otherwise produce a confident wrong number.
