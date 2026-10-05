@@ -329,6 +329,29 @@ describe('BoqImportService.validate', () => {
       },
     );
 
+    /**
+     * The section fix produced ten notes on a correct import of this file — one real (the sheet
+     * opens with lines before any heading) and nine for lines the parser placed correctly. Ten
+     * notes is how a reader learns to scroll past the one that matters.
+     */
+    (present ? it : it.skip)(
+      'does not report a line it placed correctly as a line it could not place',
+      async () => {
+        const report = await run(REAL);
+
+        // The sheet genuinely opens with lines before any heading; that one is worth saying.
+        expect(report.warnings.length).toBe(1);
+        expect(report.warnings[0].reason).toContain(
+          'before any section heading',
+        );
+        expect(
+          report.warnings.some((w) =>
+            w.reason.includes('not under the section'),
+          ),
+        ).toBe(false);
+      },
+    );
+
     (present ? it : it.skip)(
       'resolves its unit spellings to twelve units',
       async () => {

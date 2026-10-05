@@ -339,20 +339,22 @@ export class BoqImportService {
           boqNo: String(groups.length + 1),
           items: [],
         });
-        if (pendingHeadings.length === 0) {
+        if (pendingHeadings.length === 0 && !leavesSection) {
           // FR-038: good rows, unstated structure. A warning, not an error — rejecting them would
-          // discard real schedule lines over a missing heading. Two ways to arrive here now: a
-          // line before any heading at all, and a line that left the numbered section above it
-          // without a heading of its own to land in.
+          // discard real schedule lines over a missing heading.
+          //
+          // **`leavesSection` is deliberately not warned about.** A warning should name something
+          // the reader has to decide or check, and that case is neither: the file stated its
+          // structure by numbering the line outside the section above it, and the parser read
+          // exactly what it said. Warning on it turned a correct import of the client's own tender
+          // into ten notes — which is how a reader learns to scroll past the one note that matters,
+          // the line that really did arrive before any heading at all.
           warnings.push({
             row: row.rowNumber,
             column: 'Item Description',
-            reason: leavesSection
-              ? `This line is numbered ${boqNo}, which is not under the section above it, and it ` +
-                'has no heading of its own — so it has been grouped under the sheet name ' +
-                `("${schedule.sheetName}").`
-              : 'This line appears before any section heading, so it has been grouped under the ' +
-                `sheet name ("${schedule.sheetName}").`,
+            reason:
+              'This line appears before any section heading, so it has been grouped under the ' +
+              `sheet name ("${schedule.sheetName}").`,
           });
         }
         openHeadingNo = pendingHeadings.length > 0 ? pendingHeadingNo : null;
