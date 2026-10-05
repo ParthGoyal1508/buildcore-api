@@ -7,6 +7,7 @@ import {
 import {
   BillDirection,
   BillPackageStatus,
+  BillTaxBasis,
   ClaimProposalSource,
   ClientBillStatus,
   Prisma,
@@ -20,10 +21,21 @@ import { VendorsService } from '../../../partners/vendors/vendors.service';
 import { CompaniesService } from '../../../settings/companies/companies.service';
 import { DwrPeriodFiguresService } from '../../dwr/dwr-period-figures.service';
 import { lineTotals, money } from '../bill-totals';
-import type { AbstractColumn, BillAbstract } from './bill-abstract';
-import { billAbstract, displayRupees, zeroColumn } from './bill-abstract';
+import type { AbstractColumn } from './bill-abstract';
+import { billAbstract, displayRupees } from './bill-abstract';
 import { decideTaxBasis } from './bill-tax';
+import { checkListGaps, mergeCheckList } from './check-list';
 import { PACKAGE_ERRORS } from './package-error-codes';
+
+/** One party's statutory details, however they were sourced. */
+interface PartyIdentity {
+  name: string | null;
+  gstin: string | null;
+  pan: string | null;
+  state: string | null;
+  address: string | null;
+  code: string | null;
+}
 
 /**
  * One line of the schedule a bill's direction measures (023 FR-003).
@@ -839,6 +851,399 @@ export class BillPackageService {
           'it is a document that was sent.',
       });
     });
+  }
+
+  /**
+   * Issues the package: freezes every figure and the statutory header (FR-044).
+   *
+   * **Freezing is what makes the rest of the feature true.** FR-028's "produced twice is identical"
+   * and FR-014's "up to previous is read from the predecessor's stored position" both rest on this
+   * row stopping moving at this moment. After it, the party records can be corrected, a statute can
+   * change a tax rate, and the BOQ can be revised — and this document still reproduces exactly as
+   * the client has it on paper.
+   *
+   * Refuses an unpriced line carrying a non-zero claim (FR-009): 018's `unpriced` flag means
+   * "nobody has priced this", not "this is free", so issuing one bills work at zero and nothing
+   * downstream would notice a bill that was quietly short.
+   *
+   * Reports, never refuses: the header fields that could not be filled (FR-027, FR-027a) and the
+   * check-list gaps (FR-043, FR-043a). The client's own footer says non-compliance "may delay the
+   * process", which is a human judgement rather than a validation rule — and a bill blocked by an
+   * unticked box is a bill nobody can send while the person who could tick it is on site.
+   */
+  async issue(
+    ctx: RlsContext,
+    companyId: string,
+    userId: string | null,
+    packageId: string,
+  ): Promise<{
+    package: BillPackageView;
+    missingHeaderFields: string[];
+    checkListGaps: ReturnType<typeof checkListGaps>;
+  }> {
+    const result = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        include: {
+          project: {
+            select: { name: true, clientId: true, cgstApplicable: true },
+          },
+          raBill: { select: { workOrderId: true, grossAmount: true } },
+          clientBill: { select: { grossAmount: true } },
+          claims: {
+            select: {
+              claimedQty: true,
+              clientBillLine: {
+                select: {
+                  rate: true,
+                  boqTaskItem: { select: { boqNo: true } },
+                },
+              },
+              raBillLine: { select: { rate: true } },
+            },
+          },
+          checkListAnswers: {
+            select: { questionKey: true, answer: true, answeredAt: true },
+          },
+        },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.packageIssued,
+          message: `${packageLabel(pkg.sequenceNo)} has already been issued.`,
+        });
+      }
+
+      // FR-009, and it is deliberately here rather than at composition: FR-003 proposes **every**
+      // line, so a package may legitimately carry an unpriced one at zero. What cannot leave the
+      // building is an unpriced line with a quantity against it.
+      const unpriced = pkg.claims.filter(
+        (claim) =>
+          !claim.claimedQty.isZero() &&
+          (
+            claim.clientBillLine?.rate ??
+            claim.raBillLine?.rate ??
+            dec(0)
+          ).isZero(),
+      );
+      if (unpriced.length > 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: PACKAGE_ERRORS.unpricedLineClaimed,
+          message:
+            'These lines carry a claim and no rate, so issuing this bill would bill the work at ' +
+            `zero: ${unpriced
+              .map(
+                (claim) =>
+                  claim.clientBillLine?.boqTaskItem.boqNo ?? '(award line)',
+              )
+              .join(
+                ', ',
+              )}. A zero rate is almost always an unpriced line rather than free work.`,
+          boqNumbers: unpriced.map(
+            (claim) => claim.clientBillLine?.boqTaskItem.boqNo ?? '',
+          ),
+        });
+      }
+
+      const header = await this.freezeHeader(ctx, tx, companyId, pkg);
+      const abstract = await this.abstractColumns(tx, pkg);
+
+      await tx.billPackage.update({
+        where: { id: pkg.id },
+        data: {
+          status: BillPackageStatus.issued,
+          issuedAt: new Date(),
+          issuedByUserId: userId,
+          ...header.columns,
+          missingHeaderFields: header.missing,
+          // The cumulative position, frozen (FR-014a, D1). From here the next bill reads these and
+          // nothing recomputes them.
+          ...abstract,
+        },
+      });
+
+      return {
+        missing: header.missing,
+        gaps: checkListGaps(mergeCheckList(pkg.checkListAnswers)),
+      };
+    });
+
+    return {
+      package: await this.view(ctx, packageId),
+      missingHeaderFields: result.missing,
+      checkListGaps: result.gaps,
+    };
+  }
+
+  /**
+   * The statutory header, copied **once** and never re-read (FR-026, FR-028).
+   *
+   * Each party comes through the service that owns its table — Principle I forbids reading
+   * `settings.Company` or `partners.Vendor` from here — and `projects.Client` is this module's own.
+   * A field the party's record does not carry is listed in `missingHeaderFields` rather than
+   * refused: `Client` has no `state` and no `pan` today, so on a bill to a client those two are the
+   * likeliest gaps, and a bill that cannot be produced because a permanent account number is
+   * unrecorded is worse than one produced with a blank somebody fills in by hand.
+   */
+  private async freezeHeader(
+    ctx: RlsContext,
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    pkg: {
+      direction: BillDirection;
+      project: { name: string; clientId: string };
+      raBill: { workOrderId: string | null } | null;
+    },
+  ): Promise<{ columns: Record<string, string | null>; missing: string[] }> {
+    const company = await this.companies.getBillingIdentity(companyId);
+
+    let issuer: PartyIdentity;
+    let receiver: PartyIdentity;
+
+    if (pkg.direction === BillDirection.to_client) {
+      const client = await tx.client.findFirst({
+        where: { id: pkg.project.clientId },
+        select: { name: true, gstin: true, address: true },
+      });
+      // The authority occupies the "Company Name" slot and the company is the contractor beneath
+      // it — the client's own layout, and the reason this is a binding rather than a second
+      // renderer. `Client` carries no state and no permanent account number, which is why both
+      // come back null and are reported.
+      issuer = {
+        name: client?.name ?? null,
+        gstin: client?.gstin ?? null,
+        pan: null,
+        state: null,
+        address: client?.address ?? null,
+        code: null,
+      };
+      receiver = { ...company, code: null };
+    } else {
+      const workOrder = pkg.raBill?.workOrderId
+        ? await tx.workOrder.findFirst({
+            where: { id: pkg.raBill.workOrderId },
+            select: { partnerId: true, workDetail: true },
+          })
+        : null;
+      const vendor = workOrder?.partnerId
+        ? await this.vendors.getBillingIdentity(ctx, workOrder.partnerId)
+        : null;
+      issuer = { ...company, code: null };
+      receiver = vendor ?? {
+        name: null,
+        gstin: null,
+        pan: null,
+        state: null,
+        address: null,
+        code: null,
+      };
+    }
+
+    const columns: Record<string, string | null> = {
+      issuerName: issuer.name,
+      issuerGstin: issuer.gstin,
+      issuerPan: issuer.pan,
+      issuerState: issuer.state,
+      issuerAddress: issuer.address,
+      receiverName: receiver.name,
+      receiverGstin: receiver.gstin,
+      receiverPan: receiver.pan,
+      receiverState: receiver.state,
+      receiverAddress: receiver.address,
+      receiverCode: receiver.code,
+    };
+
+    const missing = Object.entries(columns)
+      .filter(([, value]) => value === null)
+      .map(([key]) => key);
+
+    return { columns, missing };
+  }
+
+  /**
+   * The cumulative columns to freeze at issue (FR-014a).
+   *
+   * This bill's own figures added to the previous **issued** package's stored ones, which is the
+   * chain FR-014 reads back. Nothing here is recomputed from current data — that is the whole of
+   * decision D1.
+   */
+  private async abstractColumns(
+    tx: Prisma.TransactionClient,
+    pkg: {
+      projectId: string;
+      direction: BillDirection;
+      counterpartyKey: string;
+      sequenceNo: number;
+      taxBasis: BillTaxBasis;
+      retentionFraction: Prisma.Decimal;
+      cgstFraction: Prisma.Decimal;
+      sgstFraction: Prisma.Decimal;
+      igstFraction: Prisma.Decimal;
+      tdsFraction: Prisma.Decimal;
+      releaseWithheld: Prisma.Decimal;
+      recoveryDiesel: Prisma.Decimal;
+      debitAgainstCivil: Prisma.Decimal;
+      otherRecoveries: Prisma.Decimal;
+      mechanicalDebit: Prisma.Decimal;
+      mobilizationAdvance: Prisma.Decimal;
+      performanceSecurity: Prisma.Decimal;
+      theftWithheld: Prisma.Decimal;
+      mobilizationAdvanceTotal: Prisma.Decimal | null;
+      performanceSecurityTotal: Prisma.Decimal | null;
+      clientBill: { grossAmount: Prisma.Decimal } | null;
+      raBill: { grossAmount: Prisma.Decimal } | null;
+    },
+  ): Promise<Record<string, Prisma.Decimal>> {
+    const previous = await this.previousIssuedColumn(tx, pkg);
+    const workDone =
+      pkg.clientBill?.grossAmount ?? pkg.raBill?.grossAmount ?? dec(0);
+
+    const abstract = billAbstract({
+      workDone,
+      entered: {
+        releaseWithheld: pkg.releaseWithheld,
+        recoveryDiesel: pkg.recoveryDiesel,
+        debitAgainstCivil: pkg.debitAgainstCivil,
+        otherRecoveries: pkg.otherRecoveries,
+        mechanicalDebit: pkg.mechanicalDebit,
+        mobilizationAdvance: pkg.mobilizationAdvance,
+        performanceSecurity: pkg.performanceSecurity,
+        theftWithheld: pkg.theftWithheld,
+      },
+      rates: {
+        retentionFraction: pkg.retentionFraction,
+        cgstFraction: pkg.cgstFraction,
+        sgstFraction: pkg.sgstFraction,
+        igstFraction: pkg.igstFraction,
+        tdsFraction: pkg.tdsFraction,
+      },
+      taxBasis: pkg.taxBasis,
+      previous,
+      oneTime: {
+        mobilizationAdvance: {
+          total: pkg.mobilizationAdvanceTotal,
+          recoveredBefore: previous?.mobilizationAdvance ?? dec(0),
+        },
+        performanceSecurity: {
+          total: pkg.performanceSecurityTotal,
+          recoveredBefore: previous?.performanceSecurity ?? dec(0),
+        },
+      },
+    });
+
+    const { thisBill, uptoDate } = abstract;
+    return {
+      workDone: thisBill.workDone,
+      cgstAmount: thisBill.cgstAmount,
+      sgstAmount: thisBill.sgstAmount,
+      igstAmount: thisBill.igstAmount,
+      retentionAmount: thisBill.retentionAmount,
+      tdsAmount: thisBill.tdsAmount,
+      payable: thisBill.payable,
+      workDoneUptoDate: uptoDate.workDone,
+      releaseWithheldUptoDate: uptoDate.releaseWithheld,
+      cgstAmountUptoDate: uptoDate.cgstAmount,
+      sgstAmountUptoDate: uptoDate.sgstAmount,
+      igstAmountUptoDate: uptoDate.igstAmount,
+      recoveryDieselUptoDate: uptoDate.recoveryDiesel,
+      debitAgainstCivilUptoDate: uptoDate.debitAgainstCivil,
+      otherRecoveriesUptoDate: uptoDate.otherRecoveries,
+      mechanicalDebitUptoDate: uptoDate.mechanicalDebit,
+      mobilizationAdvanceUptoDate: uptoDate.mobilizationAdvance,
+      retentionAmountUptoDate: uptoDate.retentionAmount,
+      performanceSecurityUptoDate: uptoDate.performanceSecurity,
+      theftWithheldUptoDate: uptoDate.theftWithheld,
+      tdsAmountUptoDate: uptoDate.tdsAmount,
+      payableUptoDate: uptoDate.payable,
+    };
+  }
+
+  /**
+   * Records a revision (FR-045, FR-046).
+   *
+   * Counted with a reason. What the package stated at issue stays readable — the frozen columns are
+   * not touched — because a bill is a document that was sent, and a reader reconciling a payment
+   * against a bill whose history has moved is the one thing nobody can do.
+   */
+  async revise(
+    ctx: RlsContext,
+    userId: string | null,
+    packageId: string,
+    reason: string,
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const moved = await tx.billPackage.updateMany({
+        where: {
+          id: packageId,
+          status: {
+            in: [BillPackageStatus.issued, BillPackageStatus.certified],
+          },
+        },
+        data: {
+          revisionCount: { increment: 1 },
+          lastRevisedAt: new Date(),
+          lastRevisedByUserId: userId,
+          lastRevisionReason: reason,
+        },
+      });
+      if (moved.count === 1) return;
+      const existing = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true },
+      });
+      if (!existing) throw new NotFoundException('Bill package not found');
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.packageIssued,
+        message:
+          'Only an issued bill can be revised. A draft is simply edited.',
+      });
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Records what the counterparty certified (FR-047).
+   *
+   * Kept **beside** the billed figure and never instead of it — 018's existing reasoning, kept. The
+   * variance between the two is what a project manager chases, and overwriting the billed amount
+   * erases the fact that there was a shortfall at all.
+   */
+  async certify(
+    ctx: RlsContext,
+    packageId: string,
+    certifiedAmount: string,
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true, status: true, clientBillId: true },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.status === BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.packageIssued,
+          message: 'A draft cannot be certified — issue it first.',
+        });
+      }
+
+      await tx.billPackage.update({
+        where: { id: pkg.id },
+        data: { status: BillPackageStatus.certified },
+      });
+      // The certified figure lives on the bill 018 already owns, beside its gross and net.
+      if (pkg.clientBillId) {
+        await tx.clientBill.update({
+          where: { id: pkg.clientBillId },
+          data: { certifiedAmount, certifiedAt: new Date() },
+        });
+      }
+    });
+    return this.view(ctx, packageId);
   }
 
   /**

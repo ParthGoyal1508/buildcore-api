@@ -484,48 +484,48 @@ contains one measurement sheet per schedule line, and is identical when produced
 **Independent test**: an issued package is readable as issued after a revision, and both reports
 return the cases their decisions create.
 
-- [ ] T079 [US7] Implement `issue` in `bill-package.service.ts` (FR-044): freeze every figure and
+- [X] T079 [US7] Implement `issue` in `bill-package.service.ts` (FR-044): freeze every figure and
       the statutory header, record when it went out and by whom, and refuse an **unpriced** line
       carrying a non-zero claim (FR-009) — 018's `unpriced` flag means "nobody has priced this", not
       "this is free"
-- [ ] T080 [US7] Return `missingHeaderFields` and the check-list gaps in the issue response
+- [X] T080 [US7] Return `missingHeaderFields` and the check-list gaps in the issue response
       (FR-027a, FR-043a): reported to the caller, never a refusal, and not merely recorded against a
       row where nobody looks. **Assert that an issue with every question unanswered still
       succeeds** (FR-043) — the check list records a fact, and the client's own footer says only
       that gaps "may delay the process"
-- [ ] T081 [US7] Implement `revise` and `certify` in `bill-package.service.ts`: a revision counted
+- [X] T081 [US7] Implement `revise` and `certify` in `bill-package.service.ts`: a revision counted
       with a reason and what the package stated at issue still readable (FR-045, FR-046), and a
       certified amount kept **beside** the billed one and never instead of it (FR-047) — the
       variance between the two is what a project manager chases, and overwriting the billed figure
       erases the fact that there was a shortfall
-- [ ] T082 [US7] Refuse deletion of an issued package (FR-044a). A draft is abandoned instead
+- [X] T082 [US7] Refuse deletion of an issued package (FR-044a). A draft is abandoned instead
       (T029), which is the only way a period is ever released
-- [ ] T083 [US7] Create `src/projects/billing/package/package-reports.service.ts` with
+- [X] T083 [US7] Create `src/projects/billing/package/package-reports.service.ts` with
       `understatement(projectId)` (FR-014b): compare each issued package's period claims against
       that period's approved measurement **as it now stands**, answered on demand, with **no
       tolerance** — quantities are fixed-point, so any difference at all is reportable
-- [ ] T084 [US7] Carry the **remedy** on each understatement line in `package-reports.service.ts`
+- [X] T084 [US7] Carry the **remedy** on each understatement line in `package-reports.service.ts`
       (FR-014c): 022 attributes measurement by work date, so a quantity approved late whose work
       date sits inside an already-billed period never appears in any later period's proposal — it is
       unreachable rather than deferred. The route back is an over-claim under FR-006 on a later
       package carrying this report as its reason, and the response says so rather than leaving each
       engineer to work it out
-- [ ] T085 [US7] Implement `overClaims(projectId)` in `package-reports.service.ts` (FR-006a): the
+- [X] T085 [US7] Implement `overClaims(projectId)` in `package-reports.service.ts` (FR-006a): the
       count per package and per project, **with the number of lines it was drawn from** (FR-006b).
       Three over-claims out of five lines and three out of 312 are the same count and different
       facts, and "observed as a pattern" is FR-006a's own stated purpose
-- [ ] T086 [US7] Answer FR-048 and FR-049b from the **same** comparison as FR-014b in
+- [X] T086 [US7] Answer FR-048 and FR-049b from the **same** comparison as FR-014b in
       `package-reports.service.ts` (FR-048a): all three are "compare a billed period's claims against
       that period's approved measurement as it now stands", and two implementations of one
       comparison disagree — after which nobody knows which to believe
-- [ ] T087 [P] [US7] Create `src/projects/billing/package/package-reports.service.spec.ts`: a
+- [X] T087 [P] [US7] Create `src/projects/billing/package/package-reports.service.spec.ts`: a
       package whose period's measurement has since grown is reported with the exact difference and
       its remedy; one whose measurement has not is absent; and a reversal after issue appears as a
       discrepancy without moving the issued figures (FR-014b, FR-048)
-- [ ] T088 [P] [US7] Add the over-claim tests to `package-reports.service.spec.ts`: counted per
+- [X] T088 [P] [US7] Add the over-claim tests to `package-reports.service.spec.ts`: counted per
       package and per project with its denominator, and a line proposed from
       `no_measurement_source` **not** counted as an over-claim (FR-006a, FR-006b, FR-003a)
-- [ ] T089 [P] [US7] Add the revision test to `package-reports.service.spec.ts` or
+- [X] T089 [P] [US7] Add the revision test to `package-reports.service.spec.ts` or
       `bill-package.service.spec.ts`: a package issued, then revised, still reads as it was issued
       (FR-045, SC-006)
 
