@@ -913,6 +913,116 @@ describe('Daily work reports (e2e)', () => {
         'workerCount',
       ]);
     });
+
+    /**
+     * **The detail read, and the array it must not carry twice.**
+     *
+     * This response spread the raw rows, so it answered with `tasks` — the BOQ line nested under
+     * `boqItem`, no flat `boqNo` — *beside* the documented `lines`. Two arrays of the same thing in
+     * two shapes, one of them undocumented; the detail screen read the undocumented one and printed
+     * `BOQ —` against every line in the product. Equality is what catches that: containment would
+     * pass against a response carrying both.
+     */
+    it('answers the detail with exactly one lines array, and no tasks', async () => {
+      const created = await createReport([
+        {
+          paymentMode: 'work_basis',
+          boqItemId: itemA,
+          nos1: '1',
+          length: '30',
+          breadth: '15',
+          depth: '0.26',
+        },
+      ]);
+
+      const res = await http()
+        .get(`/projects/dwr/${created.body.id}`)
+        .set(auth())
+        .expect(200);
+
+      expect(Object.keys(res.body)).not.toContain('tasks');
+      expect(Object.keys(res.body.lines[0]).sort()).toEqual([
+        'boqItemId',
+        'boqNo',
+        'breadth',
+        'chainageFrom',
+        'chainageTo',
+        'density',
+        'depth',
+        'doneQty',
+        'engineerName',
+        'equipmentId',
+        'exceedsScope',
+        'id',
+        'layer',
+        'layerNo',
+        'length',
+        'logbook',
+        'logbookMissing',
+        'nos1',
+        'nos2',
+        'paymentMode',
+        'pendingQty',
+        'quantityInForce',
+        'remark',
+        'roadSide',
+        'scopeQty',
+        'section',
+        'targetQty',
+        'taskName',
+        'unit',
+      ]);
+    });
+
+    /**
+     * FR-030. The arithmetic is the record: 117 is a figure, 30 × 15 × 0.26 is an argument. A
+     * detail read that omits the factors can show only the answer, which is the half nobody checks.
+     */
+    it('carries the six factors on a measured line and none on a presence line', async () => {
+      const created = await createReport([
+        {
+          paymentMode: 'work_basis',
+          boqItemId: itemA,
+          nos1: '1',
+          length: '30',
+          breadth: '15',
+          depth: '0.26',
+        },
+        { paymentMode: 'day_basis', boqItemId: itemB, servedQty: '1' },
+      ]);
+
+      const res = await http()
+        .get(`/projects/dwr/${created.body.id}`)
+        .set(auth())
+        .expect(200);
+
+      const measured = res.body.lines.find(
+        (l: { paymentMode: string }) => l.paymentMode === 'work_basis',
+      );
+      expect(measured).toMatchObject({
+        nos1: '1.000',
+        nos2: '1.000',
+        length: '30.000',
+        breadth: '15.000',
+        depth: '0.260',
+        density: '1.000',
+        quantityInForce: '117.000',
+      });
+
+      // Null, never 1: a presence-paid line was not multiplied, and a 1 here would read as a
+      // factor somebody entered — on the screen whose whole job is to say how a quantity arose.
+      const presence = res.body.lines.find(
+        (l: { paymentMode: string }) => l.paymentMode === 'day_basis',
+      );
+      expect(presence).toMatchObject({
+        nos1: null,
+        nos2: null,
+        length: null,
+        breadth: null,
+        depth: null,
+        density: null,
+      });
+    });
   });
 
   // ── The concurrency properties ───────────────────────────────────────────

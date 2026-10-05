@@ -632,6 +632,19 @@ export class DwrService {
               paymentMode: true,
               actualQty: true,
               servedQty: true,
+              // The six factors the quantity was computed from (FR-030).
+              //
+              // Selected because the arithmetic is the record. `actualQty` alone says a line
+              // measured 117; only these say it was 30 × 15 × 0.26, which is the half somebody
+              // disputes and the half an engineer checks. Omitting them left the detail screen
+              // able to print nothing but "no factors entered" for every measured line in the
+              // product — a sentence that was never true of a line the server had computed.
+              nos1: true,
+              nos2: true,
+              length: true,
+              breadth: true,
+              depth: true,
+              density: true,
               equipmentId: true,
               chainageFrom: true,
               chainageTo: true,
@@ -662,12 +675,20 @@ export class DwrService {
     const workDate = report.workDate.toISOString().slice(0, 10);
     const logbook = await this.logbookFor(report.tasks, companyId, workDate);
 
+    // `tasks` is destructured out rather than spread: it is the raw rows, carrying the BOQ line
+    // nested under `boqItem` and no flattened `boqNo`, and returning it beside `lines` gave the
+    // response two arrays of the same thing with different shapes. The contract only ever named
+    // `lines`; `tasks` arrived by accident, and the detail screen picked the accidental one and
+    // showed "BOQ —" against every line in the product.
+    const { tasks, ...header } = report;
+
     return {
-      ...report,
+      ...header,
       workDate,
-      lines: report.tasks.map((task) => {
+      lines: tasks.map((task) => {
         const scopeQty = task.boqItem?.scopeQty ?? null;
         const doneQty = task.boqItem?.doneQty ?? null;
+        const measured = task.paymentMode === DwrPaymentMode.work_basis;
         const entry = task.equipmentId
           ? logbook.get(task.equipmentId)
           : undefined;
@@ -680,6 +701,14 @@ export class DwrService {
           unit: task.boqItem?.unit ?? null,
           paymentMode: task.paymentMode,
           quantityInForce: storedQuantityInForce(task).toFixed(3),
+          // How that quantity was arrived at. Null on a presence-paid line, where there was no
+          // multiplication — not 1, which would read as a factor somebody entered.
+          nos1: measured ? task.nos1.toFixed(3) : null,
+          nos2: measured ? task.nos2.toFixed(3) : null,
+          length: measured ? task.length.toFixed(3) : null,
+          breadth: measured ? task.breadth.toFixed(3) : null,
+          depth: measured ? task.depth.toFixed(3) : null,
+          density: measured ? task.density.toFixed(3) : null,
           // The BOQ line's own position (FR-027), from `BoqService`'s projection rather than
           // recomputed: pending is scope less done, and two definitions of it would diverge.
           scopeQty: scopeQty?.toFixed(3) ?? null,

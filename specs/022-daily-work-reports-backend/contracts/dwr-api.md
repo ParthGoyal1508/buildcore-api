@@ -202,8 +202,53 @@ button that would be refused.
 
 ### `GET /projects/dwr/:dwrId` → 200
 
-Each line beside its BOQ line's own position — `scopeQty`, `doneQty`, `pendingQty`, `targetQty`
-(FR-027), reusing `BoqService`'s existing projection rather than recomputing it.
+**One array, named `lines`, stated field for field** — for the same reason the list above is stated
+field for field. This read briefly returned `tasks` as well, an accidental spread of the raw rows
+carrying the BOQ line nested under `boqItem`, and a screen written against the accidental array
+showed `BOQ —` against every line in the product. There is no `tasks` array.
+
+```jsonc
+{
+  "id": "…", "projectId": "…", "dprNumber": "PRPL-2401-0001",
+  "workDate": "2026-09-30",          // a date, not a timestamp
+  "status": "draft", "weather": "overcast",
+  "workerCount": 46, "machineryCount": 6, "progress": 41,
+  "supervisorEmployeeId": null, "location": "…", "description": "…",
+  "contractFor": "self", "contractNumber": null, "rfiNo": "…", "layer": null,
+  "createdByUserId": "…", "submittedByUserId": null, "submittedAt": null,
+  "approvedByUserId": null, "approvedAt": null,
+  "reversedAt": null, "reversedByUserId": null, "reversalReason": null, "reversalCount": 0,
+  "attachments": [ { "id": "…", "fileName": "…", "mimeType": "…", "sizeBytes": 619, "uploadedAt": "…" } ],
+  "lines": [{
+    "id": "…", "boqItemId": "…",
+    "boqNo": "4",                    // FLAT, from the BOQ line. Not nested.
+    "taskName": "Filling available excavated earth …",
+    "unit": "Cum",
+    "paymentMode": "work_basis",
+    "quantityInForce": "117.000",    // the quantity, whichever basis produced it
+
+    // The six factors (FR-030). Present on a measured line, NULL on a presence-paid one —
+    // null because there was no multiplication, never 1, which reads as a factor somebody typed.
+    "nos1": "1.000", "nos2": "1.000", "length": "30.000",
+    "breadth": "15.000", "depth": "0.260", "density": "1.000",
+
+    "scopeQty": "2987.357", "doneQty": "474.000",      // the BOQ line's own position (FR-027)
+    "pendingQty": "2513.357", "targetQty": null,
+    "chainageFrom": null, "chainageTo": null,
+    "layer": null, "roadSide": null, "section": null, "layerNo": null,
+    "engineerName": null, "remark": null,
+    "exceedsScope": false,
+    "equipmentId": null, "logbook": null, "logbookMissing": false
+  }]
+}
+```
+
+**The factors are the record, not decoration.** `quantityInForce` alone says a line measured 117;
+only the six say it was 30 × 15 × 0.26 — which is the half a client disputes and the half an
+engineer checks.
+
+Each line comes beside its BOQ line's own position — `scopeQty`, `doneQty`, `pendingQty`,
+`targetQty` (FR-027), reusing `BoqService`'s existing projection rather than recomputing it.
 
 Where a line names an `equipmentId`, the equipment's logbook entry for the work date comes with it
 (FR-032):
