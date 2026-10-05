@@ -8,7 +8,12 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
-import { CreateBoqGroupDto, CreateBoqItemDto } from './dto/boq.dto';
+import { BOQ_ERRORS } from './boq-error-codes';
+import {
+  CreateBoqGroupDto,
+  CreateBoqItemDto,
+  PlanBoqItemDto,
+} from './dto/boq.dto';
 
 const DEC = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
@@ -386,6 +391,104 @@ export class BoqService {
    * DWR — the obvious one, and the only one that existed when US4 was written — would let a billed
    * line be deleted out from under a submitted bill.
    */
+  /**
+   * Give an existing line its programme (025 FR-009 to FR-015).
+   *
+   * ## Why this exists at all
+   *
+   * A tender schedule carries no dates and the importer reads none, so every imported line was
+   * unplanned and **there was no update of any kind for a BOQ item**. The only route to a finish
+   * date was to delete the line and add it again, which stops being possible the moment a daily
+   * work report measures against it. Meanwhile `stateOf` classified every line as `unplanned`,
+   * `neededRate` returned null for all of them, and the four alert tabs 008 built had nothing to
+   * report — on a 312-line tender, permanently.
+   *
+   * ## `null` clears, omission leaves alone
+   *
+   * The DTO's docblock explains how the two stay distinguishable through the validation pipe. Here
+   * it is one `!== undefined` per field: present-and-null writes SQL NULL, absent writes nothing.
+   *
+   * ## The check reads the merged line, not the request
+   *
+   * A request carrying only a finish date must still be refused against the start date already
+   * stored (FR-012). Validating the request alone accepts it, and every figure derived afterwards
+   * divides by a negative number of days — which produces a per-day target that looks like an
+   * ordinary small quantity rather than like an error.
+   */
+  async planItem(
+    ctx: RlsContext,
+    projectId: string,
+    itemId: string,
+    input: PlanBoqItemDto,
+  ): Promise<BoqItemView> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const current = await tx.bOQTaskItem.findFirst({
+        // Scoped through the group's project, as `deleteItem` is: an item id alone would reach a
+        // line on another project. A line in another company is invisible to RLS, so both miss and
+        // both answer 404 — never 403, which would confirm the row exists.
+        where: { id: itemId, group: { projectId } },
+        select: ITEM_SELECT,
+      });
+      if (!current)
+        throw new NotFoundException('BOQ item not found on this project');
+
+      const merged = {
+        startDate:
+          input.startDate !== undefined
+            ? input.startDate === null
+              ? null
+              : new Date(input.startDate)
+            : current.startDate,
+        finishDate:
+          input.finishDate !== undefined
+            ? input.finishDate === null
+              ? null
+              : new Date(input.finishDate)
+            : current.finishDate,
+      };
+
+      if (
+        merged.startDate &&
+        merged.finishDate &&
+        merged.finishDate < merged.startDate
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: BOQ_ERRORS.programmeInconsistent,
+          message:
+            `The finish date ${merged.finishDate
+              .toISOString()
+              .slice(0, 10)} is before the start ` +
+            `date ${merged.startDate
+              .toISOString()
+              .slice(0, 10)}. One of the two is a typo — a ` +
+            'line that finishes before it starts makes every figure derived from it negative.',
+        });
+      }
+
+      const updated = await tx.bOQTaskItem.update({
+        where: { id: itemId },
+        data: {
+          ...(input.startDate !== undefined
+            ? { startDate: merged.startDate }
+            : {}),
+          ...(input.finishDate !== undefined
+            ? { finishDate: merged.finishDate }
+            : {}),
+          ...(input.duration !== undefined ? { duration: input.duration } : {}),
+          ...(input.perDayQty !== undefined
+            ? { perDayQty: input.perDayQty }
+            : {}),
+        },
+        select: ITEM_SELECT,
+      });
+
+      // Returned in the shape the BOQ read returns, so a caller replaces the row in place rather
+      // than re-fetching a 312-line tree to show one changed date.
+      return viewOf(updated, new Date());
+    });
+  }
+
   async deleteItem(ctx: RlsContext, projectId: string, itemId: string) {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const item = await tx.bOQTaskItem.findFirst({
