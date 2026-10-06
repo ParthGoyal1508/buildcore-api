@@ -112,6 +112,30 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // the real protection here; this diff is the backstop.
           ':(exclude)src/partners/partners.module.ts',
           ':(exclude)src/partners/vendors/vendor-search.source.ts',
+          // Owned by 023 Phase C (the bill package's statutory header). `getBillingIdentity` is a
+          // **read-only slice** — code, name, registration number, permanent account number, state,
+          // address — exported so `projects` can put a subcontractor in a bill's receiving slot
+          // without reading the `partners` schema directly, which is what Principle I requires. It
+          // adds no approval path of any kind, and the per-file `approve()` assertions above still
+          // read this file and still enforce that `src/partners` keeps its own approval mechanism.
+          //
+          // Added a commit late, again, and the reason is worth keeping rather than apologising
+          // for: this check diffs two commits, so a change is invisible to it until the commit that
+          // makes it. Phase B did not touch `src/partners` and Phase C did, so the guard fired on
+          // Phase C — which is the earliest it could have.
+          ':(exclude)src/partners/vendors/vendors.service.ts',
+          // Owned by 023 Phase G. A **read-only** source registering itself with
+          // `ProjectSourcesRegistry` so a bill's header can print a subcontractor's statutory
+          // details — the same registry pattern `plant` uses for the equipment logbook and
+          // `search` for its registers, and for the same cycle reason: `PartnersModule` imports
+          // `ProjectsModule`, so the dependency has to be inverted. No approval path of any kind,
+          // and the per-file `approve()` assertions above still enforce that `src/partners` keeps
+          // its own approval mechanism.
+          //
+          // A commit late for the seventh time, and still the earliest it could be: the check
+          // diffs two commits, so an untracked file is invisible to it until the commit that adds
+          // it. Worth knowing rather than worth apologising for.
+          ':(exclude)src/partners/vendors/vendor-identity.source.ts',
           ':(exclude)src/plant/plant.module.ts',
           ':(exclude)src/plant/equipment/equipment-search.source.ts',
           ':(exclude)src/projects/portfolio/project-search.source.ts',
@@ -215,6 +239,52 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // half of the same rule: running it is only useful if its refusal is then acted on rather
           // than read. The refusal names the file; adding it takes a line.
           ':(exclude)src/projects/route-shadowing.spec.ts',
+          // Owned by 022: daily work reports, which 008 specified in August, created tables for,
+          // and never built — leaving every BOQ line in the system reporting 0% executed, because
+          // `doneQty` moves only on approval and nothing could approve anything. Recording,
+          // lifecycle and reads; **nothing here calls `ApprovalService`**. 022 decision D2 settled
+          // that deliberately: approval is a direct transition by somebody other than the author,
+          // because one report a day per project makes routing disproportionate and a chain left
+          // unconfigured would block the site's measurement rather than review it. The per-file
+          // assertions above still enforce that `src/projects` keeps no approval mechanism of its
+          // own.
+          //
+          // **Fired a commit late for the fifth time, and this one is worth being precise about.**
+          // 022's tasks.md carries running this spec before each phase commit as T067, and it *was*
+          // run before both the Phase A and Phase B commits — passing each time, because
+          // `git diff` between two commits cannot see an untracked file. So the habit named above
+          // is necessary and not sufficient: the only run that can see a new directory is the one
+          // *after* its first commit. The rule that actually works is narrower than "run it before
+          // committing" — it is **run it again straight after the first commit of any new directory
+          // under these paths**, which is the one moment the check can finally see it.
+          ':(exclude)src/projects/dwr',
+          // Owned by 025 FR-035, closing 008's T057: `SitesService.getGeofence()` now carries
+          // whether the site is in service. `SiteStatus.inactive` had been stored and editable
+          // since 008 and read by nothing, so decommissioning a site did not stop attendance being
+          // recorded against it. One field on a projection and one boolean on its return; **nothing
+          // here calls `ApprovalService`**, and the per-file assertions above still enforce that
+          // `src/projects` keeps no approval mechanism of its own.
+          //
+          // **Fired a commit late for the sixth time**, and this one was predicted in writing:
+          // 025's tasks.md names this spec in its repository rules and its Phase G, and it was run
+          // before every commit of that feature — passing each time, because the run that could
+          // have seen this change is the one *after* the commit carrying it. The rule that works
+          // remains the narrow one: run it again straight after committing anything under these
+          // paths, not only before.
+          ':(exclude)src/projects/sites/sites.service.ts',
+          // Owned by 025 FR-039: `Client.pan` and `Client.state`, the two rows the running-account
+          // bill's statutory header prints and this table carried neither — so every bill issued to
+          // a client reported both as missing and somebody filled them in by hand on the printed
+          // sheet. Two nullable columns, their validation, and a spec that exercises both DTOs
+          // under the global pipe's own settings. **Nothing here calls `ApprovalService`**, and the
+          // per-file assertions above still enforce that `src/projects` keeps no approval mechanism
+          // of its own.
+          //
+          // **Fired a commit late for the seventh time, two commits after the sixth.** The note on
+          // the exclusion above says the rule plainly — run it again *after* committing anything
+          // under these paths — and it was not followed here either. Written down a seventh time
+          // because the alternative is pretending the habit works.
+          ':(exclude)src/projects/clients',
         ],
         {
           cwd: REPO_ROOT,

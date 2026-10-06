@@ -262,10 +262,22 @@ describe('Inventory module (e2e)', () => {
     // Order matters, and it is the reverse of the dependency direction: allocations
     // point at payments and bills, bills and GRNs at purchases, and every movement
     // at an item and a site.
-    await sys.paymentAllocation.deleteMany({ where: { companyId } });
-    await sys.payment.deleteMany({ where: { companyId } });
-    await sys.purchaseBill.deleteMany({ where: { companyId } });
-    await sys.goodsReceiptNote.deleteMany({ where: { companyId } });
+    // **Scoped to what this suite made, never to the company.** These four were deleted by
+    // `companyId`, and this fixture runs as the caller's own company — the seeded one on a
+    // developer's machine. A run therefore deleted every payment, purchase bill and goods receipt
+    // in that company, not just its own. `bill-package.e2e-spec.ts` had the same defect and
+    // destroyed a real issued bill's lines on 2026-10-05.
+    const suitePurchases = { itemId: { in: createdItemIds } };
+    await sys.paymentAllocation.deleteMany({
+      where: { bill: { purchase: suitePurchases } },
+    });
+    await sys.payment.deleteMany({
+      where: { allocations: { some: { bill: { purchase: suitePurchases } } } },
+    });
+    await sys.purchaseBill.deleteMany({ where: { purchase: suitePurchases } });
+    await sys.goodsReceiptNote.deleteMany({
+      where: { purchase: suitePurchases },
+    });
     await sys.issue.deleteMany({ where: { itemId: { in: createdItemIds } } });
     await sys.purchase.deleteMany({
       where: { itemId: { in: createdItemIds } },

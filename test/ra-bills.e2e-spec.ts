@@ -342,6 +342,34 @@ describe('RA bills against an award (e2e)', () => {
       expect(first.body.netPayable).toBeLessThan(first.body.grossAmount);
     });
 
+    /**
+     * 027. The reason exists for whoever decides the bill a *second* time, so a draft — decided by
+     * nobody — must not demand one. Sends the quantities back unchanged, so this proves the gate
+     * without moving the figures the next test reads.
+     *
+     * Not vacuous: this was a 400 from the DTO before `reason` became optional, and it is still a
+     * 400 on a submitted bill — the test at `refuses a revision with no reason given` holds that
+     * side and would start failing if the requirement were simply dropped.
+     */
+    it('revises a draft with no reason given, because nobody has decided it yet', async () => {
+      const revised = await http()
+        .patch(`/projects/ra-bills/${firstId}/lines?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          lines: [
+            { workOrderBoqItemId: awarded['Excavation'].id, quantity: 60 },
+            { workOrderBoqItemId: awarded['PCC 1:4:8'].id, quantity: 10 },
+          ],
+        })
+        .expect(200);
+
+      expect(revised.body.status).toBe('draft');
+      const excavation = revised.body.lines.find(
+        (line: { description: string }) => line.description === 'Excavation',
+      );
+      expect(excavation.thisPeriodQty).toBe(60);
+    });
+
     it('carries the first bill’s quantity into the second, once the first has left draft', async () => {
       await submit(firstId);
 

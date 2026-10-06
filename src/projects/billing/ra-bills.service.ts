@@ -18,12 +18,14 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
+import { nextRaBillNumber } from './bill-number';
 import {
   billTotals,
   lineTotals,
   retentionBalance,
   retentionOn,
 } from './bill-totals';
+import { webRoutes } from '../../common/web-routes';
 
 /** One award line as the work order captures it. */
 export interface AwardLineInput {
@@ -47,14 +49,21 @@ export interface ReviseRaBillInput {
   lines: MeasureLineInput[];
   advanceRecovery?: number;
   otherDeductions?: number;
-  /** Why the quantities changed. Required — see `revise`. */
-  reason: string;
+  /** Why the quantities changed. Required once the bill has left draft — see `revise`. */
+  reason?: string;
 }
 
 export interface ComposeRaBillInput {
   projectId: string;
   workOrderId: string;
-  billNumber: string;
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this work order (027).
+   *
+   * Optional rather than removed, because an importer bringing historical bills across has numbers
+   * that already exist on paper and inventing new ones for them would make the record disagree with
+   * the documents it describes. No screen sends it.
+   */
+  billNumber?: string;
   description?: string | null;
   billingDate: string;
   lines: MeasureLineInput[];
@@ -67,6 +76,16 @@ export interface ComposeRaBillInput {
 export interface RaBillLineView {
   id: string;
   workOrderBoqItemId: string;
+  /**
+   * The client BOQ line this award line corresponds to, where it corresponds to one.
+   *
+   * On the **read** side since 027, because it was accepted on the write side from the start and
+   * never returned — so a screen loading an award to edit it could not put back what it had not
+   * been told, and every re-save silently unlinked the line. `assertNotBilledBelow` reaches the
+   * subcontractor-billed quantity through exactly this id, so an unlink is not cosmetic: it drops
+   * that line out of the floor a daily-work reversal is checked against.
+   */
+  boqTaskItemId: string | null;
   description: string;
   unit: string;
   awardedQty: number;
@@ -218,6 +237,7 @@ export class RaBillsService {
       return stored.map((item) => ({
         id: item.id,
         workOrderBoqItemId: item.id,
+        boqTaskItemId: item.boqTaskItemId,
         description: item.description,
         unit: item.unit,
         awardedQty: item.awardedQty.toNumber(),
@@ -257,35 +277,57 @@ export class RaBillsService {
         otherDeductions: input.otherDeductions,
       });
 
-      return tx.rABill.create({
-        data: {
-          companyId,
-          projectId: input.projectId,
-          workOrderId: input.workOrderId,
-          billNumber: input.billNumber.trim(),
-          description: input.description ?? null,
-          billingDate: new Date(input.billingDate),
-          // `amount` is the pre-018 column. Set to **gross**, matching the migration's backfill, so a
-          // screen still reading it sees the work rather than the net — and the two cannot disagree
-          // about what `amount` meant for bills raised either side of this change.
-          amount: totals.gross,
-          grossAmount: totals.gross,
-          retentionAmount: totals.retention,
-          advanceRecovery: totals.advanceRecovery,
-          otherDeductions: totals.otherDeductions,
-          netPayable: totals.net,
-          status: RaBillStatus.draft,
-          lines: {
-            create: priced.map(({ line, item, totals: lineAmount }) => ({
-              companyId,
-              workOrderBoqItemId: item.id,
-              quantity: line.quantity,
-              rate: item.rate,
-              amount: lineAmount.amount,
-            })),
+      // Allocated here rather than typed, and inside the transaction so a failed compose does not
+      // consume a number. See `nextRaBillNumber` for why it counts bills rather than keeping one.
+      const billNumber =
+        input.billNumber?.trim() ||
+        (await nextRaBillNumber(tx, input.workOrderId));
+
+      try {
+        return await tx.rABill.create({
+          data: {
+            companyId,
+            projectId: input.projectId,
+            workOrderId: input.workOrderId,
+            billNumber,
+            description: input.description ?? null,
+            billingDate: new Date(input.billingDate),
+            // `amount` is the pre-018 column. Set to **gross**, matching the migration's backfill,
+            // so a screen still reading it sees the work rather than the net — and the two cannot
+            // disagree about what `amount` meant for bills raised either side of this change.
+            amount: totals.gross,
+            grossAmount: totals.gross,
+            retentionAmount: totals.retention,
+            advanceRecovery: totals.advanceRecovery,
+            otherDeductions: totals.otherDeductions,
+            netPayable: totals.net,
+            status: RaBillStatus.draft,
+            lines: {
+              create: priced.map(({ line, item, totals: lineAmount }) => ({
+                companyId,
+                workOrderBoqItemId: item.id,
+                quantity: line.quantity,
+                rate: item.rate,
+                amount: lineAmount.amount,
+              })),
+            },
           },
-        },
-      });
+        });
+      } catch (error) {
+        // Two composes racing on one work order read the same highest number; 027's unique
+        // constraint refuses the second. Named rather than surfaced as a bare 409, because the
+        // caller's remedy is simply to compose again — nothing they entered was wrong.
+        if ((error as { code?: string }).code === 'P2002') {
+          throw new ConflictException({
+            statusCode: 409,
+            code: BILLING_ERRORS.duplicateNumber,
+            message:
+              `This project already has a bill numbered ${billNumber}. It was raised while this ` +
+              'one was being composed — compose it again and it will take the next number.',
+          });
+        }
+        throw error;
+      }
     });
 
     return this.view(ctx, created.id);
@@ -338,6 +380,7 @@ export class RaBillsService {
           return {
             id: item.id,
             workOrderBoqItemId: item.id,
+            boqTaskItemId: item.boqTaskItemId,
             description: item.description,
             unit: item.unit,
             awardedQty: awarded,
@@ -565,7 +608,7 @@ export class RaBillsService {
       entityId: bill.id,
       originatorUserId: caller.id,
       subject: `RA bill ${bill.billNumber}`,
-      href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+      href: webRoutes.projectRaBills(bill.projectId),
       viewPermission: Permission.PROJECT_FINANCIALS,
     });
 
@@ -620,16 +663,6 @@ export class RaBillsService {
         message: 'A measured bill needs at least one line.',
       });
     }
-    if (!input.reason?.trim()) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: BILLING_ERRORS.revisionReasonRequired,
-        message:
-          'Say why the quantities changed. A certified bill going round again costs somebody a ' +
-          'second decision, and “why” is the first thing they will ask.',
-      });
-    }
-
     const bill = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findFirst({
         where: { id: billId },
@@ -657,6 +690,20 @@ export class RaBillsService {
 
     const wasDecided = bill.status !== RaBillStatus.draft;
 
+    // Asked for only where somebody has already decided this bill. A draft has been decided by
+    // nobody, so there is no second decider to read the reason and nothing for it to explain —
+    // demanding one asks the author to invent a justification for editing their own unsent
+    // document, and an invented reason devalues the field on the bills where it carries weight.
+    if (wasDecided && !input.reason?.trim()) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: BILLING_ERRORS.revisionReasonRequired,
+        message:
+          'Say why the quantities changed. A certified bill going round again costs somebody a ' +
+          'second decision, and “why” is the first thing they will ask.',
+      });
+    }
+
     if (wasDecided) {
       // Closes a *pending* instance so nobody is left deciding a superseded version. A completed
       // one is untouched — the spine ignores a non-live instance, which is the behaviour research §6
@@ -676,7 +723,7 @@ export class RaBillsService {
         entityId: bill.id,
         originatorUserId: caller.id,
         subject: `RA bill ${bill.billNumber} (revised)`,
-        href: `/projects/${bill.projectId}/ra-bills/${bill.id}`,
+        href: webRoutes.projectRaBills(bill.projectId),
         viewPermission: Permission.PROJECT_FINANCIALS,
       });
     }
@@ -911,6 +958,7 @@ export class RaBillsService {
         return {
           id: line.id,
           workOrderBoqItemId: line.workOrderBoqItemId,
+          boqTaskItemId: line.workOrderBoqItem.boqTaskItemId,
           description: line.workOrderBoqItem.description,
           unit: line.workOrderBoqItem.unit,
           awardedQty: awarded,

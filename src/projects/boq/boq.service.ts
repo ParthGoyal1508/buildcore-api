@@ -8,7 +8,13 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
-import { CreateBoqGroupDto, CreateBoqItemDto } from './dto/boq.dto';
+import { BOQ_ERRORS } from './boq-error-codes';
+import {
+  CreateBoqGroupDto,
+  CreateBoqItemDto,
+  PlanBoqItemDto,
+} from './dto/boq.dto';
+import { sortByBoqNo } from './boq-order';
 
 const DEC = (value: Prisma.Decimal.Value) => new Prisma.Decimal(value);
 
@@ -205,6 +211,10 @@ export class BoqService {
       }),
     );
 
+    // Text order puts 10 before 2. Re-ordered here rather than in the query — see `boq-order.ts`.
+    sortByBoqNo(groups);
+    for (const group of groups) sortByBoqNo(group.items);
+
     return groups.map((group) => ({
       id: group.id,
       boqNo: group.boqNo,
@@ -276,6 +286,109 @@ export class BoqService {
   }
 
   /**
+   * Applies several lines' completed quantities **inside a caller's transaction**, in one statement
+   * (022 FR-013, FR-015, FR-015a, FR-021).
+   *
+   * ## Why `updateDoneQty` above could not be used for this
+   *
+   * That method opens its own transaction through `withRlsContext`, which is right for a single
+   * movement and wrong for a report. A daily work report must apply **every** one of its increments
+   * or none (022 FR-013), and seventeen calls to a method that each commit separately is the
+   * precise opposite: a failure half way leaves the BOQ showing work nobody approved, the report
+   * still submitted, and no way to tell which lines moved.
+   *
+   * It is also the latency shape that produced a production 500 on 2026-10-04 — the BOQ import's
+   * confirm step made 132 sequential round trips inside one 5 000 ms transaction budget, passing
+   * every local run because the local round trip is short.
+   *
+   * ## Why one raw statement rather than a loop of `update` calls
+   *
+   * Three properties, and the statement gives all three where a loop gives none:
+   *
+   * 1. **Relative.** `"doneQty" = "doneQty" + delta`, evaluated by Postgres against the row as it
+   *    stands. Two reports measuring one line, approved at the same moment, both land. A
+   *    read-then-write would lose one, and lose it silently (022 FR-015, FR-015a).
+   * 2. **One round trip**, whatever the line count.
+   * 3. **The floor is part of the statement.** `AND "doneQty" + delta >= 0` means a row that would
+   *    go negative is simply not updated and the returned count is short — so 022 FR-021 is
+   *    enforced by the database rather than by a check the caller might forget. The caller compares
+   *    the count and throws, which makes FR-013 and FR-021 one mechanism instead of two.
+   *
+   * Returns the number of rows actually updated. **The caller must compare it** against the number
+   * it asked for; a shortfall means a line was missing or would have gone negative, and the
+   * transaction must be rolled back by throwing.
+   */
+  async applyDoneQtyDeltas(
+    tx: Prisma.TransactionClient,
+    deltas: { itemId: string; delta: Prisma.Decimal }[],
+  ): Promise<number> {
+    if (deltas.length === 0) return 0;
+
+    const values = Prisma.join(
+      deltas.map(
+        (d) => Prisma.sql`(${d.itemId}::text, ${d.delta.toFixed(3)}::numeric)`,
+      ),
+    );
+
+    return tx.$executeRaw`
+      UPDATE "projects"."BOQTaskItem" AS b
+         SET "doneQty" = b."doneQty" + d.delta,
+             "updatedAt" = NOW()
+        FROM (VALUES ${values}) AS d(id, delta)
+       WHERE b."id" = d.id
+         AND b."doneQty" + d.delta >= 0
+    `;
+  }
+
+  /**
+   * Sets a line's completed quantity to an **absolute** value, returning what it held before
+   * (022 FR-015b, FR-039c, decision D3).
+   *
+   * ## The one exception to relative-only movement, and why it must exist
+   *
+   * Every other path moves this counter by an increment, because `doneQty` is denormalised and two
+   * concurrent approvals must both land. Reconciliation repair cannot work that way: it exists
+   * precisely because the counter has drifted from the sum of approved measurement, and "make this
+   * equal that" is not expressible as an increment when the difference is the very thing being
+   * corrected. Computing a delta and incrementing by it would subtract from the drifted figure and
+   * so preserve the drift it was called to remove.
+   *
+   * **This contradiction between 022 FR-015 and FR-039c was invisible inside the specification.**
+   * Both requirements are individually sound; they disagree only at the mechanism level, which
+   * cross-artifact analysis surfaced on 2026-10-04 as finding F1. FR-015b records the exception.
+   *
+   * Reachable only from reconciliation repair, which is permissioned, requires a stated reason, and
+   * audits the previous value this method returns. Never automatic: a discrepancy is the only
+   * symptom of whatever moved the counter without a report, and a silent self-heal would destroy
+   * that evidence every time it ran.
+   */
+  async setDoneQtyAbsolute(
+    tx: Prisma.TransactionClient,
+    itemId: string,
+    value: Prisma.Decimal,
+  ): Promise<{ previous: Prisma.Decimal; current: Prisma.Decimal }> {
+    if (value.isNegative()) {
+      throw new BadRequestException(
+        'A completed quantity cannot be set to a negative value.',
+      );
+    }
+
+    const before = await tx.bOQTaskItem.findUnique({
+      where: { id: itemId },
+      select: { doneQty: true },
+    });
+    if (!before) throw new NotFoundException('BOQ line not found');
+
+    const after = await tx.bOQTaskItem.update({
+      where: { id: itemId },
+      data: { doneQty: value },
+      select: { doneQty: true },
+    });
+
+    return { previous: before.doneQty, current: after.doneQty };
+  }
+
+  /**
    * Deletes a line, unless something already measures against it.
    *
    * **Three relations, not one.** A line can be referenced by a DWR task, a client bill line and a
@@ -283,6 +396,104 @@ export class BoqService {
    * DWR — the obvious one, and the only one that existed when US4 was written — would let a billed
    * line be deleted out from under a submitted bill.
    */
+  /**
+   * Give an existing line its programme (025 FR-009 to FR-015).
+   *
+   * ## Why this exists at all
+   *
+   * A tender schedule carries no dates and the importer reads none, so every imported line was
+   * unplanned and **there was no update of any kind for a BOQ item**. The only route to a finish
+   * date was to delete the line and add it again, which stops being possible the moment a daily
+   * work report measures against it. Meanwhile `stateOf` classified every line as `unplanned`,
+   * `neededRate` returned null for all of them, and the four alert tabs 008 built had nothing to
+   * report — on a 312-line tender, permanently.
+   *
+   * ## `null` clears, omission leaves alone
+   *
+   * The DTO's docblock explains how the two stay distinguishable through the validation pipe. Here
+   * it is one `!== undefined` per field: present-and-null writes SQL NULL, absent writes nothing.
+   *
+   * ## The check reads the merged line, not the request
+   *
+   * A request carrying only a finish date must still be refused against the start date already
+   * stored (FR-012). Validating the request alone accepts it, and every figure derived afterwards
+   * divides by a negative number of days — which produces a per-day target that looks like an
+   * ordinary small quantity rather than like an error.
+   */
+  async planItem(
+    ctx: RlsContext,
+    projectId: string,
+    itemId: string,
+    input: PlanBoqItemDto,
+  ): Promise<BoqItemView> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const current = await tx.bOQTaskItem.findFirst({
+        // Scoped through the group's project, as `deleteItem` is: an item id alone would reach a
+        // line on another project. A line in another company is invisible to RLS, so both miss and
+        // both answer 404 — never 403, which would confirm the row exists.
+        where: { id: itemId, group: { projectId } },
+        select: ITEM_SELECT,
+      });
+      if (!current)
+        throw new NotFoundException('BOQ item not found on this project');
+
+      const merged = {
+        startDate:
+          input.startDate !== undefined
+            ? input.startDate === null
+              ? null
+              : new Date(input.startDate)
+            : current.startDate,
+        finishDate:
+          input.finishDate !== undefined
+            ? input.finishDate === null
+              ? null
+              : new Date(input.finishDate)
+            : current.finishDate,
+      };
+
+      if (
+        merged.startDate &&
+        merged.finishDate &&
+        merged.finishDate < merged.startDate
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: BOQ_ERRORS.programmeInconsistent,
+          message:
+            `The finish date ${merged.finishDate
+              .toISOString()
+              .slice(0, 10)} is before the start ` +
+            `date ${merged.startDate
+              .toISOString()
+              .slice(0, 10)}. One of the two is a typo — a ` +
+            'line that finishes before it starts makes every figure derived from it negative.',
+        });
+      }
+
+      const updated = await tx.bOQTaskItem.update({
+        where: { id: itemId },
+        data: {
+          ...(input.startDate !== undefined
+            ? { startDate: merged.startDate }
+            : {}),
+          ...(input.finishDate !== undefined
+            ? { finishDate: merged.finishDate }
+            : {}),
+          ...(input.duration !== undefined ? { duration: input.duration } : {}),
+          ...(input.perDayQty !== undefined
+            ? { perDayQty: input.perDayQty }
+            : {}),
+        },
+        select: ITEM_SELECT,
+      });
+
+      // Returned in the shape the BOQ read returns, so a caller replaces the row in place rather
+      // than re-fetching a 312-line tree to show one changed date.
+      return viewOf(updated, new Date());
+    });
+  }
+
   async deleteItem(ctx: RlsContext, projectId: string, itemId: string) {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const item = await tx.bOQTaskItem.findFirst({

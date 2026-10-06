@@ -3,11 +3,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { WorkOrderStatus } from '@prisma/client';
+import { CodeSeriesType, WorkOrderStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { CodeSeriesService } from '../../settings/code-series/code-series.service';
+
+/** `PRPL-WO-0001`. The slot every other series in this product fills the same way. */
+const WORK_ORDER_CODE_INFIX = 'WO';
 
 export interface WorkOrderInput {
   projectId: string;
@@ -28,6 +32,7 @@ export interface WorkOrderView {
   id: string;
   projectId: string;
   partnerId: string | null;
+  code: string | null;
   workDetail: string;
   terms: string | null;
   requirements: string | null;
@@ -78,7 +83,10 @@ export interface WorkOrderView {
  */
 @Injectable()
 export class WorkOrdersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly codeSeries: CodeSeriesService,
+  ) {}
 
   async listForProject(
     ctx: RlsContext,
@@ -121,9 +129,20 @@ export class WorkOrdersService {
       });
       if (!project) throw new NotFoundException('Project not found');
 
+      // Allocated inside this transaction so a later failure rolls the number back rather than
+      // burning it — a gap in the series reads as a deleted work order to anyone auditing it.
+      // The same rule project and vendor codes follow.
+      const code = await this.codeSeries.next(
+        tx,
+        companyId,
+        CodeSeriesType.WORK_ORDER,
+        WORK_ORDER_CODE_INFIX,
+      );
+
       return tx.workOrder.create({
         data: {
           companyId,
+          code,
           projectId: input.projectId,
           partnerId: input.partnerId ?? null,
           workDetail: input.workDetail.trim(),
@@ -204,6 +223,7 @@ type Row = {
   id: string;
   projectId: string;
   partnerId: string | null;
+  code: string | null;
   workDetail: string;
   terms: string | null;
   requirements: string | null;
@@ -219,6 +239,8 @@ type Row = {
 const shape = (row: Row): WorkOrderView => ({
   id: row.id,
   projectId: row.projectId,
+  /** Null only on work orders raised before 027 numbered them. */
+  code: row.code,
   partnerId: row.partnerId,
   workDetail: row.workDetail,
   terms: row.terms,

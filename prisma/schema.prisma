@@ -432,6 +432,28 @@ model Company {
   /// a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.
   bocwCessRate Decimal @default(0.0100) @db.Decimal(6, 4)
 
+  /// The indirect-tax and withholding rates a running-account bill is computed at (023 FR-015,
+  /// FR-019, FR-023), as fractions — `0.090000` is 9%.
+  ///
+  /// Here rather than in the billing module for the reason `bocwCessRate` is here: a statutory
+  /// percentage is exactly the value Principle III keeps out of the calculation that uses it, and
+  /// `settings.Company` is where this repository already keeps them. Read through
+  /// `CompaniesService.getBillingTaxRates` — Principle I forbids `projects` reading this table
+  /// directly.
+  ///
+  /// **Six decimal places, matching `BillPackage`'s frozen columns.** A freeze that narrowed the
+  /// precision would be a silent change to the rate it claims to have recorded.
+  ///
+  /// The defaults state today's statute, and carry the same trade `bocwCessRate` accepted: a
+  /// company that never reviews them keeps billing at these. What makes that survivable here is
+  /// that every bill **records the rate it was computed at** (023 FR-019), so a rate change is
+  /// visible as a difference between two bills rather than as a silent re-derivation of both.
+  cgstFraction Decimal @default(0.090000) @db.Decimal(8, 6)
+  sgstFraction Decimal @default(0.090000) @db.Decimal(8, 6)
+  igstFraction Decimal @default(0.180000) @db.Decimal(8, 6)
+  /// Income tax deducted at source on a works contract.
+  tdsFraction  Decimal @default(0.020000) @db.Decimal(8, 6)
+
   /// The labour wage cycle a payment sheet's period defaults to (013 FR-041) —
   /// independent of the monthly salary `payCycle` above, because daily-wage labour
   /// is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
@@ -1581,6 +1603,19 @@ model Client {
   /// therefore admit unlimited GSTIN-less clients — correct here, but only by
   /// accident. The partial index in the migration states the rule explicitly.
   gstin         String?
+  /// The two the running-account bill's statutory header needs and this table did not carry
+  /// (025 FR-039). Until they existed, every bill issued to a client reported `issuerPan` and
+  /// `issuerState` as missing, and the intra/inter-state tax decision had no client state code to
+  /// read — so it fell back to `Project.cgstApplicable` on every single bill rather than deriving
+  /// the basis from the two parties' GSTINs the way 023 FR-015 describes.
+  ///
+  /// Both nullable: a client recorded before this existed is not wrong, and refusing to issue a
+  /// bill for a missing PAN is worse than issuing one with a blank somebody fills in by hand —
+  /// which is the rule the header has followed since 023 and this does not change.
+  pan           String?
+  /// Two-digit GST state code, as the GSTIN's own first two characters spell it (`08` is
+  /// Rajasthan). Stored as text, never an integer: `08` is not 8.
+  state         String?
 
   status ClientStatus @default(active)
 
@@ -1653,17 +1688,34 @@ model Project {
   purchaseLimit  Decimal?  @db.Decimal(18, 2)
   orderNumber    String?
   cgstApplicable Boolean   @default(false)
-  description    String?
 
-  sites            Site[]
-  boqTaskGroups    BOQTaskGroup[]
-  dailyWorkReports DailyWorkReport[]
-  revenues         Revenue[]
-  raBills          RABill[]
-  clientBills      ClientBill[]
-  workOrders       WorkOrder[]
-  budgets          ProjectBudget[]
-  documents        ProjectDocument[]
+  /// The **client contract's** retention term as a fraction — `0.050000` is 5% (023 FR-018).
+  ///
+  /// **Nullable with no default, deliberately.** Research §4 requires a missing rate to be a
+  /// refusal rather than a default of zero: a silent zero produces a bill with no retention and a
+  /// payable 5% too high, which is the error most likely to be paid before anybody notices. Null
+  /// means nobody has recorded the term; `0` means the contract has none.
+  ///
+  /// **Why a project-level rate is right here when research §4 rejected project-level rates.** That
+  /// objection was that two work orders on one project can carry different terms, so a rate on the
+  /// project would quietly apply one contract's to another's bill. It does not reach the client
+  /// direction: a project has exactly one client and one client agreement, so for that direction
+  /// the project *is* the contract. A bill to a subcontractor still reads
+  /// `WorkOrder.retentionPercent`, which is that subcontract's own term.
+  clientRetentionFraction Decimal? @db.Decimal(8, 6)
+  description             String?
+
+  sites             Site[]
+  boqTaskGroups     BOQTaskGroup[]
+  dailyWorkReports  DailyWorkReport[]
+  revenues          Revenue[]
+  raBills           RABill[]
+  clientBills       ClientBill[]
+  workOrders        WorkOrder[]
+  billPackages      BillPackage[]
+  billPackageDebits BillPackageDebit[]
+  budgets           ProjectBudget[]
+  documents         ProjectDocument[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1806,12 +1858,55 @@ model DailyWorkReport {
   rfiNo          String?
   layer          String?
 
+  /// Who created the draft and who put it forward. `shared.User.id`, bare ids.
+  ///
+  /// **`submittedByUserId` is what makes 022 FR-012a enforceable at all.** Approval is a direct
+  /// transition rather than a routed chain action (decision D2), and the control that replaces the
+  /// chain is that the approver is not the person who submitted it — a site engineer may not
+  /// certify their own claim. Without this column that rule has nothing to compare against: the
+  /// audit log holds the act, but enforcing a refusal by querying an audit trail makes the trail
+  /// load-bearing for correctness rather than for accountability, and a gap in it would silently
+  /// become a permission.
+  ///
+  /// Submission rather than creation is the act that matters: a clerk may type a report up for a
+  /// supervisor, and it is the person who put it forward as true who must not also certify it.
+  createdByUserId   String?
+  submittedByUserId String?
+  submittedAt       DateTime?
+
   /// `shared.User.id`. Bare id — see the schema-level note above.
   approvedByUserId String?
   approvedAt       DateTime?
 
-  /// Object-storage references, same pattern as `hr.EmployeeDocument`.
+  /// Object-storage references, as 008 created them.
+  ///
+  /// **Superseded by `attachments` in 022 and kept only because dropping a column is not something
+  /// an additive migration does.** A bare array of references cannot hold the name a file was
+  /// uploaded under or the type it is, which 022 FR-009 requires — a download that arrives as a
+  /// bare UUID with no extension is a defect this repository fixed once already, in 017, and the
+  /// fix was columns for the name and the type. Empty in every row, and nothing reads it.
   fileRefs String[]
+
+  attachments DWRAttachment[]
+
+  /// The **latest** reversal of an approval (022 FR-019, FR-022).
+  ///
+  /// A report in `draft` carrying `reversedAt` was approved and taken back, which is a different
+  /// thing from one never approved — and 022 FR-019 needs the two distinguishable. `approvedAt`
+  /// and `approvedByUserId` are deliberately **not** cleared when this is set: the approval
+  /// happened, and erasing it would leave a reversal reason referring to an approval nobody can
+  /// see.
+  ///
+  /// Only the latest reversal lives here; the full sequence is in the audit log, which is the
+  /// system of record for who did what. The count is kept rather than left to be reconstructed by
+  /// counting audit entries, for the reason `RABill.revisionCount` gives: "this has been round
+  /// three times" is what a reader wants, and having to count by hand is how a reader stops asking.
+  reversedAt       DateTime?
+  reversedByUserId String?
+  /// Required by the service rather than by the column: a reversal moves a quantity a bill may
+  /// already depend on.
+  reversalReason   String?
+  reversalCount    Int       @default(0)
 
   tasks DWRTask[]
 
@@ -1824,8 +1919,12 @@ model DailyWorkReport {
   @@schema("projects")
 }
 
-/// One measurement line within a work report. `actualQty` is computed server-side
-/// from the six factors so the arithmetic cannot differ between clients.
+/// One measurement line within a work report.
+///
+/// Carries **one of two quantities**, decided by `paymentMode`: `actualQty` for work measured by
+/// the six factors, computed server-side so the arithmetic cannot differ between clients, or
+/// `servedQty` for a line paid by presence. Exactly one is non-null, enforced by the
+/// `DWRTask_quantity_matches_basis` constraint (022 FR-030a).
 model DWRTask {
   id String @id @default(cuid())
 
@@ -1853,7 +1952,44 @@ model DWRTask {
   density Decimal @default(1) @db.Decimal(18, 3)
 
   /// nos1 × nos2 × length × breadth × depth × density, computed by the server.
-  actualQty Decimal @db.Decimal(18, 3)
+  ///
+  /// **Nullable since 022 (T002), and the nullability carries meaning.** This is the quantity of a
+  /// *measured* line, and a presence-paid line has none — absence says "not measured", while 0
+  /// says "measured as nothing". The client's real measurement sheets contain both, side by side,
+  /// and collapsing them would lose the distinction every performance deduction is argued from.
+  /// Non-null exactly when `paymentMode = work_basis`, enforced by
+  /// `DWRTask_quantity_matches_basis` rather than by a service (022 FR-030a).
+  ///
+  /// Safe to loosen without a backfill: the table held 0 rows on 2026-10-04, because nothing could
+  /// write one until 022 built the module 008 specified and left unimplemented.
+  actualQty Decimal? @db.Decimal(18, 3)
+
+  /// The day served on a presence-paid line: 1 for a full day, less for a part day (022 FR-030).
+  ///
+  /// **Why this is its own column and not `actualQty`.** Eleven of the seventeen line types in the
+  /// client's real tender are paid for presence rather than measurement — an ambulance or a
+  /// patrolling vehicle on a monthly rate, forty security guards a day — and the quantity claimed
+  /// for a month is a fraction of it. The six factors above cannot express that: they all default
+  /// to 1, so their product is 1, which *looks* exactly like one day served while being only an
+  /// artefact of the defaults. A figure that is right by coincidence passes every test written the
+  /// obvious way and turns wrong the moment somebody sets a factor.
+  ///
+  /// So the quantity in force is a stated property of the line (`paymentMode`) rather than an
+  /// inference about which fields happen to be filled, and `dwr-quantity.ts` never reads the
+  /// factors for a presence line at all (022 FR-030b, FR-030d).
+  ///
+  /// Non-null exactly when `paymentMode = day_basis`.
+  servedQty Decimal? @db.Decimal(18, 3)
+
+  /// `plant.Equipment.id`. Bare id — see the schema-level note above.
+  ///
+  /// The key the equipment's own logbook entry for the work date is read by (022 FR-032).
+  /// `plant.LogbookEntry` already holds the opening and closing readings, the run and the day's
+  /// remarks, unique per machine per date — which is precisely the odometer register printed
+  /// beneath each of the client's measurement sheets. It is read across the module boundary through
+  /// `ProjectSourcesRegistry` and **never copied here**: a second system of record for an odometer
+  /// disagrees with the first the moment one is corrected.
+  equipmentId String?
 
   /// Flagged, not refused: the site did the work, and a BOQ line that turns out to
   /// have been under-scoped is a commercial question, not a data-entry error.
@@ -1866,6 +2002,40 @@ model DWRTask {
 
   @@index([dwrId])
   @@index([boqItemId])
+  @@schema("projects")
+}
+
+/// One file attached to a day's work report (022 FR-009).
+///
+/// **A table rather than another string in `DailyWorkReport.fileRefs`.** An attachment is three
+/// facts, not one: where the bytes are, what the file was called, and what type it is. 017 fixed
+/// exactly this defect for project and company documents — files downloading as a bare UUID with
+/// no extension, which a browser then refused to open — and the fix was to store the name and the
+/// type rather than to sniff them back later. Repeating the array here would repeat the defect.
+///
+/// `uploadedByUserId` and `uploadedAt` are here because a photograph of a day's work is evidence,
+/// and evidence whose provenance is unrecorded is weaker than evidence that has none.
+model DWRAttachment {
+  id        String @id @default(cuid())
+  companyId String
+
+  dwrId String
+  dwr   DailyWorkReport @relation(fields: [dwrId], references: [id], onDelete: Cascade)
+
+  /// Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.
+  fileRef   String
+  /// As the uploader's own filesystem spelled it, so the download arrives named.
+  fileName  String
+  /// Detected from the bytes by `detectContentType`, not taken from the client's claim.
+  mimeType  String
+  sizeBytes Int
+
+  /// `shared.User.id`. Bare id — see the schema-level note above.
+  uploadedByUserId String?
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([dwrId])
   @@schema("projects")
 }
 
@@ -1938,11 +2108,18 @@ model RABill {
   otherDeductions Decimal @default(0) @db.Decimal(18, 2)
   netPayable      Decimal @default(0) @db.Decimal(18, 2)
 
-  lines RABillLine[]
+  lines   RABillLine[]
+  /// The 023 package, where this bill has been made into one. A relation field, not a column.
+  package BillPackage?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// Added by 027. A bill number was free text with nothing enforcing it, so two bills on one
+  /// project could carry the same number — and two paths mint them: the RA bill sheet, where a
+  /// person typed one, and 023's package path, which writes `RA-nn` into this column. `ClientBill`
+  /// has carried the equivalent constraint since 018; this side simply never got it.
+  @@unique([projectId, billNumber])
   @@index([companyId])
   @@index([projectId])
   @@index([workOrderId])
@@ -1957,8 +2134,25 @@ model WorkOrder {
   projectId String
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  /// The work order's own number — `PRPL-WO-0001` (027).
+  ///
+  /// **Nullable, and that is a migration artefact rather than a design choice.** The table is
+  /// populated, so a required unique column cannot simply be added to it; the rows that predate
+  /// this carry none and read by their detail as they always did. Every work order raised from
+  /// here on is numbered, and the service allocates it the way every other series in this product
+  /// is allocated.
+  ///
+  /// Unique per company, not globally: two companies number their own work orders independently,
+  /// exactly as they do projects and vendors.
+  code String?
+
   /// `partners.Vendor.id`, read through `PartnersService`. Bare id — see the
   /// schema-level note above.
+  ///
+  /// Nullable because it always has been and the existing rows carry nothing. 027 added the picker
+  /// that sets it: the column shipped with 018 and **no screen ever wrote to it**, so every work
+  /// order in the product was anonymous — the award, the bills and the retention all belonged to
+  /// nobody in particular.
   partnerId String?
 
   workDetail   String
@@ -1981,6 +2175,7 @@ model WorkOrder {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([companyId, code])
   @@index([companyId])
   @@index([projectId])
   @@schema("projects")
@@ -2040,7 +2235,9 @@ model ClientBill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lines ClientBillLine[]
+  lines   ClientBillLine[]
+  /// The 023 package, where this bill has been made into one. A relation field, not a column.
+  package BillPackage?
 
   @@unique([projectId, billNumber])
   @@index([companyId])
@@ -2094,9 +2291,409 @@ model ClientBillLine {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// The 023 claim recording how this line's quantity was chosen. A relation field, not a column.
+  packageClaim BillPackageLineClaim?
+
   @@unique([clientBillId, boqTaskItemId])
   @@index([companyId])
   @@index([boqTaskItemId])
+  @@schema("projects")
+}
+
+// ---------------------------------------------------------------------------------------------
+// Feature 023 — the running-account bill package.
+//
+// A running-account bill is not an invoice with lines on it. It is a **package**: a check list, an
+// abstract, a priced schedule, a measurement sheet for every item, and a debit-note register. The
+// four tables below hold **only what `ClientBill` and `RABill` lack** — research §3. Their
+// `grossAmount`, `retentionAmount` and `netAmount` stay the only home for those three figures,
+// because a second copy of a figure is a copy that disagrees after the first correction, which this
+// repository has now refused three times (018 research §3, 022 research §6, 022 FR-039b).
+//
+// **Why there are two bill tables and one package table**, rather than one bill table with a
+// direction flag: the two directions measure **different schedules**. A bill to the client measures
+// the project's own `BOQTaskItem` lines at the client's rate; a bill to a subcontractor measures
+// that subcontractor's `WorkOrderBOQItem` award lines at the awarded rate. Those are different
+// numbers for the same work — revenue and cost — and the margin between them is what 018's P&L
+// exists to show. But the ~30 columns the *package* adds are identical for both, so they live once.
+// ---------------------------------------------------------------------------------------------
+
+/// One bill made into a package, for one period, in one direction (023 FR-001).
+model BillPackage {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  direction BillDirection
+
+  /// Exactly one of these two is set, matching `direction`, enforced by
+  /// `BillPackage_one_bill_matching_direction` in the migration (data-model.md).
+  ///
+  /// Prisma's schema language cannot express a constraint spanning two nullable references, so the
+  /// `CHECK` is appended to the generated migration — plan.md's tracked deviation. A package
+  /// attached to both bills, or to neither, would produce a document whose figures belong to one
+  /// bill and whose lines belong to another, and the thing it protects is a money document.
+  clientBillId String?     @unique
+  clientBill   ClientBill? @relation(fields: [clientBillId], references: [id], onDelete: Cascade)
+  raBillId     String?     @unique
+  raBill       RABill?     @relation(fields: [raBillId], references: [id], onDelete: Cascade)
+
+  /// **Both inclusive** (FR-001). The client's cycle runs the 21st to the 20th, so a period is two
+  /// stored dates and not a month anybody can derive from one.
+  periodFrom DateTime @db.Date
+  periodTo   DateTime @db.Date
+
+  /// **Which counterparty this bill is to**: the project's client for `to_client`, the work order
+  /// for `to_subcontractor`.
+  ///
+  /// Denormalised onto the package rather than reached through the bill, for two reasons that are
+  /// the same reason. FR-002's overlap check is "the same schedule to the same counterparty" — one
+  /// project is billed to its client and to several subcontractors over the same month,
+  /// legitimately — and the running number is per counterparty too: the client's own package is
+  /// "RA-12" for *that* subcontractor. Keyed on the project and direction alone, two
+  /// subcontractors on one project would share one series, so A's bills would be RA-01 and RA-03
+  /// while B's were RA-02 and RA-04, and neither party's file would make sense.
+  counterpartyKey String
+
+  /// The package's running number — the "12" of "RA-12". Per project, per direction, per
+  /// counterparty.
+  sequenceNo Int
+
+  // --- Frozen rates (FR-019, FR-023, research §4) -------------------------------------------
+  //
+  // Each is recorded **per bill** rather than read at render time. 5 % retention is a contract term
+  // and 2 % tax deducted and 9 % tax are statutes, and all three change — so a bill issued in March
+  // must still recompute identically in September, which is only true if the rate travels with it.
+
+  retentionFraction Decimal @db.Decimal(8, 6)
+  cgstFraction      Decimal @db.Decimal(8, 6)
+  sgstFraction      Decimal @db.Decimal(8, 6)
+  igstFraction      Decimal @db.Decimal(8, 6)
+  tdsFraction       Decimal @db.Decimal(8, 6)
+
+  /// Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
+  ///
+  /// The source is stored because a client record carries no `state` today, so for a bill issued to
+  /// a client the fallback to the project's flag is the likely path rather than the exceptional one.
+  /// A fallback recorded and shown to nobody is a tax decision nobody made.
+  taxBasis       BillTaxBasis
+  taxBasisSource BillTaxBasisSource
+
+  // --- This period's figures (FR-013, FR-017) -----------------------------------------------
+  //
+  // Every named recovery and deduction is its own column, reported in its own right whether or not
+  // it carries an amount. Not one `otherDeductions` bucket: a subcontractor disputing a payment asks
+  // which deduction accounts for the difference, and a bucket cannot answer.
+
+  workDone        Decimal @default(0) @db.Decimal(18, 2)
+  releaseWithheld Decimal @default(0) @db.Decimal(18, 2)
+  cgstAmount      Decimal @default(0) @db.Decimal(18, 2)
+  sgstAmount      Decimal @default(0) @db.Decimal(18, 2)
+  igstAmount      Decimal @default(0) @db.Decimal(18, 2)
+
+  recoveryDiesel    Decimal @default(0) @db.Decimal(18, 2)
+  debitAgainstCivil Decimal @default(0) @db.Decimal(18, 2)
+  otherRecoveries   Decimal @default(0) @db.Decimal(18, 2)
+  mechanicalDebit   Decimal @default(0) @db.Decimal(18, 2)
+
+  mobilizationAdvance Decimal @default(0) @db.Decimal(18, 2)
+  retentionAmount     Decimal @default(0) @db.Decimal(18, 2)
+  performanceSecurity Decimal @default(0) @db.Decimal(18, 2)
+  theftWithheld       Decimal @default(0) @db.Decimal(18, 2)
+
+  tdsAmount Decimal @default(0) @db.Decimal(18, 2)
+  /// Work total less recoveries, less deductions, less tax deducted. **May be negative** (FR-022):
+  /// a bill whose debits exceed its work is a real outcome the client's own format expresses.
+  payable   Decimal @default(0) @db.Decimal(18, 2)
+
+  /// What each one-time recovery **totals** (FR-020).
+  ///
+  /// Added after `checklists/silent-failure.md` CHK021 found FR-020 satisfiable by doing nothing:
+  /// without a recorded total, a deduction that is fully recovered and one somebody entered as zero
+  /// this month are the same row. Recovered-to-date is the `…UptoDate` cumulative below, so the
+  /// target was the only missing half. Nullable because a contract may carry neither.
+  mobilizationAdvanceTotal Decimal? @db.Decimal(18, 2)
+  performanceSecurityTotal Decimal? @db.Decimal(18, 2)
+
+  // --- Frozen cumulative position (FR-014a, decision D1) -------------------------------------
+  //
+  // Stored at issue, so every bill is reproducible from itself for ever and the package always
+  // agrees with the signed copy the client holds. The next bill reads these.
+  //
+  // **The up-to-previous column is not here, and is not derived from this row either** (FR-013a).
+  // It is the *previous* bill's `…UptoDate`, read across the chain. Deriving it as this bill's
+  // up-to-date less its own amount is numerically equal only while the chain is unbroken — and it
+  // makes FR-035's footer identity a rearrangement of its own definition, true for any values
+  // whatever. The identity has to be able to fail or it is not worth asserting.
+
+  workDoneUptoDate            Decimal @default(0) @db.Decimal(18, 2)
+  releaseWithheldUptoDate     Decimal @default(0) @db.Decimal(18, 2)
+  cgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
+  sgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
+  igstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
+  recoveryDieselUptoDate      Decimal @default(0) @db.Decimal(18, 2)
+  debitAgainstCivilUptoDate   Decimal @default(0) @db.Decimal(18, 2)
+  otherRecoveriesUptoDate     Decimal @default(0) @db.Decimal(18, 2)
+  mechanicalDebitUptoDate     Decimal @default(0) @db.Decimal(18, 2)
+  mobilizationAdvanceUptoDate Decimal @default(0) @db.Decimal(18, 2)
+  retentionAmountUptoDate     Decimal @default(0) @db.Decimal(18, 2)
+  performanceSecurityUptoDate Decimal @default(0) @db.Decimal(18, 2)
+  theftWithheldUptoDate       Decimal @default(0) @db.Decimal(18, 2)
+  tdsAmountUptoDate           Decimal @default(0) @db.Decimal(18, 2)
+  payableUptoDate             Decimal @default(0) @db.Decimal(18, 2)
+
+  // --- Frozen statutory header (FR-026, FR-028) ----------------------------------------------
+  //
+  // Copied from `settings.Company`, `partners.Vendor` or `projects.Client` **at issue** and never
+  // re-read. That is what makes "a bill produced twice is identical" true rather than hoped for: a
+  // renderer reading the party records live would produce a different document after an address
+  // change, and the one in the client's file would stop matching.
+
+  issuerName          String?
+  issuerGstin         String?
+  issuerPan           String?
+  issuerState         String?
+  issuerAddress       String?
+  receiverName        String?
+  receiverGstin       String?
+  receiverPan         String?
+  receiverState       String?
+  receiverAddress     String?
+  receiverCode        String?
+  natureOfWork        String?
+  location            String?
+  /// References the counterparty's own systems assign, recorded rather than generated.
+  externalWorkOrderNo String?
+  externalBillNo      String?
+
+  /// What could not be filled (FR-027, FR-027a). **Reported, never a refusal** — a bill that cannot
+  /// be produced because a permanent account number is unrecorded is worse than one produced with a
+  /// gap somebody fills by hand.
+  missingHeaderFields String[]
+
+  /// `draft` → `issued` → `certified`, and `draft` → `abandoned`.
+  ///
+  /// **`abandoned` exists because a package in any status occupies its period** (FR-002a, FR-002b).
+  /// Without it a mistakenly-opened draft holds that period for ever and the only remedy is deleting
+  /// the row that records the period was billed — which FR-044a forbids for an issued bill and this
+  /// status makes unnecessary for a draft.
+  status BillPackageStatus @default(draft)
+
+  issuedAt       DateTime?
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  issuedByUserId String?
+
+  /// FR-046, following `RABill.revisionCount`'s precedent: a count rather than something to be
+  /// reconstructed from the audit trail.
+  revisionCount       Int       @default(0)
+  lastRevisedAt       DateTime?
+  lastRevisedByUserId String?
+  lastRevisionReason  String?
+
+  claims           BillPackageLineClaim[]
+  checkListAnswers BillPackageCheckListAnswer[]
+  recoveredDebits  BillPackageDebit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// So "RA-12" means one thing — to one counterparty.
+  @@unique([projectId, direction, counterpartyKey, sequenceNo])
+  @@index([companyId])
+  /// FR-002's overlap check, which is per schedule and per counterparty rather than per project.
+  @@index([projectId, direction, counterpartyKey, periodFrom, periodTo])
+  @@schema("projects")
+}
+
+enum BillDirection {
+  to_client
+  to_subcontractor
+
+  @@schema("projects")
+}
+
+enum BillTaxBasis {
+  intra_state
+  inter_state
+
+  @@schema("projects")
+}
+
+enum BillTaxBasisSource {
+  derived_from_gstin
+  from_project_flag
+
+  @@schema("projects")
+}
+
+enum BillPackageStatus {
+  draft
+  issued
+  certified
+  abandoned
+
+  @@schema("projects")
+}
+
+/// How one line's claimed quantity came to be chosen (023 FR-005, research §2).
+///
+/// A separate table rather than four columns on each of the two line tables: the proposal, reason,
+/// variance and over-claim flag are identical for both directions, and a bill composed without a
+/// package — which 018's service can still do — has no proposal to record, so the columns would be
+/// permanently null on half the rows that could exist.
+model BillPackageLineClaim {
+  id        String @id @default(cuid())
+  companyId String
+
+  packageId String
+  package   BillPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  /// Exactly one of these two, matching the package's direction.
+  clientBillLineId String?         @unique
+  clientBillLine   ClientBillLine? @relation(fields: [clientBillLineId], references: [id], onDelete: Cascade)
+  raBillLineId     String?         @unique
+  raBillLine       RABillLine?     @relation(fields: [raBillLineId], references: [id], onDelete: Cascade)
+
+  /// What feature 022's approved measurement proposed, **as at composition**. A point-in-time fact.
+  ///
+  /// **Null means there was no measurement to read** (FR-003a), which is not what zero says. Zero
+  /// says the measurement was read and was nothing. The two diverge on the subcontractor direction:
+  /// a bill there measures award lines, `WorkOrderBOQItem.boqTaskItemId` is nullable by design
+  /// because a subcontract may itemise work differently, and measurement is attributed to BOQ lines
+  /// — so an unmapped award line has no source at all. Proposing zero for it would say "no work was
+  /// done this month" for every unmapped line of every bill, on the direction billed monthly.
+  proposedQty    Decimal?            @db.Decimal(18, 3)
+  proposalSource ClaimProposalSource
+
+  claimedQty Decimal @db.Decimal(18, 3)
+
+  /// `claimedQty − proposedQty`. **Stored, not derived**, and null exactly when `proposedQty` is.
+  ///
+  /// Stored because the proposed figure can move afterwards — which is the case FR-014b exists for —
+  /// so a recomputed variance would answer a different question than the engineer was looking at.
+  /// Null rather than zero against a null proposal: there is no variance from a figure that was
+  /// never proposed, and zero would say the claim matched a proposal it did not have.
+  varianceQty Decimal? @db.Decimal(18, 3)
+
+  /// Required when the variance is non-zero (FR-004, FR-006), and **cleared** when a later edit
+  /// returns the claim to its proposal (FR-004a) — a reason beside a zero variance argues on the
+  /// measurement sheet for a deduction the bill does not make.
+  reason String?
+
+  /// Set when `claimedQty > proposedQty` (FR-006, decision D2).
+  ///
+  /// A claim against `no_measurement_source` is **not** an over-claim: nothing was exceeded, and
+  /// counting it would turn FR-006a's count into a count of unmapped award lines — which is the
+  /// mitigation D2 depends on, so it has to count the thing it claims to.
+  overClaimed Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  /// So FR-006a's count is a query rather than a scan.
+  @@index([packageId, overClaimed])
+  @@schema("projects")
+}
+
+enum ClaimProposalSource {
+  approved_measurement
+  no_measurement_source
+
+  @@schema("projects")
+}
+
+/// The debit-note register (023 FR-036 to FR-040a).
+///
+/// Recorded once against a project and recovered on **one** bill. The register spans bills rather
+/// than belonging to one, because the running total is the point of it.
+model BillPackageDebit {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// "Debit against the ATMS Equipment Missing at site" (FR-040). Grouped rather than listed flat,
+  /// because the heading is how the register is read.
+  groupHeading String?
+  description  String
+  /// "KM.226 LHS".
+  location     String?
+
+  /// Present where the debit has them; the real register uses different ones per line.
+  nos      Decimal? @db.Decimal(18, 3)
+  length   Decimal? @db.Decimal(18, 3)
+  width    Decimal? @db.Decimal(18, 3)
+  quantity Decimal? @db.Decimal(18, 3)
+  unit     String?
+
+  rate          Decimal @db.Decimal(18, 2)
+  amount        Decimal @db.Decimal(18, 2)
+  /// **Carried rather than computed**: the real register shows both, and the tax on a debit is not
+  /// always the bill's own rate.
+  amountWithTax Decimal @db.Decimal(18, 2)
+
+  /// Null until applied. A debit moves from null to a value **once** (FR-037), enforced by a
+  /// conditional update whose row count the service checks — the shape 022 used for its status
+  /// transitions. The rule has to hold where concurrent writers meet it (FR-037a) and not only in a
+  /// service that reads before it writes, because a debit recovered twice is money taken twice.
+  recoveredOnPackageId String?
+  recoveredOnPackage   BillPackage? @relation(fields: [recoveredOnPackageId], references: [id], onDelete: SetNull)
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  recordedByUserId String?
+  /// Also what makes an **issued** bill's register the register *as at issue* (FR-039a):
+  /// `recordedAt <= BillPackage.issuedAt`. Without that, FR-039's running total and FR-028's frozen
+  /// workbook contradict each other and a debit recorded between two productions of a signed bill
+  /// changes it.
+  recordedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, projectId])
+  @@index([recoveredOnPackageId])
+  @@schema("projects")
+}
+
+/// One of the six fixed check-list questions, answered for one package (023 FR-041 to FR-043a).
+///
+/// The **questions themselves are a constant in code**, not rows: the client reads them by position
+/// and their wording is part of the format rather than this system's data.
+model BillPackageCheckListAnswer {
+  id        String @id @default(cuid())
+  companyId String
+
+  packageId String
+  package   BillPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  /// One of six fixed keys, from `check-list.ts`.
+  questionKey String
+
+  /// **Nullable** — an unanswered question is distinguishable from one answered `no` (FR-042),
+  /// which a boolean could not express. It never refuses an issue (FR-043); the gaps are reported.
+  answer CheckListAnswer?
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  answeredByUserId String?
+  answeredAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([packageId, questionKey])
+  @@index([companyId])
+  @@schema("projects")
+}
+
+enum CheckListAnswer {
+  yes
+  no
+  not_required
+
   @@schema("projects")
 }
 
@@ -2194,6 +2791,9 @@ model RABillLine {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// The 023 claim recording how this line's quantity was chosen. A relation field, not a column.
+  packageClaim BillPackageLineClaim?
 
   @@unique([raBillId, workOrderBoqItemId])
   @@index([companyId])
@@ -3853,6 +4453,12 @@ enum CodeSeriesType {
   /// above is.
   ASSETS
   ASSET_REQUEST
+
+  /// Added by 027. Work order numbers (`{shortCode}-WO-0001`), per company.
+  ///
+  /// A work order had no identifier of its own — only its free-text detail — so the one screen
+  /// that has to name one, composing a bill to a subcontractor, had nothing to show but a cuid.
+  WORK_ORDER
 
   @@schema("settings")
 }

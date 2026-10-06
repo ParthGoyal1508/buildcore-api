@@ -11,6 +11,8 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
 import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
+import { nextClientBillNumber } from './bill-number';
+import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
 
 /** A line as the caller composes it. */
 export interface ComposeBillLineInput {
@@ -21,7 +23,13 @@ export interface ComposeBillLineInput {
 
 export interface ComposeBillInput {
   projectId: string;
-  billNumber: string;
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this project (027).
+   *
+   * Optional rather than removed, for an importer bringing historical bills across — those numbers
+   * already exist on paper. No screen sends it.
+   */
+  billNumber?: string;
   description?: string | null;
   billingDate: string;
   lines: ComposeBillLineInput[];
@@ -35,6 +43,19 @@ export interface ClientBillLineView {
   boqTaskItemId: string;
   boqNo: string;
   taskName: string;
+  /**
+   * The heading this line sits under, and half of what it says it is.
+   *
+   * A tender schedule carries the work in the heading and the qualifier in the child: item 12 is
+   * *"centering and shuttering … and removal of formwork"* and 12.01 is only *"suspended floors,
+   * roofs, landings …"*. Read on its own, that line names a place and no work — a client cannot tell
+   * whether the ₹340 a square metre was for shuttering it, concreting it or plastering it.
+   *
+   * Carried per line rather than returned as a tree because a bill measures an arbitrary handful of
+   * lines out of two hundred, and a tree would mean shipping headings with nothing under them.
+   */
+  groupId: string;
+  groupName: string;
   unit: string;
   scopeQty: number;
   quantity: number;
@@ -279,12 +300,18 @@ export class ClientBillsService {
         },
       );
 
+      // Allocated rather than typed, and inside the transaction so a failed compose does not
+      // consume a number. See `nextClientBillNumber` for why it counts bills rather than a counter.
+      const billNumber =
+        input.billNumber?.trim() ||
+        (await nextClientBillNumber(tx, input.projectId));
+
       try {
         return await tx.clientBill.create({
           data: {
             companyId,
             projectId: input.projectId,
-            billNumber: input.billNumber.trim(),
+            billNumber,
             description: input.description ?? null,
             billingDate: new Date(input.billingDate),
             // Frozen, like the rates. The project's percentage can be corrected; a bill that was
@@ -314,7 +341,9 @@ export class ClientBillsService {
           throw new ConflictException({
             statusCode: 409,
             code: BILLING_ERRORS.duplicateNumber,
-            message: `This project already has a bill numbered ${input.billNumber}.`,
+            message:
+              `This project already has a bill numbered ${billNumber}. It was raised while ` +
+              'this one was being composed — compose it again and it will take the next number.',
           });
         }
         throw error;
@@ -337,6 +366,7 @@ export class ClientBillsService {
         include: { lines: { include: { boqTaskItem: true } } },
       });
       if (!bill) throw new NotFoundException('Bill not found');
+
       if (bill.status !== ClientBillStatus.draft) {
         throw new ConflictException({
           statusCode: 409,
@@ -480,6 +510,10 @@ export class ClientBillsService {
         orderBy: { boqNo: 'asc' },
       });
 
+      // Text order puts 10 before 2 — see `boq-order.ts`.
+      sortByBoqNo(groups);
+      for (const group of groups) sortByBoqNo(group.items);
+
       const allItemIds = groups.flatMap((group) =>
         group.items.map((item) => item.id),
       );
@@ -536,12 +570,23 @@ export class ClientBillsService {
         where: { id: billId },
         include: {
           lines: {
-            include: { boqTaskItem: true },
+            include: {
+              boqTaskItem: {
+                include: { group: { select: { id: true, name: true } } },
+              },
+            },
             orderBy: { boqTaskItem: { boqNo: 'asc' } },
           },
         },
       });
       if (!bill) throw new NotFoundException('Bill not found');
+
+      // Through the schedule line each one measures. The `orderBy` above is the database's text
+      // order, which puts 10 before 2 — see `boq-order.ts`. This is the read every screen uses,
+      // `listForProject` included, so it is the one place the order has to be right.
+      bill.lines.sort((a, b) =>
+        compareBoqNo(a.boqTaskItem.boqNo, b.boqTaskItem.boqNo),
+      );
 
       // Cumulative **up to and including** this bill, so a historical bill reads as it did when it was
       // raised rather than showing today's running total against a figure from last quarter.
@@ -559,6 +604,8 @@ export class ClientBillsService {
           boqTaskItemId: line.boqTaskItemId,
           boqNo: line.boqTaskItem.boqNo,
           taskName: line.boqTaskItem.taskName,
+          groupId: line.boqTaskItem.group.id,
+          groupName: line.boqTaskItem.group.name,
           unit: line.boqTaskItem.unit,
           scopeQty,
           quantity: line.quantity.toNumber(),

@@ -48,11 +48,19 @@ export class ComposeBillDto {
   @MinLength(1)
   projectId: string;
 
-  @ApiProperty({ example: 'RA-01' })
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this project (027).
+   *
+   * Was required and typed, which made the client bill number something a person invented while the
+   * 023 package path was already minting one into the same column. Omission differs from an empty
+   * string: `@IsOptional()` skips `undefined`, so `''` still fails `MinLength`.
+   */
+  @ApiPropertyOptional({ example: 'RA-01' })
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(60)
-  billNumber: string;
+  billNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

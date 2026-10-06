@@ -280,6 +280,10 @@ export class ProjectsService {
             purchaseLimit: dto.purchaseLimit ?? null,
             orderNumber: dto.orderNumber ?? null,
             cgstApplicable: dto.cgstApplicable ?? false,
+            // Left null when unstated, never defaulted to zero: composing a client bill without a
+            // retention term is refused by name, and a zero would instead produce a payable five
+            // per cent too high that nothing downstream would question (025 FR-019).
+            clientRetentionFraction: dto.clientRetentionFraction ?? null,
             description: dto.description ?? null,
           },
         });
@@ -604,6 +608,9 @@ export class ProjectsService {
               : {}),
             ...(dto.cgstApplicable !== undefined
               ? { cgstApplicable: dto.cgstApplicable }
+              : {}),
+            ...(dto.clientRetentionFraction !== undefined
+              ? { clientRetentionFraction: dto.clientRetentionFraction }
               : {}),
             ...(dto.description !== undefined
               ? { description: dto.description || null }

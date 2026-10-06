@@ -92,11 +92,23 @@ export class ComposeRaBillDto {
   @MinLength(1)
   workOrderId: string;
 
-  @ApiProperty({ example: 'SC-01' })
+  /**
+   * Omit to have it allocated: `RA-01`, `RA-02`… in sequence on this work order (027).
+   *
+   * Was required and typed, which made this the only document in the product whose number a person
+   * invents — and `RABill.billNumber` carried no unique constraint, so a number typed here could
+   * silently duplicate one the 023 package path had already minted into the same column.
+   *
+   * Still accepted, for an importer bringing historical bills across: those numbers already exist
+   * on paper, and inventing new ones would make the record disagree with the documents it
+   * describes. No screen sends it.
+   */
+  @ApiPropertyOptional({ example: 'RA-01' })
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(60)
-  billNumber: string;
+  billNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -147,17 +159,29 @@ export class ReviseRaBillDto {
   @Type(() => MeasureLineDto)
   lines: MeasureLineDto[];
 
-  @ApiProperty({
+  /**
+   * Why the quantities changed. **Required on a bill that has been submitted or approved, and only
+   * then** — the service enforces it, because only the service knows the bill's status.
+   *
+   * The reason exists for the person deciding the bill a *second* time. A draft has been decided by
+   * nobody: demanding a justification for editing your own unsent working document asks somebody to
+   * invent one, and an invented reason devalues the field everywhere it actually matters.
+   *
+   * Note that omission and an empty string differ here: `@IsOptional()` skips `undefined`, so `''`
+   * still fails `@MinLength(3)` rather than quietly passing as "no reason given".
+   */
+  @ApiPropertyOptional({
     description:
-      'Why the quantities changed. **Required**: a certified bill going round again costs somebody a ' +
-      'second decision, and “why” is the first thing they will ask.',
+      'Why the quantities changed. Required once the bill has been submitted or approved: it going ' +
+      'round again costs somebody a second decision, and “why” is the first thing they will ask.',
     example:
       'Re-measured after joint survey on 3 Oct; excavation 40 Cum not 48.',
   })
+  @IsOptional()
   @IsString()
   @MinLength(3)
   @MaxLength(500)
-  reason: string;
+  reason?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

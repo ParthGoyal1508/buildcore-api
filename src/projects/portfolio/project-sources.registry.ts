@@ -39,6 +39,88 @@ export interface ProjectMachinerySource {
   ): Promise<number>;
 }
 
+/**
+ * One machine's day, as its own logbook records it — 022 FR-032.
+ *
+ * `YYYY-MM-DD` for the date, so the key is a day rather than an instant and cannot be made to
+ * disagree with itself by a timezone.
+ */
+export interface EquipmentLogbookDay {
+  date: string;
+  openingReading: string;
+  closingReading: string;
+  totalHours: string;
+  fuelConsumed: string | null;
+  remarks: string | null;
+}
+
+/**
+ * What feature 006 contributes to a daily work report (022 FR-032, FR-033).
+ *
+ * ## Why this interface exists rather than a query
+ *
+ * `plant.LogbookEntry` already records a machine's day — opening reading, closing reading, total
+ * run, fuel, operator, remarks, unique per machine per date. That is **exactly** the odometer
+ * register printed beneath each measurement sheet in the client's real RA bill package. So a daily
+ * work report does not need to store those readings; it needs to be able to read them, and
+ * Principle I forbids `projects` from querying the `plant` schema.
+ *
+ * Copying them instead would create a second system of record for one odometer, and the two would
+ * disagree the first time either was corrected.
+ *
+ * ## Why a map, and why batched
+ *
+ * Returns a **map keyed by date**, so a date with no entry is **absent rather than zero** — which
+ * is 022 FR-033 and also the rule this registry's cost sources already follow: a caller must be
+ * able to tell "the machine did nothing" from "nobody recorded it". A run of zero kilometres and a
+ * missing register page are different facts, and only one of them is a reason to chase somebody.
+ *
+ * Batched over dates for the reason `ProjectCostSource` gives about projects: a per-date signature
+ * would make a month's report an N+1 that no registrant could fix from their side.
+ */
+/**
+ * A vendor's statutory details, as a bill's header states them (023 FR-026).
+ *
+ * ## Why this is a registry entry rather than an injected service
+ *
+ * `VendorsService.getBillingIdentity` exists and is exactly the right call — but **`PartnersModule`
+ * imports `ProjectsModule`** (its vendors resolve project sites), so importing it back would close
+ * a cycle across five modules. 018's `WorkOrdersService` met the same wall and chose to store
+ * `partnerId` without validating it, recording the consequence honestly.
+ *
+ * 023 cannot make that trade: a bill's header is not a validation, it is content the document
+ * prints. So the dependency is inverted the way 022 inverted the logbook — `partners` registers
+ * itself from its own side, and `projects` reads through this interface without knowing who
+ * answers.
+ *
+ * **Where nothing is registered the receiver's details are simply unknown**, which is already the
+ * behaviour FR-027 requires: the fields are listed in `missingHeaderFields` and the bill is
+ * produced with blanks for somebody to fill in, rather than refused.
+ */
+export interface VendorBillingIdentity {
+  code: string;
+  name: string;
+  gstin: string | null;
+  pan: string | null;
+  state: string | null;
+  address: string | null;
+}
+
+export interface ProjectVendorIdentitySource {
+  getBillingIdentity(
+    vendorId: string,
+    companyId: string,
+  ): Promise<VendorBillingIdentity | null>;
+}
+
+export interface ProjectLogbookSource {
+  getLogbookDays(
+    equipmentId: string,
+    companyId: string,
+    dates: string[],
+  ): Promise<Map<string, EquipmentLogbookDay>>;
+}
+
 /** What feature 009 contributes. */
 export interface ProjectMaterialsSource {
   getMaterialsByProject(
@@ -184,6 +266,8 @@ export class ProjectSourcesRegistry {
 
   private machinery: ProjectMachinerySource | null = null;
   private materials: ProjectMaterialsSource | null = null;
+  private logbook: ProjectLogbookSource | null = null;
+  private vendorIdentity: ProjectVendorIdentitySource | null = null;
 
   registerMachinerySource(source: ProjectMachinerySource): void {
     if (this.machinery) {
@@ -208,9 +292,61 @@ export class ProjectSourcesRegistry {
     this.materials = source;
   }
 
+  /**
+   * Registered by `VendorsService.onModuleInit` (023 FR-026).
+   *
+   * From the `partners` side, because `PartnersModule` already imports `ProjectsModule` and the
+   * reverse would close a five-module cycle — the same reason `PlantService` registers the logbook
+   * rather than `projects` importing `PlantModule`.
+   */
+  registerVendorIdentitySource(source: ProjectVendorIdentitySource): void {
+    if (this.vendorIdentity) {
+      this.logger.warn(
+        'A vendor identity source is already registered; the second registration is ignored.',
+      );
+      return;
+    }
+    this.vendorIdentity = source;
+  }
+
+  /** Null where `partners` has not registered. Then a bill reports the fields as missing. */
+  vendorIdentitySource(): ProjectVendorIdentitySource | null {
+    return this.vendorIdentity;
+  }
+
+  /**
+   * Registered by `PlantService.onModuleInit` (022 FR-032).
+   *
+   * **The direction is forced, not chosen.** `PlantModule` already imports `ProjectsModule`, so
+   * having `ProjectsModule` import `PlantModule` to inject a logbook service would close a cycle —
+   * the one `PlantService`'s own docblock says would span five modules. It is also the hazard 006
+   * T058/T059 recorded from the other side: `EquipmentCategoriesService` lives under
+   * `src/settings/machinery-masters` but is *provided* by `PlantModule`, and injecting across that
+   * line made a cycle. So `plant` announces itself and `projects` asks the registry.
+   */
+  registerLogbookSource(source: ProjectLogbookSource): void {
+    if (this.logbook) {
+      this.logger.warn(
+        'A logbook source is already registered; the second registration is ignored.',
+      );
+      return;
+    }
+    this.logbook = source;
+  }
+
   /** Null when feature 006 is not part of this deployment. */
   machinerySource(): ProjectMachinerySource | null {
     return this.machinery;
+  }
+
+  /**
+   * Null when feature 006 is not part of this deployment.
+   *
+   * A caller must report that absence as an absence rather than as "no logbook entries", which is
+   * the same distinction FR-033 draws for a missing date.
+   */
+  logbookSource(): ProjectLogbookSource | null {
+    return this.logbook;
   }
 
   /** Null when feature 009 is not part of this deployment. */

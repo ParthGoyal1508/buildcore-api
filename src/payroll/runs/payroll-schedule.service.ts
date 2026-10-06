@@ -16,6 +16,7 @@ import {
 import { CompaniesService } from '../../settings/companies/companies.service';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PayrollEngineService } from '../engine/payroll-engine.service';
+import { webRoutes } from '../../common/web-routes';
 
 /** What one scheduled sweep did, so the cron can log something worth reading. */
 export interface ScheduledRunResult {
@@ -265,7 +266,7 @@ export class PayrollScheduleService {
         // would put a person's name against work the schedule did.
         originatorUserId: null,
         subject: `Payroll run ${run?.period ?? ''}`.trim(),
-        href: `/dashboard/hr/payroll/runs/${runId}`,
+        href: webRoutes.payrollRun(runId),
         // Who may read this run's approval history (FR-009). Payroll figures are not
         // company-wide reading, so this is the `PAYROLL` permission and not a laxer one.
         viewPermission: Permission.PAYROLL,

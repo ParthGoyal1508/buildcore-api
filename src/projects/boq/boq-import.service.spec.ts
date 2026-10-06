@@ -298,6 +298,60 @@ describe('BoqImportService.validate', () => {
       },
     );
 
+    /**
+     * Reported 2026-10-06. The sheet numbers `85` as a heading with `85.01` and `85.02` beneath it,
+     * then `86` as a line of its own. The parser opened a group on the heading and kept filling it
+     * until the **next** heading, so `86` and `87` — which have their own quantities and belong to
+     * nobody — were swallowed into section 85.
+     *
+     * Asserts the relationship rather than a section index: section numbers renumber whenever the
+     * grouping changes, so pinning one would make this test fail for the right fix as readily as
+     * for the wrong one.
+     */
+    (present ? it : it.skip)(
+      'does not sweep line 86 into the section that line 85.01 belongs to',
+      async () => {
+        const report = await run(REAL);
+        // `report.groups` is a count; the staged sections live on the batch the report points at.
+        const staged = batches.lookup(report.batchId).batch?.groups ?? [];
+        const sectionOf = (boqNo: string) =>
+          staged.findIndex((group) =>
+            group.items.some((item) => item.boqNo === boqNo),
+          );
+
+        const child = sectionOf('85.01');
+        expect(child).toBeGreaterThanOrEqual(0);
+        // Its sibling shares the section; the file nests both under 85.
+        expect(sectionOf('85.02')).toBe(child);
+        // 86 and 87 do not. They carry their own quantities and no `85.` prefix.
+        expect(sectionOf('86')).not.toBe(child);
+        expect(sectionOf('87')).not.toBe(child);
+      },
+    );
+
+    /**
+     * The section fix produced ten notes on a correct import of this file — one real (the sheet
+     * opens with lines before any heading) and nine for lines the parser placed correctly. Ten
+     * notes is how a reader learns to scroll past the one that matters.
+     */
+    (present ? it : it.skip)(
+      'does not report a line it placed correctly as a line it could not place',
+      async () => {
+        const report = await run(REAL);
+
+        // The sheet genuinely opens with lines before any heading; that one is worth saying.
+        expect(report.warnings.length).toBe(1);
+        expect(report.warnings[0].reason).toContain(
+          'before any section heading',
+        );
+        expect(
+          report.warnings.some((w) =>
+            w.reason.includes('not under the section'),
+          ),
+        ).toBe(false);
+      },
+    );
+
     (present ? it : it.skip)(
       'resolves its unit spellings to twelve units',
       async () => {

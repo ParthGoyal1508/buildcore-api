@@ -14,6 +14,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   IsArray,
@@ -158,6 +159,31 @@ export class CreateProjectDto {
   @IsOptional()
   @IsBoolean()
   cgstApplicable?: boolean;
+
+  @ApiPropertyOptional({
+    description:
+      'The client contract’s retention term, **as a fraction** — `0.05` is 5%. Bounded at 1: a ' +
+      'retention of more than the bill makes every net payable zero, which is a typo rather than ' +
+      'a term.\n\n' +
+      '**A fraction rather than a percentage, deliberately.** `WorkOrder.retentionPercent` is a ' +
+      'fraction with the same bound, and the bill composer reads the two terms four lines apart ' +
+      'in one function — `resolveRates()` takes this one for a bill to the client and that one ' +
+      'for a bill to a subcontractor. Two units in one function is how a 5% term becomes a 500% ' +
+      'deduction. A screen collecting a percentage divides by 100 before sending, as the ' +
+      'subcontract bill sheet already does.\n\n' +
+      '**Absent is not zero.** Composing a client bill without this answers 400 and says why: ' +
+      'billing at zero retention makes the payable five per cent too high and nothing downstream ' +
+      'would notice. Until 025 this column was settable nowhere, so that refusal was unanswerable ' +
+      'and the client half of the running-account package could not be used at all.',
+    minimum: 0,
+    maximum: 1,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1)
+  clientRetentionFraction?: number;
 
   @ApiPropertyOptional()
   @IsOptional()

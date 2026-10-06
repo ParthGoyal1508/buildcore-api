@@ -47,6 +47,8 @@ const SITE = {
   latitude: 19.076,
   longitude: 72.8777,
   geofenceRadiusMeters: 200,
+  /** 025 FR-035. A site out of service refuses the punch — see the case at the end of this file. */
+  isActive: true,
 };
 
 describe('PunchService', () => {
@@ -151,6 +153,8 @@ describe('PunchService', () => {
     // Held in named consts rather than inlined, because the refusal tests assert on *whether these
     // were called* — FR-013's requirement is about ordering, not about the thrown status.
     const refusals = { record: jest.fn().mockResolvedValue(undefined) };
+    // Hoisted so a test can close the site: `isActive` is the fact 008 stored and nothing read.
+    const sites = { getGeofence: jest.fn().mockResolvedValue(SITE) };
     const storage = { put: jest.fn().mockResolvedValue('punch/ref-1') };
     const service = new PunchService(
       // 020 FR-013c. Phase 2 records would-be refusals while still accepting the punch, so these
@@ -169,7 +173,7 @@ describe('PunchService', () => {
       {
         assertMandatoryDocsComplete: jest.fn().mockResolvedValue(undefined),
       } as never,
-      { getGeofence: jest.fn().mockResolvedValue(SITE) } as never,
+      sites as never,
       {
         getPayrollLockDay: jest.fn().mockResolvedValue(7),
         // 020 FR-012b. 50 is the product default; these tests send no `accuracyMeters`, so the
@@ -201,7 +205,7 @@ describe('PunchService', () => {
               },
       } as never,
     );
-    return { service, prisma, created, approvals, refusals, storage };
+    return { service, prisma, created, approvals, refusals, storage, sites };
   };
 
   const punchDto = (overrides: Record<string, unknown> = {}) =>
@@ -647,7 +651,15 @@ describe('PunchService', () => {
       const submitted = approvals.submit.mock.calls[0][0];
       expect(submitted.subject).toContain('Rajesh Kulkarni');
       expect(submitted.subject).toContain('outside the site geofence');
-      expect(submitted.href).toContain(created[0].id);
+
+      // The href no longer carries the record id, and that is the fix rather than a
+      // regression: it used to read `/dashboard/hr/attendance/exceptions/:id`, and no such
+      // page has ever existed in buildcore-web — the queue link 404'd. This assertion was
+      // what made the broken URL look tested, because containing the id was the only thing
+      // it checked. `entityId` above is what identifies the record; the subject is what
+      // tells the approver what they are looking at; the href only has to land somewhere
+      // that shows it.
+      expect(submitted.href).toBe('/dashboard/hr/attendance');
     });
 
     it('names both reasons when a punch fails the face check and the geofence', async () => {
@@ -836,6 +848,32 @@ describe('PunchService', () => {
           punchDto({ capturedAt: lastPeriod.toISOString() }),
         ),
       ).rejects.toBeInstanceOf(HttpException);
+    });
+  });
+
+  // ── A site taken out of service (008 US2/AC4, closed by 025 FR-035) ───────
+
+  describe('a site that is no longer in service', () => {
+    it('refuses the punch rather than recording it as an exception', async () => {
+      // `SiteStatus.inactive` was stored and editable from the day 008 shipped and read by
+      // nothing, so decommissioning a site did not stop attendance being recorded against it.
+      // This is the one acceptance criterion of a P1 story that shipped unmet.
+      const { service, sites } = build();
+      sites.getGeofence.mockResolvedValue({ ...SITE, isActive: false });
+
+      await expect(service.submitPunch(caller, punchDto())).rejects.toThrow(
+        /no longer in service/,
+      );
+    });
+
+    it('still accepts a punch at a site that is in service', async () => {
+      // The non-vacuity half. Without it, a refusal that fired for every site — a typo in the
+      // condition, a projection that stopped selecting the column — would pass the test above
+      // while stopping attendance everywhere.
+      const { service } = build();
+      await expect(
+        service.submitPunch(caller, punchDto()),
+      ).resolves.toBeDefined();
     });
   });
 });

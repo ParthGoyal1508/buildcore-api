@@ -46,6 +46,17 @@ export const BOQ_ERRORS = {
    * named code can carry.
    */
   writeInterrupted: 'BOQ_IMPORT_WRITE_INTERRUPTED',
+
+  /**
+   * A programme that contradicts itself — a finish date before the start date (025 FR-012).
+   *
+   * **Checked against the merged line, not against the request.** A partial update carrying only a
+   * finish date would otherwise sail past a check that reads the request alone, and the stored
+   * start date would then be later than the finish date. `neededRate()` divides the outstanding
+   * quantity by the days remaining; a negative denominator yields a per-day target that reads as a
+   * plausible small number, which is the kind of wrong figure nobody questions.
+   */
+  programmeInconsistent: 'BOQ_PROGRAMME_INCONSISTENT',
 } as const;
 
 export type BoqErrorCode = (typeof BOQ_ERRORS)[keyof typeof BOQ_ERRORS];

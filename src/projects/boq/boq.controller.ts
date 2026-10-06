@@ -5,6 +5,7 @@ import {
   Get,
   Ip,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -30,6 +31,7 @@ import {
   ConfirmBoqImportDto,
   CreateBoqGroupDto,
   CreateBoqItemDto,
+  PlanBoqItemDto,
   ValidateBoqImportDto,
 } from './dto/boq.dto';
 
@@ -121,6 +123,38 @@ export class BoqController {
       body,
       resolveCompanyId(caller),
     );
+  }
+
+  @Patch('items/:itemId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Give an existing line its programme',
+    description:
+      'The four programme fields and nothing else. A tender schedule carries no dates, the ' +
+      'importer reads none, and until this route there was no update of any kind for a BOQ item — ' +
+      'so an imported line read “Not planned” for ever, and the only route to a finish date was to ' +
+      'delete the line and add it again, which stops being possible the moment a daily work ' +
+      'report measures against it.\n\n' +
+      '**Omitting a field leaves it unchanged; sending `null` clears it.** The two are different ' +
+      'intentions, and a planner removing a wrong finish date needs a way to say so.\n\n' +
+      '**Scope, rate, unit and description are not accepted.** A programme is *when* the work ' +
+      'happens; those are *what the work is*. Sending one is a 400 rather than a quiet no-op.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'The merged programme contradicts itself — a finish date before the start date. Merged, ' +
+      'not requested: a patch carrying only a finish date is still checked against the stored ' +
+      'start date.',
+  })
+  @ApiResponse({ status: 423, description: 'The project is locked.' })
+  async planItem(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') projectId: string,
+    @Param('itemId') itemId: string,
+    @Body() body: PlanBoqItemDto,
+  ) {
+    return this.boq.planItem(rlsContextFor(caller), projectId, itemId, body);
   }
 
   @Delete('items/:itemId')

@@ -13,6 +13,17 @@ import { BoqImportService } from './boq/boq-import.service';
 import { BoqWorkbookReader } from './boq/boq-workbook.reader';
 import { BoqController } from './boq/boq.controller';
 import { BoqService } from './boq/boq.service';
+import { DwrController } from './dwr/dwr.controller';
+import { BillPackageViewBuilder } from './billing/package/bill-package-view.builder';
+import { BillPackageController } from './billing/package/bill-package.controller';
+import { BillPackageService } from './billing/package/bill-package.service';
+import { DebitNoteService } from './billing/package/debit-note.service';
+import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
+import { PackageReportsService } from './billing/package/package-reports.service';
+import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
+import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
+import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
+import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
 import { ProjectSearchSource } from './portfolio/project-search.source';
@@ -92,6 +103,20 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // the company. Found by `test/client-bills.e2e-spec.ts` on its first run; `route-shadowing.spec.ts`
     // asserts the ordering rather than trusting this comment to be read.
     BoqController,
+    // 022. **Before `ProjectsController`, and that ordering is load-bearing.** `GET projects/dwr`
+    // is a literal path, and the portfolio registers the parameterised `GET projects/:id` — Nest
+    // matches in registration order, so listing this controller second made every request for the
+    // report list arrive at `ProjectsController.findOne` looking for a project with the id "dwr".
+    // `route-shadowing.spec.ts` caught it, which is what that spec was written for after
+    // `GET /projects/:id/boq` shadowed `GET /projects/client-bills/boq`.
+    DwrController,
+    // 023. **Before `ProjectsController`, for exactly the reason `DwrController` is.** Every path
+    // here is a literal under `projects/` — `projects/bill-packages/:id`,
+    // `projects/bill-package-debits/:id/apply/:id` — and the portfolio registers the parameterised
+    // `GET projects/:id`. Registered second, a request for a package would arrive at
+    // `ProjectsController.findOne` looking for a project whose id is the string "bill-packages"
+    // and answer 404 as though the bill did not exist. `route-shadowing.spec.ts` asserts the order.
+    BillPackageController,
     ProjectsController,
   ],
   providers: [
@@ -123,7 +148,28 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     BoqService,
     BoqImportService,
     BoqWorkbookReader,
+    // 023. The package's four services, the view builder that reads the stored bill, and the
+    // renderer — which takes **no** constructor argument, so it cannot query and therefore cannot
+    // recompute a figure a client has already signed for (FR-028).
+    BillPackageService,
+    MeasurementSheetService,
+    DebitNoteService,
+    PackageReportsService,
+    BillPackageViewBuilder,
+    BillWorkbookRenderer,
+    BillPdfRenderer,
     ImportBatchStore,
+    // 022 US5, which 008 specified in August and never built. `BoqService.updateDoneQty` was
+    // written then, exported from this module **for this caller**, and had no caller for two
+    // months — so every BOQ line in the system reported 0% executed regardless of work done.
+    // This provider is where that closes.
+    DwrService,
+    // 022 US6 — the contract feature 023 composes a bill from: per BOQ line, the measurement
+    // approved in a period, before it, and the total. Aggregated at read time rather than stored,
+    // because 018 research §3 decided exactly that for cumulative billed quantity and named
+    // `doneQty` as the one denormalised counter already in place. `reconcile` is what can say that
+    // counter has drifted, and is the only thing that can.
+    DwrPeriodFiguresService,
     // Declared here rather than imported from AuthModule, matching every other
     // feature module: the service is stateless, and AuthModule does not export it.
     AuditLogService,
@@ -141,6 +187,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // nobody else may read it directly.
   // `BoqService` is exported for the DWR work (US5): approving a report moves a BOQ line's
   // completed quantity, and that has to go through this service rather than through the table.
+  // 022 added two transaction-aware siblings to it for that caller — `applyDoneQtyDeltas`, because
+  // `updateDoneQty` opens its own transaction and a report must move every line or none, and
+  // `setDoneQtyAbsolute`, which is reconciliation repair's one exception to relative movement.
   exports: [
     BoqService,
     SitesService,

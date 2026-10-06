@@ -31,6 +31,7 @@ import { CompaniesService } from './companies.service';
 import { CompanyResponseDto } from './dto/company-response.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { SetBillingRatesDto } from './dto/set-billing-rates.dto';
 import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
 import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
 
@@ -117,6 +118,45 @@ export class CompaniesController {
       id,
       dto.punchAccuracyMaxMetres ?? null,
     );
+  }
+
+  @Get(':id/billing-rates')
+  @ApiOperation({
+    summary:
+      'The statutory rates a running-account bill is computed at (025 FR-021)',
+    description:
+      'CGST, SGST, IGST and TDS, as fractions — `0.09` is nine per cent. They carry correct ' +
+      'statutory defaults, so nothing was wrong; there was simply no way to change them short of ' +
+      'SQL, which is the no-hardcoded-values principle reaching a column rather than a literal.',
+  })
+  async getBillingRates(@Param('id') id: string) {
+    return this.companiesService.getBillingTaxRates(id);
+  }
+
+  @Patch(':id/billing-rates')
+  @ApiOperation({
+    summary: 'Change one or more of those rates (025 FR-021, FR-024)',
+    description:
+      'Each field is optional: naming one rate leaves the other three alone.\n\n' +
+      '**A rate above 1 is refused.** `0.09` is nine per cent and `9` is nine hundred — a rate ' +
+      'entered as a percentage into a fraction multiplies every tax on every bill by a hundred.' +
+      '\n\n' +
+      '**This does not move a bill that has been issued.** Issue freezes the rates onto the ' +
+      'package so a document already sent reproduces identically; this governs what is composed ' +
+      'after it.\n\n' +
+      'Recorded with both values, because a statutory rate is the figure most able to move money ' +
+      'without anybody noticing: every bill afterwards is wrong by a consistent percentage.',
+  })
+  async setBillingRates(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SetBillingRatesDto,
+    @Ip() ip: string,
+  ) {
+    return this.companiesService.setBillingTaxRates(id, dto, {
+      userId: caller.id,
+      ipAddress: ip,
+    });
   }
 
   @Put(':id/punch-enforcement')

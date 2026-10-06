@@ -189,8 +189,16 @@ describe('Plant module (e2e)', () => {
   afterAll(async () => {
     // Reverse of the dependency direction: bills and movements point at jobs, jobs
     // and every log point at equipment, equipment at a category.
-    await sys.serviceBill.deleteMany({ where: { companyId } });
-    await sys.sparePartMovement.deleteMany({ where: { companyId } });
+    // **Scoped to this suite's own equipment and spare parts.** Both were deleted by `companyId`,
+    // and this fixture runs as the caller's own company — the seeded one on a developer's machine —
+    // so a run deleted every service bill and spare-part movement in it. See the note in
+    // `bill-package.e2e-spec.ts`, where the same defect destroyed a real bill's lines.
+    await sys.serviceBill.deleteMany({
+      where: { maintenanceJob: { equipmentId: { in: createdEquipmentIds } } },
+    });
+    await sys.sparePartMovement.deleteMany({
+      where: { sparePartId: { in: createdSparePartIds } },
+    });
     for (const id of createdSparePartIds) {
       await sys.sparePart.deleteMany({ where: { id } });
     }

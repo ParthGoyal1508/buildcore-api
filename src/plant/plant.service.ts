@@ -3,6 +3,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { withRlsContext } from '../common/prisma/rls-context';
 import {
+  EquipmentLogbookDay,
   ProjectSourcesRegistry,
   costSourceFromPerProject,
 } from '../projects/portfolio/project-sources.registry';
@@ -50,6 +51,11 @@ export class PlantService implements OnModuleInit {
    */
   onModuleInit(): void {
     this.sources.registerMachinerySource(this);
+    // 022 FR-032. A daily work report shows the equipment's own logbook entry for the work date
+    // beside a presence-paid line — the odometer register printed beneath each measurement sheet in
+    // the client's real bill package. Registered from this side for the reason the comment below
+    // gives: `projects` importing this module would close the cycle.
+    this.sources.registerLogbookSource(this);
     // 018 T028. Two categories, because `plant` accounts for two: a machine's cost of ownership
     // and the diesel it burns are budgeted separately and overrun separately, and a single figure
     // would hide which. Registering them is what moves the P&L's machinery and fuel lines out of
@@ -67,7 +73,57 @@ export class PlantService implements OnModuleInit {
     );
   }
 
-  /** True once this module can answer, so a P&L can distinguish "no machinery cost"
+  /**
+   * One machine's logbook days, for a daily work report's measurement line (022 FR-032, FR-033).
+   *
+   * **Returns a map, and a date with no entry is absent from it rather than present with zeros.**
+   * That is the requirement rather than a convenience: a run of zero kilometres and a missing
+   * register page are different facts, and only one of them is a reason to go and ask somebody. A
+   * report that rendered the second as the first would quietly turn an unrecorded day into a day
+   * the asset did nothing, which is the sort of figure a client's deduction is argued from.
+   *
+   * One query for every date asked about, not one per date — the registry's own lesson about
+   * per-project signatures, applied to dates.
+   */
+  async getLogbookDays(
+    equipmentId: string,
+    companyId: string,
+    dates: string[],
+  ): Promise<Map<string, EquipmentLogbookDay>> {
+    if (dates.length === 0) return new Map();
+
+    const entries = await this.prisma.logbookEntry.findMany({
+      where: {
+        companyId,
+        equipmentId,
+        date: { in: dates.map((d) => new Date(`${d}T00:00:00.000Z`)) },
+      },
+      select: {
+        date: true,
+        openingReading: true,
+        closingReading: true,
+        totalHours: true,
+        fuelConsumed: true,
+        remarks: true,
+      },
+    });
+
+    return new Map(
+      entries.map((entry) => [
+        entry.date.toISOString().slice(0, 10),
+        {
+          date: entry.date.toISOString().slice(0, 10),
+          openingReading: entry.openingReading.toFixed(3),
+          closingReading: entry.closingReading.toFixed(3),
+          totalHours: entry.totalHours.toFixed(3),
+          fuelConsumed: entry.fuelConsumed?.toFixed(3) ?? null,
+          remarks: entry.remarks,
+        },
+      ]),
+    );
+  }
+
+  /** True once this module can answer, so a P&L can distinguish "no machinery cost""
    * from "plant has not shipped". */
   isAvailable(): boolean {
     return true;

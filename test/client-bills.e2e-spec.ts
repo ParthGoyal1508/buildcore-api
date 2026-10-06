@@ -190,6 +190,23 @@ describe('Client bills against a BOQ (e2e)', () => {
         scopeQty: '12',
         rate: '100.00',
       },
+      // Two lines whose text order and numeric order disagree: as text `1.10` sorts between `1.1`
+      // and `1.9`. Nothing else in this file touches them, so the bill composed against them
+      // cannot move a cumulative figure another test reads.
+      {
+        boqNo: '1.9',
+        taskName: 'Ordering case, ninth line',
+        unit: 'Cum',
+        scopeQty: '10',
+        rate: '10.00',
+      },
+      {
+        boqNo: '1.10',
+        taskName: 'Ordering case, tenth line',
+        unit: 'Cum',
+        scopeQty: '10',
+        rate: '10.00',
+      },
     ];
     for (const line of lines) {
       const created = await http()
@@ -251,7 +268,8 @@ describe('Client bills against a BOQ (e2e)', () => {
         .expect(200);
 
       expect(res.body.groups).toHaveLength(1);
-      expect(res.body.groups[0].items).toHaveLength(6);
+      // Six priced-and-unpriced fixture lines, plus the two 027 added for the ordering case.
+      expect(res.body.groups[0].items).toHaveLength(8);
       // A heading carries no rate of its own, so a sheet cannot render it as a measured line of zero.
       expect(res.body.groups[0]).not.toHaveProperty('rate');
 
@@ -267,8 +285,12 @@ describe('Client bills against a BOQ (e2e)', () => {
         ) / 100;
 
       expect(res.body.quotedPercentage).toBe(QUOTED);
-      // 100×251 + 50×87.50 + 30×41.25 + 10×0 + 12×100 + 12×100
-      expect(scheduleTotal).toBe(25100 + 4375 + 1237.5 + 1200 + 1200);
+      // 100×251 + 50×87.50 + 30×41.25 + 10×0 + 12×100 + 12×100, and the two ordering lines
+      // added in 027 at 10×10 each. Written out rather than summed from the fixture: a total
+      // derived from the same array it is checking would agree with any fixture at all.
+      expect(scheduleTotal).toBe(
+        25100 + 4375 + 1237.5 + 1200 + 1200 + 100 + 100,
+      );
       expect(res.body.estimatedTotal).toBe(scheduleTotal);
       expect(res.body.quotedTotal).toBeCloseTo(scheduleTotal * (1 + QUOTED), 2);
 
@@ -483,6 +505,142 @@ describe('Client bills against a BOQ (e2e)', () => {
     it('refuses a bill with no lines', async () => {
       const res = await compose({ billNumber: billNumber(), lines: [] }, 400);
       expect(res.body.code).toBe('BILL_HAS_NO_LINES');
+    });
+  });
+
+  /**
+   * Reported 2026-10-06: a composed bill listed its lines 1, 11, 2, 3 — `boqNo` is a text column
+   * and `ORDER BY` on it is alphabetical.
+   *
+   * Asserts the order **on the response**, which is the thing that was wrong. The first fix sorted
+   * in `submit()` rather than `view()` — a method that only counts the lines — so the code read as
+   * fixed, the unit suite stayed green, and the screen was unchanged. A test that checked a sort
+   * existed would have passed too; only one that reads the returned list catches it.
+   */
+  describe('the order lines come back in (027)', () => {
+    it('lists 1.9 before 1.10, which text order does not', async () => {
+      const res = await compose({
+        lines: [
+          { boqTaskItemId: item['1.10'].id, quantity: 1 },
+          { boqTaskItemId: item['1.9'].id, quantity: 1 },
+          { boqTaskItemId: item['1.1'].id, quantity: 1 },
+        ],
+      });
+
+      const asReturned = res.body.lines.map((l: { boqNo: string }) => l.boqNo);
+      expect(asReturned).toEqual(['1.1', '1.9', '1.10']);
+
+      // And again on the read every screen actually uses, not only on the compose response.
+      const read = await http()
+        .get(`/projects/client-bills/${res.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      expect(read.body.lines.map((l: { boqNo: string }) => l.boqNo)).toEqual([
+        '1.1',
+        '1.9',
+        '1.10',
+      ]);
+    });
+  });
+
+  /**
+   * Reported 2026-10-06, on a real bill: two lines read "12.01 Suspended floors, roofs, landings …"
+   * and "12.02 Columns, pillars, posts and struts etc." — a place and no work. The work is in the
+   * heading they sit under, *"centering and shuttering … and removal of formwork"*, and the bill
+   * never showed it. A client reading ₹340 a square metre could not tell what had been done.
+   *
+   * Two groups, one line each, because the cheap wrong implementation — hanging the project's first
+   * heading on every line — passes a single-group test.
+   */
+  describe('the heading each line sits under (027)', () => {
+    let shutteringGroupId = '';
+    let concreteGroupId = '';
+    let shutteringItemId = '';
+    let concreteItemId = '';
+    let billId = '';
+
+    const SHUTTERING =
+      'Centering and shuttering including strutting, propping and removal of formwork for:';
+    const CONCRETE = 'Reinforced cement concrete work in:';
+
+    beforeAll(async () => {
+      const group = async (boqNo: string, name: string) =>
+        (
+          await http()
+            .post(`/projects/${projectId}/boq/groups`)
+            .set(auth())
+            .send({ boqNo, name, scopeQty: '0' })
+            .expect(201)
+        ).body.id as string;
+      const itemIn = async (groupId: string, boqNo: string, taskName: string) =>
+        (
+          await http()
+            .post(`/projects/${projectId}/boq/items`)
+            .set(auth())
+            .send({
+              groupId,
+              boqNo,
+              taskName,
+              unit: 'Sqm',
+              scopeQty: '100',
+              rate: '340.00',
+            })
+            .expect(201)
+        ).body.id as string;
+
+      shutteringGroupId = await group('20', SHUTTERING);
+      concreteGroupId = await group('21', CONCRETE);
+      shutteringItemId = await itemIn(
+        shutteringGroupId,
+        '20.01',
+        'Suspended floors, roofs, landings, staircases, balconies etc.',
+      );
+      concreteItemId = await itemIn(
+        concreteGroupId,
+        '21.01',
+        'Columns, pillars, posts and struts etc.',
+      );
+    });
+
+    afterAll(async () => {
+      // The bill first. A measured line is Restricted by its bill line, and `deleteMany` here is
+      // caught — so leaving this out does not fail, it leaves two priced groups on the project and
+      // the schedule total two tests later is quietly wrong.
+      await sys.clientBill
+        .deleteMany({ where: { id: billId } })
+        .catch(() => undefined);
+      for (const id of [shutteringGroupId, concreteGroupId]) {
+        await sys.bOQTaskItem
+          .deleteMany({ where: { groupId: id } })
+          .catch(() => undefined);
+        await sys.bOQTaskGroup
+          .deleteMany({ where: { id } })
+          .catch(() => undefined);
+      }
+    });
+
+    it('carries each line its own heading, on the read a screen performs', async () => {
+      const res = await compose({
+        lines: [
+          { boqTaskItemId: shutteringItemId, quantity: 12 },
+          { boqTaskItemId: concreteItemId, quantity: 12 },
+        ],
+      });
+      billId = res.body.id;
+
+      const read = await http()
+        .get(`/projects/client-bills/${res.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+
+      const byNo = Object.fromEntries(
+        read.body.lines.map((l: { boqNo: string }) => [l.boqNo, l]),
+      );
+      expect(byNo['20.01'].groupName).toBe(SHUTTERING);
+      expect(byNo['21.01'].groupName).toBe(CONCRETE);
+      // Distinct ids, so a screen can group by one without two headings collapsing into one.
+      expect(byNo['20.01'].groupId).toBe(shutteringGroupId);
+      expect(byNo['21.01'].groupId).toBe(concreteGroupId);
     });
   });
 
@@ -846,9 +1004,11 @@ describe('Client bills against a BOQ (e2e)', () => {
         .set(auth())
         .expect(200);
 
-      const priced = boq.body.groups[0].items.filter(
-        (i: { unpriced: boolean }) => !i.unpriced,
-      );
+      // Every group, not `groups[0]`: `quotedTotal` is the whole schedule, and reading one group
+      // made this pass only while the fixture happened to have one.
+      const priced = boq.body.groups
+        .flatMap((g: { items: unknown[] }) => g.items)
+        .filter((i: { unpriced: boolean }) => !i.unpriced);
       const perLine =
         Math.round(
           priced.reduce(

@@ -156,3 +156,67 @@ export class ValidateBoqImportDto {
   @IsBase64()
   file!: string;
 }
+
+/**
+ * Planning a line that already exists (025 FR-009 to FR-015).
+ *
+ * ## Why this DTO is four fields and not fourteen
+ *
+ * A tender schedule carries no dates, so an imported line is unplanned and there was, until this,
+ * **no update of any kind for a BOQ item**. The only route to a programme was to delete the line
+ * and create it again — impossible once a daily work report had measured against it. So every
+ * imported line read *Not planned* permanently, and the alert tabs, the needed-rate derivation and
+ * the five-state classification that 008 built had nothing to classify.
+ *
+ * Scope, rate, unit, description and BOQ number are **not accepted here at all**. A programme is
+ * *when* the work happens; those five are *what the work is*, and a single form that edits both is
+ * how a rate gets changed while somebody is setting a date. With `forbidNonWhitelisted` on, sending
+ * one is a 400 rather than a field quietly ignored — which makes FR-015 a property of this class
+ * rather than a check in the service that somebody can forget to write.
+ *
+ * ## `null` clears, omission leaves alone (FR-011)
+ *
+ * The two are different intentions and must stay distinguishable, or a planner who wants to remove
+ * a wrong finish date has no way to say so. `@IsOptional()` skips every other validator when the
+ * value is `null` **as well as** `undefined` — usually described as a wart, and exactly the
+ * behaviour wanted here. The pipe's `whitelist` keeps a declared property that arrives as `null`,
+ * an absent one stays `undefined`, and the service distinguishes them with `!== undefined`.
+ */
+export class PlanBoqItemDto {
+  @ApiPropertyOptional({
+    description:
+      'When the work begins. `null` clears it; omit to leave it unchanged.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsDateString()
+  startDate?: string | null;
+
+  @ApiPropertyOptional({
+    description:
+      'When the work must be complete. `null` clears it; omit to leave it unchanged.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsDateString()
+  finishDate?: string | null;
+
+  @ApiPropertyOptional({
+    description: 'Planned working days. `null` clears it.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  duration?: number | null;
+
+  @ApiPropertyOptional({
+    description:
+      'An explicit per-day target, which overrides the rate derived from the finish date ' +
+      '(FR-047). `null` clears it and returns the line to deriving.',
+    nullable: true,
+  })
+  @IsOptional()
+  @IsNumberString()
+  perDayQty?: string | null;
+}

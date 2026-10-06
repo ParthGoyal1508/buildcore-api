@@ -75,6 +75,55 @@ export interface ValidationReport {
   };
 }
 
+/**
+ * A schedule's own item number, as the spreadsheet shows it (FR-041).
+ *
+ * **A numeric cell is formatted, not stringified.** These numbers are typically a fill series —
+ * `=above+0.01` — so the cached result carries accumulated float error, and the client's own file
+ * holds `88.02000000000001` where every human reading it sees `88.02`. Excel renders at fifteen
+ * significant digits, which is exactly what hides the drift; `String()` does not, and 33 of the 231
+ * lines in that file imported with a tail of noise onto a document sent to a client.
+ *
+ * A text cell passes through verbatim. Plenty of real item numbers are text — `3.19.1`, `88(a)` —
+ * and reformatting those would be inventing a number the file does not contain.
+ */
+function itemNumber(cell: unknown, fallback: number): string {
+  if (typeof cell !== 'number' || !Number.isFinite(cell)) {
+    return String(cell ?? fallback);
+  }
+  const rendered = cell.toPrecision(15);
+  // Exponent form means a magnitude no item number has; keep the plain spelling rather than
+  // putting `8.8e+21` on a schedule.
+  if (rendered.includes('e')) return String(cell);
+  return rendered.includes('.')
+    ? rendered.replace(/0+$/, '').replace(/\.$/, '')
+    : rendered;
+}
+
+/** Exported for its unit test only — the rule is too easy to get right by accident in an e2e. */
+export const itemNumberForTest = itemNumber;
+
+/**
+ * A heading row's own number, where it has one.
+ *
+ * Headings in a real tender are numbered like their lines — `85` above `85.01` and `85.02` — and
+ * that number is the only thing in the file that says where the section **ends**. Null for a
+ * heading with a blank number, which is common and must leave the old behaviour untouched.
+ */
+function headingNumber(cell: unknown): string | null {
+  if (cell === null || cell === undefined) return null;
+  const text =
+    typeof cell === 'number' && Number.isFinite(cell)
+      ? itemNumber(cell, 0)
+      : String(cell).trim();
+  return text === '' ? null : text;
+}
+
+/** `85.01` is under `85`; `86` and `850` are not. */
+function isUnder(itemNo: string, headingNo: string): boolean {
+  return itemNo.startsWith(`${headingNo}.`);
+}
+
 function refuse(code: string, message: string): BadRequestException {
   return new BadRequestException({ statusCode: 400, code, message });
 }
@@ -244,6 +293,23 @@ export class BoqImportService {
     const unitCounts = new Map<string, number>();
     /** Heading text seen since the last group, for the deeper-than-two-levels fold (FR-038). */
     let pendingHeadings: string[] = [];
+    /** The nearest pending heading's own number, where it had one. */
+    let pendingHeadingNo: string | null = null;
+    /** That number, carried onto the group it opened, until the first item decides what it means. */
+    let openHeadingNo: string | null = null;
+    /**
+     * Set once a group's **first item** proves to be a dotted child of its heading's number —
+     * `85.01` under `85`. From then on, a line that is not a child of it ends the section.
+     *
+     * Reported 2026-10-06: without this, a group ran until the *next heading*, so `86` and `87` —
+     * lines with their own quantities, belonging to nobody — were swallowed into section `85`.
+     *
+     * Conditional on the first item, deliberately. Plenty of schedules number their lines `1, 2, 3`
+     * under a heading numbered something else entirely, or under one with no number at all; in
+     * those the prefix never establishes itself and the old rule stands untouched. The split only
+     * happens where the file has already demonstrated that it nests by number.
+     */
+    let groupPrefix: string | null = null;
 
     for (const row of schedule.candidates) {
       const description = String(row.cells[columns.description] ?? '').trim();
@@ -253,10 +319,16 @@ export class BoqImportService {
         // FR-038: a description with no quantity is a heading. Collected rather than applied
         // immediately, because a run of them is a nested section and the model holds two levels.
         pendingHeadings.push(description);
+        // The nearest one wins: in a run, the last heading is the lines' actual parent.
+        pendingHeadingNo = headingNumber(row.cells[0]);
         continue;
       }
 
-      if (groups.length === 0 || pendingHeadings.length > 0) {
+      const boqNo = itemNumber(row.cells[0], row.rowNumber);
+      const leavesSection =
+        groupPrefix !== null && !isUnder(boqNo, groupPrefix);
+
+      if (groups.length === 0 || pendingHeadings.length > 0 || leavesSection) {
         groups.push({
           // Folded, not dropped: "Electrical > Light fittings" keeps both facts in the one name
           // the schema has room for.
@@ -267,9 +339,16 @@ export class BoqImportService {
           boqNo: String(groups.length + 1),
           items: [],
         });
-        if (pendingHeadings.length === 0) {
+        if (pendingHeadings.length === 0 && !leavesSection) {
           // FR-038: good rows, unstated structure. A warning, not an error — rejecting them would
           // discard real schedule lines over a missing heading.
+          //
+          // **`leavesSection` is deliberately not warned about.** A warning should name something
+          // the reader has to decide or check, and that case is neither: the file stated its
+          // structure by numbering the line outside the section above it, and the parser read
+          // exactly what it said. Warning on it turned a correct import of the client's own tender
+          // into ten notes — which is how a reader learns to scroll past the one note that matters,
+          // the line that really did arrive before any heading at all.
           warnings.push({
             row: row.rowNumber,
             column: 'Item Description',
@@ -278,7 +357,10 @@ export class BoqImportService {
               `sheet name ("${schedule.sheetName}").`,
           });
         }
+        openHeadingNo = pendingHeadings.length > 0 ? pendingHeadingNo : null;
+        groupPrefix = null;
         pendingHeadings = [];
+        pendingHeadingNo = null;
       }
 
       const problem = this.rowProblem(row, columns, description, quantity);
@@ -291,8 +373,19 @@ export class BoqImportService {
       const rate = this.rateFor(row, columns) as number;
       unitCounts.set(unit, (unitCounts.get(unit) ?? 0) + 1);
 
-      groups[groups.length - 1].items.push({
-        boqNo: String(row.cells[0] ?? row.rowNumber),
+      const group = groups[groups.length - 1];
+      // The first good line decides whether this section nests by number. A later line that is
+      // not under the same number then starts a section of its own.
+      if (
+        group.items.length === 0 &&
+        openHeadingNo !== null &&
+        isUnder(boqNo, openHeadingNo)
+      ) {
+        groupPrefix = openHeadingNo;
+      }
+
+      group.items.push({
+        boqNo,
         taskName: description,
         unit,
         scopeQty: DEC(quantity).toFixed(3),

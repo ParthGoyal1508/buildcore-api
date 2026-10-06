@@ -63,6 +63,7 @@ import type {
   MarkAttendanceDto,
   ModificationsQueryDto,
 } from './dto/mark-attendance.dto';
+import { webRoutes } from '../../common/web-routes';
 
 /** One employee's attendance for one day, as the admin daily view renders it. */
 export interface DailyAttendanceRow {
@@ -490,7 +491,7 @@ export class AttendanceAdminService {
       subject: `${employee.name ?? employee.id} — ${
         dto.date
       }, manual attendance correction`,
-      href: `/hr/attendance?employeeId=${dto.employeeId}&date=${dto.date}`,
+      href: webRoutes.hrAttendance(),
       viewPermission: Permission.ATTENDANCE,
     });
 

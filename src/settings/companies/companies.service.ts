@@ -247,6 +247,163 @@ export class CompaniesService {
   }
 
   /**
+   * Change one or more of those four rates (025 FR-021 to FR-024).
+   *
+   * **Why a statutory rate needs a route at all.** The four carry correct defaults and nothing is
+   * wrong today, so it is tempting to leave them. But CGST is statute and TDS is statute, and a
+   * statute that changes on a Monday cannot wait for somebody with database access — which is the
+   * no-hardcoded-values principle reaching the one place it had not: a column with a right answer
+   * and no way to change it is a hardcoded value wearing a column's clothes.
+   *
+   * **It does not move a bill that has been issued.** Issue freezes these onto the package, which
+   * is why a document already sent reproduces identically, and this changes what is composed after
+   * it and nothing else. That property is asserted in `test/bill-package.e2e-spec.ts` rather than
+   * assumed — a feature that makes a frozen figure editable is exactly the kind that unfreezes one
+   * by accident.
+   *
+   * **Audited with both values.** A rate is the single figure in this system most able to move
+   * money without anyone noticing: every bill composed afterwards is wrong by a consistent
+   * percentage, which is the hardest kind of error to see and the easiest to pay.
+   */
+  async setBillingTaxRates(
+    companyId: string,
+    rates: {
+      cgstFraction?: number;
+      sgstFraction?: number;
+      igstFraction?: number;
+      tdsFraction?: number;
+    },
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<{
+    cgstFraction: string;
+    sgstFraction: string;
+    igstFraction: string;
+    tdsFraction: string;
+  }> {
+    const before = await this.getBillingTaxRates(companyId);
+
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: {
+          // Field by field, so a request naming one rate cannot blank the other three.
+          ...(rates.cgstFraction !== undefined
+            ? { cgstFraction: rates.cgstFraction }
+            : {}),
+          ...(rates.sgstFraction !== undefined
+            ? { sgstFraction: rates.sgstFraction }
+            : {}),
+          ...(rates.igstFraction !== undefined
+            ? { igstFraction: rates.igstFraction }
+            : {}),
+          ...(rates.tdsFraction !== undefined
+            ? { tdsFraction: rates.tdsFraction }
+            : {}),
+        },
+      }),
+    );
+
+    const after = await this.getBillingTaxRates(companyId);
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.COMPANY,
+      action: AuditAction.UPDATE,
+      entityId: companyId,
+      changes: { billingTaxRates: { before, after } },
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+
+    return after;
+  }
+
+  /**
+   * The indirect-tax and withholding rates a running-account bill is computed at (023 FR-015,
+   * FR-019, FR-023), as fractions.
+   *
+   * Exported for `projects` for the same reason `getBocwCessRate` is exported for
+   * `partners`: Principle I forbids that module reading `settings.Company`
+   * directly, and Principle III keeps a statutory percentage out of the
+   * calculation that applies it.
+   *
+   * **Returned as strings, not numbers**, which is the one place this differs from
+   * its neighbours above. Those feed a payroll computation that works in numbers;
+   * these are frozen onto a bill as `Decimal(8,6)` and compared against a client's
+   * signed paper, and a rate that has been through a double is a rate somebody
+   * other than us has rounded. The consumer still stays free of Prisma types.
+   */
+  async getBillingTaxRates(companyId: string): Promise<{
+    cgstFraction: string;
+    sgstFraction: string;
+    igstFraction: string;
+    tdsFraction: string;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            cgstFraction: true,
+            sgstFraction: true,
+            igstFraction: true,
+            tdsFraction: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return {
+      cgstFraction: company.cgstFraction.toFixed(6),
+      sgstFraction: company.sgstFraction.toFixed(6),
+      igstFraction: company.igstFraction.toFixed(6),
+      tdsFraction: company.tdsFraction.toFixed(6),
+    };
+  }
+
+  /**
+   * The company's own statutory identity, as a bill's header states it (023 FR-026).
+   *
+   * The slice `projects` needs to put the company in a bill's issuing or
+   * receiving slot, deliberately not the whole company — the same judgement
+   * `VendorsService.getTds` made for the slice Inventory needs.
+   *
+   * Exported rather than read across the schema boundary, which Principle I
+   * forbids. Read **once per bill and frozen onto it** (023 FR-028), so an
+   * address corrected next year does not change a document that was signed.
+   */
+  async getBillingIdentity(companyId: string): Promise<{
+    name: string;
+    gstin: string | null;
+    pan: string | null;
+    state: string | null;
+    address: string | null;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            name: true,
+            gstin: true,
+            pan: true,
+            state: true,
+            address: true,
+          },
+        }),
+    );
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
+  }
+
+  /**
    * The per-company payroll rates the engine applies (005 FR-014/FR-014a).
    *
    * Exported for `payroll` for the same reason `getPayrollLockDay` is exported for

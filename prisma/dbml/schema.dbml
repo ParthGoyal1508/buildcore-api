@@ -211,6 +211,25 @@ Statutory and revisable, so it is company configuration rather than a literal
 in the cess calculation — Constitution Principle III. Read by 007\'s BOCWService
 via `SettingsService.getBocwCessRate()`. Four decimal places because the rate is
 a fraction, not a percentage: 1% is 0.0100 and a future 1.25% is 0.0125.']
+  cgstFraction Decimal [not null, default: 0.09, note: 'The indirect-tax and withholding rates a running-account bill is computed at (023 FR-015,
+FR-019, FR-023), as fractions — `0.090000` is 9%.
+
+Here rather than in the billing module for the reason `bocwCessRate` is here: a statutory
+percentage is exactly the value Principle III keeps out of the calculation that uses it, and
+`settings.Company` is where this repository already keeps them. Read through
+`CompaniesService.getBillingTaxRates` — Principle I forbids `projects` reading this table
+directly.
+
+**Six decimal places, matching `BillPackage`\'s frozen columns.** A freeze that narrowed the
+precision would be a silent change to the rate it claims to have recorded.
+
+The defaults state today\'s statute, and carry the same trade `bocwCessRate` accepted: a
+company that never reviews them keeps billing at these. What makes that survivable here is
+that every bill **records the rate it was computed at** (023 FR-019), so a rate change is
+visible as a difference between two bills rather than as a silent re-derivation of both.']
+  sgstFraction Decimal [not null, default: 0.09]
+  igstFraction Decimal [not null, default: 0.18]
+  tdsFraction Decimal [not null, default: 0.02, note: 'Income tax deducted at source on a works contract.']
   labourWageCycle LabourWageCycle [not null, default: 'weekly', note: 'The labour wage cycle a payment sheet\'s period defaults to (013 FR-041) —
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
@@ -785,6 +804,17 @@ Table Client {
 than `@@unique`, which in Postgres treats every NULL as distinct and would
 therefore admit unlimited GSTIN-less clients — correct here, but only by
 accident. The partial index in the migration states the rule explicitly.']
+  pan String [note: 'The two the running-account bill\'s statutory header needs and this table did not carry
+(025 FR-039). Until they existed, every bill issued to a client reported `issuerPan` and
+`issuerState` as missing, and the intra/inter-state tax decision had no client state code to
+read — so it fell back to `Project.cgstApplicable` on every single bill rather than deriving
+the basis from the two parties\' GSTINs the way 023 FR-015 describes.
+
+Both nullable: a client recorded before this existed is not wrong, and refusing to issue a
+bill for a missing PAN is worse than issuing one with a blank somebody fills in by hand —
+which is the rule the header has followed since 023 and this does not change.']
+  state String [note: 'Two-digit GST state code, as the GSTIN\'s own first two characters spell it (`08` is
+Rajasthan). Stored as text, never an integer: `08` is not 8.']
   status ClientStatus [not null, default: 'active']
   projects Project [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -835,6 +865,19 @@ name. Bare id — see the schema-level note above.']
   purchaseLimit Decimal
   orderNumber String
   cgstApplicable Boolean [not null, default: false]
+  clientRetentionFraction Decimal [note: 'The **client contract\'s** retention term as a fraction — `0.050000` is 5% (023 FR-018).
+
+**Nullable with no default, deliberately.** Research §4 requires a missing rate to be a
+refusal rather than a default of zero: a silent zero produces a bill with no retention and a
+payable 5% too high, which is the error most likely to be paid before anybody notices. Null
+means nobody has recorded the term; `0` means the contract has none.
+
+**Why a project-level rate is right here when research §4 rejected project-level rates.** That
+objection was that two work orders on one project can carry different terms, so a rate on the
+project would quietly apply one contract\'s to another\'s bill. It does not reach the client
+direction: a project has exactly one client and one client agreement, so for that direction
+the project *is* the contract. A bill to a subcontractor still reads
+`WorkOrder.retentionPercent`, which is that subcontract\'s own term.']
   description String
   sites Site [not null]
   boqTaskGroups BOQTaskGroup [not null]
@@ -843,6 +886,8 @@ name. Bare id — see the schema-level note above.']
   raBills RABill [not null]
   clientBills ClientBill [not null]
   workOrders WorkOrder [not null]
+  billPackages BillPackage [not null]
+  billPackageDebits BillPackageDebit [not null]
   budgets ProjectBudget [not null]
   documents ProjectDocument [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -949,9 +994,46 @@ the BOQ computes — the two are reported separately rather than reconciled.']
   contractNumber String
   rfiNo String
   layer String
+  createdByUserId String [note: 'Who created the draft and who put it forward. `shared.User.id`, bare ids.
+
+**`submittedByUserId` is what makes 022 FR-012a enforceable at all.** Approval is a direct
+transition rather than a routed chain action (decision D2), and the control that replaces the
+chain is that the approver is not the person who submitted it — a site engineer may not
+certify their own claim. Without this column that rule has nothing to compare against: the
+audit log holds the act, but enforcing a refusal by querying an audit trail makes the trail
+load-bearing for correctness rather than for accountability, and a gap in it would silently
+become a permission.
+
+Submission rather than creation is the act that matters: a clerk may type a report up for a
+supervisor, and it is the person who put it forward as true who must not also certify it.']
+  submittedByUserId String
+  submittedAt DateTime
   approvedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
   approvedAt DateTime
-  fileRefs String[] [not null, note: 'Object-storage references, same pattern as `hr.EmployeeDocument`.']
+  fileRefs String[] [not null, note: 'Object-storage references, as 008 created them.
+
+**Superseded by `attachments` in 022 and kept only because dropping a column is not something
+an additive migration does.** A bare array of references cannot hold the name a file was
+uploaded under or the type it is, which 022 FR-009 requires — a download that arrives as a
+bare UUID with no extension is a defect this repository fixed once already, in 017, and the
+fix was columns for the name and the type. Empty in every row, and nothing reads it.']
+  attachments DWRAttachment [not null]
+  reversedAt DateTime [note: 'The **latest** reversal of an approval (022 FR-019, FR-022).
+
+A report in `draft` carrying `reversedAt` was approved and taken back, which is a different
+thing from one never approved — and 022 FR-019 needs the two distinguishable. `approvedAt`
+and `approvedByUserId` are deliberately **not** cleared when this is set: the approval
+happened, and erasing it would leave a reversal reason referring to an approval nobody can
+see.
+
+Only the latest reversal lives here; the full sequence is in the audit log, which is the
+system of record for who did what. The count is kept rather than left to be reconstructed by
+counting audit entries, for the reason `RABill.revisionCount` gives: "this has been round
+three times" is what a reader wants, and having to count by hand is how a reader stops asking.']
+  reversedByUserId String
+  reversalReason String [note: 'Required by the service rather than by the column: a reversal moves a quantity a bill may
+already depend on.']
+  reversalCount Int [not null, default: 0]
   tasks DWRTask [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -982,7 +1064,40 @@ multiplicatively neutral rather than zeroing the result.']
   breadth Decimal [not null, default: 1]
   depth Decimal [not null, default: 1]
   density Decimal [not null, default: 1]
-  actualQty Decimal [not null, note: 'nos1 × nos2 × length × breadth × depth × density, computed by the server.']
+  actualQty Decimal [note: 'nos1 × nos2 × length × breadth × depth × density, computed by the server.
+
+**Nullable since 022 (T002), and the nullability carries meaning.** This is the quantity of a
+*measured* line, and a presence-paid line has none — absence says "not measured", while 0
+says "measured as nothing". The client\'s real measurement sheets contain both, side by side,
+and collapsing them would lose the distinction every performance deduction is argued from.
+Non-null exactly when `paymentMode = work_basis`, enforced by
+`DWRTask_quantity_matches_basis` rather than by a service (022 FR-030a).
+
+Safe to loosen without a backfill: the table held 0 rows on 2026-10-04, because nothing could
+write one until 022 built the module 008 specified and left unimplemented.']
+  servedQty Decimal [note: 'The day served on a presence-paid line: 1 for a full day, less for a part day (022 FR-030).
+
+**Why this is its own column and not `actualQty`.** Eleven of the seventeen line types in the
+client\'s real tender are paid for presence rather than measurement — an ambulance or a
+patrolling vehicle on a monthly rate, forty security guards a day — and the quantity claimed
+for a month is a fraction of it. The six factors above cannot express that: they all default
+to 1, so their product is 1, which *looks* exactly like one day served while being only an
+artefact of the defaults. A figure that is right by coincidence passes every test written the
+obvious way and turns wrong the moment somebody sets a factor.
+
+So the quantity in force is a stated property of the line (`paymentMode`) rather than an
+inference about which fields happen to be filled, and `dwr-quantity.ts` never reads the
+factors for a presence line at all (022 FR-030b, FR-030d).
+
+Non-null exactly when `paymentMode = day_basis`.']
+  equipmentId String [note: '`plant.Equipment.id`. Bare id — see the schema-level note above.
+
+The key the equipment\'s own logbook entry for the work date is read by (022 FR-032).
+`plant.LogbookEntry` already holds the opening and closing readings, the run and the day\'s
+remarks, unique per machine per date — which is precisely the odometer register printed
+beneath each of the client\'s measurement sheets. It is read across the module boundary through
+`ProjectSourcesRegistry` and **never copied here**: a second system of record for an odometer
+disagrees with the first the moment one is corrected.']
   exceedsScope Boolean [not null, default: false, note: 'Flagged, not refused: the site did the work, and a BOQ line that turns out to
 have been under-scoped is a commercial question, not a data-entry error.']
   engineerName String
@@ -990,8 +1105,36 @@ have been under-scoped is a commercial question, not a data-entry error.']
   layerNo String
   section String
 
-  Note: 'One measurement line within a work report. `actualQty` is computed server-side
-from the six factors so the arithmetic cannot differ between clients.'
+  Note: 'One measurement line within a work report.
+
+Carries **one of two quantities**, decided by `paymentMode`: `actualQty` for work measured by
+the six factors, computed server-side so the arithmetic cannot differ between clients, or
+`servedQty` for a line paid by presence. Exactly one is non-null, enforced by the
+`DWRTask_quantity_matches_basis` constraint (022 FR-030a).'
+}
+
+Table DWRAttachment {
+  id String [pk]
+  companyId String [not null]
+  dwrId String [not null]
+  dwr DailyWorkReport [not null]
+  fileRef String [not null, note: 'Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.']
+  fileName String [not null, note: 'As the uploader\'s own filesystem spelled it, so the download arrives named.']
+  mimeType String [not null, note: 'Detected from the bytes by `detectContentType`, not taken from the client\'s claim.']
+  sizeBytes Int [not null]
+  uploadedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note above.']
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'One file attached to a day\'s work report (022 FR-009).
+
+**A table rather than another string in `DailyWorkReport.fileRefs`.** An attachment is three
+facts, not one: where the bytes are, what the file was called, and what type it is. 017 fixed
+exactly this defect for project and company documents — files downloading as a bare UUID with
+no extension, which a browser then refused to open — and the fix was to store the name and the
+type rather than to sniff them back later. Repeating the array here would repeat the defect.
+
+`uploadedByUserId` and `uploadedAt` are here because a photograph of a day\'s work is evidence,
+and evidence whose provenance is unrecorded is weaker than evidence that has none.'
 }
 
 Table Revenue {
@@ -1044,8 +1187,13 @@ project cost** — a summary that treated net as spend would understate the proj
   otherDeductions Decimal [not null, default: 0]
   netPayable Decimal [not null, default: 0]
   lines RABillLine [not null]
+  package BillPackage [note: 'The 023 package, where this bill has been made into one. A relation field, not a column.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+
+  indexes {
+    (projectId, billNumber) [unique]
+  }
 
   Note: 'A running account bill. `draft → submitted → approved`, with `submitted → draft`
 via reject; approved bills are immutable (research.md §7).'
@@ -1056,8 +1204,23 @@ Table WorkOrder {
   companyId String [not null]
   projectId String [not null]
   project Project [not null]
+  code String [note: 'The work order\'s own number — `PRPL-WO-0001` (027).
+
+**Nullable, and that is a migration artefact rather than a design choice.** The table is
+populated, so a required unique column cannot simply be added to it; the rows that predate
+this carry none and read by their detail as they always did. Every work order raised from
+here on is numbered, and the service allocates it the way every other series in this product
+is allocated.
+
+Unique per company, not globally: two companies number their own work orders independently,
+exactly as they do projects and vendors.']
   partnerId String [note: '`partners.Vendor.id`, read through `PartnersService`. Bare id — see the
-schema-level note above.']
+schema-level note above.
+
+Nullable because it always has been and the existing rows carry nothing. 027 added the picker
+that sets it: the column shipped with 018 and **no screen ever wrote to it**, so every work
+order in the product was anonymous — the award, the bills and the retention all belonged to
+nobody in particular.']
   workDetail String [not null]
   terms String
   requirements String
@@ -1071,6 +1234,10 @@ schema-level note above.']
   retentionReleases RetentionRelease [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
 
   Note: 'Work subcontracted on a project.'
 }
@@ -1102,6 +1269,7 @@ amount with the certified one erases the fact that there was a shortfall.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   lines ClientBillLine [not null]
+  package BillPackage [note: 'The 023 package, where this bill has been made into one. A relation field, not a column.']
 
   indexes {
     (projectId, billNumber) [unique]
@@ -1146,12 +1314,241 @@ at *submit*, and only without a reason.']
   overScopeReason String [note: 'Why the over-measurement is justified. Required to submit a bill carrying one.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+  packageClaim BillPackageLineClaim [note: 'The 023 claim recording how this line\'s quantity was chosen. A relation field, not a column.']
 
   indexes {
     (clientBillId, boqTaskItemId) [unique]
   }
 
   Note: 'One BOQ line as billed on one client bill.'
+}
+
+Table BillPackage {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  direction BillDirection [not null]
+  clientBillId String [unique, note: 'Exactly one of these two is set, matching `direction`, enforced by
+`BillPackage_one_bill_matching_direction` in the migration (data-model.md).
+
+Prisma\'s schema language cannot express a constraint spanning two nullable references, so the
+`CHECK` is appended to the generated migration — plan.md\'s tracked deviation. A package
+attached to both bills, or to neither, would produce a document whose figures belong to one
+bill and whose lines belong to another, and the thing it protects is a money document.']
+  clientBill ClientBill
+  raBillId String [unique]
+  raBill RABill
+  periodFrom DateTime [not null, note: '**Both inclusive** (FR-001). The client\'s cycle runs the 21st to the 20th, so a period is two
+stored dates and not a month anybody can derive from one.']
+  periodTo DateTime [not null]
+  counterpartyKey String [not null, note: '**Which counterparty this bill is to**: the project\'s client for `to_client`, the work order
+for `to_subcontractor`.
+
+Denormalised onto the package rather than reached through the bill, for two reasons that are
+the same reason. FR-002\'s overlap check is "the same schedule to the same counterparty" — one
+project is billed to its client and to several subcontractors over the same month,
+legitimately — and the running number is per counterparty too: the client\'s own package is
+"RA-12" for *that* subcontractor. Keyed on the project and direction alone, two
+subcontractors on one project would share one series, so A\'s bills would be RA-01 and RA-03
+while B\'s were RA-02 and RA-04, and neither party\'s file would make sense.']
+  sequenceNo Int [not null, note: 'The package\'s running number — the "12" of "RA-12". Per project, per direction, per
+counterparty.']
+  retentionFraction Decimal [not null]
+  cgstFraction Decimal [not null]
+  sgstFraction Decimal [not null]
+  igstFraction Decimal [not null]
+  tdsFraction Decimal [not null]
+  taxBasis BillTaxBasis [not null, note: 'Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
+
+The source is stored because a client record carries no `state` today, so for a bill issued to
+a client the fallback to the project\'s flag is the likely path rather than the exceptional one.
+A fallback recorded and shown to nobody is a tax decision nobody made.']
+  taxBasisSource BillTaxBasisSource [not null]
+  workDone Decimal [not null, default: 0]
+  releaseWithheld Decimal [not null, default: 0]
+  cgstAmount Decimal [not null, default: 0]
+  sgstAmount Decimal [not null, default: 0]
+  igstAmount Decimal [not null, default: 0]
+  recoveryDiesel Decimal [not null, default: 0]
+  debitAgainstCivil Decimal [not null, default: 0]
+  otherRecoveries Decimal [not null, default: 0]
+  mechanicalDebit Decimal [not null, default: 0]
+  mobilizationAdvance Decimal [not null, default: 0]
+  retentionAmount Decimal [not null, default: 0]
+  performanceSecurity Decimal [not null, default: 0]
+  theftWithheld Decimal [not null, default: 0]
+  tdsAmount Decimal [not null, default: 0]
+  payable Decimal [not null, default: 0, note: 'Work total less recoveries, less deductions, less tax deducted. **May be negative** (FR-022):
+a bill whose debits exceed its work is a real outcome the client\'s own format expresses.']
+  mobilizationAdvanceTotal Decimal [note: 'What each one-time recovery **totals** (FR-020).
+
+Added after `checklists/silent-failure.md` CHK021 found FR-020 satisfiable by doing nothing:
+without a recorded total, a deduction that is fully recovered and one somebody entered as zero
+this month are the same row. Recovered-to-date is the `…UptoDate` cumulative below, so the
+target was the only missing half. Nullable because a contract may carry neither.']
+  performanceSecurityTotal Decimal
+  workDoneUptoDate Decimal [not null, default: 0]
+  releaseWithheldUptoDate Decimal [not null, default: 0]
+  cgstAmountUptoDate Decimal [not null, default: 0]
+  sgstAmountUptoDate Decimal [not null, default: 0]
+  igstAmountUptoDate Decimal [not null, default: 0]
+  recoveryDieselUptoDate Decimal [not null, default: 0]
+  debitAgainstCivilUptoDate Decimal [not null, default: 0]
+  otherRecoveriesUptoDate Decimal [not null, default: 0]
+  mechanicalDebitUptoDate Decimal [not null, default: 0]
+  mobilizationAdvanceUptoDate Decimal [not null, default: 0]
+  retentionAmountUptoDate Decimal [not null, default: 0]
+  performanceSecurityUptoDate Decimal [not null, default: 0]
+  theftWithheldUptoDate Decimal [not null, default: 0]
+  tdsAmountUptoDate Decimal [not null, default: 0]
+  payableUptoDate Decimal [not null, default: 0]
+  issuerName String
+  issuerGstin String
+  issuerPan String
+  issuerState String
+  issuerAddress String
+  receiverName String
+  receiverGstin String
+  receiverPan String
+  receiverState String
+  receiverAddress String
+  receiverCode String
+  natureOfWork String
+  location String
+  externalWorkOrderNo String [note: 'References the counterparty\'s own systems assign, recorded rather than generated.']
+  externalBillNo String
+  missingHeaderFields String[] [not null, note: 'What could not be filled (FR-027, FR-027a). **Reported, never a refusal** — a bill that cannot
+be produced because a permanent account number is unrecorded is worse than one produced with a
+gap somebody fills by hand.']
+  status BillPackageStatus [not null, default: 'draft', note: '`draft` → `issued` → `certified`, and `draft` → `abandoned`.
+
+**`abandoned` exists because a package in any status occupies its period** (FR-002a, FR-002b).
+Without it a mistakenly-opened draft holds that period for ever and the only remedy is deleting
+the row that records the period was billed — which FR-044a forbids for an issued bill and this
+status makes unnecessary for a draft.']
+  issuedAt DateTime
+  issuedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  revisionCount Int [not null, default: 0, note: 'FR-046, following `RABill.revisionCount`\'s precedent: a count rather than something to be
+reconstructed from the audit trail.']
+  lastRevisedAt DateTime
+  lastRevisedByUserId String
+  lastRevisionReason String
+  claims BillPackageLineClaim [not null]
+  checkListAnswers BillPackageCheckListAnswer [not null]
+  recoveredDebits BillPackageDebit [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (projectId, direction, counterpartyKey, sequenceNo) [unique]
+  }
+
+  Note: 'One bill made into a package, for one period, in one direction (023 FR-001).'
+}
+
+Table BillPackageLineClaim {
+  id String [pk]
+  companyId String [not null]
+  packageId String [not null]
+  package BillPackage [not null]
+  clientBillLineId String [unique, note: 'Exactly one of these two, matching the package\'s direction.']
+  clientBillLine ClientBillLine
+  raBillLineId String [unique]
+  raBillLine RABillLine
+  proposedQty Decimal [note: 'What feature 022\'s approved measurement proposed, **as at composition**. A point-in-time fact.
+
+**Null means there was no measurement to read** (FR-003a), which is not what zero says. Zero
+says the measurement was read and was nothing. The two diverge on the subcontractor direction:
+a bill there measures award lines, `WorkOrderBOQItem.boqTaskItemId` is nullable by design
+because a subcontract may itemise work differently, and measurement is attributed to BOQ lines
+— so an unmapped award line has no source at all. Proposing zero for it would say "no work was
+done this month" for every unmapped line of every bill, on the direction billed monthly.']
+  proposalSource ClaimProposalSource [not null]
+  claimedQty Decimal [not null]
+  varianceQty Decimal [note: '`claimedQty − proposedQty`. **Stored, not derived**, and null exactly when `proposedQty` is.
+
+Stored because the proposed figure can move afterwards — which is the case FR-014b exists for —
+so a recomputed variance would answer a different question than the engineer was looking at.
+Null rather than zero against a null proposal: there is no variance from a figure that was
+never proposed, and zero would say the claim matched a proposal it did not have.']
+  reason String [note: 'Required when the variance is non-zero (FR-004, FR-006), and **cleared** when a later edit
+returns the claim to its proposal (FR-004a) — a reason beside a zero variance argues on the
+measurement sheet for a deduction the bill does not make.']
+  overClaimed Boolean [not null, default: false, note: 'Set when `claimedQty > proposedQty` (FR-006, decision D2).
+
+A claim against `no_measurement_source` is **not** an over-claim: nothing was exceeded, and
+counting it would turn FR-006a\'s count into a count of unmapped award lines — which is the
+mitigation D2 depends on, so it has to count the thing it claims to.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'How one line\'s claimed quantity came to be chosen (023 FR-005, research §2).
+
+A separate table rather than four columns on each of the two line tables: the proposal, reason,
+variance and over-claim flag are identical for both directions, and a bill composed without a
+package — which 018\'s service can still do — has no proposal to record, so the columns would be
+permanently null on half the rows that could exist.'
+}
+
+Table BillPackageDebit {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  groupHeading String [note: '"Debit against the ATMS Equipment Missing at site" (FR-040). Grouped rather than listed flat,
+because the heading is how the register is read.']
+  description String [not null]
+  location String [note: '"KM.226 LHS".']
+  nos Decimal [note: 'Present where the debit has them; the real register uses different ones per line.']
+  length Decimal
+  width Decimal
+  quantity Decimal
+  unit String
+  rate Decimal [not null]
+  amount Decimal [not null]
+  amountWithTax Decimal [not null, note: '**Carried rather than computed**: the real register shows both, and the tax on a debit is not
+always the bill\'s own rate.']
+  recoveredOnPackageId String [note: 'Null until applied. A debit moves from null to a value **once** (FR-037), enforced by a
+conditional update whose row count the service checks — the shape 022 used for its status
+transitions. The rule has to hold where concurrent writers meet it (FR-037a) and not only in a
+service that reads before it writes, because a debit recovered twice is money taken twice.']
+  recoveredOnPackage BillPackage
+  recordedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  recordedAt DateTime [default: `now()`, not null, note: 'Also what makes an **issued** bill\'s register the register *as at issue* (FR-039a):
+`recordedAt <= BillPackage.issuedAt`. Without that, FR-039\'s running total and FR-028\'s frozen
+workbook contradict each other and a debit recorded between two productions of a signed bill
+changes it.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'The debit-note register (023 FR-036 to FR-040a).
+
+Recorded once against a project and recovered on **one** bill. The register spans bills rather
+than belonging to one, because the running total is the point of it.'
+}
+
+Table BillPackageCheckListAnswer {
+  id String [pk]
+  companyId String [not null]
+  packageId String [not null]
+  package BillPackage [not null]
+  questionKey String [not null, note: 'One of six fixed keys, from `check-list.ts`.']
+  answer CheckListAnswer [note: '**Nullable** — an unanswered question is distinguishable from one answered `no` (FR-042),
+which a boolean could not express. It never refuses an issue (FR-043); the gaps are reported.']
+  answeredByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  answeredAt DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (packageId, questionKey) [unique]
+  }
+
+  Note: 'One of the six fixed check-list questions, answered for one package (023 FR-041 to FR-043a).
+
+The **questions themselves are a constant in code**, not rows: the client reads them by position
+and their wording is part of the format rather than this system\'s data.'
 }
 
 Table RetentionRelease {
@@ -1218,6 +1615,7 @@ Table RABillLine {
   amount Decimal [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+  packageClaim BillPackageLineClaim [note: 'The 023 claim recording how this line\'s quantity was chosen. A relation field, not a column.']
 
   indexes {
     (raBillId, workOrderBoqItemId) [unique]
@@ -4619,6 +5017,39 @@ Enum ClientBillStatus {
   certified
 }
 
+Enum BillDirection {
+  to_client
+  to_subcontractor
+}
+
+Enum BillTaxBasis {
+  intra_state
+  inter_state
+}
+
+Enum BillTaxBasisSource {
+  derived_from_gstin
+  from_project_flag
+}
+
+Enum BillPackageStatus {
+  draft
+  issued
+  certified
+  abandoned
+}
+
+Enum ClaimProposalSource {
+  approved_measurement
+  no_measurement_source
+}
+
+Enum CheckListAnswer {
+  yes
+  no
+  not_required
+}
+
 Enum FaceEnrolmentStatus {
   not_enrolled
   enrolled
@@ -4792,6 +5223,7 @@ Enum CodeSeriesType {
   REQUISITION
   ASSETS
   ASSET_REQUEST
+  WORK_ORDER
 }
 
 Enum VendorType {
@@ -5242,6 +5674,8 @@ Ref: DWRTask.dwrId > DailyWorkReport.id [delete: Cascade]
 
 Ref: DWRTask.boqItemId > BOQTaskItem.id
 
+Ref: DWRAttachment.dwrId > DailyWorkReport.id [delete: Cascade]
+
 Ref: Revenue.projectId > Project.id [delete: Cascade]
 
 Ref: RABill.projectId > Project.id [delete: Cascade]
@@ -5255,6 +5689,24 @@ Ref: ClientBill.projectId > Project.id [delete: Cascade]
 Ref: ClientBillLine.clientBillId > ClientBill.id [delete: Cascade]
 
 Ref: ClientBillLine.boqTaskItemId > BOQTaskItem.id [delete: Restrict]
+
+Ref: BillPackage.projectId > Project.id [delete: Cascade]
+
+Ref: BillPackage.clientBillId - ClientBill.id [delete: Cascade]
+
+Ref: BillPackage.raBillId - RABill.id [delete: Cascade]
+
+Ref: BillPackageLineClaim.packageId > BillPackage.id [delete: Cascade]
+
+Ref: BillPackageLineClaim.clientBillLineId - ClientBillLine.id [delete: Cascade]
+
+Ref: BillPackageLineClaim.raBillLineId - RABillLine.id [delete: Cascade]
+
+Ref: BillPackageDebit.projectId > Project.id [delete: Cascade]
+
+Ref: BillPackageDebit.recoveredOnPackageId > BillPackage.id [delete: Set Null]
+
+Ref: BillPackageCheckListAnswer.packageId > BillPackage.id [delete: Cascade]
 
 Ref: RetentionRelease.workOrderId > WorkOrder.id [delete: Cascade]
 
