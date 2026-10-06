@@ -242,8 +242,11 @@ export class BoqImportService {
       groups: parsed.groups,
       // FR-040: only a percentage that was located *and* reconciles is carried. Never 0.
       isEstimate,
+      // `!== null`, never truthiness: `At Par` locates a real percentage of **zero**, and a falsy
+      // check would file it as "not found in this file" — which puts the missing-percentage
+      // warning, and its ₹7.4 lakh worked example, on a tender that quoted at par correctly.
       quotedPercentage:
-        totals.reconciles && percentage ? percentage.toFixed(6) : null,
+        totals.reconciles && percentage !== null ? percentage.toFixed(6) : null,
     });
     if (!batch) {
       throw refuse(
@@ -478,20 +481,45 @@ export class BoqImportService {
   }
 
   /**
-   * The workbook's own `Excess (+)` figure (FR-039, FR-056).
+   * The workbook's own quoted percentage, **with its direction** (FR-039, FR-056).
    *
    * It sits where nothing else would put it: on the quoted-rate footer row, with the label in the
    * **units** column and the value in the **rate** column. Found by the label rather than by the
    * row, because a template revision moves rows and keeps labels.
+   *
+   * ## The label carries the sign, and the number does not
+   *
+   * Reported 2026-10-06 on `docs/BOQ_748359.xls`. A bidder quotes either above the estimate or
+   * below it, and the workbook says which in words — `Excess (+)`, `Less (-)`, `At Par` — while the
+   * cell beside it holds the bare magnitude. `10.7900%` reads as `0.1079` whichever way the tender
+   * went. An earlier version of this method read that number alone, so a tender quoted 10.79%
+   * **below** estimate was recorded as 10.79% **above** it: ₹4.12 crore of schedule became ₹4.57
+   * crore instead of the ₹3.68 crore the file itself prints two cells away.
+   *
+   * That import was refused rather than accepted, because `reconcile` compares the derived quoted
+   * total against the stated one and ₹88.96 lakh is some way outside a ₹1.23 tolerance. **The
+   * refusal was the only thing standing between a sign error and every bill on that project being
+   * raised about 21% high for the life of the contract** — on a workbook that stated no totals of
+   * its own, nothing would have caught it.
+   *
+   * So the direction is read from the label and the magnitude taken as unsigned. Where the label
+   * names no direction the figure is **not located**, rather than assumed positive: an unreported
+   * percentage shows the reader a sentence about what a missing percentage costs, which is a far
+   * better outcome than silently guessing which way a tender ran.
    */
   private locatePercentage(schedule: IdentifiedSchedule): number | null {
     const { columns } = schedule;
     for (const row of schedule.candidates.concat(schedule.footer)) {
-      const label = String(row.cells[columns.unit] ?? '');
-      if (!/excess|quoted\s*rate|less/i.test(label)) continue;
-      const value = numberAt(row, columns.rate);
-      // FR-056: a figure outside 0–1 is not a percentage we recognise, so it is not located.
-      if (value !== null && value >= 0 && value <= 1) return value;
+      const direction = quoteDirection(String(row.cells[columns.unit] ?? ''));
+      if (direction === null) continue;
+      const magnitude = numberAt(row, columns.rate);
+      if (magnitude === null) continue;
+      // The label is authoritative over the cell's own sign: a file that writes `Less (-)` beside
+      // `-10.79%` means the same thing as one that writes it beside `10.79%`.
+      const value = direction * Math.abs(magnitude);
+      // FR-056, amended: a figure outside ±100% is not a percentage we recognise. The floor is -1
+      // because a quote cannot take more off than the whole schedule is worth.
+      if (value >= -1 && value <= 1) return value;
     }
     return null;
   }
@@ -831,6 +859,23 @@ export class BoqImportService {
     }
     return null;
   }
+}
+
+/**
+ * Which way a tender's quote runs, read from the label beside the figure.
+ *
+ * `-1` under estimate, `+1` over it, `0` at par, and **null where the label does not say** — see
+ * `locatePercentage`. A label naming two directions at once is the template's own instruction cell
+ * ("Select, At Par, Excess (+), Less (-)"), not a value, and is refused for the same reason.
+ */
+function quoteDirection(label: string): -1 | 0 | 1 | null {
+  const under = /less/i.test(label);
+  const over = /excess/i.test(label);
+  const par = /at\s*par/i.test(label);
+  if (Number(under) + Number(over) + Number(par) !== 1) return null;
+  if (under) return -1;
+  if (over) return 1;
+  return 0;
 }
 
 function numberAt(row: WorkbookRow, column: number): number | null {

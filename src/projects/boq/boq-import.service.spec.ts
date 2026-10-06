@@ -10,6 +10,8 @@ import { ImportBatchStore } from './import-batch.store';
 
 const SYNTHETIC = join(process.cwd(), 'test', 'fixtures', 'boq-synthetic.xls');
 const REAL = join(process.cwd(), 'docs', 'BOQ_794578.xls');
+/** The same template, quoted **below** estimate rather than above it — `Less (-) 10.79%`. */
+const REAL_UNDER = join(process.cwd(), 'docs', 'BOQ_748359.xls');
 
 const CALLER = {
   companyId: 'company-1',
@@ -326,6 +328,68 @@ describe('BoqImportService.validate', () => {
         // 86 and 87 do not. They carry their own quantities and no `85.` prefix.
         expect(sectionOf('86')).not.toBe(child);
         expect(sectionOf('87')).not.toBe(child);
+      },
+    );
+
+    /**
+     * Reported 2026-10-06, on `docs/BOQ_748359.xls`.
+     *
+     * A bidder quotes above the estimate or below it, and the workbook says which in words while
+     * the cell beside it holds the bare magnitude — `10.7900%` reads as `0.1079` either way. The
+     * importer read that number alone, so a tender quoted 10.79% **below** estimate was recorded as
+     * 10.79% above: ₹4,12,24,983.39 of schedule became ₹4,56,73,159.10 instead of the
+     * ₹3,67,76,807.68 the file prints two cells away.
+     *
+     * **The sign, not the magnitude, is what this asserts.** `expect(Math.abs(…)).toBe('0.1079')`
+     * would pass against the defect, and so would any assertion on `quotedPercentageFound` — the
+     * percentage was always found, it was found pointing the wrong way.
+     */
+    const under = (() => {
+      try {
+        return statSync(REAL_UNDER).isFile();
+      } catch {
+        return false;
+      }
+    })();
+
+    if (!under) {
+      it.skip('SKIPPED — docs/BOQ_748359.xls is not present in this checkout', () =>
+        undefined);
+    }
+
+    (under ? it : it.skip)(
+      'reads a tender quoted below estimate as a deduction, not as a premium',
+      async () => {
+        const report = await run(REAL_UNDER);
+
+        // Negative. The whole defect in one character.
+        expect(report.quotedPercentage).toBe('-0.107900');
+        expect(report.quotedPercentageFound).toBe(true);
+
+        // And it lands on the file's own quoted total, which is the independent check: the figure
+        // is printed in the workbook and in words beneath it — "Three Crore Sixty Seven Lakh
+        // Seventy Six Thousand Eight Hundred & Seven and Paise Sixty Eight".
+        expect(report.totals.scheduleDerived).toBe('41224983.39');
+        expect(report.totals.quotedStated).toBe('36776807.68');
+        expect(report.totals.quotedDerived).toBe('36776807.68');
+        expect(report.totals.reconciles).toBe(true);
+      },
+    );
+
+    (under ? it : it.skip)(
+      'would have refused the import rather than billing the project 21% high',
+      async () => {
+        // What the defect cost, asserted so the next person changing `locatePercentage` learns it
+        // from a failing test rather than from a client. Had the sign been dropped, the derived
+        // quoted total would sit ₹88.96 lakh from the one stated in the file — against a tolerance
+        // of about a rupee — and `reconciles` would be false, which blocks Confirm.
+        const report = await run(REAL_UNDER);
+        const derived = Number(report.totals.scheduleDerived);
+        const stated = Number(report.totals.quotedStated);
+
+        const ifSignDropped = Math.round(derived * 1.1079 * 100) / 100;
+        expect(Math.abs(ifSignDropped - stated)).toBeGreaterThan(8_000_000);
+        expect(Number(report.totals.tolerance)).toBeLessThan(10);
       },
     );
 
