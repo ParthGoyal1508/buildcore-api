@@ -11,6 +11,7 @@ import { configureApp } from '../src/common/configure-app';
 import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-codes';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
+import { pdfDigits } from './pdf-text';
 
 /**
  * The running-account bill package, end to end (023, quickstart passes 1–8 — tasks T096, T097).
@@ -466,6 +467,63 @@ describe('The running-account bill package (e2e)', () => {
       .set(auth())
       .send({ retentionAmount: '1.00' })
       .expect(400);
+
+    // Put it back, so the issue tests below read the figures they were written against.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '0.00' })
+      .expect(200);
+  });
+
+  /**
+   * 028 FR-004. Reported: a recovery entered on screen did not appear on the PDF the subcontractor
+   * receives.
+   *
+   * There were two stores. The RA bill sheet wrote `RABill.advanceRecovery` / `otherDeductions`;
+   * the abstract and the renderer read the ten `BillPackage` adjustment columns and have never
+   * looked at the other two. So the figure was saved correctly and the document went out
+   * understating what had been taken, with nothing on screen saying the two disagreed.
+   *
+   * **This reads the rendered document.** Asserting the column was written proves the write, and
+   * the write was already correct — that is exactly the half that was never broken. The suite's
+   * existing PDF test checks the bytes begin `%PDF-` and run past a thousand, both of which are
+   * true of a document carrying none of the right figures.
+   */
+  it('prints a recovery on the PDF itself, not only in the column', async () => {
+    // A figure no other number in this bill can coincidentally equal, so finding it in the
+    // document means it was printed rather than matched by luck.
+    //
+    // **Whole rupees, deliberately.** The abstract rounds for display and `bill-abstract.ts` sets
+    // out why at length — the client's own format shows whole rupees, and rounding happens once, at
+    // the point of display. A test asserting paise here would be asserting against a rule the
+    // document is right to follow: `1337.42` prints as `1337`, correctly. The first draft of this
+    // test did exactly that and read the rounding as a missing figure.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '133742.00' })
+      .expect(200);
+
+    const pdf = await http()
+      .get(`/projects/bill-packages/${packageId}/bill.pdf`)
+      .set(auth())
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+
+    const digits = pdfDigits(pdf.body as Buffer);
+    // `133742` — the figure as the document shows it, separators and spacing removed, because how
+    // a renderer breaks a number across text operators is not what this test is about.
+    expect(digits).toContain('133742');
+
+    // And the control: a figure that was never set does not appear. Without this the assertion
+    // above would pass against a renderer that printed every column it could find.
+    expect(digits).not.toContain('999913');
 
     // Put it back, so the issue tests below read the figures they were written against.
     await http()

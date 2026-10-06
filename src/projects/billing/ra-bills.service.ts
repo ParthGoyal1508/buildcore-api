@@ -674,6 +674,10 @@ export class RaBillsService {
           projectId: true,
           workOrderId: true,
           revisionCount: true,
+          // Read so a revision can carry them forward rather than recomputing them from an input
+          // that no longer exists — see the write below (028 FR-004).
+          advanceRecovery: true,
+          otherDeductions: true,
         },
       }),
     );
@@ -734,9 +738,14 @@ export class RaBillsService {
           tx,
           bill.workOrderId as string,
           {
+            // **Carried forward, not recomputed.** 028 FR-004 closed these as inputs, and
+            // `lineTotals` defaults a missing one to zero — so revising a bill that holds a ₹5,000
+            // advance recovery would silently rewrite it to nothing and change what the
+            // subcontractor is owed. The figure survives until it has somewhere better to live;
+            // research §2 is explicit that nothing visible today may disappear.
+            advanceRecovery: bill.advanceRecovery.toNumber(),
+            otherDeductions: bill.otherDeductions.toNumber(),
             lines: input.lines,
-            advanceRecovery: input.advanceRecovery,
-            otherDeductions: input.otherDeductions,
             excludeBillId: bill.id,
           },
         );
