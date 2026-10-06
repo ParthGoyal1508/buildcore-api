@@ -178,6 +178,14 @@ describe('RA bills against an award (e2e)', () => {
       .send({ lines })
       .expect(200);
 
+    // 028 FR-009: an award is approved before anything can be billed against it. Every test below
+    // measures against this work order, so the fixture takes it through the gate — the gate itself
+    // is asserted in `an award is approved before it commits anything` below, both halves of it.
+    await sys.workOrder.update({
+      where: { id: workOrderId },
+      data: { status: 'active' },
+    });
+
     for (const line of award.body.lines ?? award.body) {
       awarded[line.description] = {
         id: line.id,
@@ -309,6 +317,197 @@ describe('RA bills against an award (e2e)', () => {
    * **Two work orders, each holding RA-01, is the assertion.** Composing one bill and checking it
    * returned 201 proves nothing: that is exactly what worked before, for the first work order.
    */
+  /**
+   * 028 FR-009. The control was inverted: a work order committing the company to several crore went
+   * `active` the moment one person saved it, while the first bill raised *under* it required an
+   * approval. The commitment is made when the award is given; a bill only measures against it.
+   *
+   * **Both halves, and the second is the one that matters.** A test asserting only the refusal
+   * passes just as happily against a guard that refuses everything — including a guard that would
+   * make the product unusable. The acceptance after approval is what says the gate is a gate.
+   *
+   * Asserted on **both** composition paths. A control enforced on one of two screens is one anybody
+   * can step around by using the other, which is the difference between a control and its
+   * appearance.
+   */
+  describe('an award is approved before it commits anything (028 FR-009)', () => {
+    let gatedWorkOrderId = '';
+    let gatedLineId = '';
+    const gatedBillIds: string[] = [];
+
+    beforeAll(async () => {
+      const order = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workDetail: 'Waterproofing — awaiting approval of its award',
+          retentionPercent: RETENTION,
+        })
+        .expect(201);
+      gatedWorkOrderId = order.body.id;
+      // A draft award, deliberately left ungated for the refusals below.
+      expect(order.body.status).toBe('draft');
+
+      const award = await http()
+        .put(
+          `/projects/ra-bills/awards/${gatedWorkOrderId}?companyId=${companyId}`,
+        )
+        .set(auth())
+        .send({
+          lines: [
+            {
+              description: 'APP membrane to terrace',
+              unit: 'Sqm',
+              awardedQty: 300,
+              rate: 410,
+            },
+          ],
+        })
+        .expect(200);
+      gatedLineId = (award.body.lines ?? award.body)[0].id;
+    });
+
+    afterAll(async () => {
+      for (const id of gatedBillIds) {
+        await sys.rABill.deleteMany({ where: { id } }).catch(() => undefined);
+      }
+      await sys.approvalDecision
+        .deleteMany({
+          where: {
+            approvalInstance: {
+              entityType: 'work_order_award',
+              entityId: gatedWorkOrderId,
+            },
+          },
+        })
+        .catch(() => undefined);
+      await sys.approvalInstance
+        .deleteMany({
+          where: {
+            entityType: 'work_order_award',
+            entityId: gatedWorkOrderId,
+          },
+        })
+        .catch(() => undefined);
+      await sys.workOrderBOQItem
+        .deleteMany({ where: { workOrderId: gatedWorkOrderId } })
+        .catch(() => undefined);
+      await sys.workOrder
+        .deleteMany({ where: { id: gatedWorkOrderId } })
+        .catch(() => undefined);
+    });
+
+    it('refuses a bill against a draft award, on the sheet and on the package', async () => {
+      const sheet = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: gatedWorkOrderId,
+          billingDate: '2026-08-21',
+          lines: [{ workOrderBoqItemId: gatedLineId, quantity: 1 }],
+        })
+        .expect(409);
+      expect(sheet.body.code).toBe('WORK_ORDER_NOT_APPROVED');
+
+      // The other screen. Enforcing this on one path only would leave the control bypassable by
+      // whoever happened to open the other tab.
+      const pkg = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_subcontractor',
+          workOrderId: gatedWorkOrderId,
+          periodFrom: '2026-08-01',
+          periodTo: '2026-08-21',
+        })
+        .expect(409);
+      expect(pkg.body.code).toBe('WORK_ORDER_NOT_APPROVED');
+    });
+
+    it('still refuses while it is waiting, and says which of the two it is', async () => {
+      const sent = await http()
+        .post(`/projects/work-orders/${gatedWorkOrderId}/submit`)
+        .set(auth())
+        .expect(201);
+      expect(sent.body.status).toBe('pending_approval');
+
+      const refused = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: gatedWorkOrderId,
+          billingDate: '2026-08-21',
+          lines: [{ workOrderBoqItemId: gatedLineId, quantity: 1 }],
+        })
+        .expect(409);
+
+      // The two refusals need different remedies — one needs sending, the other needs deciding —
+      // so the message distinguishes them rather than saying "not approved" to both.
+      expect(String(refused.body.message)).toContain('waiting for approval');
+    });
+
+    it('accepts the bill once the award is approved', async () => {
+      const state = await approvals.stateOfSystem(
+        'work_order_award',
+        gatedWorkOrderId,
+        companyId,
+      );
+      expect(state).not.toBeNull();
+
+      await approvals.decide(
+        {
+          instanceId: String(state?.instanceId),
+          action: ApprovalDecisionAction.approve,
+          reason: 'E2E: award reviewed against the quotation',
+        },
+        asUser(callerUserId, [probeRoleId]),
+        '127.0.0.1',
+      );
+
+      const after = await http()
+        .get(`/projects/work-orders/${gatedWorkOrderId}`)
+        .set(auth())
+        .expect(200);
+      expect(after.body.status).toBe('active');
+
+      // **The half that makes the refusals mean something.** Without this the two tests above pass
+      // against a guard that refuses every bill ever composed.
+      const billed = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: gatedWorkOrderId,
+          billingDate: '2026-08-21',
+          lines: [{ workOrderBoqItemId: gatedLineId, quantity: 10 }],
+        })
+        .expect(201);
+      gatedBillIds.push(billed.body.id);
+      expect(billed.body.billNumber).toBe('RA-01');
+    });
+
+    it('refuses to send an award that awards nothing', async () => {
+      const empty = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({ projectId, workDetail: 'Nothing awarded yet' })
+        .expect(201);
+
+      const refused = await http()
+        .post(`/projects/work-orders/${empty.body.id}/submit`)
+        .set(auth())
+        .expect(400);
+      expect(refused.body.code).toBe('WORK_ORDER_NO_AWARD_LINES');
+
+      await sys.workOrder
+        .deleteMany({ where: { id: empty.body.id } })
+        .catch(() => undefined);
+    });
+  });
+
   describe('a bill number belongs to its work order (028 FR-001)', () => {
     let secondWorkOrderId = '';
     let secondLineId = '';
@@ -343,6 +542,14 @@ describe('RA bills against an award (e2e)', () => {
         })
         .expect(200);
       secondLineId = (award.body.lines ?? award.body)[0].id;
+
+      // Approved, because 028 FR-009 refuses a bill against an unapproved award and this describe
+      // is about the bill *number*, not the gate. The gate has its own tests above, which assert
+      // both the refusal and the acceptance.
+      await sys.workOrder.update({
+        where: { id: secondWorkOrderId },
+        data: { status: 'active' },
+      });
     });
 
     afterAll(async () => {

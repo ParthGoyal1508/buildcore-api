@@ -58,7 +58,14 @@ function build(opts: {
   // advanced — `code-series.service.spec.ts` owns that.
   const codeSeries = { next: async () => 'PRPL-WO-0001' };
   return {
-    service: new WorkOrdersService(prisma as never, codeSeries as never),
+    // The approval spine, stubbed: 028 FR-009 sends an award for approval, and these tests are
+    // about what the service stores. `submitForApproval` has its own coverage in the e2e suite,
+    // where a refusal before approval and an acceptance after it can both be observed.
+    service: new WorkOrdersService(
+      prisma as never,
+      codeSeries as never,
+      { submit: async () => undefined } as never,
+    ),
     updates,
   };
 }
@@ -107,7 +114,11 @@ describe('raising a work order', () => {
         return 'PRPL-WO-0007';
       },
     };
-    const service = new WorkOrdersService(prisma as never, codeSeries as never);
+    const service = new WorkOrdersService(
+      prisma as never,
+      codeSeries as never,
+      { submit: async () => undefined } as never,
+    );
 
     const view = await service.create(ctx, 'c-1', {
       projectId: 'p-1',

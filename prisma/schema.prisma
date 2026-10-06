@@ -1570,6 +1570,15 @@ enum RaBillStatus {
 
 enum WorkOrderStatus {
   draft
+  /// Submitted for approval and not yet awarded (028 FR-009).
+  ///
+  /// Added because the control was inverted: a work order committing the company to several crore
+  /// went `active` the moment one person saved it, while the first bill raised under it needed an
+  /// approval. `approvals.submit` was called for RA bills and never for the award itself.
+  ///
+  /// **Existing rows keep the status they have.** The migration adds the value and moves nothing —
+  /// setting live awards to this would make every project in flight unbillable overnight.
+  pending_approval
   active
   completed
 

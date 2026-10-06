@@ -48,9 +48,14 @@ function build(opts: {
   const tx = {
     $executeRaw: async () => 0,
     workOrder: {
+      // `active` from 028 FR-009: an award is approved before it can be billed against, so a
+      // fixture omitting the status was asking the service to bill an award in no state at all.
+      // Named rather than defaulted in the service — "I did not say" and "it is approved" must not
+      // be the same thing.
       findFirst: async () => ({
         id: 'wo-1',
         retentionPercent: dec(opts.retentionPercent ?? 0),
+        status: 'active',
       }),
     },
     workOrderBOQItem: {

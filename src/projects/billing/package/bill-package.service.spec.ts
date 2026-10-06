@@ -98,10 +98,15 @@ function build(opts: {
       }),
     },
     workOrder: {
+      // `active` from 028 FR-009: an award is approved before it can be billed against, so a
+      // fixture that left the status out was asking the service to bill an award in no state at
+      // all — which it now rightly refuses. Named here rather than defaulted in the service,
+      // because "I did not say" and "it is approved" must not be the same thing.
       findFirst: async () => ({
         id: 'wo-1',
         retentionPercent: dec(0.05),
         partnerId: 'vendor-1',
+        status: 'active',
       }),
     },
     client: {

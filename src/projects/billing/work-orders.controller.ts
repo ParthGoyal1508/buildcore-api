@@ -94,4 +94,29 @@ export class WorkOrdersController {
   ) {
     return this.workOrders.update(rlsContextFor(caller), id, dto);
   }
+
+  @Post(':id/submit')
+  @ApiOperation({
+    summary: 'Send the award for approval',
+    description:
+      'A work order commits the company, so it is approved before it becomes active (028 FR-009). ' +
+      'Until this existed an award went active the moment one person saved it, while the first ' +
+      'bill raised under it required an approval — the control was the wrong way round. The award ' +
+      'becomes active when the chain completes, never on a save.',
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      '`WORK_ORDER_NO_AWARD_LINES` — nothing is awarded yet, so there is nothing to approve.',
+  })
+  @ApiResponse({
+    status: 409,
+    description: '`WORK_ORDER_WRONG_STATUS` — only a draft award can be sent.',
+  })
+  async submit(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.workOrders.submitForApproval(rlsContextFor(caller), caller, id);
+  }
 }

@@ -1,11 +1,21 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CodeSeriesType, WorkOrderStatus } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
+import { CodeSeriesType, Permission, WorkOrderStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_WORK_ORDER_AWARD } from '../../approvals/default-chains';
+import { webRoutes } from '../../common/web-routes';
+import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
@@ -86,7 +96,106 @@ export class WorkOrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly codeSeries: CodeSeriesService,
+    private readonly approvals: ApprovalService,
   ) {}
+
+  /**
+   * Sends an award for approval (028 FR-009): `draft` → `pending_approval`.
+   *
+   * **The control was the wrong way round.** A work order committing the company to several crore
+   * went `active` the moment one person saved it, while the first bill raised under it needed an
+   * approval. The commitment is made when the award is given; a bill only measures against it.
+   *
+   * An award with no lines is refused. There is nothing to approve in a work order that awards
+   * nothing, and approving one would put a decision on record against a schedule somebody adds
+   * afterwards.
+   */
+  async submitForApproval(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<WorkOrderView> {
+    const order = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.findFirst({
+        where: { id },
+        select: {
+          id: true,
+          companyId: true,
+          projectId: true,
+          code: true,
+          status: true,
+          _count: { select: { awardLines: true } },
+        },
+      }),
+    );
+    if (!order) throw new NotFoundException('Work order not found');
+
+    if (order.status !== WorkOrderStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_WRONG_STATUS',
+        message:
+          `This work order is already ${order.status.replace(
+            '_',
+            ' ',
+          )}. Only a draft award can ` + 'be sent for approval.',
+      });
+    }
+
+    if (order._count.awardLines === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'WORK_ORDER_NO_AWARD_LINES',
+        message:
+          'This work order awards nothing yet, so there is nothing to approve. Capture the award ' +
+          'lines first — a decision recorded against an empty schedule would stand against ' +
+          'whatever is added afterwards.',
+      });
+    }
+
+    await this.approvals.submit({
+      companyId: order.companyId,
+      actionType: ACTION_WORK_ORDER_AWARD,
+      entityType: ACTION_WORK_ORDER_AWARD,
+      entityId: order.id,
+      originatorUserId: caller.id,
+      subject: `Work order ${order.code ?? order.id}`,
+      href: webRoutes.projectRaBills(order.projectId),
+      viewPermission: Permission.PROJECT_FINANCIALS,
+    });
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.update({
+        where: { id: order.id },
+        data: { status: WorkOrderStatus.pending_approval },
+      }),
+    );
+    return this.view(ctx, order.id);
+  }
+
+  /**
+   * The award becomes active when the chain completes — never when somebody saves it.
+   *
+   * `updateMany` with the status in the `where`, as the RA bill's own handler does: the event can
+   * arrive twice, and a second one must not move an order a human has since completed.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_WORK_ORDER_AWARD) return;
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: event.companyId,
+    };
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.updateMany({
+        where: {
+          id: event.entityId,
+          status: WorkOrderStatus.pending_approval,
+        },
+        data: { status: WorkOrderStatus.active },
+      }),
+    );
+  }
 
   async listForProject(
     ctx: RlsContext,

@@ -41,6 +41,13 @@ export const BILLING_ERRORS = {
   noLines: 'BILL_HAS_NO_LINES',
   /** Two bills on one project cannot share a number. */
   duplicateNumber: 'BILL_NUMBER_IN_USE',
+  /**
+   * The award has not been approved (028 FR-009).
+   *
+   * Raised on both composition paths. A control enforced on one of two screens is one anybody can
+   * step around by using the other.
+   */
+  awardNotApproved: 'WORK_ORDER_NOT_APPROVED',
   /** A measured quantity past what the work order awarded, with no variation to cover it. */
   exceedsAward: 'RA_BILL_EXCEEDS_AWARD',
   /** Certifying more than was billed. The client cannot certify work nobody claimed. */

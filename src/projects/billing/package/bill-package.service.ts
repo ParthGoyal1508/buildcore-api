@@ -13,6 +13,7 @@ import {
   ClientBillStatus,
   Prisma,
   RaBillStatus,
+  WorkOrderStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -402,7 +403,12 @@ export class BillPackageService {
         input.direction === BillDirection.to_subcontractor && input.workOrderId
           ? await tx.workOrder.findFirst({
               where: { id: input.workOrderId, projectId: input.projectId },
-              select: { id: true, retentionPercent: true, partnerId: true },
+              select: {
+                id: true,
+                retentionPercent: true,
+                partnerId: true,
+                status: true,
+              },
             })
           : null;
       if (input.direction === BillDirection.to_subcontractor && !workOrder) {
@@ -410,6 +416,30 @@ export class BillPackageService {
           statusCode: 400,
           code: PACKAGE_ERRORS.workOrderRequired,
           message: 'That work order is not on this project.',
+        });
+      }
+
+      // 028 FR-009. An award is a commitment, and until 028 it became one the moment somebody
+      // saved it while the first bill *under* it needed an approval — the control was the wrong way
+      // round. Refusing here is what gives the approval its force: without it, `pending_approval`
+      // would be a label on a screen that changed nothing.
+      //
+      // `draft` and `pending_approval` are both refused, and the message distinguishes them,
+      // because the remedy differs — one needs sending, the other needs deciding.
+      if (
+        workOrder &&
+        workOrder.status !== WorkOrderStatus.active &&
+        workOrder.status !== WorkOrderStatus.completed
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.workOrderNotApproved,
+          message:
+            workOrder.status === WorkOrderStatus.draft
+              ? 'This work order has not been sent for approval yet, so there is no approved ' +
+                'award to bill against. Send it for approval on Subcontractors first.'
+              : 'This work order is waiting for approval. A bill cannot be raised against an ' +
+                'award nobody has approved.',
         });
       }
 

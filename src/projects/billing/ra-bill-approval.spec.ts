@@ -67,7 +67,12 @@ function build(opts: {
   const tx = {
     $executeRaw: async () => 0,
     workOrder: {
-      findFirst: async () => ({ id: 'wo-1', retentionPercent: dec(0) }),
+      // `status: 'active'` from 028 FR-009 — an unapproved award cannot be billed against.
+      findFirst: async () => ({
+        id: 'wo-1',
+        retentionPercent: dec(0),
+        status: 'active',
+      }),
     },
     workOrderBOQItem: {
       findMany: async () => [

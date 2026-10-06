@@ -5,7 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { Permission, Prisma, RaBillStatus } from '@prisma/client';
+import {
+  Permission,
+  Prisma,
+  RaBillStatus,
+  WorkOrderStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import {
@@ -864,9 +869,28 @@ export class RaBillsService {
   ) {
     const workOrder = await tx.workOrder.findFirst({
       where: { id: workOrderId },
-      select: { id: true, retentionPercent: true },
+      select: { id: true, retentionPercent: true, status: true },
     });
     if (!workOrder) throw new NotFoundException('Work order not found');
+
+    // 028 FR-009. The same refusal the package path carries, and it has to be here too: a control
+    // enforced on one of two composition screens is a control anybody can step around by using the
+    // other one. `priceLines` is the single place both `compose` and `revise` pass through.
+    if (
+      workOrder.status !== WorkOrderStatus.active &&
+      workOrder.status !== WorkOrderStatus.completed
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.awardNotApproved,
+        message:
+          workOrder.status === WorkOrderStatus.draft
+            ? 'This work order has not been sent for approval yet, so there is no approved award ' +
+              'to bill against.'
+            : 'This work order is waiting for approval. A bill cannot be raised against an award ' +
+              'nobody has approved.',
+      });
+    }
 
     const award = await tx.workOrderBOQItem.findMany({
       where: {
