@@ -2115,11 +2115,22 @@ model RABill {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  /// Added by 027. A bill number was free text with nothing enforcing it, so two bills on one
-  /// project could carry the same number — and two paths mint them: the RA bill sheet, where a
-  /// person typed one, and 023's package path, which writes `RA-nn` into this column. `ClientBill`
-  /// has carried the equivalent constraint since 018; this side simply never got it.
-  @@unique([projectId, billNumber])
+  /// Scoped to the **work order**, not the project (028 FR-001).
+  ///
+  /// Added by 027 as `[projectId, billNumber]` and that was wrong in a way that stopped work: the
+  /// allocator counts per work order — `nextRaBillNumber(tx, workOrderId)` — so a project's second
+  /// subcontractor is allocated `RA-01` again and the database refused it. The reported `P2002`.
+  ///
+  /// Per work order is also the right scope on the document: a subcontractor's running account
+  /// reads RA-01, RA-02 against **their own** contract, which is what they sign for. Numbering per
+  /// project would hand a new subcontractor `RA-04` because three went to somebody else.
+  ///
+  /// **`workOrderId` is nullable and Postgres does not collide NULLs**, so this constraint alone
+  /// would leave every work-order-less bill unconstrained — the same hole, moved. A partial unique
+  /// index would close it in SQL and cannot be generated from a Prisma schema, so the rule the
+  /// database cannot express is held in the service instead: `RA_BILL_NEEDS_WORK_ORDER`. Leaving
+  /// that half undecided is how the original defect shipped (research §1).
+  @@unique([workOrderId, billNumber])
   @@index([companyId])
   @@index([projectId])
   @@index([workOrderId])

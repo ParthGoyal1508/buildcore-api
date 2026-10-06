@@ -296,6 +296,135 @@ describe('RA bills against an award (e2e)', () => {
       .set(auth())
       .expect(200);
 
+  /**
+   * Reported 2026-10-06 with a screenshot: composing a bill answered
+   * `[P2002]: Invalid 'prisma.rABill.create()' invocation:Unique constraint failed`, and no bill
+   * could be raised for that subcontractor by any route.
+   *
+   * The numbers are allocated **per work order** — `nextRaBillNumber(tx, workOrderId)` — and the
+   * constraint added on 2026-10-05 read `[projectId, billNumber]`. So a project's second
+   * subcontractor was allocated `RA-01` again and the database refused it. A regression, and one
+   * that stopped work outright.
+   *
+   * **Two work orders, each holding RA-01, is the assertion.** Composing one bill and checking it
+   * returned 201 proves nothing: that is exactly what worked before, for the first work order.
+   */
+  describe('a bill number belongs to its work order (028 FR-001)', () => {
+    let secondWorkOrderId = '';
+    let secondLineId = '';
+    const secondBillIds: string[] = [];
+
+    beforeAll(async () => {
+      const order = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workDetail: 'Plastering — a second subcontractor on the same project',
+          retentionPercent: RETENTION,
+        })
+        .expect(201);
+      secondWorkOrderId = order.body.id;
+
+      const award = await http()
+        .put(
+          `/projects/ra-bills/awards/${secondWorkOrderId}?companyId=${companyId}`,
+        )
+        .set(auth())
+        .send({
+          lines: [
+            {
+              description: 'Internal plaster 12mm',
+              unit: 'Sqm',
+              awardedQty: 500,
+              rate: 180,
+            },
+          ],
+        })
+        .expect(200);
+      secondLineId = (award.body.lines ?? award.body)[0].id;
+    });
+
+    afterAll(async () => {
+      for (const id of secondBillIds) {
+        await sys.rABill.deleteMany({ where: { id } }).catch(() => undefined);
+      }
+      await sys.workOrderBOQItem
+        .deleteMany({ where: { workOrderId: secondWorkOrderId } })
+        .catch(() => undefined);
+      await sys.workOrder
+        .deleteMany({ where: { id: secondWorkOrderId } })
+        .catch(() => undefined);
+    });
+
+    it('gives each subcontractor their own RA-01 on the same project', async () => {
+      // The first work order's first bill. Composed here rather than relying on another test's
+      // leftovers, so this reads the same whatever order the suite runs in.
+      const first = await compose({
+        lines: [{ workOrderBoqItemId: awarded['Excavation'].id, quantity: 1 }],
+      });
+      expect(first.body.billNumber).toBe('RA-01');
+
+      const second = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: secondWorkOrderId,
+          billingDate: '2026-08-21',
+          lines: [{ workOrderBoqItemId: secondLineId, quantity: 1 }],
+        })
+        .expect(201);
+      secondBillIds.push(second.body.id);
+
+      // The defect, in one line: before this, the second work order's first bill was allocated
+      // RA-01 and the database refused it with a message no reader could act on.
+      expect(second.body.billNumber).toBe('RA-01');
+
+      // And they are two bills, not one — a constraint that merged them would be a worse failure
+      // than the one it replaced.
+      expect(second.body.id).not.toBe(first.body.id);
+    });
+
+    it('still counts within a work order, so the second bill is RA-02', async () => {
+      // The half the scope change could have broken. Per-work-order uniqueness must not mean
+      // per-work-order *numbering from one every time*.
+      const next = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: secondWorkOrderId,
+          billingDate: '2026-09-21',
+          lines: [{ workOrderBoqItemId: secondLineId, quantity: 1 }],
+        })
+        .expect(201);
+      secondBillIds.push(next.body.id);
+
+      expect(next.body.billNumber).toBe('RA-02');
+    });
+
+    it('answers a genuine duplicate with a sentence, not database text', async () => {
+      // What the user actually saw. The number is supplied explicitly so the collision is real
+      // rather than raced, and the assertion is on the *message* — a 409 carrying Prisma's own
+      // text would pass a status-code-only check while being exactly the reported defect.
+      const clash = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId: secondWorkOrderId,
+          billNumber: 'RA-01',
+          billingDate: '2026-10-21',
+          lines: [{ workOrderBoqItemId: secondLineId, quantity: 1 }],
+        })
+        .expect(409);
+
+      expect(clash.body.code).toBe('BILL_NUMBER_IN_USE');
+      expect(String(clash.body.message)).not.toMatch(/P2002|prisma/i);
+    });
+  });
+
   describe('the award this bills against (FR-006)', () => {
     it('holds the subcontractor’s own rates, not the client’s', async () => {
       const res = await http()

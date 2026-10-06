@@ -32,6 +32,7 @@ import {
   mergeCheckList,
 } from './check-list';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
+import { BILLING_ERRORS } from '../billing-error-codes';
 import { PACKAGE_ERRORS } from './package-error-codes';
 import {
   nextClientBillNumber,
@@ -522,9 +523,13 @@ export class BillPackageService {
       );
 
       // One statement for the bill.
-      const bill =
+      // Both creates are wrapped, because the number each allocates is read-then-written and two
+      // composes racing on one subject take the same one. 028 FR-003: this path had no handler at
+      // all, so `[P2002]: Invalid 'prisma.rABill.create()' invocation` reached a user's screen —
+      // `RaBillsService.compose` and `ClientBillsService.compose` have both mapped it for a year.
+      const bill = await this.createBillOrConflict(async () =>
         input.direction === BillDirection.to_client
-          ? await tx.clientBill.create({
+          ? tx.clientBill.create({
               data: {
                 companyId,
                 projectId: input.projectId,
@@ -541,7 +546,7 @@ export class BillPackageService {
               },
               select: { id: true },
             })
-          : await tx.rABill.create({
+          : tx.rABill.create({
               data: {
                 companyId,
                 projectId: input.projectId,
@@ -555,12 +560,18 @@ export class BillPackageService {
                 amount: gross,
                 billingDate: new Date(input.periodTo),
                 status: RaBillStatus.draft,
-                workOrderId: input.workOrderId ?? null,
+                // Never null, and the bill's number depends on it: uniqueness is scoped to the
+                // work order (028 FR-001) and Postgres does not collide NULLs, so a bill with no
+                // work order would be unconstrained. The guard is above — `workOrderRequired`
+                // refuses a subcontractor package without one — and this reads it from the row
+                // that guard resolved rather than from the input, so the two cannot drift.
+                workOrderId: (workOrder as { id: string }).id,
                 grossAmount: gross,
                 netPayable: gross,
               },
               select: { id: true },
-            });
+            }),
+      );
 
       // One statement for the lines, returning their ids so the claims can point at them without a
       // second read. `createManyAndReturn` is the shape `boq-import.service.ts` adopted after the
@@ -1554,6 +1565,39 @@ export class BillPackageService {
    * position at issue, so a draft has no stored position to read and treating its zeros as a
    * position would reset the chain.
    */
+
+  /**
+   * Creates a bill, turning the database's duplicate-number refusal into one a caller can act on.
+   *
+   * **028 FR-003.** Both numbers here are allocated read-then-written inside the transaction, so two
+   * composes racing on one work order — or one project, for a client bill — read the same highest
+   * number and the second is refused by the unique constraint. That is the constraint working.
+   *
+   * What was wrong is what the caller saw: this path had no handler, so Prisma's own text reached
+   * the screen as `[P2002]: Invalid 'prisma.rABill.create()' invocation:Unique constraint failed on
+   * the (not available)`. `RaBillsService.compose` and `ClientBillsService.compose` have both mapped
+   * this for a year; only the package path was missed.
+   *
+   * The remedy is to compose again — nothing the caller entered was wrong — and the message says so,
+   * because a bare 409 sends somebody looking for the mistake they made.
+   */
+  private async createBillOrConflict<T>(create: () => Promise<T>): Promise<T> {
+    try {
+      return await create();
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.duplicateNumber,
+          message:
+            'That bill number was taken while this package was being composed. Nothing you ' +
+            'entered was wrong — compose it again and it will take the next number.',
+        });
+      }
+      throw error;
+    }
+  }
+
   private async previousIssuedColumn(
     tx: Prisma.TransactionClient,
     pkg: {
