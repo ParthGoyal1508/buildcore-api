@@ -127,8 +127,9 @@ error, and not a silent redirect that reads as the app losing your place.
 
 ## What must NOT change
 
-- Editing a project must still save. The withdrawn "document is mandatory" report receives **no code
-  change**; if a pass here produces that refusal, something was altered that should not have been.
+- Editing a project must still save. **Create a project, then edit it without reloading the page** —
+  that order is what reproduced the "4 required documents are still missing" refusal on 7 October,
+  and loading the edit URL directly does not. The requirement set must be empty on an edit.
 - Every work order already `active` stays active. A migration that set live awards to pending
   approval would make every project in flight unbillable.
 - The refusal after a company switch stays a 404 at the API.

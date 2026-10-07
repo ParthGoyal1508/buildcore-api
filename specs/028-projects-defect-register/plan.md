@@ -192,7 +192,7 @@ Seven tests, one per phase, each carrying the vacuity note from `spec.md` **verb
 
 Restated from the spec so it survives into implementation:
 
-- **"Document is mandatory" on edit — WITHDRAWN, and no code change.** The gate is creation-only; the edit form neither fetches requirements nor sends staged ids; it stopped reproducing. A task that changes code here has misread the feature.
+- ~~**"Document is mandatory" on edit — WITHDRAWN, and no code change.**~~ **CORRECTED 2026-10-07 — the withdrawal was wrong and the report was right.** It reproduces every time the project is created and then edited in one session. `enabled: !project` stops the *fetch* of the required set; it does not stop `useQuery` returning what the create page already put in the cache under the same key. So an edit read four required kinds, found nothing staged against them, disabled Save and said "4 required documents are still missing" — while the upload section, correctly hidden on an edit, gave no way to satisfy it. The earlier triage tested it by loading the edit URL directly, where the cache is empty and nothing shows. **"It neither fetches the required set" was true and insufficient: the claim that mattered was about reading, not fetching.** Fixed in `web:app/ui/projects/project-form.tsx` by deriving the requirement set as empty on an edit, at the one place both consumers read from.
 - The project schedule and progress module (026).
 - The nine pre-existing index-name drifts — excluded from every generated migration.
 - Per-client layouts for the daily report.

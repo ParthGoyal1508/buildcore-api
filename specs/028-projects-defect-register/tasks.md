@@ -22,7 +22,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 ## Never — state these so nobody picks them up
 
-- **The withdrawn "document is mandatory on edit" report receives NO CODE CHANGE.** The gate is creation-only in `ProjectsService.create`; the edit form neither fetches the required set nor sends staged ids; it stopped reproducing. Changing code to fix something that is not happening is how a working path acquires a defect.
+- ~~**The withdrawn "document is mandatory on edit" report receives NO CODE CHANGE.**~~ **CORRECTED 2026-10-07 — the withdrawal was wrong and the report was right.** It reproduces every time the project is created and then edited in one session. `enabled: !project` stops the *fetch* of the required set; it does not stop `useQuery` returning what the create page already put in the cache under the same key. So an edit read four required kinds, found nothing staged against them, disabled Save and said "4 required documents are still missing" — while the upload section, correctly hidden on an edit, gave no way to satisfy it. The earlier triage tested it by loading the edit URL directly, where the cache is empty and nothing shows. **"It neither fetches the required set" was true and insufficient: the claim that mattered was about reading, not fetching.** Fixed in `web:app/ui/projects/project-form.tsx` by deriving the requirement set as empty on an edit, at the one place both consumers read from.
 - **The retired `RABill.advanceRecovery` / `otherDeductions` columns are NOT dropped in this feature** (research §2). Input is retired; the columns stay, because a bill with no package has nowhere for its values to go and a dropped column is a figure nobody can recover.
 - The project schedule and progress module (026).
 - The nine pre-existing index-name drifts — **excluded from every generated migration**. A migration containing them has been mis-generated and is regenerated, never trimmed by hand.
@@ -218,8 +218,14 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
   The three invariants are verified **mechanically**, which is stronger than a walk:
 
-  - *Editing a project still saves, and the withdrawn report got no code change* —
-    `git diff --name-only cb311f9~1 HEAD -- src/projects/portfolio/` is **empty**.
+  - *Editing a project still saves* — `git diff --name-only cb311f9~1 HEAD -- src/projects/portfolio/`
+    is **empty**, and `ProjectsService.update` has no document gate of any kind.
+
+    **This check passed and the screen was still broken**, which is worth recording. It asked the
+    right question of the wrong half: the server never refused an edit, and the refusal was the
+    *form* disabling its own Save button over a cached requirement set. A mechanical check of the
+    API proves nothing about a gate that lives in the browser. Reported with a screenshot on
+    7 October and fixed the same day.
   - *Every work order already `active` stays active* — no migration in this feature contains an
     `UPDATE` against `WorkOrder`; the enum gained a value and nothing was restated.
   - *The company-switch refusal is still a 404* — `ProjectsService.findOne` still throws
