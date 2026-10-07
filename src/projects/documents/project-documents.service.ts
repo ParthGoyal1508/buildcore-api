@@ -7,7 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
-import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
+import { actorNamesFor } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
@@ -635,19 +635,18 @@ export class ProjectDocumentsService {
     return { data, ...described };
   }
 
-  /** User ids to display names, in one query. */
-  private async actorNames(ids: string[]): Promise<Map<string, string>> {
-    if (ids.length === 0) return new Map();
-    const users = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.user.findMany({
-          where: { id: { in: ids } },
-          select: ACTOR_NAME_SELECT,
-        }),
-    );
-    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
+  /**
+   * User ids to display names, in one query.
+   *
+   * The body moved to `actorNamesFor` in `src/common/actor-name.ts` when 028 FR-024 needed exactly
+   * it for a daily report's two identities. Kept as a method rather than inlined at both call sites
+   * because these two already read well; the implementation is shared, which is the part that
+   * mattered — a second copy is how one actor comes to appear under two names.
+   */
+  private async actorNames(
+    ids: (string | null | undefined)[],
+  ): Promise<Map<string, string>> {
+    return actorNamesFor(this.prisma, ids);
   }
 
   /**

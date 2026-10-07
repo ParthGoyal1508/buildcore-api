@@ -149,6 +149,38 @@ export class DwrController {
     );
   }
 
+  @Get('projects/dwr/:dwrId/report.xlsx')
+  @ApiOperation({
+    summary: 'The report as the client’s printable form',
+    description:
+      'The daily form, as a workbook (028 FR-022). Named from the report number and its date, ' +
+      'never from an id.\n\n' +
+      'A draft downloads and says DRAFT on its face rather than being refused — more use to ' +
+      'somebody checking their figures before submitting, and more honest than a clean-looking ' +
+      'form for a report nobody has put forward.',
+  })
+  @ApiResponse({ status: 404, description: 'No such report in this company.' })
+  async report(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('dwrId') dwrId: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { bytes, filename } = await this.dwr.workbookFor(
+      rlsContextFor(caller),
+      dwrId,
+      resolveCompanyId(caller, companyId),
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(bytes);
+  }
+
   @Get('projects/dwr/attachments/:attachmentId')
   @ApiOperation({ summary: 'Download an attachment' })
   async downloadAttachment(

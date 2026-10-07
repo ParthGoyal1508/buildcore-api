@@ -1,10 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { DwrWeather } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -32,10 +30,7 @@ export class UpdateDwrDto {
   @IsOptional()
   @IsString()
   supervisorEmployeeId?: string;
-  @ApiPropertyOptional({ enum: DwrWeather })
-  @IsOptional()
-  @IsEnum(DwrWeather)
-  weather?: DwrWeather;
+  // `weather` removed from entry by 028 FR-023, column and history kept. See `create-dwr.dto.ts`.
 
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) workerCount?: number;
   @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) machineryCount?: number;

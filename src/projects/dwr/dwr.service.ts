@@ -15,6 +15,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { actorNamesFor } from '../../common/actor-name';
 import { BoqService } from '../boq/boq.service';
 import {
   EquipmentLogbookDay,
@@ -27,6 +28,8 @@ import {
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
+import type { DwrWorkbookView } from './dwr-workbook.renderer';
+import { DwrWorkbookRenderer } from './dwr-workbook.renderer';
 import {
   FULL_DAY,
   MeasurementLine,
@@ -127,6 +130,8 @@ export class DwrService {
     private readonly auditLog: AuditLogService,
     private readonly boq: BoqService,
     private readonly sources: ProjectSourcesRegistry,
+    // 028 FR-022. The printable form, which this controller had no route of any kind for.
+    private readonly workbook: DwrWorkbookRenderer,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -207,7 +212,9 @@ export class DwrService {
               workDate,
               dprNumber,
               supervisorEmployeeId: input.supervisorEmployeeId ?? null,
-              weather: input.weather ?? undefined,
+              // `weather` is no longer accepted from a caller (028 FR-023) and is not written here.
+              // The column keeps its default, so every report still has a value and every value
+              // already recorded is untouched.
               status: DwrStatus.draft,
               workerCount: input.workerCount ?? 0,
               machineryCount: input.machineryCount ?? 0,
@@ -349,7 +356,7 @@ export class DwrService {
         where: { id: dwrId },
         data: {
           supervisorEmployeeId: input.supervisorEmployeeId ?? undefined,
-          weather: input.weather ?? undefined,
+          // Not accepted and not updated (028 FR-023). See `create`.
           workerCount: input.workerCount ?? undefined,
           machineryCount: input.machineryCount ?? undefined,
           progress: input.progress ?? undefined,
@@ -682,8 +689,31 @@ export class DwrService {
     // showed "BOQ —" against every line in the product.
     const { tasks, ...header } = report;
 
+    // FR-024, and **both** identities. They are already stored and already returned as ids, which
+    // answers half the question a reader asked: a report attributed to "cmuoe9b7l00q5v8…" names
+    // nobody. Both, because on a report returned for correction the person who recorded it and the
+    // person who submitted it are different people — and the one who has to answer for a figure is
+    // usually the second.
+    //
+    // `actorNamesFor` rather than a second resolver: one implementation of "what do we call this
+    // user", or the same actor appears under two names on two screens.
+    const names = await actorNamesFor(this.prisma, [
+      report.createdByUserId,
+      report.submittedByUserId,
+      report.approvedByUserId,
+    ]);
+
     return {
       ...header,
+      recordedByName: report.createdByUserId
+        ? names.get(report.createdByUserId) ?? null
+        : null,
+      submittedByName: report.submittedByUserId
+        ? names.get(report.submittedByUserId) ?? null
+        : null,
+      approvedByName: report.approvedByUserId
+        ? names.get(report.approvedByUserId) ?? null
+        : null,
       workDate,
       lines: tasks.map((task) => {
         const scopeQty = task.boqItem?.scopeQty ?? null;
@@ -733,6 +763,156 @@ export class DwrService {
           logbookMissing: Boolean(task.equipmentId) && !entry,
         };
       }),
+    };
+  }
+
+  /**
+   * One report as the client's printable form (028 FR-022).
+   *
+   * ## Why this exists
+   *
+   * This controller carries fifteen endpoints and, before this, **none produced a file**. A report
+   * could be entered, submitted, approved and read on screen, and then had to be retyped into the
+   * client's own spreadsheet to be sent anywhere — which is the work this system exists to remove,
+   * and the point at which the two copies begin to disagree.
+   *
+   * ## A draft prints, and says so
+   *
+   * Not refused. The form carries `Status`, so a draft produces a document that reads DRAFT on its
+   * face — which is more useful than a refusal to the person checking their figures before they
+   * submit, and more honest than a clean-looking form for a report nobody has put forward.
+   *
+   * ## The renderer is handed everything
+   *
+   * It holds no database client of its own, so every figure here is formatted before it goes in.
+   * That is what keeps the form and the screen from drifting apart: there is one derivation of a
+   * quantity, `storedQuantityInForce`, and both read it.
+   */
+  async workbookFor(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+  ): Promise<{ bytes: Buffer; filename: string }> {
+    const report = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          dprNumber: true,
+          workDate: true,
+          status: true,
+          weather: true,
+          workerCount: true,
+          machineryCount: true,
+          location: true,
+          description: true,
+          createdByUserId: true,
+          submittedByUserId: true,
+          project: {
+            select: {
+              name: true,
+              code: true,
+              client: { select: { name: true } },
+            },
+          },
+          tasks: {
+            select: {
+              id: true,
+              paymentMode: true,
+              actualQty: true,
+              servedQty: true,
+              nos1: true,
+              nos2: true,
+              length: true,
+              breadth: true,
+              depth: true,
+              density: true,
+              chainageFrom: true,
+              chainageTo: true,
+              roadSide: true,
+              engineerName: true,
+              remark: true,
+              boqItem: {
+                select: {
+                  boqNo: true,
+                  taskName: true,
+                  unit: true,
+                  perDayQty: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    if (!report) throw new NotFoundException('Daily work report not found');
+
+    const [company, names] = await Promise.all([
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.company.findFirst({
+          where: { id: companyId },
+          select: { name: true },
+        }),
+      ),
+      actorNamesFor(this.prisma, [
+        report.createdByUserId,
+        report.submittedByUserId,
+      ]),
+    ]);
+
+    const workDate = report.workDate.toISOString().slice(0, 10);
+    const view: DwrWorkbookView = {
+      companyName: company?.name ?? null,
+      projectName: report.project.name,
+      projectCode: report.project.code,
+      clientName: report.project.client?.name ?? null,
+      dprNumber: report.dprNumber,
+      workDate,
+      // Printed from what was recorded, which for a report entered after FR-023 is the column's
+      // default. The input was removed; the history was kept, and the client's form has the field.
+      weather: report.weather,
+      status: report.status,
+      recordedByName: report.createdByUserId
+        ? names.get(report.createdByUserId) ?? null
+        : null,
+      submittedByName: report.submittedByUserId
+        ? names.get(report.submittedByUserId) ?? null
+        : null,
+      workerCount: report.workerCount,
+      machineryCount: report.machineryCount,
+      location: report.location,
+      description: report.description,
+      lines: report.tasks.map((task, index) => {
+        const measured = task.paymentMode === DwrPaymentMode.work_basis;
+        return {
+          srNo: index + 1,
+          boqNo: task.boqItem?.boqNo ?? null,
+          // A freeform line has no BOQ line to name it, so its own remark is the only description
+          // of the work there is. Falling back to it beats printing a blank activity.
+          activity: task.boqItem?.taskName ?? task.remark ?? 'Work',
+          details: task.boqItem ? task.remark : null,
+          chainageFrom: task.chainageFrom?.toFixed(3) ?? null,
+          chainageTo: task.chainageTo?.toFixed(3) ?? null,
+          unit: task.boqItem?.unit ?? null,
+          side: task.roadSide,
+          // Null on a presence-paid line rather than 1 — the detail screen's own rule. A 1 reads
+          // as a factor somebody entered, and on this form it would read as a measured metre.
+          length: measured ? task.length.toFixed(3) : null,
+          width: measured ? task.breadth.toFixed(3) : null,
+          depth: measured ? task.depth.toFixed(3) : null,
+          quantity: storedQuantityInForce(task).toFixed(3),
+          target: task.boqItem?.perDayQty?.toFixed(3) ?? null,
+          engineerName: task.engineerName,
+          remarks: task.boqItem ? task.remark : null,
+        };
+      }),
+    };
+
+    return {
+      bytes: await this.workbook.render(view),
+      // Named from the report number and its date, the way the client names theirs — never from
+      // the cuid, which is the defect 017 fixed for every other download in this system.
+      filename: `${report.dprNumber} ${workDate}.xlsx`,
     };
   }
 

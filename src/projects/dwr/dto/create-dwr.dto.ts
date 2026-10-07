@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { DwrPaymentMode, DwrWeather } from '@prisma/client';
+import { DwrPaymentMode } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
@@ -314,10 +314,17 @@ export class CreateDwrDto {
   @IsNotEmpty()
   supervisorEmployeeId?: string;
 
-  @ApiPropertyOptional({ enum: DwrWeather })
-  @IsOptional()
-  @IsEnum(DwrWeather)
-  weather?: DwrWeather;
+  // **`weather` was here and is deliberately gone** (028 FR-023). Removed from entry at the
+  // client's request: it was a field nobody filled in honestly and nobody read.
+  //
+  // The **column, its default and every recorded value are kept** — there is no migration for this.
+  // Removing the input is what was asked; discarding what was already recorded is not, and costs
+  // nothing to avoid. The printable form still prints what a report holds.
+  //
+  // Worth knowing: the global pipe runs at `forbidNonWhitelisted`, so a caller still sending
+  // `weather` now gets a 400 rather than being quietly ignored. That is the right behaviour — a
+  // silently dropped field is how a form comes to look like it is saving something it is not — but
+  // it does mean a stale client bundle fails loudly, which is why the web form changes with this.
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

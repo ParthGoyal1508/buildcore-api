@@ -175,7 +175,16 @@ describe('outstanding on a part payment', () => {
         CTX,
         'company-1',
         'bill-1',
-        { paidOn: '2026-09-28', amount: '60000.00', instrument: 'cash' },
+        {
+          paidOn: '2026-09-28',
+          amount: '60000.00',
+          // `bank_transfer` rather than `cash`, and not arbitrarily: `instrument` joined
+          // `CASH_MODE_FIELDS` with this feature, and `cash-entry-surface.spec.ts` greps `src/`
+          // for a cash mode written anywhere outside the gate. A fixture here would have been
+          // flagged as a service deciding a payment was cash. Nothing in this suite is about the
+          // instrument, so the guard keeps its teeth and the test loses nothing.
+          instrument: 'bank_transfer',
+        },
         { userId: 'user-1' },
       ),
     ).rejects.toMatchObject({

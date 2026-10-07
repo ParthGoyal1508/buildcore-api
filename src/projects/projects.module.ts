@@ -26,6 +26,7 @@ import { PackageReportsService } from './billing/package/package-reports.service
 import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
+import { DwrWorkbookRenderer } from './dwr/dwr-workbook.renderer';
 import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
@@ -177,6 +178,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // months — so every BOQ line in the system reported 0% executed regardless of work done.
     // This provider is where that closes.
     DwrService,
+    // 028 FR-022. The client's printable daily form — the DWR controller had no route of any
+    // kind that produced a file.
+    DwrWorkbookRenderer,
     // 022 US6 — the contract feature 023 composes a bill from: per BOQ line, the measurement
     // approved in a period, before it, and the total. Aggregated at read time rather than stored,
     // because 018 research §3 decided exactly that for cumulative billed quantity and named
