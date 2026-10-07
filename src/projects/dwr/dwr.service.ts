@@ -28,6 +28,7 @@ import {
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
+import { formatChainage } from './chainage';
 import type { DwrWorkbookView } from './dwr-workbook.renderer';
 import { DwrWorkbookRenderer } from './dwr-workbook.renderer';
 import {
@@ -891,15 +892,18 @@ export class DwrService {
           // of the work there is. Falling back to it beats printing a blank activity.
           activity: task.boqItem?.taskName ?? task.remark ?? 'Work',
           details: task.boqItem ? task.remark : null,
-          chainageFrom: task.chainageFrom?.toFixed(3) ?? null,
-          chainageTo: task.chainageTo?.toFixed(3) ?? null,
+          // In the client's own notation, `21+300`, not `21.300`. The number is the storage and
+          // the notation is the rendering — see `chainage.ts`.
+          chainageFrom: formatChainage(task.chainageFrom),
+          chainageTo: formatChainage(task.chainageTo),
           unit: task.boqItem?.unit ?? null,
           side: task.roadSide,
           // Null on a presence-paid line rather than 1 — the detail screen's own rule. A 1 reads
           // as a factor somebody entered, and on this form it would read as a measured metre.
+          nos: measured ? task.nos1.toFixed(3) : null,
           length: measured ? task.length.toFixed(3) : null,
           width: measured ? task.breadth.toFixed(3) : null,
-          depth: measured ? task.depth.toFixed(3) : null,
+          height: measured ? task.depth.toFixed(3) : null,
           quantity: storedQuantityInForce(task).toFixed(3),
           target: task.boqItem?.perDayQty?.toFixed(3) ?? null,
           engineerName: task.engineerName,

@@ -41,13 +41,14 @@ function view(overrides: Partial<DwrWorkbookView> = {}): DwrWorkbookView {
         boqNo: '12.01',
         activity: 'Unwanted vegetation / grass cutting & removal',
         details: 'ROW grass cleaning',
-        chainageFrom: '71.200',
-        chainageTo: '71.450',
+        chainageFrom: '71+200',
+        chainageTo: '71+450',
         unit: 'KM',
         side: 'RHS',
+        nos: '1.000',
         length: '0.250',
         width: '1.000',
-        depth: '1.000',
+        height: '1.000',
         quantity: '0.250',
         target: '0.900',
         engineerName: 'S. Patil',
@@ -63,9 +64,10 @@ function view(overrides: Partial<DwrWorkbookView> = {}): DwrWorkbookView {
         unit: null,
         side: null,
         // A presence-paid line: null rather than 1, so the form does not read as a measured metre.
+        nos: null,
         length: null,
         width: null,
-        depth: null,
+        height: null,
         quantity: '1.000',
         target: null,
         engineerName: null,
@@ -137,10 +139,17 @@ describe('the printable daily form', () => {
     const headers = (sheet.getRow(headerRow).values as unknown[]).slice(
       1,
     ) as string[];
-    const quantityColumn = headers.indexOf('Quantity') + 1;
-    const boqColumn = headers.indexOf('BOQ No.') + 1;
-    const widthColumn = headers.indexOf('Width') + 1;
-    expect(quantityColumn).toBeGreaterThan(0);
+    // The client's own words, amended 2026-10-07 when they sent the sheet they keep.
+    const column = (header: string) => {
+      const index = headers.indexOf(header) + 1;
+      expect(index).toBeGreaterThan(0);
+      return index;
+    };
+    const quantityColumn = column('Qty.');
+    const boqColumn = column('BOQ No.');
+    const nosColumn = column('Nos.');
+    const widthColumn = column('Width in Meter');
+    const heightColumn = column('Height');
 
     const measured = sheet.getRow(headerRow + 1);
     expect(measured.getCell(boqColumn).value).toBe('12.01');
@@ -148,12 +157,28 @@ describe('the printable daily form', () => {
     // in the column a reader reads quantities from.
     expect(measured.getCell(quantityColumn).value).toBe('0.250');
     expect(measured.getCell(widthColumn).value).toBe('1.000');
+    // Nos leads the client's arithmetic and was missing from this form entirely until they said so.
+    expect(measured.getCell(nosColumn).value).toBe('1.000');
+    expect(measured.getCell(heightColumn).value).toBe('1.000');
 
     const presence = sheet.getRow(headerRow + 2);
     expect(presence.getCell(quantityColumn).value).toBe('1.000');
     // Blank, not 1. On this form a 1 in the Width column reads as a measured metre.
     expect(presence.getCell(widthColumn).value ?? '').toBe('');
+    expect(presence.getCell(nosColumn).value ?? '').toBe('');
     expect(presence.getCell(boqColumn).value ?? '').toBe('');
+  });
+
+  it('prints the chainage the way the client writes it', async () => {
+    const sheet = (
+      await readBack(await new DwrWorkbookRenderer().render(view()))
+    ).worksheets[0];
+
+    const text = JSON.stringify(sheet.getSheetValues() as unknown as unknown[]);
+    // `21+300`, not `21.3`. The fixture carries what `formatChainage` produced, and this is what
+    // makes the column recognisable to somebody holding their own sheet beside it.
+    expect(text).toContain('71+200');
+    expect(text).toContain('71+450');
   });
 
   it('says so rather than printing an empty table when nothing was measured', async () => {

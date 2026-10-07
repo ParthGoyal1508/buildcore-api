@@ -8,13 +8,21 @@ export interface DwrWorkbookLine {
   boqNo: string | null;
   activity: string;
   details: string | null;
+  /** `21+300`, already in the client's own notation — see `chainage.ts`. */
   chainageFrom: string | null;
   chainageTo: string | null;
   unit: string | null;
   side: string | null;
+  /** The count. The client's sheet leads its arithmetic with it and so does this. */
+  nos: string | null;
   length: string | null;
   width: string | null;
-  depth: string | null;
+  /**
+   * Their column reads **Hight** (height). Stored as `DWRTask.depth`, which is the same
+   * multiplicand under a different word — depth for an excavation, height for a wall — and the
+   * client's sheet is the document, so the column is theirs to name.
+   */
+  height: string | null;
   quantity: string;
   target: string | null;
   engineerName: string | null;
@@ -47,23 +55,34 @@ export interface DwrWorkbookView {
   lines: DwrWorkbookLine[];
 }
 
-/** The twenty-one columns of the client's own form, in its order. */
+/**
+ * The columns of the client's own measurement sheet, in its order and under its words.
+ *
+ * Taken from `docs/4280 -DPR -Medshi to Washim 05.10.2026.xlsx` and amended 2026-10-07 when the
+ * client sent the sheet they actually keep: **Chainage (From, To), Side, Nos, Length, Width in
+ * Meter, Hight, Qty, Remark**. `Nos` was missing and `Depth` was this system's word for their
+ * `Hight`.
+ *
+ * Their spelling of "Hight" is **not** reproduced. The column is theirs to name and the
+ * misspelling is not a name — printing it back would look like a system that cannot spell.
+ */
 const COLUMNS: { header: string; width: number }[] = [
   { header: 'Sr. No.', width: 7 },
   { header: 'BOQ No.', width: 12 },
   { header: 'Works', width: 34 },
   { header: 'Details of works', width: 30 },
-  { header: 'Chainage from', width: 12 },
-  { header: 'Chainage to', width: 12 },
+  { header: 'Chainage from', width: 13 },
+  { header: 'Chainage to', width: 13 },
+  { header: 'Side', width: 10 },
+  { header: 'Nos.', width: 8 },
+  { header: 'Length in Meter', width: 13 },
+  { header: 'Width in Meter', width: 13 },
+  { header: 'Height', width: 10 },
   { header: 'UOM', width: 8 },
-  { header: 'Side', width: 7 },
-  { header: 'Length', width: 10 },
-  { header: 'Width', width: 10 },
-  { header: 'Depth', width: 10 },
-  { header: 'Quantity', width: 12 },
+  { header: 'Qty.', width: 12 },
   { header: 'Target', width: 10 },
   { header: 'Engineer', width: 18 },
-  { header: 'Remarks', width: 26 },
+  { header: 'Remark', width: 26 },
 ];
 
 /**
@@ -194,11 +213,12 @@ function writeTable(sheet: ExcelJS.Worksheet, view: DwrWorkbookView): void {
       line.details ?? '',
       line.chainageFrom ?? '',
       line.chainageTo ?? '',
-      line.unit ?? '',
       line.side ?? '',
+      line.nos ?? '',
       line.length ?? '',
       line.width ?? '',
-      line.depth ?? '',
+      line.height ?? '',
+      line.unit ?? '',
       line.quantity,
       line.target ?? '',
       line.engineerName ?? '',
