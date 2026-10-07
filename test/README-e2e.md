@@ -53,3 +53,29 @@ DATABASE_URL="$SCRATCH" npx prisma db execute --stdin <<< "SELECT current_databa
 
 Worth doing once per session. The failure mode above was silent in both directions: the tests passed,
 and they passed against the wrong database.
+
+## Known pre-existing failures on a freshly provisioned scratch
+
+Three suites fail on `buildcore_scratch` for the **same reason the approval chains did**, and none
+of them is a product fault. Measured 2026-10-07, after feature 028.
+
+| Suite                      | What it reports                                                                        | Why                                                                            |
+| -------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `assets.e2e-spec.ts`       | `Cannot read properties of undefined (reading 'id')` on `GET /assets/condition-grades` | `settings.ConditionGrade` has **0 rows** on scratch and 12 on the dev database |
+| `dashboard.e2e-spec.ts`    | the same family                                                                        | reads the asset masters above                                                  |
+| `my-workspace.e2e-spec.ts` | `expected 400, got 423 "Locked"` on an offline punch                                   | a payroll/attendance lock in the scratch data, not a code path                 |
+
+`CompaniesService.create` installs **seven** sets of per-company defaults — vendor categories, item
+categories, asset categories, asset document types, condition grades, equipment categories and
+equipment document types — plus the approval chains. `prisma/seed.ts` writes its company row
+directly and so installs none of them. `npm run seed:chains` closes one of the eight; the other
+seven are still open, and that is what these failures are.
+
+**They are not 028's.** `git diff --name-only cb311f9~1 HEAD -- src` touches nothing under
+`src/assets`, `src/labour`, `src/plant`, `src/partners` or `src/attendance`, and
+`src/approvals/fr-022-unmigrated-modules.spec.ts` asserts exactly that and passes.
+
+The fix is a `seed:defaults` script in the shape of `prisma/seed-approval-chains.ts` — import the
+same `DEFAULT_*` constants the services read and insert them per company, idempotently. Deliberately
+not done inside 028: three suites' worth of company defaults is its own piece of work, and doing it
+half way is worse than recording it here.

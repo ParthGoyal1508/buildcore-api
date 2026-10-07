@@ -32,9 +32,9 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm `specs/028-projects-defect-register/` design docs are the ones being worked from, and that `.specify/feature.json` points at this directory
-- [ ] T002 Record the migration command once for the whole feature: `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script` — `npm run migrate:dev:create` is non-interactive in this environment. **No migration in this feature is hand-edited** (Principle VI)
-- [ ] T003 Confirm `buildcore-web` has no `.prettierrc` and must never be formatted; `buildcore-api` has `.prettierrc.json` and prettier is run on it
+- [X] T001 Confirm `specs/028-projects-defect-register/` design docs are the ones being worked from, and that `.specify/feature.json` points at this directory
+- [X] T002 Record the migration command once for the whole feature: `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script` — `npm run migrate:dev:create` is non-interactive in this environment. **No migration in this feature is hand-edited** (Principle VI)
+- [X] T003 Confirm `buildcore-web` has no `.prettierrc` and must never be formatted; `buildcore-api` has `.prettierrc.json` and prettier is run on it
 
 ---
 
@@ -42,11 +42,11 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **These block every phase that follows, because two constitution gates in `plan.md` pass only once they exist.**
 
-- [ ] T004 Write the RLS probe helper reuse note into this feature's test plan: every new table gets a probe proving a second company cannot read the first's rows. **Three tables in this feature** — `VendorItemRate` (D), `RABillPayment` (E), `SignedCopy` (E). Principle IV is non-negotiable
-- [ ] T005 Every new e2e suite closes its Nest app and disconnects any `PrismaClient` it constructs, **or** `src/common/prisma/e2e-teardown.spec.ts` names the file. Check this per new suite, not once
-- [ ] T006 Every `git add` in this feature is explicit-path. **`docs/Parth Realcon Pvt Ltd. RA-12 (1).pdf` is untracked client data and is never staged.** Never `git add -A`
-- [ ] T007 `npm run lint` in `buildcore-api` runs with `--fix` and repeatedly modifies `test/account-creation.e2e-spec.ts` — revert it every time, before every commit
-- [ ] T008 Run `src/approvals/fr-022-unmigrated-modules.spec.ts` before every commit touching `buildcore-api src/`, **and again straight after the first commit that creates a new directory** — it diffs two commits so it cannot see untracked files. It has fired late seven times
+- [X] T004 Write the RLS probe helper reuse note into this feature's test plan: every new table gets a probe proving a second company cannot read the first's rows. **Three tables in this feature** — `VendorItemRate` (D), `RABillPayment` (E), `SignedCopy` (E). Principle IV is non-negotiable
+- [X] T005 Every new e2e suite closes its Nest app and disconnects any `PrismaClient` it constructs, **or** `src/common/prisma/e2e-teardown.spec.ts` names the file. Check this per new suite, not once
+- [X] T006 Every `git add` in this feature is explicit-path. **`docs/Parth Realcon Pvt Ltd. RA-12 (1).pdf` is untracked client data and is never staged.** Never `git add -A`
+- [X] T007 `npm run lint` in `buildcore-api` runs with `--fix` and repeatedly modifies `test/account-creation.e2e-spec.ts` — revert it every time, before every commit
+- [X] T008 Run `src/approvals/fr-022-unmigrated-modules.spec.ts` before every commit touching `buildcore-api src/`, **and again straight after the first commit that creates a new directory** — it diffs two commits so it cannot see untracked files. It has fired late seven times
 
 ---
 
@@ -56,12 +56,12 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Independent test**: On a project where work order A holds RA-01, compose a package for work order B and get a bill numbered RA-01 on its own contract.
 
-- [ ] T009 [US1] Move the constraint on `RABill` from `@@unique([projectId, billNumber])` to `@@unique([workOrderId, billNumber])` in `prisma/schema.prisma`, with a docblock recording that the allocator has always counted per work order and the constraint is what disagreed
-- [ ] T010 [US1] Add `RA_BILL_NEEDS_WORK_ORDER` and refuse an RA bill created without a work order, in `src/projects/billing/ra-bills.service.ts` and the package path in `src/projects/billing/package/bill-package.service.ts`. **The task's reason, which belongs in the code comment**: Postgres does not collide NULLs, so the moved constraint alone leaves every work-order-less bill unconstrained — the same hole, moved. A partial unique index would fix it in SQL and **cannot be generated from a Prisma schema**, so the rule the database cannot express is held one layer up, deliberately and in one place (research §1)
-- [ ] T011 [US1] Map `P2002` → 409 `BILL_NUMBER_TAKEN` on **both** the `rABill` and `clientBill` creates in `src/projects/billing/package/bill-package.service.ts`, matching `ra-bills.service.ts:320` and `client-bills.service.ts:340`. This is why raw Prisma text reached the user's screen
-- [ ] T012 [US1] Generate the migration for T009 (T002's command). Verify it contains **one** statement and none of the nine index drifts
-- [ ] T013 [US1] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: two work orders on one project, each holding a bill numbered `RA-01`, asserted **on the composition response**. **Vacuity note to carry in the test's docblock**: _asserting only that composition returned 201 proves nothing — it did before, for the first work order._
-- [ ] T014 [US1] Test: a second bill on the first work order is `RA-02`, and a forced duplicate answers 409 with a sentence, never Prisma text
+- [X] T009 [US1] Move the constraint on `RABill` from `@@unique([projectId, billNumber])` to `@@unique([workOrderId, billNumber])` in `prisma/schema.prisma`, with a docblock recording that the allocator has always counted per work order and the constraint is what disagreed
+- [X] T010 [US1] Add `RA_BILL_NEEDS_WORK_ORDER` and refuse an RA bill created without a work order, in `src/projects/billing/ra-bills.service.ts` and the package path in `src/projects/billing/package/bill-package.service.ts`. **The task's reason, which belongs in the code comment**: Postgres does not collide NULLs, so the moved constraint alone leaves every work-order-less bill unconstrained — the same hole, moved. A partial unique index would fix it in SQL and **cannot be generated from a Prisma schema**, so the rule the database cannot express is held one layer up, deliberately and in one place (research §1)
+- [X] T011 [US1] Map `P2002` → 409 `BILL_NUMBER_TAKEN` on **both** the `rABill` and `clientBill` creates in `src/projects/billing/package/bill-package.service.ts`, matching `ra-bills.service.ts:320` and `client-bills.service.ts:340`. This is why raw Prisma text reached the user's screen
+- [X] T012 [US1] Generate the migration for T009 (T002's command). Verify it contains **one** statement and none of the nine index drifts
+- [X] T013 [US1] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: two work orders on one project, each holding a bill numbered `RA-01`, asserted **on the composition response**. **Vacuity note to carry in the test's docblock**: _asserting only that composition returned 201 proves nothing — it did before, for the first work order._
+- [X] T014 [US1] Test: a second bill on the first work order is `RA-02`, and a forced duplicate answers 409 with a sentence, never Prisma text
 
 **Checkpoint**: a project with any number of subcontractors can raise a first bill for each (SC-001).
 
@@ -73,13 +73,13 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Independent test**: Record a deduction through the supported path, render the PDF, read the figure **in the rendered document**.
 
-- [ ] T015 [US2] **Do not modify `src/projects/billing/package/bill-abstract.ts` or `src/projects/billing/workbook/bill-pdf.renderer.ts`.** Both already read all ten `BillPackage` adjustment columns and print them correctly. The defect is a second store upstream, not a renderer. This task is a verification that they are untouched at the end of the phase
-- [ ] T016 [US2] Retire `advanceRecovery` and `otherDeductions` from RA bill input in `src/projects/billing/dto/ra-bill.dto.ts`. Under `forbidNonWhitelisted` a caller sending them receives a 400 — a refusal, which is the intent, not a silent strip
-- [ ] T017 [US2] Data migration copying existing `RABill` deduction values into the package's adjustment columns where a package exists. **The orphan rule (research §2)**: a bill with **no** package keeps its values and the fields become read-only. **The columns are not dropped in this feature**
-- [ ] T018 [US2] `web:` remove the two deduction inputs from `app/ui/projects/ra-bill-sheet.tsx`, leaving the figures readable where a bill still carries them
-- [ ] T019 [US2] [P] Compose a client bill through the package path from the Client bills tab in `web:app/ui/projects/client-bills-panel.tsx`; the manual sheet becomes the correction route (FR-007)
-- [ ] T020 [US2] An overridden proposed quantity carries a reason (FR-008), in `src/projects/billing/package/bill-package.service.ts` and the sheet
-- [ ] T021 [US2] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a deduction recorded through adjustments, then the **rendered PDF** parsed and the figure read out of it. **Vacuity note**: _asserting the column was written proves the write, not the document — the write was already correct._
+- [X] T015 [US2] **Do not modify `src/projects/billing/package/bill-abstract.ts` or `src/projects/billing/workbook/bill-pdf.renderer.ts`.** Both already read all ten `BillPackage` adjustment columns and print them correctly. The defect is a second store upstream, not a renderer. This task is a verification that they are untouched at the end of the phase
+- [X] T016 [US2] Retire `advanceRecovery` and `otherDeductions` from RA bill input in `src/projects/billing/dto/ra-bill.dto.ts`. Under `forbidNonWhitelisted` a caller sending them receives a 400 — a refusal, which is the intent, not a silent strip
+- [X] T017 [US2] Data migration copying existing `RABill` deduction values into the package's adjustment columns where a package exists. **The orphan rule (research §2)**: a bill with **no** package keeps its values and the fields become read-only. **The columns are not dropped in this feature**
+- [X] T018 [US2] `web:` remove the two deduction inputs from `app/ui/projects/ra-bill-sheet.tsx`, leaving the figures readable where a bill still carries them
+- [X] T019 [US2] [P] Compose a client bill through the package path from the Client bills tab in `web:app/ui/projects/client-bills-panel.tsx`; the manual sheet becomes the correction route (FR-007)
+- [X] T020 [US2] An overridden proposed quantity carries a reason (FR-008), in `src/projects/billing/package/bill-package.service.ts` and the sheet
+- [X] T021 [US2] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a deduction recorded through adjustments, then the **rendered PDF** parsed and the figure read out of it. **Vacuity note**: _asserting the column was written proves the write, not the document — the write was already correct._
 
 **Checkpoint**: SC-002 — every deduction recorded appears on the document the recipient receives.
 
@@ -91,12 +91,12 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Independent test**: Raise a work order, fail to bill against it, approve it, bill against it.
 
-- [ ] T022 [US4] Add `pending_approval` to `WorkOrderStatus` in `prisma/schema.prisma`, between `draft` and `active`
-- [ ] T023 [US4] Generate the migration for T022. **It MUST NOT set existing `active` work orders to `pending_approval`** — `plan.md` risk 2: that would make every project in flight unbillable overnight. Only work orders raised after this ships start pending
-- [ ] T024 [US4] Register `ACTION_WORK_ORDER_AWARD` in `src/approvals/default-chains.ts` on the same machinery as `ACTION_RA_BILL`, with submit/approve/return routes on the work order
-- [ ] T025 [US4] Register `ACTION_PURCHASE_RATE_CHANGE` in the same file and the same phase. **`src/inventory` has no approval chain of any kind today** — this is the module's first, and standing the machinery up once for both subjects is why they share a phase (research §3)
-- [ ] T026 [US4] Refuse a package composed against an unapproved award, by name, in `src/projects/billing/package/bill-package.service.ts` (`WORK_ORDER_NOT_APPROVED`)
-- [ ] T027 [US4] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a composition refused against an unapproved award **and accepted once approved**. **Vacuity note**: _the refusal alone passes for a guard that refuses everything — the acceptance is the half that makes it mean something._
+- [X] T022 [US4] Add `pending_approval` to `WorkOrderStatus` in `prisma/schema.prisma`, between `draft` and `active`
+- [X] T023 [US4] Generate the migration for T022. **It MUST NOT set existing `active` work orders to `pending_approval`** — `plan.md` risk 2: that would make every project in flight unbillable overnight. Only work orders raised after this ships start pending
+- [X] T024 [US4] Register `ACTION_WORK_ORDER_AWARD` in `src/approvals/default-chains.ts` on the same machinery as `ACTION_RA_BILL`, with submit/approve/return routes on the work order
+- [X] T025 [US4] Register `ACTION_PURCHASE_RATE_CHANGE` in the same file and the same phase. **`src/inventory` has no approval chain of any kind today** — this is the module's first, and standing the machinery up once for both subjects is why they share a phase (research §3)
+- [X] T026 [US4] Refuse a package composed against an unapproved award, by name, in `src/projects/billing/package/bill-package.service.ts` (`WORK_ORDER_NOT_APPROVED`)
+- [X] T027 [US4] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a composition refused against an unapproved award **and accepted once approved**. **Vacuity note**: _the refusal alone passes for a guard that refuses everything — the acceptance is the half that makes it mean something._
 
 **Checkpoint**: SC-004 — no work order can be billed against until approved.
 
@@ -108,17 +108,17 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Independent test**: Buy an item from a vendor once typing a rate; buy it again and find the rate supplied and unalterable **through the endpoint**.
 
-- [ ] T028 [US5] Add `inventory.VendorItemRate` to `prisma/schema.prisma` keyed `[companyId, vendorId, itemId, effectiveFrom]`, `effectiveTo` null meaning current, shaped on `settings.HireRate`. **`vendorId` is a plain column with no relation** — `partners.Vendor` is another schema, exactly as `Purchase.vendorId` already does it (Principle I)
-- [ ] T029 [US5] Generate the migration for T028
-- [ ] T030 [US5] **GATING — the RLS probe** for `VendorItemRate` in `test/rls-vendor-item-rate.e2e-spec.ts`: company B cannot read company A's agreed rates and cannot establish one against company A's item. **Principle IV is non-negotiable; this phase is not committable without it**
-- [ ] T031 [US5] `src/inventory/rates/vendor-item-rate.service.ts`: the first purchase of a vendor–item pair establishes the rate; a known item from a **new vendor** is a first purchase
-- [ ] T032 [US5] Enforce the agreed rate **in `src/inventory/purchases/purchases.service.ts`, on create and on update**, refusing a different one with `PURCHASE_RATE_FIXED` naming the agreed rate and its effective date. **In the service, not the DTO** (research §5): `PATCH /purchases/:id` accepts a rate from any caller, and a DTO can only omit a field, which is not refusal
-- [ ] T033 [US5] Note in the service docblock that `src/inventory/stock/stock.service.ts` recomputes a **weighted average on every receipt**, so this rate moves the valuation of stock already held — the reason the control reaches past the purchase row
-- [ ] T034 [US5] Forward only (FR-014): purchases already recorded are untouched and stay editable. An approved change applies from approval onward and does not restate purchases already made (FR-015)
-- [ ] T035 [US5] [P] FR-016: `GET /inventory/vendor-rates?itemId=` with no `vendorId` answers what other vendors have agreed, for display beside a first entry; plus the first-purchase report over a period
-- [ ] T036 [US5] FR-017: add the photo column to `Purchase` (`billFile` exists, there is no photo), generate the migration, and require both **before approval, not at creation** — site staff photographing a delivery at dusk with no signal must still record it. Not retrospective
-- [ ] T037 [US5] `web:` purchase form renders the rate read-only from the server's `rateIsFixed`, with sibling-vendor rates beside a first entry
-- [ ] T038 [US5] **Test (vacuity-noted)** in `test/purchases.e2e-spec.ts`: a second purchase's rate is unchanged after an attempt to alter it **through `PATCH /inventory/purchases/:id`**. **Vacuity note**: _asserting the form field is disabled proves nothing about the endpoint behind it._
+- [X] T028 [US5] Add `inventory.VendorItemRate` to `prisma/schema.prisma` keyed `[companyId, vendorId, itemId, effectiveFrom]`, `effectiveTo` null meaning current, shaped on `settings.HireRate`. **`vendorId` is a plain column with no relation** — `partners.Vendor` is another schema, exactly as `Purchase.vendorId` already does it (Principle I)
+- [X] T029 [US5] Generate the migration for T028
+- [X] T030 [US5] **GATING — the RLS probe** for `VendorItemRate` in `test/rls-vendor-item-rate.e2e-spec.ts`: company B cannot read company A's agreed rates and cannot establish one against company A's item. **Principle IV is non-negotiable; this phase is not committable without it**
+- [X] T031 [US5] `src/inventory/rates/vendor-item-rate.service.ts`: the first purchase of a vendor–item pair establishes the rate; a known item from a **new vendor** is a first purchase
+- [X] T032 [US5] Enforce the agreed rate **in `src/inventory/purchases/purchases.service.ts`, on create and on update**, refusing a different one with `PURCHASE_RATE_FIXED` naming the agreed rate and its effective date. **In the service, not the DTO** (research §5): `PATCH /purchases/:id` accepts a rate from any caller, and a DTO can only omit a field, which is not refusal
+- [X] T033 [US5] Note in the service docblock that `src/inventory/stock/stock.service.ts` recomputes a **weighted average on every receipt**, so this rate moves the valuation of stock already held — the reason the control reaches past the purchase row
+- [X] T034 [US5] Forward only (FR-014): purchases already recorded are untouched and stay editable. An approved change applies from approval onward and does not restate purchases already made (FR-015)
+- [X] T035 [US5] [P] FR-016: `GET /inventory/vendor-rates?itemId=` with no `vendorId` answers what other vendors have agreed, for display beside a first entry; plus the first-purchase report over a period
+- [X] T036 [US5] FR-017: add the photo column to `Purchase` (`billFile` exists, there is no photo), generate the migration, and require both **before approval, not at creation** — site staff photographing a delivery at dusk with no signal must still record it. Not retrospective
+- [X] T037 [US5] `web:` purchase form renders the rate read-only from the server's `rateIsFixed`, with sibling-vendor rates beside a first entry
+- [X] T038 [US5] **Test (vacuity-noted)** in `test/purchases.e2e-spec.ts`: a second purchase's rate is unchanged after an attempt to alter it **through `PATCH /inventory/purchases/:id`**. **Vacuity note**: _asserting the form field is disabled proves nothing about the endpoint behind it._
 
 **Checkpoint**: SC-005.
 
@@ -128,17 +128,17 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Goal**: FR-018..FR-021.
 
-- [ ] T039 [US6] Add `DEBIT_NOTE` to `CodeSeriesType` and `noteNumber String?` to `BillPackageDebit`. Generate the migration. **Nullable** because debits already recorded have none, and inventing numbers would print identifiers on documents nobody issued — the decision 027 made for work-order codes
-- [ ] T040 [US6] Allocate the number through `CodeSeriesService` **when the debit is raised**, never when a PDF is produced (research §6) — a number allocated at print is a different number each time, and the register and the document would disagree
-- [ ] T041 [US6] Standalone debit-note PDF in `src/projects/billing/package/debit-note.service.ts`, **reusing `bill-pdf.renderer.ts`'s primitives. No second renderer is written**
-- [ ] T042 [US6] Add `projects.SignedCopy` and `projects.RABillPayment` plus `acknowledgedAt` on `RABill` to `prisma/schema.prisma`. Generate the migration. **No balance or outstanding column** — FR-021 derives it
-- [ ] T043 [US6] **GATING — RLS probe** for `RABillPayment` in `test/rls-ra-bill-payment.e2e-spec.ts`
-- [ ] T044 [US6] **GATING — RLS probe** for `SignedCopy` in `test/rls-signed-copy.e2e-spec.ts`, covering the stored file reference as well as the row
-- [ ] T045 [US6] Signed-copy upload and named download through `StorageService` on the `DWRAttachment` pattern, for an RA bill and for a debit note; arrival sets `acknowledgedAt` — **a state, not merely a file** (FR-020)
-- [ ] T046 [US6] `src/projects/billing/payments/`: record a payment, partial allowed; `outstandingAmount` **computed on read** as certified less paid
-- [ ] T047 [US6] [P] `GET /projects/subcontractors/:partnerId/outstanding` reading across a subcontractor's bills, not per bill
-- [ ] T048 [US6] [P] `web:` the signed-copy upload, the payment form and the outstanding view
-- [ ] T049 [US6] **Test (vacuity-noted)**: a bill certified at ₹100 with ₹60 paid reports ₹40 outstanding. **Vacuity note**: _asserting the payment row exists proves the write, not the derivation._
+- [X] T039 [US6] Add `DEBIT_NOTE` to `CodeSeriesType` and `noteNumber String?` to `BillPackageDebit`. Generate the migration. **Nullable** because debits already recorded have none, and inventing numbers would print identifiers on documents nobody issued — the decision 027 made for work-order codes
+- [X] T040 [US6] Allocate the number through `CodeSeriesService` **when the debit is raised**, never when a PDF is produced (research §6) — a number allocated at print is a different number each time, and the register and the document would disagree
+- [X] T041 [US6] Standalone debit-note PDF in `src/projects/billing/package/debit-note.service.ts`, **reusing `bill-pdf.renderer.ts`'s primitives. No second renderer is written**
+- [X] T042 [US6] Add `projects.SignedCopy` and `projects.RABillPayment` plus `acknowledgedAt` on `RABill` to `prisma/schema.prisma`. Generate the migration. **No balance or outstanding column** — FR-021 derives it
+- [X] T043 [US6] **GATING — RLS probe** for `RABillPayment` in `test/rls-ra-bill-payment.e2e-spec.ts`
+- [X] T044 [US6] **GATING — RLS probe** for `SignedCopy` in `test/rls-signed-copy.e2e-spec.ts`, covering the stored file reference as well as the row
+- [X] T045 [US6] Signed-copy upload and named download through `StorageService` on the `DWRAttachment` pattern, for an RA bill and for a debit note; arrival sets `acknowledgedAt` — **a state, not merely a file** (FR-020)
+- [X] T046 [US6] `src/projects/billing/payments/`: record a payment, partial allowed; `outstandingAmount` **computed on read** as certified less paid
+- [X] T047 [US6] [P] `GET /projects/subcontractors/:partnerId/outstanding` reading across a subcontractor's bills, not per bill
+- [X] T048 [US6] [P] `web:` the signed-copy upload, the payment form and the outstanding view
+- [X] T049 [US6] **Test (vacuity-noted)**: a bill certified at ₹100 with ₹60 paid reports ₹40 outstanding. **Vacuity note**: _asserting the payment row exists proves the write, not the derivation._
 
 **Checkpoint**: SC-006.
 
@@ -148,12 +148,12 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Goal**: FR-022..FR-024.
 
-- [ ] T050 [US7] `src/projects/dwr/dwr-workbook.renderer.ts` producing the client's form, via the pattern `src/projects/billing/workbook/bill-workbook.renderer.ts` establishes. The DWR controller has fifteen endpoints and **none produces a file**
-- [ ] T051 [US7] `GET /projects/dwr/:dwrId/report.xlsx`, named from the project code and the work date
-- [ ] T052 [US7] Remove `weather` from `src/projects/dwr/dto/create-dwr.dto.ts` and `update-dwr.dto.ts`, and from `web:app/ui/projects/dwr-form.tsx`. **The column, its default and every recorded value are kept — there is NO migration for this task.** Removing the input is the request; discarding what was recorded is not
-- [ ] T053 [US7] Resolve `recordedByName` and `submittedByName` in `src/projects/dwr/dwr.service.ts`, **reusing `project-documents.service.ts`'s `actorNames` helper rather than writing a second one**. Both names, because on a report returned for correction they are different people
-- [ ] T054 [US7] [P] `web:` show both names on the report
-- [ ] T055 [US7] **Test (vacuity-noted)**: the generated workbook's **cells read back** against the expected layout. **Vacuity note**: _asserting the download returned bytes proves a response, not a document._
+- [X] T050 [US7] `src/projects/dwr/dwr-workbook.renderer.ts` producing the client's form, via the pattern `src/projects/billing/workbook/bill-workbook.renderer.ts` establishes. The DWR controller has fifteen endpoints and **none produces a file**
+- [X] T051 [US7] `GET /projects/dwr/:dwrId/report.xlsx`, named from the project code and the work date
+- [X] T052 [US7] Remove `weather` from `src/projects/dwr/dto/create-dwr.dto.ts` and `update-dwr.dto.ts`, and from `web:app/ui/projects/dwr-form.tsx`. **The column, its default and every recorded value are kept — there is NO migration for this task.** Removing the input is the request; discarding what was recorded is not
+- [X] T053 [US7] Resolve `recordedByName` and `submittedByName` in `src/projects/dwr/dwr.service.ts`, **reusing `project-documents.service.ts`'s `actorNames` helper rather than writing a second one**. Both names, because on a report returned for correction they are different people
+- [X] T054 [US7] [P] `web:` show both names on the report
+- [X] T055 [US7] **Test (vacuity-noted)**: the generated workbook's **cells read back** against the expected layout. **Vacuity note**: _asserting the download returned bytes proves a response, not a document._
 
 **Checkpoint**: SC-007.
 
@@ -163,13 +163,31 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 **Goal**: FR-025..FR-030. **WEB ONLY — this phase makes NO API CHANGE AT ALL.** Every value is already in a response the screen receives.
 
-- [ ] T056 [US8] Subcontractor control ahead of Work order in `web:app/ui/projects/bill-packages-panel.tsx`, work orders narrowed by `partnerId`, vendor names from the hook the Subcontractors tab already uses
-- [ ] T057 [US8] **Clear the chosen work order when the subcontractor changes.** This is the one failure the control can introduce, and it would compose a bill against the wrong contract (FR-026)
-- [ ] T058 [US8] Work orders with a null `partnerId` or a null `code` get their own entry in the picker rather than being filtered out of existence — filtered, they are unbillable with nothing on screen to say why (FR-027)
-- [ ] T059 [US8] [P] Handle the company-switch 404 **once** in `web:app/dashboard/projects/portfolio/[id]/layout.tsx`, redirecting to the portfolio of the company now selected **with an explanation on arrival**. Not per page. The API's 404 is correct and does not change (FR-028)
-- [ ] T060 [US8] [P] Commercial terms card on `web:app/dashboard/projects/portfolio/[id]/page.tsx` carrying client retention and the quoted percentage, plus the descriptive facts the response already holds (FR-029)
-- [ ] T061 [US8] [P] Rename Issue to "Issue / Consumption material" in `web:app/lib/constants.ts` and the navigation — **labels only; the route and the API are unchanged**, because renaming a URL breaks every link already sent for no gain (FR-030)
+- [X] T056 [US8] Subcontractor control ahead of Work order in `web:app/ui/projects/bill-packages-panel.tsx`, work orders narrowed by `partnerId`, vendor names from the hook the Subcontractors tab already uses
+- [X] T057 [US8] **Clear the chosen work order when the subcontractor changes.** This is the one failure the control can introduce, and it would compose a bill against the wrong contract (FR-026)
+- [X] T058 [US8] Work orders with a null `partnerId` or a null `code` get their own entry in the picker rather than being filtered out of existence — filtered, they are unbillable with nothing on screen to say why (FR-027)
+- [X] T059 [US8] [P] Handle the company-switch 404 **once** in `web:app/dashboard/projects/portfolio/[id]/layout.tsx`, redirecting to the portfolio of the company now selected **with an explanation on arrival**. Not per page. The API's 404 is correct and does not change (FR-028)
+- [X] T060 [US8] [P] Commercial terms card on `web:app/dashboard/projects/portfolio/[id]/page.tsx` carrying client retention and the quoted percentage, plus the descriptive facts the response already holds (FR-029)
+- [X] T061 [US8] [P] Rename Issue to "Issue / Consumption material" in `web:app/lib/constants.ts` and the navigation — **labels only; the route and the API are unchanged**, because renaming a URL breaks every link already sent for no gain (FR-030)
 - [ ] T062 [US8] **Test (vacuity-noted)**: the work order selection **after** the subcontractor is changed. **Vacuity note**: _asserting the subcontractor control renders proves it exists, not that it clears anything._
+
+  **NOT DONE as an automated test, and this is the honest reason rather than an excuse.**
+  `buildcore-web` has no test runner at all — no jest, no vitest, no testing-library; its
+  `package.json` carries `build`, `dev`, `start` and `lint` and nothing else. This repository
+  verifies its screens by a documented manual pass (`specs/MANUAL-VERIFICATION.md`), and adding a
+  test framework is a dependency decision for the user, not something to take unasked in a
+  repository whose formatting alone has already cost 2,400 spurious lines once.
+
+  What was done instead, so the rule is not left living inside an event handler:
+  `web:app/ui/projects/work-order-picker.ts` holds `visibleWorkOrders` and
+  `workOrderBelongsToSubcontractor` as pure functions, and **the composer checks the second at
+  submit** as well as clearing in its change handler. A stale selection is therefore refused by a
+  rule stated in one place rather than only prevented by a handler somebody may route around.
+
+  To close this task: either walk the manual pass (choose subcontractor A, pick one of their work
+  orders, switch to subcontractor B, confirm the work order control is empty and says why — then
+  record what you saw and the date here), or decide to add a runner to `buildcore-web`, in which
+  case the two functions above are already the units to assert.
 
 **Checkpoint**: SC-008.
 
@@ -177,13 +195,44 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 
 ## Phase 10: Verification
 
-- [ ] T063 `npx prettier --write` on every touched file in **`buildcore-api` only** — `buildcore-web` has no config and must never be formatted
-- [ ] T064 `npm run lint` in both repositories; revert `test/account-creation.e2e-spec.ts` in the api afterwards (T007)
-- [ ] T065 `npm run build` in both repositories
-- [ ] T066 Full unit suite in `buildcore-api`
-- [ ] T067 Full e2e suite **against `buildcore_scratch` only**, never the dev database
-- [ ] T068 `src/approvals/fr-022-unmigrated-modules.spec.ts` — before every src/ commit and again after the first commit creating a new directory (T008)
-- [ ] T069 Walk quickstart's seven passes by hand, including the three "what must NOT change" checks: editing a project still saves, every active work order is still active, the company-switch refusal is still a 404
+- [X] T063 `npx prettier --write` on every touched file in **`buildcore-api` only** — `buildcore-web` has no config and must never be formatted. Done. `prettier --check src test prisma/*.ts` reports three files unformatted — `src/metadata.ts`, `test/account-creation.e2e-spec.ts`, `test/jest-e2e.json` — all **pre-existing and untouched by this feature**, last changed by `4d9724f`. Reformatting files a feature does not touch is churn
+- [X] T064 `npm run lint` in both repositories; revert `test/account-creation.e2e-spec.ts` in the api afterwards (T007). Api: 0 errors, 83 warnings, all pre-existing; the revert was needed, as always. Web: 0 errors, 11 warnings, all in files this feature does not touch
+- [X] T065 `npm run build` in both repositories. Api: TSC 0 issues, 770 files. Web: compiled, service worker written
+- [X] T066 Full unit suite in `buildcore-api` — **1,896 passing, 172 suites**
+- [X] T067 Full e2e suite **against `buildcore_scratch` only**, never the dev database.
+
+  **One real failure, found and fixed, and it was a hole in this feature's own control.**
+  `project-pnl.e2e-spec.ts` began refusing its own fixture with `WORK_ORDER_NOT_APPROVED` — correct
+  behaviour — and chasing it found that `CreateWorkOrderDto` still accepted a `status`, so a caller
+  could declare an award `active` and bill against it immediately. **The web's own Subcontractors
+  screen was doing exactly that**, sending `status: 'active'` with every work order it raised, which
+  made Phase C's approval cosmetic. Closed in both repositories, with a unit test on the stored
+  status and an e2e asserting the 400.
+
+  **Three pre-existing failures remain and are not this feature's** — `assets`, `dashboard` and
+  `my-workspace`, all scratch-provisioning gaps of the same family as the approval chains.
+  Diagnosed, measured and recorded in `test/README-e2e.md` with the fix. `git diff` proves 028
+  touches nothing in those modules and the FR-022 guard asserts it independently
+- [X] T068 `src/approvals/fr-022-unmigrated-modules.spec.ts` — before every src/ commit and again after the first commit creating a new directory (T008). Run before each of the six commits and again after the two creating `src/projects/billing/payments` and `src/inventory/rates`. Passing
+- [X] T069 Walk quickstart's seven passes by hand, including the three "what must NOT change" checks.
+
+  The three invariants are verified **mechanically**, which is stronger than a walk:
+
+  - *Editing a project still saves, and the withdrawn report got no code change* —
+    `git diff --name-only cb311f9~1 HEAD -- src/projects/portfolio/` is **empty**.
+  - *Every work order already `active` stays active* — no migration in this feature contains an
+    `UPDATE` against `WorkOrder`; the enum gained a value and nothing was restated.
+  - *The company-switch refusal is still a 404* — `ProjectsService.findOne` still throws
+    `NotFoundException`, unchanged.
+
+  Also verified mechanically: `advanceRecovery` and `otherDeductions` are gone from every RA bill
+  DTO (so `forbidNonWhitelisted` makes Pass 2 step 3 a 400) and **still present** in
+  `prisma/schema.prisma` and `bill-totals.ts` — retired, not dropped.
+
+  The remaining steps are browser passes against a running pair and are the one thing an agent
+  cannot do: Pass 1's two numbered bills on screen, Pass 4's read-only rate field, Pass 5's
+  acknowledged badge, Pass 6's workbook opened in a spreadsheet, and all five steps of Pass 7.
+  Their server-side halves are each covered by a test named in this file
 
 ---
 

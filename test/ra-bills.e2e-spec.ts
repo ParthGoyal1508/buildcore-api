@@ -398,6 +398,26 @@ describe('RA bills against an award (e2e)', () => {
         .catch(() => undefined);
     });
 
+    it('refuses to raise an award that declares itself active', async () => {
+      // **The hole Phase C shipped.** `CreateWorkOrderDto` carried a `status`, so a caller could
+      // declare an award `active` on creation and bill against it at once — and this product's own
+      // Subcontractors screen was doing exactly that, sending `status: 'active'` with every work
+      // order it raised. The approval was a control in appearance only.
+      //
+      // A 400 rather than a silently ignored field, because the pipe runs at
+      // `forbidNonWhitelisted` and a dropped status is a screen that looks like it saved something
+      // it did not. Found by the e2e suite, not by review.
+      await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workDetail: 'An award that would like to approve itself',
+          status: 'active',
+        })
+        .expect(400);
+    });
+
     it('refuses a bill against a draft award, on the sheet and on the package', async () => {
       const sheet = await http()
         .post(`/projects/ra-bills?companyId=${companyId}`)

@@ -271,6 +271,23 @@ describe('Project P&L across four modules (e2e)', () => {
       .expect(200);
     const awardLineId = (award.body.lines ?? award.body)[0].id;
 
+    // **The award is activated directly, and that is deliberate** (028 FR-009).
+    //
+    // A work order is now raised as a `draft` and reaches `active` only when its approval chain
+    // completes — so composing a bill against a freshly created one is refused by name
+    // (`WORK_ORDER_NOT_APPROVED`), which is what this fixture started failing on.
+    //
+    // Walked through the chain, this `beforeAll` would be testing the award approval rather than
+    // setting up for the P&L, and a four-level chain's worth of requests would sit between this
+    // suite and the figures it exists to check. `test/billing-approval` territory owns that path:
+    // it asserts the refusal before approval **and** the acceptance after it, which is the pair
+    // that makes the control mean something. Here the state is simply arranged, the same way the
+    // purchase below is written with `sys` rather than through four screens.
+    await sys.workOrder.update({
+      where: { id: workOrderId },
+      data: { status: 'active' },
+    });
+
     const raDraft = await http()
       .post(`/projects/ra-bills?companyId=${companyId}`)
       .set(auth())

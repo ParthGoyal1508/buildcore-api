@@ -77,10 +77,16 @@ export class CreateWorkOrderDto {
   @Max(1)
   retentionPercent?: number;
 
-  @ApiPropertyOptional({ enum: WorkOrderStatus })
-  @IsOptional()
-  @IsEnum(WorkOrderStatus)
-  status?: WorkOrderStatus;
+  // **`status` was accepted here and is deliberately gone** (028 FR-009).
+  //
+  // A new work order is a `draft`, always. Accepting a status let a caller declare an award
+  // `active` on creation and bill against it immediately — which is the whole of what the approval
+  // this feature added was for, walked around by the one screen that raises an award. A control
+  // enforced by a form over an endpoint that accepts anything is a control in appearance only, and
+  // this feature's own spec says so about the purchase rate.
+  //
+  // `pending_approval` comes from `POST /projects/work-orders/:id/submit`; `active` comes from the
+  // approval chain completing and from nowhere else.
 }
 
 export class UpdateWorkOrderDto {
@@ -139,6 +145,14 @@ export class UpdateWorkOrderDto {
   @Max(1)
   retentionPercent?: number;
 
+  /**
+   * The only status an edit may set is `completed` (028 FR-009).
+   *
+   * Closing out a finished award is an ordinary edit. The other three are not: `pending_approval`
+   * is reached by submitting, `active` by the chain completing, and reverting an active award to
+   * `draft` would strip an approval that has already been given — so each is refused by name in
+   * the service rather than silently ignored here.
+   */
   @ApiPropertyOptional({ enum: WorkOrderStatus })
   @IsOptional()
   @IsEnum(WorkOrderStatus)

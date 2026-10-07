@@ -131,6 +131,88 @@ describe('raising a work order', () => {
   });
 });
 
+describe('an award cannot declare itself approved (028 FR-009)', () => {
+  it('stores a draft even when the caller asks for an active award', async () => {
+    // **The hole Phase C shipped, and what found it.** `CreateWorkOrderDto` carried a `status`,
+    // so a caller — including this product's own Subcontractors screen, which sent
+    // `status: 'active'` — could declare an award active on creation and bill against it
+    // immediately. The approval was then a control in appearance only: enforced by a form over an
+    // endpoint that accepted anything, which is exactly what this feature's spec says about the
+    // purchase rate.
+    //
+    // Found by the e2e suite refusing a composition in a fixture that had been raising active
+    // awards, not by review.
+    const created: Record<string, unknown>[] = [];
+    const tx = {
+      $executeRaw: async () => 0,
+      project: { findFirst: async () => ({ id: 'p-1' }) },
+      workOrder: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          created.push(args.data);
+          return { id: 'wo-1' };
+        },
+        findFirst: async () => ({
+          id: 'wo-1',
+          projectId: 'p-1',
+          partnerId: null,
+          code: 'PRPL-WO-0008',
+          workDetail: 'Earthwork',
+          terms: null,
+          requirements: null,
+          hireContract: null,
+          labourAmount: { toNumber: () => 0 },
+          materialAmount: { toNumber: () => 0 },
+          retentionPercent: { toNumber: () => 0.05 },
+          status: 'draft',
+          createdAt: new Date(),
+          _count: { awardLines: 0, raBills: 0 },
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    const service = new WorkOrdersService(
+      prisma as never,
+      { next: async () => 'PRPL-WO-0008' } as never,
+      { submit: async () => undefined } as never,
+    );
+
+    await service.create(ctx, 'c-1', {
+      projectId: 'p-1',
+      workDetail: 'Earthwork',
+      // Sent anyway, as the old screen did. The DTO no longer declares it; the service ignores it.
+      status: 'active',
+    } as never);
+
+    // The **stored** status, not the one that was asked for.
+    expect(created[0].status).toBe('draft');
+  });
+
+  it('refuses an edit that sets an award active', async () => {
+    const { service, updates } = build({});
+
+    await expect(
+      service.update(ctx, 'wo-1', { status: 'active' } as never),
+    ).rejects.toMatchObject({
+      response: { code: 'WORK_ORDER_STATUS_NOT_SETTABLE' },
+    });
+    // Refused **and** nothing written. A guard that throws after the update leaves the award
+    // active and reports an error nobody can act on.
+    expect(updates).toHaveLength(0);
+  });
+
+  it('still allows an award to be closed out', async () => {
+    // The other half. A guard that refused every status would pass the test above and make a
+    // finished award impossible to close, which is a worse defect than the one it guards.
+    const { service, updates } = build({});
+
+    await service.update(ctx, 'wo-1', { status: 'completed' } as never);
+
+    expect(updates[0].status).toBe('completed');
+  });
+});
+
 describe('reading a work order', () => {
   it('says how many award lines and bills it has', async () => {
     const { service } = build({ awardLineCount: 0, billCount: 0 });

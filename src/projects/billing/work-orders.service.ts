@@ -261,7 +261,10 @@ export class WorkOrdersService {
           labourAmount: input.labourAmount ?? 0,
           materialAmount: input.materialAmount ?? 0,
           retentionPercent: input.retentionPercent ?? 0,
-          status: input.status ?? WorkOrderStatus.draft,
+          // **Always a draft** (028 FR-009). `CreateWorkOrderDto` no longer carries a status, so
+          // there is nothing to honour here — and that is the point: the approval this feature
+          // added was being walked around by a caller declaring an award `active` on creation.
+          status: WorkOrderStatus.draft,
         },
         select: { id: true },
       });
@@ -306,6 +309,28 @@ export class WorkOrdersService {
             'changed. The retention on an issued bill is already withheld at the old rate, and ' +
             'moving the basis would make the subcontractor’s copy disagree with ours about money ' +
             'already held.',
+        });
+      }
+
+      // 028 FR-009. `completed` is an ordinary edit — closing out a finished award. The other
+      // three are not, and each is refused by name rather than ignored, because a status silently
+      // dropped is a screen that looks like it saved something it did not.
+      if (
+        input.status !== undefined &&
+        input.status !== WorkOrderStatus.completed
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'WORK_ORDER_STATUS_NOT_SETTABLE',
+          message:
+            input.status === WorkOrderStatus.active
+              ? 'An award becomes active when its approval completes, never by being set. Send ' +
+                'it for approval instead.'
+              : input.status === WorkOrderStatus.pending_approval
+              ? 'Send the award for approval rather than setting this status — submitting is ' +
+                'what puts it in front of an approver.'
+              : 'An award that has been approved cannot be returned to draft: the approval has ' +
+                'already been given, and a draft would carry it silently.',
         });
       }
 
