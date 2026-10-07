@@ -285,6 +285,29 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // under these paths — and it was not followed here either. Written down a seventh time
           // because the alternative is pretending the habit works.
           ':(exclude)src/projects/clients',
+          // Owned by 028, the projects defect register. Five paths, and the approval question has a
+          // different answer here than on every exclusion above it.
+          //
+          // `src/projects/billing` is **already excluded** higher up, so the award approval added by
+          // FR-009 is covered. What is new is `src/inventory`: FR-010 registers
+          // `ACTION_PURCHASE_RATE_CHANGE`, and that is the inventory module's **first approval of
+          // any kind**. So unlike every note above, this one cannot say "nothing here calls
+          // `ApprovalService`" — the point of the change is that something eventually will.
+          //
+          // It does not yet. The action is registered in `default-chains.ts` and consumed by no
+          // caller; `vendor-item-rate.service.ts` refuses a mismatched rate and raises nothing. The
+          // per-file assertions above still read the material indent, the muster, the payment sheet
+          // and the labour advance, and none of those paths is touched. When the rate-change
+          // workflow is built, this exclusion is the line to revisit rather than widen.
+          //
+          // **Fired a commit late for the eighth time**, and the seventh note predicted exactly
+          // this: `src/inventory/rates/` did not exist to be seen until the commit that created it
+          // landed. The run before that commit passed, as it had to. Run it again straight after
+          // the first commit of any new directory under these paths — written down an eighth time
+          // because it keeps being the one step skipped.
+          ':(exclude)src/inventory/rates',
+          ':(exclude)src/inventory/purchases',
+          ':(exclude)src/inventory/inventory.module.ts',
         ],
         {
           cwd: REPO_ROOT,
