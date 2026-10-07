@@ -3,11 +3,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BillPackageStatus, Prisma } from '@prisma/client';
+import { BillPackageStatus, CodeSeriesType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
+import { CodeSeriesService } from '../../../settings/code-series/code-series.service';
+import type { DebitNoteDocumentView } from '../workbook/bill-pdf.renderer';
+import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
 import { packageLabel } from './bill-package.service';
 import { PACKAGE_ERRORS } from './package-error-codes';
 
@@ -36,6 +39,13 @@ export interface RecordDebitInput {
 
 export interface DebitRow {
   id: string;
+  /**
+   * `{shortCode}-DN-0001`, or null on a debit recorded before 028 (FR-019).
+   *
+   * Null is shown as blank rather than as a placeholder: those debits were never issued under a
+   * number, and printing one would name a document nobody sent.
+   */
+  noteNumber: string | null;
   groupHeading: string | null;
   description: string;
   location: string | null;
@@ -91,9 +101,26 @@ const ZERO = new Prisma.Decimal(0);
  */
 @Injectable()
 export class DebitNoteService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly codeSeries: CodeSeriesService,
+    private readonly pdf: BillPdfRenderer,
+  ) {}
 
-  /** Records a debit against a project. Not yet recovered on anything. */
+  /**
+   * Records a debit against a project, under its own note number. Not yet recovered on anything.
+   *
+   * **The number is allocated here, at raise** (028 FR-019, research §6) — not when a PDF is
+   * produced. A number taken from the series at print time is a *different* number on every
+   * production of the same document, so the register would say DN-0004 and the note in the
+   * subcontractor's hand would say DN-0009, and neither reader could tell which debit the other
+   * meant. Allocating at raise also means the number exists before anybody asks for the document,
+   * which is what makes the register answerable.
+   *
+   * Inside the same transaction as the row that carries it, as `CodeSeriesService` requires: a
+   * number allocated in its own transaction is burned by any later rollback, leaving a gap in the
+   * sequence that readers take for a deleted debit.
+   */
   async record(
     ctx: RlsContext,
     companyId: string,
@@ -108,9 +135,17 @@ export class DebitNoteService {
       // 404 and not 403 (FR-053).
       if (!project) throw new NotFoundException('Project not found');
 
+      const noteNumber = await this.codeSeries.next(
+        tx,
+        companyId,
+        CodeSeriesType.DEBIT_NOTE,
+        'DN',
+      );
+
       return tx.billPackageDebit.create({
         data: {
           companyId,
+          noteNumber,
           projectId: input.projectId,
           groupHeading: input.groupHeading ?? null,
           description: input.description,
@@ -263,10 +298,101 @@ export class DebitNoteService {
       };
     });
   }
+
+  /**
+   * One debit as the document a subcontractor signs (028 FR-018).
+   *
+   * ## Where the parties come from
+   *
+   * The issuer is the company. The **subcontractor is only named where the debit has been
+   * recovered on one of their bills**, and then it is taken from that package's own frozen
+   * `receiverName`/`receiverCode` columns rather than resolved afresh — the package is what fixed
+   * those values at composition, and a note that re-resolved them would disagree with the bill it
+   * was recovered on the first time a vendor record was corrected.
+   *
+   * A debit raised and not yet recovered is a debit against the **project**, not against a party.
+   * Its note prints those fields blank, which is the honest reading: naming the likeliest
+   * subcontractor would put a party's name on a document making a claim against them that nobody
+   * has yet decided to make.
+   *
+   * No second renderer: `BillPdfRenderer.renderDebitNote` is a method on the renderer the package
+   * PDF already uses, so the note carries the same letterhead and the same column treatment as the
+   * register it came from.
+   */
+  async noteDocumentFor(
+    ctx: RlsContext,
+    companyId: string,
+    debitId: string,
+  ): Promise<{ bytes: Buffer; filename: string }> {
+    const debit = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackageDebit.findFirst({
+        where: { id: debitId },
+        include: {
+          project: { select: { name: true, code: true } },
+          recoveredOnPackage: {
+            select: {
+              sequenceNo: true,
+              issuerName: true,
+              receiverName: true,
+              receiverCode: true,
+              receiverGstin: true,
+              receiverPan: true,
+            },
+          },
+        },
+      }),
+    );
+    if (!debit) throw new NotFoundException('Debit not found');
+
+    const company = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.company.findFirst({
+        where: { id: companyId },
+        select: { name: true },
+      }),
+    );
+
+    const pkg = debit.recoveredOnPackage;
+    const view: DebitNoteDocumentView = {
+      issuerName: pkg?.issuerName ?? company?.name ?? null,
+      noteNumber: debit.noteNumber,
+      raisedOn: debit.recordedAt.toISOString().slice(0, 10),
+      projectName: debit.project.name,
+      projectCode: debit.project.code,
+      receiver: {
+        name: pkg?.receiverName ?? null,
+        code: pkg?.receiverCode ?? null,
+        gstin: pkg?.receiverGstin ?? null,
+        pan: pkg?.receiverPan ?? null,
+      },
+      recoveredOn: pkg ? packageLabel(pkg.sequenceNo) : null,
+      groupHeading: debit.groupHeading,
+      line: {
+        description: debit.description,
+        location: debit.location,
+        nos: debit.nos?.toFixed(3) ?? null,
+        length: debit.length?.toFixed(3) ?? null,
+        width: debit.width?.toFixed(3) ?? null,
+        quantity: debit.quantity?.toFixed(3) ?? null,
+        unit: debit.unit,
+        rate: debit.rate.toFixed(2),
+        amount: debit.amount.toFixed(2),
+        amountWithTax: debit.amountWithTax.toFixed(2),
+      },
+    };
+
+    return {
+      bytes: await this.pdf.renderDebitNote(view),
+      // Named from the note number so a folder of these sorts and nothing overwrites anything. A
+      // debit with no number falls back to the project code — never to the cuid, which is the
+      // defect 017 fixed for every other download here.
+      filename: `Debit Note ${debit.noteNumber ?? debit.project.code}.pdf`,
+    };
+  }
 }
 
 type DebitEntity = {
   id: string;
+  noteNumber: string | null;
   groupHeading: string | null;
   description: string;
   location: string | null;
@@ -286,6 +412,7 @@ type DebitEntity = {
 function toRow(debit: DebitEntity): DebitRow {
   return {
     id: debit.id,
+    noteNumber: debit.noteNumber,
     groupHeading: debit.groupHeading,
     description: debit.description,
     location: debit.location,

@@ -1,5 +1,6 @@
 import { inflateSync } from 'zlib';
 
+import type { DebitNoteDocumentView } from './bill-pdf.renderer';
 import { BillPdfRenderer } from './bill-pdf.renderer';
 import { measurement, party, subcontractor, view } from './bill-view.fixture';
 
@@ -189,5 +190,82 @@ describe('what the renderer can reach', () => {
     // checks is an absence somebody adds a constructor parameter to. A renderer that could query
     // could recompute, and a reproduced bill would stop matching the client's copy.
     expect(BillPdfRenderer.length).toBe(0);
+  });
+});
+
+describe('the standalone debit note (028 FR-018, FR-019)', () => {
+  function note(
+    overrides: Partial<DebitNoteDocumentView> = {},
+  ): DebitNoteDocumentView {
+    return {
+      issuerName: 'Parth Realcon Private Limited',
+      noteNumber: 'PRPL-DN-0004',
+      raisedOn: '2026-09-18',
+      projectName: 'Medshi to Washim',
+      projectCode: 'PRPL-PRJ-0004',
+      receiver: { name: null, code: null, gstin: null, pan: null },
+      recoveredOn: null,
+      groupHeading: 'Debit against the ATMS Equipment Missing at site',
+      line: {
+        description: 'PTZ camera missing at KM.226 LHS',
+        location: 'KM.226 LHS',
+        nos: '1.000',
+        length: null,
+        width: null,
+        quantity: '1.000',
+        unit: 'Nos',
+        rate: '125000.00',
+        amount: '125000.00',
+        amountWithTax: '147500.00',
+      },
+      ...overrides,
+    };
+  }
+
+  it('prints the number allocated at raise on the document itself', async () => {
+    const bytes = await new BillPdfRenderer().renderDebitNote(note());
+    const text = textOf(bytes);
+
+    // **Vacuity note**: asserting `noteNumber` was written to the row, or that this call returned
+    // bytes, proves the allocation and the response — neither proves the subcontractor is holding
+    // a numbered document. FR-019 exists so the register and the note cannot disagree about which
+    // debit is which, and that is only true if the number reaches the page. Read back out of the
+    // rendered PDF for the same reason the 028 abstract test is.
+    expect(text).toContain('PRPL-DN-0004');
+    // The figure the subcontractor is being asked to accept, with the tax the register carried.
+    expect(text).toContain('147500.00');
+    expect(text).toContain('PTZ camera missing at KM.226 LHS');
+  });
+
+  it('names the subcontractor only once the debit has been recovered on their bill', async () => {
+    const unrecovered = textOf(
+      await new BillPdfRenderer().renderDebitNote(note()),
+    );
+    const recovered = textOf(
+      await new BillPdfRenderer().renderDebitNote(
+        note({
+          receiver: {
+            name: 'Shree Construction',
+            code: 'PRPL-VEN-0021',
+            gstin: '27AABCU9603R1ZP',
+            pan: 'AABCU9603R',
+          },
+          recoveredOn: 'RA-07',
+        }),
+      ),
+    );
+
+    // Both halves, because only the pair says anything. The first alone would pass for a renderer
+    // that never prints a party at all; the second alone for one that prints whoever it is handed,
+    // including on a debit nobody has yet decided to recover from anybody.
+    expect(unrecovered).not.toContain('Shree Construction');
+    expect(recovered).toContain('Shree Construction');
+    expect(recovered).toContain('RA-07');
+  });
+
+  it('is one page, because a debit note is one document', async () => {
+    expect(pageCount(await new BillPdfRenderer().renderDebitNote(note()))).toBe(
+      1,
+    );
   });
 });

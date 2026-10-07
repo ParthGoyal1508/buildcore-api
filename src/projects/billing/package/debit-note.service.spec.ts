@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 
+import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
 import { DebitNoteService } from './debit-note.service';
 
 /**
@@ -121,7 +122,15 @@ function build(opts: {
   };
 
   return {
-    service: new DebitNoteService(prisma as never),
+    // A stub allocator, not the real `CodeSeriesService`: these tests are about the register and
+    // the one-recovery rule, and a per-company sequence table is not part of either.
+    service: new DebitNoteService(
+      prisma as never,
+      {
+        next: async () => 'PRPL-DN-0001',
+      } as never,
+      new BillPdfRenderer(),
+    ),
     updates,
   };
 }

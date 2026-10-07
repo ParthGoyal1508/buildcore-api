@@ -313,6 +313,34 @@ export class BillPackageController {
 
   // ── The workbook ─────────────────────────────────────────────────────────
 
+  @Get('projects/bill-package-debits/:debitId/note.pdf')
+  @ApiOperation({
+    summary: 'One debit as a standalone note',
+    description:
+      'The document a subcontractor signs to acknowledge a recovery (028 FR-018). The register ' +
+      'already prints inside the package PDF; this is the single-debit note, carrying the number ' +
+      'allocated when the debit was raised so the register and the document cannot disagree.\n\n' +
+      'Rendered by the **same** renderer as the package PDF, so the letterhead and the columns ' +
+      'match the register the figures came from. The subcontractor is named only where the debit ' +
+      'has been recovered on one of their bills; until then it is a debit against the project.',
+  })
+  @ApiResponse({ status: 404, description: 'No such debit in this company.' })
+  async debitNote(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('debitId') debitId: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { bytes, filename } = await this.debits.noteDocumentFor(
+      rlsContextFor(caller),
+      caller.companyId,
+      debitId,
+    );
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(bytes);
+  }
+
   @Get('projects/bill-packages/:packageId/workbook.xlsx')
   @ApiOperation({
     summary: 'The package as a spreadsheet',

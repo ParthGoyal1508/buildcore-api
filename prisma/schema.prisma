@@ -2656,6 +2656,14 @@ model BillPackageDebit {
   /// always the bill's own rate.
   amountWithTax Decimal @db.Decimal(18, 2)
 
+  /// The note's own number, `{shortCode}-DN-0001`, from the `DEBIT_NOTE` series (028 FR-019).
+  ///
+  /// **Nullable**, and deliberately not backfilled: debits recorded before this shipped were never
+  /// issued under a number, and inventing one would print an identifier on a document nobody
+  /// issued — the decision 027 made for work-order codes. Allocated at raise, so the register and
+  /// the standalone note always read the same number.
+  noteNumber String?
+
   /// Null until applied. A debit moves from null to a value **once** (FR-037), enforced by a
   /// conditional update whose row count the service checks — the shape 022 used for its status
   /// transitions. The rule has to hold where concurrent writers meet it (FR-037a) and not only in a
@@ -4479,6 +4487,15 @@ enum CodeSeriesType {
   /// A work order had no identifier of its own — only its free-text detail — so the one screen
   /// that has to name one, composing a bill to a subcontractor, had nothing to show but a cuid.
   WORK_ORDER
+
+  /// Added by 028. Debit note numbers (`{shortCode}-DN-0001`), per company.
+  ///
+  /// The register printed inside a package PDF carried no number of its own, so the standalone
+  /// note a subcontractor signs had nothing to be filed under. Allocated **when the debit is
+  /// raised**, never when a PDF is produced: a number allocated at print is a different number
+  /// each time the document is produced, and the register and the note would disagree about which
+  /// debit was which (research §6).
+  DEBIT_NOTE
 
   @@schema("settings")
 }

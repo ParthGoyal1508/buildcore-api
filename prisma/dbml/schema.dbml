@@ -1192,7 +1192,7 @@ project cost** — a summary that treated net as spend would understate the proj
   updatedAt DateTime [not null]
 
   indexes {
-    (projectId, billNumber) [unique]
+    (workOrderId, billNumber) [unique]
   }
 
   Note: 'A running account bill. `draft → submitted → approved`, with `submitted → draft`
@@ -1509,6 +1509,12 @@ because the heading is how the register is read.']
   amount Decimal [not null]
   amountWithTax Decimal [not null, note: '**Carried rather than computed**: the real register shows both, and the tax on a debit is not
 always the bill\'s own rate.']
+  noteNumber String [note: 'The note\'s own number, `{shortCode}-DN-0001`, from the `DEBIT_NOTE` series (028 FR-019).
+
+**Nullable**, and deliberately not backfilled: debits recorded before this shipped were never
+issued under a number, and inventing one would print an identifier on a document nobody
+issued — the decision 027 made for work-order codes. Allocated at raise, so the register and
+the standalone note always read the same number.']
   recoveredOnPackageId String [note: 'Null until applied. A debit moves from null to a value **once** (FR-037), enforced by a
 conditional update whose row count the service checks — the shape 022 used for its status
 transitions. The rule has to hold where concurrent writers meet it (FR-037a) and not only in a
@@ -3274,6 +3280,11 @@ what the vendor billed, and recomputing it on every read would let a rounding
 change silently restate historical spend.']
   billFileRef String [note: 'Object-storage reference for the uploaded bill, same encrypted-reference
 pattern as `EmployeeDocument`/`ProjectDocument`.']
+  photoFileRef String [note: 'The delivery photographed at the gate (028 FR-017). Same pattern as the bill beside it.
+
+Both are required **before approval, not at creation**: a storekeeper photographing a load at
+dusk with no signal must still be able to record that it arrived. Nullable for that reason and
+because the rule is not retrospective — purchases recorded before it existed keep their gaps.']
   remarks String
   indentLineId String [note: 'The indent line this purchase fulfils, if it came from one (FR-023).']
   indentLine MaterialIndentLine
@@ -3283,6 +3294,57 @@ pattern as `EmployeeDocument`/`ProjectDocument`.']
   updatedAt DateTime [not null]
   bill PurchaseBill
   grn GoodsReceiptNote
+}
+
+Table VendorItemRate {
+  id String [pk]
+  companyId String [not null]
+  vendorId String [not null, note: '`partners.Vendor.id`. **A plain column with no relation** — `partners` is another schema and
+Principle I routes cross-module reads through the owning service, exactly as `Purchase.vendorId`
+already does it.']
+  itemId String [not null, note: '`settings.Item.id`. **A plain column too**, for the same reason `vendorId` is one and the
+reason `Purchase.itemId` beside it already is: `Item` lives in the `settings` schema, and
+Principle I keeps a module\'s tables from reaching across a schema with a foreign key.']
+  rate Decimal [not null, note: 'Matched to `Purchase.rate` precisely. A rate that cannot be stored exactly is a rate that
+cannot be compared exactly, and comparison is the whole of FR-013.']
+  effectiveFrom DateTime [not null]
+  effectiveTo DateTime [note: 'Null means **current** — the open end of the history, as `HireRate` spells it.']
+  establishedByPurchaseId String [note: 'The purchase that established it, where a first purchase did. What makes FR-016\'s
+first-purchase report answerable without inferring it from dates.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, vendorId, itemId, effectiveFrom) [unique]
+  }
+
+  Note: 'Auto-created 1:1 with every purchase (FR-020). Separate from `PurchaseBill`
+because they answer different questions: a GRN records that material physically
+arrived, a bill records that money is owed for it.
+The rate agreed with one vendor for one item, and the period it applied to (028 FR-011).
+
+## Why a table and not a column
+
+A rate has a history and the history is the point. FR-015 says an approved change applies **from
+approval forward** and does not restate purchases already made, which is only answerable if the
+rate carries the period it applied to. A column holds one value and loses the previous one, so
+"what was the agreed rate in August" stops being answerable the moment a rate changes.
+
+Shaped on `settings.HireRate`, which solved this exact problem for equipment — including the
+convention that a null end means *current*. This follows that precedent rather than inventing a
+second shape for the same idea.
+
+## What it is for
+
+A purchase of a vendor–item pair that has no agreed rate is typed and **establishes** one; every
+purchase after it is supplied the rate and cannot alter it. That control reaches further than
+the purchase row: `stock.service.ts` recomputes a weighted average on every receipt, so a rate
+typed on a purchase moves the value of every unit of that material already held.
+
+A familiar item from a vendor who has not supplied it before is a **first** purchase — the
+contract is per vendor, and a vendor with no agreed rate has nothing to supply. That is a chosen
+limit, not a hole: blocking new suppliers would be worse, so the control there is visibility
+(FR-016) rather than refusal.'
 }
 
 Table GoodsReceiptNote {
@@ -3297,10 +3359,6 @@ Table GoodsReceiptNote {
   indexes {
     (companyId, grnNumber) [unique]
   }
-
-  Note: 'Auto-created 1:1 with every purchase (FR-020). Separate from `PurchaseBill`
-because they answer different questions: a GRN records that material physically
-arrived, a bill records that money is owed for it.'
 }
 
 Table PurchaseBill {
@@ -4998,6 +5056,7 @@ Enum RaBillStatus {
 
 Enum WorkOrderStatus {
   draft
+  pending_approval
   active
   completed
 }
@@ -5224,6 +5283,7 @@ Enum CodeSeriesType {
   ASSETS
   ASSET_REQUEST
   WORK_ORDER
+  DEBIT_NOTE
 }
 
 Enum VendorType {
