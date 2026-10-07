@@ -65,7 +65,8 @@ of them is a product fault. Measured 2026-10-07, after feature 028.
 | `dashboard.e2e-spec.ts`    | the same family                                                                        | reads the asset masters above                                                  |
 | `my-workspace.e2e-spec.ts` | `expected 400, got 423 "Locked"` on an offline punch                                   | a payroll/attendance lock in the scratch data, not a code path                 |
 
-`CompaniesService.create` installs **seven** sets of per-company defaults — vendor categories, item
+Same cause, one level up: these suites expect company state a _created_ company would have and a
+_seeded_ one does not. `CompaniesService.create` installs **seven** sets of per-company defaults — vendor categories, item
 categories, asset categories, asset document types, condition grades, equipment categories and
 equipment document types — plus the approval chains. `prisma/seed.ts` writes its company row
 directly and so installs none of them. `npm run seed:chains` closes one of the eight; the other
