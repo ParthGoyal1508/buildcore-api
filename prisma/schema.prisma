@@ -1543,6 +1543,17 @@ enum DwrStatus {
   submitted
   approved
 
+  /// Sent back by a reviewer for correction (028).
+  ///
+  /// **Distinct from `draft`, which is why it exists.** A return used to write `draft`, so a report
+  /// a reviewer had rejected became indistinguishable from one nobody had ever submitted — the
+  /// badge read "Draft", the reason the reviewer typed was discarded by a controller that took no
+  /// body, and the author had no way to learn either that it had come back or what was wrong with
+  /// it. The web had been rendering this value since 025; the server had never sent it.
+  ///
+  /// Editable and submittable exactly as a draft is: this is a draft that carries a complaint.
+  returned
+
   @@schema("projects")
 }
 
@@ -1916,6 +1927,19 @@ model DailyWorkReport {
   /// already depend on.
   reversalReason   String?
   reversalCount    Int       @default(0)
+
+  /// The **latest** return for correction (028).
+  ///
+  /// Mirrors the reversal trio above deliberately — same shape, same reason. `returnReason` is
+  /// required by the service rather than by the column, because an author told only that their
+  /// report came back has been told nothing they can act on, and the reviewer was already typing
+  /// one into a prompt that threw it away.
+  ///
+  /// Not cleared when the report is submitted again, for the reason the reversal fields are not:
+  /// the return happened, and erasing it leaves a reader wondering why a report was filed twice.
+  returnedAt       DateTime?
+  returnedByUserId String?
+  returnReason     String?
 
   tasks DWRTask[]
 

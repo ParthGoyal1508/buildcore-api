@@ -527,11 +527,120 @@ describe('Daily work reports (e2e)', () => {
       await http()
         .post(`/projects/dwr/${id}/return?companyId=${companyId}`)
         .set(auth())
+        .send({
+          reason:
+            'fixture — returned so the delete below has something to delete',
+        })
         .expect(201);
       await http()
         .delete(`/projects/dwr/${id}?companyId=${companyId}`)
         .set(auth())
         .expect(200);
+    });
+
+    /**
+     * 028. A return has to be visible to the person it was returned to.
+     *
+     * **The vacuity this avoids: asserting that the return returned 201.** It did before this
+     * change — and wrote `draft`, so the author's report came back indistinguishable from one
+     * nobody had ever submitted, with the reviewer's reason discarded by a route that took no
+     * body. Both assertions here read the **detail response the screen renders**: the status it
+     * puts in the badge, and the sentence it has to print for the author to know what to fix.
+     */
+    it('comes back as returned, carrying the reason the reviewer typed', async () => {
+      const created = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      const id = created.body.id;
+      await http()
+        .post(`/projects/dwr/${id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+
+      await http()
+        .post(`/projects/dwr/${id}/return?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          reason: 'CH 21+300 is measured 5.8 x 1.8 — the sheet says 5.8 x 1.6',
+        })
+        .expect(201);
+
+      const detail = await http()
+        .get(`/projects/dwr/${id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+
+      // Not `draft`. This is the whole defect: the two statuses mean different things to the
+      // person looking at the list, and one value was being used for both.
+      expect(detail.body.status).toBe('returned');
+      expect(detail.body.returnReason).toContain('5.8 x 1.6');
+      expect(detail.body.returnedByName).toBeTruthy();
+      expect(detail.body.returnedAt).toBeTruthy();
+    });
+
+    /** A reason short enough to tell the author nothing is refused, as a reversal's is. */
+    it('refuses a return with no usable reason', async () => {
+      const created = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      const id = created.body.id;
+      await http()
+        .post(`/projects/dwr/${id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+
+      await http()
+        .post(`/projects/dwr/${id}/return?companyId=${companyId}`)
+        .set(auth())
+        .send({ reason: 'no' })
+        .expect(400);
+    });
+
+    /**
+     * The corrected report must have a way forward.
+     *
+     * A new status is an easy way to strand work: `submit` asserted `draft` exactly, so had the
+     * status changed without this, returning a report would have been the act that made it
+     * permanently unsubmittable — the reviewer's own correction request as the thing that killed
+     * it. Asserted through the endpoint, after an edit, because that is the author's actual path.
+     */
+    it('a returned report can be corrected and submitted again', async () => {
+      const created = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      const id = created.body.id;
+      await http()
+        .post(`/projects/dwr/${id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      await http()
+        .post(`/projects/dwr/${id}/return?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          reason: 'the served day is 1 but the logbook shows a half day',
+        })
+        .expect(201);
+
+      await http()
+        .patch(`/projects/dwr/${id}?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          lines: [
+            {
+              paymentMode: 'day_basis',
+              boqItemId: itemA,
+              servedQty: '0.5',
+              remark: 'half day — corrected against the logbook as asked',
+            },
+          ],
+        })
+        .expect(200);
+
+      const resubmitted = await http()
+        .post(`/projects/dwr/${id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      expect(resubmitted.body.status).toBe('submitted');
     });
   });
 

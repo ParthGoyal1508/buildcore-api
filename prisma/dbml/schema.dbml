@@ -1034,6 +1034,17 @@ three times" is what a reader wants, and having to count by hand is how a reader
   reversalReason String [note: 'Required by the service rather than by the column: a reversal moves a quantity a bill may
 already depend on.']
   reversalCount Int [not null, default: 0]
+  returnedAt DateTime [note: 'The **latest** return for correction (028).
+
+Mirrors the reversal trio above deliberately — same shape, same reason. `returnReason` is
+required by the service rather than by the column, because an author told only that their
+report came back has been told nothing they can act on, and the reviewer was already typing
+one into a prompt that threw it away.
+
+Not cleared when the report is submitted again, for the reason the reversal fields are not:
+the return happened, and erasing it leaves a reader wondering why a report was filed twice.']
+  returnedByUserId String
+  returnReason String
   tasks DWRTask [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -5097,6 +5108,7 @@ Enum DwrStatus {
   draft
   submitted
   approved
+  returned
 }
 
 Enum DwrPaymentMode {

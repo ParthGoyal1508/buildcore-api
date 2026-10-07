@@ -39,7 +39,7 @@ import {
   storedQuantityInForce,
 } from './dwr-quantity';
 import { CreateDwrDto, CreateDwrLineDto } from './dto/create-dwr.dto';
-import { ReverseDwrDto } from './dto/dwr-lifecycle.dto';
+import { ReturnDwrDto, ReverseDwrDto } from './dto/dwr-lifecycle.dto';
 import {
   DWR_PAGE_SIZE_DEFAULT,
   DWR_PAGE_SIZE_MAX,
@@ -48,6 +48,16 @@ import {
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 
 /** Separates the project code from the sequence in a report number (FR-002a). */
+/**
+ * The two statuses from which a report may still be written, submitted or deleted (028).
+ *
+ * `returned` belongs here because a returned report **is** a draft — one carrying a reviewer's
+ * complaint. The only thing the new status changes is what the author is told; everything they can
+ * do to it is what they could do to a draft. Named once so the three guards that ask this question
+ * cannot drift apart: a report that can be edited but not submitted is a dead end.
+ */
+const EDITABLE_STATUSES: DwrStatus[] = [DwrStatus.draft, DwrStatus.returned];
+
 const DPR_SEPARATOR = '-DPR-';
 
 /** How many times a number collision is retried before giving up (FR-002b). */
@@ -620,6 +630,11 @@ export class DwrService {
           submittedAt: true,
           approvedByUserId: true,
           approvedAt: true,
+          // 028. Selected because the reason is the whole point of the action: a report shown as
+          // returned with no sentence beside it tells its author to guess what was wrong.
+          returnedAt: true,
+          returnedByUserId: true,
+          returnReason: true,
           reversedAt: true,
           reversedByUserId: true,
           reversalReason: true,
@@ -702,6 +717,7 @@ export class DwrService {
       report.createdByUserId,
       report.submittedByUserId,
       report.approvedByUserId,
+      report.returnedByUserId,
     ]);
 
     return {
@@ -714,6 +730,9 @@ export class DwrService {
         : null,
       approvedByName: report.approvedByUserId
         ? names.get(report.approvedByUserId) ?? null
+        : null,
+      returnedByName: report.returnedByUserId
+        ? names.get(report.returnedByUserId) ?? null
         : null,
       workDate,
       lines: tasks.map((task) => {
@@ -967,7 +986,10 @@ export class DwrService {
       });
       if (!report) throw new NotFoundException('Daily work report not found');
 
-      assertStatus(report.status, DwrStatus.draft, 'submit');
+      // **`returned` as well as `draft`** (028). A returned report is a draft carrying a
+      // complaint; refusing to submit it would leave a corrected report with no way forward and
+      // the reviewer's own action as the thing that stranded it.
+      assertStatus(report.status, EDITABLE_STATUSES, 'submit');
 
       // FR-024. A day's report asserting nothing is a form somebody abandoned, and submitting it
       // would put it in a reviewer's queue to be approved into no effect at all.
@@ -982,7 +1004,7 @@ export class DwrService {
 
       // The transition is conditional on the status, so a concurrent second submit loses.
       const updated = await tx.dailyWorkReport.updateMany({
-        where: { id: dwrId, status: DwrStatus.draft },
+        where: { id: dwrId, status: { in: EDITABLE_STATUSES } },
         data: {
           status: DwrStatus.submitted,
           submittedByUserId: actor.userId,
@@ -1202,11 +1224,24 @@ export class DwrService {
     return result;
   }
 
-  /** `submitted` → `draft`. Nothing moves, because submission never moved anything (US3 AC2). */
-  async returnToDraft(
+  /**
+   * `submitted` → `returned`. Nothing moves, because submission never moved anything (US3 AC2).
+   *
+   * **`returned`, not `draft`** (028). This wrote `draft` and discarded the reason, so a report a
+   * reviewer had rejected was byte-for-byte a report nobody had ever submitted: the list showed
+   * "Draft", the detail screen showed nothing, and the sentence explaining what was wrong — which
+   * the reviewer had already typed into a prompt — reached the server in a body the route did not
+   * read. The author's only signal that their work had come back was noticing it had stopped being
+   * submitted.
+   *
+   * What the new status does **not** change is what the author can do: a `returned` report is
+   * editable, submittable and deletable exactly as a draft is (`EDITABLE_STATUSES`).
+   */
+  async returnToAuthor(
     ctx: RlsContext,
     dwrId: string,
     companyId: string,
+    input: ReturnDwrDto,
     actor: { userId: string; ipAddress?: string },
   ): Promise<{ id: string; status: DwrStatus }> {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
@@ -1215,13 +1250,29 @@ export class DwrService {
         select: { id: true, status: true },
       });
       if (!report) throw new NotFoundException('Daily work report not found');
-      assertStatus(report.status, DwrStatus.submitted, 'return to draft');
+      assertStatus(report.status, DwrStatus.submitted, 'be returned');
 
-      await tx.dailyWorkReport.update({
-        where: { id: dwrId },
-        data: { status: DwrStatus.draft },
+      // Conditional on the status, as submit, approve and reverse already are: two reviewers
+      // returning the same report would otherwise leave the second one's reason on the row and
+      // the first one's nowhere, with both told it worked.
+      const updated = await tx.dailyWorkReport.updateMany({
+        where: { id: dwrId, status: DwrStatus.submitted },
+        data: {
+          status: DwrStatus.returned,
+          returnedAt: new Date(),
+          returnedByUserId: actor.userId,
+          returnReason: input.reason.trim(),
+        },
       });
-      return { id: dwrId, status: DwrStatus.draft };
+      if (updated.count === 0) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            'Somebody else moved this report while you were returning it.',
+        });
+      }
+
+      return { id: dwrId, status: DwrStatus.returned };
     });
 
     await this.auditLog.record({
@@ -1362,14 +1413,14 @@ export class DwrService {
       });
       if (!report) throw new NotFoundException('Daily work report not found');
 
-      if (report.status !== DwrStatus.draft) {
+      if (!EDITABLE_STATUSES.includes(report.status)) {
         throw new ConflictException({
           code: DWR_ERRORS.wrongStatus,
           message:
             `This report is ${report.status}. Only a draft can be deleted — ` +
             (report.status === DwrStatus.approved
               ? 'reverse it first, which takes its quantities back out and says why.'
-              : 'return it to draft first.'),
+              : 'return it to its author first.'),
         });
       }
 
@@ -1716,13 +1767,16 @@ function groupDeltas(
 /** Refuses a transition from the wrong status, naming the status the report is actually in. */
 function assertStatus(
   actual: DwrStatus,
-  required: DwrStatus,
+  required: DwrStatus | DwrStatus[],
   action: string,
 ): void {
-  if (actual === required) return;
+  const allowed = Array.isArray(required) ? required : [required];
+  if (allowed.includes(actual)) return;
   throw new ConflictException({
     code: DWR_ERRORS.wrongStatus,
-    message: `This report is ${actual}, so it cannot ${action}. It must be ${required}.`,
+    message:
+      `This report is ${actual}, so it cannot ${action}. It must be ` +
+      `${allowed.join(' or ')}.`,
   });
 }
 

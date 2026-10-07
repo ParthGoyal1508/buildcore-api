@@ -34,6 +34,7 @@ import { CreateDwrDto } from './dto/create-dwr.dto';
 import {
   AddDwrAttachmentDto,
   RepairDoneQtyDto,
+  ReturnDwrDto,
   ReverseDwrDto,
 } from './dto/dwr-lifecycle.dto';
 import { DwrPeriodDto, ListDwrDto } from './dto/dwr-query.dto';
@@ -283,19 +284,28 @@ export class DwrController {
   @Post('projects/dwr/:dwrId/return')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
-    summary: 'Send a submitted report back to draft',
-    description: 'Nothing moves, because submission never moved anything.',
+    summary: 'Send a submitted report back to its author for correction',
+    description:
+      'Nothing moves, because submission never moved anything.\n\n' +
+      '**The report lands in `returned`, not in `draft`** (028). A returned report and one ' +
+      'nobody ever submitted are different things, and writing `draft` for both left the author ' +
+      'looking at a report that had come back with nothing on the screen saying so.\n\n' +
+      'The reason is required and is carried on the report, because it is the only part of this ' +
+      'action the author can act on. A `returned` report is editable and submittable exactly as ' +
+      'a draft is.',
   })
-  async returnToDraft(
+  async returnToAuthor(
     @UserEntity() caller: AuthenticatedUser,
     @Param('dwrId') dwrId: string,
+    @Body() dto: ReturnDwrDto,
     @Ip() ip: string,
     @Query('companyId') companyId?: string,
   ) {
-    return this.dwr.returnToDraft(
+    return this.dwr.returnToAuthor(
       rlsContextFor(caller),
       dwrId,
       resolveCompanyId(caller, companyId),
+      dto,
       { userId: caller.id, ipAddress: ip },
     );
   }
