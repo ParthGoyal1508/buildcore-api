@@ -18,6 +18,9 @@ import { BillPackageViewBuilder } from './billing/package/bill-package-view.buil
 import { BillPackageController } from './billing/package/bill-package.controller';
 import { BillPackageService } from './billing/package/bill-package.service';
 import { DebitNoteService } from './billing/package/debit-note.service';
+import { BillPaymentsController } from './billing/payments/bill-payments.controller';
+import { BillPaymentsService } from './billing/payments/bill-payments.service';
+import { SignedCopiesService } from './billing/payments/signed-copies.service';
 import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
 import { PackageReportsService } from './billing/package/package-reports.service';
 import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
@@ -117,6 +120,10 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // `ProjectsController.findOne` looking for a project whose id is the string "bill-packages"
     // and answer 404 as though the bill did not exist. `route-shadowing.spec.ts` asserts the order.
     BillPackageController,
+    // 028 FR-020, FR-021. **Before `ProjectsController`, for the same reason the three above are.**
+    // `projects/ra-bills/:id/payments` and `projects/subcontractors/:id/outstanding` are literals
+    // under `projects/`, and the portfolio registers the parameterised `GET projects/:id`.
+    BillPaymentsController,
     ProjectsController,
   ],
   providers: [
@@ -154,6 +161,12 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     BillPackageService,
     MeasurementSheetService,
     DebitNoteService,
+    // 028 FR-021. Payments against a bill, and outstanding **derived** from certified less paid —
+    // no balance column exists, deliberately.
+    BillPaymentsService,
+    // 028 FR-020. The countersigned copy, which acknowledges the document rather than only being
+    // filed beside it.
+    SignedCopiesService,
     PackageReportsService,
     BillPackageViewBuilder,
     BillWorkbookRenderer,

@@ -1186,8 +1186,14 @@ project cost** — a summary that treated net as spend would understate the proj
   advanceRecovery Decimal [not null, default: 0]
   otherDeductions Decimal [not null, default: 0]
   netPayable Decimal [not null, default: 0]
+  acknowledgedAt DateTime [note: 'When the countersigned copy came back (028 FR-020).
+
+**A state, not merely a file.** The copy returning is what makes a bill acknowledged, and a
+file in a list cannot answer "which bills are unacknowledged" — which is the only question
+anybody asks of it. The evidence lives in `SignedCopy`; this is what the question is asked of.']
   lines RABillLine [not null]
   package BillPackage [note: 'The 023 package, where this bill has been made into one. A relation field, not a column.']
+  payments RABillPayment [not null, note: 'Money that actually left, against this bill (028 FR-021).']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1532,6 +1538,61 @@ changes it.']
 
 Recorded once against a project and recovered on **one** bill. The register spans bills rather
 than belonging to one, because the running total is the point of it.'
+}
+
+Table RABillPayment {
+  id String [pk]
+  companyId String [not null]
+  raBillId String [not null]
+  raBill RABill [not null, note: '`Restrict`, not `Cascade`: a bill with payments recorded against it is not a bill anybody
+deletes, and a cascade here would take the record of money having moved with it.']
+  paidOn DateTime [not null]
+  amount Decimal [not null]
+  instrument PaymentInstrument [not null]
+  reference String [note: 'UTR, cheque number, the reference on an adjustment memo. Free text because every bank spells
+it differently and a format imposed here would be wrong for the next one.']
+  remarks String
+  recordedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  recordedAt DateTime [default: `now()`, not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'Money that actually left, against one running-account bill (028 FR-021).
+
+A bill reached `certified` and stopped: nothing recorded that it had been paid, so the figure
+everybody actually wants — what a subcontractor is still owed — could not be answered at all.
+
+**There is deliberately no `outstanding` or `balance` column here or on `RABill`.** Outstanding
+is certified less the sum of these rows, derived on read (FR-021). A stored balance is a second
+source of truth that goes wrong silently the first time a payment is corrected, and silently is
+the worst way for a money figure to be wrong.'
+}
+
+Table SignedCopy {
+  id String [pk]
+  companyId String [not null]
+  subjectType SignedCopySubject [not null]
+  subjectId String [not null, note: 'Bare id. The two subjects are different tables, so no relation can be declared — the same
+shape `AuditLog` uses for the rows it refers to.']
+  fileRef String [not null, note: '`StorageService`\'s opaque, encrypted reference — the `DWRAttachment` and `ProjectDocument`
+pattern. Never a path or a URL; that coupling is what the abstraction exists to prevent.']
+  fileName String [not null, note: 'As the uploader spelled it, so a download arrives named rather than as a UUID — the defect
+017 fixed for every other file in this system.']
+  mimeType String [not null]
+  sizeBytes Int [not null]
+  receivedOn DateTime [not null, note: 'When the signed copy was received, which is not when it was uploaded: a copy signed on site
+on Tuesday and scanned on Friday was acknowledged on Tuesday.']
+  uploadedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
+  uploadedAt DateTime [default: `now()`, not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'The countersigned document coming back, for a bill or a debit note (028 FR-020).
+
+This table is the **evidence**; the state it establishes lives on the subject —
+`RABill.acknowledgedAt`. Both, because they answer different questions: "show me the copy they
+signed" and "which bills are still unacknowledged", and a file in a list cannot answer the
+second.'
 }
 
 Table BillPackageCheckListAnswer {
@@ -5103,6 +5164,18 @@ Enum ClaimProposalSource {
   no_measurement_source
 }
 
+Enum PaymentInstrument {
+  bank_transfer
+  cheque
+  cash
+  adjustment
+}
+
+Enum SignedCopySubject {
+  ra_bill
+  debit_note
+}
+
 Enum CheckListAnswer {
   yes
   no
@@ -5765,6 +5838,8 @@ Ref: BillPackageLineClaim.raBillLineId - RABillLine.id [delete: Cascade]
 Ref: BillPackageDebit.projectId > Project.id [delete: Cascade]
 
 Ref: BillPackageDebit.recoveredOnPackageId > BillPackage.id [delete: Set Null]
+
+Ref: RABillPayment.raBillId > RABill.id [delete: Restrict]
 
 Ref: BillPackageCheckListAnswer.packageId > BillPackage.id [delete: Cascade]
 

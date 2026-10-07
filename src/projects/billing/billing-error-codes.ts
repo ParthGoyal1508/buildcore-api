@@ -78,4 +78,20 @@ export const BILLING_ERRORS = {
   retentionExceedsHeld: 'RETENTION_EXCEEDS_HELD',
   /** A release with no reason. "Which milestone was this against" is asked within the year. */
   retentionReasonRequired: 'RETENTION_RELEASE_REASON_REQUIRED',
+  /**
+   * A payment recorded against a bill nobody has certified (028 FR-021).
+   *
+   * Outstanding is certified less paid, so a payment against a draft would make outstanding
+   * negative on a figure that was never agreed — and the bill it was paid against can still change.
+   * Money paid to a subcontractor **before** certification is an advance, and an advance is
+   * recovered through the package's adjustment columns, which is where Phase B put every deduction.
+   */
+  paymentBillNotCertified: 'PAYMENT_BILL_NOT_CERTIFIED',
+  /**
+   * A payment that would take the total paid past what was certified (028 FR-021).
+   *
+   * Refused rather than recorded, because the overpayment it describes is either a double payment
+   * or a typed digit, and both are found faster here than in a reconciliation three months later.
+   */
+  paymentExceedsCertified: 'PAYMENT_EXCEEDS_CERTIFIED',
 } as const;

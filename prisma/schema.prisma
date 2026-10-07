@@ -2117,9 +2117,18 @@ model RABill {
   otherDeductions Decimal @default(0) @db.Decimal(18, 2)
   netPayable      Decimal @default(0) @db.Decimal(18, 2)
 
-  lines   RABillLine[]
+  /// When the countersigned copy came back (028 FR-020).
+  ///
+  /// **A state, not merely a file.** The copy returning is what makes a bill acknowledged, and a
+  /// file in a list cannot answer "which bills are unacknowledged" — which is the only question
+  /// anybody asks of it. The evidence lives in `SignedCopy`; this is what the question is asked of.
+  acknowledgedAt DateTime?
+
+  lines    RABillLine[]
   /// The 023 package, where this bill has been made into one. A relation field, not a column.
-  package BillPackage?
+  package  BillPackage?
+  /// Money that actually left, against this bill (028 FR-021).
+  payments RABillPayment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2684,6 +2693,104 @@ model BillPackageDebit {
 
   @@index([companyId, projectId])
   @@index([recoveredOnPackageId])
+  @@schema("projects")
+}
+
+/// How money left (028 FR-021).
+enum PaymentInstrument {
+  bank_transfer
+  cheque
+  cash
+  /// Settled against something owed the other way rather than paid — a debit recovered in full, a
+  /// credit note applied. Recorded as a payment because the bill is discharged either way, and a
+  /// bill that shows outstanding after it was settled is a bill somebody chases.
+  adjustment
+
+  @@schema("projects")
+}
+
+/// Money that actually left, against one running-account bill (028 FR-021).
+///
+/// A bill reached `certified` and stopped: nothing recorded that it had been paid, so the figure
+/// everybody actually wants — what a subcontractor is still owed — could not be answered at all.
+///
+/// **There is deliberately no `outstanding` or `balance` column here or on `RABill`.** Outstanding
+/// is certified less the sum of these rows, derived on read (FR-021). A stored balance is a second
+/// source of truth that goes wrong silently the first time a payment is corrected, and silently is
+/// the worst way for a money figure to be wrong.
+model RABillPayment {
+  id        String @id @default(cuid())
+  companyId String
+
+  raBillId String
+  /// `Restrict`, not `Cascade`: a bill with payments recorded against it is not a bill anybody
+  /// deletes, and a cascade here would take the record of money having moved with it.
+  raBill   RABill @relation(fields: [raBillId], references: [id], onDelete: Restrict)
+
+  paidOn DateTime @db.Date
+  amount Decimal  @db.Decimal(18, 2)
+
+  instrument PaymentInstrument
+  /// UTR, cheque number, the reference on an adjustment memo. Free text because every bank spells
+  /// it differently and a format imposed here would be wrong for the next one.
+  reference  String?
+  remarks    String?
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  recordedByUserId String?
+  recordedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, raBillId])
+  @@schema("projects")
+}
+
+/// What a signed copy can come back against (028 FR-020).
+enum SignedCopySubject {
+  ra_bill
+  debit_note
+
+  @@schema("projects")
+}
+
+/// The countersigned document coming back, for a bill or a debit note (028 FR-020).
+///
+/// This table is the **evidence**; the state it establishes lives on the subject —
+/// `RABill.acknowledgedAt`. Both, because they answer different questions: "show me the copy they
+/// signed" and "which bills are still unacknowledged", and a file in a list cannot answer the
+/// second.
+model SignedCopy {
+  id        String @id @default(cuid())
+  companyId String
+
+  subjectType SignedCopySubject
+  /// Bare id. The two subjects are different tables, so no relation can be declared — the same
+  /// shape `AuditLog` uses for the rows it refers to.
+  subjectId   String
+
+  /// `StorageService`'s opaque, encrypted reference — the `DWRAttachment` and `ProjectDocument`
+  /// pattern. Never a path or a URL; that coupling is what the abstraction exists to prevent.
+  fileRef   String
+  /// As the uploader spelled it, so a download arrives named rather than as a UUID — the defect
+  /// 017 fixed for every other file in this system.
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+
+  /// When the signed copy was received, which is not when it was uploaded: a copy signed on site
+  /// on Tuesday and scanned on Friday was acknowledged on Tuesday.
+  receivedOn DateTime @db.Date
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  uploadedByUserId String?
+  uploadedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, subjectType, subjectId])
   @@schema("projects")
 }
 
@@ -5427,7 +5534,6 @@ model Item {
   /// two years ago still resolves its item name.
   active Boolean @default(true)
 
-
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -5584,14 +5690,14 @@ model Purchase {
 
   /// Object-storage reference for the uploaded bill, same encrypted-reference
   /// pattern as `EmployeeDocument`/`ProjectDocument`.
-  billFileRef String?
+  billFileRef  String?
   /// The delivery photographed at the gate (028 FR-017). Same pattern as the bill beside it.
   ///
   /// Both are required **before approval, not at creation**: a storekeeper photographing a load at
   /// dusk with no signal must still be able to record that it arrived. Nullable for that reason and
   /// because the rule is not retrospective — purchases recorded before it existed keep their gaps.
   photoFileRef String?
-  remarks     String?
+  remarks      String?
 
   /// The indent line this purchase fulfils, if it came from one (FR-023).
   indentLineId String?
