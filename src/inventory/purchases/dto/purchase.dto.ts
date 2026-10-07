@@ -57,6 +57,29 @@ export class CreatePurchaseDto {
   @IsString()
   billFile?: string;
 
+  /**
+   * The delivery photographed at the gate, base64-encoded (028 FR-017).
+   *
+   * **Optional here, and that is the decision rather than an oversight.** FR-017 makes the bill and
+   * the photograph compulsory *before approval*, never at creation: a storekeeper photographing a
+   * load at dusk with no signal must still be able to record that it arrived, and a rule that
+   * refuses the record is a rule that loses the delivery.
+   *
+   * The gate that enforces it does not exist yet — **a purchase has no approval step of any kind**.
+   * `ACTION_PURCHASE_RATE_CHANGE` is the inventory module's first approval and it governs a rate,
+   * not a purchase. So this ships the capability and the column; the compulsion attaches to the
+   * approval when a purchase gains one. Recorded here rather than left as a silent gap, because a
+   * field that looks required and is not is worse than one that is plainly optional.
+   */
+  @ApiPropertyOptional({
+    description:
+      'The delivery photograph, base64-encoded. Required before approval once a purchase has an ' +
+      'approval step; optional today because it has none (028 FR-017).',
+  })
+  @IsOptional()
+  @IsString()
+  photoFile?: string;
+
   @ApiPropertyOptional({ example: 'application/pdf' })
   @IsOptional()
   @IsString()

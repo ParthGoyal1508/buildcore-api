@@ -139,6 +139,23 @@ export class PurchasesService {
       );
     }
 
+    // The delivery photograph (028 FR-017), stored exactly as the bill beside it. Optional today
+    // because a purchase has no approval step to make it compulsory *before* — see the DTO's note.
+    let photoFileRef: string | null = null;
+    if (dto.photoFile) {
+      const buffer = Buffer.from(dto.photoFile, 'base64');
+      if (buffer.length === 0) {
+        throw new BadRequestException(
+          'photoFile must be non-empty base64 content.',
+        );
+      }
+      photoFileRef = await this.storage.put(
+        BILL_NAMESPACE,
+        buffer,
+        'image/jpeg',
+      );
+    }
+
     const date = this.refs.parseDate(dto.date);
     // Rounded once, here, and stored: this is what the vendor billed, and
     // recomputing it on every read would let a rounding change restate history.
@@ -173,6 +190,7 @@ export class PurchasesService {
             rate: dto.rate,
             amount,
             billFileRef,
+            photoFileRef,
             remarks: dto.remarks?.trim() || null,
             indentLineId: dto.indentLineId ?? null,
           },
