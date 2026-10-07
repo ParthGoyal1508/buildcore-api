@@ -20,6 +20,7 @@ import { PaymentsController } from './payments/payments.controller';
 import { PaymentsService } from './payments/payments.service';
 import { PurchasesController } from './purchases/purchases.controller';
 import { PurchasesService } from './purchases/purchases.service';
+import { VendorItemRateService } from './rates/vendor-item-rate.service';
 import { StockController } from './stock/stock.controller';
 import { StockQueryService } from './stock/stock-query.service';
 import { StockService } from './stock/stock.service';
@@ -58,6 +59,7 @@ import { TransfersService } from './transfers/transfers.service';
     StockService,
     StockQueryService,
     PurchasesService,
+    VendorItemRateService,
     IssuesService,
     TransfersService,
     PaymentsService,

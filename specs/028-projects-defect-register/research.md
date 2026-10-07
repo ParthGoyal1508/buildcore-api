@@ -14,9 +14,9 @@ Checked before choosing it: `RaBillsService.compose` already types `workOrderId:
 
 **Alternatives considered**:
 
-- *A partial unique index* (`WHERE "workOrderId" IS NOT NULL`). Correct in SQL and **unreachable**: Prisma cannot express it, so the migration would have to be hand-edited, which Principle VI forbids. Breaking a non-negotiable principle to paper over a gap a guard closes properly is a bad trade.
-- *A sentinel work order id.* Makes the constraint work and makes every read lie — a bill would claim to belong to a work order that is not a work order.
-- *Leaving it unconstrained and documenting it.* This is what the original defect was. The whole reason it shipped is that the nullable case was never decided.
+- _A partial unique index_ (`WHERE "workOrderId" IS NOT NULL`). Correct in SQL and **unreachable**: Prisma cannot express it, so the migration would have to be hand-edited, which Principle VI forbids. Breaking a non-negotiable principle to paper over a gap a guard closes properly is a bad trade.
+- _A sentinel work order id._ Makes the constraint work and makes every read lie — a bill would claim to belong to a work order that is not a work order.
+- _Leaving it unconstrained and documenting it._ This is what the original defect was. The whole reason it shipped is that the nullable case was never decided.
 
 ---
 
@@ -52,11 +52,19 @@ Checked before choosing it: `RaBillsService.compose` already types `workOrderId:
 
 ## §5 — Why the immutable rate is enforced in the service and not the DTO
 
-**Decision**: the service compares the submitted rate against the agreed one and refuses a difference, on **both** create and `PATCH /purchases/:id`.
+**Decision**: the service compares the submitted rate against the agreed one and refuses a difference, on `create`.
 
-**Rationale**: a DTO can only omit the field, and omission is not refusal. `PATCH /purchases/:id` exists and accepts a rate from any caller today, so a form that disables the input leaves the rule enforced nowhere a determined or scripted caller must pass. The spec says this in FR-013 and the test asserts it through the endpoint for the same reason.
+**Rationale**: a DTO can require a number; only the service can require _this_ number. The rule is "equal to the rate agreed with this vendor for this item, as at this date", which is a database read — no validator expresses it, so a DTO that merely accepts a rate leaves the rule enforced nowhere.
+
+**Corrected 2026-10-07, after checking rather than assuming.** This section originally said the rule had to hold on `PATCH /inventory/purchases/:id` as well, "because that endpoint accepts a rate from any caller today". **It does not.** `UpdatePurchaseDto` carries only `date` and `remarks` — quantity, rate, item, site and vendor are absent by design, with a docblock saying why: the stock ledger and the bill were computed from them, and editing one in place would leave both restating history. Correcting a purchase is delete plus re-create, and under `forbidNonWhitelisted` a caller sending a rate to that endpoint already receives a 400.
+
+A guard was written there and removed once the DTO was read. It would have been dead code defending a hole that does not exist, and dead code that _looks_ like a control is worse than none: the next reader trusts it.
+
+The test therefore asserts two things rather than one — that a mismatched rate is refused on creation, and that the update endpoint refuses a rate outright.
 
 There is a second, quieter reason to refuse rather than silently overwrite: `stock.service.ts` recomputes a **weighted average on every receipt**, so a rate accepted and then replaced would move the valuation of stock already held without anybody being told.
+
+**Alternatives considered**: a `@Validate` decorator carrying the lookup (puts a database read in a validator, where failures are reported as shape errors rather than as refusals with a remedy); trusting the form (the control would hold only for callers who use it).
 
 ---
 
@@ -64,7 +72,7 @@ There is a second, quieter reason to refuse rather than silently overwrite: `sto
 
 **Decision**: a new `DEBIT_NOTE` entry in `CodeSeriesType`, allocated through `CodeSeriesService` **at the moment a debit is raised**, and stored on the debit row. No new table.
 
-**Rationale**: `BillPackageDebit` already carries `groupHeading` — "grouped rather than listed flat, because the heading is how the register is read" — which is precisely the unit the client's sample document covers (*Debit Note–Box Culvert Casting*). The grouping already exists; what is missing is a number on it and a renderer for it. Adding a `DebitNote` parent table would be a fourth new table to express a grouping the data already has.
+**Rationale**: `BillPackageDebit` already carries `groupHeading` — "grouped rather than listed flat, because the heading is how the register is read" — which is precisely the unit the client's sample document covers (_Debit Note–Box Culvert Casting_). The grouping already exists; what is missing is a number on it and a renderer for it. Adding a `DebitNote` parent table would be a fourth new table to express a grouping the data already has.
 
 Allocated at raise rather than at print, because a number allocated when a PDF is produced is a different number each time it is produced, and the register and the document would then disagree about which debit is which.
 

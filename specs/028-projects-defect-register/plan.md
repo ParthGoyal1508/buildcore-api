@@ -36,14 +36,14 @@ None. All twenty decisions were settled with the user before the spec was writte
 
 Constitution v1.5.0.
 
-| Principle | Verdict | Evidence |
-|---|---|---|
-| **I. Schema-per-module boundaries** | **PASSES, with work** | The agreed rate belongs to `inventory` beside `Purchase` and `Item`; it references `partners.Vendor` by **plain id with no relation**, exactly as `Purchase.vendorId` already does. The bill payment belongs to `projects`. Neither crosses a schema with a foreign key. |
-| **II. Validated DTO contracts** | **PASSES, with work** | Every new route carries a validated DTO. FR-013 is explicit that the DTO is **not sufficient** — the immutable rate is enforced in the service, because `PATCH /purchases/:id` accepts a rate from any caller and a DTO that merely omits the field would leave the endpoint open. |
-| **III. No hardcoded values** | **PASSES, with work** | The debit-note series goes through `CodeSeriesService` like every other number. No rate, percentage or threshold is written into code: FR-009 and FR-010 ship **no** value threshold precisely so that none is hardcoded ahead of a decision. |
-| **IV. Multi-tenant isolation** | **GATE — three probes required** | **Three new tables.** Each needs an RLS probe before its phase can be committed: the agreed rate (Phase D), the bill payment (Phase E), and the signed-copy record (Phase E). This gate does **not** pass by inspection; it passes when `test/rls-*.e2e-spec.ts` proves a second company cannot read the rows. |
-| **V. Auth & secrets** | **PASSES** | Every new route reuses the permission its siblings carry. Signed copies go through `StorageService`, which already holds the encrypted-reference pattern; no file path or bucket name is exposed to a caller. |
-| **VI. Observability & safe migrations** | **GATE — generated only** | Six schema touches. Every migration is produced by `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script` (not `npm run migrate:dev:create`, which is non-interactive here) and **never hand-edited**. The nine pre-existing index-name drifts are excluded from each generated file; a migration containing them has been mis-generated. |
+| Principle                               | Verdict                          | Evidence                                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------- | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **I. Schema-per-module boundaries**     | **PASSES, with work**            | The agreed rate belongs to `inventory` beside `Purchase` and `Item`; it references `partners.Vendor` by **plain id with no relation**, exactly as `Purchase.vendorId` already does. The bill payment belongs to `projects`. Neither crosses a schema with a foreign key.                                                                                         |
+| **II. Validated DTO contracts**         | **PASSES, with work**            | Every new route carries a validated DTO. FR-013 is explicit that the DTO is **not sufficient** — the immutable rate is enforced in the service, because a DTO can require a number and only a service can require *this* number. _Amended 2026-10-07_: the original wording justified this by saying `PATCH /purchases/:id` accepts a rate from any caller, which was asserted without reading the DTO and is false — see research §5.                                                                               |
+| **III. No hardcoded values**            | **PASSES, with work**            | The debit-note series goes through `CodeSeriesService` like every other number. No rate, percentage or threshold is written into code: FR-009 and FR-010 ship **no** value threshold precisely so that none is hardcoded ahead of a decision.                                                                                                                    |
+| **IV. Multi-tenant isolation**          | **GATE — three probes required** | **Three new tables.** Each needs an RLS probe before its phase can be committed: the agreed rate (Phase D), the bill payment (Phase E), and the signed-copy record (Phase E). This gate does **not** pass by inspection; it passes when `test/rls-*.e2e-spec.ts` proves a second company cannot read the rows.                                                   |
+| **V. Auth & secrets**                   | **PASSES**                       | Every new route reuses the permission its siblings carry. Signed copies go through `StorageService`, which already holds the encrypted-reference pattern; no file path or bucket name is exposed to a caller.                                                                                                                                                    |
+| **VI. Observability & safe migrations** | **GATE — generated only**        | Six schema touches. Every migration is produced by `prisma migrate diff --from-schema-datasource --to-schema-datamodel --script` (not `npm run migrate:dev:create`, which is non-interactive here) and **never hand-edited**. The nine pre-existing index-name drifts are excluded from each generated file; a migration containing them has been mis-generated. |
 
 **Approved dependencies used, none added**: `pdfkit` (constitution line 183) for the debit note, `exceljs` (line 187) for the daily-report workbook, `@aws-sdk/client-s3` via `StorageService` (line 222) for signed copies. Phase E reuses `bill-pdf.renderer.ts` and Phase F the workbook renderer's pattern — **no second renderer is written**.
 
@@ -125,7 +125,7 @@ buildcore-web/app/
 **Do not touch the renderer.** `bill-pdf.renderer.ts` and `bill-abstract.ts` already read all ten `BillPackage` adjustment columns and print them correctly. The defect is upstream: a second store exists.
 
 - `RABill.advanceRecovery` / `otherDeductions` stop accepting input; `setAdjustments` is the only route.
-- **The data migration is the risky half.** Existing rows carry values that are visible on screen today. They are copied into the package's columns where a package exists; **a bill with no package has nowhere to put them**, so those bills keep their values readable and the fields become read-only rather than removed. Dropping the columns is explicitly *not* in this phase — a column dropped is a figure that cannot be recovered when somebody asks where it went.
+- **The data migration is the risky half.** Existing rows carry values that are visible on screen today. They are copied into the package's columns where a package exists; **a bill with no package has nowhere to put them**, so those bills keep their values readable and the fields become read-only rather than removed. Dropping the columns is explicitly _not_ in this phase — a column dropped is a figure that cannot be recovered when somebody asks where it went.
 - FR-007/FR-008: the Client bills tab composes through the package path, which already proposes from `DwrPeriodFiguresService` for `to_client`. The manual sheet stays as the correction route and an overridden quantity carries a reason.
 
 ### Phase C — two approval subjects, one mechanism (FR-009, FR-010) · P2
@@ -167,15 +167,15 @@ Subcontractor ahead of work order on the package composer, narrowed by `partnerI
 
 Seven tests, one per phase, each carrying the vacuity note from `spec.md` **verbatim**. This is planned rather than deferred because an assertion that passes for the wrong reason is this repository's recorded failure mode — nine times, most recently a sort placed in `submit()` instead of `view()` that kept 1,875 tests green while the screen was unchanged.
 
-| Phase | The assertion | What would make it vacuous |
-|---|---|---|
-| A | Two work orders on one project each hold a bill numbered RA-01, read off the composition response | Asserting only that composition returned 201 — it did before, for the first work order |
-| B | The figure read out of the **rendered** PDF | Asserting the column was written |
-| C | A bill composed against an unapproved award is refused, **and succeeds once approved** | Only the refusal — a guard that refuses everything passes it |
-| D | The rate unchanged after an attempt **through `PATCH /purchases/:id`** | Asserting the form field is disabled |
-| E | Outstanding reported as certified less paid, on a **part** payment | Asserting the payment row exists |
-| F | The workbook's cells, read back | Asserting the download returned bytes |
-| G | The work order selection **after** the subcontractor changes | Asserting the subcontractor control renders |
+| Phase | The assertion                                                                                     | What would make it vacuous                                                             |
+| ----- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| A     | Two work orders on one project each hold a bill numbered RA-01, read off the composition response | Asserting only that composition returned 201 — it did before, for the first work order |
+| B     | The figure read out of the **rendered** PDF                                                       | Asserting the column was written                                                       |
+| C     | A bill composed against an unapproved award is refused, **and succeeds once approved**            | Only the refusal — a guard that refuses everything passes it                           |
+| D     | The rate unchanged after an attempt **through `PATCH /purchases/:id`**                            | Asserting the form field is disabled                                                   |
+| E     | Outstanding reported as certified less paid, on a **part** payment                                | Asserting the payment row exists                                                       |
+| F     | The workbook's cells, read back                                                                   | Asserting the download returned bytes                                                  |
+| G     | The work order selection **after** the subcontractor changes                                      | Asserting the subcontractor control renders                                            |
 
 ---
 
@@ -201,8 +201,8 @@ Restated from the spec so it survives into implementation:
 
 ## Complexity Tracking
 
-| Addition | Why it is necessary | Simpler alternative rejected because |
-|---|---|---|
-| Three new tables | Each holds a fact nothing currently records: an agreed rate, a payment, a signed copy | Columns on existing rows cannot carry a history (rates change, payments are many per bill) |
-| A second approval action in one phase | The machinery arrives once for the award; the rate change reuses it | Building them in separate features means standing the inventory module's first chain up twice |
-| A new enum value rather than a boolean | `pending_approval` sits in a sequence that already exists | A boolean beside a status is two sources of truth for one state |
+| Addition                               | Why it is necessary                                                                   | Simpler alternative rejected because                                                          |
+| -------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Three new tables                       | Each holds a fact nothing currently records: an agreed rate, a payment, a signed copy | Columns on existing rows cannot carry a history (rates change, payments are many per bill)    |
+| A second approval action in one phase  | The machinery arrives once for the award; the rate change reuses it                   | Building them in separate features means standing the inventory module's first chain up twice |
+| A new enum value rather than a boolean | `pending_approval` sits in a sequence that already exists                             | A boolean beside a status is two sources of truth for one state                               |

@@ -70,6 +70,7 @@ describe('Inventory module (e2e)', () => {
   const createdCategoryIds: string[] = [];
   const createdSiteIds: string[] = [];
   const createdVendorIds: string[] = [];
+  let vendorBId = '';
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   const sys: any = new Proxy(
@@ -141,6 +142,17 @@ describe('Inventory module (e2e)', () => {
       .expect(201);
     vendorId = vendor.body.id;
     createdVendorIds.push(vendorId);
+
+    // A second supplier, because 028 FR-013 fixes the rate once a vendor–item pair has been
+    // purchased: two receipts of one item at two rates now need two vendors, or an approved rate
+    // change. The weighted-average test below is about the average, not about the control.
+    const vendorTwo = await http()
+      .post(`/partners/vendors?companyId=${companyId}`)
+      .set(auth())
+      .send({ name: unique('Supplier2'), type: 'material' })
+      .expect(201);
+    vendorBId = vendorTwo.body.id;
+    createdVendorIds.push(vendorBId);
 
     const category = await http()
       .post(`/inventory/categories?companyId=${companyId}`)
@@ -310,19 +322,53 @@ describe('Inventory module (e2e)', () => {
     await app.close();
   });
 
-  const purchase = (body: Record<string, unknown> = {}) =>
-    http()
-      .post(`/inventory/purchases?companyId=${companyId}`)
-      .set(auth())
-      .send({
-        siteId: siteA,
-        itemId,
-        vendorId,
-        date: today(),
-        quantity: 100,
-        rate: 350,
-        ...body,
-      });
+  /**
+   * Records a purchase from a **fresh supplier** unless one is named.
+   *
+   * 028 FR-013 fixes the rate once a vendor–item pair has been purchased, so a suite that buys one
+   * item from one supplier at five different rates — which this one does, because that is how a
+   * weighted average is exercised — would be testing the rate control instead of the arithmetic it
+   * means to test.
+   *
+   * A new supplier is a first purchase, which is free to set any rate. That keeps every test below
+   * about the thing it is named after, and leaves the control itself to the tests that are about
+   * it, where the vendor is named explicitly so the pair repeats on purpose.
+   */
+  const purchase = (body: Record<string, unknown> = {}) => {
+    const send = async () => {
+      let vendor = body.vendorId as string | undefined;
+      if (!vendor) {
+        const made = await http()
+          .post(`/partners/vendors?companyId=${companyId}`)
+          .set(auth())
+          .send({ name: unique('Supplier'), type: 'material' })
+          .expect(201);
+        vendor = made.body.id as string;
+        createdVendorIds.push(vendor);
+      }
+      return { vendorId: vendor };
+    };
+    // `supertest` is thenable, so the request has to be built after the vendor exists. Returning
+    // the chain from a promise keeps every call site's `.expect(201)` working unchanged.
+    return {
+      expect: async (status: number) => {
+        const { vendorId: useVendor } = await send();
+        return http()
+          .post(`/inventory/purchases?companyId=${companyId}`)
+          .set(auth())
+          .send({
+            siteId: siteA,
+            itemId,
+            date: today(),
+            quantity: 100,
+            rate: 350,
+            ...body,
+            vendorId: useVendor,
+          })
+          .expect(status);
+      },
+    };
+  };
 
   const stockAt = async (site: string) => {
     const res = await http()
@@ -411,7 +457,14 @@ describe('Inventory module (e2e)', () => {
     });
 
     it('recalculates the rate against stock on hand for a second purchase', async () => {
-      await purchase({ quantity: 100, rate: 450 }).expect(201);
+      // From the **second** vendor. 028 FR-013 fixes a rate once a vendor–item pair has been
+      // purchased, so buying the same item from the same supplier at 450 after 350 is now refused —
+      // correctly, and that refusal has its own tests below. A different supplier is a first
+      // purchase, which is what this test needs: two receipts at two rates, so the weighted average
+      // has something to average.
+      await purchase({ vendorId: vendorBId, quantity: 100, rate: 450 }).expect(
+        201,
+      );
       const stock = await stockAt(siteA);
       expect(stock.inStock).toBe(200);
       // (100 × 350 + 100 × 450) / 200
@@ -695,12 +748,169 @@ describe('Inventory module (e2e)', () => {
     });
   });
 
+  /**
+   * 028 FR-011 to FR-016. The rate agreed with a vendor for an item.
+   *
+   * The first purchase of a vendor–item pair types a rate and **establishes** it; every purchase
+   * after it must match. The control reaches past the purchase row: `stock.service.ts` recomputes a
+   * weighted average on every receipt, so a mistyped rate silently restates the value of every unit
+   * of that material already held.
+   */
+  describe('the rate agreed with a vendor (028 FR-011 to FR-016)', () => {
+    let rateVendorId = '';
+    let otherVendorId = '';
+
+    beforeAll(async () => {
+      for (const target of ['rate', 'other']) {
+        const made = await http()
+          .post(`/partners/vendors?companyId=${companyId}`)
+          .set(auth())
+          .send({ name: unique(`RateSupplier-${target}`), type: 'material' })
+          .expect(201);
+        if (target === 'rate') rateVendorId = made.body.id;
+        else otherVendorId = made.body.id;
+        createdVendorIds.push(made.body.id);
+      }
+    });
+
+    it('lets the first purchase of a pair set the rate', async () => {
+      const first = await http()
+        .post(`/inventory/purchases?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId,
+          vendorId: rateVendorId,
+          date: today(),
+          quantity: 10,
+          rate: 412,
+        })
+        .expect(201);
+      expect(first.body.amount).toBe(4120);
+    });
+
+    it('refuses a second purchase of the same pair at a different rate', async () => {
+      const refused = await http()
+        .post(`/inventory/purchases?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId,
+          vendorId: rateVendorId,
+          date: today(),
+          quantity: 10,
+          rate: 500,
+        })
+        .expect(409);
+
+      expect(refused.body.code).toBe('PURCHASE_RATE_FIXED');
+      // Naming the agreed figure is what makes the refusal actionable: "that rate is wrong" leaves
+      // somebody guessing which of the two numbers the system believes.
+      expect(String(refused.body.message)).toContain('412.00');
+    });
+
+    it('accepts a second purchase at the agreed rate', async () => {
+      // **The half that makes the refusal mean something.** Without it, the test above passes
+      // against a rule that refuses every repeat purchase — which would stop the business buying
+      // anything twice.
+      const again = await http()
+        .post(`/inventory/purchases?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId,
+          vendorId: rateVendorId,
+          date: today(),
+          quantity: 5,
+          rate: 412,
+        })
+        .expect(201);
+      expect(again.body.amount).toBe(2060);
+    });
+
+    it('treats a familiar item from a new supplier as a first purchase', async () => {
+      // FR-012, and the chosen limit of the control (FR-016). The contract is per vendor, so a
+      // supplier who has not sold this item has no agreed rate to supply. That means the lock can
+      // be stepped around by adding a vendor — deliberately not blocked, because refusing new
+      // suppliers would be worse. The answer is visibility, asserted below.
+      const fromAnother = await http()
+        .post(`/inventory/purchases?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId,
+          vendorId: otherVendorId,
+          date: today(),
+          quantity: 10,
+          rate: 650,
+        })
+        .expect(201);
+      expect(fromAnother.body.amount).toBe(6500);
+    });
+
+    it('refuses a rate sent to the update endpoint at all', async () => {
+      // FR-013 names "any caller, through any route". This endpoint takes a date and a remark only
+      // — quantity, rate, item, site and vendor are absent by design, because the stock ledger and
+      // the bill were computed from them. Asserted rather than assumed: 028's research originally
+      // claimed this endpoint accepted a rate, which was wrong, and a guard was written against a
+      // hole that does not exist before the DTO was read.
+      const created = await http()
+        .post(`/inventory/purchases?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId,
+          vendorId: rateVendorId,
+          date: today(),
+          quantity: 1,
+          rate: 412,
+        })
+        .expect(201);
+
+      const refused = await http()
+        .patch(`/inventory/purchases/${created.body.id}`)
+        .set(auth())
+        .send({ rate: 999 })
+        .expect(400);
+      expect(String(JSON.stringify(refused.body))).toMatch(/rate/i);
+
+      // And the rate did not move.
+      const after = await http()
+        .get(`/inventory/purchases?vendorId=${rateVendorId}&siteId=${siteA}`)
+        .set(auth())
+        .expect(200);
+      for (const row of after.body.purchases) {
+        expect(Number(row.rate)).toBe(412);
+      }
+    });
+  });
+
   // ───────────────────────────────────────────────────────── Payments (US7)
 
   describe('Payments and FIFO allocation', () => {
     let oldBillPurchase: string;
     let newBillPurchase: string;
     let paymentId: string;
+    /**
+     * Its own supplier, and FIFO is the reason.
+     *
+     * Allocation runs per vendor, so these tests need two bills from **one** of them — which makes
+     * them the only tests here that cannot take a fresh supplier per purchase. Sharing the suite's
+     * default vendor meant sharing its agreed rate too, once 028 FR-013 fixed one: that vendor is
+     * bought at 100 elsewhere in this file, so 500 here was refused by a control these tests are
+     * not about.
+     */
+    let payVendorId = '';
+
+    beforeAll(async () => {
+      const made = await http()
+        .post(`/partners/vendors?companyId=${companyId}`)
+        .set(auth())
+        .send({ name: unique('PaySupplier'), type: 'material' })
+        .expect(201);
+      payVendorId = made.body.id;
+      createdVendorIds.push(payVendorId);
+    });
 
     it('allocates the oldest bill first and part-pays the next', async () => {
       const older = await http()
@@ -709,7 +919,7 @@ describe('Inventory module (e2e)', () => {
         .send({
           siteId: siteB,
           itemId,
-          vendorId,
+          vendorId: payVendorId,
           date: '2026-01-10',
           quantity: 10,
           rate: 500,
@@ -723,10 +933,15 @@ describe('Inventory module (e2e)', () => {
         .send({
           siteId: siteB,
           itemId,
-          vendorId,
+          vendorId: payVendorId,
           date: '2026-02-10',
-          quantity: 10,
-          rate: 300,
+          // Six at the same rate, not ten at a lower one. Both bills are from one vendor on
+          // purpose — FIFO allocation is per vendor — and 028 FR-013 fixes the rate once a
+          // vendor–item pair has been purchased, so a second rate here would be refused by a
+          // control this test is not about. 6 × 500 is the 3,000 the allocation below expects,
+          // which is what 10 × 300 was.
+          quantity: 6,
+          rate: 500,
         })
         .expect(201);
       newBillPurchase = newer.body.id;
@@ -735,7 +950,7 @@ describe('Inventory module (e2e)', () => {
         .post(`/inventory/payments?companyId=${companyId}`)
         .set(auth())
         .send({
-          vendorId,
+          vendorId: payVendorId,
           amount: 7000,
           date: today(),
           paymentMode: 'bank_transfer',
@@ -745,7 +960,7 @@ describe('Inventory module (e2e)', () => {
       paymentId = payment.body.id;
 
       const purchases = await http()
-        .get(`/inventory/purchases?vendorId=${vendorId}&siteId=${siteB}`)
+        .get(`/inventory/purchases?vendorId=${payVendorId}&siteId=${siteB}`)
         .set(auth())
         .expect(200);
       const byId = new Map(
@@ -773,7 +988,7 @@ describe('Inventory module (e2e)', () => {
         .expect(204);
 
       const purchases = await http()
-        .get(`/inventory/purchases?vendorId=${vendorId}&siteId=${siteB}`)
+        .get(`/inventory/purchases?vendorId=${payVendorId}&siteId=${siteB}`)
         .set(auth())
         .expect(200);
       for (const row of purchases.body.purchases) {
@@ -782,8 +997,10 @@ describe('Inventory module (e2e)', () => {
     });
 
     it('records a surplus rather than refusing an over-payment', async () => {
+      // The same vendor the payment is made to. Reading one vendor's outstanding and paying
+      // another's is how this test came to expect a ₹5,000 surplus and receive none.
       const outstanding = await http()
-        .get(`/inventory/bills?vendorId=${vendorId}`)
+        .get(`/inventory/bills?vendorId=${payVendorId}`)
         .set(auth())
         .expect(200);
 
@@ -791,7 +1008,7 @@ describe('Inventory module (e2e)', () => {
         .post(`/inventory/payments?companyId=${companyId}`)
         .set(auth())
         .send({
-          vendorId,
+          vendorId: payVendorId,
           amount: outstanding.body.totalOutstanding + 5000,
           date: today(),
           paymentMode: 'upi',

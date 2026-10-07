@@ -20,11 +20,11 @@ The next free directory under `specs/` is `027`. It is deliberately skipped. Twe
 
 A completion-and-repair pass. **Four of the twenty-two requirements are genuinely new mechanisms; the rest are wiring, removal, a control over machinery that already exists, or a constraint that was written wrong.** Each requirement below states what already exists, because the largest risk on a list like this is rebuilding something that works.
 
-One item from the client's list is deliberately absent: see *Out of scope*.
+One item from the client's list is deliberately absent: see _Out of scope_.
 
 ---
 
-## User Scenarios & Testing *(mandatory)*
+## User Scenarios & Testing _(mandatory)_
 
 ### User Story 1 - A second subcontractor can be billed at all (Priority: P1)
 
@@ -100,7 +100,7 @@ A storekeeper records a purchase and types whatever rate they like. Stock is val
 **Acceptance scenarios**:
 
 1. **Given** a vendor–item pair never purchased, **When** a purchase is recorded, **Then** the rate is accepted and becomes the agreed rate.
-2. **Given** an agreed rate exists, **When** a purchase is recorded for that pair, **Then** the rate is supplied and cannot be altered by any caller, including directly against the update endpoint.
+2. **Given** an agreed rate exists, **When** a purchase is recorded for that pair, **Then** the rate is supplied and a different one is refused — by the service, so no caller can route around it.
 3. **Given** an agreed rate exists, **When** a change is requested and approved, **Then** purchases from that point use the new rate and purchases already made are unchanged.
 4. **Given** an item agreed with other vendors, **When** a first purchase is recorded from a new vendor, **Then** those other agreed rates are visible while the rate is typed.
 
@@ -108,7 +108,7 @@ A storekeeper records a purchase and types whatever rate they like. Stock is val
 
 ### User Story 6 - A subcontractor's bill can be found, signed for, and paid (Priority: P3)
 
-A bill reaches *certified* and the trail ends. Nothing records that the signed copy came back or that money left.
+A bill reaches _certified_ and the trail ends. Nothing records that the signed copy came back or that money left.
 
 **Why this priority**: Real, but the business runs today by tracking these elsewhere. It is the largest of the remaining items and the least urgent of them.
 
@@ -159,55 +159,55 @@ The bill composer offers every work order on the project; changing company stran
 
 ---
 
-## Requirements *(mandatory)*
+## Requirements _(mandatory)_
 
 Each requirement states **what already exists**, so that nothing here is rebuilt.
 
 ### Group A — a bill cannot be composed
 
-- **FR-001**: Bill numbers for a subcontractor MUST be unique within the work order they belong to, not within the project. *Exists*: the allocator already counts per work order; only the constraint disagrees, and it is the disagreement that refuses the bill.
+- **FR-001**: Bill numbers for a subcontractor MUST be unique within the work order they belong to, not within the project. _Exists_: the allocator already counts per work order; only the constraint disagrees, and it is the disagreement that refuses the bill.
 - **FR-002**: The system MUST state and enforce what uniqueness means for a bill carrying no work order. A nullable column cannot carry the rule by itself.
-- **FR-003**: A duplicate bill number MUST be reported to the caller as a refusal in a sentence, never as database text. *Exists*: two of the three composition paths already do this; the package path does not.
+- **FR-003**: A duplicate bill number MUST be reported to the caller as a refusal in a sentence, never as database text. _Exists_: two of the three composition paths already do this; the package path does not.
 
 ### Group B — one place to record a deduction
 
-- **FR-004**: A deduction MUST be recorded in exactly one place, and that place MUST be the one the issued document reads. *Exists*: the abstract and the rendered PDF already read the package's ten adjustment columns correctly and need no change.
+- **FR-004**: A deduction MUST be recorded in exactly one place, and that place MUST be the one the issued document reads. _Exists_: the abstract and the rendered PDF already read the package's ten adjustment columns correctly and need no change.
 - **FR-005**: Values already held in the retired fields MUST be carried over, so that no figure visible on a screen today disappears when those fields stop being read.
 - **FR-006**: The retired fields MUST refuse input rather than accept it into a column nothing prints.
-- **FR-007**: A client bill MUST be composable from approved daily work for the period. *Exists*: the proposal mechanism already does this for both bill directions.
+- **FR-007**: A client bill MUST be composable from approved daily work for the period. _Exists_: the proposal mechanism already does this for both bill directions.
 - **FR-008**: A quantity that overrides a proposed one MUST carry a reason.
 
 ### Group C — approvals, where none exist
 
-- **FR-009**: A work order MUST be approved before it is active, and MUST NOT be billable until it is. *Exists*: the approval machinery, used today for running-account bills; a work order has never been submitted to it.
-- **FR-010**: A change to an agreed purchase rate MUST require approval. *Exists*: nothing — there is no approval chain anywhere in the inventory module, which is why FR-009 and FR-010 are one piece of work.
+- **FR-009**: A work order MUST be approved before it is active, and MUST NOT be billable until it is. _Exists_: the approval machinery, used today for running-account bills; a work order has never been submitted to it.
+- **FR-010**: A change to an agreed purchase rate MUST require approval. _Exists_: nothing — there is no approval chain anywhere in the inventory module, which is why FR-009 and FR-010 are one piece of work.
 
 ### Group D — the vendor rate contract
 
-- **FR-011**: An agreed rate MUST be held per vendor and item, with the period it applies to. *Exists*: an equipment hire rate already has exactly this shape, including the convention that an open end means "current".
+- **FR-011**: An agreed rate MUST be held per vendor and item, with the period it applies to. _Exists_: an equipment hire rate already has exactly this shape, including the convention that an open end means "current".
 - **FR-012**: The first purchase of a vendor–item pair MUST accept a typed rate and record it as agreed. A known item from a new vendor is a first purchase.
-- **FR-013**: Once agreed, the rate MUST be supplied on a purchase and MUST NOT be alterable — including by a caller addressing the update endpoint directly, which accepts a rate from anybody today. A locked field over an open endpoint is a control in appearance only.
+- **FR-013**: Once agreed, the rate MUST be supplied on a purchase and MUST NOT be alterable by any caller, through any route. _Amended 2026-10-07_: this requirement originally singled out the update endpoint as "accepting a rate from anybody today". That was asserted without reading the DTO and is false — that endpoint takes a date and a remark only, deliberately, because the stock ledger and the bill were computed from the rest. The requirement stands; the enforcement point is creation, and it belongs in the service because only a service can compare a figure against what was agreed.
 - **FR-014**: The rule MUST apply forward only. Purchases already recorded stay editable.
 - **FR-015**: An approved rate change MUST apply from approval onward and MUST NOT restate purchases already made — those were what the vendor actually billed.
 - **FR-016**: When an item is agreed with other vendors, those rates MUST be visible while a first rate is typed, and first-purchase rates MUST be reportable for a period. **This is a chosen limit, not an oversight**: a rate locked per vendor can be stepped around by adding a vendor, blocking new suppliers would be worse, and so the control is visibility rather than refusal.
-- **FR-017**: A purchase MUST carry a bill and a photograph before it is approved — not before it is recorded, because a site photographing a delivery at dusk with no signal must still be able to record it. *Exists*: a bill file, optional; no photograph at all. Not retrospective.
+- **FR-017**: A purchase MUST carry a bill and a photograph before it is approved — not before it is recorded, because a site photographing a delivery at dusk with no signal must still be able to record it. _Exists_: a bill file, optional; no photograph at all. Not retrospective.
 
 ### Group E — documents and money that leaves
 
-- **FR-018**: A debit note MUST be producible as a document in its own right. *Exists*: the debit register already prints inside the bill package; the standalone document a subcontractor signs does not exist.
+- **FR-018**: A debit note MUST be producible as a document in its own right. _Exists_: the debit register already prints inside the bill package; the standalone document a subcontractor signs does not exist.
 - **FR-019**: A debit note MUST carry a number allocated when it is raised, so that the document and the register cannot disagree about which debit it is.
 - **FR-020**: A signed copy returning MUST be recordable against a running-account bill and against a debit note, and MUST change the document's state rather than only adding a file. A file in a list cannot answer "which bills are unacknowledged".
 - **FR-021**: Payments MUST be recordable against a bill, in parts, and the outstanding amount MUST be derived from what has been certified and what has been paid rather than stored. Outstanding MUST be readable across a subcontractor's bills, not only per bill.
 
 ### Group F — daily work
 
-- **FR-022**: A submitted report MUST be downloadable as a workbook matching the client's own form. *Exists*: no export of any kind.
+- **FR-022**: A submitted report MUST be downloadable as a workbook matching the client's own form. _Exists_: no export of any kind.
 - **FR-023**: Weather MUST be removed from report entry, and the recorded history MUST be retained. Removing the input is the request; discarding what was recorded is not, and costs nothing to avoid.
-- **FR-024**: A report MUST report who recorded it and who submitted it, by name. *Exists*: both identities are already stored and already returned as identifiers; only the names are missing.
+- **FR-024**: A report MUST report who recorded it and who submitted it, by name. _Exists_: both identities are already stored and already returned as identifiers; only the names are missing.
 
 ### Group G — screens that already hold their data
 
-- **FR-025**: A bill MUST be composed by choosing the subcontractor first and then one of their work orders. *Exists*: every work order already carries its subcontractor, and the names are already resolved elsewhere on the same screen.
+- **FR-025**: A bill MUST be composed by choosing the subcontractor first and then one of their work orders. _Exists_: every work order already carries its subcontractor, and the names are already resolved elsewhere on the same screen.
 - **FR-026**: Changing the subcontractor MUST clear the chosen work order. This is the one failure the control can introduce, and it would compose a bill against the wrong contract.
 - **FR-027**: Work orders with no subcontractor recorded MUST remain reachable in the picker rather than being filtered out of existence.
 - **FR-028**: Opening a project that belongs to another company after a company switch MUST return the user to the portfolio of the company now selected, with an explanation. The refusal itself is correct and MUST NOT change.
@@ -225,7 +225,7 @@ Each requirement states **what already exists**, so that nothing here is rebuilt
 
 ---
 
-## Success Criteria *(mandatory)*
+## Success Criteria _(mandatory)_
 
 ### Measurable Outcomes
 
@@ -248,15 +248,15 @@ This is written as a requirement because the failure is recorded nine times in t
 
 For each group, the assertion that must not be weakened:
 
-| Group | The test | What would make it vacuous |
-|---|---|---|
-| A | Two work orders on one project each hold a bill numbered RA-01 | Asserting only that composition returned 201 — it did before, for the first work order |
-| B | The figure read out of the **rendered** PDF | Asserting the column was written |
-| C | A bill composed against an unapproved award is refused, **and** succeeds once approved | Only the refusal — a guard that refuses everything passes it |
-| D | A second purchase's rate is unchanged after an attempt to alter it **through the update endpoint** | Asserting the form field is disabled |
-| E | Outstanding reported as certified less paid, on a part payment | Asserting the payment row exists |
-| F | The workbook's cells, read back | Asserting the download returned bytes |
-| G | The work order selection after the subcontractor changes | Asserting the subcontractor control renders |
+| Group | The test                                                                                  | What would make it vacuous                                                             |
+| ----- | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| A     | Two work orders on one project each hold a bill numbered RA-01                            | Asserting only that composition returned 201 — it did before, for the first work order |
+| B     | The figure read out of the **rendered** PDF                                               | Asserting the column was written                                                       |
+| C     | A bill composed against an unapproved award is refused, **and** succeeds once approved    | Only the refusal — a guard that refuses everything passes it                           |
+| D     | A mismatched rate refused on creation, **and** the update endpoint refusing a rate at all | Asserting the form field is disabled                                                   |
+| E     | Outstanding reported as certified less paid, on a part payment                            | Asserting the payment row exists                                                       |
+| F     | The workbook's cells, read back                                                           | Asserting the download returned bytes                                                  |
+| G     | The work order selection after the subcontractor changes                                  | Asserting the subcontractor control renders                                            |
 
 ---
 

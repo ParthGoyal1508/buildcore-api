@@ -68,7 +68,7 @@ it mean something.
 
 **The trap**: checking the form field is disabled proves nothing about the endpoint behind it.
 
-4. Record a first purchase of the same item from a *different* vendor.
+4. Record a first purchase of the same item from a _different_ vendor.
 
 **Expect**: typed freely — a new pair is a first purchase — **with the other vendor's agreed rate
 shown beside it**. This is the chosen limit of the control, not a hole in it.

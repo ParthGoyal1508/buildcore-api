@@ -42,13 +42,13 @@ into a specification and neither is:**
 
 - FR-013's "including by a caller addressing the update endpoint directly" names a route.
   It stays, because without it the requirement is satisfiable by disabling a form field,
-  and that is the difference between a control and its appearance. The *testing* table
+  and that is the difference between a control and its appearance. The _testing_ table
   makes the same point from the other side.
 - FR-002 obliges the spec to decide what uniqueness means for a bill with no work order.
   This sounds like a schema concern. It is not: a nullable column cannot carry the rule in
   Postgres at all, so leaving it to the migration means leaving it undecided, which is how
   this feature's highest-severity defect was introduced in the first place.
 
-**One deliberate omission from the client's own list** is recorded in *Out of scope* rather
+**One deliberate omission from the client's own list** is recorded in _Out of scope_ rather
 than silently dropped: the "document is mandatory on edit" report, withdrawn and receiving
 no code change.

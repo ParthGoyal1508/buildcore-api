@@ -1,6 +1,5 @@
 ---
-
-description: "Task list for feature 028 — Projects defect register"
+description: 'Task list for feature 028 — Projects defect register'
 ---
 
 # Tasks: Projects defect register
@@ -61,7 +60,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T010 [US1] Add `RA_BILL_NEEDS_WORK_ORDER` and refuse an RA bill created without a work order, in `src/projects/billing/ra-bills.service.ts` and the package path in `src/projects/billing/package/bill-package.service.ts`. **The task's reason, which belongs in the code comment**: Postgres does not collide NULLs, so the moved constraint alone leaves every work-order-less bill unconstrained — the same hole, moved. A partial unique index would fix it in SQL and **cannot be generated from a Prisma schema**, so the rule the database cannot express is held one layer up, deliberately and in one place (research §1)
 - [ ] T011 [US1] Map `P2002` → 409 `BILL_NUMBER_TAKEN` on **both** the `rABill` and `clientBill` creates in `src/projects/billing/package/bill-package.service.ts`, matching `ra-bills.service.ts:320` and `client-bills.service.ts:340`. This is why raw Prisma text reached the user's screen
 - [ ] T012 [US1] Generate the migration for T009 (T002's command). Verify it contains **one** statement and none of the nine index drifts
-- [ ] T013 [US1] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: two work orders on one project, each holding a bill numbered `RA-01`, asserted **on the composition response**. **Vacuity note to carry in the test's docblock**: *asserting only that composition returned 201 proves nothing — it did before, for the first work order.*
+- [ ] T013 [US1] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: two work orders on one project, each holding a bill numbered `RA-01`, asserted **on the composition response**. **Vacuity note to carry in the test's docblock**: _asserting only that composition returned 201 proves nothing — it did before, for the first work order._
 - [ ] T014 [US1] Test: a second bill on the first work order is `RA-02`, and a forced duplicate answers 409 with a sentence, never Prisma text
 
 **Checkpoint**: a project with any number of subcontractors can raise a first bill for each (SC-001).
@@ -80,7 +79,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T018 [US2] `web:` remove the two deduction inputs from `app/ui/projects/ra-bill-sheet.tsx`, leaving the figures readable where a bill still carries them
 - [ ] T019 [US2] [P] Compose a client bill through the package path from the Client bills tab in `web:app/ui/projects/client-bills-panel.tsx`; the manual sheet becomes the correction route (FR-007)
 - [ ] T020 [US2] An overridden proposed quantity carries a reason (FR-008), in `src/projects/billing/package/bill-package.service.ts` and the sheet
-- [ ] T021 [US2] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a deduction recorded through adjustments, then the **rendered PDF** parsed and the figure read out of it. **Vacuity note**: *asserting the column was written proves the write, not the document — the write was already correct.*
+- [ ] T021 [US2] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a deduction recorded through adjustments, then the **rendered PDF** parsed and the figure read out of it. **Vacuity note**: _asserting the column was written proves the write, not the document — the write was already correct._
 
 **Checkpoint**: SC-002 — every deduction recorded appears on the document the recipient receives.
 
@@ -97,7 +96,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T024 [US4] Register `ACTION_WORK_ORDER_AWARD` in `src/approvals/default-chains.ts` on the same machinery as `ACTION_RA_BILL`, with submit/approve/return routes on the work order
 - [ ] T025 [US4] Register `ACTION_PURCHASE_RATE_CHANGE` in the same file and the same phase. **`src/inventory` has no approval chain of any kind today** — this is the module's first, and standing the machinery up once for both subjects is why they share a phase (research §3)
 - [ ] T026 [US4] Refuse a package composed against an unapproved award, by name, in `src/projects/billing/package/bill-package.service.ts` (`WORK_ORDER_NOT_APPROVED`)
-- [ ] T027 [US4] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a composition refused against an unapproved award **and accepted once approved**. **Vacuity note**: *the refusal alone passes for a guard that refuses everything — the acceptance is the half that makes it mean something.*
+- [ ] T027 [US4] **Test (vacuity-noted)** in `test/bill-package.e2e-spec.ts`: a composition refused against an unapproved award **and accepted once approved**. **Vacuity note**: _the refusal alone passes for a guard that refuses everything — the acceptance is the half that makes it mean something._
 
 **Checkpoint**: SC-004 — no work order can be billed against until approved.
 
@@ -119,7 +118,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T035 [US5] [P] FR-016: `GET /inventory/vendor-rates?itemId=` with no `vendorId` answers what other vendors have agreed, for display beside a first entry; plus the first-purchase report over a period
 - [ ] T036 [US5] FR-017: add the photo column to `Purchase` (`billFile` exists, there is no photo), generate the migration, and require both **before approval, not at creation** — site staff photographing a delivery at dusk with no signal must still record it. Not retrospective
 - [ ] T037 [US5] `web:` purchase form renders the rate read-only from the server's `rateIsFixed`, with sibling-vendor rates beside a first entry
-- [ ] T038 [US5] **Test (vacuity-noted)** in `test/purchases.e2e-spec.ts`: a second purchase's rate is unchanged after an attempt to alter it **through `PATCH /inventory/purchases/:id`**. **Vacuity note**: *asserting the form field is disabled proves nothing about the endpoint behind it.*
+- [ ] T038 [US5] **Test (vacuity-noted)** in `test/purchases.e2e-spec.ts`: a second purchase's rate is unchanged after an attempt to alter it **through `PATCH /inventory/purchases/:id`**. **Vacuity note**: _asserting the form field is disabled proves nothing about the endpoint behind it._
 
 **Checkpoint**: SC-005.
 
@@ -139,7 +138,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T046 [US6] `src/projects/billing/payments/`: record a payment, partial allowed; `outstandingAmount` **computed on read** as certified less paid
 - [ ] T047 [US6] [P] `GET /projects/subcontractors/:partnerId/outstanding` reading across a subcontractor's bills, not per bill
 - [ ] T048 [US6] [P] `web:` the signed-copy upload, the payment form and the outstanding view
-- [ ] T049 [US6] **Test (vacuity-noted)**: a bill certified at ₹100 with ₹60 paid reports ₹40 outstanding. **Vacuity note**: *asserting the payment row exists proves the write, not the derivation.*
+- [ ] T049 [US6] **Test (vacuity-noted)**: a bill certified at ₹100 with ₹60 paid reports ₹40 outstanding. **Vacuity note**: _asserting the payment row exists proves the write, not the derivation._
 
 **Checkpoint**: SC-006.
 
@@ -154,7 +153,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T052 [US7] Remove `weather` from `src/projects/dwr/dto/create-dwr.dto.ts` and `update-dwr.dto.ts`, and from `web:app/ui/projects/dwr-form.tsx`. **The column, its default and every recorded value are kept — there is NO migration for this task.** Removing the input is the request; discarding what was recorded is not
 - [ ] T053 [US7] Resolve `recordedByName` and `submittedByName` in `src/projects/dwr/dwr.service.ts`, **reusing `project-documents.service.ts`'s `actorNames` helper rather than writing a second one**. Both names, because on a report returned for correction they are different people
 - [ ] T054 [US7] [P] `web:` show both names on the report
-- [ ] T055 [US7] **Test (vacuity-noted)**: the generated workbook's **cells read back** against the expected layout. **Vacuity note**: *asserting the download returned bytes proves a response, not a document.*
+- [ ] T055 [US7] **Test (vacuity-noted)**: the generated workbook's **cells read back** against the expected layout. **Vacuity note**: _asserting the download returned bytes proves a response, not a document._
 
 **Checkpoint**: SC-007.
 
@@ -170,7 +169,7 @@ Item 01 of the client's list, the BOQ quoted-percentage sign, **shipped on 6 Oct
 - [ ] T059 [US8] [P] Handle the company-switch 404 **once** in `web:app/dashboard/projects/portfolio/[id]/layout.tsx`, redirecting to the portfolio of the company now selected **with an explanation on arrival**. Not per page. The API's 404 is correct and does not change (FR-028)
 - [ ] T060 [US8] [P] Commercial terms card on `web:app/dashboard/projects/portfolio/[id]/page.tsx` carrying client retention and the quoted percentage, plus the descriptive facts the response already holds (FR-029)
 - [ ] T061 [US8] [P] Rename Issue to "Issue / Consumption material" in `web:app/lib/constants.ts` and the navigation — **labels only; the route and the API are unchanged**, because renaming a URL breaks every link already sent for no gain (FR-030)
-- [ ] T062 [US8] **Test (vacuity-noted)**: the work order selection **after** the subcontractor is changed. **Vacuity note**: *asserting the subcontractor control renders proves it exists, not that it clears anything.*
+- [ ] T062 [US8] **Test (vacuity-noted)**: the work order selection **after** the subcontractor is changed. **Vacuity note**: _asserting the subcontractor control renders proves it exists, not that it clears anything._
 
 **Checkpoint**: SC-008.
 

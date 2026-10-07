@@ -11,10 +11,10 @@ Decimals cross the wire as **strings**, as everywhere else in this API.
 
 `POST /projects/bill-packages` — unchanged shape, two new refusals.
 
-| Refusal | Code | When |
-|---|---|---|
-| 409 | `BILL_NUMBER_TAKEN` | The allocated number already exists on that work order (FR-003). **Replaces raw Prisma text**: this path had no `P2002` handler, so `[P2002]: Invalid 'prisma.rABill.create()' invocation` reached the screen |
-| 409 | `WORK_ORDER_NOT_APPROVED` | The award has not been approved (FR-009). Names the work order |
+| Refusal | Code                      | When                                                                                                                                                                                                          |
+| ------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 409     | `BILL_NUMBER_TAKEN`       | The allocated number already exists on that work order (FR-003). **Replaces raw Prisma text**: this path had no `P2002` handler, so `[P2002]: Invalid 'prisma.rABill.create()' invocation` reached the screen |
+| 409     | `WORK_ORDER_NOT_APPROVED` | The award has not been approved (FR-009). Names the work order                                                                                                                                                |
 
 `POST /projects/ra-bills` gains one refusal:
 
