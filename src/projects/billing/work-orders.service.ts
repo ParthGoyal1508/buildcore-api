@@ -5,7 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { CodeSeriesType, Permission, WorkOrderStatus } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  CodeSeriesType,
+  Permission,
+  WorkOrderStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import {
@@ -15,6 +21,7 @@ import {
 } from '../../approvals/approvals.service';
 import { ACTION_WORK_ORDER_AWARD } from '../../approvals/default-chains';
 import { webRoutes } from '../../common/web-routes';
+import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
@@ -97,6 +104,7 @@ export class WorkOrdersService {
     private readonly prisma: PrismaService,
     private readonly codeSeries: CodeSeriesService,
     private readonly approvals: ApprovalService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /**
@@ -170,6 +178,111 @@ export class WorkOrdersService {
         data: { status: WorkOrderStatus.pending_approval },
       }),
     );
+    return this.view(ctx, order.id);
+  }
+
+  /**
+   * Takes an award back to `draft` so it can be corrected (2026-10-08).
+   *
+   * ## Why this exists
+   *
+   * `setAward` used to refuse only once a bill had been measured, so between approval and the
+   * first bill the whole award could be rewritten while the work order stayed `active` — the
+   * approval standing against figures that no longer existed. Locking `setAward` to a draft closed
+   * that, and closing it created a dead end: an award approved with a wrong rate and not yet
+   * billed had no route back, because **the "raise a variation instead" the billed path names is
+   * advice, not a feature** — `variationRef` exists on client BOQ lines and award lines have no
+   * equivalent.
+   *
+   * This is that route, and it is deliberately **an act of its own rather than a side effect of an
+   * edit**. Letting a save quietly cancel an approval would mean the approval could disappear
+   * without the person who removed it noticing they had; here they ask for it, and say why.
+   *
+   * ## What it does not lift
+   *
+   * A billed award stays frozen. Reopening one would move the remaining quantity under bills the
+   * subcontractor already holds, which is the thing the original refusal exists to prevent — so
+   * the bill count is checked here too, and reported as the harder refusal it is.
+   *
+   * The live approval is abandoned rather than left dangling: an instance still waiting on an
+   * approver for a schedule that is being rewritten is an item in somebody's queue that means
+   * nothing. `abandon` is a no-op where nothing is live, which is the `active` case.
+   */
+  async reopenAward(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    id: string,
+    reason: string,
+    ipAddress: string,
+  ): Promise<WorkOrderView> {
+    const order = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.findFirst({
+        where: { id },
+        select: {
+          id: true,
+          companyId: true,
+          code: true,
+          status: true,
+          _count: { select: { awardLines: true } },
+        },
+      }),
+    );
+    if (!order) throw new NotFoundException('Work order not found');
+
+    if (order.status === WorkOrderStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_WRONG_STATUS',
+        message:
+          'This award is already a draft, so there is nothing to reopen. Edit it directly.',
+      });
+    }
+
+    const billed = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABillLine.count({ where: { workOrderBoqItem: { workOrderId: id } } }),
+    );
+    if (billed > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_AWARD_BILLED',
+        message:
+          'This award has been measured against, so it cannot be reopened. Changing it would move ' +
+          'the remaining quantity on bills the subcontractor already holds.',
+      });
+    }
+
+    await this.approvals.abandon(
+      ACTION_WORK_ORDER_AWARD,
+      order.id,
+      order.companyId,
+      reason,
+    );
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.update({
+        where: { id: order.id },
+        data: { status: WorkOrderStatus.draft },
+      }),
+    );
+
+    // The reason lives in the audit trail rather than in a column. It is accountability, not
+    // correctness — nothing reads it back to decide anything — and this repository's own rule is
+    // that making the trail load-bearing for a decision is what turns a gap in it into a
+    // permission.
+    await this.auditLog.record({
+      entityType: AuditEntityType.PROJECT,
+      action: AuditAction.UPDATE,
+      entityId: order.id,
+      accountId: caller.id,
+      companyId: order.companyId,
+      ipAddress,
+      changes: {
+        awardReopened: true,
+        fromStatus: order.status,
+        reason,
+      },
+    });
+
     return this.view(ctx, order.id);
   }
 

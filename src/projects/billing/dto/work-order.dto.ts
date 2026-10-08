@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsEnum,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -157,4 +158,27 @@ export class UpdateWorkOrderDto {
   @IsOptional()
   @IsEnum(WorkOrderStatus)
   status?: WorkOrderStatus;
+}
+
+/**
+ * Reopening an approved award (2026-10-08).
+ *
+ * The reason is required because the act removes a control: an approval given on a set of figures
+ * stops applying, and "why" is the only part of that a reader can act on afterwards. Same floor as
+ * every other reason in this product — a one-word answer tells the next person nothing.
+ */
+export class ReopenAwardDto {
+  @ApiProperty({
+    example: 'rate on line 3 captured as 5,185 — the signed award says 4,185',
+    minLength: 10,
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MinLength(10, {
+    message:
+      'Say what has to change. Reopening voids an approval somebody gave, and the record of why ' +
+      'is the only thing that explains it later.',
+  })
+  @MaxLength(2000)
+  reason!: string;
 }

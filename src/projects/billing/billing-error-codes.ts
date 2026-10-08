@@ -35,6 +35,13 @@ export const BILLING_ERRORS = {
   overScopeReasonRequired: 'OVER_SCOPE_REASON_REQUIRED',
   /** A bill that has left draft cannot have its lines changed. */
   notDraft: 'BILL_NOT_DRAFT',
+  /**
+   * An award that has been submitted or approved cannot be rewritten in place.
+   *
+   * Distinct from `notDraft`, which is about a bill: this one is about the schedule the bill will
+   * be measured against. The remedy differs too — a reopen, which voids the approval.
+   */
+  awardNotDraft: 'AWARD_NOT_DRAFT',
   /** Certifying something that was never submitted. */
   notSubmitted: 'BILL_NOT_SUBMITTED',
   /** A bill with no lines. Submitting one would send a client a document saying nothing. */

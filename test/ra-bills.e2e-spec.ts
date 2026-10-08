@@ -398,6 +398,89 @@ describe('RA bills against an award (e2e)', () => {
         .catch(() => undefined);
     });
 
+    /**
+     * 2026-10-08. The approval has to survive the save, or it approves nothing.
+     *
+     * `setAward` refused only once a bill had been measured, so between approval and the first
+     * bill the whole award — rates included — could be replaced while the work order stayed
+     * `active`. The approval then stood against figures that no longer existed, and the first bill
+     * would be measured at a rate nobody approved. Reported from the screen: "once it is approved,
+     * if I'm changing the rate it's allowing me to update the rate".
+     *
+     * **The vacuity this avoids: asserting that a draft award can be edited.** It always could.
+     * Both halves are asserted here — refused while approved, accepted after reopening — because
+     * a lock that refuses everything would pass the first on its own.
+     */
+    it('refuses a rate change once the award is approved, and allows it after a reopen', async () => {
+      const rewrite = (rate: number) =>
+        http()
+          .put(
+            `/projects/ra-bills/awards/${gatedWorkOrderId}?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({
+            lines: [
+              {
+                description: 'APP membrane to terrace',
+                unit: 'Sqm',
+                awardedQty: 300,
+                rate,
+              },
+            ],
+          });
+
+      await sys.workOrder.update({
+        where: { id: gatedWorkOrderId },
+        data: { status: 'active' },
+      });
+
+      const refused = await rewrite(900);
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('AWARD_NOT_DRAFT');
+
+      // The rate the approval was given on, unchanged — not merely a 409 on the way past.
+      const held = await sys.workOrderBOQItem.findFirst({
+        where: { workOrderId: gatedWorkOrderId },
+        select: { rate: true },
+      });
+      expect(Number(held?.rate)).toBe(410);
+
+      // A reason is required: reopening removes a control somebody applied.
+      const noReason = await http()
+        .post(`/projects/work-orders/${gatedWorkOrderId}/reopen`)
+        .set(auth())
+        .send({ reason: 'no' });
+      expect(noReason.status).toBe(400);
+
+      const reopened = await http()
+        .post(`/projects/work-orders/${gatedWorkOrderId}/reopen`)
+        .set(auth())
+        .send({ reason: 'rate captured as 410; the signed award says 900' })
+        .expect(201);
+      expect(reopened.body.status).toBe('draft');
+
+      await rewrite(900).expect(200);
+      const corrected = await sys.workOrderBOQItem.findFirst({
+        where: { workOrderId: gatedWorkOrderId },
+        select: { rate: true },
+      });
+      expect(Number(corrected?.rate)).toBe(900);
+
+      // And it is no longer approved: the award has to go back through the gate.
+      const after = await sys.workOrder.findFirst({
+        where: { id: gatedWorkOrderId },
+        select: { status: true },
+      });
+      expect(after?.status).toBe('draft');
+
+      gatedLineId = (
+        await sys.workOrderBOQItem.findFirstOrThrow({
+          where: { workOrderId: gatedWorkOrderId },
+          select: { id: true },
+        })
+      ).id;
+    });
+
     it('refuses to raise an award that declares itself active', async () => {
       // **The hole Phase C shipped.** `CreateWorkOrderDto` carried a `status`, so a caller could
       // declare an award `active` on creation and bill against it at once — and this product's own

@@ -34,6 +34,12 @@ function build(opts: {
   retentionPercent?: number;
   measuredToDate?: Record<string, number>;
   billedAlready?: number;
+  /**
+   * The work order's state. Defaults to `active` because most of this file bills against an
+   * approved award — but **capturing** one is a draft-only act (2026-10-08), so the award tests
+   * name `draft` explicitly. The two are opposite ends of the same gate.
+   */
+  workOrderStatus?: 'draft' | 'pending_approval' | 'active' | 'completed';
 }) {
   const lines = opts.awardLines ?? [award()];
   const created: Record<string, unknown>[] = [];
@@ -55,7 +61,7 @@ function build(opts: {
       findFirst: async () => ({
         id: 'wo-1',
         retentionPercent: dec(opts.retentionPercent ?? 0),
-        status: 'active',
+        status: opts.workOrderStatus ?? 'active',
       }),
     },
     workOrderBOQItem: {
@@ -138,7 +144,9 @@ const measure = (overrides: Record<string, unknown> = {}) => ({
 
 describe('the award is the subcontractor’s own rates', () => {
   it('captures award lines on the work order', async () => {
-    const { service } = build({});
+    // A draft: capturing an award is refused on anything else, because an approved award rewritten
+    // in place would leave the approval standing against figures that no longer exist.
+    const { service } = build({ workOrderStatus: 'draft' });
 
     const stored = await service.setAward(ctx, 'co-1', 'wo-1', [
       {

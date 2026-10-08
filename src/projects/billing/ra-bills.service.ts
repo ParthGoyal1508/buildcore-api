@@ -204,10 +204,11 @@ export class RaBillsService {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const workOrder = await tx.workOrder.findFirst({
         where: { id: workOrderId },
-        select: { id: true },
+        select: { id: true, status: true },
       });
       if (!workOrder) throw new NotFoundException('Work order not found');
 
+      // Billed first, because it is the stronger refusal and the one reopening cannot lift.
       const billed = await tx.rABillLine.count({
         where: { workOrderBoqItem: { workOrderId } },
       });
@@ -219,6 +220,35 @@ export class RaBillsService {
             'This award has been measured against and cannot be replaced. Changing it would move the ' +
             'remaining quantity on bills already issued, and the subcontractor’s copy would then ' +
             'disagree with ours. Raise a variation instead.',
+        });
+      }
+
+      // **Draft only.** This checked the bill count alone, so between approval and the first bill
+      // the whole award — rates included — could be replaced while the work order stayed `active`.
+      // That is the control 028 FR-009 added walked around from the other side: the approval would
+      // then record a decision about figures that no longer existed, and the first bill would be
+      // measured at rates nobody approved.
+      //
+      // `submitForApproval` already refuses an empty award because "a decision recorded against an
+      // empty schedule would stand against whatever is added afterwards". This is the same
+      // sentence, enforced in the other direction.
+      //
+      // The way back is `reopenAward`, which voids the approval deliberately rather than letting an
+      // edit cancel one as a side effect nobody reads.
+      if (workOrder.status !== WorkOrderStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.awardNotDraft,
+          message:
+            `This award is ${workOrder.status.replace(
+              '_',
+              ' ',
+            )}, so it cannot be changed. ` +
+            (workOrder.status === WorkOrderStatus.pending_approval
+              ? 'Somebody is reviewing these figures; changing them under the approver would put a ' +
+                'decision against a schedule they never saw.'
+              : 'It was approved at the rates it now holds. Reopen the award to change it — that ' +
+                'voids the approval, and it has to be approved again.'),
         });
       }
 

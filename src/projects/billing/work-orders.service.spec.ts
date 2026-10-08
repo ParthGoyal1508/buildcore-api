@@ -64,7 +64,13 @@ function build(opts: {
     service: new WorkOrdersService(
       prisma as never,
       codeSeries as never,
-      { submit: async () => undefined } as never,
+      {
+        submit: async () => undefined,
+        abandon: async () => undefined,
+      } as never,
+      // The audit trail, stubbed: `reopenAward` records why an approval was voided, and these
+      // tests are about what the service stores.
+      { record: async () => undefined } as never,
     ),
     updates,
   };
@@ -117,7 +123,11 @@ describe('raising a work order', () => {
     const service = new WorkOrdersService(
       prisma as never,
       codeSeries as never,
-      { submit: async () => undefined } as never,
+      {
+        submit: async () => undefined,
+        abandon: async () => undefined,
+      } as never,
+      { record: async () => undefined } as never,
     );
 
     const view = await service.create(ctx, 'c-1', {
@@ -175,7 +185,11 @@ describe('an award cannot declare itself approved (028 FR-009)', () => {
     const service = new WorkOrdersService(
       prisma as never,
       { next: async () => 'PRPL-WO-0008' } as never,
-      { submit: async () => undefined } as never,
+      {
+        submit: async () => undefined,
+        abandon: async () => undefined,
+      } as never,
+      { record: async () => undefined } as never,
     );
 
     await service.create(ctx, 'c-1', {

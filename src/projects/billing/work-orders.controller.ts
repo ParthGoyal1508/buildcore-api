@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Ip,
   Param,
   Patch,
   Post,
@@ -23,7 +24,11 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
-import { CreateWorkOrderDto, UpdateWorkOrderDto } from './dto/work-order.dto';
+import {
+  CreateWorkOrderDto,
+  ReopenAwardDto,
+  UpdateWorkOrderDto,
+} from './dto/work-order.dto';
 import { WorkOrdersService } from './work-orders.service';
 
 /**
@@ -118,5 +123,41 @@ export class WorkOrdersController {
     @Param('id') id: string,
   ) {
     return this.workOrders.submitForApproval(rlsContextFor(caller), caller, id);
+  }
+
+  @Post(':id/reopen')
+  @ApiOperation({
+    summary: 'Reopen an approved award so it can be corrected',
+    description:
+      'Takes the work order back to `draft` and **voids the approval**, which then has to be ' +
+      'given again.\n\n' +
+      'It exists because capturing the award is now refused on anything but a draft. Before that, ' +
+      'an approved award could be rewritten in place for as long as no bill had been measured ' +
+      'against it — so the approval stood against figures that no longer existed. Closing that ' +
+      'left an approved award with a wrong rate nowhere to go, because the "raise a variation" ' +
+      'the billed path names is advice rather than a feature.\n\n' +
+      'Deliberately its own action rather than a side effect of saving: an edit that quietly ' +
+      'cancelled an approval would remove one without the person noticing they had.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      '`WORK_ORDER_WRONG_STATUS` — already a draft. ' +
+      '`WORK_ORDER_AWARD_BILLED` — measured against, and reopening would move the remaining ' +
+      'quantity under bills the subcontractor already holds.',
+  })
+  async reopen(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: ReopenAwardDto,
+    @Ip() ip: string,
+  ) {
+    return this.workOrders.reopenAward(
+      rlsContextFor(caller),
+      caller,
+      id,
+      dto.reason,
+      ip,
+    );
   }
 }
