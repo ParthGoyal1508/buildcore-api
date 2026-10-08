@@ -1105,4 +1105,94 @@ describe('The running-account bill package (e2e)', () => {
         .expect(400);
     });
   });
+
+  // ── Pass 12 — why a package proposed nothing ─────────────────────────────
+
+  /**
+   * A package whose every line proposes zero is the shape a defect takes **and** the shape a quiet
+   * month takes, and until now nothing told them apart.
+   *
+   * Reported 2026-10-08: an approved award, two lines on the bill, 0.000 against both, and the
+   * entirely reasonable conclusion that approving the award should have filled the quantities in.
+   * It should not — the award decides which lines and at what rate, and approved daily work
+   * decides how much — but the screen said nothing either way. The fact that settles it lies
+   * **outside the package**: the last day anybody approved work on the project. No amount of
+   * reading the claims can produce it, which is why it is carried on the view.
+   */
+  describe('a package that proposed nothing says why (2026-10-08)', () => {
+    // A day in the one window this suite has not already billed: 21 May to 20 June. Every other
+    // month is occupied by a package composed above, and an overlapping period is refused.
+    const workDate = '2026-05-25';
+    let dprNumber = '';
+
+    it('names the latest approved report when none falls in the period', async () => {
+      const created = await http()
+        .post(`/projects/${projectId}/dwr?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          workDate,
+          workerCount: 9,
+          lines: [
+            {
+              paymentMode: 'day_basis',
+              boqItemId: boqItemIds[0],
+              servedQty: '1.000',
+            },
+          ],
+        })
+        .expect(201);
+      dprNumber = created.body.dprNumber;
+
+      await http()
+        .post(`/projects/dwr/${created.body.id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      const approved = await http()
+        .post(`/projects/dwr/${created.body.id}/approve?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      expect(approved.body.status).toBe('approved');
+
+      // A period that begins a month after the only approved day.
+      const composed = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-06-21',
+          periodTo: '2026-07-20',
+        })
+        .expect(201);
+
+      for (const claim of composed.body.claims) {
+        expect(claim.proposedQty).toBe('0.000');
+      }
+      // **The report itself**, not merely a non-null field: a date is what the reader needs to
+      // pick a period that holds something, and the number is what lets them go and look at it.
+      expect(composed.body.latestApprovedWork).toEqual({ workDate, dprNumber });
+    });
+
+    it('stays silent on a package that did propose a figure', async () => {
+      // The half that makes the first assertion mean something. A field populated unconditionally
+      // passes the test above while explaining packages that need no explanation — and this
+      // repository has shipped nine assertions that passed for the wrong reason.
+      const composed = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-05-21',
+          periodTo: '2026-06-20',
+        })
+        .expect(201);
+
+      expect(
+        composed.body.claims.some(
+          (claim: { proposedQty: string | null }) =>
+            claim.proposedQty !== null && Number(claim.proposedQty) !== 0,
+        ),
+      ).toBe(true);
+      expect(composed.body.latestApprovedWork).toBeNull();
+    });
+  });
 });

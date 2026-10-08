@@ -85,6 +85,9 @@ function build(opts: {
 
   const tx = {
     $executeRaw: async () => 0,
+    // Read by `view` only when a package proposed nothing — which these fixtures do, since none of
+    // them approves a day's work. None has ever been approved here, so null is the honest answer.
+    dailyWorkReport: { findFirst: async () => null },
     project: {
       findFirst: async () => ({
         id: 'p-1',

@@ -11,6 +11,7 @@ import {
   CheckListAnswer,
   ClaimProposalSource,
   ClientBillStatus,
+  DwrStatus,
   Prisma,
   RaBillStatus,
   WorkOrderStatus,
@@ -157,6 +158,19 @@ export interface BillPackageView {
   claims: BillPackageClaimView[];
   /** Lines whose rate is 0 and whose claim is non-zero. Refused at **issue**, not here (FR-009). */
   unpricedClaimedCount: number;
+  /**
+   * The most recent approved daily report on the project — **read only when this package proposed
+   * nothing at all**, and null otherwise.
+   *
+   * A package whose every line proposes zero looks, from the screen, exactly like a system that
+   * has stopped working: the award is approved, the lines are there, and every quantity is 0.000.
+   * The fact that resolves it lives outside the package — the last day anybody approved work — and
+   * no amount of looking at the claims can produce it. So it is read here and carried on the view.
+   *
+   * Null **together with** an all-zero proposal is the other answer, and a different one: no work
+   * has ever been approved on this project.
+   */
+  latestApprovedWork: { workDate: string; dprNumber: string } | null;
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
@@ -1908,6 +1922,22 @@ export class BillPackageService {
         };
       });
 
+      // Asked for only when it explains something. A package that proposed figures needs no
+      // account of itself, and the query is skipped rather than its answer discarded.
+      const nothingProposed =
+        claims.length > 0 &&
+        claims.every(
+          (claim) =>
+            claim.proposedQty === null || Number(claim.proposedQty) === 0,
+        );
+      const latestApproved = nothingProposed
+        ? await tx.dailyWorkReport.findFirst({
+            where: { projectId: pkg.projectId, status: DwrStatus.approved },
+            select: { workDate: true, dprNumber: true },
+            orderBy: { workDate: 'desc' },
+          })
+        : null;
+
       return {
         id: pkg.id,
         projectId: pkg.projectId,
@@ -1930,6 +1960,12 @@ export class BillPackageService {
         unpricedClaimedCount: claims.filter(
           (claim) => claim.unpriced && Number(claim.claimedQty) !== 0,
         ).length,
+        latestApprovedWork: latestApproved
+          ? {
+              workDate: iso(latestApproved.workDate),
+              dprNumber: latestApproved.dprNumber,
+            }
+          : null,
       };
     });
   }
