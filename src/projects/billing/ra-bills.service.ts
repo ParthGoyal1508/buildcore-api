@@ -5,7 +5,15 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
-import { Permission, Prisma, RaBillStatus } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  BillPackageStatus,
+  Permission,
+  Prisma,
+  RaBillStatus,
+  WorkOrderStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import {
@@ -14,6 +22,7 @@ import {
   type ApprovalCompletedEvent,
 } from '../../approvals/approvals.service';
 import { ACTION_RA_BILL } from '../../approvals/default-chains';
+import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
@@ -145,7 +154,16 @@ export interface RaBillView {
   advanceRecovery: number;
   otherDeductions: number;
   deductionTotal: number;
-  netPayable: number;
+  /**
+   * **Null while the figures are not yet frozen** — a bill composed through a bill package whose
+   * package is still a draft.
+   *
+   * The package is where the recoveries, deductions and tax on such a bill are decided, and issue
+   * is what settles them. Until then there is no payable, and the old answer — gross, because the
+   * bill row's own deduction columns are zero since 028 — was a figure presented as a fact that
+   * the document would not agree with.
+   */
+  netPayable: number | null;
   /**
    * What this bill contributes to project **cost** — gross, not net.
    *
@@ -181,6 +199,7 @@ export class RaBillsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly approvals: ApprovalService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /**
@@ -199,10 +218,11 @@ export class RaBillsService {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const workOrder = await tx.workOrder.findFirst({
         where: { id: workOrderId },
-        select: { id: true },
+        select: { id: true, status: true },
       });
       if (!workOrder) throw new NotFoundException('Work order not found');
 
+      // Billed first, because it is the stronger refusal and the one reopening cannot lift.
       const billed = await tx.rABillLine.count({
         where: { workOrderBoqItem: { workOrderId } },
       });
@@ -214,6 +234,35 @@ export class RaBillsService {
             'This award has been measured against and cannot be replaced. Changing it would move the ' +
             'remaining quantity on bills already issued, and the subcontractor’s copy would then ' +
             'disagree with ours. Raise a variation instead.',
+        });
+      }
+
+      // **Draft only.** This checked the bill count alone, so between approval and the first bill
+      // the whole award — rates included — could be replaced while the work order stayed `active`.
+      // That is the control 028 FR-009 added walked around from the other side: the approval would
+      // then record a decision about figures that no longer existed, and the first bill would be
+      // measured at rates nobody approved.
+      //
+      // `submitForApproval` already refuses an empty award because "a decision recorded against an
+      // empty schedule would stand against whatever is added afterwards". This is the same
+      // sentence, enforced in the other direction.
+      //
+      // The way back is `reopenAward`, which voids the approval deliberately rather than letting an
+      // edit cancel one as a side effect nobody reads.
+      if (workOrder.status !== WorkOrderStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.awardNotDraft,
+          message:
+            `This award is ${workOrder.status.replace(
+              '_',
+              ' ',
+            )}, so it cannot be changed. ` +
+            (workOrder.status === WorkOrderStatus.pending_approval
+              ? 'Somebody is reviewing these figures; changing them under the approver would put a ' +
+                'decision against a schedule they never saw.'
+              : 'It was approved at the rates it now holds. Reopen the award to change it — that ' +
+                'voids the approval, and it has to be approved again.'),
         });
       }
 
@@ -573,6 +622,100 @@ export class RaBillsService {
    * nobody, sitting in no queue, that looks to its author as though it were submitted — the exact
    * silent failure T022 is about, arriving on the happy path instead of the error path.
    */
+  /**
+   * Throws away a draft bill that should not exist (2026-10-08).
+   *
+   * Reported: "I raised the bill twice for the same date." There was no way out of the second one
+   * — a draft could be submitted, revised or left sitting in the list for ever, and a duplicate
+   * left sitting is one somebody eventually submits.
+   *
+   * ## Why a delete and not a status
+   *
+   * `BillPackage.abandon` exists for the package and sets a status, because a package **occupies
+   * its period** and the abandoned row is what records that the period was considered and
+   * released. A bill raised by mistake records nothing anybody wants: it was never sent, never
+   * certified, and nothing downstream has read it.
+   *
+   * The lines cascade, and so does the package — `BillPackage.raBill` is `onDelete: Cascade` — so
+   * discarding frees the period too, which is exactly what somebody who composed the same dates
+   * twice needs. A package worked on and deliberately set aside is still `abandon`'s job; this is
+   * for the one that should never have been opened.
+   *
+   * ## What it refuses
+   *
+   * Anything out of draft, because a submitted bill is a claim somebody is reading and an approved
+   * one has moved money. A bill with a payment against it, explicitly rather than by letting the
+   * `Restrict` on `RABillPayment` surface as a foreign-key error — "money has been paid against
+   * this" is the sentence that explains it. And an issued package, which is a document that was
+   * produced even though the bill under it is still a draft.
+   *
+   * The number is not kept. `nextRaBillNumber` counts what exists, so the next bill on this work
+   * order takes the number back — which is right for a bill nobody ever saw.
+   */
+  async discard(
+    ctx: RlsContext,
+    companyId: string,
+    billId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<void> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const bill = await tx.rABill.findFirst({
+        where: { id: billId },
+        select: {
+          id: true,
+          status: true,
+          billNumber: true,
+          package: { select: { id: true, status: true } },
+          _count: { select: { payments: true } },
+        },
+      });
+      if (!bill) throw new NotFoundException('RA bill not found');
+
+      if (bill.status !== RaBillStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `${bill.billNumber} is ${bill.status}, so it cannot be discarded. A submitted bill is ` +
+            'a claim somebody is reading and an approved one has moved money — revise its ' +
+            'quantities instead.',
+        });
+      }
+
+      if (bill._count.payments > 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `Money has been paid against ${bill.billNumber}, so it cannot be discarded. Remove the ` +
+            'payments first if they were recorded in error.',
+        });
+      }
+
+      if (bill.package && bill.package.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `${bill.billNumber} belongs to a bill package that has been issued. The package is a ` +
+            'document that was produced, and discarding the bill would take it with it.',
+        });
+      }
+
+      // The lines and the draft package go with it, by the cascades the schema declares.
+      await tx.rABill.delete({ where: { id: bill.id } });
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.PROJECT,
+      action: AuditAction.DELETE,
+      entityId: billId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+  }
+
   async submitForCertification(
     ctx: RlsContext,
     caller: AuthenticatedUser,
@@ -674,6 +817,10 @@ export class RaBillsService {
           projectId: true,
           workOrderId: true,
           revisionCount: true,
+          // Read so a revision can carry them forward rather than recomputing them from an input
+          // that no longer exists — see the write below (028 FR-004).
+          advanceRecovery: true,
+          otherDeductions: true,
         },
       }),
     );
@@ -734,9 +881,14 @@ export class RaBillsService {
           tx,
           bill.workOrderId as string,
           {
+            // **Carried forward, not recomputed.** 028 FR-004 closed these as inputs, and
+            // `lineTotals` defaults a missing one to zero — so revising a bill that holds a ₹5,000
+            // advance recovery would silently rewrite it to nothing and change what the
+            // subcontractor is owed. The figure survives until it has somewhere better to live;
+            // research §2 is explicit that nothing visible today may disappear.
+            advanceRecovery: bill.advanceRecovery.toNumber(),
+            otherDeductions: bill.otherDeductions.toNumber(),
             lines: input.lines,
-            advanceRecovery: input.advanceRecovery,
-            otherDeductions: input.otherDeductions,
             excludeBillId: bill.id,
           },
         );
@@ -855,9 +1007,28 @@ export class RaBillsService {
   ) {
     const workOrder = await tx.workOrder.findFirst({
       where: { id: workOrderId },
-      select: { id: true, retentionPercent: true },
+      select: { id: true, retentionPercent: true, status: true },
     });
     if (!workOrder) throw new NotFoundException('Work order not found');
+
+    // 028 FR-009. The same refusal the package path carries, and it has to be here too: a control
+    // enforced on one of two composition screens is a control anybody can step around by using the
+    // other one. `priceLines` is the single place both `compose` and `revise` pass through.
+    if (
+      workOrder.status !== WorkOrderStatus.active &&
+      workOrder.status !== WorkOrderStatus.completed
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.awardNotApproved,
+        message:
+          workOrder.status === WorkOrderStatus.draft
+            ? 'This work order has not been sent for approval yet, so there is no approved award ' +
+              'to bill against.'
+            : 'This work order is waiting for approval. A bill cannot be raised against an award ' +
+              'nobody has approved.',
+      });
+    }
 
     const award = await tx.workOrderBOQItem.findMany({
       where: {
@@ -941,6 +1112,9 @@ export class RaBillsService {
         where: { id: billId },
         include: {
           lines: { include: { workOrderBoqItem: true } },
+          // Only its status. The figures themselves are copied onto this row when the package is
+          // issued; what the package is needed for here is whether that has happened yet.
+          package: { select: { status: true } },
         },
       });
       if (!bill) throw new NotFoundException('RA bill not found');
@@ -974,6 +1148,11 @@ export class RaBillsService {
       const retention = bill.retentionAmount.toNumber();
       const advance = bill.advanceRecovery.toNumber();
       const other = bill.otherDeductions.toNumber();
+      // A bill composed through a package has no payable until the package is issued: the
+      // recoveries and deductions are still being decided there, and tax is applied there too.
+      // Reporting gross as the net — which is what the row holds, its own deduction columns
+      // having been retired by 028 — states a figure the bill itself will not agree with.
+      const unsettled = bill.package?.status === BillPackageStatus.draft;
       return {
         id: bill.id,
         projectId: bill.projectId,
@@ -987,7 +1166,7 @@ export class RaBillsService {
         advanceRecovery: advance,
         otherDeductions: other,
         deductionTotal: Math.round((retention + advance + other) * 100) / 100,
-        netPayable: bill.netPayable.toNumber(),
+        netPayable: unsettled ? null : bill.netPayable.toNumber(),
         // Gross, never net. See the class docblock and `bill-totals.ts`.
         pnlAmount: gross,
         lines,

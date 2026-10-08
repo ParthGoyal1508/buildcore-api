@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Ip,
   Param,
   Patch,
   Post,
@@ -129,6 +131,39 @@ export class RaBillsController {
       dto,
       caller.id,
     );
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Discard a draft bill that should not exist',
+    description:
+      'Reported as "I raised the bill twice for the same date". A draft could be submitted, ' +
+      'revised or left in the list for ever, and a duplicate left in the list is one somebody ' +
+      'eventually submits.\n\n' +
+      'A delete rather than a status, unlike `BillPackage.abandon`: a package occupies its period ' +
+      'and the abandoned row records that the period was considered, while a bill raised by ' +
+      'mistake records nothing anybody wants. Its lines and its **draft** package go with it, so ' +
+      'the period is freed and the dates can be composed again.',
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      '`BILL_NOT_DRAFT` — out of draft, carrying a payment, or belonging to a package that has ' +
+      'already been issued.',
+  })
+  async discard(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Ip() ip: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    await this.bills.discard(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      id,
+      { userId: caller.id, ipAddress: ip },
+    );
+    return { id, discarded: true };
   }
 
   @Post(':id/submit')

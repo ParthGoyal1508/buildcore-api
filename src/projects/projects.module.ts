@@ -7,6 +7,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
 import { ProjectDocumentsController } from './documents/project-documents.controller';
+import { ProjectDocumentExpiryRule } from './documents/project-document.reminder-rule';
 import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { BoqImportService } from './boq/boq-import.service';
@@ -18,11 +19,15 @@ import { BillPackageViewBuilder } from './billing/package/bill-package-view.buil
 import { BillPackageController } from './billing/package/bill-package.controller';
 import { BillPackageService } from './billing/package/bill-package.service';
 import { DebitNoteService } from './billing/package/debit-note.service';
+import { BillPaymentsController } from './billing/payments/bill-payments.controller';
+import { BillPaymentsService } from './billing/payments/bill-payments.service';
+import { SignedCopiesService } from './billing/payments/signed-copies.service';
 import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
 import { PackageReportsService } from './billing/package/package-reports.service';
 import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
+import { DwrWorkbookRenderer } from './dwr/dwr-workbook.renderer';
 import { DwrService } from './dwr/dwr.service';
 import { ImportBatchStore } from './boq/import-batch.store';
 import { ProjectsController } from './portfolio/projects.controller';
@@ -117,6 +122,10 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // `ProjectsController.findOne` looking for a project whose id is the string "bill-packages"
     // and answer 404 as though the bill did not exist. `route-shadowing.spec.ts` asserts the order.
     BillPackageController,
+    // 028 FR-020, FR-021. **Before `ProjectsController`, for the same reason the three above are.**
+    // `projects/ra-bills/:id/payments` and `projects/subcontractors/:id/outstanding` are literals
+    // under `projects/`, and the portfolio registers the parameterised `GET projects/:id`.
+    BillPaymentsController,
     ProjectsController,
   ],
   providers: [
@@ -127,6 +136,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     SitesService,
     ProjectsService,
     ProjectDocumentsService,
+    ProjectDocumentExpiryRule,
     ClientBillsService,
     RaBillsService,
     // 018 US2. Feature 008 US6's surface, delivered in the smallest form that makes an RA bill
@@ -154,6 +164,12 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     BillPackageService,
     MeasurementSheetService,
     DebitNoteService,
+    // 028 FR-021. Payments against a bill, and outstanding **derived** from certified less paid —
+    // no balance column exists, deliberately.
+    BillPaymentsService,
+    // 028 FR-020. The countersigned copy, which acknowledges the document rather than only being
+    // filed beside it.
+    SignedCopiesService,
     PackageReportsService,
     BillPackageViewBuilder,
     BillWorkbookRenderer,
@@ -164,6 +180,9 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // months — so every BOQ line in the system reported 0% executed regardless of work done.
     // This provider is where that closes.
     DwrService,
+    // 028 FR-022. The client's printable daily form — the DWR controller had no route of any
+    // kind that produced a file.
+    DwrWorkbookRenderer,
     // 022 US6 — the contract feature 023 composes a bill from: per BOQ line, the measurement
     // approved in a period, before it, and the total. Aggregated at read time rather than stored,
     // because 018 research §3 decided exactly that for cumulative billed quantity and named

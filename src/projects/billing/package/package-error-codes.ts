@@ -47,6 +47,13 @@ export const PACKAGE_ERRORS = {
   packageIssued: 'BILL_PACKAGE_ISSUED',
   /** A work order is required for a bill to a subcontractor, and none was named. */
   workOrderRequired: 'BILL_WORK_ORDER_REQUIRED',
+  /**
+   * The award has not been approved, so there is nothing approved to bill against (028 FR-009).
+   *
+   * A work order used to go active the moment one person saved it, while the first bill under it
+   * required an approval. This is the refusal that makes the new order of those two mean something.
+   */
+  workOrderNotApproved: 'WORK_ORDER_NOT_APPROVED',
   /** An unpriced line carries a non-zero claim, refused at **issue** and not at composition. */
   unpricedLineClaimed: 'BILL_UNPRICED_LINE_CLAIMED',
   /** A debit already recovered on another package (FR-037). */

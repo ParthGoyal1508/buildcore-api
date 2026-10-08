@@ -15,6 +15,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { actorNamesFor } from '../../common/actor-name';
 import { BoqService } from '../boq/boq.service';
 import {
   EquipmentLogbookDay,
@@ -27,6 +28,9 @@ import {
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
+import { formatChainage } from './chainage';
+import type { DwrWorkbookView } from './dwr-workbook.renderer';
+import { DwrWorkbookRenderer } from './dwr-workbook.renderer';
 import {
   FULL_DAY,
   MeasurementLine,
@@ -35,7 +39,7 @@ import {
   storedQuantityInForce,
 } from './dwr-quantity';
 import { CreateDwrDto, CreateDwrLineDto } from './dto/create-dwr.dto';
-import { ReverseDwrDto } from './dto/dwr-lifecycle.dto';
+import { ReturnDwrDto, ReverseDwrDto } from './dto/dwr-lifecycle.dto';
 import {
   DWR_PAGE_SIZE_DEFAULT,
   DWR_PAGE_SIZE_MAX,
@@ -44,6 +48,16 @@ import {
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 
 /** Separates the project code from the sequence in a report number (FR-002a). */
+/**
+ * The two statuses from which a report may still be written, submitted or deleted (028).
+ *
+ * `returned` belongs here because a returned report **is** a draft — one carrying a reviewer's
+ * complaint. The only thing the new status changes is what the author is told; everything they can
+ * do to it is what they could do to a draft. Named once so the three guards that ask this question
+ * cannot drift apart: a report that can be edited but not submitted is a dead end.
+ */
+const EDITABLE_STATUSES: DwrStatus[] = [DwrStatus.draft, DwrStatus.returned];
+
 const DPR_SEPARATOR = '-DPR-';
 
 /** How many times a number collision is retried before giving up (FR-002b). */
@@ -127,6 +141,8 @@ export class DwrService {
     private readonly auditLog: AuditLogService,
     private readonly boq: BoqService,
     private readonly sources: ProjectSourcesRegistry,
+    // 028 FR-022. The printable form, which this controller had no route of any kind for.
+    private readonly workbook: DwrWorkbookRenderer,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -207,7 +223,9 @@ export class DwrService {
               workDate,
               dprNumber,
               supervisorEmployeeId: input.supervisorEmployeeId ?? null,
-              weather: input.weather ?? undefined,
+              // `weather` is no longer accepted from a caller (028 FR-023) and is not written here.
+              // The column keeps its default, so every report still has a value and every value
+              // already recorded is untouched.
               status: DwrStatus.draft,
               workerCount: input.workerCount ?? 0,
               machineryCount: input.machineryCount ?? 0,
@@ -349,7 +367,7 @@ export class DwrService {
         where: { id: dwrId },
         data: {
           supervisorEmployeeId: input.supervisorEmployeeId ?? undefined,
-          weather: input.weather ?? undefined,
+          // Not accepted and not updated (028 FR-023). See `create`.
           workerCount: input.workerCount ?? undefined,
           machineryCount: input.machineryCount ?? undefined,
           progress: input.progress ?? undefined,
@@ -612,6 +630,11 @@ export class DwrService {
           submittedAt: true,
           approvedByUserId: true,
           approvedAt: true,
+          // 028. Selected because the reason is the whole point of the action: a report shown as
+          // returned with no sentence beside it tells its author to guess what was wrong.
+          returnedAt: true,
+          returnedByUserId: true,
+          returnReason: true,
           reversedAt: true,
           reversedByUserId: true,
           reversalReason: true,
@@ -682,8 +705,35 @@ export class DwrService {
     // showed "BOQ —" against every line in the product.
     const { tasks, ...header } = report;
 
+    // FR-024, and **both** identities. They are already stored and already returned as ids, which
+    // answers half the question a reader asked: a report attributed to "cmuoe9b7l00q5v8…" names
+    // nobody. Both, because on a report returned for correction the person who recorded it and the
+    // person who submitted it are different people — and the one who has to answer for a figure is
+    // usually the second.
+    //
+    // `actorNamesFor` rather than a second resolver: one implementation of "what do we call this
+    // user", or the same actor appears under two names on two screens.
+    const names = await actorNamesFor(this.prisma, [
+      report.createdByUserId,
+      report.submittedByUserId,
+      report.approvedByUserId,
+      report.returnedByUserId,
+    ]);
+
     return {
       ...header,
+      recordedByName: report.createdByUserId
+        ? names.get(report.createdByUserId) ?? null
+        : null,
+      submittedByName: report.submittedByUserId
+        ? names.get(report.submittedByUserId) ?? null
+        : null,
+      approvedByName: report.approvedByUserId
+        ? names.get(report.approvedByUserId) ?? null
+        : null,
+      returnedByName: report.returnedByUserId
+        ? names.get(report.returnedByUserId) ?? null
+        : null,
       workDate,
       lines: tasks.map((task) => {
         const scopeQty = task.boqItem?.scopeQty ?? null;
@@ -736,6 +786,159 @@ export class DwrService {
     };
   }
 
+  /**
+   * One report as the client's printable form (028 FR-022).
+   *
+   * ## Why this exists
+   *
+   * This controller carries fifteen endpoints and, before this, **none produced a file**. A report
+   * could be entered, submitted, approved and read on screen, and then had to be retyped into the
+   * client's own spreadsheet to be sent anywhere — which is the work this system exists to remove,
+   * and the point at which the two copies begin to disagree.
+   *
+   * ## A draft prints, and says so
+   *
+   * Not refused. The form carries `Status`, so a draft produces a document that reads DRAFT on its
+   * face — which is more useful than a refusal to the person checking their figures before they
+   * submit, and more honest than a clean-looking form for a report nobody has put forward.
+   *
+   * ## The renderer is handed everything
+   *
+   * It holds no database client of its own, so every figure here is formatted before it goes in.
+   * That is what keeps the form and the screen from drifting apart: there is one derivation of a
+   * quantity, `storedQuantityInForce`, and both read it.
+   */
+  async workbookFor(
+    ctx: RlsContext,
+    dwrId: string,
+    companyId: string,
+  ): Promise<{ bytes: Buffer; filename: string }> {
+    const report = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: {
+          id: true,
+          dprNumber: true,
+          workDate: true,
+          status: true,
+          weather: true,
+          workerCount: true,
+          machineryCount: true,
+          location: true,
+          description: true,
+          createdByUserId: true,
+          submittedByUserId: true,
+          project: {
+            select: {
+              name: true,
+              code: true,
+              client: { select: { name: true } },
+            },
+          },
+          tasks: {
+            select: {
+              id: true,
+              paymentMode: true,
+              actualQty: true,
+              servedQty: true,
+              nos1: true,
+              nos2: true,
+              length: true,
+              breadth: true,
+              depth: true,
+              density: true,
+              chainageFrom: true,
+              chainageTo: true,
+              roadSide: true,
+              engineerName: true,
+              remark: true,
+              boqItem: {
+                select: {
+                  boqNo: true,
+                  taskName: true,
+                  unit: true,
+                  perDayQty: true,
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+    if (!report) throw new NotFoundException('Daily work report not found');
+
+    const [company, names] = await Promise.all([
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.company.findFirst({
+          where: { id: companyId },
+          select: { name: true },
+        }),
+      ),
+      actorNamesFor(this.prisma, [
+        report.createdByUserId,
+        report.submittedByUserId,
+      ]),
+    ]);
+
+    const workDate = report.workDate.toISOString().slice(0, 10);
+    const view: DwrWorkbookView = {
+      companyName: company?.name ?? null,
+      projectName: report.project.name,
+      projectCode: report.project.code,
+      clientName: report.project.client?.name ?? null,
+      dprNumber: report.dprNumber,
+      workDate,
+      // Printed from what was recorded, which for a report entered after FR-023 is the column's
+      // default. The input was removed; the history was kept, and the client's form has the field.
+      weather: report.weather,
+      status: report.status,
+      recordedByName: report.createdByUserId
+        ? names.get(report.createdByUserId) ?? null
+        : null,
+      submittedByName: report.submittedByUserId
+        ? names.get(report.submittedByUserId) ?? null
+        : null,
+      workerCount: report.workerCount,
+      machineryCount: report.machineryCount,
+      location: report.location,
+      description: report.description,
+      lines: report.tasks.map((task, index) => {
+        const measured = task.paymentMode === DwrPaymentMode.work_basis;
+        return {
+          srNo: index + 1,
+          boqNo: task.boqItem?.boqNo ?? null,
+          // A freeform line has no BOQ line to name it, so its own remark is the only description
+          // of the work there is. Falling back to it beats printing a blank activity.
+          activity: task.boqItem?.taskName ?? task.remark ?? 'Work',
+          details: task.boqItem ? task.remark : null,
+          // In the client's own notation, `21+300`, not `21.300`. The number is the storage and
+          // the notation is the rendering — see `chainage.ts`.
+          chainageFrom: formatChainage(task.chainageFrom),
+          chainageTo: formatChainage(task.chainageTo),
+          unit: task.boqItem?.unit ?? null,
+          side: task.roadSide,
+          // Null on a presence-paid line rather than 1 — the detail screen's own rule. A 1 reads
+          // as a factor somebody entered, and on this form it would read as a measured metre.
+          nos: measured ? task.nos1.toFixed(3) : null,
+          length: measured ? task.length.toFixed(3) : null,
+          width: measured ? task.breadth.toFixed(3) : null,
+          height: measured ? task.depth.toFixed(3) : null,
+          quantity: storedQuantityInForce(task).toFixed(3),
+          target: task.boqItem?.perDayQty?.toFixed(3) ?? null,
+          engineerName: task.engineerName,
+          remarks: task.boqItem ? task.remark : null,
+        };
+      }),
+    };
+
+    return {
+      bytes: await this.workbook.render(view),
+      // Named from the report number and its date, the way the client names theirs — never from
+      // the cuid, which is the defect 017 fixed for every other download in this system.
+      filename: `${report.dprNumber} ${workDate}.xlsx`,
+    };
+  }
+
   /** The logbook day for every equipment a report's lines name, in one call per machine. */
   private async logbookFor(
     tasks: { equipmentId: string | null }[],
@@ -783,7 +986,10 @@ export class DwrService {
       });
       if (!report) throw new NotFoundException('Daily work report not found');
 
-      assertStatus(report.status, DwrStatus.draft, 'submit');
+      // **`returned` as well as `draft`** (028). A returned report is a draft carrying a
+      // complaint; refusing to submit it would leave a corrected report with no way forward and
+      // the reviewer's own action as the thing that stranded it.
+      assertStatus(report.status, EDITABLE_STATUSES, 'submit');
 
       // FR-024. A day's report asserting nothing is a form somebody abandoned, and submitting it
       // would put it in a reviewer's queue to be approved into no effect at all.
@@ -798,7 +1004,7 @@ export class DwrService {
 
       // The transition is conditional on the status, so a concurrent second submit loses.
       const updated = await tx.dailyWorkReport.updateMany({
-        where: { id: dwrId, status: DwrStatus.draft },
+        where: { id: dwrId, status: { in: EDITABLE_STATUSES } },
         data: {
           status: DwrStatus.submitted,
           submittedByUserId: actor.userId,
@@ -1018,11 +1224,24 @@ export class DwrService {
     return result;
   }
 
-  /** `submitted` → `draft`. Nothing moves, because submission never moved anything (US3 AC2). */
-  async returnToDraft(
+  /**
+   * `submitted` → `returned`. Nothing moves, because submission never moved anything (US3 AC2).
+   *
+   * **`returned`, not `draft`** (028). This wrote `draft` and discarded the reason, so a report a
+   * reviewer had rejected was byte-for-byte a report nobody had ever submitted: the list showed
+   * "Draft", the detail screen showed nothing, and the sentence explaining what was wrong — which
+   * the reviewer had already typed into a prompt — reached the server in a body the route did not
+   * read. The author's only signal that their work had come back was noticing it had stopped being
+   * submitted.
+   *
+   * What the new status does **not** change is what the author can do: a `returned` report is
+   * editable, submittable and deletable exactly as a draft is (`EDITABLE_STATUSES`).
+   */
+  async returnToAuthor(
     ctx: RlsContext,
     dwrId: string,
     companyId: string,
+    input: ReturnDwrDto,
     actor: { userId: string; ipAddress?: string },
   ): Promise<{ id: string; status: DwrStatus }> {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
@@ -1031,13 +1250,29 @@ export class DwrService {
         select: { id: true, status: true },
       });
       if (!report) throw new NotFoundException('Daily work report not found');
-      assertStatus(report.status, DwrStatus.submitted, 'return to draft');
+      assertStatus(report.status, DwrStatus.submitted, 'be returned');
 
-      await tx.dailyWorkReport.update({
-        where: { id: dwrId },
-        data: { status: DwrStatus.draft },
+      // Conditional on the status, as submit, approve and reverse already are: two reviewers
+      // returning the same report would otherwise leave the second one's reason on the row and
+      // the first one's nowhere, with both told it worked.
+      const updated = await tx.dailyWorkReport.updateMany({
+        where: { id: dwrId, status: DwrStatus.submitted },
+        data: {
+          status: DwrStatus.returned,
+          returnedAt: new Date(),
+          returnedByUserId: actor.userId,
+          returnReason: input.reason.trim(),
+        },
       });
-      return { id: dwrId, status: DwrStatus.draft };
+      if (updated.count === 0) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            'Somebody else moved this report while you were returning it.',
+        });
+      }
+
+      return { id: dwrId, status: DwrStatus.returned };
     });
 
     await this.auditLog.record({
@@ -1178,14 +1413,14 @@ export class DwrService {
       });
       if (!report) throw new NotFoundException('Daily work report not found');
 
-      if (report.status !== DwrStatus.draft) {
+      if (!EDITABLE_STATUSES.includes(report.status)) {
         throw new ConflictException({
           code: DWR_ERRORS.wrongStatus,
           message:
             `This report is ${report.status}. Only a draft can be deleted — ` +
             (report.status === DwrStatus.approved
               ? 'reverse it first, which takes its quantities back out and says why.'
-              : 'return it to draft first.'),
+              : 'return it to its author first.'),
         });
       }
 
@@ -1532,13 +1767,16 @@ function groupDeltas(
 /** Refuses a transition from the wrong status, naming the status the report is actually in. */
 function assertStatus(
   actual: DwrStatus,
-  required: DwrStatus,
+  required: DwrStatus | DwrStatus[],
   action: string,
 ): void {
-  if (actual === required) return;
+  const allowed = Array.isArray(required) ? required : [required];
+  if (allowed.includes(actual)) return;
   throw new ConflictException({
     code: DWR_ERRORS.wrongStatus,
-    message: `This report is ${actual}, so it cannot ${action}. It must be ${required}.`,
+    message:
+      `This report is ${actual}, so it cannot ${action}. It must be ` +
+      `${allowed.join(' or ')}.`,
   });
 }
 

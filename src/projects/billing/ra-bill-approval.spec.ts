@@ -67,7 +67,12 @@ function build(opts: {
   const tx = {
     $executeRaw: async () => 0,
     workOrder: {
-      findFirst: async () => ({ id: 'wo-1', retentionPercent: dec(0) }),
+      // `status: 'active'` from 028 FR-009 — an unapproved award cannot be billed against.
+      findFirst: async () => ({
+        id: 'wo-1',
+        retentionPercent: dec(0),
+        status: 'active',
+      }),
     },
     workOrderBOQItem: {
       findMany: async () => [
@@ -136,7 +141,12 @@ function build(opts: {
   };
 
   return {
-    service: new RaBillsService(prisma as never, approvals as never),
+    service: new RaBillsService(
+      prisma as never,
+      approvals as never,
+      // The audit trail, stubbed: these tests are about what the service stores.
+      { record: async () => undefined } as never,
+    ),
     approvals,
     updates,
     updateManyCalls,

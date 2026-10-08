@@ -48,6 +48,47 @@ const SIZE = { title: 12, heading: 9, body: 7.5, small: 6.5 } as const;
 
 type Align = 'left' | 'right' | 'center';
 
+/**
+ * One debit, as the document a subcontractor signs for it (028 FR-018).
+ *
+ * Strings throughout, already rounded, for the reason `BillWorkbookView` is: a renderer that
+ * formatted its own figures could print a different number from the register the figure came from.
+ */
+export interface DebitNoteDocumentView {
+  issuerName: string | null;
+  /** `{shortCode}-DN-0001`, or null on a debit raised before 028 — printed blank, never invented. */
+  noteNumber: string | null;
+  raisedOn: string;
+  projectName: string;
+  projectCode: string | null;
+  /**
+   * The subcontractor, where the debit has been recovered on one of their bills and is therefore
+   * known. A debit raised and not yet recovered belongs to the project, not to a party — so this
+   * prints blank rather than naming whoever seems likeliest.
+   */
+  receiver: {
+    name: string | null;
+    code: string | null;
+    gstin: string | null;
+    pan: string | null;
+  };
+  /** "RA-07", where it has been recovered. */
+  recoveredOn: string | null;
+  groupHeading: string | null;
+  line: {
+    description: string;
+    location: string | null;
+    nos: string | null;
+    length: string | null;
+    width: string | null;
+    quantity: string | null;
+    unit: string | null;
+    rate: string;
+    amount: string;
+    amountWithTax: string;
+  };
+}
+
 interface Column {
   header: string;
   width: number;
@@ -93,12 +134,145 @@ export class BillPdfRenderer {
     return finished;
   }
 
+  /**
+   * One debit as a document in its own right (028 FR-018).
+   *
+   * **Not a second renderer.** It is a method on this one, using the same `page`, `title`,
+   * `headerBlock` and `table` the bill package's five sheets use, so the note carries the same
+   * letterhead, the same margins and the same column treatment as the register it came from. A
+   * separate `debit-note.renderer.ts` would have been a second house style to keep in step, and
+   * the one thing certain about two house styles is that only one of them gets updated.
+   *
+   * The register already prints *inside* the package PDF; what did not exist was the single-debit
+   * document a subcontractor signs to acknowledge the recovery. Same figures, one page.
+   */
+  async renderDebitNote(view: DebitNoteDocumentView): Promise<Buffer> {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: MARGIN,
+      autoFirstPage: false,
+      info: {
+        Title: `Debit Note ${view.noteNumber ?? ''} — ${
+          view.projectName
+        }`.trim(),
+        Author: view.issuerName ?? 'BuildCore',
+        // Pinned to the date the debit was raised, never to the clock — the rule `render` follows
+        // (FR-028): a document produced twice must be identical down to the bytes nobody reads.
+        CreationDate: new Date(`${view.raisedOn}T00:00:00.000Z`),
+      },
+    });
+
+    const chunks: Buffer[] = [];
+    doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const finished = new Promise<Buffer>((resolve, reject) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.on('error', reject);
+    });
+
+    this.debitNotePage(doc, view);
+
+    doc.end();
+    return finished;
+  }
+
   // ── Pages ────────────────────────────────────────────────────────────────
+
+  private debitNotePage(
+    doc: PDFKit.PDFDocument,
+    view: DebitNoteDocumentView,
+  ): void {
+    this.page(doc, 'landscape');
+    this.title(doc, view.issuerName, 'DEBIT NOTE', A4_HEIGHT);
+    this.headerBlock(
+      doc,
+      [
+        ['Debit Note No.', view.noteNumber],
+        ['Date', view.raisedOn],
+        ['Project', view.projectName],
+        ['Project Code', view.projectCode],
+      ],
+      [
+        ['Name of Sub-Contractor', view.receiver.name],
+        ['Vendor Code', view.receiver.code],
+        ['Vendor GSTIN', view.receiver.gstin],
+        // Blank where the debit has not been recovered yet, which is a fact about the debit and
+        // not a gap in the document.
+        ['Recovered On', view.recoveredOn],
+      ],
+      A4_HEIGHT,
+    );
+
+    const width = A4_HEIGHT - MARGIN * 2;
+    const columns: Column[] = [
+      { header: 'Sr', width: 24, align: 'center' },
+      { header: 'Description', width: width - 24 - 90 - 40 * 5 - 70 * 2 },
+      { header: 'Location', width: 90 },
+      { header: 'Nos', width: 40, align: 'right' },
+      { header: 'Length', width: 40, align: 'right' },
+      { header: 'Width', width: 40, align: 'right' },
+      { header: 'Qty', width: 40, align: 'right' },
+      { header: 'UOM', width: 40, align: 'center' },
+      { header: 'Rate', width: 70, align: 'right' },
+      { header: 'Amt with GST', width: 70, align: 'right' },
+    ];
+
+    const rows: string[][] = [];
+    // The heading is how the register is read (023 FR-040), so the note keeps it where it has one.
+    if (view.groupHeading) {
+      rows.push(['', view.groupHeading, '', '', '', '', '', '', '', '']);
+    }
+    const line = view.line;
+    rows.push([
+      '1',
+      line.description,
+      line.location ?? '',
+      line.nos ?? '',
+      line.length ?? '',
+      line.width ?? '',
+      line.quantity ?? '',
+      line.unit ?? '',
+      line.rate,
+      line.amountWithTax,
+    ]);
+
+    this.table(doc, columns, rows, [
+      '',
+      'Total',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      '',
+      line.amountWithTax,
+    ]);
+
+    // Two signatures, because a debit note exists to be acknowledged — a note nobody signed is a
+    // claim, not a recovery.
+    doc.moveDown(3).fontSize(SIZE.body);
+    const half = width / 2;
+    const y = doc.y;
+    ['For ' + (view.issuerName ?? ''), 'Sub-Contractor'].forEach(
+      (label, index) => {
+        doc
+          .moveTo(MARGIN + index * half, y)
+          .lineTo(MARGIN + index * half + half - 20, y)
+          .stroke();
+        doc.text(label, MARGIN + index * half, y + 4, { width: half });
+      },
+    );
+  }
 
   private checkListPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'portrait');
-    this.title(doc, view, 'CHECK LIST for Subcontractor Bill', A4_WIDTH);
-    this.headerBlock(doc, view, A4_WIDTH);
+    this.title(
+      doc,
+      view.header.issuer.name,
+      'CHECK LIST for Subcontractor Bill',
+      A4_WIDTH,
+    );
+    this.headerBlock(doc, ...billHeaderPairs(view), A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
     this.table(
@@ -144,8 +318,8 @@ export class BillPdfRenderer {
 
   private abstractPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'portrait');
-    this.title(doc, view, 'ABSTRACT SHEET', A4_WIDTH);
-    this.headerBlock(doc, view, A4_WIDTH);
+    this.title(doc, view.header.issuer.name, 'ABSTRACT SHEET', A4_WIDTH);
+    this.headerBlock(doc, ...billHeaderPairs(view), A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
     const figure = (width - 40 - 40) / 3;
@@ -206,8 +380,8 @@ export class BillPdfRenderer {
 
   private schedulePage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'landscape');
-    this.title(doc, view, 'BOQ ANNEXURE-I', A4_HEIGHT);
-    this.headerBlock(doc, view, A4_HEIGHT);
+    this.title(doc, view.header.issuer.name, 'BOQ ANNEXURE-I', A4_HEIGHT);
+    this.headerBlock(doc, ...billHeaderPairs(view), A4_HEIGHT);
 
     const width = A4_HEIGHT - MARGIN * 2;
     const figure = 62;
@@ -263,7 +437,7 @@ export class BillPdfRenderer {
     sheet: WorkbookMeasurementSheet,
   ): void {
     this.page(doc, 'portrait');
-    this.title(doc, view, 'MEASUREMENT SHEET', A4_WIDTH);
+    this.title(doc, view.header.issuer.name, 'MEASUREMENT SHEET', A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
     // The item is printed **inside** the sheet, which is what makes naming the sheets by position
@@ -338,8 +512,8 @@ export class BillPdfRenderer {
     view: BillWorkbookView,
   ): void {
     this.page(doc, 'landscape');
-    this.title(doc, view, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(doc, view, A4_HEIGHT);
+    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_HEIGHT);
+    this.headerBlock(doc, ...billHeaderPairs(view), A4_HEIGHT);
 
     const width = A4_HEIGHT - MARGIN * 2;
     const columns: Column[] = [
@@ -415,19 +589,25 @@ export class BillPdfRenderer {
     doc.addPage({ size: 'A4', layout, margin: MARGIN });
   }
 
+  /**
+   * The issuer's name and the sheet's heading, centred.
+   *
+   * Takes the **name** rather than a whole bill view so a document that is not a bill package —
+   * the standalone debit note (028 FR-018) — can use the same heading block. That is the reason
+   * for the parameter: the alternative was a second renderer, and two renderers of one house
+   * style drift apart exactly once and then print two different letterheads.
+   */
   private title(
     doc: PDFKit.PDFDocument,
-    view: BillWorkbookView,
+    issuerName: string | null,
     heading: string,
     pageWidth: number,
   ): void {
     const width = pageWidth - MARGIN * 2;
-    doc
-      .fontSize(SIZE.title)
-      .text(view.header.issuer.name ?? '', MARGIN, MARGIN, {
-        width,
-        align: 'center',
-      });
+    doc.fontSize(SIZE.title).text(issuerName ?? '', MARGIN, MARGIN, {
+      width,
+      align: 'center',
+    });
     doc
       .fontSize(SIZE.heading)
       .text(heading, { width, align: 'center' })
@@ -444,26 +624,12 @@ export class BillPdfRenderer {
    */
   private headerBlock(
     doc: PDFKit.PDFDocument,
-    view: BillWorkbookView,
+    left: [string, string | null][],
+    right: [string, string | null][],
     pageWidth: number,
   ): void {
     const width = pageWidth - MARGIN * 2;
     const half = width / 2;
-    const h = view.header;
-    const left: [string, string | null][] = [
-      ['Name of Sub-Contractor', h.receiver.name],
-      ['Nature of Work', h.natureOfWork],
-      ['Work Order No.', h.externalWorkOrderNo],
-      ['Bill No.', h.externalBillNo],
-      ['Bill Period', `${h.periodFrom} to ${h.periodTo}`],
-    ];
-    const right: [string, string | null][] = [
-      ['Location', h.location],
-      ['Vendor Code', h.receiver.code],
-      ['Vendor GSTIN', h.receiver.gstin],
-      ['Vendor PAN', h.receiver.pan],
-      ['Bill Date', h.billDate],
-    ];
 
     const top = doc.y;
     doc.fontSize(SIZE.small);
@@ -568,4 +734,32 @@ export class BillPdfRenderer {
       writeRow(footer, true);
     }
   }
+}
+
+/**
+ * The statutory pairs the bill package's sheets repeat on every page.
+ *
+ * Lifted out of `headerBlock` when the standalone debit note needed the same block with different
+ * pairs. The values and their order are unchanged — this is where they moved to, not a rewrite.
+ */
+function billHeaderPairs(
+  view: BillWorkbookView,
+): [[string, string | null][], [string, string | null][]] {
+  const h = view.header;
+  return [
+    [
+      ['Name of Sub-Contractor', h.receiver.name],
+      ['Nature of Work', h.natureOfWork],
+      ['Work Order No.', h.externalWorkOrderNo],
+      ['Bill No.', h.externalBillNo],
+      ['Bill Period', `${h.periodFrom} to ${h.periodTo}`],
+    ],
+    [
+      ['Location', h.location],
+      ['Vendor Code', h.receiver.code],
+      ['Vendor GSTIN', h.receiver.gstin],
+      ['Vendor PAN', h.receiver.pan],
+      ['Bill Date', h.billDate],
+    ],
+  ];
 }

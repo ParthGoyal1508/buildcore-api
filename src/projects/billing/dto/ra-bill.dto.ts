@@ -126,23 +126,24 @@ export class ComposeRaBillDto {
   @Type(() => MeasureLineDto)
   lines: MeasureLineDto[];
 
-  @ApiPropertyOptional({
-    description:
-      'Money already advanced, coming back. **Not a project cost** — counting it would count the same ' +
-      'rupee twice, once when the advance went out and once here.',
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  advanceRecovery?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  otherDeductions?: number;
+  /*
+   * `advanceRecovery` and `otherDeductions` were accepted here until 028 FR-004, and removing them
+   * is the fix for a bill that understated what had been deducted.
+   *
+   * **There were two stores and only one of them reached the document.** A deduction typed on this
+   * sheet was saved onto the `RABill` row; the abstract and the PDF a subcontractor receives read
+   * the ten `BillPackage` adjustment columns and have never looked at these. So the figure was
+   * recorded correctly, and the document went out understating what was taken — with nothing on
+   * screen to say the two disagreed.
+   *
+   * Removed rather than deprecated: under the global pipe's `forbidNonWhitelisted` a caller sending
+   * one now gets a 400, which is the point. Accepting a figure into a column no document reads is
+   * the defect, not the cure.
+   *
+   * The columns themselves survive, and bills that carry values still show them — see the migration
+   * `20261007..._deductions_into_package_adjustments` and research §2. Recording a deduction now
+   * goes through `PUT /projects/bill-packages/:packageId/adjustments`.
+   */
 }
 
 /**
@@ -183,19 +184,7 @@ export class ReviseRaBillDto {
   @MaxLength(500)
   reason?: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  advanceRecovery?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  otherDeductions?: number;
+  /* Both deduction fields retired here too — see the note on the compose DTO (028 FR-004). */
 }
 
 /**

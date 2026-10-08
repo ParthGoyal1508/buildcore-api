@@ -18,6 +18,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
+import { VendorItemRateService } from '../rates/vendor-item-rate.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import {
@@ -90,6 +91,7 @@ export class PurchasesService {
     private readonly codeSeries: CodeSeriesService,
     private readonly storage: StorageService,
     private readonly indentFulfilment: IndentFulfilmentService,
+    private readonly rates: VendorItemRateService,
   ) {}
 
   async create(
@@ -137,6 +139,23 @@ export class PurchasesService {
       );
     }
 
+    // The delivery photograph (028 FR-017), stored exactly as the bill beside it. Optional today
+    // because a purchase has no approval step to make it compulsory *before* — see the DTO's note.
+    let photoFileRef: string | null = null;
+    if (dto.photoFile) {
+      const buffer = Buffer.from(dto.photoFile, 'base64');
+      if (buffer.length === 0) {
+        throw new BadRequestException(
+          'photoFile must be non-empty base64 content.',
+        );
+      }
+      photoFileRef = await this.storage.put(
+        BILL_NAMESPACE,
+        buffer,
+        'image/jpeg',
+      );
+    }
+
     const date = this.refs.parseDate(dto.date);
     // Rounded once, here, and stored: this is what the vendor billed, and
     // recomputing it on every read would let a rounding change restate history.
@@ -146,6 +165,20 @@ export class PurchasesService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // 028 FR-012/FR-013, inside the transaction so a concurrent first purchase of the same pair
+        // cannot slip between the read and the write.
+        //
+        // A pair with an agreed rate must match it; a pair with none establishes one below. A known
+        // item from a vendor who has not supplied it before has no agreed rate, so it is a first
+        // purchase — the contract is per vendor.
+        const agreed = await this.rates.currentFor(
+          tx,
+          targetCompanyId,
+          dto.vendorId,
+          dto.itemId,
+        );
+        this.rates.assertMatchesAgreed(agreed, dto.rate);
+
         const purchase = await tx.purchase.create({
           data: {
             companyId: targetCompanyId,
@@ -157,10 +190,25 @@ export class PurchasesService {
             rate: dto.rate,
             amount,
             billFileRef,
+            photoFileRef,
             remarks: dto.remarks?.trim() || null,
             indentLineId: dto.indentLineId ?? null,
           },
         });
+
+        // The first purchase of a pair is what establishes the agreed rate (FR-012). Recorded here
+        // rather than before the create, so the rate points at the purchase that set it — which is
+        // what makes FR-016's first-purchase report answerable without inferring it from dates.
+        if (!agreed) {
+          await this.rates.establish(tx, {
+            companyId: targetCompanyId,
+            vendorId: dto.vendorId,
+            itemId: dto.itemId,
+            rate: dto.rate,
+            effectiveFrom: date,
+            purchaseId: purchase.id,
+          });
+        }
 
         await this.stock.appendLedgerEntry(tx, {
           companyId: targetCompanyId,
@@ -411,6 +459,19 @@ export class PurchasesService {
           throw new NotFoundException(`Purchase ${id} not found`);
         }
         assertInScope(caller, existing, `Purchase ${id}`);
+
+        // No rate check here, and that is not an omission (028 FR-013).
+        //
+        // `UpdatePurchaseDto` carries only `date` and `remarks`: quantity, rate, item, site and
+        // vendor are absent **by design**, because the stock ledger and the bill were computed from
+        // them and editing one in place would leave both restating history. Correcting a purchase
+        // is delete plus re-create. Under the global pipe's `forbidNonWhitelisted` a caller sending
+        // a rate here receives a 400 before this method runs.
+        //
+        // 028's research §5 claimed this endpoint accepted a rate from any caller and was wrong —
+        // corrected there. The enforcement point is `create`, and the reason to hold it in the
+        // service rather than the DTO still stands: a DTO can require a number, and only the
+        // service can require *this* number.
 
         const date = dto.date ? this.refs.parseDate(dto.date) : undefined;
 

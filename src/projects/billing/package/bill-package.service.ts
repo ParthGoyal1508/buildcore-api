@@ -11,8 +11,10 @@ import {
   CheckListAnswer,
   ClaimProposalSource,
   ClientBillStatus,
+  DwrStatus,
   Prisma,
   RaBillStatus,
+  WorkOrderStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -32,10 +34,12 @@ import {
   mergeCheckList,
 } from './check-list';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
+import { BILLING_ERRORS } from '../billing-error-codes';
 import { PACKAGE_ERRORS } from './package-error-codes';
 import {
   nextClientBillNumber,
   nextRaBillNumber,
+  sequenceOf,
   packageLabel,
 } from '../bill-number';
 import { sortByBoqNo } from '../../boq/boq-order';
@@ -155,6 +159,19 @@ export interface BillPackageView {
   claims: BillPackageClaimView[];
   /** Lines whose rate is 0 and whose claim is non-zero. Refused at **issue**, not here (FR-009). */
   unpricedClaimedCount: number;
+  /**
+   * The most recent approved daily report on the project — **read only when this package proposed
+   * nothing at all**, and null otherwise.
+   *
+   * A package whose every line proposes zero looks, from the screen, exactly like a system that
+   * has stopped working: the award is approved, the lines are there, and every quantity is 0.000.
+   * The fact that resolves it lives outside the package — the last day anybody approved work — and
+   * no amount of looking at the claims can produce it. So it is read here and carried on the view.
+   *
+   * Null **together with** an all-zero proposal is the other answer, and a different one: no work
+   * has ever been approved on this project.
+   */
+  latestApprovedWork: { workDate: string; dprNumber: string } | null;
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
@@ -401,7 +418,12 @@ export class BillPackageService {
         input.direction === BillDirection.to_subcontractor && input.workOrderId
           ? await tx.workOrder.findFirst({
               where: { id: input.workOrderId, projectId: input.projectId },
-              select: { id: true, retentionPercent: true, partnerId: true },
+              select: {
+                id: true,
+                retentionPercent: true,
+                partnerId: true,
+                status: true,
+              },
             })
           : null;
       if (input.direction === BillDirection.to_subcontractor && !workOrder) {
@@ -409,6 +431,30 @@ export class BillPackageService {
           statusCode: 400,
           code: PACKAGE_ERRORS.workOrderRequired,
           message: 'That work order is not on this project.',
+        });
+      }
+
+      // 028 FR-009. An award is a commitment, and until 028 it became one the moment somebody
+      // saved it while the first bill *under* it needed an approval — the control was the wrong way
+      // round. Refusing here is what gives the approval its force: without it, `pending_approval`
+      // would be a label on a screen that changed nothing.
+      //
+      // `draft` and `pending_approval` are both refused, and the message distinguishes them,
+      // because the remedy differs — one needs sending, the other needs deciding.
+      if (
+        workOrder &&
+        workOrder.status !== WorkOrderStatus.active &&
+        workOrder.status !== WorkOrderStatus.completed
+      ) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.workOrderNotApproved,
+          message:
+            workOrder.status === WorkOrderStatus.draft
+              ? 'This work order has not been sent for approval yet, so there is no approved ' +
+                'award to bill against. Send it for approval on Subcontractors first.'
+              : 'This work order is waiting for approval. A bill cannot be raised against an ' +
+                'award nobody has approved.',
         });
       }
 
@@ -492,12 +538,24 @@ export class BillPackageService {
         projectCgstApplicable: project.cgstApplicable,
       });
 
-      const sequenceNo = await this.nextSequenceNo(
-        tx,
-        input.projectId,
-        input.direction,
-        counterpartyKey,
-      );
+      // **One number, minted once.** The bill's number is the running account — scoped to the work
+      // order by 028 FR-001, and what the counterparty signs for — so the package takes its
+      // sequence from it rather than counting packages separately. Both spell themselves `RA-nn`
+      // and 027 observed they read identically in the ordinary case; they stop doing so the moment
+      // a bill is raised on the sheet, which consumes a bill number and no package sequence. On
+      // 2026-10-08 that put RA-04 on the document and RA-06 on the subcontractor's account, for
+      // one bill, on two screens open at the same time.
+      //
+      // Allocated here rather than at the create below so the sequence can be read out of it.
+      // Uniqueness survives the change: bill numbers are unique per work order and per project,
+      // which is the same population `@@unique([projectId, direction, counterpartyKey,
+      // sequenceNo])` scopes to, and a number is freed only by discarding the bill — which
+      // cascades the package holding it.
+      const billNumber =
+        input.direction === BillDirection.to_client
+          ? await nextClientBillNumber(tx, input.projectId)
+          : await nextRaBillNumber(tx, (workOrder as { id: string }).id);
+      const sequenceNo = sequenceOf(billNumber) ?? 1;
       const quotedPercentage =
         input.direction === BillDirection.to_client
           ? project.quotedPercentage.toNumber()
@@ -522,16 +580,21 @@ export class BillPackageService {
       );
 
       // One statement for the bill.
-      const bill =
+      // Both creates are wrapped, because the number each allocates is read-then-written and two
+      // composes racing on one subject take the same one. 028 FR-003: this path had no handler at
+      // all, so `[P2002]: Invalid 'prisma.rABill.create()' invocation` reached a user's screen —
+      // `RaBillsService.compose` and `ClientBillsService.compose` have both mapped it for a year.
+      const bill = await this.createBillOrConflict(async () =>
         input.direction === BillDirection.to_client
-          ? await tx.clientBill.create({
+          ? tx.clientBill.create({
               data: {
                 companyId,
                 projectId: input.projectId,
                 // Counted from the bills on this project, not from `sequenceNo` — the bill sheet
                 // composes into the same table, and numbering from the package's own sequence
-                // could not see what the sheet had already raised (027).
-                billNumber: await nextClientBillNumber(tx, input.projectId),
+                // could not see what the sheet had already raised (027). The package's sequence
+                // now follows this, above.
+                billNumber,
                 billingDate: new Date(input.periodTo),
                 quotedPercentage,
                 grossAmount: gross,
@@ -541,26 +604,30 @@ export class BillPackageService {
               },
               select: { id: true },
             })
-          : await tx.rABill.create({
+          : tx.rABill.create({
               data: {
                 companyId,
                 projectId: input.projectId,
                 // Counted from the bills on this work order, not from `sequenceNo` — the RA bill
                 // sheet composes into the same table, and numbering from the package's own
-                // sequence could not see what the sheet had already raised (027).
-                billNumber: await nextRaBillNumber(
-                  tx,
-                  (workOrder as { id: string }).id,
-                ),
+                // sequence could not see what the sheet had already raised (027). The package's
+                // sequence now follows this, above.
+                billNumber,
                 amount: gross,
                 billingDate: new Date(input.periodTo),
                 status: RaBillStatus.draft,
-                workOrderId: input.workOrderId ?? null,
+                // Never null, and the bill's number depends on it: uniqueness is scoped to the
+                // work order (028 FR-001) and Postgres does not collide NULLs, so a bill with no
+                // work order would be unconstrained. The guard is above — `workOrderRequired`
+                // refuses a subcontractor package without one — and this reads it from the row
+                // that guard resolved rather than from the input, so the two cannot drift.
+                workOrderId: (workOrder as { id: string }).id,
                 grossAmount: gross,
                 netPayable: gross,
               },
               select: { id: true },
-            });
+            }),
+      );
 
       // One statement for the lines, returning their ids so the claims can point at them without a
       // second read. `createManyAndReturn` is the shape `boq-import.service.ts` adopted after the
@@ -780,27 +847,6 @@ export class BillPackageService {
         iso(found.periodFrom) === input.periodFrom &&
         iso(found.periodTo) === input.periodTo,
     };
-  }
-
-  /**
-   * The next running number for this counterparty.
-   *
-   * A gap is permitted and means nothing — the same judgement 022 FR-002c made about report numbers.
-   * What matters is that two packages to one counterparty never carry one number, which the unique
-   * index holds rather than this query.
-   */
-  private async nextSequenceNo(
-    tx: Prisma.TransactionClient,
-    projectId: string,
-    direction: BillDirection,
-    counterpartyKey: string,
-  ): Promise<number> {
-    const last = await tx.billPackage.findFirst({
-      where: { projectId, direction, counterpartyKey },
-      orderBy: { sequenceNo: 'desc' },
-      select: { sequenceNo: true },
-    });
-    return (last?.sequenceNo ?? 0) + 1;
   }
 
   /**
@@ -1030,15 +1076,42 @@ export class BillPackageService {
       // position counts bills that have left draft, so Position reported no revenue at all for
       // every running-account bill ever issued, and the Client bills tab showed it as a draft
       // beside it. Issuing is the act of sending; one act, one status, in one transaction.
+      //
+      // **And what it is payable at** (2026-10-09). The bill row carries its own
+      // `retentionAmount` and net, and 028 stopped the bill sheet writing them — so for a bill
+      // composed through a package they stayed at zero, and net came out equal to gross. Two
+      // screens then disagreed about one bill: the Subcontractors list read the row and said
+      // ₹35,193.50 while the document said ₹40,120.59, and `bill-payments.service.ts` reads the
+      // same column to decide what a bill may be paid, so the amount actually owed was refused as
+      // an overpayment.
+      //
+      // Copied here rather than computed on the way out, because this is the moment the payable
+      // becomes a fact: the frozen column beside it was written in this same statement, from this
+      // same abstract. A later reader recomputing it could only get a different answer by being
+      // wrong. `netPayable` carries tax, as the document's payable does — `grossAmount` is the
+      // work done before it, and the P&L reads that one.
+      const settled = {
+        retentionAmount: abstract.retentionAmount,
+        netPayable: abstract.payable,
+      };
       if (pkg.clientBillId) {
         await tx.clientBill.update({
           where: { id: pkg.clientBillId },
-          data: { status: ClientBillStatus.submitted, submittedAt: new Date() },
+          data: {
+            status: ClientBillStatus.submitted,
+            submittedAt: new Date(),
+            retentionAmount: settled.retentionAmount,
+            netAmount: settled.netPayable,
+          },
         });
       } else if (pkg.raBillId) {
         await tx.rABill.update({
           where: { id: pkg.raBillId },
-          data: { status: RaBillStatus.submitted, submittedAt: new Date() },
+          data: {
+            status: RaBillStatus.submitted,
+            submittedAt: new Date(),
+            ...settled,
+          },
         });
       }
 
@@ -1554,6 +1627,39 @@ export class BillPackageService {
    * position at issue, so a draft has no stored position to read and treating its zeros as a
    * position would reset the chain.
    */
+
+  /**
+   * Creates a bill, turning the database's duplicate-number refusal into one a caller can act on.
+   *
+   * **028 FR-003.** Both numbers here are allocated read-then-written inside the transaction, so two
+   * composes racing on one work order — or one project, for a client bill — read the same highest
+   * number and the second is refused by the unique constraint. That is the constraint working.
+   *
+   * What was wrong is what the caller saw: this path had no handler, so Prisma's own text reached
+   * the screen as `[P2002]: Invalid 'prisma.rABill.create()' invocation:Unique constraint failed on
+   * the (not available)`. `RaBillsService.compose` and `ClientBillsService.compose` have both mapped
+   * this for a year; only the package path was missed.
+   *
+   * The remedy is to compose again — nothing the caller entered was wrong — and the message says so,
+   * because a bare 409 sends somebody looking for the mistake they made.
+   */
+  private async createBillOrConflict<T>(create: () => Promise<T>): Promise<T> {
+    try {
+      return await create();
+    } catch (error) {
+      if ((error as { code?: string }).code === 'P2002') {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.duplicateNumber,
+          message:
+            'That bill number was taken while this package was being composed. Nothing you ' +
+            'entered was wrong — compose it again and it will take the next number.',
+        });
+      }
+      throw error;
+    }
+  }
+
   private async previousIssuedColumn(
     tx: Prisma.TransactionClient,
     pkg: {
@@ -1834,6 +1940,22 @@ export class BillPackageService {
         };
       });
 
+      // Asked for only when it explains something. A package that proposed figures needs no
+      // account of itself, and the query is skipped rather than its answer discarded.
+      const nothingProposed =
+        claims.length > 0 &&
+        claims.every(
+          (claim) =>
+            claim.proposedQty === null || Number(claim.proposedQty) === 0,
+        );
+      const latestApproved = nothingProposed
+        ? await tx.dailyWorkReport.findFirst({
+            where: { projectId: pkg.projectId, status: DwrStatus.approved },
+            select: { workDate: true, dprNumber: true },
+            orderBy: { workDate: 'desc' },
+          })
+        : null;
+
       return {
         id: pkg.id,
         projectId: pkg.projectId,
@@ -1856,6 +1978,12 @@ export class BillPackageService {
         unpricedClaimedCount: claims.filter(
           (claim) => claim.unpriced && Number(claim.claimedQty) !== 0,
         ).length,
+        latestApprovedWork: latestApproved
+          ? {
+              workDate: iso(latestApproved.workDate),
+              dprNumber: latestApproved.dprNumber,
+            }
+          : null,
       };
     });
   }

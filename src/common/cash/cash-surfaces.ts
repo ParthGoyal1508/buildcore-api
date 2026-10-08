@@ -14,6 +14,7 @@
  * | `PaymentMode.cash` on a payment | The general case |
  * | `LabourPaymentMode.cash` on a disbursement | Labour wage payouts |
  * | `LabourPaymentSheet.denominationBreakup` | Cash by construction — a note-count breakup exists only for cash |
+ * | `PaymentInstrument.cash` on a subcontractor bill payment | Added by 028. Cash leaving on a running-account bill is the same surface as cash leaving on any other payment, and the guard below is what said so — the enum was added for FR-021 and this list failed until it was named here |
  *
  * **`Company.labourCashDenominations` is deliberately absent.** It looks like cash and is not:
  * it is configuration — which notes are in circulation — and hiding it would break the payment
@@ -27,6 +28,9 @@ export const CASH_ENUM_VALUES: readonly string[] = ['cash'];
 export const CASH_MODE_ENUMS: readonly string[] = [
   'PaymentMode',
   'LabourPaymentMode',
+  // 028 FR-021. `RABillPayment.instrument`, which is why `instrument` joins the mode fields below:
+  // naming the enum alone hides nothing, as this file's own comment warns.
+  'PaymentInstrument',
 ];
 
 /**
@@ -53,7 +57,14 @@ export const UNCONDITIONAL_CASH_FIELDS: readonly string[] = [
 ];
 
 /** The field names that say a row's payment mode. */
-export const CASH_MODE_FIELDS: readonly string[] = ['paymentMode', 'mode'];
+export const CASH_MODE_FIELDS: readonly string[] = [
+  'paymentMode',
+  'mode',
+  // 028. A bill payment calls it the **instrument**, which is the word the document uses — a UTR,
+  // a cheque number, a cash voucher. The field is named for the domain and listed here so the
+  // interceptor still recognises it.
+  'instrument',
+];
 
 /** True when a value names a cash payment mode. */
 export function isCashMode(value: unknown): boolean {

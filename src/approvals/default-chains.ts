@@ -126,6 +126,32 @@ export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
 export const ACTION_RA_BILL = 'ra_bill';
 
 /**
+ * Awarding a work order to a subcontractor (028 FR-009).
+ *
+ * **The control was inverted.** A work order committing the company to several crore went `active`
+ * the moment one person saved it, while the first bill raised *under* it required an approval —
+ * approvals were submitted for the bill and never for the award. The commitment is made when the
+ * award is given; the bill only measures against it.
+ *
+ * One Director level by default, the same shape an RA bill carries, because that is the minimum
+ * gate that makes "an unapproved award cannot be billed against" mean anything. No value threshold:
+ * a threshold is a number, and a number written here is a hardcoded value nobody chose (Principle
+ * III). Thresholds are a settings question once the subject exists.
+ */
+export const ACTION_WORK_ORDER_AWARD = 'work_order_award';
+
+/**
+ * Changing a rate already agreed with a vendor for an item (028 FR-010).
+ *
+ * **The inventory module's first approval of any kind.** Chains existed for attendance, payroll,
+ * payment release, letters, settlements, fuel recovery and running-account bills, and nothing in
+ * `src/inventory` had ever been submitted to one — which is why this is registered in the same
+ * phase as the award above rather than with the rate contract that consumes it: the machinery
+ * arrives once and the second subject is nearly free (research §3).
+ */
+export const ACTION_PURCHASE_RATE_CHANGE = 'purchase_rate_change';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these
@@ -240,6 +266,11 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
   // about what the client confirmed and an RA bill is not on it.
   [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // 028 FR-009 and FR-010. Both one Director level, for the reason each constant gives. Seeded here
+  // so a company gets them on creation like every other chain — a chain installed per company by
+  // hand is a configuration visit the deployment should have made.
+  [ACTION_WORK_ORDER_AWARD, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  [ACTION_PURCHASE_RATE_CHANGE, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // FR-018's remaining action types, each a director-only chain (T048). Seeded even where no module
   // submits into them yet: without the chain, feature 017's first work order would be refused as a
   // configuration fault in every company at once, and the remedy would be a settings visit per

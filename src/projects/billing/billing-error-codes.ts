@@ -35,12 +35,26 @@ export const BILLING_ERRORS = {
   overScopeReasonRequired: 'OVER_SCOPE_REASON_REQUIRED',
   /** A bill that has left draft cannot have its lines changed. */
   notDraft: 'BILL_NOT_DRAFT',
+  /**
+   * An award that has been submitted or approved cannot be rewritten in place.
+   *
+   * Distinct from `notDraft`, which is about a bill: this one is about the schedule the bill will
+   * be measured against. The remedy differs too — a reopen, which voids the approval.
+   */
+  awardNotDraft: 'AWARD_NOT_DRAFT',
   /** Certifying something that was never submitted. */
   notSubmitted: 'BILL_NOT_SUBMITTED',
   /** A bill with no lines. Submitting one would send a client a document saying nothing. */
   noLines: 'BILL_HAS_NO_LINES',
   /** Two bills on one project cannot share a number. */
   duplicateNumber: 'BILL_NUMBER_IN_USE',
+  /**
+   * The award has not been approved (028 FR-009).
+   *
+   * Raised on both composition paths. A control enforced on one of two screens is one anybody can
+   * step around by using the other.
+   */
+  awardNotApproved: 'WORK_ORDER_NOT_APPROVED',
   /** A measured quantity past what the work order awarded, with no variation to cover it. */
   exceedsAward: 'RA_BILL_EXCEEDS_AWARD',
   /** Certifying more than was billed. The client cannot certify work nobody claimed. */
@@ -71,4 +85,20 @@ export const BILLING_ERRORS = {
   retentionExceedsHeld: 'RETENTION_EXCEEDS_HELD',
   /** A release with no reason. "Which milestone was this against" is asked within the year. */
   retentionReasonRequired: 'RETENTION_RELEASE_REASON_REQUIRED',
+  /**
+   * A payment recorded against a bill nobody has certified (028 FR-021).
+   *
+   * Outstanding is certified less paid, so a payment against a draft would make outstanding
+   * negative on a figure that was never agreed — and the bill it was paid against can still change.
+   * Money paid to a subcontractor **before** certification is an advance, and an advance is
+   * recovered through the package's adjustment columns, which is where Phase B put every deduction.
+   */
+  paymentBillNotCertified: 'PAYMENT_BILL_NOT_CERTIFIED',
+  /**
+   * A payment that would take the total paid past what was certified (028 FR-021).
+   *
+   * Refused rather than recorded, because the overpayment it describes is either a double payment
+   * or a typed digit, and both are found faster here than in a reconciliation three months later.
+   */
+  paymentExceedsCertified: 'PAYMENT_EXCEEDS_CERTIFIED',
 } as const;

@@ -34,6 +34,12 @@ function build(opts: {
   retentionPercent?: number;
   measuredToDate?: Record<string, number>;
   billedAlready?: number;
+  /**
+   * The work order's state. Defaults to `active` because most of this file bills against an
+   * approved award — but **capturing** one is a draft-only act (2026-10-08), so the award tests
+   * name `draft` explicitly. The two are opposite ends of the same gate.
+   */
+  workOrderStatus?: 'draft' | 'pending_approval' | 'active' | 'completed';
 }) {
   const lines = opts.awardLines ?? [award()];
   const created: Record<string, unknown>[] = [];
@@ -48,9 +54,14 @@ function build(opts: {
   const tx = {
     $executeRaw: async () => 0,
     workOrder: {
+      // `active` from 028 FR-009: an award is approved before it can be billed against, so a
+      // fixture omitting the status was asking the service to bill an award in no state at all.
+      // Named rather than defaulted in the service — "I did not say" and "it is approved" must not
+      // be the same thing.
       findFirst: async () => ({
         id: 'wo-1',
         retentionPercent: dec(opts.retentionPercent ?? 0),
+        status: opts.workOrderStatus ?? 'active',
       }),
     },
     workOrderBOQItem: {
@@ -114,7 +125,12 @@ function build(opts: {
   };
 
   return {
-    service: new RaBillsService(prisma as never, approvals as never),
+    service: new RaBillsService(
+      prisma as never,
+      approvals as never,
+      // The audit trail, stubbed: these tests are about what the service stores.
+      { record: async () => undefined } as never,
+    ),
     created,
     approvals,
   };
@@ -133,7 +149,9 @@ const measure = (overrides: Record<string, unknown> = {}) => ({
 
 describe('the award is the subcontractor’s own rates', () => {
   it('captures award lines on the work order', async () => {
-    const { service } = build({});
+    // A draft: capturing an award is refused on anything else, because an approved award rewritten
+    // in place would leave the approval standing against figures that no longer exist.
+    const { service } = build({ workOrderStatus: 'draft' });
 
     const stored = await service.setAward(ctx, 'co-1', 'wo-1', [
       {

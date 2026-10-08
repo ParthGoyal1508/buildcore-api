@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ClientBillStatus, Prisma } from '@prisma/client';
+import { BillPackageStatus, ClientBillStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
@@ -137,7 +137,12 @@ export interface ClientBillView {
   quotedPercentage: number;
   grossAmount: number;
   retentionAmount: number;
-  netAmount: number;
+  /**
+   * **Null while the figures are not yet frozen** — a bill composed through a bill package whose
+   * package is still a draft. See `RaBillView.netPayable`, which carries the same rule for the
+   * other direction.
+   */
+  netAmount: number | null;
   certifiedAmount: number | null;
   certifiedAt: Date | null;
   /**
@@ -577,6 +582,8 @@ export class ClientBillsService {
             },
             orderBy: { boqTaskItem: { boqNo: 'asc' } },
           },
+          // Only its status — the figures are copied onto this row when the package is issued.
+          package: { select: { status: true } },
         },
       });
       if (!bill) throw new NotFoundException('Bill not found');
@@ -631,7 +638,11 @@ export class ClientBillsService {
         quotedPercentage: bill.quotedPercentage.toNumber(),
         grossAmount: bill.grossAmount.toNumber(),
         retentionAmount: bill.retentionAmount.toNumber(),
-        netAmount: bill.netAmount.toNumber(),
+        // No net until the package that decides the recoveries, deductions and tax is issued.
+        netAmount:
+          bill.package?.status === BillPackageStatus.draft
+            ? null
+            : bill.netAmount.toNumber(),
         certifiedAmount: certified,
         certifiedAt: bill.certifiedAt,
         certificationVariance:

@@ -34,6 +34,7 @@ import { CreateDwrDto } from './dto/create-dwr.dto';
 import {
   AddDwrAttachmentDto,
   RepairDoneQtyDto,
+  ReturnDwrDto,
   ReverseDwrDto,
 } from './dto/dwr-lifecycle.dto';
 import { DwrPeriodDto, ListDwrDto } from './dto/dwr-query.dto';
@@ -149,6 +150,38 @@ export class DwrController {
     );
   }
 
+  @Get('projects/dwr/:dwrId/report.xlsx')
+  @ApiOperation({
+    summary: 'The report as the client’s printable form',
+    description:
+      'The daily form, as a workbook (028 FR-022). Named from the report number and its date, ' +
+      'never from an id.\n\n' +
+      'A draft downloads and says DRAFT on its face rather than being refused — more use to ' +
+      'somebody checking their figures before submitting, and more honest than a clean-looking ' +
+      'form for a report nobody has put forward.',
+  })
+  @ApiResponse({ status: 404, description: 'No such report in this company.' })
+  async report(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('dwrId') dwrId: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { bytes, filename } = await this.dwr.workbookFor(
+      rlsContextFor(caller),
+      dwrId,
+      resolveCompanyId(caller, companyId),
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(bytes);
+  }
+
   @Get('projects/dwr/attachments/:attachmentId')
   @ApiOperation({ summary: 'Download an attachment' })
   async downloadAttachment(
@@ -251,19 +284,28 @@ export class DwrController {
   @Post('projects/dwr/:dwrId/return')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
-    summary: 'Send a submitted report back to draft',
-    description: 'Nothing moves, because submission never moved anything.',
+    summary: 'Send a submitted report back to its author for correction',
+    description:
+      'Nothing moves, because submission never moved anything.\n\n' +
+      '**The report lands in `returned`, not in `draft`** (028). A returned report and one ' +
+      'nobody ever submitted are different things, and writing `draft` for both left the author ' +
+      'looking at a report that had come back with nothing on the screen saying so.\n\n' +
+      'The reason is required and is carried on the report, because it is the only part of this ' +
+      'action the author can act on. A `returned` report is editable and submittable exactly as ' +
+      'a draft is.',
   })
-  async returnToDraft(
+  async returnToAuthor(
     @UserEntity() caller: AuthenticatedUser,
     @Param('dwrId') dwrId: string,
+    @Body() dto: ReturnDwrDto,
     @Ip() ip: string,
     @Query('companyId') companyId?: string,
   ) {
-    return this.dwr.returnToDraft(
+    return this.dwr.returnToAuthor(
       rlsContextFor(caller),
       dwrId,
       resolveCompanyId(caller, companyId),
+      dto,
       { userId: caller.id, ipAddress: ip },
     );
   }

@@ -1543,6 +1543,17 @@ enum DwrStatus {
   submitted
   approved
 
+  /// Sent back by a reviewer for correction (028).
+  ///
+  /// **Distinct from `draft`, which is why it exists.** A return used to write `draft`, so a report
+  /// a reviewer had rejected became indistinguishable from one nobody had ever submitted — the
+  /// badge read "Draft", the reason the reviewer typed was discarded by a controller that took no
+  /// body, and the author had no way to learn either that it had come back or what was wrong with
+  /// it. The web had been rendering this value since 025; the server had never sent it.
+  ///
+  /// Editable and submittable exactly as a draft is: this is a draft that carries a complaint.
+  returned
+
   @@schema("projects")
 }
 
@@ -1570,6 +1581,15 @@ enum RaBillStatus {
 
 enum WorkOrderStatus {
   draft
+  /// Submitted for approval and not yet awarded (028 FR-009).
+  ///
+  /// Added because the control was inverted: a work order committing the company to several crore
+  /// went `active` the moment one person saved it, while the first bill raised under it needed an
+  /// approval. `approvals.submit` was called for RA bills and never for the award itself.
+  ///
+  /// **Existing rows keep the status they have.** The migration adds the value and moves nothing —
+  /// setting live awards to this would make every project in flight unbillable overnight.
+  pending_approval
   active
   completed
 
@@ -1908,6 +1928,19 @@ model DailyWorkReport {
   reversalReason   String?
   reversalCount    Int       @default(0)
 
+  /// The **latest** return for correction (028).
+  ///
+  /// Mirrors the reversal trio above deliberately — same shape, same reason. `returnReason` is
+  /// required by the service rather than by the column, because an author told only that their
+  /// report came back has been told nothing they can act on, and the reviewer was already typing
+  /// one into a prompt that threw it away.
+  ///
+  /// Not cleared when the report is submitted again, for the reason the reversal fields are not:
+  /// the return happened, and erasing it leaves a reader wondering why a report was filed twice.
+  returnedAt       DateTime?
+  returnedByUserId String?
+  returnReason     String?
+
   tasks DWRTask[]
 
   createdAt DateTime @default(now())
@@ -2108,18 +2141,38 @@ model RABill {
   otherDeductions Decimal @default(0) @db.Decimal(18, 2)
   netPayable      Decimal @default(0) @db.Decimal(18, 2)
 
-  lines   RABillLine[]
+  /// When the countersigned copy came back (028 FR-020).
+  ///
+  /// **A state, not merely a file.** The copy returning is what makes a bill acknowledged, and a
+  /// file in a list cannot answer "which bills are unacknowledged" — which is the only question
+  /// anybody asks of it. The evidence lives in `SignedCopy`; this is what the question is asked of.
+  acknowledgedAt DateTime?
+
+  lines    RABillLine[]
   /// The 023 package, where this bill has been made into one. A relation field, not a column.
-  package BillPackage?
+  package  BillPackage?
+  /// Money that actually left, against this bill (028 FR-021).
+  payments RABillPayment[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  /// Added by 027. A bill number was free text with nothing enforcing it, so two bills on one
-  /// project could carry the same number — and two paths mint them: the RA bill sheet, where a
-  /// person typed one, and 023's package path, which writes `RA-nn` into this column. `ClientBill`
-  /// has carried the equivalent constraint since 018; this side simply never got it.
-  @@unique([projectId, billNumber])
+  /// Scoped to the **work order**, not the project (028 FR-001).
+  ///
+  /// Added by 027 as `[projectId, billNumber]` and that was wrong in a way that stopped work: the
+  /// allocator counts per work order — `nextRaBillNumber(tx, workOrderId)` — so a project's second
+  /// subcontractor is allocated `RA-01` again and the database refused it. The reported `P2002`.
+  ///
+  /// Per work order is also the right scope on the document: a subcontractor's running account
+  /// reads RA-01, RA-02 against **their own** contract, which is what they sign for. Numbering per
+  /// project would hand a new subcontractor `RA-04` because three went to somebody else.
+  ///
+  /// **`workOrderId` is nullable and Postgres does not collide NULLs**, so this constraint alone
+  /// would leave every work-order-less bill unconstrained — the same hole, moved. A partial unique
+  /// index would close it in SQL and cannot be generated from a Prisma schema, so the rule the
+  /// database cannot express is held in the service instead: `RA_BILL_NEEDS_WORK_ORDER`. Leaving
+  /// that half undecided is how the original defect shipped (research §1).
+  @@unique([workOrderId, billNumber])
   @@index([companyId])
   @@index([projectId])
   @@index([workOrderId])
@@ -2636,6 +2689,14 @@ model BillPackageDebit {
   /// always the bill's own rate.
   amountWithTax Decimal @db.Decimal(18, 2)
 
+  /// The note's own number, `{shortCode}-DN-0001`, from the `DEBIT_NOTE` series (028 FR-019).
+  ///
+  /// **Nullable**, and deliberately not backfilled: debits recorded before this shipped were never
+  /// issued under a number, and inventing one would print an identifier on a document nobody
+  /// issued — the decision 027 made for work-order codes. Allocated at raise, so the register and
+  /// the standalone note always read the same number.
+  noteNumber String?
+
   /// Null until applied. A debit moves from null to a value **once** (FR-037), enforced by a
   /// conditional update whose row count the service checks — the shape 022 used for its status
   /// transitions. The rule has to hold where concurrent writers meet it (FR-037a) and not only in a
@@ -2656,6 +2717,104 @@ model BillPackageDebit {
 
   @@index([companyId, projectId])
   @@index([recoveredOnPackageId])
+  @@schema("projects")
+}
+
+/// How money left (028 FR-021).
+enum PaymentInstrument {
+  bank_transfer
+  cheque
+  cash
+  /// Settled against something owed the other way rather than paid — a debit recovered in full, a
+  /// credit note applied. Recorded as a payment because the bill is discharged either way, and a
+  /// bill that shows outstanding after it was settled is a bill somebody chases.
+  adjustment
+
+  @@schema("projects")
+}
+
+/// Money that actually left, against one running-account bill (028 FR-021).
+///
+/// A bill reached `certified` and stopped: nothing recorded that it had been paid, so the figure
+/// everybody actually wants — what a subcontractor is still owed — could not be answered at all.
+///
+/// **There is deliberately no `outstanding` or `balance` column here or on `RABill`.** Outstanding
+/// is certified less the sum of these rows, derived on read (FR-021). A stored balance is a second
+/// source of truth that goes wrong silently the first time a payment is corrected, and silently is
+/// the worst way for a money figure to be wrong.
+model RABillPayment {
+  id        String @id @default(cuid())
+  companyId String
+
+  raBillId String
+  /// `Restrict`, not `Cascade`: a bill with payments recorded against it is not a bill anybody
+  /// deletes, and a cascade here would take the record of money having moved with it.
+  raBill   RABill @relation(fields: [raBillId], references: [id], onDelete: Restrict)
+
+  paidOn DateTime @db.Date
+  amount Decimal  @db.Decimal(18, 2)
+
+  instrument PaymentInstrument
+  /// UTR, cheque number, the reference on an adjustment memo. Free text because every bank spells
+  /// it differently and a format imposed here would be wrong for the next one.
+  reference  String?
+  remarks    String?
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  recordedByUserId String?
+  recordedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, raBillId])
+  @@schema("projects")
+}
+
+/// What a signed copy can come back against (028 FR-020).
+enum SignedCopySubject {
+  ra_bill
+  debit_note
+
+  @@schema("projects")
+}
+
+/// The countersigned document coming back, for a bill or a debit note (028 FR-020).
+///
+/// This table is the **evidence**; the state it establishes lives on the subject —
+/// `RABill.acknowledgedAt`. Both, because they answer different questions: "show me the copy they
+/// signed" and "which bills are still unacknowledged", and a file in a list cannot answer the
+/// second.
+model SignedCopy {
+  id        String @id @default(cuid())
+  companyId String
+
+  subjectType SignedCopySubject
+  /// Bare id. The two subjects are different tables, so no relation can be declared — the same
+  /// shape `AuditLog` uses for the rows it refers to.
+  subjectId   String
+
+  /// `StorageService`'s opaque, encrypted reference — the `DWRAttachment` and `ProjectDocument`
+  /// pattern. Never a path or a URL; that coupling is what the abstraction exists to prevent.
+  fileRef   String
+  /// As the uploader spelled it, so a download arrives named rather than as a UUID — the defect
+  /// 017 fixed for every other file in this system.
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+
+  /// When the signed copy was received, which is not when it was uploaded: a copy signed on site
+  /// on Tuesday and scanned on Friday was acknowledged on Tuesday.
+  receivedOn DateTime @db.Date
+
+  /// `shared.User.id`. Bare id — see the schema-level note.
+  uploadedByUserId String?
+  uploadedAt       DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId, subjectType, subjectId])
   @@schema("projects")
 }
 
@@ -2856,6 +3015,12 @@ model StagedProjectDocument {
   fileName String?
   mimeType String?
 
+  /// Carried through to the `ProjectDocument` this is promoted into, for the same reason
+  /// `fileName` is: a date typed before the project existed must survive the project's creation,
+  /// or the gate accepts a document whose expiry nobody can read afterwards.
+  documentNumber String?
+  expiresAt      DateTime? @db.Date
+
   /// Who staged it. Checked on use, not merely recorded — see the note above.
   uploadedBy String
 
@@ -2902,6 +3067,22 @@ model ProjectDocument {
   fileName String?
   mimeType String?
 
+  /// The certificate's own number, where the kind carries one (`DocumentType.needsNumber`).
+  documentNumber String?
+
+  /// When this document lapses. Required when `DocumentType.hasExpiry` — enforced in the
+  /// service, as `CompanyDocumentsService` enforces its own.
+  ///
+  /// Added 2026-10-09, and the omission was the defect: `CompanyDocument`, `EmployeeDocument`,
+  /// `EquipmentDocument` and `AssetDocument` all carry an expiry and this one did not, so an
+  /// insurance certificate filed against a project answered its required kind for ever. A
+  /// lapsed policy and a current one were the same row.
+  ///
+  /// Nullable, and null means **no expiry recorded** rather than expired: every row filed
+  /// before this column existed has none, and treating those as lapsed would report every
+  /// project in flight as unready overnight.
+  expiresAt DateTime? @db.Date
+
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String
   uploadedAt       DateTime @default(now())
@@ -2911,6 +3092,8 @@ model ProjectDocument {
   /// Readiness asks "which of these kinds does each of these projects hold?" — this is
   /// the index that question is answered by (FR-008).
   @@index([companyId, projectId, documentTypeId])
+  /// Drives the expiry reminder, which sweeps every company's documents due inside the window.
+  @@index([companyId, expiresAt])
   @@schema("projects")
 }
 
@@ -4460,6 +4643,15 @@ enum CodeSeriesType {
   /// that has to name one, composing a bill to a subcontractor, had nothing to show but a cuid.
   WORK_ORDER
 
+  /// Added by 028. Debit note numbers (`{shortCode}-DN-0001`), per company.
+  ///
+  /// The register printed inside a package PDF carried no number of its own, so the standalone
+  /// note a subcontractor signs had nothing to be filed under. Allocated **when the debit is
+  /// raised**, never when a PDF is produced: a number allocated at print is a different number
+  /// each time the document is produced, and the register and the note would disagree about which
+  /// debit was which (research §6).
+  DEBIT_NOTE
+
   @@schema("settings")
 }
 
@@ -5546,8 +5738,14 @@ model Purchase {
 
   /// Object-storage reference for the uploaded bill, same encrypted-reference
   /// pattern as `EmployeeDocument`/`ProjectDocument`.
-  billFileRef String?
-  remarks     String?
+  billFileRef  String?
+  /// The delivery photographed at the gate (028 FR-017). Same pattern as the bill beside it.
+  ///
+  /// Both are required **before approval, not at creation**: a storekeeper photographing a load at
+  /// dusk with no signal must still be able to record that it arrived. Nullable for that reason and
+  /// because the rule is not retrospective — purchases recorded before it existed keep their gaps.
+  photoFileRef String?
+  remarks      String?
 
   /// The indent line this purchase fulfils, if it came from one (FR-023).
   indentLineId String?
@@ -5573,6 +5771,67 @@ model Purchase {
 /// Auto-created 1:1 with every purchase (FR-020). Separate from `PurchaseBill`
 /// because they answer different questions: a GRN records that material physically
 /// arrived, a bill records that money is owed for it.
+/// The rate agreed with one vendor for one item, and the period it applied to (028 FR-011).
+///
+/// ## Why a table and not a column
+///
+/// A rate has a history and the history is the point. FR-015 says an approved change applies **from
+/// approval forward** and does not restate purchases already made, which is only answerable if the
+/// rate carries the period it applied to. A column holds one value and loses the previous one, so
+/// "what was the agreed rate in August" stops being answerable the moment a rate changes.
+///
+/// Shaped on `settings.HireRate`, which solved this exact problem for equipment — including the
+/// convention that a null end means *current*. This follows that precedent rather than inventing a
+/// second shape for the same idea.
+///
+/// ## What it is for
+///
+/// A purchase of a vendor–item pair that has no agreed rate is typed and **establishes** one; every
+/// purchase after it is supplied the rate and cannot alter it. That control reaches further than
+/// the purchase row: `stock.service.ts` recomputes a weighted average on every receipt, so a rate
+/// typed on a purchase moves the value of every unit of that material already held.
+///
+/// A familiar item from a vendor who has not supplied it before is a **first** purchase — the
+/// contract is per vendor, and a vendor with no agreed rate has nothing to supply. That is a chosen
+/// limit, not a hole: blocking new suppliers would be worse, so the control there is visibility
+/// (FR-016) rather than refusal.
+model VendorItemRate {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// `partners.Vendor.id`. **A plain column with no relation** — `partners` is another schema and
+  /// Principle I routes cross-module reads through the owning service, exactly as `Purchase.vendorId`
+  /// already does it.
+  vendorId String
+
+  /// `settings.Item.id`. **A plain column too**, for the same reason `vendorId` is one and the
+  /// reason `Purchase.itemId` beside it already is: `Item` lives in the `settings` schema, and
+  /// Principle I keeps a module's tables from reaching across a schema with a foreign key.
+  itemId String
+
+  /// Matched to `Purchase.rate` precisely. A rate that cannot be stored exactly is a rate that
+  /// cannot be compared exactly, and comparison is the whole of FR-013.
+  rate Decimal @db.Decimal(18, 2)
+
+  effectiveFrom DateTime  @db.Date
+  /// Null means **current** — the open end of the history, as `HireRate` spells it.
+  effectiveTo   DateTime? @db.Date
+
+  /// The purchase that established it, where a first purchase did. What makes FR-016's
+  /// first-purchase report answerable without inferring it from dates.
+  establishedByPurchaseId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, vendorId, itemId, effectiveFrom])
+  @@index([companyId])
+  /// FR-016: what *other* vendors have agreed for this item, shown beside a first entry.
+  @@index([companyId, itemId])
+  @@schema("inventory")
+}
+
 model GoodsReceiptNote {
   id String @id @default(cuid())
 

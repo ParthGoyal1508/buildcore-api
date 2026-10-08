@@ -61,6 +61,8 @@ function build(opts: {
   const service = new RaBillsService(
     prisma as never,
     { submit: jest.fn() } as never,
+    // The audit trail, stubbed: these tests are about what the service stores.
+    { record: async () => undefined } as never,
   );
   return { service, created };
 }

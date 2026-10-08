@@ -55,9 +55,23 @@ export const PROJECT_DOCUMENT_KIND_NOT_DEFINED =
 export const PROJECT_DOCUMENT_KIND_NOT_REQUIRED =
   'PROJECT_DOCUMENT_KIND_NOT_REQUIRED';
 
+/**
+ * A document was filed against a kind that expires, with no expiry date (2026-10-09).
+ *
+ * The same refusal `CompanyDocumentsService` gives, and for the same reason: without a date the
+ * certificate sits in the system looking present and never warns anybody that it has lapsed. The
+ * vocabulary already said so — `DocumentType.hasExpiry` — and this surface was the one that
+ * ignored it.
+ *
+ * Asked for **before the bytes are stored**, so a refusal leaves no orphaned blob behind.
+ */
+export const PROJECT_DOCUMENT_EXPIRY_REQUIRED =
+  'PROJECT_DOCUMENT_EXPIRY_REQUIRED';
+
 export type ProjectDocumentErrorCode =
   | typeof PROJECT_DOCUMENT_TYPE_UNKNOWN
   | typeof PROJECT_DOCUMENTS_MANDATORY_MISSING
   | typeof PROJECT_STAGED_DOCUMENT_UNKNOWN
   | typeof PROJECT_DOCUMENT_KIND_NOT_DEFINED
-  | typeof PROJECT_DOCUMENT_KIND_NOT_REQUIRED;
+  | typeof PROJECT_DOCUMENT_KIND_NOT_REQUIRED
+  | typeof PROJECT_DOCUMENT_EXPIRY_REQUIRED;

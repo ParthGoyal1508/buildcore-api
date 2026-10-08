@@ -267,6 +267,69 @@ describe('Project documents (e2e)', () => {
     expect(row.documentReadiness.present).toBe(0);
   });
 
+  describe('a lapsed document answers nothing (2026-10-09)', () => {
+    /**
+     * Reported: "How are we handling the expiry documents? We have not entered the date of
+     * expiry." There was nowhere to enter one — `ProjectDocument` carried no expiry at all while
+     * every sibling document model did, so an insurance certificate that lapsed last year went on
+     * answering its mandatory kind for ever.
+     *
+     * Over HTTP and against the real predicate, because the rule IS a `where` clause: a unit
+     * double returning whatever it is handed would pass whether the filter were there or not.
+     */
+    const readinessFor = async (projectId: string) => {
+      const res = await http()
+        .get('/projects?include=documentReadiness')
+        .set(auth(adminToken))
+        .expect(200);
+      return res.body.items.find((p: { id: string }) => p.id === projectId)
+        .documentReadiness;
+    };
+
+    const file = async (projectId: string, expiresAt: Date | null) =>
+      sys.projectDocument.create({
+        data: {
+          companyId,
+          projectId,
+          documentType: 'Insurance',
+          documentTypeId: typeIdByCode.get('INSURANCE'),
+          fileRef: `e2epd/ins-${Date.now()}.pdf`,
+          expiresAt,
+          uploadedByUserId: userIds[0],
+        },
+      });
+
+    it('stops counting a required kind once its document has expired', async () => {
+      const projectId = await createProject('Lapsed');
+      const kind = typeIdByCode.get('INSURANCE');
+
+      await file(projectId, new Date('2020-03-31'));
+      const lapsed = await readinessFor(projectId);
+      expect(lapsed.missingTypeIds).toContain(kind);
+
+      // **The same project, the same kind, a date in the future** — so the assertion above
+      // cannot be passing because insurance was never required or never filed.
+      await sys.projectDocument.deleteMany({ where: { projectId } });
+      await file(projectId, new Date('2099-03-31'));
+      const current = await readinessFor(projectId);
+      expect(current.missingTypeIds).not.toContain(kind);
+    });
+
+    it('still counts a document with no expiry recorded', async () => {
+      // Null is "no date recorded", not "expired". Every row filed before the column existed has
+      // none, and reading those as lapsed would report every project in flight unready overnight
+      // — the whole reason the column is nullable.
+      const projectId = await createProject('Undated');
+
+      await file(projectId, null);
+
+      const readiness = await readinessFor(projectId);
+      expect(readiness.missingTypeIds).not.toContain(
+        typeIdByCode.get('INSURANCE'),
+      );
+    });
+  });
+
   it('costs ONE query against the project-document table for 50 projects (T070, Pass 4)', async () => {
     // Quickstart Pass 4, executed rather than described: "open the project list for a
     // company with 50 projects and count queries against the project-document table —

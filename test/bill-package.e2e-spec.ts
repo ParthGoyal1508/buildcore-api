@@ -11,6 +11,7 @@ import { configureApp } from '../src/common/configure-app';
 import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-codes';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
+import { pdfDigits } from './pdf-text';
 
 /**
  * The running-account bill package, end to end (023, quickstart passes 1–8 — tasks T096, T097).
@@ -466,6 +467,63 @@ describe('The running-account bill package (e2e)', () => {
       .set(auth())
       .send({ retentionAmount: '1.00' })
       .expect(400);
+
+    // Put it back, so the issue tests below read the figures they were written against.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '0.00' })
+      .expect(200);
+  });
+
+  /**
+   * 028 FR-004. Reported: a recovery entered on screen did not appear on the PDF the subcontractor
+   * receives.
+   *
+   * There were two stores. The RA bill sheet wrote `RABill.advanceRecovery` / `otherDeductions`;
+   * the abstract and the renderer read the ten `BillPackage` adjustment columns and have never
+   * looked at the other two. So the figure was saved correctly and the document went out
+   * understating what had been taken, with nothing on screen saying the two disagreed.
+   *
+   * **This reads the rendered document.** Asserting the column was written proves the write, and
+   * the write was already correct — that is exactly the half that was never broken. The suite's
+   * existing PDF test checks the bytes begin `%PDF-` and run past a thousand, both of which are
+   * true of a document carrying none of the right figures.
+   */
+  it('prints a recovery on the PDF itself, not only in the column', async () => {
+    // A figure no other number in this bill can coincidentally equal, so finding it in the
+    // document means it was printed rather than matched by luck.
+    //
+    // **Whole rupees, deliberately.** The abstract rounds for display and `bill-abstract.ts` sets
+    // out why at length — the client's own format shows whole rupees, and rounding happens once, at
+    // the point of display. A test asserting paise here would be asserting against a rule the
+    // document is right to follow: `1337.42` prints as `1337`, correctly. The first draft of this
+    // test did exactly that and read the rounding as a missing figure.
+    await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '133742.00' })
+      .expect(200);
+
+    const pdf = await http()
+      .get(`/projects/bill-packages/${packageId}/bill.pdf`)
+      .set(auth())
+      .buffer()
+      .parse((res, callback) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+
+    const digits = pdfDigits(pdf.body as Buffer);
+    // `133742` — the figure as the document shows it, separators and spacing removed, because how
+    // a renderer breaks a number across text operators is not what this test is about.
+    expect(digits).toContain('133742');
+
+    // And the control: a figure that was never set does not appear. Without this the assertion
+    // above would pass against a renderer that printed every column it could find.
+    expect(digits).not.toContain('999913');
 
     // Put it back, so the issue tests below read the figures they were written against.
     await http()
@@ -1045,6 +1103,228 @@ describe('The running-account bill package (e2e)', () => {
         .set(auth())
         .send({ clientRetentionFraction: 5 })
         .expect(400);
+    });
+  });
+
+  // ── Pass 12 — why a package proposed nothing ─────────────────────────────
+
+  /**
+   * A package whose every line proposes zero is the shape a defect takes **and** the shape a quiet
+   * month takes, and until now nothing told them apart.
+   *
+   * Reported 2026-10-08: an approved award, two lines on the bill, 0.000 against both, and the
+   * entirely reasonable conclusion that approving the award should have filled the quantities in.
+   * It should not — the award decides which lines and at what rate, and approved daily work
+   * decides how much — but the screen said nothing either way. The fact that settles it lies
+   * **outside the package**: the last day anybody approved work on the project. No amount of
+   * reading the claims can produce it, which is why it is carried on the view.
+   */
+  describe('a package that proposed nothing says why (2026-10-08)', () => {
+    // A day in the one window this suite has not already billed: 21 May to 20 June. Every other
+    // month is occupied by a package composed above, and an overlapping period is refused.
+    const workDate = '2026-05-25';
+    let dprNumber = '';
+
+    it('names the latest approved report when none falls in the period', async () => {
+      const created = await http()
+        .post(`/projects/${projectId}/dwr?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          workDate,
+          workerCount: 9,
+          lines: [
+            {
+              paymentMode: 'day_basis',
+              boqItemId: boqItemIds[0],
+              servedQty: '1.000',
+            },
+          ],
+        })
+        .expect(201);
+      dprNumber = created.body.dprNumber;
+
+      await http()
+        .post(`/projects/dwr/${created.body.id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      const approved = await http()
+        .post(`/projects/dwr/${created.body.id}/approve?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      expect(approved.body.status).toBe('approved');
+
+      // A period that begins a month after the only approved day.
+      const composed = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-06-21',
+          periodTo: '2026-07-20',
+        })
+        .expect(201);
+
+      for (const claim of composed.body.claims) {
+        expect(claim.proposedQty).toBe('0.000');
+      }
+      // **The report itself**, not merely a non-null field: a date is what the reader needs to
+      // pick a period that holds something, and the number is what lets them go and look at it.
+      expect(composed.body.latestApprovedWork).toEqual({ workDate, dprNumber });
+    });
+
+    it('stays silent on a package that did propose a figure', async () => {
+      // The half that makes the first assertion mean something. A field populated unconditionally
+      // passes the test above while explaining packages that need no explanation — and this
+      // repository has shipped nine assertions that passed for the wrong reason.
+      const composed = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-05-21',
+          periodTo: '2026-06-20',
+        })
+        .expect(201);
+
+      expect(
+        composed.body.claims.some(
+          (claim: { proposedQty: string | null }) =>
+            claim.proposedQty !== null && Number(claim.proposedQty) !== 0,
+        ),
+      ).toBe(true);
+      expect(composed.body.latestApprovedWork).toBeNull();
+    });
+  });
+
+  // ── Pass 13 — one bill, one payable, one number ──────────────────────────
+
+  /**
+   * Three reports from the 2026-10-08 walk-through, all of them one bill disagreeing with itself.
+   *
+   * The bill row carries its own `retentionAmount` and net; 028 stopped the bill sheet writing
+   * them and made the package the only store. Nothing then wrote them for a package-composed
+   * bill, so the net came out equal to the gross — and `bill-payments.service.ts` reads that
+   * column to decide what a bill may be paid, so the amount the document asks for was refused as
+   * an overpayment.
+   */
+  describe('a package-composed bill agrees with itself (2026-10-09)', () => {
+    let secondPackageId = '';
+    let manualBillNumber = '';
+
+    beforeAll(async () => {
+      // A day inside the period these tests bill, so the package carries a real figure. A package
+      // of zeros would satisfy "net equals payable" by both being nothing, which is the assertion
+      // passing for the wrong reason this suite keeps guarding against.
+      const created = await http()
+        .post(`/projects/${projectId}/dwr?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          workDate: '2026-08-05',
+          workerCount: 11,
+          lines: [
+            {
+              paymentMode: 'day_basis',
+              boqItemId: boqItemIds[1],
+              servedQty: '2.000',
+            },
+          ],
+        })
+        .expect(201);
+      await http()
+        .post(`/projects/dwr/${created.body.id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      await http()
+        .post(`/projects/dwr/${created.body.id}/approve?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+    });
+
+    it('takes its number from the bill it raises, not from its own count', async () => {
+      // A bill raised on the sheet consumes a bill number and no package sequence. Before this
+      // fix the next package carried on counting packages, so its document said one thing and the
+      // client's account said another.
+      const manual = await http()
+        .post('/projects/client-bills')
+        .set(auth())
+        .send({
+          projectId,
+          billingDate: '2026-08-10',
+          lines: [{ boqTaskItemId: boqItemIds[0], quantity: 1 }],
+        })
+        .expect(201);
+      manualBillNumber = manual.body.billNumber;
+
+      const composed = await http()
+        .post(`/projects/${projectId}/bill-packages`)
+        .set(auth())
+        .send({
+          direction: 'to_client',
+          periodFrom: '2026-07-21',
+          periodTo: '2026-08-20',
+        })
+        .expect(201);
+      secondPackageId = composed.body.id;
+
+      // **Against the bill, not against a number typed here.** The package's label must be the
+      // number its own bill carries; asserting a literal would pass against whichever counter the
+      // code happened to read.
+      const bills = await http()
+        .get(`/projects/client-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      const raised = bills.body.find(
+        (bill: { billNumber: string }) =>
+          bill.billNumber === composed.body.label,
+      );
+      expect(raised).toBeDefined();
+      // And the sheet's bill really did take a number out of the series, so the two counters had
+      // something to disagree about.
+      expect(manualBillNumber).not.toBe(composed.body.label);
+    });
+
+    it('reports no payable until the package is issued, and the frozen one after', async () => {
+      // The package's own label, read back rather than remembered — it is the bill's number now.
+      const view = await http()
+        .get(`/projects/bill-packages/${secondPackageId}`)
+        .set(auth())
+        .expect(200);
+      const label: string = view.body.label;
+      const listed = () =>
+        http()
+          .get(`/projects/client-bills?projectId=${projectId}`)
+          .set(auth())
+          .expect(200)
+          .then((res) =>
+            res.body.find(
+              (bill: { billNumber: string }) => bill.billNumber === label,
+            ),
+          );
+
+      // Draft: the recoveries, deductions and tax are still being decided on the package, so
+      // there is no payable. Gross-as-net was the old answer and the document never agreed.
+      expect((await listed()).netAmount).toBeNull();
+
+      await http()
+        .post(`/projects/bill-packages/${secondPackageId}/issue`)
+        .set(auth())
+        .expect(201);
+
+      const abstract = await http()
+        .get(`/projects/bill-packages/${secondPackageId}/abstract`)
+        .set(auth())
+        .expect(200);
+      const after = await listed();
+
+      // **Against the abstract's own payable**, which is the figure printed on the document.
+      expect(String(after.netAmount)).toBe(
+        abstract.body.columns.thisBill.payable,
+      );
+      // And not the gross, which is what it used to be. Without this the assertion above would
+      // pass on a bill whose tax and deductions happened to cancel — and on this fixture they do
+      // not, so the two figures are genuinely different.
+      expect(after.netAmount).not.toBe(after.grossAmount);
+      expect(after.retentionAmount).toBeGreaterThan(0);
     });
   });
 });

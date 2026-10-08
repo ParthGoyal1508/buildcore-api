@@ -1,11 +1,28 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { CodeSeriesType, WorkOrderStatus } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
+import {
+  AuditAction,
+  AuditEntityType,
+  CodeSeriesType,
+  Permission,
+  WorkOrderStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_WORK_ORDER_AWARD } from '../../approvals/default-chains';
+import { webRoutes } from '../../common/web-routes';
+import { AuditLogService } from '../../auth/audit-log.service';
+import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
@@ -86,7 +103,212 @@ export class WorkOrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly codeSeries: CodeSeriesService,
+    private readonly approvals: ApprovalService,
+    private readonly auditLog: AuditLogService,
   ) {}
+
+  /**
+   * Sends an award for approval (028 FR-009): `draft` → `pending_approval`.
+   *
+   * **The control was the wrong way round.** A work order committing the company to several crore
+   * went `active` the moment one person saved it, while the first bill raised under it needed an
+   * approval. The commitment is made when the award is given; a bill only measures against it.
+   *
+   * An award with no lines is refused. There is nothing to approve in a work order that awards
+   * nothing, and approving one would put a decision on record against a schedule somebody adds
+   * afterwards.
+   */
+  async submitForApproval(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<WorkOrderView> {
+    const order = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.findFirst({
+        where: { id },
+        select: {
+          id: true,
+          companyId: true,
+          projectId: true,
+          code: true,
+          status: true,
+          _count: { select: { awardLines: true } },
+        },
+      }),
+    );
+    if (!order) throw new NotFoundException('Work order not found');
+
+    if (order.status !== WorkOrderStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_WRONG_STATUS',
+        message:
+          `This work order is already ${order.status.replace(
+            '_',
+            ' ',
+          )}. Only a draft award can ` + 'be sent for approval.',
+      });
+    }
+
+    if (order._count.awardLines === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'WORK_ORDER_NO_AWARD_LINES',
+        message:
+          'This work order awards nothing yet, so there is nothing to approve. Capture the award ' +
+          'lines first — a decision recorded against an empty schedule would stand against ' +
+          'whatever is added afterwards.',
+      });
+    }
+
+    await this.approvals.submit({
+      companyId: order.companyId,
+      actionType: ACTION_WORK_ORDER_AWARD,
+      entityType: ACTION_WORK_ORDER_AWARD,
+      entityId: order.id,
+      originatorUserId: caller.id,
+      subject: `Work order ${order.code ?? order.id}`,
+      href: webRoutes.projectRaBills(order.projectId),
+      viewPermission: Permission.PROJECT_FINANCIALS,
+    });
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.update({
+        where: { id: order.id },
+        data: { status: WorkOrderStatus.pending_approval },
+      }),
+    );
+    return this.view(ctx, order.id);
+  }
+
+  /**
+   * Takes an award back to `draft` so it can be corrected (2026-10-08).
+   *
+   * ## Why this exists
+   *
+   * `setAward` used to refuse only once a bill had been measured, so between approval and the
+   * first bill the whole award could be rewritten while the work order stayed `active` — the
+   * approval standing against figures that no longer existed. Locking `setAward` to a draft closed
+   * that, and closing it created a dead end: an award approved with a wrong rate and not yet
+   * billed had no route back, because **the "raise a variation instead" the billed path names is
+   * advice, not a feature** — `variationRef` exists on client BOQ lines and award lines have no
+   * equivalent.
+   *
+   * This is that route, and it is deliberately **an act of its own rather than a side effect of an
+   * edit**. Letting a save quietly cancel an approval would mean the approval could disappear
+   * without the person who removed it noticing they had; here they ask for it, and say why.
+   *
+   * ## What it does not lift
+   *
+   * A billed award stays frozen. Reopening one would move the remaining quantity under bills the
+   * subcontractor already holds, which is the thing the original refusal exists to prevent — so
+   * the bill count is checked here too, and reported as the harder refusal it is.
+   *
+   * The live approval is abandoned rather than left dangling: an instance still waiting on an
+   * approver for a schedule that is being rewritten is an item in somebody's queue that means
+   * nothing. `abandon` is a no-op where nothing is live, which is the `active` case.
+   */
+  async reopenAward(
+    ctx: RlsContext,
+    caller: AuthenticatedUser,
+    id: string,
+    reason: string,
+    ipAddress: string,
+  ): Promise<WorkOrderView> {
+    const order = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.findFirst({
+        where: { id },
+        select: {
+          id: true,
+          companyId: true,
+          code: true,
+          status: true,
+          _count: { select: { awardLines: true } },
+        },
+      }),
+    );
+    if (!order) throw new NotFoundException('Work order not found');
+
+    if (order.status === WorkOrderStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_WRONG_STATUS',
+        message:
+          'This award is already a draft, so there is nothing to reopen. Edit it directly.',
+      });
+    }
+
+    const billed = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.rABillLine.count({ where: { workOrderBoqItem: { workOrderId: id } } }),
+    );
+    if (billed > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'WORK_ORDER_AWARD_BILLED',
+        message:
+          'This award has been measured against, so it cannot be reopened. Changing it would move ' +
+          'the remaining quantity on bills the subcontractor already holds.',
+      });
+    }
+
+    await this.approvals.abandon(
+      ACTION_WORK_ORDER_AWARD,
+      order.id,
+      order.companyId,
+      reason,
+    );
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.update({
+        where: { id: order.id },
+        data: { status: WorkOrderStatus.draft },
+      }),
+    );
+
+    // The reason lives in the audit trail rather than in a column. It is accountability, not
+    // correctness — nothing reads it back to decide anything — and this repository's own rule is
+    // that making the trail load-bearing for a decision is what turns a gap in it into a
+    // permission.
+    await this.auditLog.record({
+      entityType: AuditEntityType.PROJECT,
+      action: AuditAction.UPDATE,
+      entityId: order.id,
+      accountId: caller.id,
+      companyId: order.companyId,
+      ipAddress,
+      changes: {
+        awardReopened: true,
+        fromStatus: order.status,
+        reason,
+      },
+    });
+
+    return this.view(ctx, order.id);
+  }
+
+  /**
+   * The award becomes active when the chain completes — never when somebody saves it.
+   *
+   * `updateMany` with the status in the `where`, as the RA bill's own handler does: the event can
+   * arrive twice, and a second one must not move an order a human has since completed.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_WORK_ORDER_AWARD) return;
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: event.companyId,
+    };
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.workOrder.updateMany({
+        where: {
+          id: event.entityId,
+          status: WorkOrderStatus.pending_approval,
+        },
+        data: { status: WorkOrderStatus.active },
+      }),
+    );
+  }
 
   async listForProject(
     ctx: RlsContext,
@@ -152,7 +374,10 @@ export class WorkOrdersService {
           labourAmount: input.labourAmount ?? 0,
           materialAmount: input.materialAmount ?? 0,
           retentionPercent: input.retentionPercent ?? 0,
-          status: input.status ?? WorkOrderStatus.draft,
+          // **Always a draft** (028 FR-009). `CreateWorkOrderDto` no longer carries a status, so
+          // there is nothing to honour here — and that is the point: the approval this feature
+          // added was being walked around by a caller declaring an award `active` on creation.
+          status: WorkOrderStatus.draft,
         },
         select: { id: true },
       });
@@ -197,6 +422,28 @@ export class WorkOrdersService {
             'changed. The retention on an issued bill is already withheld at the old rate, and ' +
             'moving the basis would make the subcontractor’s copy disagree with ours about money ' +
             'already held.',
+        });
+      }
+
+      // 028 FR-009. `completed` is an ordinary edit — closing out a finished award. The other
+      // three are not, and each is refused by name rather than ignored, because a status silently
+      // dropped is a screen that looks like it saved something it did not.
+      if (
+        input.status !== undefined &&
+        input.status !== WorkOrderStatus.completed
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'WORK_ORDER_STATUS_NOT_SETTABLE',
+          message:
+            input.status === WorkOrderStatus.active
+              ? 'An award becomes active when its approval completes, never by being set. Send ' +
+                'it for approval instead.'
+              : input.status === WorkOrderStatus.pending_approval
+              ? 'Send the award for approval rather than setting this status — submitting is ' +
+                'what puts it in front of an approver.'
+              : 'An award that has been approved cannot be returned to draft: the approval has ' +
+                'already been given, and a draft would carry it silently.',
         });
       }
 

@@ -7,7 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { AuditAction, AuditEntityType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
-import { ACTOR_NAME_SELECT, actorNameOf } from '../../common/actor-name';
+import { actorNamesFor } from '../../common/actor-name';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
@@ -17,6 +17,7 @@ import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
 import {
   PROJECT_DOCUMENTS_MANDATORY_MISSING,
+  PROJECT_DOCUMENT_EXPIRY_REQUIRED,
   PROJECT_DOCUMENT_KIND_NOT_DEFINED,
   PROJECT_STAGED_DOCUMENT_UNKNOWN,
   PROJECT_DOCUMENT_KIND_NOT_REQUIRED,
@@ -30,6 +31,15 @@ export interface ProjectDocumentRequirementView {
   code: string;
   name: string;
   isMandatory: boolean;
+  /**
+   * Whether the kind lapses, and whether it carries a printed number.
+   *
+   * Carried on the requirement so the upload form can ask for a date on exactly the kinds that
+   * need one. The vocabulary has said this since 017; this surface simply never passed it on,
+   * which is why the form had the field and kept it switched off.
+   */
+  hasExpiry: boolean;
+  needsNumber: boolean;
 }
 
 export interface ProjectDocumentRequirementSet {
@@ -65,6 +75,8 @@ export interface ProjectDocumentRequirementSet {
     code: string;
     name: string;
     isRequired: boolean;
+    hasExpiry: boolean;
+    needsNumber: boolean;
   }[];
 }
 
@@ -148,6 +160,8 @@ export class ProjectDocumentsService {
           code: type.code,
           name: type.name,
           isMandatory: requirement.isMandatory,
+          hasExpiry: type.hasExpiry,
+          needsNumber: type.needsNumber,
         });
       }
       return {
@@ -171,6 +185,8 @@ export class ProjectDocumentsService {
           code: type.code,
           name: type.name,
           isMandatory: true,
+          hasExpiry: type.hasExpiry,
+          needsNumber: type.needsNumber,
         });
       } else {
         undefinedCodes.push(kind.code);
@@ -202,6 +218,8 @@ export class ProjectDocumentsService {
       name: string;
       scope: string;
       isActive: boolean;
+      hasExpiry: boolean;
+      needsNumber: boolean;
     }[],
     requirements: ProjectDocumentRequirementView[],
   ): ProjectDocumentRequirementSet['availableTypes'] {
@@ -213,6 +231,10 @@ export class ProjectDocumentsService {
         code: t.code,
         name: t.name,
         isRequired: required.has(t.id),
+        // The upload form asks for a date on exactly the kinds that lapse, so it needs to be
+        // told which those are — see `ProjectDocumentRequirementView`.
+        hasExpiry: t.hasExpiry,
+        needsNumber: t.needsNumber,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }
@@ -396,6 +418,14 @@ export class ProjectDocumentsService {
           projectId: { in: projectIds },
           // Both partitions in one predicate, so the page still costs one query (T127).
           documentTypeId: { in: [...required, ...advisory] },
+          // **A lapsed certificate answers nothing** (2026-10-09). Before this, an insurance
+          // policy that expired last year went on reporting the project ready, because the only
+          // question asked was whether a row existed.
+          //
+          // `null` is kept — it means no expiry was recorded, not that the document is expired.
+          // Every row filed before the column existed has none, and reading those as lapsed
+          // would report every project in flight unready overnight.
+          OR: [{ expiresAt: null }, { expiresAt: { gte: dayStart(today()) } }],
         },
         select: { projectId: true, documentTypeId: true },
         distinct: ['projectId', 'documentTypeId'],
@@ -534,11 +564,16 @@ export class ProjectDocumentsService {
       /** The uploader's own file name, so the download is not `<kind>-<id>` with no extension. */
       fileName?: string;
       remark?: string;
+      /** The certificate's own number, where the kind carries one. */
+      documentNumber?: string;
+      /** Required when the kind expires — see `assertExpiryGiven`. */
+      expiresAt?: string;
     },
     actorUserId: string,
   ) {
     if (input.documentTypeId) {
-      await this.assertTypeExists(ctx, companyId, input.documentTypeId);
+      const type = await this.resolveType(ctx, companyId, input.documentTypeId);
+      this.assertExpiryGiven(type, input.expiresAt);
     }
 
     const fileRef = await this.storage.put(
@@ -558,6 +593,8 @@ export class ProjectDocumentsService {
           fileName: input.fileName ?? null,
           mimeType: input.contentType,
           remark: input.remark ?? null,
+          documentNumber: input.documentNumber ?? null,
+          expiresAt: input.expiresAt ? dayStart(input.expiresAt) : null,
           uploadedByUserId: actorUserId,
         },
       }),
@@ -635,19 +672,18 @@ export class ProjectDocumentsService {
     return { data, ...described };
   }
 
-  /** User ids to display names, in one query. */
-  private async actorNames(ids: string[]): Promise<Map<string, string>> {
-    if (ids.length === 0) return new Map();
-    const users = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.user.findMany({
-          where: { id: { in: ids } },
-          select: ACTOR_NAME_SELECT,
-        }),
-    );
-    return new Map(users.map((user) => [user.id, actorNameOf(user)]));
+  /**
+   * User ids to display names, in one query.
+   *
+   * The body moved to `actorNamesFor` in `src/common/actor-name.ts` when 028 FR-024 needed exactly
+   * it for a daily report's two identities. Kept as a method rather than inlined at both call sites
+   * because these two already read well; the implementation is shared, which is the part that
+   * mattered — a second copy is how one actor comes to appear under two names.
+   */
+  private async actorNames(
+    ids: (string | null | undefined)[],
+  ): Promise<Map<string, string>> {
+    return actorNamesFor(this.prisma, ids);
   }
 
   /**
@@ -665,11 +701,17 @@ export class ProjectDocumentsService {
       data: Buffer;
       contentType: string;
       fileName?: string;
+      documentNumber?: string;
+      expiresAt?: string;
     },
     actorUserId: string,
   ): Promise<{ stagedDocumentId: string }> {
     if (input.documentTypeId) {
-      await this.assertTypeExists(ctx, companyId, input.documentTypeId);
+      const type = await this.resolveType(ctx, companyId, input.documentTypeId);
+      // Asked for at staging, not deferred to creation. A date demanded only at the end would
+      // refuse the project itself for a document already uploaded, with the form that could have
+      // supplied it already gone.
+      this.assertExpiryGiven(type, input.expiresAt);
     }
 
     const fileRef = await this.storage.put(
@@ -687,6 +729,8 @@ export class ProjectDocumentsService {
           fileRef,
           fileName: input.fileName ?? null,
           mimeType: input.contentType,
+          documentNumber: input.documentNumber ?? null,
+          expiresAt: input.expiresAt ? dayStart(input.expiresAt) : null,
           uploadedBy: actorUserId,
         },
       }),
@@ -717,6 +761,8 @@ export class ProjectDocumentsService {
       filePath: string | null;
       fileName: string | null;
       mimeType: string | null;
+      documentNumber: string | null;
+      expiresAt: Date | null;
     }[]
   > {
     const staged = stagedIds.length
@@ -800,6 +846,8 @@ export class ProjectDocumentsService {
       // the one that downloads as `<kind>-<id>` with no extension.
       fileName: row.fileName,
       mimeType: row.mimeType,
+      documentNumber: row.documentNumber,
+      expiresAt: row.expiresAt,
     }));
   }
 
@@ -855,18 +903,64 @@ export class ProjectDocumentsService {
     );
   }
 
-  private async assertTypeExists(
+  private async resolveType(
     _ctx: RlsContext,
     companyId: string,
     documentTypeId: string,
-  ): Promise<void> {
+  ): Promise<{ name: string; hasExpiry: boolean }> {
     const types = await this.documentTypes.listForCompany(companyId);
-    if (!types.some((type) => type.id === documentTypeId)) {
+    const type = types.find((candidate) => candidate.id === documentTypeId);
+    if (!type) {
       throw new BadRequestException({
         statusCode: 400,
         code: PROJECT_DOCUMENT_TYPE_UNKNOWN,
         message: 'That document type does not exist for this company.',
       });
     }
+    // Returned rather than asserted away: the kind's own `hasExpiry` decides whether a date is
+    // required, and the caller needed the row anyway to say so by name.
+    return type;
   }
+
+  /**
+   * Refuses a document filed against a kind that expires, with no date (2026-10-09).
+   *
+   * Word for word the rule `CompanyDocumentsService` has had since 017, applied here because the
+   * surface that lacked it was the one where the omission mattered most: a project's insurance
+   * answers a **mandatory** kind, so a lapsed certificate was not merely unflagged — it went on
+   * reporting the project ready.
+   *
+   * Called before the bytes are stored, so a refusal leaves no orphaned blob.
+   */
+  private assertExpiryGiven(
+    type: { name: string; hasExpiry: boolean },
+    expiresAt: string | undefined,
+  ): void {
+    if (type.hasExpiry && !expiresAt) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PROJECT_DOCUMENT_EXPIRY_REQUIRED,
+        message:
+          `"${type.name}" expires, so an expiry date is required. Without one this document ` +
+          `would sit against the project looking present and never warn anybody that it had ` +
+          `lapsed.`,
+      });
+    }
+  }
+}
+
+/**
+ * A date column compared as the day it is, with no timezone in the way.
+ *
+ * `@db.Date` stores a calendar day; building the instant at midnight UTC is what makes
+ * "expires on the 9th" mean the whole of the 9th rather than a moment inside it. The same
+ * conversion `dwr-period-figures.service.ts` makes, for the same reason.
+ */
+function dayStart(iso: string): Date {
+  return new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
+}
+
+/** Today as an ISO day. Extracted so the readiness rule has one definition of "now". */
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
