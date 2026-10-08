@@ -12,7 +12,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
   const harness = (opts: {
     staged?: Record<string, unknown>[];
     requirements?: { documentTypeId: string; isMandatory: boolean }[];
-    types?: { id: string; name: string }[];
+    types?: { id: string; name: string; hasExpiry?: boolean }[];
     documents?: Record<string, unknown>[];
     /** Who the uploader ids resolve to (web T077). */
     users?: {
@@ -78,18 +78,19 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
     const prisma = {
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     };
+    const storage = {
+      put: jest.fn(async () => 'ref-1'),
+      get: async () => opts.file ?? Buffer.from('bytes'),
+      deleteMany: jest.fn(),
+    };
     const service = new ProjectDocumentsService(
       prisma as never,
       { listForCompany: async () => opts.types ?? [] } as never,
       { record: jest.fn() } as never,
-      {
-        put: async () => 'ref-1',
-        get: async () => opts.file ?? Buffer.from('bytes'),
-        deleteMany: jest.fn(),
-      } as never,
+      storage as never,
       { get: () => ({ stagedDocumentRetentionHours: 24 }) } as never,
     );
-    return { service, writes };
+    return { service, writes, storage };
   };
 
   const ctx = { isSuperAdmin: true } as never;
@@ -134,6 +135,90 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
       ).rejects.toMatchObject({
         response: { code: 'PROJECT_DOCUMENT_TYPE_UNKNOWN' },
       });
+    });
+
+    /**
+     * The expiry rule (2026-10-09).
+     *
+     * Reported as "we have not entered the date of expiry of that document", and the reason was
+     * that there was nowhere to enter one. `DocumentType.hasExpiry` has said which kinds lapse
+     * since 017 and `CompanyDocumentsService` has honoured it since then; this surface ignored
+     * it, so a project's insurance certificate answered its mandatory kind for ever.
+     */
+    it('refuses an expiring kind with no date, before storing the bytes', async () => {
+      const { service, storage, writes } = harness({
+        types: [{ id: 'dt-ins', name: 'Insurance', hasExpiry: true }],
+      });
+
+      await expect(
+        service.upload(
+          ctx,
+          CO,
+          'p-1',
+          {
+            documentTypeId: 'dt-ins',
+            documentType: 'Insurance',
+            data: Buffer.from('x'),
+            contentType: 'application/pdf',
+          },
+          'u-1',
+        ),
+      ).rejects.toMatchObject({
+        response: { code: 'PROJECT_DOCUMENT_EXPIRY_REQUIRED' },
+      });
+
+      // **Nothing stored.** A refusal after the upload leaves a blob nobody will ever reference
+      // and nothing to find it by — the reason `CompanyDocumentsService` checks in this order too.
+      expect(storage.put).not.toHaveBeenCalled();
+      expect(writes).toHaveLength(0);
+    });
+
+    it('accepts the same upload once a date is given, and stores it as a day', async () => {
+      // The other half. A guard that refused every expiring kind would pass the test above and
+      // make insurance impossible to file, which is a worse defect than the one it guards.
+      const { service, writes } = harness({
+        types: [{ id: 'dt-ins', name: 'Insurance', hasExpiry: true }],
+      });
+
+      await service.upload(
+        ctx,
+        CO,
+        'p-1',
+        {
+          documentTypeId: 'dt-ins',
+          documentType: 'Insurance',
+          data: Buffer.from('x'),
+          contentType: 'application/pdf',
+          expiresAt: '2027-03-31',
+        },
+        'u-1',
+      );
+
+      expect(writes[0]).toMatchObject({
+        model: 'document',
+        expiresAt: new Date('2027-03-31T00:00:00.000Z'),
+      });
+    });
+
+    it('leaves a kind that does not expire alone', async () => {
+      const { service, writes } = harness({
+        types: [{ id: 'dt-loi', name: 'Letter of intent', hasExpiry: false }],
+      });
+
+      await service.upload(
+        ctx,
+        CO,
+        'p-1',
+        {
+          documentTypeId: 'dt-loi',
+          documentType: 'Letter of intent',
+          data: Buffer.from('x'),
+          contentType: 'application/pdf',
+        },
+        'u-1',
+      );
+
+      expect(writes[0]).toMatchObject({ model: 'document', expiresAt: null });
     });
   });
 

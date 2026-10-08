@@ -3015,6 +3015,12 @@ model StagedProjectDocument {
   fileName String?
   mimeType String?
 
+  /// Carried through to the `ProjectDocument` this is promoted into, for the same reason
+  /// `fileName` is: a date typed before the project existed must survive the project's creation,
+  /// or the gate accepts a document whose expiry nobody can read afterwards.
+  documentNumber String?
+  expiresAt      DateTime? @db.Date
+
   /// Who staged it. Checked on use, not merely recorded — see the note above.
   uploadedBy String
 
@@ -3061,6 +3067,22 @@ model ProjectDocument {
   fileName String?
   mimeType String?
 
+  /// The certificate's own number, where the kind carries one (`DocumentType.needsNumber`).
+  documentNumber String?
+
+  /// When this document lapses. Required when `DocumentType.hasExpiry` — enforced in the
+  /// service, as `CompanyDocumentsService` enforces its own.
+  ///
+  /// Added 2026-10-09, and the omission was the defect: `CompanyDocument`, `EmployeeDocument`,
+  /// `EquipmentDocument` and `AssetDocument` all carry an expiry and this one did not, so an
+  /// insurance certificate filed against a project answered its required kind for ever. A
+  /// lapsed policy and a current one were the same row.
+  ///
+  /// Nullable, and null means **no expiry recorded** rather than expired: every row filed
+  /// before this column existed has none, and treating those as lapsed would report every
+  /// project in flight as unready overnight.
+  expiresAt DateTime? @db.Date
+
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String
   uploadedAt       DateTime @default(now())
@@ -3070,6 +3092,8 @@ model ProjectDocument {
   /// Readiness asks "which of these kinds does each of these projects hold?" — this is
   /// the index that question is answered by (FR-008).
   @@index([companyId, projectId, documentTypeId])
+  /// Drives the expiry reminder, which sweeps every company's documents due inside the window.
+  @@index([companyId, expiresAt])
   @@schema("projects")
 }
 

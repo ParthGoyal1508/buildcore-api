@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBase64,
+  IsDateString,
   IsOptional,
   IsString,
   MaxLength,
@@ -50,6 +51,27 @@ export class StageProjectDocumentDto {
   @IsString()
   @MaxLength(255)
   fileName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The certificate's own number, where the kind carries one (`DocumentType.needsNumber`).",
+    example: 'POL/2026/88417',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  documentNumber?: string;
+
+  @ApiPropertyOptional({
+    description:
+      '**Required when the kind expires** (`DocumentType.hasExpiry`) — a certificate with no ' +
+      'date sits against the project looking present and never warns anybody it has lapsed, ' +
+      'and an expired one stops answering its required kind.',
+    example: '2027-03-31',
+  })
+  @IsOptional()
+  @IsDateString()
+  expiresAt?: string;
 }
 
 /** Filing a document against an existing project (017 FR-008a). */

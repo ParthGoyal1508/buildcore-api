@@ -77,6 +77,8 @@ export class ProjectDocumentUploadController {
         data: Buffer.from(dto.data, 'base64'),
         contentType: dto.contentType,
         fileName: dto.fileName,
+        documentNumber: dto.documentNumber,
+        expiresAt: dto.expiresAt,
       },
       caller.id,
     );
@@ -107,6 +109,8 @@ export class ProjectDocumentUploadController {
         contentType: dto.contentType,
         fileName: dto.fileName,
         remark: dto.remark,
+        documentNumber: dto.documentNumber,
+        expiresAt: dto.expiresAt,
       },
       caller.id,
     );

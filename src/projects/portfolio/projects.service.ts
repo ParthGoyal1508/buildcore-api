@@ -303,6 +303,11 @@ export class ProjectsService {
               filePath: staged.filePath,
               fileName: staged.fileName,
               mimeType: staged.mimeType,
+              // Carried over for the same reason `fileName` is: a date typed before the project
+              // existed must survive its creation, or the gate accepts a document whose expiry
+              // nobody can read afterwards.
+              documentNumber: staged.documentNumber,
+              expiresAt: staged.expiresAt,
               uploadedByUserId: caller.id,
             })),
           });

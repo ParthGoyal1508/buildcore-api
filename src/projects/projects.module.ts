@@ -7,6 +7,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
 import { ProjectDocumentsController } from './documents/project-documents.controller';
+import { ProjectDocumentExpiryRule } from './documents/project-document.reminder-rule';
 import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { BoqImportService } from './boq/boq-import.service';
@@ -135,6 +136,7 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     SitesService,
     ProjectsService,
     ProjectDocumentsService,
+    ProjectDocumentExpiryRule,
     ClientBillsService,
     RaBillsService,
     // 018 US2. Feature 008 US6's surface, delivered in the smallest form that makes an RA bill

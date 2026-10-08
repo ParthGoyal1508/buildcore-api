@@ -98,6 +98,15 @@ export async function createProjectWithMandatoryDocuments(
         documentType: 'E2E mandatory fixture',
         data: TINY_PDF,
         contentType: 'application/pdf',
+        // Sent for every kind, not only the ones that expire (2026-10-09). The server requires
+        // it when `DocumentType.hasExpiry` and ignores it otherwise, and this helper does not
+        // know which kinds a given suite's company declared — asking it to find out would make
+        // a fixture depend on the vocabulary it is working around.
+        //
+        // Far future on purpose: a lapsed document no longer answers its required kind, so a
+        // date inside any suite's lifetime would make these projects start failing readiness
+        // the moment the clock passed it.
+        expiresAt: '2099-12-31',
       });
 
     // Thrown with the body in the message, because a failure here is a failure of the

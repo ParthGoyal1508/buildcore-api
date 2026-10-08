@@ -1730,6 +1730,10 @@ type is renamed or removed between staging and creation.']
   fileName String [note: 'Carried through to the `ProjectDocument` the creation promotes this into, so a document
 staged before its project existed is not the one that downloads without a name.']
   mimeType String
+  documentNumber String [note: 'Carried through to the `ProjectDocument` this is promoted into, for the same reason
+`fileName` is: a date typed before the project existed must survive the project\'s creation,
+or the gate accepts a document whose expiry nobody can read afterwards.']
+  expiresAt DateTime
   uploadedBy String [not null, note: 'Who staged it. Checked on use, not merely recorded — see the note above.']
   createdAt DateTime [default: `now()`, not null]
 
@@ -1781,6 +1785,18 @@ under a name with no extension and a PDF opened as text. `describeStoredFile` sn
 bytes when `mimeType` is null, which is why no backfill was attempted — the bytes are the
 only honest source, and they are already there.']
   mimeType String
+  documentNumber String [note: 'The certificate\'s own number, where the kind carries one (`DocumentType.needsNumber`).']
+  expiresAt DateTime [note: 'When this document lapses. Required when `DocumentType.hasExpiry` — enforced in the
+service, as `CompanyDocumentsService` enforces its own.
+
+Added 2026-10-09, and the omission was the defect: `CompanyDocument`, `EmployeeDocument`,
+`EquipmentDocument` and `AssetDocument` all carry an expiry and this one did not, so an
+insurance certificate filed against a project answered its required kind for ever. A
+lapsed policy and a current one were the same row.
+
+Nullable, and null means **no expiry recorded** rather than expired: every row filed
+before this column existed has none, and treating those as lapsed would report every
+project in flight as unready overnight.']
   uploadedByUserId String [not null, note: '`shared.User.id`. Bare id — see the schema-level note above.']
   uploadedAt DateTime [default: `now()`, not null]
 }
