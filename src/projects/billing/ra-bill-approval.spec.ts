@@ -141,7 +141,12 @@ function build(opts: {
   };
 
   return {
-    service: new RaBillsService(prisma as never, approvals as never),
+    service: new RaBillsService(
+      prisma as never,
+      approvals as never,
+      // The audit trail, stubbed: these tests are about what the service stores.
+      { record: async () => undefined } as never,
+    ),
     approvals,
     updates,
     updateManyCalls,

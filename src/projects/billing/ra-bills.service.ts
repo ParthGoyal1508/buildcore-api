@@ -6,6 +6,9 @@ import {
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import {
+  AuditAction,
+  AuditEntityType,
+  BillPackageStatus,
   Permission,
   Prisma,
   RaBillStatus,
@@ -19,6 +22,7 @@ import {
   type ApprovalCompletedEvent,
 } from '../../approvals/approvals.service';
 import { ACTION_RA_BILL } from '../../approvals/default-chains';
+import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
@@ -186,6 +190,7 @@ export class RaBillsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly approvals: ApprovalService,
+    private readonly auditLog: AuditLogService,
   ) {}
 
   /**
@@ -608,6 +613,100 @@ export class RaBillsService {
    * nobody, sitting in no queue, that looks to its author as though it were submitted — the exact
    * silent failure T022 is about, arriving on the happy path instead of the error path.
    */
+  /**
+   * Throws away a draft bill that should not exist (2026-10-08).
+   *
+   * Reported: "I raised the bill twice for the same date." There was no way out of the second one
+   * — a draft could be submitted, revised or left sitting in the list for ever, and a duplicate
+   * left sitting is one somebody eventually submits.
+   *
+   * ## Why a delete and not a status
+   *
+   * `BillPackage.abandon` exists for the package and sets a status, because a package **occupies
+   * its period** and the abandoned row is what records that the period was considered and
+   * released. A bill raised by mistake records nothing anybody wants: it was never sent, never
+   * certified, and nothing downstream has read it.
+   *
+   * The lines cascade, and so does the package — `BillPackage.raBill` is `onDelete: Cascade` — so
+   * discarding frees the period too, which is exactly what somebody who composed the same dates
+   * twice needs. A package worked on and deliberately set aside is still `abandon`'s job; this is
+   * for the one that should never have been opened.
+   *
+   * ## What it refuses
+   *
+   * Anything out of draft, because a submitted bill is a claim somebody is reading and an approved
+   * one has moved money. A bill with a payment against it, explicitly rather than by letting the
+   * `Restrict` on `RABillPayment` surface as a foreign-key error — "money has been paid against
+   * this" is the sentence that explains it. And an issued package, which is a document that was
+   * produced even though the bill under it is still a draft.
+   *
+   * The number is not kept. `nextRaBillNumber` counts what exists, so the next bill on this work
+   * order takes the number back — which is right for a bill nobody ever saw.
+   */
+  async discard(
+    ctx: RlsContext,
+    companyId: string,
+    billId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<void> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const bill = await tx.rABill.findFirst({
+        where: { id: billId },
+        select: {
+          id: true,
+          status: true,
+          billNumber: true,
+          package: { select: { id: true, status: true } },
+          _count: { select: { payments: true } },
+        },
+      });
+      if (!bill) throw new NotFoundException('RA bill not found');
+
+      if (bill.status !== RaBillStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `${bill.billNumber} is ${bill.status}, so it cannot be discarded. A submitted bill is ` +
+            'a claim somebody is reading and an approved one has moved money — revise its ' +
+            'quantities instead.',
+        });
+      }
+
+      if (bill._count.payments > 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `Money has been paid against ${bill.billNumber}, so it cannot be discarded. Remove the ` +
+            'payments first if they were recorded in error.',
+        });
+      }
+
+      if (bill.package && bill.package.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: BILLING_ERRORS.notDraft,
+          message:
+            `${bill.billNumber} belongs to a bill package that has been issued. The package is a ` +
+            'document that was produced, and discarding the bill would take it with it.',
+        });
+      }
+
+      // The lines and the draft package go with it, by the cascades the schema declares.
+      await tx.rABill.delete({ where: { id: bill.id } });
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.PROJECT,
+      action: AuditAction.DELETE,
+      entityId: billId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+    });
+  }
+
   async submitForCertification(
     ctx: RlsContext,
     caller: AuthenticatedUser,

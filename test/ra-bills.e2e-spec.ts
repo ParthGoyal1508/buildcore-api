@@ -330,6 +330,101 @@ describe('RA bills against an award (e2e)', () => {
    * can step around by using the other, which is the difference between a control and its
    * appearance.
    */
+  /**
+   * 2026-10-08. A bill raised twice for the same date needs a way out.
+   *
+   * Reported from the screen. A draft could be submitted, revised, or left in the list — and a
+   * duplicate left in the list is one somebody eventually submits.
+   *
+   * **The vacuity this avoids: asserting the endpoint answered 200.** The bill has to be *gone*,
+   * so the list is read back; and the refusals matter as much as the deletion, so a submitted
+   * bill is asked for too and has to survive.
+   */
+  describe('a draft bill can be discarded (2026-10-08)', () => {
+    it('removes a duplicate draft, and refuses one that has left draft', async () => {
+      const before = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      const countOf = (body: { items?: unknown[] } | unknown[]) =>
+        Array.isArray(body) ? body.length : body.items?.length ?? 0;
+
+      const duplicate = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId,
+          billNumber: 'SC-DUP',
+          billingDate: '2026-08-29',
+          lines: [{ workOrderBoqItemId: awarded.Excavation.id, quantity: 1 }],
+        })
+        .expect(201);
+      const duplicateId = duplicate.body.id;
+
+      const withDuplicate = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      expect(countOf(withDuplicate.body)).toBe(countOf(before.body) + 1);
+
+      await http()
+        .delete(`/projects/ra-bills/${duplicateId}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+
+      // Gone from the list, not merely a 200 on the way past.
+      const after = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      expect(countOf(after.body)).toBe(countOf(before.body));
+      const ids = (
+        Array.isArray(after.body) ? after.body : after.body.items
+      ).map((bill: { id: string }) => bill.id);
+      expect(ids).not.toContain(duplicateId);
+
+      // Its lines went with it rather than being orphaned.
+      expect(
+        await sys.rABillLine.count({ where: { raBillId: duplicateId } }),
+      ).toBe(0);
+
+      // And a bill that has left draft is refused — a claim somebody is reading.
+      const submitted = await http()
+        .post(`/projects/ra-bills?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          projectId,
+          workOrderId,
+          billNumber: 'SC-KEEP',
+          billingDate: '2026-08-30',
+          lines: [{ workOrderBoqItemId: awarded.Excavation.id, quantity: 1 }],
+        })
+        .expect(201);
+      await http()
+        .post(
+          `/projects/ra-bills/${submitted.body.id}/submit?companyId=${companyId}`,
+        )
+        .set(auth())
+        .expect(201);
+
+      const refused = await http()
+        .delete(
+          `/projects/ra-bills/${submitted.body.id}?companyId=${companyId}`,
+        )
+        .set(auth());
+      expect(refused.status).toBe(409);
+      expect(refused.body.code).toBe('BILL_NOT_DRAFT');
+      expect(await sys.rABill.count({ where: { id: submitted.body.id } })).toBe(
+        1,
+      );
+
+      await sys.rABill
+        .deleteMany({ where: { id: submitted.body.id } })
+        .catch(() => undefined);
+    });
+  });
+
   describe('an award is approved before it commits anything (028 FR-009)', () => {
     let gatedWorkOrderId = '';
     let gatedLineId = '';
