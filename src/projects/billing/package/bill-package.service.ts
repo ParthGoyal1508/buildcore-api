@@ -39,6 +39,7 @@ import { PACKAGE_ERRORS } from './package-error-codes';
 import {
   nextClientBillNumber,
   nextRaBillNumber,
+  sequenceOf,
   packageLabel,
 } from '../bill-number';
 import { sortByBoqNo } from '../../boq/boq-order';
@@ -537,12 +538,24 @@ export class BillPackageService {
         projectCgstApplicable: project.cgstApplicable,
       });
 
-      const sequenceNo = await this.nextSequenceNo(
-        tx,
-        input.projectId,
-        input.direction,
-        counterpartyKey,
-      );
+      // **One number, minted once.** The bill's number is the running account — scoped to the work
+      // order by 028 FR-001, and what the counterparty signs for — so the package takes its
+      // sequence from it rather than counting packages separately. Both spell themselves `RA-nn`
+      // and 027 observed they read identically in the ordinary case; they stop doing so the moment
+      // a bill is raised on the sheet, which consumes a bill number and no package sequence. On
+      // 2026-10-08 that put RA-04 on the document and RA-06 on the subcontractor's account, for
+      // one bill, on two screens open at the same time.
+      //
+      // Allocated here rather than at the create below so the sequence can be read out of it.
+      // Uniqueness survives the change: bill numbers are unique per work order and per project,
+      // which is the same population `@@unique([projectId, direction, counterpartyKey,
+      // sequenceNo])` scopes to, and a number is freed only by discarding the bill — which
+      // cascades the package holding it.
+      const billNumber =
+        input.direction === BillDirection.to_client
+          ? await nextClientBillNumber(tx, input.projectId)
+          : await nextRaBillNumber(tx, (workOrder as { id: string }).id);
+      const sequenceNo = sequenceOf(billNumber) ?? 1;
       const quotedPercentage =
         input.direction === BillDirection.to_client
           ? project.quotedPercentage.toNumber()
@@ -579,8 +592,9 @@ export class BillPackageService {
                 projectId: input.projectId,
                 // Counted from the bills on this project, not from `sequenceNo` — the bill sheet
                 // composes into the same table, and numbering from the package's own sequence
-                // could not see what the sheet had already raised (027).
-                billNumber: await nextClientBillNumber(tx, input.projectId),
+                // could not see what the sheet had already raised (027). The package's sequence
+                // now follows this, above.
+                billNumber,
                 billingDate: new Date(input.periodTo),
                 quotedPercentage,
                 grossAmount: gross,
@@ -596,11 +610,9 @@ export class BillPackageService {
                 projectId: input.projectId,
                 // Counted from the bills on this work order, not from `sequenceNo` — the RA bill
                 // sheet composes into the same table, and numbering from the package's own
-                // sequence could not see what the sheet had already raised (027).
-                billNumber: await nextRaBillNumber(
-                  tx,
-                  (workOrder as { id: string }).id,
-                ),
+                // sequence could not see what the sheet had already raised (027). The package's
+                // sequence now follows this, above.
+                billNumber,
                 amount: gross,
                 billingDate: new Date(input.periodTo),
                 status: RaBillStatus.draft,
@@ -838,27 +850,6 @@ export class BillPackageService {
   }
 
   /**
-   * The next running number for this counterparty.
-   *
-   * A gap is permitted and means nothing — the same judgement 022 FR-002c made about report numbers.
-   * What matters is that two packages to one counterparty never carry one number, which the unique
-   * index holds rather than this query.
-   */
-  private async nextSequenceNo(
-    tx: Prisma.TransactionClient,
-    projectId: string,
-    direction: BillDirection,
-    counterpartyKey: string,
-  ): Promise<number> {
-    const last = await tx.billPackage.findFirst({
-      where: { projectId, direction, counterpartyKey },
-      orderBy: { sequenceNo: 'desc' },
-      select: { sequenceNo: true },
-    });
-    return (last?.sequenceNo ?? 0) + 1;
-  }
-
-  /**
    * Sets one line's claimed quantity (FR-004, FR-004a, FR-006).
    *
    * A reduction needs a reason; an over-claim needs a reason **and** sets the flag. Returning the
@@ -1085,15 +1076,42 @@ export class BillPackageService {
       // position counts bills that have left draft, so Position reported no revenue at all for
       // every running-account bill ever issued, and the Client bills tab showed it as a draft
       // beside it. Issuing is the act of sending; one act, one status, in one transaction.
+      //
+      // **And what it is payable at** (2026-10-09). The bill row carries its own
+      // `retentionAmount` and net, and 028 stopped the bill sheet writing them — so for a bill
+      // composed through a package they stayed at zero, and net came out equal to gross. Two
+      // screens then disagreed about one bill: the Subcontractors list read the row and said
+      // ₹35,193.50 while the document said ₹40,120.59, and `bill-payments.service.ts` reads the
+      // same column to decide what a bill may be paid, so the amount actually owed was refused as
+      // an overpayment.
+      //
+      // Copied here rather than computed on the way out, because this is the moment the payable
+      // becomes a fact: the frozen column beside it was written in this same statement, from this
+      // same abstract. A later reader recomputing it could only get a different answer by being
+      // wrong. `netPayable` carries tax, as the document's payable does — `grossAmount` is the
+      // work done before it, and the P&L reads that one.
+      const settled = {
+        retentionAmount: abstract.retentionAmount,
+        netPayable: abstract.payable,
+      };
       if (pkg.clientBillId) {
         await tx.clientBill.update({
           where: { id: pkg.clientBillId },
-          data: { status: ClientBillStatus.submitted, submittedAt: new Date() },
+          data: {
+            status: ClientBillStatus.submitted,
+            submittedAt: new Date(),
+            retentionAmount: settled.retentionAmount,
+            netAmount: settled.netPayable,
+          },
         });
       } else if (pkg.raBillId) {
         await tx.rABill.update({
           where: { id: pkg.raBillId },
-          data: { status: RaBillStatus.submitted, submittedAt: new Date() },
+          data: {
+            status: RaBillStatus.submitted,
+            submittedAt: new Date(),
+            ...settled,
+          },
         });
       }
 

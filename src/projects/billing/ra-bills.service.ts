@@ -154,7 +154,16 @@ export interface RaBillView {
   advanceRecovery: number;
   otherDeductions: number;
   deductionTotal: number;
-  netPayable: number;
+  /**
+   * **Null while the figures are not yet frozen** — a bill composed through a bill package whose
+   * package is still a draft.
+   *
+   * The package is where the recoveries, deductions and tax on such a bill are decided, and issue
+   * is what settles them. Until then there is no payable, and the old answer — gross, because the
+   * bill row's own deduction columns are zero since 028 — was a figure presented as a fact that
+   * the document would not agree with.
+   */
+  netPayable: number | null;
   /**
    * What this bill contributes to project **cost** — gross, not net.
    *
@@ -1103,6 +1112,9 @@ export class RaBillsService {
         where: { id: billId },
         include: {
           lines: { include: { workOrderBoqItem: true } },
+          // Only its status. The figures themselves are copied onto this row when the package is
+          // issued; what the package is needed for here is whether that has happened yet.
+          package: { select: { status: true } },
         },
       });
       if (!bill) throw new NotFoundException('RA bill not found');
@@ -1136,6 +1148,11 @@ export class RaBillsService {
       const retention = bill.retentionAmount.toNumber();
       const advance = bill.advanceRecovery.toNumber();
       const other = bill.otherDeductions.toNumber();
+      // A bill composed through a package has no payable until the package is issued: the
+      // recoveries and deductions are still being decided there, and tax is applied there too.
+      // Reporting gross as the net — which is what the row holds, its own deduction columns
+      // having been retired by 028 — states a figure the bill itself will not agree with.
+      const unsettled = bill.package?.status === BillPackageStatus.draft;
       return {
         id: bill.id,
         projectId: bill.projectId,
@@ -1149,7 +1166,7 @@ export class RaBillsService {
         advanceRecovery: advance,
         otherDeductions: other,
         deductionTotal: Math.round((retention + advance + other) * 100) / 100,
-        netPayable: bill.netPayable.toNumber(),
+        netPayable: unsettled ? null : bill.netPayable.toNumber(),
         // Gross, never net. See the class docblock and `bill-totals.ts`.
         pnlAmount: gross,
         lines,

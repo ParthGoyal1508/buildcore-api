@@ -51,6 +51,8 @@ interface Built {
   writeStatements: () => number;
   /** The package row it wrote. */
   pkg: () => Record<string, unknown> | null;
+  /** The bill row it raised, whichever direction it was. */
+  bill: () => Record<string, unknown> | null;
 }
 
 function build(opts: {
@@ -68,7 +70,8 @@ function build(opts: {
     periodTo: string;
   } | null;
   clientRetentionFraction?: number | null;
-  lastSequenceNo?: number;
+  /** Bill numbers already on this counterparty's account, which the package's own follows. */
+  existingBills?: string[];
   /** The claim `setClaim` reads, for the reason tests. */
   claim?: Record<string, unknown>;
 }): Built {
@@ -81,6 +84,7 @@ function build(opts: {
   const billLines: Record<string, unknown>[] = [];
   const claimUpdates: Record<string, unknown>[] = [];
   let pkgRow: Record<string, unknown> | null = null;
+  let billRow: Record<string, unknown> | null = null;
   let writes = 0;
 
   const tx = {
@@ -166,12 +170,6 @@ function build(opts: {
             claims: [],
           };
         }
-        // `nextSequenceNo` asks for the highest number so far.
-        if (args.where.counterpartyKey && !args.where.periodFrom) {
-          return opts.lastSequenceNo
-            ? { sequenceNo: opts.lastSequenceNo }
-            : null;
-        }
         // The overlap check.
         const occupying = opts.occupying;
         if (!occupying) return null;
@@ -211,9 +209,11 @@ function build(opts: {
       // Read by `nextClientBillNumber` (027) to continue this project's sequence. A read, so it
       // deliberately does not touch `writes` — the "one statement for the bill" assertion counts
       // writes, and allocating a number is not one.
-      findMany: async () => [],
-      create: async () => {
+      findMany: async () =>
+        (opts.existingBills ?? []).map((billNumber) => ({ billNumber })),
+      create: async (args: { data: Record<string, unknown> }) => {
         writes += 1;
+        billRow = args.data;
         return { id: 'bill-1' };
       },
     },
@@ -221,9 +221,11 @@ function build(opts: {
       // Read by `nextRaBillNumber` (027) to continue this work order's sequence. A read, so it
       // deliberately does not touch `writes` — the "one statement for the bill" assertion below
       // counts writes, and allocating a number is not one.
-      findMany: async () => [],
-      create: async () => {
+      findMany: async () =>
+        (opts.existingBills ?? []).map((billNumber) => ({ billNumber })),
+      create: async (args: { data: Record<string, unknown> }) => {
         writes += 1;
+        billRow = args.data;
         return { id: 'bill-1' };
       },
     },
@@ -381,6 +383,7 @@ function build(opts: {
     billLines,
     writeStatements: () => writes,
     pkg: () => pkgRow,
+    bill: () => billRow,
     // Exposed for the reason tests.
     ...({ claimUpdates } as Record<string, unknown>),
   } as Built & { claimUpdates: Record<string, unknown>[] };
@@ -552,16 +555,29 @@ describe('composing a bill package', () => {
     });
   });
 
-  it('numbers a package from its counterparty’s own series', async () => {
-    const built = build({ lastSequenceNo: 11 });
+  it('numbers a package from the bill it raises, not from its own count', async () => {
+    // **Two counters, one name** (2026-10-09). `sequenceNo` counts packages and `billNumber`
+    // counts bills, and both spell themselves `RA-nn`. 027 observed they read identically in the
+    // ordinary case and left them separate; they stop agreeing the moment a bill is raised on the
+    // sheet, which consumes a bill number and no package sequence. The reported symptom was one
+    // bill called RA-04 on its own document and RA-06 on the subcontractor's account, with both
+    // screens open.
+    //
+    // The fixture is the disagreement itself: eleven bills on the account and no package before
+    // this one. Asserting 12 against a fixture where the two already agree would pass whichever
+    // counter the code read, which is how the defect survived.
+    const built = build({ existingBills: ['RA-10', 'RA-11'] });
 
     const view = await built.service.compose({ isSuperAdmin: true }, 'c-1', {
       ...period,
       direction: BillDirection.to_client,
     });
 
-    expect(view.sequenceNo).toBe(12);
     expect(view.label).toBe('RA-12');
+    // The stored sequence too, not only the rendered label: the overlap messages, the debit
+    // register and the previous-bill lookup all read the column.
+    expect(view.sequenceNo).toBe(12);
+    expect(built.bill()).toMatchObject({ billNumber: 'RA-12' });
   });
 });
 

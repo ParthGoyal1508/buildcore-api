@@ -16,6 +16,21 @@ export function packageLabel(sequenceNo: number): string {
 const SEQUENCE = /^RA-(\d+)$/;
 
 /**
+ * The sequence inside a bill number, or null where the number is not one this module minted.
+ *
+ * Exported so a package can take its sequence **from the bill it holds** rather than counting
+ * packages separately. Both counters spell themselves `RA-nn`, and 027 observed they read
+ * identically in the ordinary case — but a bill raised on the sheet consumes a bill number and no
+ * package sequence, after which they disagree, and on 2026-10-08 one screen said RA-04 and
+ * another RA-06 about the same bill. The bill's number is the running account the counterparty
+ * signs for, so it is the one that wins.
+ */
+export function sequenceOf(billNumber: string): number | null {
+  const match = SEQUENCE.exec(billNumber);
+  return match ? Number(match[1]) : null;
+}
+
+/**
  * The next running account bill number on one work order (027).
  *
  * ## Why this is derived from the bills rather than from a counter
