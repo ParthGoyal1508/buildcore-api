@@ -1,4 +1,4 @@
-import { AuditEntityType } from '@prisma/client';
+import { AuditEntityType, Permission } from '@prisma/client';
 
 /** The PRD's Activity Log module filter buckets (data-model.md). */
 export type ActivityModule =
@@ -165,6 +165,71 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.LABOUR_ADVANCE,
   ],
 };
+
+/**
+ * Which permissions make a module's audit trail the caller's business — **any one of
+ * them** (2026-10-10).
+ *
+ * `/activity-log` is gated on `DASHBOARD`, which every employee holds, and nothing
+ * below it narrowed further. So any account could read — and CSV-export — the whole
+ * company's audit trail: payroll runs, loans and salary advances, role and user-account
+ * changes, every bill and purchase, each with its `before` and `after` values. It is
+ * the broadest read in the product and it had the narrowest gate.
+ *
+ * Each bucket lists the permissions whose own screens already show that module's data,
+ * so the log discloses nothing a caller could not have seen by navigating. A bucket is
+ * generous where its module is: `machinery` admits the workshop, the fuel desk and the
+ * hire-bill clerk alike, because each of them can already see equipment records.
+ *
+ * `hr` carries the login and account-lockout events as well as employee data, which is
+ * why it takes `EMPLOYEES` or `ATTENDANCE` and not `USER_MANAGEMENT`: the bucket is
+ * mixed, and the rule is that holding any one of a bucket's areas shows the bucket.
+ * Splitting the login events out is a sharper line and a bigger change than this is.
+ */
+export const MODULE_PERMISSIONS: Record<ActivityModule, Permission[]> = {
+  hr: [Permission.EMPLOYEES, Permission.ATTENDANCE],
+  settings: [
+    Permission.SETTINGS,
+    Permission.COMPANY_SETTINGS,
+    Permission.USER_MANAGEMENT,
+  ],
+  payroll: [Permission.PAYROLL, Permission.LOANS],
+  machinery: [
+    Permission.MACHINERY,
+    Permission.MAINTENANCE,
+    Permission.LOGBOOK,
+    Permission.FUEL,
+    Permission.HIRE_BILLS,
+  ],
+  projects: [
+    Permission.PROJECTS,
+    Permission.DWR,
+    Permission.PROJECT_FINANCIALS,
+  ],
+  inventory: [Permission.INVENTORY],
+  partners: [Permission.PARTNERS],
+  recruitment: [Permission.RECRUITMENT],
+  labour: [Permission.DAILY_WORKER_REGISTRY],
+  assets: [Permission.ASSETS],
+};
+
+/**
+ * The entity types this caller may see, across every bucket they hold.
+ *
+ * Returns the types rather than the module names because that is what the query
+ * filters on, and an empty array for a caller holding none — which the caller of this
+ * function must treat as "no rows", never as "no filter".
+ */
+export function visibleEntityTypes(
+  permissions: Permission[],
+): AuditEntityType[] {
+  const held = new Set(permissions);
+  return (
+    Object.entries(MODULE_PERMISSIONS) as [ActivityModule, Permission[]][]
+  )
+    .filter(([, required]) => required.some((p) => held.has(p)))
+    .flatMap(([module]) => MODULE_ENTITY_TYPES[module]);
+}
 
 /** Reverse lookup: the module bucket one entity type belongs to. */
 const ENTITY_TYPE_TO_MODULE = new Map<AuditEntityType, ActivityModule>(

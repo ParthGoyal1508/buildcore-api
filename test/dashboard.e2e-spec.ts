@@ -219,6 +219,9 @@ describe('Dashboard reminders (e2e)', () => {
     await sys.auditLogEntry.deleteMany({
       where: { accountId: { in: [scopedUserId, deniedUserId] } },
     });
+    await sys.auditLogEntry.deleteMany({
+      where: { entityId: { startsWith: `${PREFIX}audit` } },
+    });
     await sys.user.deleteMany({
       where: { id: { in: [scopedUserId, deniedUserId] } },
     });
@@ -492,6 +495,91 @@ describe('Dashboard reminders (e2e)', () => {
 
     it('requires authentication', async () => {
       await http().get('/dashboard/reminders').expect(401);
+    });
+  });
+
+  /**
+   * The Activity Log is the broadest read in the product and had the narrowest gate:
+   * `DASHBOARD`, which every employee holds. Any account could page through — and
+   * CSV-export — payroll runs, loans, role changes and every bill, with before/after
+   * values attached.
+   *
+   * Tested through HTTP against two real seeded roles rather than against the mapping
+   * function, because the mapping was never the part that could be wrong: a correct map
+   * that `where()` does not consult is exactly the defect.
+   */
+  describe('activity log entitlement (2026-10-10)', () => {
+    /** One payroll row and one projects row, in the caller's own company. */
+    beforeAll(async () => {
+      await sys.auditLogEntry.createMany({
+        data: [
+          {
+            companyId: callerCompanyId,
+            accountId: null,
+            action: 'UPDATE',
+            entityType: 'PAYROLL_RUN',
+            entityId: `${PREFIX}audit-payroll`,
+            ipAddress: '127.0.0.1',
+          },
+          {
+            companyId: callerCompanyId,
+            accountId: null,
+            action: 'UPDATE',
+            entityType: 'PROJECT',
+            entityId: `${PREFIX}audit-project`,
+            ipAddress: '127.0.0.1',
+          },
+        ],
+      });
+    });
+
+    const targets = (body: { entries: { target: string | null }[] }) =>
+      body.entries
+        .map((e) => e.target)
+        .filter((t): t is string => !!t && t.startsWith(`${PREFIX}audit`));
+
+    it('withholds a module the caller holds no permission for', async () => {
+      // Project Manager holds PROJECTS but not PAYROLL. Both rows exist, in their own
+      // company, inside the default time range — so a missing payroll row is the filter
+      // and nothing else.
+      const res = await http()
+        .get('/activity-log')
+        .set(auth(scopedToken))
+        .expect(200);
+
+      expect(targets(res.body)).toEqual([`${PREFIX}audit-project`]);
+    });
+
+    it('shows both to a caller holding both', async () => {
+      // The other half of the pair. Without it, a filter that hid everything would pass.
+      const res = await http().get('/activity-log').set(auth()).expect(200);
+
+      expect(targets(res.body).sort()).toEqual([
+        `${PREFIX}audit-payroll`,
+        `${PREFIX}audit-project`,
+      ]);
+    });
+
+    it('does not leak the withheld module through the CSV export', async () => {
+      // The export is a second route over the same filter, and the one that puts the
+      // data on somebody's disk.
+      const res = await http()
+        .get('/activity-log/export')
+        .set(auth(scopedToken))
+        .expect(200);
+
+      expect(res.text).toContain(`${PREFIX}audit-project`);
+      expect(res.text).not.toContain(`${PREFIX}audit-payroll`);
+    });
+
+    it('asking for a module the caller cannot see returns an empty feed, not a 403', async () => {
+      // A 403 here would confirm the bucket holds rows.
+      const res = await http()
+        .get('/activity-log?module=payroll')
+        .set(auth(scopedToken))
+        .expect(200);
+
+      expect(targets(res.body)).toEqual([]);
     });
   });
 });

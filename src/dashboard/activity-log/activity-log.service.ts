@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AuditAction, Prisma } from '@prisma/client';
+import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -11,6 +11,7 @@ import type {
 import {
   entityTypesForModule,
   moduleForEntityType,
+  visibleEntityTypes,
 } from './module-bucket-mapping';
 
 /** One row of the Activity Log feed (contracts/dashboard-api.md). */
@@ -104,7 +105,6 @@ export class ActivityLogService {
     user: AuthenticatedUser,
     query: ActivityLogQueryDto,
   ): Prisma.AuditLogEntryWhereInput {
-    const types = entityTypesForModule(query.module);
     const since = this.since(query.timeRange);
     return {
       // RLS is not enforced on the legacy audit table, so scope explicitly here:
@@ -112,9 +112,40 @@ export class ActivityLogService {
       ...(rlsContextFor(user).isSuperAdmin
         ? {}
         : { companyId: user.companyId }),
-      ...(types ? { entityType: { in: types } } : {}),
+      entityType: { in: this.permittedTypes(user, query) },
       ...(since ? { createdAt: { gte: since } } : {}),
     };
+  }
+
+  /**
+   * The entity types this request may return: what the caller's permissions admit,
+   * intersected with the module filter they asked for (2026-10-10).
+   *
+   * **Always a positive list, never an absent filter.** The earlier code omitted
+   * `entityType` entirely when no module was selected, which is how an unfiltered feed
+   * came to return every module's audit rows to anybody holding `DASHBOARD` — payroll
+   * runs, salary advances, role changes, each with its before/after values, and the same
+   * set again as a CSV. A caller holding nothing now gets an empty `in` list and so an
+   * empty feed, which is the correct answer and not an error (spec Edge Cases already
+   * says a bucket with no rows returns an empty feed).
+   *
+   * Asking for a module the caller cannot see yields the intersection — empty — rather
+   * than a 403: the module filter is a list of buckets, and refusing would confirm which
+   * of them hold rows.
+   *
+   * Nothing falls through the gaps: `module-bucket-mapping.spec.ts` asserts every
+   * `AuditEntityType` sits in exactly one bucket, so a type added without a bucket fails
+   * that test rather than quietly becoming invisible here.
+   */
+  private permittedTypes(
+    user: AuthenticatedUser,
+    query: ActivityLogQueryDto,
+  ): AuditEntityType[] {
+    const permitted = visibleEntityTypes(user.permissions);
+    const asked = entityTypesForModule(query.module);
+    if (!asked) return permitted;
+    const allowed = new Set(permitted);
+    return asked.filter((type) => allowed.has(type));
   }
 
   private since(range: ActivityTimeRange | undefined): Date | null {
