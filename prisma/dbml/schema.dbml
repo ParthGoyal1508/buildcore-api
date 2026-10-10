@@ -1839,10 +1839,27 @@ that would refuse every creation with no way to comply.']
 
 Table Employee {
   id String [pk]
-  userId String [unique, not null, note: 'The account this employee record belongs to (`shared.User.id`). Unique: an
-account maps to exactly one employee record, which is what lets every `/my/*`
-endpoint resolve the caller\'s own employee from their token alone and never
-accept an employeeId parameter (FR-028).']
+  userId String [unique, note: 'The account this employee record belongs to (`shared.User.id`), once one exists.
+
+Unique, so an account maps to at most one employee record — which is what lets every
+`/my/*` endpoint resolve the caller\'s own employee from their token alone and never
+accept an employeeId parameter (FR-028).
+
+**Nullable, and that is the whole point** (2026-10-10). Most staff never get a login:
+an employee record exists the moment HR hires somebody, and an account is attached later
+or never. Feature 010 built exactly that — `getUnlinkedEmployees` filters `userId: null`
+to populate the invite form\'s picker, `linkUserToEmployee` is "the only writer of
+`Employee.userId` anywhere in the system", and `exit.service.ts` guards every read with
+`if (employee.userId)`.
+
+The column was declared required anyway, and the contradiction broke both halves at once:
+`EmployeesService.create` never supplies a `userId`, so **every employee creation failed**
+with a Prisma validation error surfaced as a 500 — and because the employee code is
+allocated before the insert, each attempt burned a number (SBPL\'s series reached 0010 with
+no employees). The picker failed the same way, filtering a non-nullable column for null.
+
+Postgres permits many NULLs under a unique index, which is precisely the shape wanted:
+one account per employee, any number of employees with no account.']
   companyId String [not null, note: 'RLS-protected. Bare id, not a relation — see the note on `Site.companyId`.']
   siteId String [not null, note: '`projects.Site.id`; read through `SitesService`.']
   shiftId String [not null, note: '`settings.Shift.id`; the shift duration OT is computed against, read through
