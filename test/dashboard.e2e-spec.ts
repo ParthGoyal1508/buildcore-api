@@ -77,6 +77,14 @@ describe('Dashboard reminders (e2e)', () => {
   /** Holds no DASHBOARD permission at all. */
   let deniedToken: string;
   let deniedUserId: string;
+  /** Site Engineer: DASHBOARD without EMPLOYEES — the persona the 2026-10-10
+   *  entitlement work is about. */
+  let engineerToken: string;
+  let engineerUserId: string;
+  /** Viewer: exactly [DASHBOARD, REPORTS] — may use the reporting surface and holds
+   *  no module permission at all. */
+  let viewerToken: string;
+  let viewerUserId: string;
 
   const auth = (t = token) => ({ Authorization: `Bearer ${t}` });
 
@@ -198,6 +206,71 @@ describe('Dashboard reminders (e2e)', () => {
         })
         .expect(201)
     ).body.accessToken;
+
+    // Site Engineer grants DASHBOARD, ATTENDANCE, DWR, MACHINERY, LOGBOOK, FUEL and
+    // INVENTORY — and no EMPLOYEES. The reported defect is exactly this account being
+    // shown things it cannot act on.
+    const siteEngineer = await sys.role.findUniqueOrThrow({
+      where: { name: 'Site Engineer' },
+    });
+    const engineer = await sys.user.create({
+      data: {
+        email: `${unique('engineer')}@example.test`,
+        username: unique('engineer'),
+        password: await hash('secret42'),
+        companyId: callerCompanyId,
+      },
+    });
+    engineerUserId = engineer.id;
+    await sys.userRole.create({
+      data: {
+        userId: engineer.id,
+        roleId: siteEngineer.id,
+        companyId: callerCompanyId,
+      },
+    });
+    engineerToken = (
+      await http()
+        .post('/auth/login')
+        .send({
+          identifier: engineer.email,
+          password: 'secret42',
+          rememberMe: false,
+        })
+        .expect(201)
+    ).body.accessToken;
+
+    // Viewer grants exactly DASHBOARD and REPORTS — the caller the reports gate is
+    // about: entitled to the reporting surface, entitled to no module's data.
+    const viewerRole = await sys.role.findUniqueOrThrow({
+      where: { name: 'Viewer' },
+    });
+    const viewer = await sys.user.create({
+      data: {
+        email: `${unique('viewer')}@example.test`,
+        username: unique('viewer'),
+        password: await hash('secret42'),
+        companyId: callerCompanyId,
+      },
+    });
+    viewerUserId = viewer.id;
+    await sys.userRole.create({
+      data: {
+        userId: viewer.id,
+        roleId: viewerRole.id,
+        companyId: callerCompanyId,
+      },
+    });
+    viewerToken = (
+      await http()
+        .post('/auth/login')
+        .send({
+          identifier: viewer.email,
+          password: 'secret42',
+          rememberMe: false,
+        })
+        .expect(201)
+    ).body.accessToken;
   });
 
   afterAll(async () => {
@@ -207,23 +280,37 @@ describe('Dashboard reminders (e2e)', () => {
     await sys.reminderSnooze.deleteMany({ where: { ruleKey: RULE_KEY } });
     await sys.reminderRule.deleteMany({ where: { ruleKey: RULE_KEY } });
     await sys.userRole.deleteMany({
-      where: { userId: { in: [scopedUserId, deniedUserId] } },
+      where: {
+        userId: {
+          in: [scopedUserId, deniedUserId, engineerUserId, viewerUserId],
+        },
+      },
     });
     // Both fixture users logged in, and a login issues a refresh token that
     // references the account. Deleting the user without clearing these violates
     // `RefreshToken_accountId_fkey` — the same teardown gap that left orphan rows
     // behind in the settings suite.
     await sys.refreshToken.deleteMany({
-      where: { accountId: { in: [scopedUserId, deniedUserId] } },
+      where: {
+        accountId: {
+          in: [scopedUserId, deniedUserId, engineerUserId, viewerUserId],
+        },
+      },
     });
     await sys.auditLogEntry.deleteMany({
-      where: { accountId: { in: [scopedUserId, deniedUserId] } },
+      where: {
+        accountId: {
+          in: [scopedUserId, deniedUserId, engineerUserId, viewerUserId],
+        },
+      },
     });
     await sys.auditLogEntry.deleteMany({
       where: { entityId: { startsWith: `${PREFIX}audit` } },
     });
     await sys.user.deleteMany({
-      where: { id: { in: [scopedUserId, deniedUserId] } },
+      where: {
+        id: { in: [scopedUserId, deniedUserId, engineerUserId, viewerUserId] },
+      },
     });
     await app.close();
   });
@@ -580,6 +667,84 @@ describe('Dashboard reminders (e2e)', () => {
         .expect(200);
 
       expect(targets(res.body)).toEqual([]);
+    });
+  });
+
+  /**
+   * The rest of the dashboard's `DASHBOARD`-only surfaces, from the seat the reported
+   * defect was seen from: a Site Engineer, holding DASHBOARD and no EMPLOYEES.
+   *
+   * Each assertion is paired with the admin, because "the engineer sees nothing" is
+   * also what a broken endpoint returns.
+   */
+  describe('dashboard entitlement from a Site Engineer’s seat (2026-10-10)', () => {
+    it('withholds the HR widgets and keeps the placeholders', async () => {
+      const ids = async (t: string) =>
+        (
+          await http().get('/dashboard/widgets').set(auth(t)).expect(200)
+        ).body.map((w: { id: string }) => w.id);
+
+      const admin = await ids(token);
+      const engineer = await ids(engineerToken);
+
+      expect(admin).toContain('total-employees');
+      expect(admin).toContain('recent-leaves');
+      // No EMPLOYEES: the headcount goes. ATTENDANCE is held, so the leave table stays
+      // — which is the point, the filter is per widget and not a blanket.
+      expect(engineer).not.toContain('total-employees');
+      expect(engineer).toContain('recent-leaves');
+      // Placeholders carry no data and belong to everyone.
+      expect(engineer).toContain('monthly-expenses');
+    });
+
+    it('lists no real report type to a Viewer, who holds REPORTS and no module', async () => {
+      // REPORTS says somebody may use the reporting surface; it never said which data
+      // they may take away. The admin pair below is what makes the emptiness meaningful.
+      const ids = async (t: string) =>
+        (await http().get('/reports/types').set(auth(t)).expect(200)).body.map(
+          (r: { id: string }) => r.id,
+        );
+
+      const admin = await ids(token);
+      const viewer = await ids(viewerToken);
+
+      expect(admin).toEqual(expect.arrayContaining(['employee', 'attendance']));
+      expect(viewer).not.toContain('employee');
+      expect(viewer).not.toContain('attendance');
+      // Placeholders stay: they carry no rows, only the name of an unbuilt module.
+      expect(viewer).toContain('payroll');
+    });
+
+    it('refuses to run the Employee report it did not list', async () => {
+      // 404, not 403 — the same answer as for a report id that does not exist, so a
+      // caller cannot enumerate what they are not allowed to run.
+      await http()
+        .post('/reports/employee/run')
+        .set(auth(viewerToken))
+        .send({})
+        .expect(404);
+
+      await http()
+        .post('/reports/employee/run')
+        .set(auth())
+        .send({})
+        .expect(201);
+    });
+
+    it('refuses the cross-company employee search', async () => {
+      // A staff directory by name, previously readable by anyone with DASHBOARD.
+      await http()
+        .get('/group/employees/search?q=an')
+        .set(auth(engineerToken))
+        .expect(403);
+
+      await http().get('/group/employees/search?q=an').set(auth()).expect(200);
+    });
+
+    it('refuses the group company cards', async () => {
+      await http().get('/group/companies').set(auth(engineerToken)).expect(403);
+
+      await http().get('/group/companies').set(auth()).expect(200);
     });
   });
 });
