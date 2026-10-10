@@ -5,6 +5,8 @@ import {
   callerFor,
   createPrismaMock,
 } from '../../settings/testing/prisma-mock';
+import { Permission } from '@prisma/client';
+
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { ReminderCandidate, ReminderRuleProvider } from './reminder-rule.types';
 import { RemindersService } from './reminders.service';
@@ -33,14 +35,22 @@ class FakeRule implements ReminderRuleProvider {
   readonly leadDays = 30;
   readonly severityLadder = { warnWithinDays: 7 };
 
+  /** Undeclared by default, so every pre-existing test keeps its old meaning. */
+  readonly requires?: Permission[];
+
   constructor(
     readonly ruleKey = 'testing-document-expiry',
     public candidates: ReminderCandidate[] = [],
     private available = true,
-    overrides: { sourceModule?: string; type?: string } = {},
+    overrides: {
+      sourceModule?: string;
+      type?: string;
+      requires?: Permission[];
+    } = {},
   ) {
     this.sourceModule = overrides.sourceModule ?? 'testing';
     this.type = overrides.type ?? 'document_expiry';
+    this.requires = overrides.requires;
   }
 
   isAvailable(): boolean {
@@ -599,6 +609,104 @@ describe('RemindersService', () => {
       const { reminders } = await service.list(caller, {});
 
       expect(reminders.map((r) => r.entityId)).toEqual(['mine']);
+    });
+  });
+
+  /**
+   * Who a reminder is for (2026-10-10).
+   *
+   * `/dashboard/reminders` is gated on DASHBOARD, which every employee holds, so a
+   * site engineer was shown the company's expiring registrations and licences, each
+   * with a deep link into a module they cannot open.
+   */
+  describe('entitlement', () => {
+    const machineryRule = () =>
+      new FakeRule(
+        'machinery-document-expiry',
+        [candidate('plant-4', 3)],
+        true,
+        {
+          sourceModule: 'machinery',
+          requires: [Permission.MACHINERY],
+        },
+      );
+
+    it('withholds a rule the caller holds no permission for', async () => {
+      const { service } = serviceWith([machineryRule()], new FakeLedger());
+
+      // The pair: identical rule and candidate, two callers. Asserting only the
+      // entitled one would have passed against the defect — everybody saw it.
+      const mechanic = await service.list(
+        callerFor(COMPANY, { permissions: [Permission.MACHINERY] }),
+        {},
+      );
+      const engineer = await service.list(
+        callerFor(COMPANY, { permissions: [Permission.DASHBOARD] }),
+        {},
+      );
+
+      expect(mechanic.reminders.map((r) => r.entityId)).toEqual(['plant-4']);
+      expect(engineer.reminders).toEqual([]);
+    });
+
+    it('withholds the rule from the pending list too, not just the reminders', async () => {
+      // `unavailable` names modules. "Project assets, coming soon" is still something
+      // to withhold from somebody who will never see that register.
+      const pending = new FakeRule('assets-pending', [], false, {
+        sourceModule: 'project_assets',
+        requires: [Permission.ASSETS],
+      });
+      const { service } = serviceWith([pending], new FakeLedger());
+
+      const { unavailable } = await service.list(
+        callerFor(COMPANY, { permissions: [Permission.DASHBOARD] }),
+        {},
+      );
+
+      expect(unavailable).toEqual([]);
+    });
+
+    it('counts only what the caller may see', async () => {
+      // The badge is a separate path from the list and is what shows when the panel
+      // is shut: a filter on one of them is this bug with the count still reading 1.
+      const { service } = serviceWith([machineryRule()], new FakeLedger());
+
+      const { total } = await service.count(
+        callerFor(COMPANY, { permissions: [Permission.DASHBOARD] }),
+        {},
+      );
+
+      expect(total).toBe(0);
+    });
+
+    it('refuses to snooze a reminder the caller may not read', async () => {
+      const { service } = serviceWith([machineryRule()], new FakeLedger());
+
+      await expect(
+        service.snooze(
+          callerFor(COMPANY, { permissions: [Permission.DASHBOARD] }),
+          'machinery-document-expiry:plant-4',
+          {
+            snoozeUntil: daysFromToday(5).toISOString(),
+            reason: 'later',
+          } as never,
+          '127.0.0.1',
+        ),
+      ).rejects.toThrow(/not found/i);
+    });
+
+    it('keeps a rule that declares no permission', async () => {
+      const { service } = serviceWith(
+        [new FakeRule('testing-document-expiry', [candidate('a', 3)])],
+        new FakeLedger(),
+      );
+
+      const { reminders } = await service.list(
+        callerFor(COMPANY, { permissions: [] }),
+        {},
+      );
+
+      expect(reminders.map((r) => r.entityId)).toEqual(['a']);
     });
   });
 });

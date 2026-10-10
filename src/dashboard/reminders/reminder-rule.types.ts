@@ -1,4 +1,4 @@
-import { ReminderSeverity } from '@prisma/client';
+import { Permission, ReminderSeverity } from '@prisma/client';
 
 import { RlsContext } from '../../common/prisma/rls-context';
 import { MS_PER_DAY } from '../constants/dashboard.constants';
@@ -55,6 +55,22 @@ export interface ReminderRuleProvider {
   readonly ruleKey: string;
   /** The module that owns the rule: `machinery`, `project_assets`, `settings`. */
   readonly sourceModule: string;
+  /**
+   * The permissions that make this rule's reminders the caller's business — **any one
+   * of them** (2026-10-10).
+   *
+   * `/dashboard/reminders` is gated on `DASHBOARD`, which every employee holds, so
+   * every rule ran for every caller: a site engineer was shown the company's expiring
+   * registrations and licences, each with a deep link into a module they cannot open.
+   * The notification centre, the widgets and the activity log all had the same hole;
+   * this is the last of the four.
+   *
+   * Declared by the **owning module**, which is the only place that knows what gates
+   * its own screens — the same division of labour the rule itself already follows under
+   * Principle I. A rule that declares nothing is shown to anyone who can reach the
+   * endpoint, so omitting it is a decision, not a default to fall into.
+   */
+  readonly requires?: Permission[];
   /** The reminder family, used by the list's type filter: `document_expiry`. */
   readonly type: string;
   /** What the rule evaluates over: `EQUIPMENT_DOCUMENT`. */

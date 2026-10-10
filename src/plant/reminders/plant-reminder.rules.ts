@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { withRlsContext, RlsContext } from '../../common/prisma/rls-context';
@@ -41,6 +42,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
   readonly ruleKey = 'machinery-document-expiry';
   readonly sourceModule = 'machinery';
+  /** Equipment records — `MACHINERY`, or the workshop's own `MAINTENANCE`. */
+  readonly requires = [Permission.MACHINERY, Permission.MAINTENANCE];
   readonly type = 'document_expiry';
   readonly entityType = 'EQUIPMENT_DOCUMENT';
   readonly leadDays = 60;
@@ -116,6 +119,8 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
 export class EquipmentServiceDueRule implements ReminderRuleProvider {
   readonly ruleKey = 'machinery-service-due';
   readonly sourceModule = 'machinery';
+  /** A service schedule is the workshop's, so `MAINTENANCE` as well as `MACHINERY`. */
+  readonly requires = [Permission.MACHINERY, Permission.MAINTENANCE];
   readonly type = 'service_due';
   readonly entityType = 'EQUIPMENT';
   /** A service is scheduled, not applied for — a fortnight's notice is enough. */

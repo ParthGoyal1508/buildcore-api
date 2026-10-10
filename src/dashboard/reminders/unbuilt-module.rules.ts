@@ -1,3 +1,5 @@
+import { Permission } from '@prisma/client';
+
 import { ReminderRule } from './reminder-rule.decorator';
 import {
   ReminderCandidate,
@@ -26,6 +28,12 @@ import {
 abstract class PendingModuleRule implements ReminderRuleProvider {
   abstract readonly ruleKey: string;
   abstract readonly sourceModule: string;
+  /**
+   * All three placeholders belong to Project Assets, so the permission sits on the
+   * base rather than three times over. When 012 is built and these are deleted, the
+   * real providers declare their own — as every built module's rules already do.
+   */
+  readonly requires: Permission[] = [Permission.ASSETS];
   abstract readonly type: string;
   abstract readonly entityType: string;
 

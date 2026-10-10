@@ -166,6 +166,15 @@ export class RemindersService {
   private async collect(
     ctx: RlsContext,
     companyId: string | null,
+    /**
+     * The caller's permissions, when there is a caller (2026-10-10).
+     *
+     * Passed by `list` and `snooze`; **omitted by the nightly sweep**, which runs under
+     * the cross-company bypass with nobody to entitle and must keep evaluating every
+     * rule — a reminder that is nobody's to read is still one the ledger has to track,
+     * or it would re-emit as new the next time somebody with access looked.
+     */
+    permissions?: Permission[],
   ): Promise<{
     reminders: Reminder[];
     unavailable: UnavailableRuleSource[];
@@ -178,6 +187,12 @@ export class RemindersService {
     const disabled = await this.disabledRuleKeys(ctx);
 
     for (const provider of this.registry.rules()) {
+      // Not the caller's module. Skipped **before** the available/unavailable split, so
+      // an unentitled rule contributes neither a reminder nor an `unavailable` entry —
+      // the pending list names modules too, and "project assets, coming soon" is still
+      // something to withhold from somebody who will never see that register.
+      if (permissions && !this.mayRead(provider, permissions)) continue;
+
       // An operator switched this rule off. It contributes nothing and is NOT
       // reported as unavailable: `module_pending` means "cannot be computed yet",
       // and saying that about a rule someone deliberately silenced would send the
@@ -256,6 +271,17 @@ export class RemindersService {
     };
   }
 
+  /** Any one of the rule's declared permissions, or no declaration at all. */
+  private mayRead(
+    provider: ReminderRuleProvider,
+    permissions: Permission[],
+  ): boolean {
+    return (
+      !provider.requires ||
+      provider.requires.some((required) => permissions.includes(required))
+    );
+  }
+
   /**
    * Rules an operator has switched off in the catalogue.
    *
@@ -300,7 +326,7 @@ export class RemindersService {
   ): Promise<ReminderListResponse> {
     const { ctx, companyId } = this.resolveScope(caller, query);
     const [{ reminders, unavailable }, snoozed] = await Promise.all([
-      this.collect(ctx, companyId),
+      this.collect(ctx, companyId, caller.permissions),
       this.activeSnoozes(ctx, this.today()),
     ]);
 
@@ -387,7 +413,13 @@ export class RemindersService {
     }
 
     const { ctx, companyId } = this.resolveScope(caller, {});
-    const { reminders } = await this.collect(ctx, companyId);
+    // The caller's own permissions, so a reminder they may not read is a 404 here for
+    // the same reason one in another company is: snoozing it would confirm it exists.
+    const { reminders } = await this.collect(
+      ctx,
+      companyId,
+      caller.permissions,
+    );
     const reminder = reminders.find((r) => r.id === reminderId);
     if (!reminder) {
       throw new NotFoundException('Reminder not found');

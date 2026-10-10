@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import config from '../../common/configs/config';
@@ -35,6 +36,8 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export class ProjectDocumentExpiryRule implements ReminderRuleProvider {
   readonly ruleKey = 'projects-document-expiry';
   readonly sourceModule = 'projects';
+  /** Project documents — what the project shell and its Documents tab are gated on. */
+  readonly requires = [Permission.PROJECTS];
   readonly type = 'document_expiry';
   readonly entityType = 'PROJECT_DOCUMENT';
 
