@@ -152,6 +152,27 @@ export const ACTION_WORK_ORDER_AWARD = 'work_order_award';
 export const ACTION_PURCHASE_RATE_CHANGE = 'purchase_rate_change';
 
 /**
+ * Approving a day's measured work (2026-10-10).
+ *
+ * **This reverses 022's decision D2, deliberately and with the client's word for it.** That
+ * decision kept the daily work report off the spine on two grounds: one report a day per project
+ * makes routing disproportionate, and "a chain nobody has configured would block the site's
+ * measurement rather than review it". The first has not held — a report is the thing every bill
+ * is built from, and the Director is the person who signs for it. The second is a real cost and
+ * is now accepted: a company whose `final` slot is unmapped cannot approve a report at all until
+ * an administrator maps it, which is the same price every other approved subject already pays.
+ *
+ * What this buys is the thing that was missing: a submitted report reaches the Approvals queue
+ * and the notification count. Before it, the only way to find one was to open each project in
+ * turn — the approval existed but nothing told anybody it was waiting.
+ *
+ * One Director level, matching the RA bill it feeds. **The author still cannot approve their own
+ * report**: the spine authorises by role and has no originator check of its own, so FR-012a's
+ * guard stays where it is, in front of the decision.
+ */
+export const ACTION_DWR = 'dwr';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these
@@ -271,6 +292,11 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // hand is a configuration visit the deployment should have made.
   [ACTION_WORK_ORDER_AWARD, DEFAULT_DIRECTOR_FINAL_LEVELS],
   [ACTION_PURCHASE_RATE_CHANGE, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // 2026-10-10: the daily work report, reversing 022 D2. One Director level, matching the RA
+  // bill it feeds. `npm run seed:chains` installs it into companies that already exist — the
+  // seeder is idempotent per chain and is the remedy for every chain added after a company was
+  // created, as 028's two were.
+  [ACTION_DWR, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // FR-018's remaining action types, each a director-only chain (T048). Seeded even where no module
   // submits into them yet: without the chain, feature 017's first work order would be refused as a
   // configuration fault in every company at once, and the remedy would be a settings visit per
