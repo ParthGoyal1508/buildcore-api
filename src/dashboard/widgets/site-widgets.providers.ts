@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 
 import type { DashboardContext } from '../context';
 import { CompanyDataService } from './company-data.service';
@@ -14,6 +15,8 @@ export class WorkersTodayWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'Workers Today';
   readonly section = 'site' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
 
   constructor(private readonly data: CompanyDataService) {}
 
@@ -33,6 +36,8 @@ export class SiteAttendanceTableWidget implements WidgetProvider {
   readonly displayType = 'table' as const;
   readonly title = "Today's Attendance";
   readonly section = 'site' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
 
   constructor(private readonly data: CompanyDataService) {}
 

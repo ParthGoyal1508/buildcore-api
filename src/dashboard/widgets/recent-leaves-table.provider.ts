@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 
 import type { DashboardContext } from '../context';
 import { CompanyDataService } from './company-data.service';
@@ -11,6 +12,8 @@ export class RecentLeavesTableWidget implements WidgetProvider {
   readonly displayType = 'table' as const;
   readonly title = 'Recent Leaves';
   readonly section = 'table' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
 
   constructor(private readonly data: CompanyDataService) {}
 
