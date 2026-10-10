@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 
 import {
   AttendanceAdminService,
@@ -27,6 +28,8 @@ const MAX_RANGE_DAYS = 92;
 export class AttendanceReportProvider implements ReportProvider {
   readonly id = 'attendance';
   readonly name = 'Attendance';
+  /** `ATTENDANCE` — the same register `/hr/attendance` is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
   readonly filters: FilterSpec[] = [
     { key: 'fromDate', label: 'From', type: 'date', required: true },
     { key: 'toDate', label: 'To', type: 'date', required: true },

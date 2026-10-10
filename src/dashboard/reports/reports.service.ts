@@ -1,4 +1,5 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import type { Permission } from '@prisma/client';
 
 import type { DashboardContext } from '../context';
 import {
@@ -27,18 +28,39 @@ export class ReportsService {
     @Inject(REPORT_PROVIDERS) private readonly providers: ReportProvider[],
   ) {}
 
-  types(): ReportTypeSummary[] {
-    return this.providers.map((p) => ({
-      id: p.id,
-      name: p.name,
-      isAvailable: p.isAvailable(),
-      filters: p.filters,
-    }));
+  /** Any one of a type's declared permissions, or no declaration at all. */
+  private permitted(provider: ReportProvider, held: Permission[]): boolean {
+    return (
+      !provider.requires ||
+      provider.requires.some((required) => held.includes(required))
+    );
   }
 
-  find(id: string): ReportProvider {
+  /** The types this caller may run (2026-10-10 — see `ReportProvider.requires`). */
+  types(held: Permission[]): ReportTypeSummary[] {
+    return this.providers
+      .filter((p) => this.permitted(p, held))
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        isAvailable: p.isAvailable(),
+        filters: p.filters,
+      }));
+  }
+
+  /**
+   * One type by id, or a 404.
+   *
+   * **A type the caller may not run is the same 404 as one that does not exist**, on
+   * the reasoning `PROJECT_STAGED_DOCUMENT_UNKNOWN` already records: distinguishing
+   * them lets a caller enumerate the reports they are not allowed to run. The list
+   * above has already omitted it, so there is nothing to tell them it was ever there.
+   */
+  find(id: string, held: Permission[]): ReportProvider {
     const provider = this.providers.find((p) => p.id === id);
-    if (!provider) throw new NotFoundException('Unknown report type');
+    if (!provider || !this.permitted(provider, held)) {
+      throw new NotFoundException('Unknown report type');
+    }
     return provider;
   }
 
@@ -47,7 +69,7 @@ export class ReportsService {
     id: string,
     params: ReportRunParams,
   ): Promise<ReportResult> {
-    const provider = this.find(id);
+    const provider = this.find(id, ctx.user.permissions);
     if (!provider.isAvailable()) {
       return {
         unavailable: {

@@ -308,6 +308,25 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/inventory/rates',
           ':(exclude)src/inventory/purchases',
           ':(exclude)src/inventory/inventory.module.ts',
+          // The dashboard entitlement work of 2026-10-10. Four registries — notifications,
+          // widgets, the activity log and reminders — were gated on `DASHBOARD` alone, which
+          // every employee holds, so each of them showed one module's data to every other
+          // module's staff. The fix is a `requires` declaration per provider, made by the module
+          // that owns the provider, because only it knows what gates its own screens.
+          //
+          // This file is `src/plant`'s two reminder rules declaring `MACHINERY`/`MAINTENANCE`.
+          // **Nothing here calls `ApprovalService`** — a reminder rule evaluates due dates and
+          // returns candidates; it has no decision to make and nothing to submit. The per-file
+          // assertions above still enforce that plant's own approval surfaces are untouched,
+          // and `src/plant/fuel-exceptions` and `src/plant/fuel-recovery` keep their own
+          // exclusions for the parts that genuinely do approve things.
+          //
+          // **Fired a commit late for the ninth time**, for the reason the eighth note gives and
+          // the seventh before it: the run before the commit sees a working tree, the run that
+          // catches this sees a committed one. The habit the notes keep prescribing — run it
+          // again straight after — was followed here, which is why this is being written at all
+          // rather than discovered next week.
+          ':(exclude)src/plant/reminders',
         ],
         {
           cwd: REPO_ROOT,
