@@ -53,6 +53,7 @@ function harness(opts: { kind?: Kind; letter?: Record<string, unknown> } = {}) {
     countersignedRef: null,
     countersignedAt: null,
     renderedRef: '',
+    referenceNo: null,
     version: 1,
     isSuperseded: false,
     issuedAt: null,
@@ -65,6 +66,10 @@ function harness(opts: { kind?: Kind; letter?: Record<string, unknown> } = {}) {
     issuedLetter: {
       create: jest.fn(async () => letterRow),
       findFirst: jest.fn(async () => letterRow),
+      // Read when a reference is allocated at issue (2026-10-11). Empty, so these
+      // letters take 0001 — the series itself is tested in `letter-reference.spec.ts`,
+      // where it can be asked about four hundred prior letters without a mock per row.
+      findMany: jest.fn(async () => []),
       update: jest.fn(async (args: { data: Record<string, unknown> }) => ({
         ...letterRow,
         ...args.data,
@@ -84,7 +89,10 @@ function harness(opts: { kind?: Kind; letter?: Record<string, unknown> } = {}) {
     // tests render on plain paper and assert nothing about the artwork — the geometry
     // and the image itself belong to `letter-pdf.renderer.spec.ts`.
     company: {
-      findUnique: jest.fn(async () => ({ letterheadRef: null })),
+      findUnique: jest.fn(async () => ({
+        letterheadRef: null,
+        shortCode: 'TEST',
+      })),
     },
     $executeRaw: jest.fn(),
   };
@@ -382,19 +390,32 @@ describe('LettersService — reissue (FR-014)', () => {
         employeeId: 'e-1',
         subjectType: null,
         subjectId: null,
+        referenceNo: 'PRPL/HR/2026-27/0007',
       },
     });
 
     await service.reissue(hrCaller, 'l-1', { variables: { name: 'Anil' } });
 
     // The original is marked superseded, not deleted, and a NEW row carries v2.
+    //
+    // It also gives up its reference number (2026-10-11): a reissue is the same letter
+    // corrected, so version 2 keeps `PRPL/HR/2026-27/0007` rather than taking a new
+    // number that would read as a second letter. `@@unique([companyId, referenceNo])`
+    // means the original has to release it in the same transaction, which is why this is
+    // part of the supersede and not a separate write.
     expect(tx.issuedLetter.update).toHaveBeenCalledWith({
       where: { id: 'l-1' },
-      data: { isSuperseded: true },
+      data: { isSuperseded: true, referenceNo: null },
     });
     expect(tx.issuedLetter.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ version: 2 }),
+        data: expect.objectContaining({
+          version: 2,
+          // The replacement takes the reference the original released. Asserting only
+          // `version: 2` passed while the number was printed on the PDF and held by no
+          // row at all — the letter was unfindable by the number its recipient quotes.
+          referenceNo: 'PRPL/HR/2026-27/0007',
+        }),
       }),
     );
   });

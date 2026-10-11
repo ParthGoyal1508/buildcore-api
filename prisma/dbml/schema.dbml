@@ -4938,6 +4938,18 @@ silently rewrites history the first time somebody uploads a new signature.']
   countersignedRef String [note: 'FR-017: the executed copy that comes back, and FR-018\'s issued-vs-executed
 distinction, which is rendered from whether this is null.']
   countersignedAt DateTime
+  referenceNo String [note: 'The reference the letter is filed under: `PRPL/HR/2026-27/0001` (2026-10-11).
+
+**Allocated at issue, not at compose.** A composed letter may never be issued — it
+can sit in an approval chain and be rejected — and a number burnt on a document that
+was never sent is a gap in a series somebody has to explain. The same reasoning 028
+recorded for the debit note number, reached the other way round: that one is
+allocated at raise because a raised debit always exists.
+
+Null for every letter issued before this column, and for one still composing. The
+unique index is the guarantee behind the MAX-based allocator in
+`letter-reference.ts`; without it two letters issued in the same instant would take
+the same number and nothing would say so.']
   renderedRef String [not null, default: '', note: 'Empty until the letter is issued — a composed letter awaiting approval has no
 rendered document yet, because rendering it would produce a file indistinguishable
 from the real one.']
@@ -4949,6 +4961,10 @@ against — so the letter exists first and is issued second. The same null-as-no
 idiom `countersignedAt` uses two fields up.']
   issuedBy String
   createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (companyId, referenceNo) [unique]
+  }
 
   Note: 'A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
 prior version; both remain downloadable.
