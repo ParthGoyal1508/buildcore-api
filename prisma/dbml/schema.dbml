@@ -3687,10 +3687,18 @@ lands (SC-006) — a single mutable "current rate" column could not.'
 Table Equipment {
   id String [pk]
   companyId String [not null]
-  code String [not null, note: 'Allocated from the company\'s EQUIPMENT series (`{shortCode}-EQP-0001`) when the
-caller does not supply one — most machines already carry a plate or asset
-number the yard knows them by, and overwriting it would be unhelpful.']
+  code String [not null, note: 'Built as `{prefix}{NN}/{manufacturingYear}` — `JCB01/2027` — when the caller does
+not supply one (2026-10-11). Most machines already carry a plate or asset number
+the yard knows them by, and overwriting it would be unhelpful, so a supplied code
+still wins. See `equipment-code.ts` for how the prefix is derived.']
   name String [not null]
+  manufacturingYear Int [note: 'The year the machine was built, which is the last part of its code.
+
+Not `purchaseDate`\'s year: a 2015 excavator bought in 2024 is a 2015 machine, and
+a code reading `/2024` would mislabel it on the one surface the yard actually
+reads. Nullable because every machine registered before this column existed has
+none, and because a hired machine\'s build year is often simply not known —
+code generation falls back to the purchase year, then to the current year.']
   categoryId String [not null, note: '→ `settings.EquipmentCategory`. Resolved via `EquipmentCategoriesService`.']
   ownership EquipmentOwnership [not null]
   vendorId String [note: '→ `partners.Vendor`, for hired equipment. Resolved via `PartnersService`.']

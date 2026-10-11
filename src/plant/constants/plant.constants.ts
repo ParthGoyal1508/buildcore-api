@@ -14,9 +14,25 @@
 export const DEFAULT_PAGE_SIZE = 25;
 export const MAX_PAGE_SIZE = 200;
 
-/** Infix for equipment codes allocated from the company's EQUIPMENT series:
- * `{shortCode}-EQP-0001`. */
+/**
+ * Infix for equipment codes allocated from the company's EQUIPMENT series.
+ *
+ * **Unused since 2026-10-11**: a machine's code is now `{prefix}{NN}/{year}` —
+ * `JCB01/2027` — built by `equipment-code.ts`, whose serial counts per prefix rather
+ * than per company. Kept because machines registered before that date still carry
+ * `{shortCode}-EQP-0001` and a reader meeting one needs to find out where it came from.
+ */
 export const EQUIPMENT_CODE_INFIX = 'EQP';
+
+/**
+ * The range a manufacturing year must fall in.
+ *
+ * The floor is not 1900: a construction company's register holds working plant, and a
+ * four-digit year typed one digit wrong — 1024, 2207 — is a typo, not a vintage. The
+ * ceiling allows next year, because machines are ordered and coded ahead of delivery.
+ */
+export const EQUIPMENT_YEAR_MIN = 1950;
+export const EQUIPMENT_YEAR_MAX = 2100;
 
 /**
  * How close to `nextDueReading` a service schedule reads as `due_soon`

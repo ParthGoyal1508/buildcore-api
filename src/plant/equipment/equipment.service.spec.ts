@@ -81,7 +81,9 @@ const build = (documents: { docTypeId: string; expiresAt: Date | null }[]) => {
       vendorNames: async () => new Map(),
       docTypesByIds: async () => docTypes,
     } as never,
-    { next: jest.fn() } as never,
+    // `CodeSeriesService` is gone from this constructor (2026-10-11): a machine's code
+    // is built by `equipment-code.ts`, whose serial counts per prefix rather than per
+    // company. Only the storage service remains after the refs.
     {} as never,
   );
   return { service, prisma };

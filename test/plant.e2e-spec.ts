@@ -335,12 +335,75 @@ describe('Plant module (e2e)', () => {
   // ── Asset register ──────────────────────────────────────────────────────
 
   describe('Asset register (US2)', () => {
-    it('allocates a code from the company series when none is supplied', async () => {
-      const equipment = await http()
-        .get(`/plant/equipment/${ownedEquipmentId}`)
+    it('builds the code from the machine name, a serial and the build year', async () => {
+      // `JCB01/2027` (2026-10-11). A name chosen here rather than reusing the shared
+      // fixture, because the whole assertion is which prefix the name produces — and
+      // the fixture's name carries the suite's own `E2EPLT` prefix.
+      //
+      // The year is asserted as a literal, not as "four digits": it is the half of the
+      // code the yard reads to tell two identical backhoes apart, and `purchaseDate`
+      // deliberately disagrees with it so a fallback to the purchase year would fail.
+      const made = await http()
+        .post(`/plant/equipment?companyId=${companyId}`)
         .set(auth())
-        .expect(200);
-      expect(equipment.body.code).toMatch(/-EQP-\d{4}$/);
+        .send({
+          name: `JCB 3DX ${unique('')}`,
+          categoryId,
+          ownership: 'owned',
+          powerSource: 'diesel',
+          purchaseDate: '2024-06-15',
+          manufacturingYear: 2027,
+        })
+        .expect(201);
+      createdEquipmentIds.push(made.body.id);
+
+      expect(made.body.code).toMatch(/^JCB\d{2,}\/2027$/);
+    });
+
+    it('counts the serial within the prefix, not across the company', async () => {
+      // Two transit mixers registered after any number of JCBs still read TM01, TM02.
+      // Asserting only that two codes differ would pass for a company-wide counter,
+      // which is exactly what this replaced.
+      const mixer = async () => {
+        const res = await http()
+          .post(`/plant/equipment?companyId=${companyId}`)
+          .set(auth())
+          .send({
+            name: 'Transit Mixer',
+            categoryId,
+            ownership: 'owned',
+            powerSource: 'diesel',
+            manufacturingYear: 2024,
+          })
+          .expect(201);
+        createdEquipmentIds.push(res.body.id);
+        return res.body.code as string;
+      };
+
+      const first = await mixer();
+      const second = await mixer();
+
+      expect(first).toMatch(/^TM\d{2,}\/2024$/);
+      const serial = (code: string) => Number(/^TM(\d+)\//.exec(code)![1]);
+      expect(serial(second)).toBe(serial(first) + 1);
+    });
+
+    it('still honours a plate number the yard supplies', async () => {
+      const code = unique('PLATE');
+      const made = await http()
+        .post(`/plant/equipment?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: 'Transit Mixer',
+          categoryId,
+          ownership: 'owned',
+          powerSource: 'diesel',
+          code,
+        })
+        .expect(201);
+      createdEquipmentIds.push(made.body.id);
+
+      expect(made.body.code).toBe(code);
     });
 
     it('copies the meter type from the category', async () => {

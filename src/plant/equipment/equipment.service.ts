@@ -7,7 +7,6 @@ import {
 import {
   AuditAction,
   AuditEntityType,
-  CodeSeriesType,
   EquipmentOwnership,
   EquipmentStatus,
   MeterType,
@@ -19,17 +18,16 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
-import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import {
   DEFAULT_PAGE_SIZE,
   DEFAULT_TARGET_HOURS_PER_MONTH,
-  EQUIPMENT_CODE_INFIX,
   MAX_DOCUMENT_BYTES,
   MAX_PAGE_SIZE,
   SERVICE_DUE_SOON_MARGIN,
 } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
+import { equipmentCode, equipmentPrefixFor, serialOf } from './equipment-code';
 import {
   CreateEquipmentDto,
   ListEquipmentDto,
@@ -124,7 +122,6 @@ export class EquipmentService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly refs: PlantRefsService,
-    private readonly codeSeries: CodeSeriesService,
     private readonly storage: StorageService,
   ) {}
 
@@ -357,6 +354,44 @@ export class EquipmentService {
 
   // ── Writes ────────────────────────────────────────────────────────────────
 
+  /**
+   * The next code for a machine of this name: `JCB01/2027` (2026-10-11).
+   *
+   * The serial counts **per prefix**, not per company, so JCB01 and TM01 coexist. That
+   * is why this does not use `CodeSeriesService`, whose counter is keyed by company and
+   * series and would have given the second machine JCB02 only if it were also a JCB.
+   *
+   * Derived from what is already stored rather than from a counter row: the highest
+   * serial currently in use under this prefix, plus one. No new table, no new
+   * migration, and the register stays the single source of truth for what is taken.
+   *
+   * ponytail: a MAX over the prefix's rows, not a counter — two simultaneous
+   * registrations of the same machine type can both read the same high-water mark. The
+   * loser hits the `@@unique([companyId, code])` clash the caller below already reports
+   * as a 409, and registering a machine is a deliberate, infrequent act at a desk. Move
+   * to a `(companyId, prefix)` counter table if that 409 is ever actually seen.
+   */
+  private async nextEquipmentCode(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    name: string,
+    year: number,
+  ): Promise<string> {
+    const prefix = equipmentPrefixFor(name);
+    // `startsWith` narrows in the database; `serialOf` is what decides, because the
+    // prefix alone would let `TMX-44` — a plate number somebody typed — move TM's
+    // series, and would count `TM01/2024` towards `T`.
+    const existing = await tx.equipment.findMany({
+      where: { companyId, code: { startsWith: prefix } },
+      select: { code: true },
+    });
+    const highest = existing.reduce(
+      (max, row) => Math.max(max, serialOf(row.code, prefix) ?? 0),
+      0,
+    );
+    return equipmentCode(prefix, highest + 1, year);
+  }
+
   async create(
     caller: AuthenticatedUser,
     dto: CreateEquipmentDto,
@@ -384,13 +419,19 @@ export class EquipmentService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        const manufacturingYear =
+          dto.manufacturingYear ??
+          (dto.purchaseDate
+            ? this.refs.parseDate(dto.purchaseDate).getFullYear()
+            : new Date().getFullYear());
+
         const code =
           dto.code?.trim() ||
-          (await this.codeSeries.next(
+          (await this.nextEquipmentCode(
             tx,
             companyId,
-            CodeSeriesType.EQUIPMENT,
-            EQUIPMENT_CODE_INFIX,
+            dto.name,
+            manufacturingYear,
           ));
 
         const clash = await tx.equipment.findFirst({
@@ -415,6 +456,7 @@ export class EquipmentService {
               ? this.refs.parseDate(dto.purchaseDate)
               : null,
             purchaseCost: dto.purchaseCost ?? null,
+            manufacturingYear: dto.manufacturingYear ?? null,
             depreciationRate: dto.depreciationRate ?? null,
             // Copied from the category rather than joined at read time: changing a
             // category's meter type must not silently reinterpret readings already

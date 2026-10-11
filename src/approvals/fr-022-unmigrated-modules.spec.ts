@@ -337,6 +337,19 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // and the run straight after the commit is what caught it, as the notes above
           // keep prescribing.
           ':(exclude)src/projects/constants/projects.constants.ts',
+          // 2026-10-11, the machine code `JCB01/2027`. A machine's code is now built from
+          // its name, a per-prefix serial and its manufacturing year, so `EquipmentService`
+          // stops calling `CodeSeriesService` and gains an allocator of its own, and
+          // `plant.constants.ts` gains the year bounds. Verified by grep before excluding:
+          // **neither path contains `ApprovalService` or `approvals.submit`**, and the
+          // per-file assertions above still read every plant file that approves anything.
+          //
+          // **Excluded in the same commit as the change, for the first time.** The ten
+          // notes above all say the same thing after the fact; the diff this guard runs
+          // can be run by hand against the index beforehand, which is what happened here.
+          // That is the habit, not "run it again afterwards".
+          ':(exclude)src/plant/equipment',
+          ':(exclude)src/plant/constants',
         ],
         {
           cwd: REPO_ROOT,
