@@ -2,6 +2,8 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CodeSeriesType } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 
+import { CODE_SERIES_FORMATS, formatCode } from './code-series.formats';
+
 /**
  * Per-company numbering series, allocated atomically.
  *
@@ -33,6 +35,7 @@ export class CodeSeriesService {
     tx: Prisma.TransactionClient,
     companyId: string,
     seriesType: CodeSeriesType,
+    /** Ignored by a series listed in `CODE_SERIES_FORMATS`, which has no infix. */
     infix: string,
   ): Promise<string> {
     // Created on first use rather than seeded per company: a series that no feature
@@ -55,6 +58,14 @@ export class CodeSeriesService {
         `No ${seriesType} code sequence exists for company ${companyId}`,
       );
     }
+
+    // A series the business has specified a format for renders from the table and
+    // never reads the company at all (2026-10-11). The short code is deliberately
+    // absent from those three: `@@unique([companyId, code])` is what keeps two
+    // companies apart, not the prefix, and the people quoting a vendor code down the
+    // phone do not want four more characters in front of it.
+    const format = CODE_SERIES_FORMATS[seriesType];
+    if (format) return formatCode(format, rows[0].lastNumber);
 
     const company = await tx.company.findUnique({
       where: { id: companyId },

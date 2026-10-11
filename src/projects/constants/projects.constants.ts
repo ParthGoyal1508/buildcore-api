@@ -29,7 +29,14 @@ export const DEFAULT_PAGE_SIZE = 25;
  */
 export const MAX_PAGE_SIZE = 200;
 
-/** Infix for project codes allocated from the company's PROJECTS series: `ACME-PRJ-0001`. */
+/**
+ * Infix for project codes.
+ *
+ * **Unused since 2026-10-11**: the PROJECTS series renders as `1010`, `1020`, … from
+ * `CODE_SERIES_FORMATS`, which has no infix. Kept because `CodeSeriesService.next()`
+ * still takes the argument for the series that do use one, and passing an empty string
+ * from one call site would read as an oversight rather than as a format decision.
+ */
 export const PROJECT_CODE_INFIX = 'PRJ';
 
 /**

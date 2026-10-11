@@ -254,8 +254,12 @@ describe('Projects module (e2e)', () => {
         startDate: '2026-03-01',
       });
 
-      // `<company shortCode>-PRJ-<4 digits>`, allocated by CodeSeriesService.
-      expect(project.code).toMatch(/-PRJ-\d{4}$/);
+      // `1010`, `1020`, … — counting from 1000 in tens (2026-10-11). Asserted as the
+      // shape a person reads, not as "contains digits": the whole change is which
+      // digits, and a loose pattern would pass for the old `PRPL-PRJ-0001` too.
+      expect(project.code).toMatch(/^1\d*0$/);
+      expect(Number(project.code) % 10).toBe(0);
+      expect(Number(project.code)).toBeGreaterThanOrEqual(1010);
     });
 
     it('gives consecutive projects consecutive numbers', async () => {
@@ -272,8 +276,9 @@ describe('Projects module (e2e)', () => {
         startDate: '2026-03-01',
       });
 
-      const numberOf = (code: string) => Number(code.split('-').pop());
-      expect(numberOf(second.code)).toBe(numberOf(first.code) + 1);
+      // Ten apart, not one: the gap is deliberate, so a project inserted between two
+      // others later can take 1015 without renumbering anything downstream.
+      expect(Number(second.code)).toBe(Number(first.code) + 10);
     });
 
     it('honours a caller-supplied code, for projects migrated with one already', async () => {
