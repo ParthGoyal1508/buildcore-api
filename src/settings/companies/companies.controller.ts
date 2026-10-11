@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Res,
   UseGuards,
   Put,
 } from '@nestjs/common';
@@ -18,6 +19,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
@@ -33,6 +35,7 @@ import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { SetBillingRatesDto } from './dto/set-billing-rates.dto';
 import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
+import { SetLetterheadDto } from './dto/set-letterhead.dto';
 import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
 
 @ApiTags('settings/companies')
@@ -95,6 +98,56 @@ export class CompaniesController {
     return CompanyResponseDto.fromEntity(
       await this.companiesService.create(caller, dto, ipAddress),
     );
+  }
+
+  /**
+   * The company's printed letterhead — the stationery every letter renders on.
+   *
+   * `COMPANY_SETTINGS`, matching the other company-level settings on this controller.
+   * Replacing it changes the appearance of every letter issued from now on; letters
+   * already issued keep their own rendered PDF and are unaffected, which is the same
+   * freeze `appliedSignatureRef` gives a signature.
+   */
+  @Put(':id/letterhead')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Upload the company letterhead (2026-10-11)',
+    description:
+      'A **full-page** image — header, blank middle, footer — as the pre-printed ' +
+      'stationery is. The renderer draws it to the page edges on every page and lays ' +
+      'the letter body inside the clear band.\n\n' +
+      'The content type is detected from the bytes; anything that is not an image is ' +
+      'refused with a 400 here, rather than silently printing every letter on plain ' +
+      'paper later.',
+  })
+  async setLetterhead(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SetLetterheadDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.companiesService.setLetterhead(caller, id, dto.data, ipAddress);
+  }
+
+  @Get(':id/letterhead')
+  @ApiOperation({
+    summary: 'The letterhead currently in force',
+    description:
+      'Served as the image itself so a settings screen can show what letters will be ' +
+      'printed on. 404 when the company has none, which is a legitimate state — those ' +
+      'companies render on plain paper.',
+  })
+  async getLetterhead(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { bytes, contentType } = await this.companiesService.getLetterhead(
+      caller,
+      id,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.status(200).send(bytes);
   }
 
   @Put(':id/punch-accuracy')

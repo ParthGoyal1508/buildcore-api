@@ -39,6 +39,9 @@ const approvalChains = { seedDefaultsForCompany: jest.fn() };
 // writes is covered by `standard-templates.service.spec.ts`, and a company creating
 // without it is the state every test here was written against.
 const standardTemplates = { install: jest.fn() };
+// Holds the company letterhead (2026-10-11). Stubbed; the upload path has its own
+// tests and no test in this file reaches it.
+const storage = { put: jest.fn(), get: jest.fn(), delete: jest.fn() };
 
 const decimal = (n: number) => new Prisma.Decimal(n);
 const companyRow = (over: Record<string, unknown> = {}) => ({
@@ -76,6 +79,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await expect(
@@ -121,6 +125,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await service.create(
@@ -167,6 +172,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await service.create(
@@ -220,6 +226,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await service.create(
@@ -288,6 +295,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await expect(
@@ -319,6 +327,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
       await expect(
         service.update(
@@ -349,6 +358,7 @@ describe('CompaniesService', () => {
         equipmentDocTypes as never,
         approvalChains as never,
         standardTemplates as never,
+        storage as never,
       );
 
       await service.listActiveForOtherModules();

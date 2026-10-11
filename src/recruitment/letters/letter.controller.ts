@@ -64,10 +64,18 @@ export class LetterController {
     description:
       'Offer, appointment, relieving, experience, increment and payment advice. ' +
       'Idempotent: a kind the company already has a template for is **skipped**, ' +
-      'rewritten or not — these are starting values, not managed content.',
+      'rewritten or not — these are starting values, not managed content.\n\n' +
+      '`?replace=true` overwrites them instead, for a company still holding the short ' +
+      'placeholder bodies this product used to seed. It is an explicit opt-in because ' +
+      'it discards whatever is there, and the response lists what it replaced.',
   })
-  installStandardTemplates(@UserEntity() caller: AuthenticatedUser) {
-    return this.templates.installStandard(caller);
+  installStandardTemplates(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('replace') replace?: string,
+  ) {
+    return this.templates.installStandard(caller, {
+      replace: replace === 'true',
+    });
   }
 
   @Get('letter-templates')

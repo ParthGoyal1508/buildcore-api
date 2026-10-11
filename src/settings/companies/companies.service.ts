@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -18,6 +19,8 @@ import type {
   WorkspaceConfig,
 } from '../../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { detectContentType } from '../../common/storage/file-type';
+import { StorageService } from '../../common/storage/storage.service';
 import { AssetCategoriesService } from '../asset-masters/asset-categories.service';
 import { AssetDocTypesService } from '../asset-masters/asset-doc-types.service';
 import { ConditionGradesService } from '../asset-masters/condition-grades.service';
@@ -26,6 +29,9 @@ import { ItemCategoriesService } from '../item-masters/item-categories.service';
 import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+
+/** Where company letterheads live in blob storage (2026-10-11). */
+const LETTERHEAD_NAMESPACE = 'letterhead';
 
 /** FR-004's uniqueness rule is case-insensitive and trimmed; normalizing on write
  * makes "dc", " DC " and "Dc" the same code, and keeps the value consistent with the
@@ -51,6 +57,7 @@ export class CompaniesService {
     private readonly equipmentDocTypes: EquipmentDocTypesService,
     private readonly approvalChains: ChainsService,
     private readonly standardTemplates: StandardTemplatesService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -115,6 +122,99 @@ export class CompaniesService {
    * `null` clears the company's decision and returns it to the product default, which is a
    * different act from setting it to 50 — see the column's comment.
    */
+  /**
+   * Stores the company's printed letterhead, replacing any already held (2026-10-11).
+   *
+   * The content type is **sniffed from the bytes**, never taken from the caller: a wrong
+   * one is a letterhead pdfkit refuses to decode, and the consequence is every letter in
+   * the company quietly printing on plain paper. An image that is not an image is refused
+   * here, where somebody is looking at an upload screen, rather than discovered later by
+   * a recipient holding a letter with no logo on it.
+   *
+   * The previous file is deleted after the row is updated, not before. Deleting first and
+   * then failing to write leaves a company with a reference to nothing; this order leaves
+   * at worst an orphaned blob, which costs storage and nothing else.
+   */
+  async setLetterhead(
+    caller: AuthenticatedUser,
+    companyId: string,
+    data: string,
+    ipAddress: string,
+  ): Promise<{ contentType: string; sizeBytes: number }> {
+    const bytes = Buffer.from(data, 'base64');
+    const detected = detectContentType(bytes);
+    if (!detected || !detected.contentType.startsWith('image/')) {
+      throw new BadRequestException(
+        'A letterhead must be an image. Upload the stationery as a PNG or JPEG of the ' +
+          'whole page — header, blank middle and footer.',
+      );
+    }
+
+    const existing = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+    );
+    if (!existing) throw new NotFoundException('Company not found');
+
+    const ref = await this.storage.put(
+      `${LETTERHEAD_NAMESPACE}/${companyId}`,
+      bytes,
+      detected.contentType,
+    );
+    await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: { letterheadRef: ref },
+      }),
+    );
+    if (existing.letterheadRef) {
+      await this.storage.delete(existing.letterheadRef).catch(() => undefined);
+    }
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.COMPANY,
+      action: AuditAction.UPDATE,
+      entityId: companyId,
+      // The bytes are not logged, obviously; what matters is that the stationery every
+      // letter prints on was replaced, and by whom.
+      changes: { letterhead: detected.contentType, sizeBytes: bytes.length },
+      accountId: caller.id,
+      companyId,
+      ipAddress,
+    });
+
+    return { contentType: detected.contentType, sizeBytes: bytes.length };
+  }
+
+  /** The stored letterhead, for the settings screen to show what is in force. */
+  async getLetterhead(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ bytes: Buffer; contentType: string }> {
+    const company = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+    );
+    if (!company?.letterheadRef) {
+      throw new NotFoundException('This company has no letterhead.');
+    }
+    const bytes = await this.storage.get(company.letterheadRef);
+    return {
+      bytes,
+      contentType: detectContentType(bytes)?.contentType ?? 'image/png',
+    };
+  }
+
   async setPunchAccuracyMaxMetres(
     companyId: string,
     metres: number | null,

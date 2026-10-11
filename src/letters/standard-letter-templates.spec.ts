@@ -107,13 +107,26 @@ describe('standard letter templates', () => {
   });
 
   describe('wording that must not carry a guess', () => {
-    it('takes pronouns as fields on the letters that describe a person', () => {
+    it('takes pronouns as fields, and hardcodes none', () => {
       // The client's relieving draft says "he" throughout because it was written for one
-      // man. Baking that in misgenders the next person it is issued for.
+      // man. Baking that in misgenders the next person it is issued for. Which *forms* a
+      // body needs is the body's business — the relieving letter needs object and
+      // possessive, the experience certificate subject and possessive — so the assertion
+      // is that pronouns are tokens and that no gendered word survives as text.
       for (const key of ['relieving', 'experience']) {
-        const tokens = tokensIn(byKey.get(key)!.body);
-        expect(tokens).toContain('pronounSubject');
-        expect(tokens).toContain('pronounPossessive');
+        const body = byKey.get(key)!.body;
+        expect(tokensIn(body).some((t) => t.startsWith('pronoun'))).toBe(true);
+        expect(body).not.toMatch(/\b(he|him|his|she|her|hers)\b/i);
+      }
+    });
+
+    it('never starts a sentence with a pronoun token', () => {
+      // A token cannot be capitalised by substitution, so `{{pronounSubject}}` after a
+      // full stop renders "he is amiable in nature" — which the first draft of the
+      // relieving letter did, and which only showed up on the rendered page.
+      for (const template of STANDARD_LETTER_TEMPLATES) {
+        expect(template.body).not.toMatch(/[.!?]\s+\{\{\s*pronoun/);
+        expect(template.body).not.toMatch(/(^|\n)\s*\{\{\s*pronoun/);
       }
     });
 

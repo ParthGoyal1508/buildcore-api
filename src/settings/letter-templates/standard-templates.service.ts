@@ -54,7 +54,21 @@ export class StandardTemplatesService {
   async install(
     companyId: string,
     tx: Prisma.TransactionClient,
-  ): Promise<{ created: string[]; skipped: string[] }> {
+    /**
+     * Overwrite a kind that already has a template.
+     *
+     * **Off by default, and it must stay off by default.** The reason for the whole
+     * create-only contract is that these are starting values and a company's rewrite of
+     * its own offer letter is theirs to keep.
+     *
+     * The flag exists because a company can be holding a *placeholder* rather than a
+     * rewrite — this product seeded short demo bodies for offer, appointment and
+     * relieving, and the client asking for their real documents to be used is asking for
+     * exactly those three to be replaced. That is a decision somebody makes knowingly,
+     * which is what an explicit flag and a `replaced` list in the response are for.
+     */
+    opts: { replace?: boolean } = {},
+  ): Promise<{ created: string[]; replaced: string[]; skipped: string[] }> {
     const kinds = await tx.letterKind.findMany({
       where: {
         key: { in: STANDARD_LETTER_TEMPLATES.map((t) => t.kindKey) },
@@ -66,6 +80,7 @@ export class StandardTemplatesService {
     const kindIdByKey = new Map(kinds.map((k) => [k.key, k.id]));
 
     const created: string[] = [];
+    const replaced: string[] = [];
     const skipped: string[] = [];
 
     for (const template of STANDARD_LETTER_TEMPLATES) {
@@ -88,7 +103,19 @@ export class StandardTemplatesService {
         select: { id: true },
       });
       if (existing) {
-        skipped.push(template.kindKey);
+        if (!opts.replace) {
+          skipped.push(template.kindKey);
+          continue;
+        }
+        await tx.letterTemplate.update({
+          where: { id: existing.id },
+          data: {
+            name: template.name,
+            bodyTemplate: template.body,
+            isActive: true,
+          },
+        });
+        replaced.push(template.kindKey);
         continue;
       }
 
@@ -107,7 +134,7 @@ export class StandardTemplatesService {
       created.push(template.kindKey);
     }
 
-    return { created, skipped };
+    return { created, replaced, skipped };
   }
 
   /** Declares the kind's tokens, so the compose screen knows what to ask for. */

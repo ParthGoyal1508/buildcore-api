@@ -114,15 +114,24 @@ const company = (
 /**
  * Who the letter is about, in the third person.
  *
- * Two tokens rather than fixed wording, and rather than a guess. A relieving letter is
- * about one named person whose pronouns the HR office knows and this system does not —
- * the client's own draft says "he" throughout because it was written for one man. The
- * default offered is they/their, which is correct for anybody.
+ * Fields rather than fixed wording, and rather than a guess. A relieving letter is about
+ * one named person whose pronouns the HR office knows and this system does not — the
+ * client's own draft says "he" throughout because it was written for one man. The default
+ * offered is they/them/their, which is correct for anybody.
+ *
+ * **Three forms, because English needs three.** Rendering the first draft of these
+ * templates produced "we found *he* a sincere employee" and "we wish *his* good luck":
+ * one subject-form token cannot stand where the object form belongs. The bodies are also
+ * written so that **no pronoun begins a sentence** — a token cannot be capitalised by
+ * substitution, and "he is amiable in nature" mid-paragraph is the other half of the same
+ * bug.
  */
-const PRONOUN_FIELDS: StandardField[] = [
-  manual('pronounSubject', 'Pronoun — they / he / she'),
-  manual('pronounPossessive', 'Pronoun — their / his / her'),
-];
+const PRONOUN_SUBJECT = manual('pronounSubject', 'Pronoun — they / he / she');
+const PRONOUN_OBJECT = manual('pronounObject', 'Pronoun — them / him / her');
+const PRONOUN_POSSESSIVE = manual(
+  'pronounPossessive',
+  'Pronoun — their / his / her',
+);
 
 /** The company block every letter closes with. */
 const COMPANY_FIELD = company('companyName', 'Company name', 'name');
@@ -452,15 +461,15 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         '{{designation}} in our company from {{fromDate}} to {{toDate}}, posted at ' +
         '{{postingLocation}}, to our entire satisfaction.',
       '',
-      'During {{pronounPossessive}} working period we found {{pronounSubject}} a sincere, ' +
-        'honest, hardworking and dedicated employee with a professional attitude and very ' +
-        'good job knowledge. {{pronounSubject}} is amiable in nature and character.',
+      'During {{pronounPossessive}} working period we found {{pronounObject}} to be a ' +
+        'sincere, honest, hardworking and dedicated employee with a professional attitude ' +
+        'and very good job knowledge, and amiable in nature and character.',
       '',
       'We have no objection to {{pronounPossessive}} taking up any better position, and ' +
         'there are no liabilities outstanding against {{pronounPossessive}} name in our ' +
         'company.',
       '',
-      'We wish {{pronounPossessive}} good luck for future assignments.',
+      'We wish {{pronounObject}} good luck for future assignments.',
       '',
       'For {{companyName}}',
     ].join('\n'),
@@ -471,7 +480,10 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       manual('fromDate', 'Employed from'),
       manual('toDate', 'Employed to'),
       manual('postingLocation', 'Place of posting'),
-      ...PRONOUN_FIELDS,
+      // Object and possessive only. The body never needs the subject form, and a field
+      // declared but unused is a box somebody fills in whose answer goes nowhere.
+      PRONOUN_OBJECT,
+      PRONOUN_POSSESSIVE,
       COMPANY_FIELD,
     ],
   },
@@ -495,8 +507,8 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '',
       'During this period {{pronounSubject}} was responsible for {{responsibilities}}. We ' +
         'found {{pronounPossessive}} work sincere, diligent and of a consistently ' +
-        'professional standard, and {{pronounPossessive}} conduct during the engagement ' +
-        'was found to be good.',
+        'professional standard, and {{pronounPossessive}} conduct throughout the ' +
+        'engagement to be good.',
       '',
       'This certificate is issued at the request of the employee.',
       '',
@@ -510,7 +522,8 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       manual('toDate', 'Associated to'),
       manual('postingLocation', 'Place of posting'),
       manual('responsibilities', 'Responsibilities held'),
-      ...PRONOUN_FIELDS,
+      PRONOUN_SUBJECT,
+      PRONOUN_POSSESSIVE,
       COMPANY_FIELD,
     ],
   },

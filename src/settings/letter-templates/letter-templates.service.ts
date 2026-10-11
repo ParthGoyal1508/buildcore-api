@@ -78,7 +78,8 @@ export class LetterTemplatesService {
    */
   async installStandard(
     caller: AuthenticatedUser,
-  ): Promise<{ created: string[]; skipped: string[] }> {
+    opts: { replace?: boolean } = {},
+  ): Promise<{ created: string[]; replaced: string[]; skipped: string[] }> {
     const companyId = companyScope(caller).companyId;
     if (!companyId) {
       throw new BadRequestException(
@@ -88,11 +89,11 @@ export class LetterTemplatesService {
     const result = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) => this.standard.install(companyId, tx),
+      (tx) => this.standard.install(companyId, tx, opts),
     );
     // Only when something changed. An audit entry for a call that created nothing is
     // noise in the log that somebody later has to read past.
-    if (result.created.length > 0) {
+    if (result.created.length + result.replaced.length > 0) {
       await this.auditLog.record({
         // `LETTER`, as every other write in this service records — there is no
         // LETTER_TEMPLATE entity type, and inventing one here would put these entries
@@ -100,7 +101,10 @@ export class LetterTemplatesService {
         entityType: AuditEntityType.LETTER,
         action: AuditAction.CREATE,
         entityId: companyId,
-        changes: { installed: result.created },
+        // Replacements are logged separately from creations: overwriting a company's
+        // offer letter is a different act from giving it one, and "who replaced our
+        // appointment letter" is a question somebody will ask.
+        changes: { installed: result.created, replaced: result.replaced },
         accountId: caller.id,
         companyId,
         ipAddress: '',

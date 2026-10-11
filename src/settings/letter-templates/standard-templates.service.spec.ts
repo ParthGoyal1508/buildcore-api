@@ -32,6 +32,7 @@ function harness(opts: { existingFor?: string[] } = {}) {
   const tx: any = {
     letterKind: { findMany: jest.fn(async () => KINDS) },
     letterTemplate: {
+      update: jest.fn(async (args: any) => args.data),
       findFirst: jest.fn(async (args: any) => {
         const key = [...kindIdByKey].find(
           ([, id]) => id === args.where.letterKindId,
@@ -126,6 +127,25 @@ describe('StandardTemplatesService', () => {
     });
     await service.install('co-1', tx);
     expect(fieldWrites.length).toBeGreaterThan(0);
+  });
+
+  it('replaces a placeholder only when explicitly told to', async () => {
+    // The client's own case: this product seeded short demo bodies for offer,
+    // appointment and relieving, so "use our templates" means replacing exactly those.
+    // The default run above leaves them; this one is the knowing opt-in, and the two
+    // results differ, which is what proves the flag does something.
+    const { service, tx } = harness({
+      existingFor: ['offer', 'appointment', 'relieving'],
+    });
+    const result = await service.install('co-1', tx, { replace: true });
+
+    expect(result.replaced.sort()).toEqual([
+      'appointment',
+      'offer',
+      'relieving',
+    ]);
+    expect(result.skipped).toEqual([]);
+    expect(tx.letterTemplate.update).toHaveBeenCalledTimes(3);
   });
 
   it('skips a kind the database has never heard of rather than failing creation', async () => {
