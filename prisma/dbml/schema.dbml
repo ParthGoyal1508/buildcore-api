@@ -1111,6 +1111,7 @@ beneath each of the client\'s measurement sheets. It is read across the module b
 disagrees with the first the moment one is corrected.']
   exceedsScope Boolean [not null, default: false, note: 'Flagged, not refused: the site did the work, and a BOQ line that turns out to
 have been under-scoped is a commercial question, not a data-entry error.']
+  attachments DWRAttachment [not null, note: 'Photographs and other evidence filed against this line (2026-10-11).']
   engineerName String
   remark String
   layerNo String
@@ -1129,6 +1130,21 @@ Table DWRAttachment {
   companyId String [not null]
   dwrId String [not null]
   dwr DailyWorkReport [not null]
+  taskId String [note: 'The measurement line this file belongs to, where it belongs to one (2026-10-11).
+
+A site photograph is evidence **for a line** — this chainage, this pour, this quantity —
+and an argument about one line is lost in a pile of twenty files attached to the report.
+
+Nullable, and the nullability is the whole design: an attachment is either a line\'s or the
+report\'s. The report-level case is not a fallback, it is the right answer for a general
+site view, a signed measurement sheet or a weather photo, and those are what every
+attachment filed before today is. A second table would have made a file that belongs to
+both impossible to express and given the download two routes to maintain.
+
+`Cascade`, matching `dwrId`: deleting the line deletes the evidence filed against it. The
+alternative — orphaning the photo onto the report — leaves a file whose caption refers to a
+chainage nobody can find.']
+  task DWRTask
   fileRef String [not null, note: 'Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.']
   fileName String [not null, note: 'As the uploader\'s own filesystem spelled it, so the download arrives named.']
   mimeType String [not null, note: 'Detected from the bytes by `detectContentType`, not taken from the client\'s claim.']
@@ -5861,6 +5877,8 @@ Ref: DWRTask.dwrId > DailyWorkReport.id [delete: Cascade]
 Ref: DWRTask.boqItemId > BOQTaskItem.id
 
 Ref: DWRAttachment.dwrId > DailyWorkReport.id [delete: Cascade]
+
+Ref: DWRAttachment.taskId > DWRTask.id [delete: Cascade]
 
 Ref: Revenue.projectId > Project.id [delete: Cascade]
 

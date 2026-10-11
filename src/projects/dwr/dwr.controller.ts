@@ -147,6 +147,7 @@ export class DwrController {
       resolveCompanyId(caller, companyId),
       { data: Buffer.from(dto.data, 'base64'), fileName: dto.fileName },
       { userId: caller.id, ipAddress: ip },
+      dto.taskId,
     );
   }
 

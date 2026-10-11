@@ -2028,6 +2028,9 @@ model DWRTask {
   /// have been under-scoped is a commercial question, not a data-entry error.
   exceedsScope Boolean @default(false)
 
+  /// Photographs and other evidence filed against this line (2026-10-11).
+  attachments DWRAttachment[]
+
   engineerName String?
   remark       String?
   layerNo      String?
@@ -2055,6 +2058,23 @@ model DWRAttachment {
   dwrId String
   dwr   DailyWorkReport @relation(fields: [dwrId], references: [id], onDelete: Cascade)
 
+  /// The measurement line this file belongs to, where it belongs to one (2026-10-11).
+  ///
+  /// A site photograph is evidence **for a line** — this chainage, this pour, this quantity —
+  /// and an argument about one line is lost in a pile of twenty files attached to the report.
+  ///
+  /// Nullable, and the nullability is the whole design: an attachment is either a line's or the
+  /// report's. The report-level case is not a fallback, it is the right answer for a general
+  /// site view, a signed measurement sheet or a weather photo, and those are what every
+  /// attachment filed before today is. A second table would have made a file that belongs to
+  /// both impossible to express and given the download two routes to maintain.
+  ///
+  /// `Cascade`, matching `dwrId`: deleting the line deletes the evidence filed against it. The
+  /// alternative — orphaning the photo onto the report — leaves a file whose caption refers to a
+  /// chainage nobody can find.
+  taskId String?
+  task   DWRTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
   /// Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.
   fileRef   String
   /// As the uploader's own filesystem spelled it, so the download arrives named.
@@ -2069,6 +2089,7 @@ model DWRAttachment {
 
   @@index([companyId])
   @@index([dwrId])
+  @@index([taskId])
   @@schema("projects")
 }
 
