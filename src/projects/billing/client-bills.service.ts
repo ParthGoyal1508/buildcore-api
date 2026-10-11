@@ -13,6 +13,19 @@ import { BILLING_ERRORS } from './billing-error-codes';
 import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
 import { nextClientBillNumber } from './bill-number';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
+import {
+  contentDispositionFor,
+  detectContentType,
+} from '../../common/storage/file-type';
+import { StorageService } from '../../common/storage/storage.service';
+
+/** What a certification carries (2026-10-11). */
+export interface CertifyBillInput {
+  /** Ignored when `lines` are given — the lines are then the single answer. */
+  certifiedAmount?: number;
+  lines?: { lineId: string; certifiedQty: number }[];
+  certificate?: { data: Buffer; fileName: string };
+}
 
 /** A line as the caller composes it. */
 export interface ComposeBillLineInput {
@@ -64,6 +77,13 @@ export interface ClientBillLineView {
   /** Including this bill. */
   cumulativeQty: number;
   remainingQty: number;
+  /**
+   * What the client certified on this line, or null where they did not say (2026-10-11).
+   *
+   * Null and zero are different answers: null is "not certified line by line", zero is
+   * "certified at nothing", and only the second returns the quantity to the schedule.
+   */
+  certifiedQty: number | null;
   exceedsScope: boolean;
   overScopeReason: string | null;
   isVariation: boolean;
@@ -145,6 +165,12 @@ export interface ClientBillView {
   netAmount: number | null;
   certifiedAmount: number | null;
   certifiedAt: Date | null;
+  /** The client's certification document, where one was filed (2026-10-11). */
+  certificate: {
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+  } | null;
   /**
    * The shortfall between billed and certified, where there is one (FR-005).
    *
@@ -188,7 +214,10 @@ export interface ClientBillView {
  */
 @Injectable()
 export class ClientBillsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /**
    * Prices a draft bill from the BOQ and freezes what it read.
@@ -426,10 +455,20 @@ export class ClientBillsService {
   async certify(
     ctx: RlsContext,
     billId: string,
-    certifiedAmount: number,
+    input: CertifyBillInput,
   ): Promise<ClientBillView> {
+    // Stored before the transaction, like every other upload in this product: a blob
+    // written inside one is orphaned by a rollback, and the reference below is what
+    // makes it findable.
+    const certificate = input.certificate
+      ? await this.storeCertificate(ctx, billId, input.certificate)
+      : null;
+
     await withRlsContext(this.prisma, ctx, async (tx) => {
-      const bill = await tx.clientBill.findFirst({ where: { id: billId } });
+      const bill = await tx.clientBill.findFirst({
+        where: { id: billId },
+        include: { lines: true },
+      });
       if (!bill) throw new NotFoundException('Bill not found');
       if (bill.status === ClientBillStatus.draft) {
         throw new ConflictException({
@@ -439,6 +478,36 @@ export class ClientBillsService {
             'This bill has not been submitted, so there is nothing for the client to have certified.',
         });
       }
+
+      const certifiedLines = input.lines ?? [];
+      for (const line of certifiedLines) {
+        const billed = bill.lines.find((row) => row.id === line.lineId);
+        if (!billed) {
+          throw new NotFoundException(
+            `Line ${line.lineId} is not on this bill.`,
+          );
+        }
+        if (line.certifiedQty > billed.quantity.toNumber()) {
+          // The same refusal the total already gives, at line level and for the same
+          // reason: a client cannot certify work nobody claimed.
+          throw new BadRequestException({
+            statusCode: 400,
+            code: BILLING_ERRORS.certifiedExceedsBilled,
+            message:
+              `Certified ${line.certifiedQty} on a line billed at ` +
+              `${billed.quantity.toNumber()}. Raise a further bill for the extra work rather ` +
+              `than certifying above this one.`,
+          });
+        }
+      }
+
+      // **Derived from the lines when there are lines**, never taken alongside them. A
+      // certified total and a set of certified lines that disagree is two answers to
+      // one question, and the lines are the ones the outstanding BOQ is counted from.
+      const certifiedAmount = certifiedLines.length
+        ? this.amountOfCertified(bill, certifiedLines)
+        : input.certifiedAmount ?? 0;
+
       if (certifiedAmount > bill.grossAmount.toNumber()) {
         // A client cannot certify work nobody claimed. More likely a typo than a windfall, and the
         // typo is the one worth catching.
@@ -452,17 +521,94 @@ export class ClientBillsService {
         });
       }
 
+      for (const line of certifiedLines) {
+        await tx.clientBillLine.update({
+          where: { id: line.lineId },
+          data: { certifiedQty: line.certifiedQty },
+        });
+      }
+
       await tx.clientBill.update({
         where: { id: billId },
         data: {
           status: ClientBillStatus.certified,
           certifiedAmount,
           certifiedAt: new Date(),
+          ...(certificate
+            ? {
+                certificateFileRef: certificate.fileRef,
+                certificateFileName: certificate.fileName,
+                certificateMimeType: certificate.mimeType,
+                certificateSizeBytes: certificate.sizeBytes,
+              }
+            : {}),
         },
       });
     });
 
     return this.view(ctx, billId);
+  }
+
+  /**
+   * What the certified quantities come to, at the rates and quote the bill was priced at.
+   *
+   * A line the client said nothing about keeps its billed quantity — omission is "not
+   * said", not "certified at nothing". A client returning a certificate that covers half
+   * the schedule has said nothing about the other half, and reading silence as a
+   * rejection would quietly halve the bill.
+   */
+  private amountOfCertified(
+    bill: {
+      quotedPercentage: Prisma.Decimal;
+      lines: { id: string; quantity: Prisma.Decimal; rate: Prisma.Decimal }[];
+    },
+    certified: { lineId: string; certifiedQty: number }[],
+  ): number {
+    const byId = new Map(
+      certified.map((row) => [row.lineId, row.certifiedQty]),
+    );
+    const quoted = bill.quotedPercentage.toNumber();
+    const total = bill.lines.reduce((sum, line) => {
+      const qty = byId.get(line.id) ?? line.quantity.toNumber();
+      return sum + qty * line.rate.toNumber() * (1 + quoted);
+    }, 0);
+    return Math.round(total * 100) / 100;
+  }
+
+  /** The client's certification document, through `StorageService` like every other upload. */
+  private async storeCertificate(
+    ctx: RlsContext,
+    billId: string,
+    file: { data: Buffer; fileName: string },
+  ): Promise<{
+    fileRef: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+  }> {
+    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.clientBill.findFirst({
+        where: { id: billId },
+        select: { companyId: true },
+      }),
+    );
+    if (!bill) throw new NotFoundException('Bill not found');
+
+    // From the bytes, never the client's claim — the rule 022 established and 017
+    // before it. A certificate served as octet-stream downloads instead of opening.
+    const mimeType =
+      detectContentType(file.data)?.contentType ?? 'application/octet-stream';
+    const fileRef = await this.storage.put(
+      `client-bill-certificates/${bill.companyId}`,
+      file.data,
+      mimeType,
+    );
+    return {
+      fileRef,
+      fileName: file.fileName,
+      mimeType,
+      sizeBytes: file.data.length,
+    };
   }
 
   /** Every bill on a project, newest first. */
@@ -620,6 +766,7 @@ export class ClientBillsService {
           amount: line.amount.toNumber(),
           cumulativeQty,
           remainingQty: Math.round((scopeQty - cumulativeQty) * 1000) / 1000,
+          certifiedQty: line.certifiedQty?.toNumber() ?? null,
           exceedsScope: line.exceedsScope,
           overScopeReason: line.overScopeReason,
           isVariation: line.boqTaskItem.isVariation,
@@ -645,6 +792,20 @@ export class ClientBillsService {
             : bill.netAmount.toNumber(),
         certifiedAmount: certified,
         certifiedAt: bill.certifiedAt,
+        /**
+         * The client's own certification document, where one was filed (2026-10-11).
+         *
+         * The name and the type, never the storage reference — a reference on the wire
+         * is a handle to somebody else's bytes, and the download route takes the bill's
+         * id rather than the ref for exactly that reason.
+         */
+        certificate: bill.certificateFileRef
+          ? {
+              fileName: bill.certificateFileName ?? 'certificate',
+              mimeType: bill.certificateMimeType ?? 'application/octet-stream',
+              sizeBytes: bill.certificateSizeBytes ?? 0,
+            }
+          : null,
         certificationVariance:
           certified === null
             ? null
@@ -657,6 +818,42 @@ export class ClientBillsService {
   }
 
   /**
+   * The stored certification document, for the download route (2026-10-11).
+   *
+   * Addressed by the **bill's** id, not the storage reference: the reference is an
+   * internal handle, and an endpoint that took one would serve any blob whose ref a
+   * caller could guess or had once been shown.
+   */
+  async readCertificate(
+    ctx: RlsContext,
+    billId: string,
+  ): Promise<{ bytes: Buffer; mimeType: string; contentDisposition: string }> {
+    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.clientBill.findFirst({
+        where: { id: billId },
+        select: {
+          certificateFileRef: true,
+          certificateFileName: true,
+          certificateMimeType: true,
+        },
+      }),
+    );
+    if (!bill?.certificateFileRef) {
+      throw new NotFoundException('No certification document on this bill.');
+    }
+    return {
+      bytes: await this.storage.get(bill.certificateFileRef),
+      mimeType: bill.certificateMimeType ?? 'application/octet-stream',
+      // `contentDispositionFor`, never a hand-built header: a file name carrying a
+      // character outside latin1 makes `res.setHeader` throw `ERR_INVALID_CHAR`, which
+      // is a 500 on a download — a defect this repository shipped and fixed in 2026-10.
+      contentDisposition: contentDispositionFor(
+        bill.certificateFileName ?? 'certificate',
+      ),
+    };
+  }
+
+  /**
    * How much of each BOQ line has been billed, as an **aggregate** (research §3).
    *
    * Draft bills are excluded: a draft is a working document, and counting it toward cumulative would
@@ -665,6 +862,11 @@ export class ClientBillsService {
    * `upToBillDate` lets a historical bill show the position as at its own date — otherwise opening a
    * bill from last quarter would show today's running total beside figures from then, which reads as
    * an arithmetic error in the bill.
+   *
+   * ponytail: rows fetched and summed here rather than `groupBy … _sum`, because what is
+   * counted is `certifiedQty ?? quantity` and Prisma cannot group on a coalesce. Bounded by
+   * bills × lines per BOQ item, which is single digits per item on a real project. A
+   * database-side `COALESCE` sum would need raw SQL, which this repository has none of.
    */
   private async previouslyBilled(
     tx: Prisma.TransactionClient,
@@ -672,8 +874,7 @@ export class ClientBillsService {
     options?: { upToBillDate?: Date; includeBillId?: string },
   ): Promise<Map<string, number>> {
     if (boqTaskItemIds.length === 0) return new Map();
-    const grouped = await tx.clientBillLine.groupBy({
-      by: ['boqTaskItemId'],
+    const rows = await tx.clientBillLine.findMany({
       where: {
         boqTaskItemId: { in: boqTaskItemIds },
         OR: [
@@ -692,13 +893,25 @@ export class ClientBillsService {
             : []),
         ],
       },
-      _sum: { quantity: true },
+      select: { boqTaskItemId: true, quantity: true, certifiedQty: true },
     });
-    return new Map(
-      grouped.map((row) => [
+
+    const totals = new Map<string, number>();
+    for (const row of rows) {
+      // **What the client certified, where they said** (2026-10-11). The reported case:
+      // nine items billed, eight certified, and the ninth stayed deducted from what was
+      // left to bill — so it could never be claimed again without over-measuring.
+      //
+      // `null` is "not said line by line", and the billed quantity stands: before
+      // certification, and for a bill certified only as a single figure. **Zero is not
+      // null** — a line certified at nothing returns its quantity to the schedule, and
+      // that distinction is the whole of the column.
+      const counted = row.certifiedQty ?? row.quantity;
+      totals.set(
         row.boqTaskItemId,
-        row._sum.quantity?.toNumber() ?? 0,
-      ]),
-    );
+        (totals.get(row.boqTaskItemId) ?? 0) + counted.toNumber(),
+      );
+    }
+    return totals;
   }
 }

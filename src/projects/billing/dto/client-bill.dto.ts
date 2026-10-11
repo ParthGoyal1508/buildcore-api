@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsArray,
   IsDateString,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -91,14 +92,74 @@ export class ComposeBillDto {
   retentionPercent?: number;
 }
 
-export class CertifyBillDto {
+/** One line's certified quantity, where the client certified line by line (2026-10-11). */
+export class CertifiedLineDto {
+  @ApiProperty({ description: 'The `ClientBillLine` being certified.' })
+  @IsString()
+  @IsNotEmpty()
+  lineId: string;
+
   @ApiProperty({
     description:
-      'What the client certified. Kept **alongside** the billed amount, never instead of it — the ' +
-      'variance is what a project manager chases, and overwriting erases the fact there was one.',
+      'The quantity the client accepted on this line. **Zero is meaningful** — it ' +
+      'returns the whole of the billed quantity to the outstanding BOQ, which is the ' +
+      'point of certifying line by line at all.',
   })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  certifiedQty: number;
+}
+
+export class CertifyBillDto {
+  @ApiPropertyOptional({
+    description:
+      'What the client certified, as one figure. Kept **alongside** the billed amount, never ' +
+      'instead of it — the variance is what a project manager chases, and overwriting erases the ' +
+      'fact there was one.\n\n' +
+      '**Optional since 2026-10-11, and ignored when `lines` are given**: a certified total and a ' +
+      'set of certified lines that disagree is two answers to one question, and the lines are the ' +
+      'ones the outstanding BOQ is counted from.',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  certifiedAmount: number;
+  certifiedAmount?: number;
+
+  @ApiPropertyOptional({
+    type: [CertifiedLineDto],
+    description:
+      'What was certified line by line. Lines left out keep their billed quantity — omission ' +
+      'is “not said”, not “certified at nothing”, and a client who returns a certificate ' +
+      'covering half the schedule has said nothing about the other half.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CertifiedLineDto)
+  lines?: CertifiedLineDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'The client’s certification document, base64-encoded — a PDF or a workbook, whatever came ' +
+      'back. Replaces any copy already held: re-certifying supersedes, and the audit log records ' +
+      'that it happened.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  certificateData?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'As the uploader’s own filesystem spells it, so the download arrives named rather than as ' +
+      'a bare storage reference. Required when `certificateData` is given.',
+    example: 'RA-09 certification.pdf',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  certificateFileName?: string;
 }

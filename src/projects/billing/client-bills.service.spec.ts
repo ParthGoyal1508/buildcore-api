@@ -66,11 +66,16 @@ function build(opts: {
     },
     bOQTaskItem: { findMany: async () => items.map(hydrate) },
     clientBillLine: {
-      groupBy: async () =>
+      // Rows, not a grouped sum, since 2026-10-11: what counts against the BOQ is
+      // `certifiedQty ?? quantity`, which Prisma cannot group on. `certifiedQty: null`
+      // here means these fixtures keep meaning exactly what they did — billed stands.
+      findMany: async () =>
         Object.entries(opts.previouslyBilled ?? {}).map(([id, qty]) => ({
           boqTaskItemId: id,
-          _sum: { quantity: dec(qty) },
+          quantity: dec(qty),
+          certifiedQty: null,
         })),
+      update: async (args: { data: Record<string, unknown> }) => args.data,
     },
     clientBill: {
       create: async (args: { data: Record<string, unknown> }) => {
@@ -128,7 +133,8 @@ function build(opts: {
   };
 
   return {
-    service: new ClientBillsService(prisma as never),
+    // No storage: nothing here uploads a certification document.
+    service: new ClientBillsService(prisma as never, {} as never),
     created,
     updated,
     setStored: (value: Record<string, unknown> | null) => {
@@ -368,7 +374,9 @@ describe('certification keeps both figures (FR-005)', () => {
     // would erase the only record that there was one.
     const { service, updated } = build({ bill: { ...submitted } });
 
-    const view = await service.certify(ctx, 'bill-1', 22000);
+    const view = await service.certify(ctx, 'bill-1', {
+      certifiedAmount: 22000,
+    });
 
     expect(updated[0]).toMatchObject({ certifiedAmount: 22000 });
     expect(view.grossAmount).toBe(25100);
@@ -378,7 +386,9 @@ describe('certification keeps both figures (FR-005)', () => {
   it('reports the variance rather than making a reader subtract two columns', async () => {
     const { service } = build({ bill: { ...submitted } });
 
-    const view = await service.certify(ctx, 'bill-1', 22000);
+    const view = await service.certify(ctx, 'bill-1', {
+      certifiedAmount: 22000,
+    });
 
     expect(view.certificationVariance).toBe(3100);
   });
@@ -388,7 +398,9 @@ describe('certification keeps both figures (FR-005)', () => {
     // next bill would re-bill the same work as though it had never been claimed.
     const { service } = build({ bill: { ...submitted } });
 
-    const view = await service.certify(ctx, 'bill-1', 22000);
+    const view = await service.certify(ctx, 'bill-1', {
+      certifiedAmount: 22000,
+    });
 
     expect(view.lines[0].quantity).toBe(100);
   });
@@ -398,17 +410,17 @@ describe('certification keeps both figures (FR-005)', () => {
     // the one worth catching.
     const { service } = build({ bill: { ...submitted } });
 
-    await expect(service.certify(ctx, 'bill-1', 30000)).rejects.toThrow(
-      /more than billed/,
-    );
+    await expect(
+      service.certify(ctx, 'bill-1', { certifiedAmount: 30000 }),
+    ).rejects.toThrow(/more than billed/);
   });
 
   it('refuses certifying a draft', async () => {
     const { service } = build({ bill: { ...submitted, status: 'draft' } });
 
-    await expect(service.certify(ctx, 'bill-1', 1000)).rejects.toThrow(
-      /not been submitted/,
-    );
+    await expect(
+      service.certify(ctx, 'bill-1', { certifiedAmount: 1000 }),
+    ).rejects.toThrow(/not been submitted/);
   });
 
   it('reports no variance before certification', async () => {
@@ -557,15 +569,17 @@ function buildBoq(opts: {
         })),
     },
     clientBillLine: {
-      groupBy: async () =>
+      findMany: async () =>
         Object.entries(opts.billed ?? {}).map(([id, qty]) => ({
           boqTaskItemId: id,
-          _sum: { quantity: d(qty) },
+          quantity: d(qty),
+          certifiedQty: null,
         })),
+      update: async (args: { data: Record<string, unknown> }) => args.data,
     },
   };
   const prisma = {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
-  return { service: new ClientBillsService(prisma as never) };
+  return { service: new ClientBillsService(prisma as never, {} as never) };
 }

@@ -5,6 +5,7 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -14,6 +15,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -148,9 +150,15 @@ export class ClientBillsController {
   @ApiOperation({
     summary: 'Record what the client certified (FR-005)',
     description:
-      '**Both figures are kept.** The billed amount is not overwritten and cumulative billed quantity ' +
-      'is untouched: a shortfall is a dispute to pursue, not a correction to absorb, and a system ' +
-      'that silently reduced what was billed would lose the only record that there was one.',
+      '**Billed figures are kept.** The billed amount and each line’s billed quantity are not ' +
+      'overwritten: a shortfall is a dispute to pursue, not a correction to absorb, and a system ' +
+      'that silently reduced what was billed would lose the only record that there was one.\n\n' +
+      '**Certify line by line to free the uncertified quantity (2026-10-11).** Nine items billed ' +
+      'and eight certified used to leave all nine deducted from the outstanding BOQ, so the ninth ' +
+      'could not be claimed again without over-measuring. Send `lines` and only what was certified ' +
+      'counts against the schedule.\n\n' +
+      'Re-certifying is how a certification is corrected: the endpoint accepts an already-certified ' +
+      'bill and replaces what it holds, certificate included.',
   })
   @ApiResponse({
     status: 400,
@@ -162,6 +170,48 @@ export class ClientBillsController {
     @Param('id') id: string,
     @Body() dto: CertifyBillDto,
   ) {
-    return this.bills.certify(rlsContextFor(caller), id, dto.certifiedAmount);
+    return this.bills.certify(rlsContextFor(caller), id, {
+      certifiedAmount: dto.certifiedAmount,
+      lines: dto.lines,
+      ...(dto.certificateData
+        ? {
+            certificate: {
+              data: Buffer.from(dto.certificateData, 'base64'),
+              // Falls back to a name rather than refusing: a certificate that arrived
+              // with no file name is still the document, and a 400 here would lose it.
+              fileName: dto.certificateFileName ?? 'certificate',
+            },
+          }
+        : {}),
+    });
+  }
+
+  @Get(':id/certificate')
+  @ApiOperation({
+    summary: 'Download the client’s certification document (2026-10-11)',
+    description:
+      'Addressed by the **bill’s** id, never the storage reference: a reference on the wire is a ' +
+      'handle to bytes, and an endpoint that took one would serve any blob whose ref a caller had ' +
+      'once been shown.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'No certification document on this bill.',
+  })
+  async certificate(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { bytes, mimeType, contentDisposition } =
+      await this.bills.readCertificate(rlsContextFor(caller), id);
+    // The real type: a browser cannot render what it has not been told, and serving a
+    // PDF as octet-stream is how one ends up opened in a text editor.
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', contentDisposition);
+    // Without this a cross-origin caller cannot read the name off a `fetch`, and a blob
+    // URL carries none of its own.
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.status(200).send(bytes);
   }
 }

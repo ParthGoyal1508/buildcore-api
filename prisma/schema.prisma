@@ -2302,6 +2302,21 @@ model ClientBill {
   certifiedAmount Decimal?  @db.Decimal(18, 2)
   certifiedAt     DateTime?
 
+  /// The client's own certification document, as they sent it (2026-10-11).
+  ///
+  /// A PDF or a workbook — whatever came back. Columns rather than a table because
+  /// there is one certificate per bill and re-certifying replaces it; a list of
+  /// superseded certificates is a different feature from the one that was asked for,
+  /// and the audit log already records that a re-certification happened.
+  ///
+  /// Four columns and not one, for the reason 017 and 022 both landed on: a bare
+  /// storage reference downloads as an extensionless UUID, and the name and the type
+  /// are what make it open.
+  certificateFileRef   String?
+  certificateFileName  String?
+  certificateMimeType  String?
+  certificateSizeBytes Int?
+
   status ClientBillStatus @default(draft)
 
   submittedAt DateTime?
@@ -2352,6 +2367,22 @@ model ClientBillLine {
 
   /// `quantity × rate × (1 + quotedPercentage)`. Stored for the same reason the rate is frozen.
   amount Decimal @db.Decimal(18, 2)
+
+  /// What the client **certified** for this line, where they said line by line (2026-10-11).
+  ///
+  /// The reported case: nine items billed, eight certified. Until now the whole bill counted
+  /// against the BOQ the moment it left draft, so the ninth item's quantity stayed deducted from
+  /// what was left to bill and nobody could claim it again without over-measuring.
+  ///
+  /// `null` means "not certified line by line" and the billed `quantity` stands — which is the
+  /// right reading both before certification and for a bill certified only as a single figure.
+  /// **Zero is not null**: a line certified at nothing returns its quantity to the outstanding
+  /// BOQ, and that distinction is the whole of this column.
+  ///
+  /// `quantity` is never overwritten. A shortfall is a dispute to pursue, and a system that
+  /// absorbed it would lose the only record that there was one — the same rule `certifiedAmount`
+  /// already follows at the bill level.
+  certifiedQty Decimal? @db.Decimal(18, 3)
 
   /// Whether this line takes the BOQ item past its scope quantity (FR-003).
   ///
