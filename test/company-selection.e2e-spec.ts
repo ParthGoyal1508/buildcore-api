@@ -355,4 +355,143 @@ describe('Company selection and cash visibility (e2e)', () => {
       .send({ hideCashTransactions: true });
     expect(res.status).toBe(403);
   });
+
+  /**
+   * Approval configuration under a company switch (2026-10-11).
+   *
+   * **The defect this defends against.** `approvals.controller.ts` read `caller.companyId`
+   * where every other settings reader reads the *selected* company, so the request asked
+   * for company A's rows under an RLS context scoped to company B. The two symptoms are
+   * the same bug seen from either side of the database role:
+   *
+   *   - where the role cannot bypass RLS, every read came back empty — the settings screen
+   *     reported that the company had no approval chains and that no level had a role,
+   *     while both were configured — and the slot-mapping write was refused by the
+   *     `tenant_isolation` policy as a bare **500 Internal server error**;
+   *   - where it can bypass RLS, as this suite's role does, the same bug is silent: the
+   *     administrator is shown, and edits, **the other company's** approval configuration.
+   *
+   * This suite runs as a superuser, so it asserts the second form. The assertions are
+   * about *identity*, not shape: that the chain returned is company B's and that the row
+   * the write produced carries company B's id. Asserting that three slots came back, or
+   * that the PUT returned 200, passes against the defect — it did both, for company A.
+   *
+   * Its own caller and fixtures rather than the suite's `crossToken`: a later test in this
+   * file revokes that role's cross-company access, and a test that depends on running
+   * first is a test that fails for the wrong reason later.
+   */
+  describe('approval configuration follows the selected company', () => {
+    let token: string;
+    let roleInA: string;
+    let roleInB: string;
+    const chainIds: string[] = [];
+    const actionInA = unique('actionA');
+    const actionInB = unique('actionB');
+
+    const seedChain = async (companyId: string, actionType: string) => {
+      const chain = await sys.approvalChain.create({
+        data: {
+          companyId,
+          actionType,
+          levels: {
+            create: [{ companyId, position: 1, slotKey: 'first_approver' }],
+          },
+        },
+      });
+      chainIds.push(chain.id as string);
+    };
+
+    beforeAll(async () => {
+      const caller = await makeUser('apprcross', companyA, [
+        Permission.CROSS_COMPANY_ACCESS,
+        Permission.SETTINGS,
+      ]);
+      token = caller.token;
+
+      roleInA = (await makeUser('slotA', companyA, [Permission.SETTINGS]))
+        .roleId;
+      roleInB = (await makeUser('slotB', companyB, [Permission.SETTINGS]))
+        .roleId;
+
+      await seedChain(companyA, actionInA);
+      await seedChain(companyB, actionInB);
+
+      // Both companies map `first_approver`, to different roles. One company mapped and
+      // the other not would let a wrong-company read pass as an unmapped slot.
+      await sys.roleSlotMapping.create({
+        data: {
+          companyId: companyA,
+          slotKey: 'first_approver',
+          roleId: roleInA,
+        },
+      });
+      await sys.roleSlotMapping.create({
+        data: {
+          companyId: companyB,
+          slotKey: 'first_approver',
+          roleId: roleInB,
+        },
+      });
+
+      await http()
+        .put('/my/company-selection')
+        .set(auth(token))
+        .send({ companyId: companyB })
+        .expect(200);
+    }, 90_000);
+
+    afterAll(async () => {
+      await sys.roleSlotMapping.deleteMany({
+        where: { companyId: { in: [companyA, companyB] } },
+      });
+      await sys.approvalChain.deleteMany({ where: { id: { in: chainIds } } });
+    });
+
+    it('lists the selected company’s chains, not the caller’s own', async () => {
+      const res = await http()
+        .get('/approvals/chains')
+        .set(auth(token))
+        .expect(200);
+
+      const actions = res.body.map((c: { actionType: string }) => c.actionType);
+      expect(actions).toContain(actionInB);
+      // The half that fails against the defect. Before the fix this response was company
+      // A's chain list, which is a cross-tenant read and not merely the wrong label.
+      expect(actions).not.toContain(actionInA);
+    });
+
+    it('resolves a slot to the selected company’s role, not the caller’s own', async () => {
+      const res = await http()
+        .get('/approvals/slot-mappings')
+        .set(auth(token))
+        .expect(200);
+
+      const first = res.body.slots.find(
+        (s: { slotKey: string }) => s.slotKey === 'first_approver',
+      );
+      // Identity, not presence: the defect returned a populated `roleId` too — company A's.
+      expect(first.roleId).toBe(roleInB);
+      expect(first.roleId).not.toBe(roleInA);
+    });
+
+    it('writes a slot mapping into the selected company, leaving the caller’s own alone', async () => {
+      await http()
+        .put('/approvals/slot-mappings')
+        .set(auth(token))
+        .send({ slotKey: 'hr', roleId: roleInB })
+        .expect(200);
+
+      const written = await sys.roleSlotMapping.findUnique({
+        where: { companyId_slotKey: { companyId: companyB, slotKey: 'hr' } },
+      });
+      // Where the row landed is the whole assertion. Against the defect the endpoint
+      // still answered 200 and still wrote a row — into company A.
+      expect(written?.roleId).toBe(roleInB);
+
+      const strayed = await sys.roleSlotMapping.findUnique({
+        where: { companyId_slotKey: { companyId: companyA, slotKey: 'hr' } },
+      });
+      expect(strayed).toBeNull();
+    });
+  });
 });

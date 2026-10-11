@@ -21,6 +21,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import type { ApprovalsConfig } from '../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
+import { effectiveCompanyId } from '../settings/company-scope';
 import { UsersService } from '../users/users.service';
 import {
   APPROVAL_ALREADY_DECIDED,
@@ -309,7 +310,10 @@ export class ApprovalService {
   ): Promise<ApprovalInstanceView> {
     const ctx: RlsContext = {
       isSuperAdmin: false,
-      companyId: caller.companyId,
+      // The **selected** company, not the account's own — see the note in
+      // `approvals.controller.ts`. `isSuperAdmin` stays false on purpose: this narrows
+      // which company a caller acts in and must never widen it to all of them.
+      companyId: effectiveCompanyId(caller),
     };
 
     const instance = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -915,7 +919,10 @@ export class ApprovalService {
   ): Promise<ApprovalInstanceView> {
     const ctx: RlsContext = {
       isSuperAdmin: false,
-      companyId: caller.companyId,
+      // The **selected** company, not the account's own — see the note in
+      // `approvals.controller.ts`. `isSuperAdmin` stays false on purpose: this narrows
+      // which company a caller acts in and must never widen it to all of them.
+      companyId: effectiveCompanyId(caller),
     };
 
     const instance = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -1010,7 +1017,7 @@ export class ApprovalService {
     caller: AuthenticatedUser,
     paging: { limit?: number; cursor?: string | null } = {},
   ): Promise<ApprovalQueuePage> {
-    const companyId = caller.companyId;
+    const companyId = effectiveCompanyId(caller);
     if (!companyId) return { items: [], nextCursor: null };
 
     const limit = Math.min(Math.max(paging.limit ?? 25, 1), 100);
@@ -1106,7 +1113,7 @@ export class ApprovalService {
 
   /** The badge count. Separate from the queue because it is polled on every screen. */
   async queueCountFor(caller: AuthenticatedUser): Promise<number> {
-    const companyId = caller.companyId;
+    const companyId = effectiveCompanyId(caller);
     if (!companyId) return 0;
     const ctx: RlsContext = { isSuperAdmin: false, companyId };
 

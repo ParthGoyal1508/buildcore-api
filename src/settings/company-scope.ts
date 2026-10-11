@@ -141,3 +141,23 @@ export function resolveCompanyId(
   }
   return effective;
 }
+
+/**
+ * The single company a caller is effectively working in, or null when they have none.
+ *
+ * The selection first, their own account's company second — the same precedence as
+ * `resolveCompanyId`, and for the same reason: since 019 FR-010 a cross-company caller
+ * who has chosen a company arrives scoped to it, and reading `caller.companyId` silently
+ * ignores the switcher.
+ *
+ * Differs from `resolveCompanyId` in exactly one way, which is why both exist: this
+ * answers **null** for a caller with no company instead of throwing. Callers that render
+ * an empty list rather than an error — an approval queue, a badge count — need the null;
+ * callers writing a row need the throw, because a write with no company is a fault.
+ *
+ * It never returns "all companies". A caller holding `CROSS_COMPANY_ACCESS` with nothing
+ * selected gets their own company, so a context built from this can only ever narrow.
+ */
+export function effectiveCompanyId(caller: AuthenticatedUser): string | null {
+  return rlsContextFor(caller).companyId ?? caller.companyId;
+}
