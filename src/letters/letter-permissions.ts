@@ -23,6 +23,10 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   transfer: Permission.EMPLOYEES,
   suspension: Permission.EMPLOYEES,
   salary_slip: Permission.PAYROLL,
+  // A pay revision, so `PAYROLL` rather than `EMPLOYEES` (2026-10-11): the increment
+  // letter states a figure the payroll run has to match, and whoever may change pay is
+  // the person who may put it in writing.
+  increment: Permission.PAYROLL,
 
   // The three that commit money. `PROJECT_FINANCIALS` rather than `PROJECTS`: issuing a
   // work order is a spending decision, and 009 and 013 both established that spending
@@ -30,6 +34,12 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   letter_work_order: Permission.PROJECT_FINANCIALS,
   letter_loi: Permission.PROJECT_FINANCIALS,
   letter_purchase_order: Permission.PROJECT_FINANCIALS,
+
+  // A payment leaving the company against a vendor's bill (2026-10-11). Money, so it
+  // sits with the three above rather than with procurement paperwork — a payment advice
+  // tells a vendor the transfer has been made, and anyone who can issue one can assert
+  // that it was.
+  payment_advice: Permission.PROJECT_FINANCIALS,
 
   // Procurement paperwork.
   indent: Permission.INVENTORY,

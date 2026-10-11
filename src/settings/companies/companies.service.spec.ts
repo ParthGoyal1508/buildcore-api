@@ -35,6 +35,10 @@ const equipmentCategories = { seedDefaultsForCompany: jest.fn() };
 const equipmentDocTypes = { seedDefaultsForCompany: jest.fn() };
 // 016 seeds the default approval chains the same way, in the same transaction.
 const approvalChains = { seedDefaultsForCompany: jest.fn() };
+// Installs the shipped letter bodies for a new company (2026-10-11). Stubbed: what it
+// writes is covered by `standard-templates.service.spec.ts`, and a company creating
+// without it is the state every test here was written against.
+const standardTemplates = { install: jest.fn() };
 
 const decimal = (n: number) => new Prisma.Decimal(n);
 const companyRow = (over: Record<string, unknown> = {}) => ({
@@ -71,6 +75,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await expect(
@@ -115,6 +120,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await service.create(
@@ -160,6 +166,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await service.create(
@@ -212,6 +219,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await service.create(
@@ -279,6 +287,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await expect(
@@ -309,6 +318,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
       await expect(
         service.update(
@@ -338,6 +348,7 @@ describe('CompaniesService', () => {
         equipmentCategories as never,
         equipmentDocTypes as never,
         approvalChains as never,
+        standardTemplates as never,
       );
 
       await service.listActiveForOtherModules();

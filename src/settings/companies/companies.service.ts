@@ -9,6 +9,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DEFAULT_SLOT_ROLE_NAMES } from '../../approvals/approval-slots';
 import { ChainsService } from '../../approvals/chains.service';
+import { StandardTemplatesService } from '../letter-templates/standard-templates.service';
 import { EquipmentCategoriesService } from '../machinery-masters/equipment-categories.service';
 import { EquipmentDocTypesService } from '../machinery-masters/equipment-doc-types.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -49,6 +50,7 @@ export class CompaniesService {
     private readonly equipmentCategories: EquipmentCategoriesService,
     private readonly equipmentDocTypes: EquipmentDocTypesService,
     private readonly approvalChains: ChainsService,
+    private readonly standardTemplates: StandardTemplatesService,
   ) {}
 
   /**
@@ -652,6 +654,12 @@ export class CompaniesService {
           superAdminRoleId: superAdminRole?.id ?? null,
           slotRoleIds,
         });
+
+        // The shipped letter bodies — offer, appointment, relieving, experience,
+        // increment and payment advice (2026-10-11). Starting values: `install` creates
+        // only what is missing, so a company that rewrites its offer letter keeps the
+        // rewrite. Same contract as the approval chains seeded above.
+        await this.standardTemplates.install(company.id, tx);
 
         await tx.employeeCodeSequence.create({
           data: { companyId: company.id, lastNumber: 0 },
