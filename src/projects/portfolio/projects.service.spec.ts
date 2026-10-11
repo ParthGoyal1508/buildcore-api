@@ -53,7 +53,18 @@ describe('ProjectsService.findOne', () => {
       } as never,
       // 017 US2: readiness is only consulted when the caller asks for it, so these
       // tests never reach it.
-      { readinessFor: jest.fn() } as never,
+      {
+        readinessFor: jest.fn(),
+        // `findOne` reports readiness on the overview since 2026-10-11.
+        readinessForOne: jest.fn().mockResolvedValue({
+          required: 2,
+          present: 1,
+          missingTypeIds: ['type-boq'],
+          advisoryRequired: 0,
+          advisoryPresent: 0,
+          advisoryMissingTypeIds: [],
+        }),
+      } as never,
     );
   };
 
@@ -122,7 +133,18 @@ describe('ProjectsService outward contract', () => {
       { machinerySource: () => null, materialsSource: () => null } as never,
       // 017 US2: readiness is only consulted when the caller asks for it, so these
       // tests never reach it.
-      { readinessFor: jest.fn() } as never,
+      {
+        readinessFor: jest.fn(),
+        // `findOne` reports readiness on the overview since 2026-10-11.
+        readinessForOne: jest.fn().mockResolvedValue({
+          required: 2,
+          present: 1,
+          missingTypeIds: ['type-boq'],
+          advisoryRequired: 0,
+          advisoryPresent: 0,
+          advisoryMissingTypeIds: [],
+        }),
+      } as never,
     );
 
   it('reports the portfolio as available, which 007 branches on', () => {
@@ -169,7 +191,18 @@ describe('ProjectsService.remove', () => {
       { machinerySource: () => null, materialsSource: () => null } as never,
       // 017 US2: readiness is only consulted when the caller asks for it, so these
       // tests never reach it.
-      { readinessFor: jest.fn() } as never,
+      {
+        readinessFor: jest.fn(),
+        // `findOne` reports readiness on the overview since 2026-10-11.
+        readinessForOne: jest.fn().mockResolvedValue({
+          required: 2,
+          present: 1,
+          missingTypeIds: ['type-boq'],
+          advisoryRequired: 0,
+          advisoryPresent: 0,
+          advisoryMissingTypeIds: [],
+        }),
+      } as never,
     );
 
     const attempt = service.remove(caller, 'project-1', '10.0.0.1');
