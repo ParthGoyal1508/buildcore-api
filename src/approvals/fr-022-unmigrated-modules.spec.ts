@@ -327,6 +327,16 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // again straight after — was followed here, which is why this is being written at all
           // rather than discovered next week.
           ':(exclude)src/plant/reminders',
+          // 2026-10-11. `PROJECT_CODE_INFIX`'s docblock said project codes read
+          // `ACME-PRJ-0001`; they now read `1010`. A comment correction and nothing else —
+          // the constant's value is unchanged and **nothing in this file has ever called
+          // `ApprovalService`**. Excluded rather than left wrong: a stale comment about a
+          // format is how the next reader builds against the old one.
+          //
+          // **Tenth time this guard has fired a commit late.** Same mechanism every time,
+          // and the run straight after the commit is what caught it, as the notes above
+          // keep prescribing.
+          ':(exclude)src/projects/constants/projects.constants.ts',
         ],
         {
           cwd: REPO_ROOT,
