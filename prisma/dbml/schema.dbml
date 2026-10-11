@@ -334,6 +334,7 @@ payment-sheet builder while concealing nothing anybody wanted concealed.']
   directorFinalActions DirectorFinalAction [not null, note: '016 FR-018a: which action types this company requires the Director to approve.']
   directorFinalChangeProposals DirectorFinalChangeProposal [not null, note: '016 FR-018b: proposed changes to this company\'s director-final set.']
   userCompanySelections UserCompanySelection [not null, note: '019 FR-008: users currently working in this company.']
+  TermsTemplate TermsTemplate [not null]
 
   Note: 'The tenant root — not itself `companyId`-scoped, so deliberately NOT RLS-filtered
 (a company has no companyId; it *is* the company). Access is gated by the
@@ -530,6 +531,36 @@ a `settings`-schema master owned and audited by feature 011 (011 FR-037). When
 issue; otherwise it is a non-stock issuance.'
 }
 
+Table TermsTemplate {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  documentKind TermsDocumentKind [not null]
+  body String [not null, note: 'The clauses, as plain text. Newline-separated; no markup, because what consumes
+this is a PDF table cell and a textarea, neither of which renders any.']
+  updatedByUserId String [note: 'Who last changed the company\'s standard terms. `shared.User.id`, a bare id.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, documentKind) [unique]
+  }
+
+  Note: 'The company\'s standard terms and conditions for one kind of document (2026-10-11).
+
+**Why this is not `LetterTemplate`.** A letter template is a whole letter body with
+`{{token}}` substitution, and it already serves LOI and the other issued letters —
+that mechanism is not duplicated here. A terms block is a different thing: it is a
+clause set that gets copied *into* a document which has its own structure, and
+`WorkOrder.terms` is the column that holds the copy.
+
+**Copied in, not read through.** A work order keeps the terms it was raised under,
+in its own column, exactly as a bill keeps the rate it was priced at. Editing the
+standard set changes what the *next* work order starts from and leaves every award
+already signed alone — which is the whole reason the master and the copy are
+separate rows rather than one.'
+}
+
 Table LetterTemplate {
   id String [pk]
   companyId String [not null]
@@ -544,10 +575,6 @@ this code shipped.']
   isActive Boolean [not null, default: false]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
-
-  Note: 'A per-company letter template with `{{token}}` substitution (011 FR-020, FR-021).
-At most one active template per (companyId, letterType) — enforced by a partial
-unique index in the migration.'
 }
 
 Table DocumentType {
@@ -5024,6 +5051,12 @@ Enum LetterFieldSource {
   manual
 }
 
+Enum TermsDocumentKind {
+  work_order
+  letter_of_intent
+  purchase_order
+}
+
 Enum DocumentTypeScope {
   employee
   company
@@ -5864,6 +5897,8 @@ Ref: LetterKindField.letterKindId > LetterKind.id [delete: Cascade]
 Ref: Signatory.companyId > Company.id [delete: Cascade]
 
 Ref: KitItem.companyId > Company.id [delete: Cascade]
+
+Ref: TermsTemplate.companyId > Company.id [delete: Cascade]
 
 Ref: LetterTemplate.companyId > Company.id [delete: Cascade]
 

@@ -593,6 +593,7 @@ model Company {
 
   /// 019 FR-008: users currently working in this company.
   userCompanySelections UserCompanySelection[]
+  TermsTemplate         TermsTemplate[]
 
   @@schema("settings")
 }
@@ -874,6 +875,60 @@ model KitItem {
 /// A per-company letter template with `{{token}}` substitution (011 FR-020, FR-021).
 /// At most one active template per (companyId, letterType) — enforced by a partial
 /// unique index in the migration.
+/// Which document a set of standard terms belongs to (2026-10-11).
+///
+/// A string-keyed enum rather than free text, so a typo cannot create a second,
+/// invisible set of terms that no document will ever read. Extending it is a migration,
+/// which is the right weight: a new kind of document that carries terms is a decision,
+/// not a data entry.
+enum TermsDocumentKind {
+  /// The subcontract award. Defaults into `WorkOrder.terms` when one is raised.
+  work_order
+  /// Letter of intent.
+  letter_of_intent
+  /// Purchase order.
+  purchase_order
+
+  @@schema("settings")
+}
+
+/// The company's standard terms and conditions for one kind of document (2026-10-11).
+///
+/// **Why this is not `LetterTemplate`.** A letter template is a whole letter body with
+/// `{{token}}` substitution, and it already serves LOI and the other issued letters —
+/// that mechanism is not duplicated here. A terms block is a different thing: it is a
+/// clause set that gets copied *into* a document which has its own structure, and
+/// `WorkOrder.terms` is the column that holds the copy.
+///
+/// **Copied in, not read through.** A work order keeps the terms it was raised under,
+/// in its own column, exactly as a bill keeps the rate it was priced at. Editing the
+/// standard set changes what the *next* work order starts from and leaves every award
+/// already signed alone — which is the whole reason the master and the copy are
+/// separate rows rather than one.
+model TermsTemplate {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  documentKind TermsDocumentKind
+
+  /// The clauses, as plain text. Newline-separated; no markup, because what consumes
+  /// this is a PDF table cell and a textarea, neither of which renders any.
+  body String
+
+  /// Who last changed the company's standard terms. `shared.User.id`, a bare id.
+  updatedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One set per kind per company. A second would make "the standard terms" ambiguous,
+  /// and the defaulting below would have to pick.
+  @@unique([companyId, documentKind])
+  @@index([companyId])
+  @@schema("settings")
+}
+
 model LetterTemplate {
   id        String  @id @default(cuid())
   companyId String

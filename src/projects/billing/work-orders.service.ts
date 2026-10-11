@@ -10,6 +10,7 @@ import {
   AuditEntityType,
   CodeSeriesType,
   Permission,
+  TermsDocumentKind,
   WorkOrderStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -26,6 +27,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
+import { TermsTemplatesService } from '../../settings/terms-templates/terms-templates.service';
 
 /**
  * The infix slot every series in this product fills the same way.
@@ -110,6 +112,7 @@ export class WorkOrdersService {
     private readonly codeSeries: CodeSeriesService,
     private readonly approvals: ApprovalService,
     private readonly auditLog: AuditLogService,
+    private readonly terms: TermsTemplatesService,
   ) {}
 
   /**
@@ -373,7 +376,23 @@ export class WorkOrdersService {
           projectId: input.projectId,
           partnerId: input.partnerId ?? null,
           workDetail: input.workDetail.trim(),
-          terms: input.terms ?? null,
+          // The company's standard terms where the caller supplied none (2026-10-11).
+          //
+          // **Copied in, never read through.** The award keeps the terms it was raised
+          // under, exactly as a bill keeps the rate it was priced at: editing the
+          // standard set changes what the *next* order starts from and leaves every one
+          // already signed alone.
+          //
+          // `??`, not `||`: an empty string is somebody deliberately clearing the box,
+          // and refilling it with the standard set would make the box impossible to
+          // empty.
+          terms:
+            input.terms ??
+            (await this.terms.bodyFor(
+              tx,
+              companyId,
+              TermsDocumentKind.work_order,
+            )),
           requirements: input.requirements ?? null,
           hireContract: input.hireContract ?? null,
           labourAmount: input.labourAmount ?? 0,

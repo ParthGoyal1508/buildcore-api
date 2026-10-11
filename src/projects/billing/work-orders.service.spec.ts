@@ -1,5 +1,8 @@
 import { WorkOrdersService } from './work-orders.service';
 
+/** What the stubbed terms master hands back, so a defaulted value is recognisable. */
+const STANDARD = 'Standard terms, from the company master.';
+
 /**
  * Work orders in the minimal form 018 needs (018 US2).
  *
@@ -71,6 +74,9 @@ function build(opts: {
       // The audit trail, stubbed: `reopenAward` records why an approval was voided, and these
       // tests are about what the service stores.
       { record: async () => undefined } as never,
+      // The standard terms, stubbed: `create` falls back to the company's set when the
+      // caller sends none. `terms-templates` owns what that set is.
+      { bodyFor: async () => STANDARD } as never,
     ),
     updates,
   };
@@ -128,6 +134,9 @@ describe('raising a work order', () => {
         abandon: async () => undefined,
       } as never,
       { record: async () => undefined } as never,
+      // The standard terms, stubbed: `create` falls back to the company's set when the
+      // caller sends none. `terms-templates` owns what that set is.
+      { bodyFor: async () => STANDARD } as never,
     );
 
     const view = await service.create(ctx, 'c-1', {
@@ -138,6 +147,91 @@ describe('raising a work order', () => {
     expect(created[0].code).toBe('PRPL-WO-0007');
     expect(seen[0]).toBe(tx);
     expect(view.code).toBe('PRPL-WO-0007');
+  });
+});
+
+/**
+ * The company's standard terms, onto the award (2026-10-11).
+ *
+ * "A fixed set of terms and conditions" was the request. Before this, a new work order's
+ * terms box was empty, so every award carried whatever its author could remember.
+ */
+describe('the standard terms land on a new work order', () => {
+  const buildFor = (created: Record<string, unknown>[]) => {
+    const tx = {
+      $executeRaw: async () => 0,
+      project: { findFirst: async () => ({ id: 'p-1' }) },
+      workOrder: {
+        create: async (args: { data: Record<string, unknown> }) => {
+          created.push(args.data);
+          return { id: 'wo-1' };
+        },
+        findFirst: async () => ({
+          id: 'wo-1',
+          projectId: 'p-1',
+          partnerId: null,
+          code: 'PRPL-WO-0009',
+          workDetail: 'Earthwork',
+          terms: null,
+          requirements: null,
+          hireContract: null,
+          labourAmount: { toNumber: () => 0 },
+          materialAmount: { toNumber: () => 0 },
+          retentionPercent: { toNumber: () => 0 },
+          status: 'draft',
+          createdAt: new Date(),
+          _count: { awardLines: 0, raBills: 0 },
+        }),
+      },
+    };
+    return new WorkOrdersService(
+      {
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      } as never,
+      { next: async () => 'PRPL-WO-0009' } as never,
+      {
+        submit: async () => undefined,
+        abandon: async () => undefined,
+      } as never,
+      { record: async () => undefined } as never,
+      { bodyFor: async () => STANDARD } as never,
+    );
+  };
+
+  it('fills the terms from the company master when none is given', async () => {
+    const created: Record<string, unknown>[] = [];
+    await buildFor(created).create(ctx, 'c-1', {
+      projectId: 'p-1',
+      workDetail: 'Earthwork',
+    } as never);
+
+    expect(created[0].terms).toBe(STANDARD);
+  });
+
+  it('leaves a caller’s own terms alone', async () => {
+    // Without this, "fill from the master" would be indistinguishable from "always use
+    // the master", and the box would be impossible to write in.
+    const created: Record<string, unknown>[] = [];
+    await buildFor(created).create(ctx, 'c-1', {
+      projectId: 'p-1',
+      workDetail: 'Earthwork',
+      terms: 'Ours, negotiated separately.',
+    } as never);
+
+    expect(created[0].terms).toBe('Ours, negotiated separately.');
+  });
+
+  it('lets the box be emptied deliberately', async () => {
+    // `??`, not `||`. An empty string is somebody clearing the field, and refilling it
+    // with the standard set would make it impossible to empty.
+    const created: Record<string, unknown>[] = [];
+    await buildFor(created).create(ctx, 'c-1', {
+      projectId: 'p-1',
+      workDetail: 'Earthwork',
+      terms: '',
+    } as never);
+
+    expect(created[0].terms).toBe('');
   });
 });
 
@@ -190,6 +284,9 @@ describe('an award cannot declare itself approved (028 FR-009)', () => {
         abandon: async () => undefined,
       } as never,
       { record: async () => undefined } as never,
+      // The standard terms, stubbed: `create` falls back to the company's set when the
+      // caller sends none. `terms-templates` owns what that set is.
+      { bodyFor: async () => STANDARD } as never,
     );
 
     await service.create(ctx, 'c-1', {
