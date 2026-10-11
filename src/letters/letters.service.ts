@@ -8,14 +8,6 @@ import {
 } from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
-// `import = require` deliberately, not `import * as`. The app is built by SWC
-// (nest-cli.json), which gives `import * as` true ESM semantics and hands back a
-// namespace object that cannot be constructed; the tests are built by ts-jest, which
-// emits a bare require and constructs fine. The namespace form therefore passes every
-// test and throws "_pdfkit is not a constructor" in the running server. This form emits
-// a bare require under both.
-import PDFDocument = require('pdfkit');
-
 import { ApprovalService } from '../approvals/approvals.service';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -34,6 +26,7 @@ import {
   SIGNATORY_REQUIRED,
 } from './letter-error-codes';
 import { permissionForKind } from './letter-permissions';
+import { formatLetterDate, renderLetterPdf } from './letter-pdf.renderer';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
 import { webRoutes } from '../common/web-routes';
 
@@ -89,38 +82,6 @@ function toView(row: LetterRow): IssuedLetterView {
     countersignedAt: row.countersignedAt,
     requiresApproval: row.letterKind.requiresApproval,
   };
-}
-
-/** Renders plain text into a single-column A4 PDF buffer. */
-function renderPdf(
-  title: string,
-  body: string,
-  signature?: { image: Buffer; name: string; title: string },
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 56 });
-    const chunks: Buffer[] = [];
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-    doc.fontSize(16).text(title, { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(11).text(body, { align: 'left' });
-    if (signature) {
-      doc.moveDown(2);
-      try {
-        doc.image(signature.image, { width: 140 });
-      } catch {
-        // A signature graphic that pdfkit cannot decode must not lose the letter. The
-        // name and title below still identify the signatory, and `appliedSignatureRef`
-        // still records what was meant to be applied.
-        doc.fontSize(10).text('[signature]');
-      }
-      doc.fontSize(11).text(signature.name);
-      doc.fontSize(10).text(signature.title);
-    }
-    doc.end();
-  });
 }
 
 /**
@@ -468,13 +429,20 @@ export class LettersService {
       templateId: string;
       letterKind: { label: string; requiresSignature: boolean };
       signatoryId: string | null;
+      referenceNo?: string | null;
     },
     variables: Record<string, string>,
   ): Promise<{ ref: string; appliedSignatureRef: string | null }> {
-    const template = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.letterTemplate.findFirst({
-        where: { id: letter.templateId, companyId },
-      }),
+    const [template, company] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.letterTemplate.findFirst({
+          where: { id: letter.templateId, companyId },
+        }),
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+      ]),
     );
     if (!template) {
       throw new ConflictException({
@@ -506,17 +474,51 @@ export class LettersService {
     }
 
     const body = renderTemplate(template.bodyTemplate, variables);
-    const pdf = await renderPdf(
-      letter.letterKind.label.toUpperCase(),
+    const pdf = await renderLetterPdf({
+      title: letter.letterKind.label.toUpperCase(),
       body,
+      letterhead: await this.letterhead(template.letterheadAssetId, company),
+      referenceNo: letter.referenceNo ?? null,
+      // The date the letter bears is the day it is issued. Taken from the clock rather
+      // than from `variables`, so the printed date and `issuedAt` can never disagree —
+      // which, on a document that starts a notice period, is a dispute.
+      issueDate: formatLetterDate(new Date()),
       signature,
-    );
+    });
     const ref = await this.storage.put(
       `${LETTER_NAMESPACE}/${companyId}`,
       pdf,
       'application/pdf',
     );
     return { ref, appliedSignatureRef };
+  }
+
+  /**
+   * The stationery to print on: the template's own, else the company's, else none.
+   *
+   * `LetterTemplate.letterheadAssetId` has existed since the 017 restructure and was never
+   * read by anything — the column was written at save and ignored at render. It is honoured
+   * here rather than removed, because a company with one letterhead for HR and another for
+   * commercial letters is the case it was added for, and the per-company reference is the
+   * answer for everyone else.
+   *
+   * A reference that no longer resolves returns null rather than throwing. Losing the
+   * artwork must not make a company's letters unissuable; it makes them plain.
+   */
+  private async letterhead(
+    templateRef: string | null,
+    company: { letterheadRef: string | null } | null,
+  ): Promise<Buffer | null> {
+    const ref = templateRef ?? company?.letterheadRef ?? null;
+    if (!ref) return null;
+    try {
+      return await this.storage.get(ref);
+    } catch {
+      this.logger.warn(
+        `Letterhead ${ref} could not be read; rendering on plain paper.`,
+      );
+      return null;
+    }
   }
 
   /**

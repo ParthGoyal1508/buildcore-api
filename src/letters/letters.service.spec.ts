@@ -75,7 +75,16 @@ function harness(opts: { kind?: Kind; letter?: Record<string, unknown> } = {}) {
         id: 'tpl-1',
         companyId: COMPANY,
         bodyTemplate: 'Dear {{vendorName}}, work order for {{amount}}.',
+        // Null: the template defers to the company's letterhead, which is the case
+        // every company but one will be in.
+        letterheadAssetId: null,
       })),
+    },
+    // Read at render for the company's letterhead (2026-10-11). Null here, so these
+    // tests render on plain paper and assert nothing about the artwork — the geometry
+    // and the image itself belong to `letter-pdf.renderer.spec.ts`.
+    company: {
+      findUnique: jest.fn(async () => ({ letterheadRef: null })),
     },
     $executeRaw: jest.fn(),
   };

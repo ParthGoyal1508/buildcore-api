@@ -386,6 +386,21 @@ model Company {
   shortCode String  @unique
   logoUrl   String?
 
+  /// The company's printed letterhead, as a full-page image (2026-10-11).
+  ///
+  /// A storage reference, not a URL: the file is served through the API like every other
+  /// blob, so it is reachable only by a caller who may read this company.
+  ///
+  /// **A whole page, not a header strip.** The client's two letterheads are full-page
+  /// artwork — header band at the top, contact block and footer rule at the bottom, blank
+  /// between — exactly as their pre-printed stationery is. The renderer draws it to the
+  /// page edges and lays the body inside the clear middle, which is why there is one
+  /// reference here and not a header/footer pair.
+  ///
+  /// Null means letters render on plain paper, which is the correct behaviour for a
+  /// company that has not supplied one — not an error to refuse an issue over.
+  letterheadRef String?
+
   status CompanyStatus @default(active)
 
   // Statutory registration identifiers. GSTIN/PAN are format-validated at the DTO
