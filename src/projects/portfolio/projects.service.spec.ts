@@ -34,6 +34,9 @@ describe('ProjectsService.findOne', () => {
         findFirst: jest.fn().mockResolvedValue(null),
       },
       rABill: { findMany: jest.fn().mockResolvedValue([]) },
+      // The other direction (2026-10-12) — `ClientBill`, which is a different model from `RABill`
+      // and a different question: money in rather than money out.
+      clientBill: { findMany: jest.fn().mockResolvedValue([]) },
       revenue: { findMany: jest.fn().mockResolvedValue([]) },
       ...overrides,
     });
@@ -102,6 +105,42 @@ describe('ProjectsService.findOne', () => {
     // Employees are NOT in unavailableModules — 005 has shipped, so this is a real
     // answer rather than a gap.
     expect(detail.unavailableModules).not.toContain('hr');
+  });
+
+  /**
+   * The two bill directions are two models, and the card now shows both.
+   *
+   * Asserted here as well as end to end because this is where the crossing would happen: both
+   * summaries are built in one method from two queries, and reading `bills` for the client figures
+   * — or summing `grossAmount` instead of `netAmount` — produces a response that parses perfectly
+   * and is wrong. The amounts below share no value, so a crossed wire cannot pass.
+   */
+  it('summarises client bills apart from subcontractor bills', async () => {
+    const service = serviceWith({
+      rABill: {
+        findMany: jest.fn().mockResolvedValue([{ amount: 1111 }]),
+      },
+      clientBill: {
+        findMany: jest.fn().mockResolvedValue([
+          { netAmount: 5000, certifiedAmount: 4800 },
+          // Null is "not certified", which is not zero — the count is what says so.
+          { netAmount: 7000, certifiedAmount: null },
+        ]),
+      },
+    });
+
+    const detail = await service.findOne(caller, 'project-1');
+
+    expect(detail.tabs.billSummary).toEqual({
+      totalBills: 1,
+      totalExpenses: 1111,
+    });
+    expect(detail.tabs.clientBillSummary).toEqual({
+      totalBills: 2,
+      totalBilled: 12000,
+      totalCertified: 4800,
+      certifiedCount: 1,
+    });
   });
 
   it('splits revenue by status rather than reporting one total', async () => {

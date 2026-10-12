@@ -131,7 +131,38 @@ export interface ProjectDetail {
       issuedQuantity: number;
     }[];
     dwrSummary: { count: number; latestDate: Date | null };
+    /**
+     * **Subcontractor running-account bills** — `RABill`, the RA bills tab. Money going out.
+     *
+     * The name is kept as it was found rather than corrected to `subcontractorBillSummary`,
+     * because it is a published field and renaming it would break every client that reads it for
+     * nothing a comment cannot fix. The label on the screen says which it is, which is where the
+     * ambiguity actually bit: a project has a Client bills tab and an RA bills tab, and the
+     * overview card said only "Bills".
+     *
+     * Every status, drafts included — this is "how many bills exist against this project", not
+     * "how many have been approved".
+     */
     billSummary: { totalBills: number; totalExpenses: number };
+    /**
+     * **Client bills** — `ClientBill`, the Client bills tab. Money coming in (2026-10-12).
+     *
+     * A separate model from `RABill` and never counted in the figure above, which is why the
+     * overview could show six bills booked against a project that had also billed its client
+     * several lakh and say nothing about it.
+     *
+     * `totalBilled` is the sum of `netAmount` — gross less retention, which is what the client is
+     * actually asked to pay — and `totalCertified` the sum of what they agreed to. The two are
+     * reported separately rather than netted because the variance between them is the thing a
+     * project manager chases; a single figure can only say one of them.
+     */
+    clientBillSummary: {
+      totalBills: number;
+      totalBilled: number;
+      totalCertified: number;
+      /** How many of those bills carry a certified figure, so "₹0 certified" is readable. */
+      certifiedCount: number;
+    };
     revenueSummary: { totalReceived: number; totalPending: number };
   };
   /**
@@ -470,8 +501,8 @@ export class ProjectsService {
     assertInScope(caller, project, `Project ${id}`);
 
     const ownData = await withRlsContext(this.prisma, ctx, async (tx) => {
-      const [siteIds, dwrCount, latestDwr, bills, revenues] = await Promise.all(
-        [
+      const [siteIds, dwrCount, latestDwr, bills, revenues, clientBills] =
+        await Promise.all([
           tx.site.findMany({
             where: { projectId: id },
             select: { id: true },
@@ -490,9 +521,14 @@ export class ProjectsService {
             where: { projectId: id },
             select: { amount: true, status: true },
           }),
-        ],
-      );
-      return { siteIds, dwrCount, latestDwr, bills, revenues };
+          // The other direction (2026-10-12). `netAmount` rather than `grossAmount`: retention is
+          // the client's money held back, not a figure they were asked for.
+          tx.clientBill.findMany({
+            where: { projectId: id },
+            select: { netAmount: true, certifiedAmount: true },
+          }),
+        ]);
+      return { siteIds, dwrCount, latestDwr, bills, revenues, clientBills };
     });
 
     const employees = await this.employees.listActiveBySiteIds(
@@ -537,6 +573,22 @@ export class ProjectsService {
             (sum, bill) => sum + Number(bill.amount),
             0,
           ),
+        },
+        clientBillSummary: {
+          totalBills: ownData.clientBills.length,
+          totalBilled: ownData.clientBills.reduce(
+            (sum, bill) => sum + Number(bill.netAmount),
+            0,
+          ),
+          // Null is "not certified yet", which is not zero — a bill certified at nil and a bill
+          // nobody has looked at are different facts, and only the count tells them apart.
+          totalCertified: ownData.clientBills.reduce(
+            (sum, bill) => sum + Number(bill.certifiedAmount ?? 0),
+            0,
+          ),
+          certifiedCount: ownData.clientBills.filter(
+            (bill) => bill.certifiedAmount !== null,
+          ).length,
         },
         revenueSummary: { totalReceived, totalPending },
       },

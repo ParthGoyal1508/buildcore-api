@@ -387,6 +387,89 @@ describe('Projects module (e2e)', () => {
       expect(detail.body.unavailableModules).toEqual([]);
     });
 
+    /**
+     * The overview counts **both directions of billing** (reported 2026-10-12).
+     *
+     * "6 bills booked" on a project's Activity card meant `RABill` — money out to subcontractors —
+     * and the client bills on the same project contributed nothing to any figure on that card. A
+     * reader could not tell which they were looking at, and the one they usually wanted was the
+     * one that was missing.
+     *
+     * ## Vacuity note
+     *
+     * _Asserting that `clientBillSummary` is present proves a field._ A summary wired to the wrong
+     * model, or to the same rows as `billSummary`, is present too — and reads perfectly plausibly.
+     * So this project carries **a different number of bills in each direction and no shared
+     * amount**: one RA bill of 1,111 against two client bills of 5,000 and 7,000. Every figure
+     * below would be wrong if the two were crossed.
+     */
+    it('counts subcontractor bills and client bills separately on the detail', async () => {
+      const project = await createProject({
+        name: unique('BothBills'),
+        clientId,
+        contractValue: 1,
+        startDate: '2026-05-01',
+      });
+
+      await sys.rABill.create({
+        data: {
+          companyId,
+          projectId: project.id,
+          billNumber: `RA-${Date.now() % 100000}`,
+          amount: 1111,
+          billingDate: new Date('2026-06-01'),
+        },
+      });
+      await sys.clientBill.createMany({
+        data: [
+          {
+            companyId,
+            projectId: project.id,
+            billNumber: `CB1-${Date.now() % 100000}`,
+            billingDate: new Date('2026-06-02'),
+            grossAmount: 5500,
+            retentionAmount: 500,
+            netAmount: 5000,
+            certifiedAmount: 4800,
+          },
+          {
+            companyId,
+            projectId: project.id,
+            billNumber: `CB2-${Date.now() % 100000}`,
+            billingDate: new Date('2026-06-03'),
+            grossAmount: 7000,
+            retentionAmount: 0,
+            netAmount: 7000,
+            // Not yet certified. Null is not zero, and the count below is what says so.
+            certifiedAmount: null,
+          },
+        ],
+      });
+
+      const detail = await http()
+        .get(`/projects/${project.id}`)
+        .set(auth())
+        .expect(200);
+
+      expect(detail.body.tabs.billSummary).toEqual({
+        totalBills: 1,
+        totalExpenses: 1111,
+      });
+      expect(detail.body.tabs.clientBillSummary).toEqual({
+        totalBills: 2,
+        // `netAmount`, not gross: retention is the client's money held back, not a figure they
+        // were asked for. 5,500 would mean this read the wrong column.
+        totalBilled: 12000,
+        totalCertified: 4800,
+        // One of the two. Without this, "₹4,800 certified" cannot be told from "one bill
+        // certified at ₹4,800 and another certified at nil".
+        certifiedCount: 1,
+      });
+
+      await sys.clientBill.deleteMany({ where: { projectId: project.id } });
+      await sys.rABill.deleteMany({ where: { projectId: project.id } });
+    });
+
     it('refuses to delete a project that has recorded data, naming what is in the way', async () => {
       const project = await createProject({
         name: unique('HasDwr'),
