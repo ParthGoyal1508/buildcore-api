@@ -612,6 +612,39 @@ describe('Plant module (e2e)', () => {
       expect(row.totalQuantity).toBe(96);
       expect(row.totalAmount).toBe(8880);
     });
+
+    /**
+     * The unfiltered list, which is the only request the Fuel exceptions panel makes
+     * when it opens — and the one that answered 500 in the running application.
+     *
+     * **This assertion does not catch the defect, and is kept for what it documents
+     * rather than what it defends.** The crash depends on the `design:paramtypes`
+     * metadata emitted for a Prisma enum in a parameter position, and ts-jest and SWC
+     * emit it differently: under SWC, which is what `nest build` uses and therefore what
+     * ships, the enum object reaches `ValidationPipe` and `plainToClass(metatype,
+     * undefined)` throws; under ts-jest the same source emits `Object`, which the pipe
+     * skips, so this test passed against the broken controller too. Verified by reverting
+     * the fix and re-running: 53 passed, and only the case below went red. A browser
+     * against the real server is what proved the screen was blank.
+     *
+     * The test that does fail against the defect is the next one — the pipe cannot
+     * answer 400 for a bad enum value unless it is validating a class it understands.
+     */
+    it('lists every exception when no status is given', async () => {
+      const listed = await http()
+        .get('/plant/fuel/exceptions')
+        .set(auth())
+        .expect(200);
+
+      expect(Array.isArray(listed.body)).toBe(true);
+    });
+
+    it('refuses a status that is not a status, rather than failing', async () => {
+      await http()
+        .get('/plant/fuel/exceptions?status=not-a-status')
+        .set(auth())
+        .expect(400);
+    });
   });
 
   // ── Service schedules and maintenance ───────────────────────────────────

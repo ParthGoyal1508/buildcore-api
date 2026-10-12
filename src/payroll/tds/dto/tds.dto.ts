@@ -113,3 +113,27 @@ export class QuarterlyQueryDto {
   @IsString()
   companyId?: string;
 }
+
+/**
+ * Which financial year's slab set, under which regime.
+ *
+ * A DTO rather than three bare `@Query(...)` parameters, because one of them —
+ * `regime: TaxRegime` — made the global `ValidationPipe` validate against a Prisma enum
+ * object as though it were a class. That returns a 500 rather than a 400 for a regime
+ * that is not a regime, and a 500 if the parameter is omitted at all. The same fault as
+ * `list-leave-applications.dto.ts` documents; this was the last site carrying it.
+ */
+export class SlabsQueryDto {
+  @ApiProperty({ example: '2026-27' })
+  @Matches(FY, { message: 'financialYear must be YYYY-YY' })
+  financialYear: string;
+
+  @ApiProperty({ enum: TaxRegime })
+  @IsEnum(TaxRegime)
+  regime: TaxRegime;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+}

@@ -51,3 +51,29 @@ export class ReviewFuelExceptionDto {
   @MaxLength(1000)
   reason?: string;
 }
+
+/**
+ * Which exceptions to list, or none of them to list every one.
+ *
+ * A DTO rather than a bare `@Query('status') status?: FuelExceptionStatus`, which is what this
+ * used to be and which returned a 500 on **every** unfiltered request — the only request the
+ * screen makes on arrival, so the Fuel exceptions panel never loaded at all. The global
+ * `ValidationPipe` runs with `transform: true`, and for a parameter whose declared type is not
+ * one of the primitives it recognises it calls `plainToClass(metatype, value)`; class-transformer
+ * throws `Cannot read properties of undefined (reading 'constructor')` on an undefined value.
+ * A supplied `?status=confirmed` survived that path intact, which is why the endpoint looked
+ * healthy from a filtered call and from its own unit tests.
+ *
+ * The same fault, with the same note, was fixed for leave applications, clients and vendors —
+ * see `list-leave-applications.dto.ts`. This was the one site left, and `tds.controller.ts`'s
+ * `regime` was the other.
+ */
+export class ListFuelExceptionsQueryDto {
+  @ApiPropertyOptional({
+    enum: FuelExceptionStatus,
+    description: 'Omit to list exceptions in every state.',
+  })
+  @IsOptional()
+  @IsEnum(FuelExceptionStatus)
+  status?: FuelExceptionStatus;
+}

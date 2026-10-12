@@ -9,7 +9,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { FuelExceptionStatus, Permission } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -17,7 +17,10 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { ReviewFuelExceptionDto } from './dto/fuel-exception.dto';
+import {
+  ListFuelExceptionsQueryDto,
+  ReviewFuelExceptionDto,
+} from './dto/fuel-exception.dto';
 import { FuelExceptionsService } from './fuel-exceptions.service';
 
 /**
@@ -45,9 +48,9 @@ export class FuelExceptionsController {
   })
   async list(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('status') status?: FuelExceptionStatus,
+    @Query() query: ListFuelExceptionsQueryDto,
   ) {
-    return this.exceptions.list(caller, status);
+    return this.exceptions.list(caller, query.status);
   }
 
   @Post('raise')

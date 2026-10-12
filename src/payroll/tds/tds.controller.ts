@@ -16,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Permission, TaxRegime } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import type { Request } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -29,6 +29,7 @@ import {
   DeclareTaxDto,
   QuarterlyQueryDto,
   SetTaxSlabsDto,
+  SlabsQueryDto,
 } from './dto/tds.dto';
 import { TdsService } from './tds.service';
 
@@ -56,15 +57,13 @@ export class TdsController {
   async getSlabs(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
-    @Query('financialYear') financialYear: string,
-    @Query('regime') regime: TaxRegime,
-    @Query('companyId') companyId?: string,
+    @Query() query: SlabsQueryDto,
   ) {
     return this.tds.getSlabs(
       callerFrom(user, request),
-      this.companyOf(user, companyId),
-      financialYear,
-      regime,
+      this.companyOf(user, query.companyId),
+      query.financialYear,
+      query.regime,
     );
   }
 
