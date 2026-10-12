@@ -30,7 +30,26 @@ import {
  * test counts pages and requires more than one.
  */
 
-const LETTERHEAD = join(__dirname, '..', '..', 'docs', 'Parth_Realcon.jpeg');
+/**
+ * The stand-in letterhead these tests render with.
+ *
+ * **A fixture in the repository, not the client's artwork in `docs/`.** This read used to
+ * reach `docs/Parth_Realcon.jpeg`, which is not committed — so the whole suite failed to
+ * run on CI with `ENOENT`, and 2,053 passing tests reported as a red build. It passed
+ * locally for the obvious reason: the file is on the machine it was written on.
+ *
+ * Skipping when the file is absent is the other convention here (`boq-import.service.spec.ts`
+ * does exactly that) and is wrong for this one: these assertions exist because the renderer
+ * ignored the artwork entirely for a year, and a test that stands down on CI is a test that
+ * is absent from the only place a regression would be caught.
+ *
+ * Synthetic, and portrait at A4 proportions, which is what the three tests below need
+ * between them: real bytes to find inside the PDF, enough of them that "the document grew
+ * by the artwork" means something, and a graphic taller than it is wide for the signature
+ * letterboxing. Generated once from seeded noise over a gradient — noise so the run taken
+ * from its middle is distinctive rather than the quantisation tables every JPEG shares.
+ */
+const LETTERHEAD = join(__dirname, '__fixtures__', 'letterhead.jpg');
 
 /** Pages, counted off the PDF's own page objects. */
 const pageCount = (pdf: Buffer): number =>
@@ -92,9 +111,14 @@ describe('letter PDF renderer', () => {
       const plain = await renderLetterPdf({ ...letter, letterhead: null });
       const headed = await renderLetterPdf({ ...letter, letterhead: artwork });
 
-      // The artwork is 71 KB. A renderer that accepted the buffer and discarded it — the
-      // behaviour before this change — produces a document the same size as the plain one.
-      expect(headed.length).toBeGreaterThan(plain.length + 50_000);
+      // Measured against the artwork's own size rather than a fixed threshold: a renderer
+      // that accepted the buffer and discarded it — the behaviour before this change —
+      // produces a document the same size as the plain one, whatever the artwork weighs.
+      // A hardcoded 50 KB was a statement about one particular file and silently became
+      // wrong the moment the file did.
+      expect(headed.length).toBeGreaterThan(
+        plain.length + artwork.length * 0.8,
+      );
 
       // And it is *this* image, not some image: a PDF stores a JPEG by copying its
       // compressed scan data verbatim, so a distinctive run from the middle of the file
@@ -132,8 +156,8 @@ describe('letter PDF renderer', () => {
       // The artwork is embedded **once** — one JPEG stream — and each page's resource
       // dictionary names it. So the right count for "every page" is the references, not
       // the copies, and asserting one copy at the same time is what stops a regression
-      // back to re-embedding it per page (a 71 KB letterhead × 5 pages was most of the
-      // file before `openImage`).
+      // back to re-embedding it per page (the client's 71 KB letterhead × 5 pages was
+      // most of the file before `openImage`).
       expect(raw.match(/\/DCTDecode/g)?.length).toBe(1);
       expect(raw.match(/\/I\d+/g)?.length).toBe(pages);
     });
@@ -146,7 +170,7 @@ describe('letter PDF renderer', () => {
       // 46pt — so the name printed across the middle of the image and the graphic ran
       // into the footer. Capping the height is what prevents that, and the observable
       // consequence is that a tall graphic does not cost an extra page.
-      const tall = readFileSync(LETTERHEAD); // 1131 × 1600 — as portrait as it gets.
+      const tall = readFileSync(LETTERHEAD); // 413 × 584 — taller than it is wide.
       const pdf = await renderLetterPdf({
         title: 'RELIEVING LETTER',
         body: 'This is to certify that he worked here.\n\nFor the company',
