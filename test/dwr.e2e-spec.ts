@@ -3,6 +3,9 @@ import { Permission } from '@prisma/client';
 import { Test, TestingModule } from '@nestjs/testing';
 import { hash } from 'argon2';
 import { PrismaService } from 'nestjs-prisma';
+
+import { ACTION_DWR } from '../src/approvals/default-chains';
+import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
@@ -50,6 +53,7 @@ describe('Daily work reports (e2e)', () => {
   let projectId: string;
   let clientId: string;
   let groupId: string;
+  let finalSlotMapped = false;
   let itemA: string;
   let itemB: string;
   let itemUnmeasured: string;
@@ -105,6 +109,21 @@ describe('Daily work reports (e2e)', () => {
     token = login.body.accessToken;
     companyId = await effectiveCompanyIdFor(sys);
 
+    // The `dwr` chain, because as of 2026-10-10 a report is submitted to the spine and `submit`
+    // refuses with `APPROVAL_CHAIN_NOT_CONFIGURED` where none exists. Kept afterwards rather than
+    // torn down — see the helper for why.
+    await ensureApprovalChain(sys, companyId, ACTION_DWR);
+
+    // The chain's one level sits on `final`, so a decision is admitted only from whoever holds the
+    // role that slot maps to. The seeded companies map it to Super Admin, which this suite's caller
+    // is — read rather than overwritten, for the reason `ra-bills.e2e-spec.ts` records: replacing a
+    // real mapping would leave the company's chains pointing at a role this suite then deleted.
+    finalSlotMapped = Boolean(
+      await sys.roleSlotMapping.findUnique({
+        where: { companyId_slotKey: { companyId, slotKey: 'final' } },
+      }),
+    );
+
     const client = await http()
       .post(`/projects/clients?companyId=${companyId}`)
       .set(auth())
@@ -159,7 +178,91 @@ describe('Daily work reports (e2e)', () => {
     itemUnmeasured = await item('30.30', 'NO', '500');
   });
 
+  /**
+   * The report reaches the Director's queue (2026-10-10).
+   *
+   * Reported from a client environment: a submitted report showed Approve and Return on the
+   * project's own Daily work tab and appeared in neither the Approvals tab nor the notification
+   * count. It was not a glitch — `src/projects/dwr/` held no call to `approvals.submit` at all,
+   * so no instance existed for either to read. 022's decision D2 had kept the report off the
+   * spine deliberately; the client reversed it.
+   *
+   * The assertion that matters is the **quantity**, not the queue row: a report that appears in
+   * the list and approves into no effect is the failure this whole module is built to prevent.
+   */
+  describe('a submitted report reaches the approvals queue', () => {
+    it('queues it, and a decision there moves the executed quantity', async () => {
+      if (!finalSlotMapped) {
+        // Stated rather than silently skipped. An unmapped `final` slot is the one configuration
+        // that makes every chain approval impossible, and a suite that quietly passed over it
+        // would hide exactly the gap this feature exposed in the client's own environment.
+        throw new Error(
+          'The `final` slot is unmapped in this company, so no chain decision can be taken. ' +
+            'Map it to the caller’s role before running this suite.',
+        );
+      }
+
+      const before = await doneQty(itemB);
+
+      const created = await createReport([
+        {
+          paymentMode: 'day_basis',
+          boqItemId: itemB,
+          servedQty: '0.250',
+          remark: 'Quarter day — plant down from midday',
+        },
+      ]);
+      expect(created.status).toBe(201);
+      const id = created.body.id;
+
+      await http()
+        .post(`/projects/dwr/${id}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+
+      // Submission alone still moves nothing — the property 022 established, unchanged by
+      // routing the report through the spine.
+      expect(await doneQty(itemB)).toBe(before);
+
+      const queue = await http()
+        .get('/approvals/queue')
+        .set(auth())
+        .expect(200);
+      const row = queue.body.items.find(
+        (item: { entityType: string; entityId: string }) =>
+          item.entityType === ACTION_DWR && item.entityId === id,
+      );
+      // **Found by its own id**, not by the list being non-empty: this company has other
+      // subjects on the same spine, and "the queue has something in it" was true before.
+      expect(row).toBeDefined();
+      expect(row.subject).toContain(created.body.dprNumber);
+
+      await http()
+        .post(`/approvals/${row.instanceId}/decide`)
+        .set(auth())
+        .send({ action: 'approve' })
+        .expect(201);
+
+      // The whole point: deciding in the queue approved the report and moved the BOQ line.
+      const detail = await http()
+        .get(`/projects/dwr/${id}`)
+        .set(auth())
+        .expect(200);
+      expect(detail.body.status).toBe('approved');
+      expect(await doneQty(itemB)).toBe((Number(before) + 0.25).toFixed(3));
+    });
+  });
+
   afterAll(async () => {
+    // The spine first: a decision points at an instance and an instance at this company.
+    await sys.approvalDecision
+      .deleteMany({
+        where: { approvalInstance: { entityType: ACTION_DWR, companyId } },
+      })
+      .catch(() => undefined);
+    await sys.approvalInstance
+      .deleteMany({ where: { entityType: ACTION_DWR, companyId } })
+      .catch(() => undefined);
     await sys.dailyWorkReport.deleteMany({ where: { projectId } });
     await sys.bOQTaskItem.deleteMany({ where: { groupId } });
     await sys.bOQTaskGroup.deleteMany({ where: { id: groupId } });

@@ -236,6 +236,46 @@ describe('Project documents (e2e)', () => {
     );
   });
 
+  it('reports readiness on the project overview too (2026-10-11)', async () => {
+    // The list has carried this since FR-008; the detail page showed thirteen facts
+    // about a project and nothing about its paperwork, so "how many documents are
+    // still outstanding" meant opening the Documents tab and counting.
+    const projectId = await createProject('Flyover');
+
+    const before = await http()
+      .get(`/projects/${projectId}`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    expect(before.body.documentReadiness.required).toBe(
+      REQUIRED_PROJECT_DOCUMENT_KINDS.length,
+    );
+    expect(before.body.documentReadiness.present).toBe(0);
+
+    await sys.projectDocument.create({
+      data: {
+        companyId,
+        projectId,
+        documentType: 'Letter of intent',
+        documentTypeId: typeIdByCode.get('LOI'),
+        fileRef: 'e2epd/flyover-loi.pdf',
+        uploadedByUserId: userIds[0],
+      },
+    });
+
+    // The pair. A `present: 0` on its own would pass for a field hardcoded to the
+    // empty readiness, which is exactly what a forgotten `readinessForOne` would give.
+    const after = await http()
+      .get(`/projects/${projectId}`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    expect(after.body.documentReadiness.present).toBe(1);
+    expect(after.body.documentReadiness.missingTypeIds).not.toContain(
+      typeIdByCode.get('LOI'),
+    );
+  });
+
   it('omits readiness entirely when it was not asked for', async () => {
     const res = await http().get('/projects').set(auth(adminToken)).expect(200);
 

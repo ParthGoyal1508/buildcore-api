@@ -10,11 +10,20 @@ import {
   AuditEntityType,
   DwrPaymentMode,
   DwrStatus,
+  Permission,
   Prisma,
 } from '@prisma/client';
+import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import {
+  APPROVAL_COMPLETED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_DWR } from '../../approvals/default-chains';
+import { webRoutes } from '../../common/web-routes';
 import { actorNamesFor } from '../../common/actor-name';
 import { BoqService } from '../boq/boq.service';
 import {
@@ -143,6 +152,9 @@ export class DwrService {
     private readonly sources: ProjectSourcesRegistry,
     // 028 FR-022. The printable form, which this controller had no route of any kind for.
     private readonly workbook: DwrWorkbookRenderer,
+    // 2026-10-10: the report now routes through the approval spine, so the Director sees it in
+    // the queue rather than only on the project's own Daily work tab.
+    private readonly approvals: ApprovalService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -982,7 +994,16 @@ export class DwrService {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
       const report = await tx.dailyWorkReport.findFirst({
         where: { id: dwrId },
-        select: { id: true, status: true, _count: { select: { tasks: true } } },
+        select: {
+          id: true,
+          status: true,
+          // For the queue row, which the spine cannot build itself: it holds no foreign key to
+          // this table and must be told what the item is about (research.md §1).
+          dprNumber: true,
+          workDate: true,
+          projectId: true,
+          _count: { select: { tasks: true } },
+        },
       });
       if (!report) throw new NotFoundException('Daily work report not found');
 
@@ -1001,6 +1022,25 @@ export class DwrService {
             'or leave it as a draft.',
         });
       }
+
+      // **The spine is asked first, and the status written only once the instance exists**
+      // (2026-10-10, the ordering `RaBillsService.submitForCertification` already uses). A report
+      // flipped to `submitted` with no instance behind it is one waiting on nobody, sitting in no
+      // queue, that looks to its author as though it had been sent — which is precisely the
+      // silent failure putting it on the chain was meant to end.
+      //
+      // Outside the transaction below because the spine opens its own, and a chain that is not
+      // configured must refuse before anything here moves.
+      await this.approvals.submit({
+        companyId,
+        actionType: ACTION_DWR,
+        entityType: ACTION_DWR,
+        entityId: dwrId,
+        originatorUserId: actor.userId,
+        subject: `${report.dprNumber} — ${iso(report.workDate)}`,
+        href: webRoutes.projectDwr(report.projectId),
+        viewPermission: Permission.DWR,
+      });
 
       // The transition is conditional on the status, so a concurrent second submit loses.
       const updated = await tx.dailyWorkReport.updateMany({
@@ -1201,6 +1241,22 @@ export class DwrService {
       };
     });
 
+    // The queue entry must not outlive the report (2026-10-10). Approving from the project's own
+    // Daily work tab decides the very thing the Director is looking at in the Approvals queue, so
+    // the instance is closed here rather than left pending against a report already approved.
+    //
+    // Abandoned, not decided: a decision carries an actor and a chain position, and this approval
+    // did not pass through the chain. Recording it as one would put a name against a level that
+    // never reviewed it. `abandon` is a no-op where no live instance exists — which is every
+    // report submitted before this route joined the spine, and every approval arriving from the
+    // queue, whose instance the spine has already closed itself.
+    await this.approvals.abandon(
+      ACTION_DWR,
+      dwrId,
+      companyId,
+      'Approved on the project’s Daily work tab.',
+    );
+
     await this.auditLog.record({
       entityType: AuditEntityType.DWR,
       // `AuditAction` has no APPROVE: the enum is CREATE/UPDATE/DELETE/READ plus login events, and
@@ -1222,6 +1278,47 @@ export class DwrService {
     });
 
     return result;
+  }
+
+  /**
+   * Approves the report when its chain completes (2026-10-10).
+   *
+   * The spine announces completion and never calls back, so this is what makes a decision taken
+   * in the Approvals queue actually move the quantities. It delegates to `approve` above rather
+   * than repeating it: all-or-none, at-most-once and relative-increment are properties of that
+   * method, and a second implementation of a transition that moves the figures every bill is
+   * built from is the last thing this module needs.
+   *
+   * **`mayApproveOwn` is true here, and that is not a loosening by accident.** The decision has
+   * already been taken and committed by the spine; refusing at this point would leave the
+   * instance approved and the report still submitted — a split state nobody can act on. The
+   * segregation-of-duty guard belongs in front of the decision, and that is where it stays for
+   * the direct route. The queue route is gated by the chain's role instead: only whoever holds
+   * the Director slot can decide at all.
+   *
+   * Re-delivery of the same event is ordinary for an event bus, and harmless: `approve` refuses
+   * a report that is already approved, and its conditional transition means the second pass
+   * moves nothing.
+   */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_DWR) return;
+    const ctx: RlsContext = {
+      isSuperAdmin: false,
+      companyId: event.companyId,
+    };
+
+    const state = await this.approvals.stateOfSystem(
+      ACTION_DWR,
+      event.entityId,
+      event.companyId,
+    );
+    const decidedBy = state?.latestDecision?.actorUserId ?? null;
+
+    await this.approve(ctx, event.entityId, event.companyId, {
+      userId: decidedBy ?? '',
+      mayApproveOwn: true,
+    });
   }
 
   /**
@@ -1274,6 +1371,17 @@ export class DwrService {
 
       return { id: dwrId, status: DwrStatus.returned };
     });
+
+    // Sent back to its author, so it is waiting on nobody in the queue (2026-10-10). The spine
+    // has a `return` decision of its own, and this is deliberately not it: returning here is the
+    // reviewer's own act on the project screen, not a step of the chain, and the report comes
+    // back round as a fresh submission rather than a resubmission of the same round.
+    await this.approvals.abandon(
+      ACTION_DWR,
+      dwrId,
+      companyId,
+      `Returned to the author: ${input.reason.trim()}`,
+    );
 
     await this.auditLog.record({
       entityType: AuditEntityType.DWR,
@@ -1906,4 +2014,9 @@ export function narrowLine(
   }
 
   return measured;
+}
+
+/** A work date as the day it is, for the approval queue's subject line. */
+function iso(value: Date): string {
+  return value.toISOString().slice(0, 10);
 }

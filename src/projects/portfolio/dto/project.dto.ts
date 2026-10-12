@@ -56,7 +56,8 @@ export class CreateProjectDto {
 
   @ApiPropertyOptional({
     description:
-      'Omit to allocate the next code in the company PROJECTS series (e.g. ACME-PRJ-0001).',
+      'Omit to allocate the next code in the company PROJECTS series — `1010`, `1020`, ' +
+      '… counting from 1000 in tens.',
     maxLength: 50,
   })
   @IsOptional()

@@ -19,11 +19,17 @@ import {
   Min,
 } from 'class-validator';
 
+import {
+  EQUIPMENT_YEAR_MAX,
+  EQUIPMENT_YEAR_MIN,
+} from '../../constants/plant.constants';
+
 export class CreateEquipmentDto {
   @ApiPropertyOptional({
     description:
-      "The yard's own plate or asset number. Omit to have one allocated from the " +
-      'company EQUIPMENT series.',
+      "The yard's own plate or asset number. Omit to have one built as " +
+      '`{prefix}{NN}/{manufacturingYear}` — `JCB01/2027` — where the prefix comes ' +
+      'from the name and the serial counts within that prefix.',
   })
   @IsOptional()
   @IsString()
@@ -62,6 +68,20 @@ export class CreateEquipmentDto {
   @IsOptional()
   @IsISO8601()
   purchaseDate?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The year the machine was built — the last part of its code. Not the purchase ' +
+      'year: a 2015 excavator bought in 2024 is a 2015 machine. Omitted, the code ' +
+      'falls back to the purchase year and then to the current one.',
+    example: 2027,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(EQUIPMENT_YEAR_MIN)
+  @Max(EQUIPMENT_YEAR_MAX)
+  manufacturingYear?: number;
 
   @ApiPropertyOptional({
     description: 'Rupees. Feeds owned-equipment depreciation.',

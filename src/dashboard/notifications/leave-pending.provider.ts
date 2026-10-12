@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { LeaveApplicationStatus } from '@prisma/client';
+import { LeaveApplicationStatus, Permission } from '@prisma/client';
 
 import { LeaveService } from '../../hr/leave/leave.service';
 import type { DashboardContext } from '../context';
@@ -16,6 +16,8 @@ import type {
 @Injectable()
 export class LeavePendingProvider implements NotificationProvider {
   readonly type = 'leave_pending';
+  /** `ATTENDANCE` — what `/hr/leave` and the approver's own queue are gated on. */
+  readonly requires = Permission.ATTENDANCE;
 
   constructor(private readonly leave: LeaveService) {}
 

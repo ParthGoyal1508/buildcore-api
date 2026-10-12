@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 
 import { EmployeesService } from '../../hr/employees/employees.service';
 import type { DashboardContext } from '../context';
@@ -13,6 +14,8 @@ import type { FilterSpec, ReportData, ReportProvider } from './report.types';
 export class EmployeeReportProvider implements ReportProvider {
   readonly id = 'employee';
   readonly name = 'Employee';
+  /** `EMPLOYEES` — this is the roster, with joining dates, as a download. */
+  readonly requires = [Permission.EMPLOYEES];
   readonly filters: FilterSpec[] = [];
 
   constructor(private readonly employees: EmployeesService) {}

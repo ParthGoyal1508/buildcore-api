@@ -134,6 +134,18 @@ export interface ProjectDetail {
     billSummary: { totalBills: number; totalExpenses: number };
     revenueSummary: { totalReceived: number; totalPending: number };
   };
+  /**
+   * How much of the project's paperwork is in (2026-10-11).
+   *
+   * The same figures the portfolio list already carries, on the one page somebody
+   * opens when they want to know what is still outstanding. Until now the overview
+   * showed thirteen facts about the project and nothing at all about its documents —
+   * the Documents tab had the answer and you had to go and look.
+   *
+   * `readinessForOne`, not `readinessFor`: the single-project form exists for exactly
+   * this, and the list must keep using the batch (the N+1 the contract names).
+   */
+  documentReadiness: ProjectDocumentReadiness;
   unavailableModules: string[];
 }
 
@@ -488,6 +500,12 @@ export class ProjectsService {
       ownData.siteIds.map((site) => site.id),
     );
 
+    const documentReadiness = await this.documents.readinessForOne(
+      ctx,
+      project.companyId,
+      id,
+    );
+
     const companyId = project.companyId;
     const plant = this.sources.machinerySource();
     const inventory = this.sources.materialsSource();
@@ -522,6 +540,7 @@ export class ProjectsService {
         },
         revenueSummary: { totalReceived, totalPending },
       },
+      documentReadiness,
       // Named, not silently empty — see the note on ProjectDetail. Both are
       // normally present now; the list stays computed so an absent module still
       // reads as "could not ask" rather than as "there is none".

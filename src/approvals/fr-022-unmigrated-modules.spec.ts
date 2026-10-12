@@ -308,6 +308,48 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/inventory/rates',
           ':(exclude)src/inventory/purchases',
           ':(exclude)src/inventory/inventory.module.ts',
+          // The dashboard entitlement work of 2026-10-10. Four registries — notifications,
+          // widgets, the activity log and reminders — were gated on `DASHBOARD` alone, which
+          // every employee holds, so each of them showed one module's data to every other
+          // module's staff. The fix is a `requires` declaration per provider, made by the module
+          // that owns the provider, because only it knows what gates its own screens.
+          //
+          // This file is `src/plant`'s two reminder rules declaring `MACHINERY`/`MAINTENANCE`.
+          // **Nothing here calls `ApprovalService`** — a reminder rule evaluates due dates and
+          // returns candidates; it has no decision to make and nothing to submit. The per-file
+          // assertions above still enforce that plant's own approval surfaces are untouched,
+          // and `src/plant/fuel-exceptions` and `src/plant/fuel-recovery` keep their own
+          // exclusions for the parts that genuinely do approve things.
+          //
+          // **Fired a commit late for the ninth time**, for the reason the eighth note gives and
+          // the seventh before it: the run before the commit sees a working tree, the run that
+          // catches this sees a committed one. The habit the notes keep prescribing — run it
+          // again straight after — was followed here, which is why this is being written at all
+          // rather than discovered next week.
+          ':(exclude)src/plant/reminders',
+          // 2026-10-11. `PROJECT_CODE_INFIX`'s docblock said project codes read
+          // `ACME-PRJ-0001`; they now read `1010`. A comment correction and nothing else —
+          // the constant's value is unchanged and **nothing in this file has ever called
+          // `ApprovalService`**. Excluded rather than left wrong: a stale comment about a
+          // format is how the next reader builds against the old one.
+          //
+          // **Tenth time this guard has fired a commit late.** Same mechanism every time,
+          // and the run straight after the commit is what caught it, as the notes above
+          // keep prescribing.
+          ':(exclude)src/projects/constants/projects.constants.ts',
+          // 2026-10-11, the machine code `JCB01/2027`. A machine's code is now built from
+          // its name, a per-prefix serial and its manufacturing year, so `EquipmentService`
+          // stops calling `CodeSeriesService` and gains an allocator of its own, and
+          // `plant.constants.ts` gains the year bounds. Verified by grep before excluding:
+          // **neither path contains `ApprovalService` or `approvals.submit`**, and the
+          // per-file assertions above still read every plant file that approves anything.
+          //
+          // **Excluded in the same commit as the change, for the first time.** The ten
+          // notes above all say the same thing after the fact; the diff this guard runs
+          // can be run by hand against the index beforehand, which is what happened here.
+          // That is the habit, not "run it again afterwards".
+          ':(exclude)src/plant/equipment',
+          ':(exclude)src/plant/constants',
         ],
         {
           cwd: REPO_ROOT,

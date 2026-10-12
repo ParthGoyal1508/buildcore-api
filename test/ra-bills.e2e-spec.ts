@@ -166,6 +166,10 @@ describe('RA bills against an award (e2e)', () => {
       })
       .expect(201);
     workOrderId = order.body.id;
+    // `1500001`, `1500002`, … — the 150 fixed, the tail a 4-digit sequence
+    // (2026-10-11). Prefix *and* length, because /^150/ alone would pass for the
+    // unpadded `1501`.
+    expect(order.body.code).toMatch(/^150\d{4}$/);
 
     const lines = [
       { description: 'Excavation', unit: 'Cum', awardedQty: 100, rate: 200 },

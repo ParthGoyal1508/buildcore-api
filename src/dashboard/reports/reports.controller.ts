@@ -44,9 +44,15 @@ export class ReportsController {
   ) {}
 
   @Get('types')
-  @ApiOperation({ summary: 'Every registered report type, available or not' })
-  types() {
-    return this.reports.types();
+  @ApiOperation({
+    summary: 'The report types this caller may run, available or not',
+    description:
+      'Narrowed to the caller’s own modules: `REPORTS` says somebody may use the ' +
+      'reporting surface, not which data they may take away. A type omitted here ' +
+      'answers 404 on run and export.',
+  })
+  types(@UserEntity() user: AuthenticatedUser) {
+    return this.reports.types(user.permissions);
   }
 
   @Post(':type/run')
@@ -95,7 +101,7 @@ export class ReportsController {
       return;
     }
 
-    const provider = this.reports.find(type);
+    const provider = this.reports.find(type, user.permissions);
     const outcome = await this.exports.start(
       user,
       ip,

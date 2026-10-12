@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ReimbursementClaimStatus } from '@prisma/client';
+import { Permission, ReimbursementClaimStatus } from '@prisma/client';
 
 import type { ListClaimsQueryDto } from '../../payroll/reimbursements-admin/dto/decide-claim.dto';
 import { ReimbursementsAdminService } from '../../payroll/reimbursements-admin/reimbursements-admin.service';
@@ -17,6 +17,9 @@ import type {
 @Injectable()
 export class PayrollPendingProvider implements NotificationProvider {
   readonly type = 'payroll_pending';
+  /** `EMPLOYEES` — what `/hr/reimbursements` is gated on, not `PAYROLL`, despite
+   *  the title. The link, not the name, decides. */
+  readonly requires = Permission.EMPLOYEES;
 
   constructor(private readonly reimbursements: ReimbursementsAdminService) {}
 

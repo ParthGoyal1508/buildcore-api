@@ -47,6 +47,16 @@ export const webRoutes = {
     `/dashboard/projects/portfolio/${projectId}/ra-bills`,
 
   /**
+   * A project's daily work reports, where a submitted one is approved or returned.
+   *
+   * `app/dashboard/projects/portfolio/[id]/dwr/page.tsx`. The report id is not in the path for
+   * the same reason the bill's is not: the list is the screen, and each row carries its own
+   * controls.
+   */
+  projectDwr: (projectId: string): string =>
+    `/dashboard/projects/portfolio/${projectId}/dwr`,
+
+  /**
    * Letters raised against a project.
    *
    * `app/dashboard/projects/portfolio/[id]/letters/page.tsx`, which lists by

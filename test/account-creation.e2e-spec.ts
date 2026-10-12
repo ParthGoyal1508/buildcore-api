@@ -67,7 +67,6 @@ class CapturingEmailService extends EmailService {
       bytes: input.pdf.length,
     });
   }
-
 }
 
 describe('Account creation — invite flow (e2e)', () => {
@@ -147,7 +146,9 @@ describe('Account creation — invite flow (e2e)', () => {
     const adminRole = await sys.role.create({
       data: {
         name: unique('AcAdmin'),
-        permissions: [Permission.USER_MANAGEMENT],
+        // `EMPLOYEES` alongside it for the employee-record block below: creating one is what
+        // an account is linked *to*, and that endpoint is guarded separately.
+        permissions: [Permission.USER_MANAGEMENT, Permission.EMPLOYEES],
       },
     });
     adminRoleId = adminRole.id;
@@ -191,6 +192,12 @@ describe('Account creation — invite flow (e2e)', () => {
     }
     for (const id of [scopedRoleId, adminRoleId].filter(Boolean)) {
       await sys.role.deleteMany({ where: { id } });
+    }
+    if (companyId) {
+      await sys.employee.deleteMany({ where: { companyId } });
+      await sys.employeeCodeSequence.deleteMany({ where: { companyId } });
+      await sys.site.deleteMany({ where: { companyId } });
+      await sys.shift.deleteMany({ where: { companyId } });
     }
     if (companyId) {
       await sys.company.deleteMany({ where: { id: companyId } });
@@ -597,6 +604,123 @@ describe('Account creation — invite flow (e2e)', () => {
         .post(`/account-creation/users/${userId}/resend-invite`)
         .set(auth(adminToken))
         .expect(409);
+    });
+  });
+
+  /**
+   * An employee record exists before any account does (2026-10-10).
+   *
+   * `Employee.userId` was declared `String @unique` — **required** — while every line of code
+   * around it was written for a nullable column: `getUnlinkedEmployees` filters `userId: null`
+   * to fill this feature's own invite picker, `linkUserToEmployee` is documented as "the only
+   * writer of `Employee.userId` anywhere in the system", and `exit.service.ts` guards each read
+   * with `if (employee.userId)`.
+   *
+   * The contradiction broke both halves at once. `EmployeesService.create` supplies no `userId`,
+   * so **every employee creation failed** — a Prisma validation error surfacing as a 500 — and
+   * the picker failed the same way for filtering a non-nullable column for null. Found on a
+   * client environment whose employee-code series had reached 0010 with no employees on file:
+   * the code is allocated before the insert, so each failure burned a number.
+   *
+   * **Driven over HTTP against a real database on purpose.** Every unit test of this service
+   * stubs `prisma.employee.create`, and a stub accepts a payload the real column rejects — which
+   * is exactly how a required field nobody ever set survived to a client environment.
+   */
+  describe('an employee exists before an account does (2026-10-10)', () => {
+    let employeeId = '';
+    let employeeCode = '';
+
+    beforeAll(async () => {
+      await sys.employeeCodeSequence.create({
+        data: { companyId, lastNumber: 0 },
+      });
+      await sys.site.create({
+        data: {
+          companyId,
+          name: unique('AC Site'),
+          latitude: 12.9716,
+          longitude: 77.5946,
+          geofenceRadiusMeters: 200,
+          weeklyOffDay: 0,
+        },
+      });
+      await sys.shift.create({
+        data: {
+          companyId,
+          name: unique('AC Shift'),
+          inTime: new Date('1970-01-01T09:00:00.000Z'),
+          outTime: new Date('1970-01-01T18:00:00.000Z'),
+        },
+      });
+    });
+
+    it('creates one with no account attached', async () => {
+      const site = await sys.site.findFirst({ where: { companyId } });
+      const shift = await sys.shift.findFirst({ where: { companyId } });
+
+      const created = await http()
+        .post(`/hr/employees?companyId=${companyId}`)
+        .set(auth(adminToken))
+        .send({
+          siteId: site.id,
+          shiftId: shift.id,
+          firstName: 'Unlinked',
+          lastName: 'Starter',
+        })
+        .expect(201);
+
+      employeeId = created.body.id;
+      employeeCode = created.body.employeeCode;
+      expect(employeeCode).toBeTruthy();
+
+      // **Read back from the database, not from the response.** The whole defect was that the
+      // row never reached the table; a response body echoing what was sent would not have
+      // noticed, and this assertion is the one that would have caught it.
+      const stored = await sys.employee.findFirst({
+        where: { id: employeeId },
+      });
+      expect(stored).not.toBeNull();
+      expect(stored.userId).toBeNull();
+    });
+
+    it('offers it to the invite picker, which is what null means here', async () => {
+      const listed = await http()
+        .get(`/account-creation/employees/unlinked?companyId=${companyId}`)
+        .set(auth(adminToken))
+        .expect(200);
+
+      expect(listed.body.map((row: { id: string }) => row.id)).toContain(
+        employeeId,
+      );
+    });
+
+    it('links the account to it, and drops it from the picker', async () => {
+      const created = await http()
+        .post('/account-creation/users')
+        .set(auth(adminToken))
+        .send({
+          email: `${unique('linked')}@example.test`,
+          roleId: scopedRoleId,
+          companyId,
+          employeeId,
+        })
+        .expect(201);
+      createdUserIds.push(created.body.id);
+
+      const stored = await sys.employee.findFirst({
+        where: { id: employeeId },
+      });
+      expect(stored.userId).toBe(created.body.id);
+
+      // The other half, and the one that makes the first test mean something: a picker that
+      // listed every employee regardless would have passed it.
+      const after = await http()
+        .get(`/account-creation/employees/unlinked?companyId=${companyId}`)
+        .set(auth(adminToken))
+        .expect(200);
+      expect(after.body.map((row: { id: string }) => row.id)).not.toContain(
+        employeeId,
+      );
     });
   });
 });

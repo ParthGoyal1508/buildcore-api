@@ -1,3 +1,5 @@
+import type { Permission } from '@prisma/client';
+
 import type { DashboardContext } from '../context';
 
 /** One filter a report type accepts, described so the frontend can render it. */
@@ -38,6 +40,23 @@ export interface ReportProvider {
   id: string;
   name: string;
   filters: FilterSpec[];
+  /**
+   * The permissions that make this report the caller's business — **any one of them**
+   * (2026-10-10).
+   *
+   * `/reports` is gated on `REPORTS`, which is one permission covering every report
+   * there is. So a role given `REPORTS` to run the machinery utilisation figures could
+   * also run the Employee report — the whole roster with joining dates — and export it
+   * to Excel. `REPORTS` says somebody may use the reporting surface; it does not say
+   * which data they may take away.
+   *
+   * Declared as the permission the module's own screens are gated on, matching what
+   * `WidgetProvider.requires` and `ReminderRuleProvider.requires` already do.
+   *
+   * A placeholder for an unbuilt module declares nothing: it carries no rows, only the
+   * name of a module that does not exist yet.
+   */
+  readonly requires?: Permission[];
   isAvailable(): boolean;
   /** The module a placeholder is waiting on. Read only when unavailable. */
   readonly unavailableModule?: string;

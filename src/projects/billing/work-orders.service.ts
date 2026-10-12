@@ -27,7 +27,12 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 
-/** `PRPL-WO-0001`. The slot every other series in this product fills the same way. */
+/**
+ * The infix slot every series in this product fills the same way.
+ *
+ * **Unused since 2026-10-11**: work orders render as `1500001` from
+ * `CODE_SERIES_FORMATS`, which has no infix. See the note on `PROJECT_CODE_INFIX`.
+ */
 const WORK_ORDER_CODE_INFIX = 'WO';
 
 export interface WorkOrderInput {

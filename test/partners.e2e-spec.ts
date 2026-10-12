@@ -130,7 +130,10 @@ describe('Partners module (e2e)', () => {
         categoryIds: [category.body.id],
       });
 
-      expect(vendor.code).toMatch(/-VEN-\d{4}$/);
+      // `2022001`, `2022002`, … — the 2022 fixed, the tail a 3-digit sequence
+      // (2026-10-11). Checked against the prefix *and* the length, because
+      // /^2022/ alone would pass for the unpadded `20221`.
+      expect(vendor.code).toMatch(/^2022\d{3}$/);
       expect(vendor.contacts).toHaveLength(2);
       expect(vendor.categoryIds).toEqual([category.body.id]);
 

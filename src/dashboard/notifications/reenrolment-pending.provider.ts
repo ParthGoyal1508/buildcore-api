@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ReEnrolmentRequestStatus } from '@prisma/client';
+import { Permission, ReEnrolmentRequestStatus } from '@prisma/client';
 
 import { FaceEnrolmentService } from '../../hr/biometrics/face-enrolment.service';
 import type { DashboardContext } from '../context';
@@ -16,6 +16,8 @@ import type {
 @Injectable()
 export class ReenrolmentPendingProvider implements NotificationProvider {
   readonly type = 'reenrolment_pending';
+  /** `EMPLOYEES` — what `/hr/re-enrolment-requests` is gated on. */
+  readonly requires = Permission.EMPLOYEES;
 
   constructor(private readonly enrolment: FaceEnrolmentService) {}
 

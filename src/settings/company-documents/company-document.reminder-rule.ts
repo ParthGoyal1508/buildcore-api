@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import config from '../../common/configs/config';
@@ -37,6 +38,8 @@ export class CompanyDocumentExpiryRule implements ReminderRuleProvider {
    * are keyed on this, and renaming it would orphan both. */
   readonly ruleKey = 'settings-company-document-expiry';
   readonly sourceModule = 'settings';
+  /** The company's own certificates — what `/settings/company-documents` is gated on. */
+  readonly requires = [Permission.COMPANY_SETTINGS, Permission.SETTINGS];
   readonly type = 'document_expiry';
   readonly entityType = 'COMPANY_DOCUMENT';
 

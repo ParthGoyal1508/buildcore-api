@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import {
   LeaveApplicationStatus,
   MaintenanceStatus,
+  Permission,
   ReimbursementClaimStatus,
 } from '@prisma/client';
 
@@ -22,6 +23,8 @@ export class TotalEmployeesWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'Total Employees';
   readonly section = 'kpi' as const;
+  /** `EMPLOYEES` — the headcount is the roster's figure, and the roster is gated. */
+  readonly requires = [Permission.EMPLOYEES];
   constructor(private readonly employees: EmployeesService) {}
   isAvailable(): boolean {
     return true;
@@ -38,6 +41,8 @@ export class PresentTodayWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'Present Today';
   readonly section = 'kpi' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
   constructor(private readonly data: CompanyDataService) {}
   isAvailable(): boolean {
     return true;
@@ -54,6 +59,8 @@ export class AbsentTodayWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'Absent';
   readonly section = 'kpi' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
   constructor(private readonly data: CompanyDataService) {}
   isAvailable(): boolean {
     return true;
@@ -70,6 +77,8 @@ export class OnLeaveWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'On Leave';
   readonly section = 'kpi' as const;
+  /** `ATTENDANCE` — what every attendance and leave screen is gated on. */
+  readonly requires = [Permission.ATTENDANCE];
   constructor(private readonly data: CompanyDataService) {}
   isAvailable(): boolean {
     return true;
@@ -91,6 +100,16 @@ export class PendingApprovalsWidget implements WidgetProvider {
   readonly displayType = 'kpi' as const;
   readonly title = 'Pending Approvals';
   readonly section = 'kpi' as const;
+  /**
+   * Any one of the three areas it sums. The widget then counts only that caller's
+   * share — see `compute`, where the filter is repeated per source, because a single
+   * gate on a figure made of three modules would disclose the other two.
+   */
+  readonly requires = [
+    Permission.ATTENDANCE,
+    Permission.MAINTENANCE,
+    Permission.EMPLOYEES,
+  ];
   constructor(
     private readonly leave: LeaveService,
     private readonly maintenance: MaintenanceService,
@@ -99,22 +118,40 @@ export class PendingApprovalsWidget implements WidgetProvider {
   isAvailable(): boolean {
     return true;
   }
+  /**
+   * Counts only the sources the caller may act on.
+   *
+   * The registry's own filter admits anyone holding *one* of the three, which is right —
+   * a plant supervisor should see their open maintenance jobs. It is not sufficient: a
+   * single total would then carry the leave and claim counts they cannot see, and a KPI
+   * is no less a disclosure for being a sum. So each source is asked for separately,
+   * and a source the caller holds nothing for is **not queried at all**.
+   */
   async compute(ctx: DashboardContext): Promise<number> {
-    const [pendingLeave, openMaintenance, submittedClaims] = await Promise.all([
-      this.leave
-        .listForReview(ctx.caller, LeaveApplicationStatus.pending)
-        .then((rows) => rows.length),
-      this.maintenance
-        .findAll(ctx.user, {
-          status: MaintenanceStatus.open,
-        } as ListMaintenanceDto)
-        .then((res) => res.total),
-      this.reimbursements
-        .listClaims(ctx.caller, ctx.companyId, {
-          status: ReimbursementClaimStatus.submitted,
-        } as ListClaimsQueryDto)
-        .then((res) => res.total),
+    const holds = (permission: Permission): boolean =>
+      ctx.user.permissions.includes(permission);
+
+    const counts = await Promise.all([
+      holds(Permission.ATTENDANCE)
+        ? this.leave
+            .listForReview(ctx.caller, LeaveApplicationStatus.pending)
+            .then((rows) => rows.length)
+        : 0,
+      holds(Permission.MAINTENANCE)
+        ? this.maintenance
+            .findAll(ctx.user, {
+              status: MaintenanceStatus.open,
+            } as ListMaintenanceDto)
+            .then((res) => res.total)
+        : 0,
+      holds(Permission.EMPLOYEES)
+        ? this.reimbursements
+            .listClaims(ctx.caller, ctx.companyId, {
+              status: ReimbursementClaimStatus.submitted,
+            } as ListClaimsQueryDto)
+            .then((res) => res.total)
+        : 0,
     ]);
-    return pendingLeave + openMaintenance + submittedClaims;
+    return counts.reduce((sum, n) => sum + n, 0);
   }
 }

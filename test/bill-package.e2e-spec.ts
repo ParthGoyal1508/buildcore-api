@@ -12,6 +12,8 @@ import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-co
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 import { pdfDigits } from './pdf-text';
+import { ACTION_DWR } from '../src/approvals/default-chains';
+import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 
 /**
  * The running-account bill package, end to end (023, quickstart passes 1–8 — tasks T096, T097).
@@ -143,6 +145,10 @@ describe('The running-account bill package (e2e)', () => {
         .expect(201);
       boqItemIds.push(line.body.id);
     }
+
+    // The `dwr` chain: as of 2026-10-10 a daily report is submitted to the approval spine, and
+    // three blocks below record and approve one to give a package something to propose from.
+    await ensureApprovalChain(sys, companyId, ACTION_DWR);
   });
 
   afterAll(async () => {
