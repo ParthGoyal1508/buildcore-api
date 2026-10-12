@@ -384,6 +384,167 @@ describe('Daily work reports (e2e)', () => {
     });
   });
 
+  /**
+   * Correcting a day must not destroy the evidence for it (2026-10-12).
+   *
+   * An edit replaced every line: `deleteMany` then `createMany`. `DWRAttachment.taskId` cascades
+   * from the line it is filed against, so fixing a typo in a chainage deleted the photograph that
+   * proved the chainage — silently, from the database, with the only other copy on a phone at
+   * site. The entry form now offers a file box on every measurement, which would have made that a
+   * trap rather than a corner case.
+   */
+  describe('correcting a draft keeps each line and its evidence', () => {
+    const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    /** Two measured lines, told apart by their chainage rather than by position. */
+    const twoLines = () => [
+      {
+        paymentMode: 'work_basis',
+        boqItemId: itemB,
+        nos1: '1',
+        length: '10',
+        breadth: '2',
+        depth: '0.1',
+        chainageFrom: '21.300',
+        chainageTo: '21.450',
+      },
+      {
+        paymentMode: 'work_basis',
+        boqItemId: itemB,
+        nos1: '1',
+        length: '8',
+        breadth: '2',
+        depth: '0.1',
+        chainageFrom: '22.100',
+        chainageTo: '22.250',
+      },
+    ];
+
+    const lineAt = (view: request.Response, from: string) =>
+      view.body.lines.find(
+        (l: { chainageFrom: string | null }) =>
+          l.chainageFrom !== null && Number(l.chainageFrom) === Number(from),
+      );
+
+    it('answers a creation with one line id per line, in the order they were sent', async () => {
+      const report = await createReport(twoLines());
+      expect(report.status).toBe(201);
+
+      const view = await http()
+        .get(`/projects/dwr/${report.body.id}`)
+        .set(auth())
+        .expect(200);
+
+      // **Which id is which, not how many there are.** A length assertion passes for two ids in
+      // either order, and the form attaches the photograph picked beside the second measurement
+      // to `lineIds[1]` — so an answer in the wrong order files it against the wrong chainage,
+      // which is the whole defect this is here to stop.
+      expect(report.body.lineIds).toEqual([
+        lineAt(view, '21.300').id,
+        lineAt(view, '22.100').id,
+      ]);
+    });
+
+    it('keeps a photograph against the line whose chainage was corrected', async () => {
+      const report = await createReport(twoLines());
+      expect(report.status).toBe(201);
+      const [firstLine, secondLine] = report.body.lineIds as string[];
+
+      const photo = await http()
+        .post(
+          `/projects/dwr/${report.body.id}/attachments?companyId=${companyId}`,
+        )
+        .set(auth())
+        .send({
+          data: PNG.toString('base64'),
+          fileName: 'CH 22+100 — pour.png',
+          taskId: secondLine,
+        })
+        .expect(201);
+
+      // The correction: the second measurement started 50 m earlier than it was typed. Both lines
+      // are sent back by id, which is what says "edited", not "replaced".
+      const edited = await http()
+        .patch(`/projects/dwr/${report.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          lines: [
+            { ...twoLines()[0], id: firstLine },
+            { ...twoLines()[1], id: secondLine, chainageFrom: '22.050' },
+          ],
+        })
+        .expect(200);
+      expect(edited.body.lineIds).toEqual([firstLine, secondLine]);
+
+      const view = await http()
+        .get(`/projects/dwr/${report.body.id}`)
+        .set(auth())
+        .expect(200);
+
+      // **Not that the attachment row survived.** It would survive being re-pointed at the first
+      // measurement, or at no line at all, and either of those is a photograph arguing for a
+      // quantity it is not evidence of. So: still on the report, and still filed against the line
+      // that now carries the corrected chainage.
+      const filed = view.body.attachments.find(
+        (a: { id: string }) => a.id === photo.body.id,
+      );
+      expect(filed).toBeDefined();
+      expect(filed.taskId).toBe(lineAt(view, '22.050').id);
+      expect(lineAt(view, '22.100')).toBeUndefined();
+    });
+
+    it('removes a line left out of the edit, and its evidence with it', async () => {
+      const report = await createReport(twoLines());
+      expect(report.status).toBe(201);
+      const [firstLine, secondLine] = report.body.lineIds as string[];
+
+      await http()
+        .post(
+          `/projects/dwr/${report.body.id}/attachments?companyId=${companyId}`,
+        )
+        .set(auth())
+        .send({
+          data: PNG.toString('base64'),
+          fileName: 'Deleted measurement.png',
+          taskId: secondLine,
+        })
+        .expect(201);
+
+      // The second measurement was never done. Dropping it is a deletion, and the photograph of it
+      // goes too — otherwise the diff would be a rule that never removes anything, which would
+      // pass the test above for the wrong reason.
+      await http()
+        .patch(`/projects/dwr/${report.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .send({ lines: [{ ...twoLines()[0], id: firstLine }] })
+        .expect(200);
+
+      const view = await http()
+        .get(`/projects/dwr/${report.body.id}`)
+        .set(auth())
+        .expect(200);
+      expect(view.body.lines).toHaveLength(1);
+      expect(view.body.attachments).toHaveLength(0);
+    });
+
+    it('refuses a line id belonging to another report', async () => {
+      const mine = await createReport(twoLines());
+      const theirs = await createReport(twoLines());
+      expect(theirs.status).toBe(201);
+
+      // Accepting it would move another day's measurement — and its photographs — onto this one.
+      await http()
+        .patch(`/projects/dwr/${mine.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          lines: [
+            { ...twoLines()[0], id: (theirs.body.lineIds as string[])[0] },
+          ],
+        })
+        .expect(404);
+    });
+  });
+
   // ── Pass 1 — the measured quantity, computed by the server ────────────────
 
   describe('Pass 1 — a measured day', () => {
@@ -1267,15 +1428,19 @@ describe('Daily work reports (e2e)', () => {
    * should change the answer.
    */
   describe('the published shape (025 FR-008)', () => {
-    it('answers a creation with exactly an id, a number, a status and the warnings', async () => {
+    it('answers a creation with exactly an id, a number, a status, the line ids and the warnings', async () => {
       const res = await createReport([
         { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
       ]);
 
       expect(res.status).toBe(201);
+      // `lineIds` added 2026-10-12, with `contracts/dwr-api.md` moved in the same commit, which is
+      // what this assertion exists to force. A file is attached to a line and an entry form has
+      // files in hand before any line has an id; everything else here is unchanged.
       expect(Object.keys(res.body).sort()).toEqual([
         'dprNumber',
         'id',
+        'lineIds',
         'status',
         'warnings',
       ]);
