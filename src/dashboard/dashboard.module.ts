@@ -33,6 +33,7 @@ import {
   FuelReportProvider,
   MachineryReportProvider,
 } from './reports/plant-reports.provider';
+import { PayrollReportProvider } from './reports/payroll-report.provider';
 import {
   PnlReportProvider,
   ProjectCostReportProvider,
@@ -150,6 +151,7 @@ const REPORT_CLASSES = [
   FuelReportProvider,
   ProjectCostReportProvider,
   PnlReportProvider,
+  PayrollReportProvider,
 ] as const;
 
 const widgetRegistry: Provider = {

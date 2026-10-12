@@ -23,6 +23,5 @@ class PlaceholderReport implements ReportProvider {
 
 /** The not-yet-built report types, in the order the contract lists them. */
 export const UNBUILT_REPORT_PLACEHOLDERS: ReportProvider[] = [
-  new PlaceholderReport('payroll', 'Payroll', 'payroll'),
   new PlaceholderReport('expense', 'Expense', 'expenses'),
 ];

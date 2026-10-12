@@ -763,8 +763,25 @@ describe('Dashboard reminders (e2e)', () => {
       expect(admin).toEqual(expect.arrayContaining(['employee', 'attendance']));
       expect(viewer).not.toContain('employee');
       expect(viewer).not.toContain('attendance');
+      // And every report built on 2026-10-12, each declaring its module's own
+      // permission. Listed one by one rather than as "nothing but placeholders": the
+      // next report added must be *chosen* to be visible here, not become visible by
+      // being forgotten.
+      for (const id of [
+        'payroll',
+        'machinery',
+        'equipment-utilization',
+        'fuel',
+        'project-cost',
+        'pnl',
+      ]) {
+        expect(viewer).not.toContain(id);
+      }
       // Placeholders stay: they carry no rows, only the name of an unbuilt module.
-      expect(viewer).toContain('payroll');
+      // `expense` is the last one — this assertion named `payroll` until Payroll
+      // became a real report with `requires: [PAYROLL]`, at which point a Viewer
+      // correctly stopped seeing it.
+      expect(viewer).toContain('expense');
     });
 
     it('refuses to run the Employee report it did not list', async () => {

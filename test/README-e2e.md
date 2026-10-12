@@ -80,3 +80,28 @@ The fix is a `seed:defaults` script in the shape of `prisma/seed-approval-chains
 same `DEFAULT_*` constants the services read and insert them per company, idempotently. Deliberately
 not done inside 028: three suites' worth of company defaults is its own piece of work, and doing it
 half way is worse than recording it here.
+
+## Two more that accumulate, rather than appear on a fresh database
+
+Measured 2026-10-12, after running the full suite several times in one session:
+
+| Suite                 | What it reports                                                        | Why                                                                                                                        |
+| --------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `projects.e2e-spec.ts` | `allocates a project code from the company series when none is supplied` | `settings.CodeSequence` advances every run and is never reset, so the expected next code drifts away from the asserted one |
+| `dwr.e2e-spec.ts`      | `queues it, and a decision there moves the executed quantity`            | approval-chain/queue state left behind by earlier suites in the same session                                               |
+
+**Neither is a product fault, and neither is caused by the change in front of you** — the
+check that settles it is to stash the working tree and run the two suites again:
+
+```sh
+git stash push -u -- src test
+DATABASE_URL="$SCRATCH" npx jest --config ./test/jest-e2e.json projects.e2e-spec dwr.e2e-spec
+git stash pop
+```
+
+Both still fail. That is thirty seconds and it is the difference between "my change broke
+two suites" and "this database has been run against all afternoon" — which look identical
+in the output and lead to completely different afternoons.
+
+They are a counter and a queue, not missing defaults, so the `seed:defaults` script above
+would not fix them. Reprovisioning scratch would.
