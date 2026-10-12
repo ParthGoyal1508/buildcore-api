@@ -46,6 +46,19 @@ export interface WidgetProvider {
    * any one of the three should see that one's share of it.
    */
   readonly requires?: Permission[];
+  /**
+   * What the number means, so the interface can format it (2026-10-12).
+   *
+   * Omitted for a plain count, which renders as itself. `'currency'` marks a rupee
+   * amount: the Contract Value card shipped reading `371100000`, which is ₹37.11 crore
+   * written in a way nobody can read at a glance and easily mistaken for a different
+   * order of magnitude.
+   *
+   * A declared unit rather than the renderer matching on widget id — `WidgetRenderer`
+   * knows no widget's id by design, and a list of "these ids are money" kept on the far
+   * side of the wire is a list that goes stale the first time a widget is added.
+   */
+  readonly valueUnit?: 'currency';
   /** False for a placeholder standing in for a not-yet-built module (spec FR-003). */
   isAvailable(): boolean;
   /** The module a placeholder is waiting on. Read only when `isAvailable()` is false. */
@@ -62,6 +75,7 @@ export type WidgetResult =
       title: string;
       section: WidgetSection;
       value: unknown;
+      valueUnit?: 'currency';
     }
   | {
       id: string;
@@ -100,7 +114,11 @@ export async function resolveWidget(
     };
   }
   try {
-    return { ...base, value: await provider.compute(ctx) };
+    return {
+      ...base,
+      value: await provider.compute(ctx),
+      ...(provider.valueUnit ? { valueUnit: provider.valueUnit } : {}),
+    };
   } catch {
     return {
       ...base,

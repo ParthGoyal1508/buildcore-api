@@ -90,6 +90,24 @@ export class InventoryService implements OnModuleInit {
    * its sources were unavailable. The failure is logged so a persistent zero is not
    * mistaken for a measurement.
    */
+  /**
+   * What the whole company spent on materials in one month (2026-10-12).
+   *
+   * For the dashboard's Materials Cost card. On this façade rather than by exporting
+   * `PurchasesService`, matching how `getMaterialCostByProject` below keeps the
+   * project P&L to this module's own surface.
+   *
+   * Unlike that method this one is **company-wide**, so it needs no site resolution
+   * and cannot return a misleading zero for a project whose sites are unknown.
+   */
+  async getMaterialsSpendForMonth(
+    caller: AuthenticatedUser,
+    month: { from: Date; to: Date },
+    companyId?: string,
+  ): Promise<number> {
+    return this.purchases.monthlySpend(caller, month, companyId);
+  }
+
   async getMaterialCostByProject(
     projectId: string,
     companyId: string,

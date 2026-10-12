@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { HireBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { withRlsContext } from '../common/prisma/rls-context';
@@ -127,6 +128,53 @@ export class PlantService implements OnModuleInit {
    * from "plant has not shipped". */
   isAvailable(): boolean {
     return true;
+  }
+
+  /**
+   * The three company-wide plant figures the dashboard shows (2026-10-12).
+   *
+   * One method rather than three, and on this façade rather than by exporting
+   * `EquipmentService`, `FuelService` and `HireBillsService`: this module exports
+   * deliberately little — the note on `FuelRecoveryService` above says why — and three
+   * new exports to render three numbers would widen that surface more than the numbers
+   * are worth. It is also one round trip instead of three.
+   *
+   * `unpaidHireBills` counts everything not yet paid, verified or not. The card answers
+   * "what is outstanding on hired plant", and a bill nobody has verified yet is still
+   * money the company expects to pay — unlike `getMachineryCostByProject` above, which
+   * excludes unverified bills precisely because a P&L must not book a claim as a cost.
+   * The two differ on purpose.
+   */
+  async getCompanyTotals(
+    companyId: string,
+    month: { from: Date; to: Date },
+  ): Promise<{
+    equipmentCount: number;
+    fuelSpend: number;
+    unpaidHireBills: number;
+  }> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const [equipmentCount, fuel, hire] = await Promise.all([
+          tx.equipment.count({ where: { companyId } }),
+          tx.fuelEntry.aggregate({
+            where: { companyId, date: { gte: month.from, lte: month.to } },
+            _sum: { amount: true },
+          }),
+          tx.hireBill.aggregate({
+            where: { companyId, status: { not: HireBillStatus.paid } },
+            _sum: { netPayable: true },
+          }),
+        ]);
+        return {
+          equipmentCount,
+          fuelSpend: Number(fuel._sum.amount ?? 0),
+          unpaidHireBills: Number(hire._sum.netPayable ?? 0),
+        };
+      },
+    );
   }
 
   /**

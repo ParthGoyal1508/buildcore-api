@@ -6,6 +6,7 @@ import { StorageModule } from '../common/storage/storage.module';
 import { HrModule } from '../hr/hr.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { PlantModule } from '../plant/plant.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ActivityLogController } from './activity-log/activity-log.controller';
@@ -53,6 +54,14 @@ import {
   UNBUILT_SITE_WIDGET_PLACEHOLDERS,
   UNBUILT_WIDGET_PLACEHOLDERS,
 } from './widgets/unbuilt-module.placeholders';
+import {
+  ActiveProjectsWidget,
+  ContractValueWidget,
+  FuelCostWidget,
+  HireBillsWidget,
+  MaterialsCostWidget,
+  TotalMachineryWidget,
+} from './widgets/module-kpi.providers';
 import { WIDGET_PROVIDERS, type WidgetProvider } from './widgets/widget.types';
 import type { NotificationProvider } from './notifications/notification.types';
 import type { ReportProvider } from './reports/report.types';
@@ -93,6 +102,14 @@ const WIDGET_CLASSES = [
   RecentLeavesTableWidget,
   WorkersTodayWidget,
   SiteAttendanceTableWidget,
+  // The six whose modules have since been built (2026-10-12) — see
+  // `module-kpi.providers.ts` for why they were placeholders and no longer are.
+  ActiveProjectsWidget,
+  TotalMachineryWidget,
+  ContractValueWidget,
+  MaterialsCostWidget,
+  FuelCostWidget,
+  HireBillsWidget,
 ] as const;
 
 const NOTIFICATION_CLASSES = [
@@ -121,6 +138,12 @@ const widgetRegistry: Provider = {
     recentLeavesTable: WidgetProvider,
     workersToday: WidgetProvider,
     siteAttendanceTable: WidgetProvider,
+    activeProjects: WidgetProvider,
+    totalMachinery: WidgetProvider,
+    contractValue: WidgetProvider,
+    materialsCost: WidgetProvider,
+    fuelCost: WidgetProvider,
+    hireBills: WidgetProvider,
   ): WidgetProvider[] => [
     // Company dashboard — contract order.
     totalEmployees,
@@ -129,12 +152,12 @@ const widgetRegistry: Provider = {
     onLeave,
     UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses,
     pendingApprovals,
-    UNBUILT_WIDGET_PLACEHOLDERS.activeProjects,
-    UNBUILT_WIDGET_PLACEHOLDERS.totalMachinery,
-    UNBUILT_WIDGET_PLACEHOLDERS.contractValue,
-    UNBUILT_WIDGET_PLACEHOLDERS.materialsCost,
-    UNBUILT_WIDGET_PLACEHOLDERS.fuelCost,
-    UNBUILT_WIDGET_PLACEHOLDERS.hireBills,
+    activeProjects,
+    totalMachinery,
+    contractValue,
+    materialsCost,
+    fuelCost,
+    hireBills,
     musterStat,
     UNBUILT_WIDGET_PLACEHOLDERS.alertsReminders,
     todayAttendanceTable,
@@ -196,6 +219,8 @@ const reportRegistry: Provider = {
   imports: [
     DiscoveryModule,
     HrModule,
+    // For `InventoryService` — the Materials Cost card (2026-10-12).
+    InventoryModule,
     ProjectsModule,
     SettingsModule,
     PlantModule,
