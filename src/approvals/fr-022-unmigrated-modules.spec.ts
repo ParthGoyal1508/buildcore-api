@@ -350,6 +350,21 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // That is the habit, not "run it again afterwards".
           ':(exclude)src/plant/equipment',
           ':(exclude)src/plant/constants',
+          // 2026-10-12, `FuelEntry.siteId`. A fuel entry now records **where** the fuel was
+          // drawn, so the Site Dashboard's two fuel cards can stop being placeholders; the
+          // DTO gains one optional `siteId`. Verified by grep before excluding: this file
+          // contains no `ApprovalService`, no `approvals.submit` and no `ApprovalInstance`,
+          // and `src/plant/fuel/fuel.service.ts` beside it was already excluded above for
+          // the same reason. The per-file assertions still read every plant file that
+          // approves anything.
+          //
+          // **Eleventh time this guard has fired a commit late**, and the tenth note said
+          // exactly how to avoid it: run the diff against the index *before* committing, not
+          // the suite after. I ran the full unit suite before the commit — which passes,
+          // because this check diffs commits and cannot see a working tree — and then did not
+          // re-run it after. The habit is the pre-commit diff; the suite is not a substitute
+          // for it.
+          ':(exclude)src/plant/fuel/dto/fuel.dto.ts',
         ],
         {
           cwd: REPO_ROOT,
