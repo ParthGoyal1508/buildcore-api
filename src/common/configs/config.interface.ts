@@ -77,6 +77,29 @@ export interface NestConfig {
    * a single request can make the server buffer.
    */
   maxRequestBodySize: string;
+  /**
+   * How many reverse proxies sit in front of this API, or `false` for none.
+   *
+   * Express's `trust proxy`. Left `false`, `req.ip` is the address of whatever
+   * connected to the process — which behind a load balancer is the balancer, for every
+   * caller. Three things read `req.ip` and all three are wrong in that state: the auth
+   * rate limiter keys its buckets on it, so every user in the deployment shares one
+   * bucket; the audit log records who did what from where; and the sign-in lockout
+   * counts failures per address.
+   *
+   * **A count, not `true`.** `trust proxy: true` tells Express to believe the
+   * left-most entry in `X-Forwarded-For`, which is a header the client sets — so a
+   * caller could spoof an address and get a fresh lockout and rate-limit bucket per
+   * request. A count makes Express skip exactly that many trusted hops from the right
+   * and take the next one, which cannot be forged by the client as long as the number
+   * matches the real topology.
+   *
+   * Defaults to `false`, so nothing changes until a deployment says otherwise. On
+   * Render, Vercel or any single load balancer, set `TRUST_PROXY=1`. Set it to the
+   * actual number of proxies; too high is the dangerous direction, because each extra
+   * hop moves the trusted boundary one step further into client-supplied text.
+   */
+  trustProxy: number | false;
 }
 
 export interface CorsConfig {
