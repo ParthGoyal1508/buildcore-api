@@ -783,6 +783,58 @@ describe('Dashboard reminders (e2e)', () => {
         .expect(201);
     });
 
+    /**
+     * The Department and Designation columns hold names.
+     *
+     * **Asserted on the cell, against the master's own name.** The test above asserts
+     * only that the run returned 201, and it did so happily while both columns were
+     * full of `cmu40n39a0030123nt0se33v5` — in the one report of the roster anybody
+     * can export to a file and send on. Asserting the column *label* reads "Department"
+     * would have passed too; the label was never wrong.
+     */
+    it('names the department and designation rather than their ids', async () => {
+      const employee = await sys.employee.findFirst({
+        where: {
+          companyId: callerCompanyId,
+          isActive: true,
+          departmentId: { not: null },
+          designationId: { not: null },
+        },
+        select: {
+          employeeCode: true,
+          departmentId: true,
+          designationId: true,
+        },
+      });
+      // Not skipped when absent: a test that quietly passes on no data is the failure
+      // mode this suite exists to avoid.
+      expect(employee).not.toBeNull();
+
+      const [department, designation] = await Promise.all([
+        sys.department.findUniqueOrThrow({
+          where: { id: employee.departmentId },
+          select: { name: true },
+        }),
+        sys.designation.findUniqueOrThrow({
+          where: { id: employee.designationId },
+          select: { name: true },
+        }),
+      ]);
+
+      const res = await http()
+        .post('/reports/employee/run')
+        .set(auth())
+        .send({})
+        .expect(201);
+
+      const row = res.body.rows.find(
+        (r: { employeeCode: string }) =>
+          r.employeeCode === employee.employeeCode,
+      );
+      expect(row.department).toBe(department.name);
+      expect(row.designation).toBe(designation.name);
+    });
+
     it('refuses the cross-company employee search', async () => {
       // A staff directory by name, previously readable by anyone with DASHBOARD.
       await http()
