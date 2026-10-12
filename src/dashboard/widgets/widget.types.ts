@@ -82,7 +82,20 @@ export type WidgetResult =
       displayType: WidgetDisplayType;
       title: string;
       section: WidgetSection;
-      unavailable: { reason: 'module_pending'; module: string };
+      unavailable: {
+        reason: 'module_pending';
+        module: string;
+        /**
+         * Why this card cannot be filled, when "waiting on the {module} module" is not
+         * the true answer (2026-10-12).
+         *
+         * The Statutory Calendar said it was waiting on Challans long after Challans
+         * shipped. The real blocker is that nothing records statutory **due dates** or
+         * what has been **filed** — a different problem with a different fix, and the
+         * stock sentence actively misdirected whoever went looking.
+         */
+        note?: string;
+      };
     };
 
 /** Multi-provider injection token every widget registers under (research.md §1). */
