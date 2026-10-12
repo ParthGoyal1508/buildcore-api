@@ -131,6 +131,33 @@ export class PlantService implements OnModuleInit {
   }
 
   /**
+   * The machines standing at one site (2026-10-12).
+   *
+   * For the Site Dashboard's Machinery Deployed count and its Machinery at Site table,
+   * both of which were "waiting on the machinery module" placeholders. `deployedSiteId`
+   * is the field the equipment register already filters on, so the dashboard and the
+   * register agree by construction.
+   *
+   * Site ids come from the `projects` schema; this only ever compares the one it is
+   * handed against its own column, so no cross-schema read is involved.
+   */
+  async getSiteMachinery(
+    companyId: string,
+    siteId: string,
+  ): Promise<{ id: string; code: string; name: string; status: string }[]> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.equipment.findMany({
+          where: { companyId, deployedSiteId: siteId },
+          select: { id: true, code: true, name: true, status: true },
+          orderBy: { code: 'asc' },
+        }),
+    );
+  }
+
+  /**
    * The three company-wide plant figures the dashboard shows (2026-10-12).
    *
    * One method rather than three, and on this façade rather than by exporting

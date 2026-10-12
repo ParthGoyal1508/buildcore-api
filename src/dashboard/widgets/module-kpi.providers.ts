@@ -221,3 +221,141 @@ export class FuelCostWidget implements WidgetProvider {
     return (await plantTotals(ctx, this.plant)).fuelSpend;
   }
 }
+
+// ─────────────────────────────────────────────────────────── site dashboard ──
+//
+// The Site Dashboard's own placeholders, same story as the company ones above.
+//
+// **Fuel Consumed and Fuel Consumption are deliberately left as placeholders**, and not
+// for the reason their message gives. `plant.FuelEntry` records which *machine* was
+// fuelled and carries no site: the only way to attribute fuel to a site is through the
+// machine's **current** deployment, which would file last month's diesel against wherever
+// that machine happens to stand today, and silently restate the figure every time a
+// machine moves. A site fuel figure needs `siteId` captured on the entry when it is
+// recorded; until then "no answer" beats an answer that rewrites itself.
+
+/** The machines standing at the selected site, as a count (spec FR-012). */
+@Injectable()
+export class MachineryDeployedWidget implements WidgetProvider {
+  readonly id = 'machinery-deployed';
+  readonly displayType = 'kpi' as const;
+  readonly title = 'Machinery Deployed';
+  readonly section = 'site' as const;
+  readonly requires = [Permission.MACHINERY];
+  constructor(private readonly plant: PlantService) {}
+  isAvailable(): boolean {
+    return this.plant.isAvailable();
+  }
+  async compute(ctx: DashboardContext): Promise<number> {
+    return (await siteMachinery(ctx, this.plant)).length;
+  }
+}
+
+/** The same machines, listed (spec FR-012). */
+@Injectable()
+export class MachineryAtSiteWidget implements WidgetProvider {
+  readonly id = 'machinery-at-site';
+  readonly displayType = 'table' as const;
+  readonly title = 'Machinery at Site';
+  readonly section = 'site' as const;
+  readonly requires = [Permission.MACHINERY];
+  constructor(private readonly plant: PlantService) {}
+  isAvailable(): boolean {
+    return this.plant.isAvailable();
+  }
+  async compute(ctx: DashboardContext): Promise<{
+    columns: { key: string; label: string }[];
+    rows: Record<string, unknown>[];
+  }> {
+    const machines = await siteMachinery(ctx, this.plant);
+    return {
+      columns: [
+        { key: 'code', label: 'Code' },
+        { key: 'name', label: 'Machine' },
+        { key: 'status', label: 'Status' },
+      ],
+      rows: machines.map((m) => ({
+        code: m.code,
+        name: m.name,
+        status: m.status,
+      })),
+    };
+  }
+}
+
+/** What the material standing at the selected site is worth (spec FR-012). */
+@Injectable()
+export class MaterialStockValueWidget implements WidgetProvider {
+  readonly id = 'material-stock-value';
+  readonly displayType = 'kpi' as const;
+  readonly title = 'Material Stock Value';
+  readonly section = 'site' as const;
+  readonly valueUnit = 'currency' as const;
+  readonly requires = [Permission.INVENTORY];
+  constructor(private readonly inventory: InventoryService) {}
+  isAvailable(): boolean {
+    return true;
+  }
+  async compute(ctx: DashboardContext): Promise<number> {
+    return (await siteStock(ctx, this.inventory)).totalValue;
+  }
+}
+
+/** What is actually in the store, biggest holdings first (spec FR-012). */
+@Injectable()
+export class MaterialStockWidget implements WidgetProvider {
+  readonly id = 'material-stock';
+  readonly displayType = 'table' as const;
+  readonly title = 'Material Stock';
+  readonly section = 'site' as const;
+  readonly requires = [Permission.INVENTORY];
+  constructor(private readonly inventory: InventoryService) {}
+  isAvailable(): boolean {
+    return true;
+  }
+  async compute(ctx: DashboardContext): Promise<{
+    columns: { key: string; label: string }[];
+    rows: Record<string, unknown>[];
+  }> {
+    const stock = await siteStock(ctx, this.inventory);
+    return {
+      columns: [
+        { key: 'name', label: 'Item' },
+        { key: 'inStock', label: 'In stock' },
+        { key: 'value', label: 'Value' },
+      ],
+      rows: stock.items.map((item) => ({
+        name: item.name,
+        inStock: `${item.inStock} ${item.unit}`.trim(),
+        value: item.value,
+      })),
+    };
+  }
+}
+
+/**
+ * Site reads, shared between the count card and the table beside it.
+ *
+ * Both site machinery cards — and both site stock cards — resolve in parallel from one
+ * request and would otherwise run the same query twice to render the same rows as a
+ * number and as a list.
+ *
+ * A dashboard with no site selected cannot answer these, and `ctx.siteId` is undefined on
+ * the company path. Empty rather than throwing: `resolveWidget` turns a throw into a
+ * "module pending" card, which would blame the machinery module for a missing parameter.
+ */
+function siteMachinery(ctx: DashboardContext, plant: PlantService) {
+  if (!ctx.siteId) return Promise.resolve([]);
+  const siteId = ctx.siteId;
+  return once(ctx, `plant:site:${siteId}`, () =>
+    plant.getSiteMachinery(ctx.companyId, siteId),
+  );
+}
+
+function siteStock(ctx: DashboardContext, inventory: InventoryService) {
+  if (!ctx.siteId) return Promise.resolve({ totalValue: 0, items: [] });
+  const siteId = ctx.siteId;
+  return once(ctx, `inventory:site:${siteId}`, () =>
+    inventory.getSiteStock(ctx.user, siteId),
+  );
+}

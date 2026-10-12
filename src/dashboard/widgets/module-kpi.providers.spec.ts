@@ -6,10 +6,17 @@ import {
   ContractValueWidget,
   FuelCostWidget,
   HireBillsWidget,
+  MachineryAtSiteWidget,
+  MachineryDeployedWidget,
+  MaterialStockValueWidget,
+  MaterialStockWidget,
   MaterialsCostWidget,
   TotalMachineryWidget,
 } from './module-kpi.providers';
-import { UNBUILT_WIDGET_PLACEHOLDERS } from './unbuilt-module.placeholders';
+import {
+  UNBUILT_SITE_WIDGET_PLACEHOLDERS,
+  UNBUILT_WIDGET_PLACEHOLDERS,
+} from './unbuilt-module.placeholders';
 import { resolveWidget, type WidgetProvider } from './widget.types';
 
 /**
@@ -192,5 +199,111 @@ describe('dashboard cards for modules that now exist', () => {
         'expenses',
       );
     });
+  });
+});
+
+describe('site dashboard cards for modules that now exist', () => {
+  const siteCtx = () => {
+    const base = ctx();
+    return { ...base, siteId: 'site-1' };
+  };
+
+  const machines = [
+    {
+      id: 'e1',
+      code: 'PRPL-EQP-0051',
+      name: 'TEST MACHINERY',
+      status: 'active',
+    },
+  ];
+  const plant = () => ({
+    isAvailable: () => true,
+    getSiteMachinery: jest.fn(async () => machines),
+  });
+  const inventory = () => ({
+    getSiteStock: jest.fn(async () => ({
+      totalValue: 129_313.53,
+      items: [
+        {
+          itemId: 'i1',
+          name: 'Cement OPC 53',
+          unit: 'BAG',
+          inStock: 30,
+          value: 120_000,
+        },
+        {
+          itemId: 'i2',
+          name: 'Sand',
+          unit: 'CUM',
+          inStock: 4,
+          value: 9_313.53,
+        },
+      ],
+    })),
+  });
+
+  it('counts the machines standing at the site', async () => {
+    const result = await resolveWidget(
+      new MachineryDeployedWidget(plant() as any),
+      siteCtx() as any,
+    );
+    expect('value' in result && result.value).toBe(1);
+  });
+
+  it('lists those machines rather than only counting them', async () => {
+    const result = await resolveWidget(
+      new MachineryAtSiteWidget(plant() as any),
+      siteCtx() as any,
+    );
+    const value = 'value' in result ? (result.value as any) : null;
+    expect(value.rows).toHaveLength(1);
+    expect(value.rows[0]).toMatchObject({ code: 'PRPL-EQP-0051' });
+  });
+
+  it('values the site store, as money', async () => {
+    const result = await resolveWidget(
+      new MaterialStockValueWidget(inventory() as any),
+      siteCtx() as any,
+    );
+    expect('value' in result && result.value).toBe(129_313.53);
+    expect('valueUnit' in result && result.valueUnit).toBe('currency');
+  });
+
+  it('reads each module once for the card and the table beside it', async () => {
+    // The count and the table are two providers over one query, resolving in parallel.
+    const p = plant();
+    const i = inventory();
+    const shared = siteCtx();
+    await Promise.all([
+      resolveWidget(new MachineryDeployedWidget(p as any), shared as any),
+      resolveWidget(new MachineryAtSiteWidget(p as any), shared as any),
+      resolveWidget(new MaterialStockValueWidget(i as any), shared as any),
+      resolveWidget(new MaterialStockWidget(i as any), shared as any),
+    ]);
+    expect(p.getSiteMachinery).toHaveBeenCalledTimes(1);
+    expect(i.getSiteStock).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers empty, not "module pending", when no site is selected', async () => {
+    // `resolveWidget` turns a throw into a module-pending card, which would blame the
+    // machinery module for what is a missing parameter on the company dashboard path.
+    const service = plant();
+    const result = await resolveWidget(
+      new MachineryDeployedWidget(service as any),
+      ctx(),
+    );
+    expect('value' in result && result.value).toBe(0);
+    expect(service.getSiteMachinery).not.toHaveBeenCalled();
+  });
+
+  it('leaves site fuel unavailable, because a fuel entry has no site', async () => {
+    // `plant.FuelEntry` records which machine was fuelled, not where. Deriving the site
+    // from the machine's current deployment would file last month's diesel wherever that
+    // machine stands today, and restate it every time one moves.
+    const result = await resolveWidget(
+      UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed,
+      siteCtx() as any,
+    );
+    expect('unavailable' in result).toBe(true);
   });
 });

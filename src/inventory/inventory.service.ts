@@ -233,6 +233,71 @@ export class InventoryService implements OnModuleInit {
    * Principle I forbids `plant` querying the `inventory` schema, and this is the
    * seam that keeps that true.
    */
+  /**
+   * What is in stock at one site, and what it is worth (2026-10-12).
+   *
+   * For the Site Dashboard's Material Stock Value card and Material Stock table, both of
+   * which were "waiting on the inventory module" placeholders.
+   *
+   * In-stock is `received + transferIn − issued − transferOut`, and the value is that at
+   * the running average rate — the same arithmetic `StockService.toRow` does for the
+   * stock screen, including rounding the value to paise. The rate carries six decimals so
+   * the average does not drift as receipts accumulate; a rupee figure with six decimals
+   * is noise on a card and misleading in a total.
+   */
+  async getSiteStock(
+    caller: AuthenticatedUser,
+    siteId: string,
+  ): Promise<{
+    totalValue: number;
+    items: {
+      itemId: string;
+      name: string;
+      unit: string;
+      inStock: number;
+      value: number;
+    }[];
+  }> {
+    const balances = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.stockBalance.findMany({
+          where: { siteId, ...companyScope(caller) },
+        }),
+    );
+    if (balances.length === 0) return { totalValue: 0, items: [] };
+
+    const items = await this.items.getItemsByIds(
+      caller,
+      balances.map((b) => b.itemId),
+    );
+
+    const rows = balances.map((balance) => {
+      const inStock =
+        Number(balance.received) +
+        Number(balance.transferIn) -
+        Number(balance.issued) -
+        Number(balance.transferOut);
+      const item = items.get(balance.itemId);
+      return {
+        itemId: balance.itemId,
+        name: item?.name ?? '—',
+        unit: item?.unit ?? '',
+        inStock,
+        value: Math.round(inStock * Number(balance.avgRate) * 100) / 100,
+      };
+    });
+
+    return {
+      totalValue:
+        Math.round(rows.reduce((sum, r) => sum + r.value, 0) * 100) / 100,
+      // Biggest holdings first: a site dashboard answers "what is sitting here", and
+      // the answer is led by the cement, not by whatever is alphabetically first.
+      items: rows.sort((a, b) => b.value - a.value),
+    };
+  }
+
   async getItemStockTotals(
     caller: AuthenticatedUser,
     itemIds: string[],

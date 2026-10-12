@@ -59,6 +59,10 @@ import {
   ContractValueWidget,
   FuelCostWidget,
   HireBillsWidget,
+  MachineryAtSiteWidget,
+  MachineryDeployedWidget,
+  MaterialStockValueWidget,
+  MaterialStockWidget,
   MaterialsCostWidget,
   TotalMachineryWidget,
 } from './widgets/module-kpi.providers';
@@ -110,6 +114,10 @@ const WIDGET_CLASSES = [
   MaterialsCostWidget,
   FuelCostWidget,
   HireBillsWidget,
+  MachineryDeployedWidget,
+  MachineryAtSiteWidget,
+  MaterialStockValueWidget,
+  MaterialStockWidget,
 ] as const;
 
 const NOTIFICATION_CLASSES = [
@@ -144,6 +152,10 @@ const widgetRegistry: Provider = {
     materialsCost: WidgetProvider,
     fuelCost: WidgetProvider,
     hireBills: WidgetProvider,
+    machineryDeployed: WidgetProvider,
+    machineryAtSite: WidgetProvider,
+    materialStockValue: WidgetProvider,
+    materialStock: WidgetProvider,
   ): WidgetProvider[] => [
     // Company dashboard — contract order.
     totalEmployees,
@@ -166,12 +178,14 @@ const widgetRegistry: Provider = {
     // Site dashboard — contract order.
     workersToday,
     siteAttendanceTable,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryDeployed,
+    machineryDeployed,
+    // Fuel stays a placeholder: `FuelEntry` records a machine, not a site — see the
+    // note in `module-kpi.providers.ts`.
     UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStockValue,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryAtSite,
+    materialStockValue,
+    machineryAtSite,
     UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumption,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStock,
+    materialStock,
     UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses,
   ],
 };
