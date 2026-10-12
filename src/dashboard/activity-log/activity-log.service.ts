@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { actorNamesFor } from '../../common/actor-name';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import type {
@@ -65,9 +66,14 @@ export class ActivityLogService {
       }),
     );
     const hasMore = rows.length > PAGE_SIZE;
-    const entries = rows.slice(0, PAGE_SIZE).map((row) => ({
+    const page_ = rows.slice(0, PAGE_SIZE);
+    const names = await actorNamesFor(
+      this.prisma,
+      page_.map((row) => row.accountId),
+    );
+    const entries = page_.map((row) => ({
       id: row.id,
-      actor: row.accountId ?? row.attemptedEmail ?? 'system',
+      actor: this.actorOf(row, names),
       action: row.action,
       module: moduleForEntityType(row.entityType),
       target: row.entityId,
@@ -87,11 +93,15 @@ export class ActivityLogService {
         orderBy: { createdAt: 'desc' },
       }),
     );
+    const names = await actorNamesFor(
+      this.prisma,
+      rows.map((row) => row.accountId),
+    );
     return rows.map((row) => {
       const { before, after } = this.beforeAfter(row.changes);
       return {
         timestamp: row.createdAt.toISOString(),
-        user: row.accountId ?? row.attemptedEmail ?? 'system',
+        user: this.actorOf(row, names),
         action: row.action,
         module: moduleForEntityType(row.entityType),
         entity: `${row.entityType}${row.entityId ? `:${row.entityId}` : ''}`,
@@ -99,6 +109,31 @@ export class ActivityLogService {
         after,
       };
     });
+  }
+
+  /**
+   * Who did it, as a person's name.
+   *
+   * `accountId` is a cuid, and both surfaces used to render it directly — so the Activity
+   * Log's User column read `cmu40n37h0001123njsvg08v5` on every action by a signed-in user,
+   * and so did every row of the CSV export. An audit trail exists to answer "who", and that
+   * is the one question it was not answering; `actor-name.ts` says in its own header that
+   * printing an id instead is the defect it exists to fix.
+   *
+   * `attemptedEmail` stays the fallback, and is the whole answer for a failed sign-in: there
+   * is no account to name, and the address someone typed is the only identity the event has.
+   * `system` last, for an entry with neither — a scheduled job, not a person.
+   */
+  private actorOf(
+    row: { accountId: string | null; attemptedEmail: string | null },
+    names: Map<string, string>,
+  ): string {
+    return (
+      (row.accountId ? names.get(row.accountId) : null) ??
+      row.attemptedEmail ??
+      row.accountId ??
+      'system'
+    );
   }
 
   private where(

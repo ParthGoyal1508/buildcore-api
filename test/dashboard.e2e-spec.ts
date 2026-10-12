@@ -616,8 +616,60 @@ describe('Dashboard reminders (e2e)', () => {
             entityId: `${PREFIX}audit-project`,
             ipAddress: '127.0.0.1',
           },
+          // One row with a real account on it, for the actor's name. The two above
+          // carry `accountId: null` and resolve to "system", so neither of them can
+          // tell a name apart from an id.
+          {
+            companyId: callerCompanyId,
+            accountId: scopedUserId,
+            action: 'UPDATE',
+            entityType: 'PROJECT',
+            entityId: `${PREFIX}actorrow`,
+            ipAddress: '127.0.0.1',
+          },
         ],
       });
+    });
+
+    /**
+     * The User column names a person.
+     *
+     * Asserted against the user's actual username, not against "is not empty" or "is
+     * not a cuid": a cuid is a non-empty string, so a truthiness check passes against
+     * the defect, and a negative regex passes for any wrong name too. Before this fix
+     * both the feed and the CSV export printed `accountId` verbatim, so an audit trail
+     * answered "who did this" with `cmu40n37h0001123njsvg08v5`.
+     */
+    it('names the actor rather than printing their id', async () => {
+      const res = await http().get('/activity-log').set(auth()).expect(200);
+
+      const row = res.body.entries.find(
+        (entry: { target: string | null }) =>
+          entry.target === `${PREFIX}actorrow`,
+      );
+      const scoped = await sys.user.findUniqueOrThrow({
+        where: { id: scopedUserId },
+        select: { username: true },
+      });
+      expect(row.actor).toBe(scoped.username);
+    });
+
+    it('names the actor in the CSV export too', async () => {
+      // A second route over the same rows, and the one that leaves the building.
+      const scoped = await sys.user.findUniqueOrThrow({
+        where: { id: scopedUserId },
+        select: { username: true },
+      });
+      const res = await http()
+        .get('/activity-log/export')
+        .set(auth())
+        .expect(200);
+
+      const line = res.text
+        .split('\n')
+        .find((l: string) => l.includes(`${PREFIX}actorrow`));
+      expect(line).toContain(scoped.username);
+      expect(line).not.toContain(scopedUserId);
     });
 
     const targets = (body: { entries: { target: string | null }[] }) =>
