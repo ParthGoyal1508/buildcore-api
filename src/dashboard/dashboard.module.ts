@@ -28,6 +28,11 @@ import { RemindersService } from './reminders/reminders.service';
 import { UNBUILT_MODULE_RULES } from './reminders/unbuilt-module.rules';
 import { AttendanceReportProvider } from './reports/attendance-report.provider';
 import { EmployeeReportProvider } from './reports/employee-report.provider';
+import {
+  EquipmentUtilizationReportProvider,
+  FuelReportProvider,
+  MachineryReportProvider,
+} from './reports/plant-reports.provider';
 import { ExportJobService } from './reports/export/export-job.service';
 import { REPORT_PROVIDERS } from './reports/report.types';
 import { ReportsController } from './reports/reports.controller';
@@ -136,6 +141,9 @@ const NOTIFICATION_CLASSES = [
 const REPORT_CLASSES = [
   AttendanceReportProvider,
   EmployeeReportProvider,
+  MachineryReportProvider,
+  EquipmentUtilizationReportProvider,
+  FuelReportProvider,
 ] as const;
 
 const widgetRegistry: Provider = {

@@ -2,7 +2,9 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HireBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
-import { withRlsContext } from '../common/prisma/rls-context';
+import { AuthenticatedUser } from '../auth/authenticated-user';
+import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import { companyScope } from '../settings/company-scope';
 import {
   EquipmentLogbookDay,
   ProjectSourcesRegistry,
@@ -10,6 +12,7 @@ import {
 } from '../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { MONTHS_PER_YEAR } from './constants/plant.constants';
+import { PlantRefsService } from './plant-refs.service';
 
 /** Whole months, inclusive of both ends, that a date range covers. */
 function monthsBetween(from: Date, to: Date): number {
@@ -41,6 +44,12 @@ export class PlantService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly sources: ProjectSourcesRegistry,
+    /**
+     * For the two report methods, which turn the ids this schema stores as plain
+     * columns into the names a report has to carry. Same module, and the only
+     * sanctioned route to `settings` and `projects` from here (Principle I).
+     */
+    private readonly refs: PlantRefsService,
   ) {}
 
   /**
@@ -202,6 +211,136 @@ export class PlantService implements OnModuleInit {
         };
       },
     );
+  }
+
+  /**
+   * The machinery register, for the Machinery and Equipment Utilization reports.
+   *
+   * One method for both because they are one read with two column sets — the register
+   * and the utilisation figure live on the same row, and two façade methods would be
+   * two queries and two more exports from a module that exports deliberately little.
+   *
+   * Category and site are resolved to **names** here. A report is a file somebody sends
+   * on, and `cmu40n39a0030123nt0se33v5` under a column headed "Site" is the defect the
+   * Employee report shipped with.
+   */
+  async listEquipmentForReport(caller: AuthenticatedUser): Promise<
+    {
+      code: string;
+      name: string;
+      category: string;
+      ownership: string;
+      status: string;
+      site: string;
+      meterType: string;
+      currentReading: number;
+      utilizationPercent: number;
+    }[]
+  > {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.equipment.findMany({
+          where: companyScope(caller),
+          orderBy: { code: 'asc' },
+          select: {
+            code: true,
+            name: true,
+            categoryId: true,
+            ownership: true,
+            status: true,
+            deployedSiteId: true,
+            meterType: true,
+            currentReading: true,
+            utilizationPercent: true,
+          },
+        }),
+    );
+
+    const [categories, siteNames] = await Promise.all([
+      this.refs.categoriesByIds(
+        caller,
+        rows.map((row) => row.categoryId),
+      ),
+      this.refs.siteNames(
+        caller,
+        rows.flatMap((row) => (row.deployedSiteId ? [row.deployedSiteId] : [])),
+      ),
+    ]);
+
+    return rows.map((row) => ({
+      code: row.code,
+      name: row.name,
+      // 'Unknown category', not blank — the same fallback `equipment.service.ts`
+      // uses on the Register. A blank cell reads as "no category", which is a
+      // different fact from "its category has since been deleted".
+      category: categories.get(row.categoryId)?.name ?? 'Unknown category',
+      ownership: row.ownership,
+      status: row.status,
+      site: row.deployedSiteId
+        ? siteNames.get(row.deployedSiteId) ?? ''
+        : 'Not deployed',
+      meterType: row.meterType,
+      currentReading: Number(row.currentReading),
+      utilizationPercent: Number(row.utilizationPercent),
+    }));
+  }
+
+  /**
+   * Every fuel entry in a date range, for the Fuel report.
+   *
+   * `site` is the entry's **own** site, not the machine's present deployment — see
+   * `FuelEntry.siteId`. An entry recorded before that column existed reads "Not
+   * recorded", which is what it is; filling it in from the machine's current site is
+   * the inference the column was added to stop.
+   */
+  async listFuelForReport(
+    caller: AuthenticatedUser,
+    range: { from: Date; to: Date },
+  ): Promise<
+    {
+      date: string;
+      code: string;
+      machine: string;
+      site: string;
+      litres: number;
+      rate: number;
+      amount: number;
+      flagged: string;
+    }[]
+  > {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.fuelEntry.findMany({
+          where: {
+            ...companyScope(caller),
+            date: { gte: range.from, lte: range.to },
+          },
+          orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+          include: { equipment: { select: { code: true, name: true } } },
+        }),
+    );
+
+    const siteNames = await this.refs.siteNames(
+      caller,
+      rows.flatMap((row) => (row.siteId ? [row.siteId] : [])),
+    );
+
+    return rows.map((row) => ({
+      date: row.date.toISOString().slice(0, 10),
+      code: row.equipment.code,
+      machine: row.equipment.name,
+      site: row.siteId ? siteNames.get(row.siteId) ?? '' : 'Not recorded',
+      litres: Number(row.quantity),
+      rate: Number(row.rate),
+      amount: Number(row.amount),
+      // Spelled out rather than a boolean: a report cell reading "false" is a cell
+      // somebody has to stop and interpret.
+      flagged: row.varianceAlert ? 'Yes' : 'No',
+    }));
   }
 
   /**
