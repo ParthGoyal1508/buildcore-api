@@ -629,6 +629,8 @@ export interface WorkspaceConfig {
   imageProcessing: {
     enrolment: { maxDimension: number; jpegQuality: number };
     punch: { maxDimension: number; jpegQuality: number };
+    /** A photograph printed into the DPR workbook beside its measurement (2026-10-12). */
+    dprForm: { maxDimension: number; jpegQuality: number };
   };
   /**
    * Labour (feature 013) tunables. Principle III keeps each of these out of the

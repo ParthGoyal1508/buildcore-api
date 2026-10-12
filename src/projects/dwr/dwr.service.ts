@@ -16,6 +16,8 @@ import {
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'nestjs-prisma';
 
+import config from '../../common/configs/config';
+import { fitImage } from '../../common/storage/image-fit';
 import { AuditLogService } from '../../auth/audit-log.service';
 import {
   APPROVAL_COMPLETED_EVENT,
@@ -38,7 +40,10 @@ import {
 import { StorageService } from '../../common/storage/storage.service';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
 import { formatChainage } from './chainage';
-import type { DwrWorkbookView } from './dwr-workbook.renderer';
+import type {
+  DwrWorkbookPhoto,
+  DwrWorkbookView,
+} from './dwr-workbook.renderer';
 import { DwrWorkbookRenderer } from './dwr-workbook.renderer';
 import {
   FACTOR_NAMES,
@@ -552,10 +557,35 @@ export class DwrService {
     const exists = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dailyWorkReport.findFirst({
         where: { id: dwrId },
-        select: { id: true },
+        select: { id: true, status: true },
       }),
     );
     if (!exists) throw new NotFoundException('Daily work report not found');
+
+    // **An approved report takes no further evidence** (2026-10-12).
+    //
+    // Approval moved this report's quantities onto the BOQ, and a bill may already have been
+    // built from them. Evidence filed afterwards is evidence the approver never saw, attached to
+    // a figure they have already certified — so the record of what was approved would no longer
+    // be what was approved.
+    //
+    // Refused here rather than only hidden on the screen. The control is gone from the report
+    // page in the same change, but a hidden control over an open endpoint is a control in
+    // appearance only — this repository's own words, and the reason FR-013's rate lock is
+    // enforced in a service rather than by a disabled input.
+    //
+    // The way to add something to an approved day is the way to change anything else about one:
+    // reverse it, with a reason, which is recorded. The message says so rather than leaving the
+    // caller to discover it.
+    if (exists.status === DwrStatus.approved) {
+      throw new ConflictException({
+        code: DWR_ERRORS.approvedTakesNoEvidence,
+        message:
+          'This report is approved, and approving it moved executed quantities a bill may ' +
+          'depend on. Reverse it first, with a reason — filing evidence against it now would ' +
+          'add to a record somebody has already certified.',
+      });
+    }
 
     if (taskId) {
       // **Checked against this report, not merely that the line exists.** Without the
@@ -1032,7 +1062,7 @@ export class DwrService {
     );
     if (!report) throw new NotFoundException('Daily work report not found');
 
-    const [company, names] = await Promise.all([
+    const [company, names, photos] = await Promise.all([
       withRlsContext(this.prisma, ctx, (tx) =>
         tx.company.findFirst({
           where: { id: companyId },
@@ -1043,6 +1073,7 @@ export class DwrService {
         report.createdByUserId,
         report.submittedByUserId,
       ]),
+      this.linePhotosFor(ctx, dwrId),
     ]);
 
     const workDate = report.workDate.toISOString().slice(0, 10);
@@ -1092,6 +1123,9 @@ export class DwrService {
           target: task.boqItem?.perDayQty?.toFixed(3) ?? null,
           engineerName: task.engineerName,
           remarks: task.boqItem ? task.remark : null,
+          // The evidence for this measurement, printed under the table (2026-10-12). Empty where
+          // there is none, which is most lines.
+          photos: photos.get(task.id) ?? [],
         };
       }),
     };
@@ -1102,6 +1136,77 @@ export class DwrService {
       // the cuid, which is the defect 017 fixed for every other download in this system.
       filename: `${report.dprNumber} ${workDate}.xlsx`,
     };
+  }
+
+  /**
+   * Every file filed against a line of this report, scaled for the printable form.
+   *
+   * ## Why the bytes are read here rather than in the renderer
+   *
+   * The renderer holds no database and no storage client, deliberately — `DwrWorkbookRenderer`'s
+   * docblock says why, and it is the same reason every figure reaches it already formatted. So
+   * fetching and scaling is this service's work, and what crosses the boundary is a picture and
+   * the size to draw it.
+   *
+   * ## What is deliberately not here
+   *
+   * Report-level attachments — the signed measurement sheet, the general site view — are **not**
+   * printed. They belong to the day rather than to any line, and this block exists to put a
+   * photograph beside the measurement it argues for. Printing them too would be a reasonable
+   * second step and is not what was asked for.
+   *
+   * A file that is not a picture is carried with a null image rather than dropped, so the form can
+   * name it. A storage read that fails is treated the same way: a workbook that fails to download
+   * because one photograph is missing from the blob store is worse than one that says so.
+   */
+  private async linePhotosFor(
+    ctx: RlsContext,
+    dwrId: string,
+  ): Promise<Map<string, DwrWorkbookPhoto[]>> {
+    const files = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dWRAttachment.findMany({
+        where: { dwrId, taskId: { not: null } },
+        select: {
+          taskId: true,
+          fileRef: true,
+          fileName: true,
+          mimeType: true,
+        },
+        orderBy: { uploadedAt: 'asc' },
+      }),
+    );
+    if (files.length === 0) return new Map();
+
+    const { maxDimension, jpegQuality } =
+      config().workspace.imageProcessing.dprForm;
+
+    const loaded = await Promise.all(
+      files.map(async (file) => {
+        if (!file.mimeType.startsWith('image/')) return { file, image: null };
+        try {
+          const bytes = await this.storage.get(file.fileRef);
+          return {
+            file,
+            image: await fitImage(bytes, maxDimension, jpegQuality),
+          };
+        } catch {
+          return { file, image: null };
+        }
+      }),
+    );
+
+    // Filled in a second pass rather than inside the `Promise.all`, so two photographs on one line
+    // print in the order they were uploaded rather than in the order their reads happened to
+    // finish.
+    const byLine = new Map<string, DwrWorkbookPhoto[]>();
+    for (const { file, image } of loaded) {
+      const key = file.taskId!;
+      byLine.set(key, [
+        ...(byLine.get(key) ?? []),
+        { fileName: file.fileName, image },
+      ]);
+    }
+    return byLine;
   }
 
   /** The logbook day for every equipment a report's lines name, in one call per machine. */
