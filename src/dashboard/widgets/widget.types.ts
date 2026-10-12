@@ -98,6 +98,24 @@ export type WidgetResult =
       };
     };
 
+/**
+ * One row of a `list` widget (2026-10-12).
+ *
+ * A declared shape, because the renderer previously fell back to `JSON.stringify` for
+ * any item that was not a string — so the first list widget to emit objects would have
+ * printed raw JSON onto the dashboard. No widget had, which is the only reason it was
+ * never seen.
+ */
+export interface WidgetListItem {
+  label: string;
+  /** Secondary line — "overdue by 6 days". */
+  detail?: string;
+  /** Drives the row's colour where the interface shows one. */
+  severity?: string;
+  /** Deep link into the owning module's screen, when the source offers one. */
+  href?: string;
+}
+
 /** Multi-provider injection token every widget registers under (research.md §1). */
 export const WIDGET_PROVIDERS = Symbol('WIDGET_PROVIDERS');
 

@@ -56,6 +56,7 @@ import {
 } from './widgets/unbuilt-module.placeholders';
 import {
   ActiveProjectsWidget,
+  AlertsRemindersWidget,
   ContractValueWidget,
   FuelCostWidget,
   HireBillsWidget,
@@ -118,6 +119,7 @@ const WIDGET_CLASSES = [
   MachineryAtSiteWidget,
   MaterialStockValueWidget,
   MaterialStockWidget,
+  AlertsRemindersWidget,
 ] as const;
 
 const NOTIFICATION_CLASSES = [
@@ -156,6 +158,7 @@ const widgetRegistry: Provider = {
     machineryAtSite: WidgetProvider,
     materialStockValue: WidgetProvider,
     materialStock: WidgetProvider,
+    alertsReminders: WidgetProvider,
   ): WidgetProvider[] => [
     // Company dashboard — contract order.
     totalEmployees,
@@ -171,7 +174,7 @@ const widgetRegistry: Provider = {
     fuelCost,
     hireBills,
     musterStat,
-    UNBUILT_WIDGET_PLACEHOLDERS.alertsReminders,
+    alertsReminders,
     todayAttendanceTable,
     recentLeavesTable,
 

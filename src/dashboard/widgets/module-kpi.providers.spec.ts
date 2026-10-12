@@ -3,6 +3,7 @@ import { Permission } from '@prisma/client';
 import { buildDashboardContext } from '../context';
 import {
   ActiveProjectsWidget,
+  AlertsRemindersWidget,
   ContractValueWidget,
   FuelCostWidget,
   HireBillsWidget,
@@ -305,5 +306,95 @@ describe('site dashboard cards for modules that now exist', () => {
       siteCtx() as any,
     );
     expect('unavailable' in result).toBe(true);
+  });
+});
+
+describe('Alerts & Reminders', () => {
+  const reminder = (over: Record<string, unknown> = {}) => ({
+    id: 'r1',
+    ruleKey: 'labour_licence',
+    sourceModule: 'labour',
+    type: 'expiry',
+    entityType: 'contractor',
+    entityId: 'c1',
+    companyId: 'co-1',
+    subject: 'Labour licence expires',
+    dueDate: '2026-10-04',
+    daysRemaining: -8,
+    severity: 'overdue',
+    actionLink: '/dashboard/partners/contractors/c1',
+    ...over,
+  });
+
+  const service = (reminders: unknown[]) => ({
+    list: jest.fn(async () => ({
+      reminders,
+      unavailable: [],
+      truncated: false,
+      matched: reminders.length,
+    })),
+  });
+
+  it('shows reminders rather than waiting on a module that exists', async () => {
+    const result = await rendered(
+      new AlertsRemindersWidget(service([reminder()]) as any),
+    );
+    const items = result.value as any[];
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      label: 'Labour licence expires',
+      severity: 'overdue',
+      href: '/dashboard/partners/contractors/c1',
+    });
+  });
+
+  it('says how late a thing is, not just when it was due', async () => {
+    // `daysRemaining` is negative when overdue. A bare date makes the reader do the
+    // arithmetic; the card exists to prompt an action.
+    const late = await rendered(
+      new AlertsRemindersWidget(service([reminder()]) as any),
+    );
+    expect((late.value as any[])[0].detail).toBe('overdue by 8 days');
+
+    const today = await rendered(
+      new AlertsRemindersWidget(
+        service([reminder({ daysRemaining: 0 })]) as any,
+      ),
+    );
+    expect((today.value as any[])[0].detail).toBe('due today');
+
+    const soon = await rendered(
+      new AlertsRemindersWidget(
+        service([reminder({ daysRemaining: 3 })]) as any,
+      ),
+    );
+    expect((soon.value as any[])[0].detail).toBe('due in 3 days');
+  });
+
+  it('keeps the card short and leaves the rest to the Reminders screen', async () => {
+    const many = Array.from({ length: 20 }, (_, i) =>
+      reminder({ id: `r${i}` }),
+    );
+    const result = await rendered(
+      new AlertsRemindersWidget(service(many) as any),
+    );
+    expect((result.value as any[]).length).toBeLessThanOrEqual(6);
+  });
+
+  it('takes the service’s order rather than re-sorting', async () => {
+    // `RemindersService` sorts overdue-first then soonest-due, and the Reminders screen
+    // shows that order. A second sort here is how a card and its screen disagree about
+    // what is most urgent.
+    const ordered = [
+      reminder({ id: 'a', subject: 'First', daysRemaining: -9 }),
+      reminder({ id: 'b', subject: 'Second', daysRemaining: 2 }),
+    ];
+    const result = await rendered(
+      new AlertsRemindersWidget(service(ordered) as any),
+    );
+    expect((result.value as any[]).map((i) => i.label)).toEqual([
+      'First',
+      'Second',
+    ]);
   });
 });

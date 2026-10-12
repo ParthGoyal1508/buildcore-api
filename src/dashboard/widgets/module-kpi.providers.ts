@@ -4,9 +4,10 @@ import { Permission, ProjectStatus } from '@prisma/client';
 import { InventoryService } from '../../inventory/inventory.service';
 import { PlantService } from '../../plant/plant.service';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
+import { RemindersService } from '../reminders/reminders.service';
 import type { DashboardContext } from '../context';
 import { once } from '../context';
-import type { WidgetProvider } from './widget.types';
+import type { WidgetListItem, WidgetProvider } from './widget.types';
 
 /**
  * The dashboard cards whose modules have since been built (2026-10-12).
@@ -359,3 +360,51 @@ function siteStock(ctx: DashboardContext, inventory: InventoryService) {
     inventory.getSiteStock(ctx.user, siteId),
   );
 }
+
+/**
+ * What needs attention, from the reminders engine (spec FR-005).
+ *
+ * The last of the company-dashboard placeholders, and the oddest: it was registered as
+ * "waiting on the machinery module" while a whole reminders engine ran beside it —
+ * `RemindersService` already evaluates every registered rule, the sidebar already shows
+ * its overdue badge, and `/dashboard/reminders` already lists them.
+ *
+ * Overdue first, then soonest due, which is `compareReminders`' own order — the list is
+ * taken as the service sorted it rather than re-sorted here, so the card and the
+ * Reminders screen agree about what is most urgent.
+ *
+ * No `requires`: a reminder is only ever produced by a rule the caller is entitled to
+ * see. `RemindersService.list` filters the rules by the caller's permissions before
+ * evaluating them, so gating the card again here would hide a reminder from somebody the
+ * engine had already decided should get it.
+ */
+@Injectable()
+export class AlertsRemindersWidget implements WidgetProvider {
+  readonly id = 'alerts-reminders';
+  readonly displayType = 'list' as const;
+  readonly title = 'Alerts & Reminders';
+  readonly section = 'alerts' as const;
+  constructor(private readonly reminders: RemindersService) {}
+  isAvailable(): boolean {
+    return true;
+  }
+  async compute(ctx: DashboardContext): Promise<WidgetListItem[]> {
+    const { reminders } = await this.reminders.list(ctx.user, {});
+    return reminders.slice(0, ALERTS_ON_DASHBOARD).map((reminder) => ({
+      label: reminder.subject,
+      // "overdue by 6 days" rather than a bare date: the card is a prompt to act, and
+      // `daysRemaining` is already negative when late (spec FR-030).
+      detail:
+        reminder.daysRemaining < 0
+          ? `overdue by ${Math.abs(reminder.daysRemaining)} days`
+          : reminder.daysRemaining === 0
+          ? 'due today'
+          : `due in ${reminder.daysRemaining} days`,
+      severity: reminder.severity,
+      href: reminder.actionLink,
+    }));
+  }
+}
+
+/** How many reminders the card shows before "see all" on the Reminders screen. */
+const ALERTS_ON_DASHBOARD = 6;
