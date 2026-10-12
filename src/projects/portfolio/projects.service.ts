@@ -26,6 +26,7 @@ import {
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
+import { BillPaymentsService } from '../billing/payments/bill-payments.service';
 import {
   ProjectDocumentReadiness,
   ProjectDocumentsService,
@@ -143,7 +144,26 @@ export interface ProjectDetail {
      * Every status, drafts included — this is "how many bills exist against this project", not
      * "how many have been approved".
      */
-    billSummary: { totalBills: number; totalExpenses: number };
+    billSummary: {
+      totalBills: number;
+      totalExpenses: number;
+      /**
+       * Certified, paid and still owed (2026-10-12).
+       *
+       * `totalBills`/`totalExpenses` above are everything **raised**, drafts included. These are
+       * the money questions, and they are not the same question: a bill is raised when a
+       * subcontractor claims, certified when we agree, and paid when it leaves. Derived by
+       * `BillPaymentsService.positionForProject`, which is where the rule that certified means
+       * `netPayable` on an `approved` bill is written down.
+       *
+       * Strings, because they are `Decimal` — a project's bills summed as JavaScript numbers leave
+       * a fraction of a paisa outstanding on a project that is fully settled.
+       */
+      certifiedBills: number;
+      certifiedAmount: string;
+      paidAmount: string;
+      outstandingAmount: string;
+    };
     /**
      * **Client bills** — `ClientBill`, the Client bills tab. Money coming in (2026-10-12).
      *
@@ -163,6 +183,19 @@ export interface ProjectDetail {
       /** How many of those bills carry a certified figure, so "₹0 certified" is readable. */
       certifiedCount: number;
     };
+    /**
+     * The project's revenue ledger — **not** client bill receipts (2026-10-12).
+     *
+     * `Revenue` is a hand-kept list of money received or expected "outside the RA bill process", as
+     * its own docblock says, and nothing links a row of it to a client bill. So this is what it has
+     * always been, and the screen now labels it as such: a project that has certified ten lakh of
+     * client bills still reads ₹0 here if nobody typed a revenue row, and that is not a defect in
+     * this figure.
+     *
+     * **Money received against a client bill is recorded nowhere in this system.** There is no
+     * equivalent of `RABillPayment` on the client side. Reporting this ledger as though it were one
+     * would be a figure that looks like an answer and is not one.
+     */
     revenueSummary: { totalReceived: number; totalPending: number };
   };
   /**
@@ -207,6 +240,9 @@ export class ProjectsService {
     // the dashboard asks it through `ProjectDocumentsService`'s exported method rather
     // than by reading the table.
     private readonly documents: ProjectDocumentsService,
+    // 2026-10-12. What a subcontractor bill has been certified and paid at is that service's
+    // rule, not a second summation written here — see `positionForProject`.
+    private readonly billPayments: BillPaymentsService,
   ) {}
 
   /** See `ClientsService.targetCompanyOf()` for why the caller's own company is the
@@ -536,11 +572,10 @@ export class ProjectsService {
       ownData.siteIds.map((site) => site.id),
     );
 
-    const documentReadiness = await this.documents.readinessForOne(
-      ctx,
-      project.companyId,
-      id,
-    );
+    const [documentReadiness, position] = await Promise.all([
+      this.documents.readinessForOne(ctx, project.companyId, id),
+      this.billPayments.positionForProject(ctx, id),
+    ]);
 
     const companyId = project.companyId;
     const plant = this.sources.machinerySource();
@@ -573,6 +608,10 @@ export class ProjectsService {
             (sum, bill) => sum + Number(bill.amount),
             0,
           ),
+          certifiedBills: position.certifiedCount,
+          certifiedAmount: position.certifiedAmount,
+          paidAmount: position.paidAmount,
+          outstandingAmount: position.outstandingAmount,
         },
         clientBillSummary: {
           totalBills: ownData.clientBills.length,

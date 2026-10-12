@@ -411,13 +411,40 @@ describe('Projects module (e2e)', () => {
         startDate: '2026-05-01',
       });
 
-      await sys.rABill.create({
+      // Certified, with gross unlike net and a part payment against it — so raised, certified,
+      // paid and outstanding are four different numbers and none can stand in for another.
+      const certifiedBill = await sys.rABill.create({
         data: {
           companyId,
           projectId: project.id,
           billNumber: `RA-${Date.now() % 100000}`,
           amount: 1111,
+          grossAmount: 1111,
+          netPayable: 900,
+          status: 'approved',
           billingDate: new Date('2026-06-01'),
+        },
+      });
+      await sys.rABillPayment.create({
+        data: {
+          companyId,
+          raBillId: certifiedBill.id,
+          paidOn: new Date('2026-06-20'),
+          amount: 400,
+          instrument: 'bank_transfer',
+        },
+      });
+      // Still a draft. It counts as raised and must not count as certified — an outstanding
+      // against a figure nobody has agreed to pay is a figure nobody can act on.
+      await sys.rABill.create({
+        data: {
+          companyId,
+          projectId: project.id,
+          billNumber: `RA-D${Date.now() % 100000}`,
+          amount: 2222,
+          grossAmount: 2222,
+          netPayable: 2000,
+          billingDate: new Date('2026-06-05'),
         },
       });
       await sys.clientBill.createMany({
@@ -452,8 +479,16 @@ describe('Projects module (e2e)', () => {
         .expect(200);
 
       expect(detail.body.tabs.billSummary).toEqual({
-        totalBills: 1,
-        totalExpenses: 1111,
+        // Everything claimed, the draft included.
+        totalBills: 2,
+        totalExpenses: 3333,
+        // The approved one alone, at its **net**. 1,111 would mean this read what was claimed
+        // rather than what was agreed; 2 bills would mean the draft was counted as certified.
+        certifiedBills: 1,
+        certifiedAmount: '900.00',
+        paidAmount: '400.00',
+        // Derived, and the part payment is what tells a subtraction from either figure alone.
+        outstandingAmount: '500.00',
       });
       expect(detail.body.tabs.clientBillSummary).toEqual({
         totalBills: 2,
@@ -467,6 +502,9 @@ describe('Projects module (e2e)', () => {
       });
 
       await sys.clientBill.deleteMany({ where: { projectId: project.id } });
+      await sys.rABillPayment.deleteMany({
+        where: { raBillId: certifiedBill.id },
+      });
       await sys.rABill.deleteMany({ where: { projectId: project.id } });
     });
 

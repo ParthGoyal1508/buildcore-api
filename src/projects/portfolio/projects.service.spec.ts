@@ -25,6 +25,8 @@ describe('ProjectsService.findOne', () => {
   const serviceWith = (
     overrides: Record<string, unknown> = {},
     employees: Record<string, unknown> = {},
+    /** What `BillPaymentsService.positionForProject` answers, for the tests that care. */
+    billing: Record<string, unknown> = {},
   ) => {
     const prisma = createPrismaMock({
       project: { findUnique: jest.fn().mockResolvedValue(projectRow) },
@@ -66,6 +68,21 @@ describe('ProjectsService.findOne', () => {
           advisoryRequired: 0,
           advisoryPresent: 0,
           advisoryMissingTypeIds: [],
+        }),
+      } as never,
+      // The subcontractor billing position (2026-10-12). A double rather than the real service:
+      // what "certified" means for a running-account bill is `BillPaymentsService`'s rule and is
+      // asserted in its own spec, and restating the derivation here would make this spec pass
+      // against a copy of the rule rather than against the rule.
+      {
+        positionForProject: jest.fn().mockResolvedValue({
+          raisedCount: 0,
+          raisedAmount: '0.00',
+          certifiedCount: 0,
+          certifiedAmount: '0.00',
+          paidAmount: '0.00',
+          outstandingAmount: '0.00',
+          ...billing,
         }),
       } as never,
     );
@@ -116,24 +133,41 @@ describe('ProjectsService.findOne', () => {
    * and is wrong. The amounts below share no value, so a crossed wire cannot pass.
    */
   it('summarises client bills apart from subcontractor bills', async () => {
-    const service = serviceWith({
-      rABill: {
-        findMany: jest.fn().mockResolvedValue([{ amount: 1111 }]),
+    const service = serviceWith(
+      {
+        rABill: {
+          findMany: jest.fn().mockResolvedValue([{ amount: 1111 }]),
+        },
+        clientBill: {
+          findMany: jest.fn().mockResolvedValue([
+            { netAmount: 5000, certifiedAmount: 4800 },
+            // Null is "not certified", which is not zero — the count is what says so.
+            { netAmount: 7000, certifiedAmount: null },
+          ]),
+        },
       },
-      clientBill: {
-        findMany: jest.fn().mockResolvedValue([
-          { netAmount: 5000, certifiedAmount: 4800 },
-          // Null is "not certified", which is not zero — the count is what says so.
-          { netAmount: 7000, certifiedAmount: null },
-        ]),
+      {},
+      {
+        // Deliberately unlike every client figure above and unlike the raised amount: the four
+        // subcontractor figures are carried through from this service, and a response that
+        // recomputed any of them from the rows would answer something else.
+        certifiedCount: 1,
+        certifiedAmount: '900.00',
+        paidAmount: '400.00',
+        outstandingAmount: '500.00',
       },
-    });
+    );
 
     const detail = await service.findOne(caller, 'project-1');
 
     expect(detail.tabs.billSummary).toEqual({
       totalBills: 1,
       totalExpenses: 1111,
+      // Passed through from `positionForProject`, not recomputed here — see the double below.
+      certifiedBills: 1,
+      certifiedAmount: '900.00',
+      paidAmount: '400.00',
+      outstandingAmount: '500.00',
     });
     expect(detail.tabs.clientBillSummary).toEqual({
       totalBills: 2,
@@ -184,6 +218,8 @@ describe('ProjectsService outward contract', () => {
           advisoryMissingTypeIds: [],
         }),
       } as never,
+      // Never reached by these two — neither exercises `findOne` — but the constructor takes it.
+      { positionForProject: jest.fn() } as never,
     );
 
   it('reports the portfolio as available, which 007 branches on', () => {
@@ -242,6 +278,8 @@ describe('ProjectsService.remove', () => {
           advisoryMissingTypeIds: [],
         }),
       } as never,
+      // Never reached by these two — neither exercises `findOne` — but the constructor takes it.
+      { positionForProject: jest.fn() } as never,
     );
 
     const attempt = service.remove(caller, 'project-1', '10.0.0.1');

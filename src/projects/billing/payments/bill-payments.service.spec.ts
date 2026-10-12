@@ -22,6 +22,8 @@ interface BillFixture {
   id: string;
   billNumber: string;
   status: RaBillStatus;
+  /** What was **claimed**. Deliberately not `netPayable`: the two are what the deductions sit between. */
+  amount?: string;
   netPayable: string;
   acknowledgedAt?: Date | null;
   workOrderId?: string | null;
@@ -38,6 +40,7 @@ function harness(bills: BillFixture[]) {
     workOrderId: bill.workOrderId ?? 'wo-1',
     status: bill.status,
     netPayable: new Prisma.Decimal(bill.netPayable),
+    amount: new Prisma.Decimal(bill.amount ?? bill.netPayable),
     acknowledgedAt: bill.acknowledgedAt ?? null,
     payments: (bill.payments ?? []).map((payment) => ({
       id: payment.id,
@@ -282,5 +285,57 @@ describe('outstanding across a subcontractor’s bills', () => {
       ['RA-01', '0.00'],
       ['RA-02', '160000.00'],
     ]);
+  });
+});
+
+/**
+ * A whole project's position, which the overview card reads (2026-10-12).
+ *
+ * ## Vacuity note
+ *
+ * _Asserting the four figures are present proves four fields._ Every plausible wrong
+ * implementation returns four figures too — counting only certified bills as raised, summing
+ * `netPayable` where `amount` was claimed, summing `amount` where `netPayable` was certified, or
+ * letting a draft into the certified total. So the fixture below gives **every one of those a
+ * different answer**: two bills, only one certified, and gross unequal to net on both.
+ */
+describe('a project\u2019s subcontractor billing position', () => {
+  const project = () =>
+    harness([
+      {
+        id: 'bill-1',
+        billNumber: 'RA-01',
+        status: RaBillStatus.approved,
+        amount: '120000.00',
+        netPayable: '100000.00',
+        payments: [{ id: 'p1', amount: '60000.00', paidOn: '2026-09-20' }],
+      },
+      {
+        // Claimed and not yet agreed. It counts as raised and must not count as certified: an
+        // outstanding against a figure nobody has agreed to pay is a figure nobody can act on.
+        id: 'bill-2',
+        billNumber: 'RA-02',
+        status: RaBillStatus.draft,
+        amount: '50000.00',
+        netPayable: '45000.00',
+      },
+    ]);
+
+  it('separates what was claimed, what was agreed, and what has left', async () => {
+    const { service } = project();
+
+    expect(await service.positionForProject(CTX, 'project-1')).toEqual({
+      // Both bills, drafts included — 170,000 is gross of both, so a sum of `netPayable` (145,000)
+      // or of the certified bill alone (120,000) fails here.
+      raisedCount: 2,
+      raisedAmount: '170000.00',
+      // One bill, at its **net**. 120,000 would mean this read what was claimed rather than what
+      // was agreed, and would overpay by exactly the deductions.
+      certifiedCount: 1,
+      certifiedAmount: '100000.00',
+      paidAmount: '60000.00',
+      // The part payment, which is the case that tells a subtraction from either figure alone.
+      outstandingAmount: '40000.00',
+    });
   });
 });
