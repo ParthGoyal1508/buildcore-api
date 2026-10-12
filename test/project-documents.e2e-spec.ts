@@ -307,6 +307,115 @@ describe('Project documents (e2e)', () => {
     expect(row.documentReadiness.present).toBe(0);
   });
 
+  /**
+   * The expiry typed on the creation form reaches the project (reported 2026-10-12).
+   *
+   * The same question as the block below, asked again a month later and about the other end of
+   * the same rule: the server has refused a document of an expiring kind with no date since
+   * 2026-10-09, and the project **creation form had no field to type one into**. Every file was
+   * refused, the mandatory kind stayed unstaged, and the submit button stayed shut — so a company
+   * whose required set contained an expiring kind could not create a project at all.
+   *
+   * ## Vacuity note
+   *
+   * _Asserting the project was created proves the gate, not the date._ A promotion that dropped
+   * `expiresAt` creates exactly the same project, and nobody learns otherwise until the document
+   * lapses and the reminder that should have fired does not. So this reads the date back off the
+   * project's own document.
+   */
+  it('carries a staged expiry through creation onto the project document', async () => {
+    const kind = typeIdByCode.get('INSURANCE');
+    const EXPIRES = '2031-07-19';
+
+    const staged = await http()
+      .post('/projects/document-uploads')
+      .set(auth(adminToken))
+      .send({
+        documentTypeId: kind,
+        documentType: 'Insurance',
+        data: Buffer.from('%PDF-1.4 e2e insurance').toString('base64'),
+        contentType: 'application/pdf',
+        fileName: 'policy.pdf',
+        expiresAt: EXPIRES,
+      })
+      .expect(201);
+
+    const created = await http()
+      .post('/projects')
+      .set(auth(adminToken))
+      .send({
+        code: unique('PX').slice(0, 30),
+        name: `${PREFIX} Expiry carried`,
+        clientId,
+        contractValue: 1000000,
+        startDate: '2026-04-01',
+        stagedDocumentIds: [staged.body.stagedDocumentId],
+      })
+      .expect(201);
+    projectIds.push(created.body.id);
+
+    const documents = await http()
+      .get(`/projects/${created.body.id}/documents`)
+      .set(auth(adminToken))
+      .expect(200);
+
+    const filed = documents.body.find(
+      (d: { documentTypeId: string | null }) => d.documentTypeId === kind,
+    );
+    expect(filed).toBeDefined();
+    // **The date, not its presence.** A column written as null, or as today, reads as a filed
+    // document just as well — and both are a certificate nothing will ever report as lapsed.
+    expect(String(filed.expiresAt).slice(0, 10)).toBe(EXPIRES);
+  });
+
+  /**
+   * The refusal that makes the field necessary.
+   *
+   * The kind is switched to one that lapses for the length of this test and switched back, because
+   * `hasExpiry` is company configuration and the rest of this suite is written against the seeded
+   * set. Refused **and then accepted** with the only difference being the date: a refusal on its
+   * own would pass against an endpoint that refused every staging attempt.
+   */
+  it('refuses to stage a lapsing kind with no date, and accepts it with one', async () => {
+    const kind = typeIdByCode.get('INSURANCE');
+    const body = (expiresAt?: string) => ({
+      documentTypeId: kind,
+      documentType: 'Insurance',
+      data: Buffer.from('%PDF-1.4 expiry rule').toString('base64'),
+      contentType: 'application/pdf',
+      fileName: 'policy.pdf',
+      ...(expiresAt ? { expiresAt } : {}),
+    });
+
+    await sys.documentType.update({
+      where: { id: kind },
+      data: { hasExpiry: true },
+    });
+    try {
+      const refused = await http()
+        .post('/projects/document-uploads')
+        .set(auth(adminToken))
+        .send(body())
+        .expect(400);
+
+      expect(refused.body.code).toBe('PROJECT_DOCUMENT_EXPIRY_REQUIRED');
+      // Named, because the form puts this message on the control it belongs to and a refusal
+      // naming an id is one the reader cannot match to a row.
+      expect(refused.body.message).toContain('Insurance');
+
+      await http()
+        .post('/projects/document-uploads')
+        .set(auth(adminToken))
+        .send(body('2031-07-19'))
+        .expect(201);
+    } finally {
+      await sys.documentType.update({
+        where: { id: kind },
+        data: { hasExpiry: false },
+      });
+    }
+  });
+
   describe('a lapsed document answers nothing (2026-10-09)', () => {
     /**
      * Reported: "How are we handling the expiry documents? We have not entered the date of
