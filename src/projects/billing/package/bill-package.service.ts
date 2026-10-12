@@ -1728,6 +1728,7 @@ export class BillPackageService {
       status: BillPackageStatus;
       issuedAt: string | null;
       payable: string;
+      counterpartyKey: string;
     }[]
   > {
     return withRlsContext(this.prisma, ctx, async (tx) => {
@@ -1743,6 +1744,7 @@ export class BillPackageService {
           status: true,
           issuedAt: true,
           payable: true,
+          counterpartyKey: true,
         },
       });
       return rows.map((row) => ({
@@ -1754,6 +1756,22 @@ export class BillPackageService {
         status: row.status,
         issuedAt: row.issuedAt?.toISOString() ?? null,
         payable: displayRupees(row.payable),
+        /**
+         * **Who this bill is to** — the work order for a subcontractor, the client for the client
+         * (2026-10-13).
+         *
+         * The running number is per counterparty, so two subcontractors on one project both hold
+         * an RA-01, and a list carrying only the label cannot tell them apart. Reported against the
+         * screen that prints every package on a project in one table: the direction column was the
+         * only thing separating two rows reading `RA-04`, and it does not separate two
+         * subcontractors from each other at all.
+         *
+         * The **key**, not a name. `WorkOrder.partnerId` is a bare column with no relation by
+         * Principle I — the vendor register is another module's schema — so resolving the name
+         * here would cross a boundary this schema deliberately does not cross. The screen already
+         * holds both lists and does the lookup it already does for the composer.
+         */
+        counterpartyKey: row.counterpartyKey,
       }));
     });
   }

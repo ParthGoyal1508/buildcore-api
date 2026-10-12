@@ -781,3 +781,60 @@ describe('packageLabel', () => {
     expect(packageLabel(112)).toBe('RA-112');
   });
 });
+
+/**
+ * Listing a project's packages (2026-10-13) — reported on the RA bills tab.
+ *
+ * Every package on the project printed into one table, client bills and subcontractor bills
+ * interleaved, with a Direction column as the only thing separating two rows both reading `RA-04`.
+ * And it does not separate two **subcontractors** from each other at all: the running number is per
+ * counterparty, so each one's first bill is `RA-01`.
+ */
+describe('listing a project’s bill packages', () => {
+  const listing = (rows: Record<string, unknown>[]) => {
+    const prisma = {
+      $transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          $executeRaw: async () => 0,
+          billPackage: { findMany: async () => rows },
+        }),
+    };
+    return new BillPackageService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  };
+
+  const row = (over: Record<string, unknown>) => ({
+    id: 'pkg-1',
+    sequenceNo: 1,
+    direction: 'to_subcontractor',
+    periodFrom: new Date('2026-09-25'),
+    periodTo: new Date('2026-09-27'),
+    status: 'issued',
+    issuedAt: new Date('2026-10-08'),
+    payable: new Prisma.Decimal('40121'),
+    counterpartyKey: 'wo-1',
+    ...over,
+  });
+
+  it('says who each bill is to, where the number cannot', async () => {
+    // Two subcontractors, one project, and both hold their own first bill.
+    const service = listing([
+      row({ id: 'pkg-1', counterpartyKey: 'wo-1' }),
+      row({ id: 'pkg-2', counterpartyKey: 'wo-2' }),
+    ]);
+
+    const rows = await service.list({ isSuperAdmin: true } as never, 'p-1');
+
+    // **The labels are identical**, which is correct and is the whole problem: a screen showing
+    // these two rows has nothing to tell a reader which award each was raised against.
+    expect(rows.map((r) => r.label)).toEqual(['RA-01', 'RA-01']);
+    // Asserting the field is present would pass for a list that returned the same key twice — so
+    // what is asserted is that the two rows are told apart.
+    expect(rows[0].counterpartyKey).not.toBe(rows[1].counterpartyKey);
+    expect(rows.map((r) => r.counterpartyKey)).toEqual(['wo-1', 'wo-2']);
+  });
+});
