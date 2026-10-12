@@ -10,7 +10,13 @@ import { PrismaService } from 'nestjs-prisma';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
-import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
+import {
+  billTotals,
+  lineTotals,
+  money,
+  retentionOn,
+  unitRate,
+} from './bill-totals';
 import { nextClientBillNumber } from './bill-number';
 import { balanceColumn } from './package/bill-abstract';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
@@ -73,7 +79,23 @@ export interface ClientBillLineView {
   unit: string;
   scopeQty: number;
   quantity: number;
+  /** The schedule's own rate, frozen at composition. What the tender document prints. */
   rate: number;
+  /**
+   * That rate after the project's quoted percentage — **the rate the amount was computed at**
+   * (2026-10-13).
+   *
+   * Reported: a line reading 37.25 Cum at ₹178.00 for ₹5,915.07, where 37.25 × 178 is ₹6,630.50.
+   * Both figures were right and the column between them was missing: the project is quoted 10.79%
+   * below, `lineTotals` applies that per line, and the rate on screen was the one before it. A
+   * document whose own columns do not multiply out is a document the reader stops trusting, and
+   * they are right to.
+   *
+   * Carried rather than left to the reader to derive, for the same reason the rate itself is
+   * frozen: the project's percentage can be corrected, and this is the one the bill was priced at.
+   */
+  quotedRate: number;
+  /** `quantity × quotedRate`. */
   amount: number;
   /** Including this bill. */
   cumulativeQty: number;
@@ -204,6 +226,24 @@ export interface ClientBillView {
   billingDate: Date;
   status: ClientBillStatus;
   quotedPercentage: number;
+  /**
+   * These lines at the **schedule's** rates, before the quoted percentage (2026-10-13).
+   *
+   * With `quoteAdjustment` it is the two rows above the work done: what the schedule says the work
+   * comes to, what the quote takes off or adds, and the gross. The client's own abstract prints the
+   * same three — `TOTAL`, `Total Amount after 14.92% below`, `Total Payable Amount` — because a
+   * reader checking a bill against the tender starts from the schedule figure and needs to see
+   * where it went.
+   *
+   * Formed per line and then summed, exactly as the gross is, so that
+   * `boqGrossAmount + quoteAdjustment === grossAmount` holds to the paisa rather than nearly.
+   */
+  boqGrossAmount: number;
+  /**
+   * `grossAmount − boqGrossAmount`. **Negative where the quote is below the schedule**, which is
+   * the common case and the one a reader must not have to infer from two totals.
+   */
+  quoteAdjustment: number;
   grossAmount: number;
   retentionAmount: number;
   /**
@@ -872,6 +912,10 @@ export class ClientBillsService {
         { upToBillDate: bill.billingDate, includeBillId: bill.id },
       );
 
+      // Frozen onto the bill at composition, so a correction to the project's percentage does not
+      // restate a bill already raised.
+      const quoted = bill.quotedPercentage.toNumber();
+
       const lines: ClientBillLineView[] = bill.lines.map((line) => {
         const scopeQty = line.boqTaskItem.scopeQty.toNumber();
         const cumulativeQty = cumulative.get(line.boqTaskItemId) ?? 0;
@@ -886,6 +930,7 @@ export class ClientBillsService {
           scopeQty,
           quantity: line.quantity.toNumber(),
           rate: line.rate.toNumber(),
+          quotedRate: unitRate(line.rate.toNumber() * (1 + quoted)),
           amount: line.amount.toNumber(),
           cumulativeQty,
           remainingQty: Math.round((scopeQty - cumulativeQty) * 1000) / 1000,
@@ -897,6 +942,17 @@ export class ClientBillsService {
         };
       });
 
+      // The same lines at the schedule's own rates. Rounded per line and then summed, which is how
+      // the gross was formed — sum first and the two totals disagree by a paisa or two, on the one
+      // screen whose whole purpose is that figures reconcile.
+      const boqGrossAmount = money(
+        bill.lines.reduce(
+          (sum, line) =>
+            sum + money(line.quantity.toNumber() * line.rate.toNumber()),
+          0,
+        ),
+      );
+
       const certified = bill.certifiedAmount?.toNumber() ?? null;
       return {
         id: bill.id,
@@ -905,7 +961,11 @@ export class ClientBillsService {
         description: bill.description,
         billingDate: bill.billingDate,
         status: bill.status,
-        quotedPercentage: bill.quotedPercentage.toNumber(),
+        quotedPercentage: quoted,
+        boqGrossAmount,
+        // Derived from the stored gross rather than re-applying the percentage: the gross is what
+        // the bill was raised at, and a second multiplication is a second opinion about it.
+        quoteAdjustment: money(bill.grossAmount.toNumber() - boqGrossAmount),
         grossAmount: bill.grossAmount.toNumber(),
         retentionAmount: bill.retentionAmount.toNumber(),
         // No net until the package that decides the recoveries, deductions and tax is issued.

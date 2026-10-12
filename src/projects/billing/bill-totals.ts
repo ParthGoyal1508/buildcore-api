@@ -32,6 +32,21 @@ export const money = (value: number): number => Math.round(value * 100) / 100;
 export const quantity = (value: number): number =>
   Math.round(value * 1000) / 1000;
 
+/**
+ * Six, for a **rate the quote derives** rather than one anybody typed.
+ *
+ * A rate column is conventionally two decimals and two is wrong here. The reported bill is priced
+ * at 10.79% below: ₹178.00 becomes ₹158.795380, and ₹158.80 × 37.25 is ₹5,915.30 against the
+ * ₹5,915.07 the line was actually billed. A reader multiplying the rate beside the amount would
+ * land twenty-three paise away from it and reasonably conclude one of the two was wrong — which is
+ * the whole defect this figure exists to close, reintroduced by rounding it to look tidy.
+ *
+ * Not `money`, because this is not money: it is a price per unit, and only the product of it and a
+ * quantity is ever paid.
+ */
+export const unitRate = (value: number): number =>
+  Math.round(value * 1e6) / 1e6;
+
 /** One line of a bill, before anything is summed. */
 export interface BillLineInput {
   quantity: number;

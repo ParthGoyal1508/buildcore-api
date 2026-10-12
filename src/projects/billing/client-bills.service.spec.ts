@@ -604,6 +604,92 @@ function buildBoq(opts: {
  * screen to each other: the breakdown starts at the gross a reader can see and ends at the net they
  * are querying.
  */
+/**
+ * The two rates a quoted bill is priced at, and the step between them (2026-10-13) — reported on
+ * RA-05.
+ *
+ * The line read 37.25 Cum at ₹178.00 for ₹5,915.07, and 37.25 × 178 is ₹6,630.50. Nothing was wrong:
+ * the project is quoted 10.79% below, `lineTotals` applies that **per line**, and the rate printed
+ * beside the amount was the schedule’s, before it. One column was missing and one subtotal, and
+ * without them the sheet is a document whose own figures do not multiply out.
+ *
+ * The fixture is that bill’s two lines, at their real quantities and rates.
+ */
+describe('the rate a quoted line is actually billed at', () => {
+  /** Two decimals, as every money figure in this product is rounded. */
+  const paise = (value: number) => Math.round(value * 100) / 100;
+
+  const ra05 = {
+    items: [
+      item({ id: 'boq-1', boqNo: '1', rate: 178 }),
+      item({ id: 'boq-2', boqNo: '2', rate: 3302 }),
+    ],
+    quotedPercentage: -0.1079,
+  };
+  const lines = [
+    { boqTaskItemId: 'boq-1', quantity: 37.25 },
+    { boqTaskItemId: 'boq-2', quantity: 15.25 },
+  ];
+
+  it('carries a rate that multiplies out to the amount beside it', async () => {
+    const { service } = build(ra05);
+    await service.compose(ctx, 'co-1', compose({ lines }));
+
+    const view = await service.view(ctx, 'bill-1');
+
+    // **The assertion the column exists for.** Quantity times the rate shown equals the amount
+    // shown — on every line, in the reader’s own arithmetic.
+    //
+    // It fails against the defect: the schedule rate gives ₹6,630.50 where the line says ₹5,915.07.
+    // And it fails against the tidy-looking fix, a quoted rate rounded to two decimals like every
+    // other money column — ₹158.79 × 37.25 is ₹5,914.93, twenty-three paise adrift, which is the
+    // same defect again in smaller type.
+    for (const line of view.lines) {
+      expect(paise(line.quantity * line.quotedRate)).toBe(line.amount);
+    }
+
+    // The schedule rate is still carried, unchanged and not replaced: it is what the tender prints
+    // and what a client checks the bill against.
+    expect(view.lines.map((line) => line.rate)).toEqual([178, 3302]);
+    expect(view.lines.map((line) => line.amount)).toEqual([5915.07, 44922.14]);
+  });
+
+  it('shows where the schedule total went, as the client’s own abstract does', async () => {
+    const { service } = build(ra05);
+    await service.compose(ctx, 'co-1', compose({ lines }));
+
+    const view = await service.view(ctx, 'bill-1');
+
+    // 37.25 × 178 plus 15.25 × 3,302, at the schedule’s rates.
+    expect(view.boqGrossAmount).toBe(56986);
+    // Negative, because the quote is below. A reader must not have to infer the direction by
+    // subtracting two totals and noticing which was larger.
+    expect(view.quoteAdjustment).toBe(-6148.79);
+
+    // **The three chain exactly**, which is the point of forming them the way the gross is formed.
+    // A figure half a rupee out would read as an arithmetic error in the bill rather than in the
+    // rounding, on the one block whose purpose is that the sums are checkable.
+    expect(view.boqGrossAmount + view.quoteAdjustment).toBe(view.grossAmount);
+
+    // And the schedule total is not the gross — ₹6,148.79 apart on this bill. A `boqGrossAmount`
+    // that merely echoed the gross would satisfy every assertion above except this one.
+    expect(view.boqGrossAmount).not.toBe(view.grossAmount);
+  });
+
+  it('leaves an at-par bill with one rate, because it has one', async () => {
+    // Nothing to explain where nothing was quoted: the two rates are the same rate, and the screen
+    // reads this to drop the second column rather than print it twice.
+    const { service } = build({ items: [item({ rate: 251 })] });
+    await service.compose(ctx, 'co-1', compose());
+
+    const view = await service.view(ctx, 'bill-1');
+    expect(view.quotedPercentage).toBe(0);
+    expect(view.lines[0].quotedRate).toBe(view.lines[0].rate);
+    expect(view.quoteAdjustment).toBe(0);
+    expect(view.boqGrossAmount).toBe(view.grossAmount);
+  });
+});
+
 describe('the breakdown behind a packaged bill’s net', () => {
   const dc = (value: string) => new Prisma.Decimal(value);
 
