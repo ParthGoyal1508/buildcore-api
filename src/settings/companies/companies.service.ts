@@ -33,6 +33,11 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 /** Where company letterheads live in blob storage (2026-10-11). */
 const LETTERHEAD_NAMESPACE = 'letterhead';
 
+/** Where company logos live (2026-10-12). Separate from the letterhead: they are
+ * different pictures with different lifetimes, and one namespace would make replacing
+ * either of them overwrite the other. */
+const LOGO_NAMESPACE = 'company-logo';
+
 /** FR-004's uniqueness rule is case-insensitive and trimmed; normalizing on write
  * makes "dc", " DC " and "Dc" the same code, and keeps the value consistent with the
  * `DC-0001` employee codes derived from it. A `lower()` unique index backs this at
@@ -189,6 +194,92 @@ export class CompaniesService {
     });
 
     return { contentType: detected.contentType, sizeBytes: bytes.length };
+  }
+
+  /**
+   * Stores the company's logo, replacing any already held (2026-10-12).
+   *
+   * The same shape as `setLetterhead` above and for the same reasons, including sniffing
+   * the content type from the bytes rather than trusting the caller and deleting the old
+   * blob only after the row points at the new one.
+   *
+   * Different picture, different purpose: the letterhead is the full page a letter is
+   * printed on, this is the mark in the sidebar and the shell header. A company that
+   * supplies one and not the other is ordinary.
+   */
+  async setLogo(
+    caller: AuthenticatedUser,
+    companyId: string,
+    data: string,
+    ipAddress: string,
+  ): Promise<{ contentType: string; sizeBytes: number }> {
+    const bytes = Buffer.from(data, 'base64');
+    const detected = detectContentType(bytes);
+    if (!detected || !detected.contentType.startsWith('image/')) {
+      throw new BadRequestException(
+        'A logo must be an image. Upload a PNG or JPEG of the mark — it is drawn at ' +
+          'about 32 pixels tall, so a wide, short image reads best.',
+      );
+    }
+
+    const existing = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { logoRef: true },
+        }),
+    );
+    if (!existing) throw new NotFoundException('Company not found');
+
+    const ref = await this.storage.put(
+      `${LOGO_NAMESPACE}/${companyId}`,
+      bytes,
+      detected.contentType,
+    );
+    await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.company.update({ where: { id: companyId }, data: { logoRef: ref } }),
+    );
+    if (existing.logoRef) {
+      await this.storage.delete(existing.logoRef).catch(() => undefined);
+    }
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.COMPANY,
+      action: AuditAction.UPDATE,
+      entityId: companyId,
+      changes: { logo: detected.contentType, sizeBytes: bytes.length },
+      accountId: caller.id,
+      companyId,
+      ipAddress,
+    });
+
+    return { contentType: detected.contentType, sizeBytes: bytes.length };
+  }
+
+  /** The stored logo. 404 when the company has none — the product mark is shown then. */
+  async getLogo(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ bytes: Buffer; contentType: string }> {
+    const company = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { logoRef: true },
+        }),
+    );
+    if (!company?.logoRef) {
+      throw new NotFoundException('This company has no logo.');
+    }
+    const bytes = await this.storage.get(company.logoRef);
+    return {
+      bytes,
+      contentType: detectContentType(bytes)?.contentType ?? 'image/png',
+    };
   }
 
   /** The stored letterhead, for the settings screen to show what is in force. */

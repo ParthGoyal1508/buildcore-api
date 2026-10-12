@@ -36,6 +36,7 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { SetBillingRatesDto } from './dto/set-billing-rates.dto';
 import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
 import { SetLetterheadDto } from './dto/set-letterhead.dto';
+import { SetLogoDto } from './dto/set-logo.dto';
 import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
 
 @ApiTags('settings/companies')
@@ -143,6 +144,56 @@ export class CompaniesController {
     @Res() res: Response,
   ): Promise<void> {
     const { bytes, contentType } = await this.companiesService.getLetterhead(
+      caller,
+      id,
+    );
+    res.setHeader('Content-Type', contentType);
+    res.status(200).send(bytes);
+  }
+
+  /**
+   * The company's logo — the mark the shell shows once this company is selected.
+   *
+   * `COMPANY_SETTINGS`, like the letterhead above. Changing it changes what everyone
+   * working in this company sees in the sidebar from their next page load.
+   */
+  @Put(':id/logo')
+  @RequirePermissions(Permission.COMPANY_SETTINGS)
+  @ApiOperation({
+    summary: 'Upload the company logo (2026-10-12)',
+    description:
+      'Shown in the sidebar and the mobile shell header in place of the product mark, ' +
+      'so switching company switches the logo. Drawn at about 32 pixels tall against ' +
+      'both a white panel and a blue one.\n\n' +
+      'The content type is detected from the bytes; anything that is not an image is ' +
+      'refused with a 400 here rather than becoming a broken image in everybody’s ' +
+      'sidebar.',
+  })
+  async setLogo(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: SetLogoDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.companiesService.setLogo(caller, id, dto.data, ipAddress);
+  }
+
+  @Get(':id/logo')
+  @ApiOperation({
+    summary: 'The company logo currently in force',
+    description:
+      'Served as the image itself. **404 when the company has none**, which is a ' +
+      'legitimate state and not an error: the interface falls back to the product mark. ' +
+      'Deliberately not gated on `COMPANY_SETTINGS` — everyone working in the company ' +
+      'sees this in their sidebar, and only people who may *change* it need that ' +
+      'permission.',
+  })
+  async getLogo(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { bytes, contentType } = await this.companiesService.getLogo(
       caller,
       id,
     );

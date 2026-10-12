@@ -384,7 +384,24 @@ model Company {
   /// uppercase on write, with a `lower()` functional unique index as the
   /// database-level backstop (FR-004). Drives employee code generation.
   shortCode String  @unique
+  /// **Superseded by `logoRef` below and read by nothing** (2026-10-12). Kept because
+  /// the company form has written it since 002 and the rows hold whatever was typed;
+  /// dropping a column to tidy a field is how somebody's data disappears in a release
+  /// nobody read the notes for. The form no longer offers it.
   logoUrl   String?
+
+  /// The company's own logo, shown wherever the product mark otherwise is (2026-10-12).
+  ///
+  /// A storage reference, not a URL, for the two reasons `Logo` in the web app already
+  /// gives for serving its mark locally: a remote host is latency and availability this
+  /// application does not control and leaks a referrer on every page load, and the one
+  /// part of a precached PWA shell that would still fail offline. Served through the API
+  /// like every other blob, so it is reachable only by a caller who may read this
+  /// company.
+  ///
+  /// Null means the product mark is shown, which is the right answer for a company that
+  /// has not supplied one — not a gap to refuse anything over.
+  logoRef   String?
 
   /// The company's printed letterhead, as a full-page image (2026-10-11).
   ///

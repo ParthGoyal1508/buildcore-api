@@ -220,6 +220,98 @@ describe('Company selection and cash visibility (e2e)', () => {
     expect(res.body[0].selected).toBe(true);
   });
 
+  describe('the company logo the shell shows (2026-10-12)', () => {
+    /**
+     * Two companies, two different logos, and each must get its own.
+     *
+     * **Different bytes per company is the assertion.** The feature is "switching
+     * company switches the mark", and a test that asserted only `200` — or only that
+     * some image came back — would pass just as happily if every company were served
+     * the same picture, which is precisely the bug worth catching.
+     *
+     * One-pixel PNG and GIF: the smallest two files that are genuinely different
+     * images of genuinely different types, so the content type is proven to come from
+     * the bytes rather than from anything the caller said.
+     */
+    const PNG_1PX =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+    const GIF_1PX = 'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+    const logoOf = (companyId: string) =>
+      http().get(`/settings/companies/${companyId}/logo`).set(auth(crossToken));
+
+    const selectable = async () =>
+      (
+        await http()
+          .get('/settings/companies/selectable')
+          .set(auth(crossToken))
+          .expect(200)
+      ).body as { id: string; hasLogo: boolean }[];
+
+    it('reports no logo, and serves none, before one is uploaded', async () => {
+      // The pair for everything below: without it, a `hasLogo` hardcoded true and a
+      // handler that always served something would satisfy the rest of this block.
+      const before = await selectable();
+      expect(before.find((c) => c.id === companyA)?.hasLogo).toBe(false);
+      expect(before.find((c) => c.id === companyB)?.hasLogo).toBe(false);
+
+      // 404, not an error: a company without a logo is an ordinary state, and the
+      // interface shows the product mark for it.
+      await logoOf(companyA).expect(404);
+    });
+
+    it('refuses something that is not an image', async () => {
+      await http()
+        .put(`/settings/companies/${companyA}/logo`)
+        .set(auth(crossToken))
+        .send({ data: Buffer.from('this is not a picture').toString('base64') })
+        .expect(400);
+
+      // And stored nothing — a refusal that half-applied would be worse than one that
+      // did not refuse at all.
+      expect((await selectable()).find((c) => c.id === companyA)?.hasLogo).toBe(
+        false,
+      );
+    });
+
+    it('serves each company its own logo, not the other’s', async () => {
+      await http()
+        .put(`/settings/companies/${companyA}/logo`)
+        .set(auth(crossToken))
+        .send({ data: PNG_1PX })
+        .expect(200);
+      await http()
+        .put(`/settings/companies/${companyB}/logo`)
+        .set(auth(crossToken))
+        .send({ data: GIF_1PX })
+        .expect(200);
+
+      const a = await logoOf(companyA).expect(200);
+      const b = await logoOf(companyB).expect(200);
+
+      // The bytes themselves, and they differ. This is the whole feature.
+      expect(a.body.toString('base64')).toBe(PNG_1PX);
+      expect(b.body.toString('base64')).toBe(GIF_1PX);
+      expect(a.headers['content-type']).toContain('image/png');
+      expect(b.headers['content-type']).toContain('image/gif');
+
+      const after = await selectable();
+      expect(after.find((c) => c.id === companyA)?.hasLogo).toBe(true);
+      expect(after.find((c) => c.id === companyB)?.hasLogo).toBe(true);
+    });
+
+    it('replaces a logo rather than accumulating one', async () => {
+      await http()
+        .put(`/settings/companies/${companyA}/logo`)
+        .set(auth(crossToken))
+        .send({ data: GIF_1PX })
+        .expect(200);
+
+      const replaced = await logoOf(companyA).expect(200);
+      expect(replaced.body.toString('base64')).toBe(GIF_1PX);
+    });
+  });
+
   it('switches from one company to another, not only from none to one', async () => {
     // **Every test in this suite selected exactly once**, so the row was only ever inserted and
     // the conflict path was never taken. On the deployment that path was a 42501: the upsert ran
