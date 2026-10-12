@@ -49,6 +49,9 @@ const build = (options: {
     prisma as never,
     projects as never,
     { registerMachinerySource: jest.fn() } as never,
+    // Reference resolution, used only by the two report methods, which these tests do
+    // not exercise.
+    { categoriesByIds: jest.fn(), siteNames: jest.fn() } as never,
   );
   return { service, projects };
 };

@@ -16,7 +16,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Permission, TaxRegime } from '@prisma/client';
+import { Permission } from '@prisma/client';
 import type { Request } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -27,8 +27,10 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import {
   DeclareTaxDto,
+  FinancialYearQueryDto,
   QuarterlyQueryDto,
   SetTaxSlabsDto,
+  SlabsQueryDto,
 } from './dto/tds.dto';
 import { TdsService } from './tds.service';
 
@@ -56,15 +58,13 @@ export class TdsController {
   async getSlabs(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
-    @Query('financialYear') financialYear: string,
-    @Query('regime') regime: TaxRegime,
-    @Query('companyId') companyId?: string,
+    @Query() query: SlabsQueryDto,
   ) {
     return this.tds.getSlabs(
       callerFrom(user, request),
-      this.companyOf(user, companyId),
-      financialYear,
-      regime,
+      this.companyOf(user, query.companyId),
+      query.financialYear,
+      query.regime,
     );
   }
 
@@ -104,12 +104,12 @@ export class TdsController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('employeeId') employeeId: string,
-    @Query('financialYear') financialYear: string,
+    @Query() query: FinancialYearQueryDto,
   ) {
     return this.tds.getDeclaration(
       callerFrom(user, request),
       employeeId,
-      financialYear,
+      query.financialYear,
     );
   }
 
@@ -177,12 +177,12 @@ export class TdsController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('employeeId') employeeId: string,
-    @Query('financialYear') financialYear: string,
+    @Query() query: FinancialYearQueryDto,
   ) {
     return this.tds.formSixteenData(
       callerFrom(user, request),
       employeeId,
-      financialYear,
+      query.financialYear,
     );
   }
 }

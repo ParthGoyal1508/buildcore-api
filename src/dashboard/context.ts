@@ -18,8 +18,21 @@ export interface DashboardContext {
   user: AuthenticatedUser;
   caller: Caller;
   rls: RlsContext;
-  /** The caller's own company. Null only for a company-less Super Admin, which the
-   * controllers reject before a provider ever runs. */
+  /**
+   * The company every provider computes for — **the selected one**, not the caller's own.
+   *
+   * These are different for a cross-company caller using the company switcher, and
+   * taking the wrong one was a live defect: `rlsContextFor` honours
+   * `selectedCompanyId` and every module screen scopes through it, while this field was
+   * `user.companyId`. So after switching company, the Plant Register listed the newly
+   * selected company's two machines while the Total Machinery card said 3 and Contract
+   * Value showed the other company's ₹37.11 crore — one director's dashboard reporting
+   * another company's figures, with nothing on screen to say so.
+   *
+   * Falls back to the caller's own company, then to empty, so a cross-company caller who
+   * has selected nothing behaves exactly as before. Empty only for a company-less Super
+   * Admin, which the controllers reject before a provider ever runs.
+   */
   companyId: string;
   ipAddress: string;
   /** Set on the Site Dashboard path; undefined on the company dashboard. */
@@ -33,17 +46,21 @@ export function buildDashboardContext(
   ipAddress: string,
   siteId?: string,
 ): DashboardContext {
+  const rls = rlsContextFor(user);
   return {
     user,
     caller: {
       userId: user.id,
+      // The caller's **own** company, deliberately, matching `callerFrom` — the services
+      // that take a `Caller` scope through `caller.rls` and read this only where "the
+      // company this person belongs to" is what they mean.
       companyId: user.companyId,
       roleIds: user.roleIds ?? [],
       ipAddress,
-      rls: rlsContextFor(user),
+      rls,
     },
-    rls: rlsContextFor(user),
-    companyId: user.companyId ?? '',
+    rls,
+    companyId: rls.companyId ?? user.companyId ?? '',
     ipAddress,
     siteId,
     cache: new Map(),

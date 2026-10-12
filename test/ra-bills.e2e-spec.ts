@@ -850,6 +850,112 @@ describe('RA bills against an award (e2e)', () => {
     });
   });
 
+  /**
+   * The company's standard terms, onto the award (2026-10-11).
+   *
+   * "A fixed set of terms and conditions, and a mechanism to change it" was the ask.
+   * Before this a new work order's terms box was empty, so every award carried whatever
+   * its author could remember.
+   */
+  describe('standard terms reach a new work order', () => {
+    const OURS = 'E2E standard terms: retention released at 12 months.';
+
+    afterAll(async () => {
+      // The company's own set, removed — it would otherwise reach every work order the
+      // other suites raise against this seeded company.
+      await sys.termsTemplate
+        .deleteMany({ where: { companyId, documentKind: 'work_order' } })
+        .catch(() => undefined);
+    });
+
+    it('fills the terms from the shipped set before anybody writes one', async () => {
+      const order = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({ projectId, workDetail: 'Terms fixture — shipped' })
+        .expect(201);
+
+      // The shipped clause set, not an empty box. Asserted on a clause rather than on
+      // "something is there": a single space would satisfy a truthiness check.
+      expect(order.body.terms).toContain('Retention shall be withheld');
+    });
+
+    it('fills them from the company’s own set once it has one', async () => {
+      await http()
+        .put(`/settings/terms?companyId=${companyId}`)
+        .set(auth())
+        .send({ documentKind: 'work_order', body: OURS })
+        .expect(200);
+
+      const order = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({ projectId, workDetail: 'Terms fixture — ours' })
+        .expect(201);
+
+      // The pair with the test above is what proves the master is read at all: either
+      // alone would pass against a hardcoded string.
+      expect(order.body.terms).toBe(OURS);
+    });
+
+    it('leaves an order already raised exactly as it was', async () => {
+      // The whole reason the master and the copy are separate rows. An award is a
+      // document somebody signed, and editing the standard set must not reword it.
+      const before = await http()
+        .post(`/projects/work-orders?companyId=${companyId}`)
+        .set(auth())
+        .send({ projectId, workDetail: 'Terms fixture — frozen' })
+        .expect(201);
+
+      await http()
+        .put(`/settings/terms?companyId=${companyId}`)
+        .set(auth())
+        .send({ documentKind: 'work_order', body: 'Rewritten afterwards.' })
+        .expect(200);
+
+      const after = await http()
+        .get(`/projects/work-orders/${before.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+
+      expect(after.body.terms).toBe(OURS);
+    });
+
+    it('lists every kind, saying which are the company’s own', async () => {
+      const res = await http()
+        .get(`/settings/terms?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+
+      const kinds = res.body.map(
+        (t: { documentKind: string }) => t.documentKind,
+      );
+      // Every kind, not only the saved one: a kind absent from the list is one the
+      // screen offers no way to start from.
+      expect(kinds).toEqual(
+        expect.arrayContaining([
+          'work_order',
+          'letter_of_intent',
+          'purchase_order',
+        ]),
+      );
+
+      const workOrder = res.body.find(
+        (t: { documentKind: string }) => t.documentKind === 'work_order',
+      );
+      const loi = res.body.find(
+        (t: { documentKind: string }) => t.documentKind === 'letter_of_intent',
+      );
+      expect(workOrder.isCustomised).toBe(true);
+      // Still on the shipped set, which is a different sentence from "somebody wrote
+      // this and it happens to match".
+      expect(loi.isCustomised).toBe(false);
+      expect(loi.body).toContain(
+        'does not by itself constitute a binding contract',
+      );
+    });
+  });
+
   describe('two bills against one award (T020, FR-007)', () => {
     let firstId = '';
 

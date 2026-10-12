@@ -286,6 +286,104 @@ describe('Daily work reports (e2e)', () => {
     return res;
   }
 
+  /**
+   * A photograph belongs to a line, not to a pile (2026-10-11).
+   *
+   * Attachments were per report. Twenty files under one report is not evidence for the
+   * chainage somebody is arguing about; the photo has to say which line it is of.
+   */
+  describe('a photograph can be filed against one measurement line', () => {
+    /** Eight bytes of real PNG, so `detectContentType` sniffs the type from the file. */
+    const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const photo = (name: string, taskId?: string) => ({
+      data: PNG.toString('base64'),
+      fileName: name,
+      ...(taskId ? { taskId } : {}),
+    });
+
+    let dwrId = '';
+    let firstLineId = '';
+
+    beforeAll(async () => {
+      const report = await createReport([
+        {
+          paymentMode: 'work_basis',
+          boqItemId: itemB,
+          nos1: '1',
+          length: '10',
+          breadth: '2',
+          depth: '0.1',
+          chainageFrom: '228.2',
+          chainageTo: '228.4',
+        },
+        { paymentMode: 'day_basis', boqItemId: itemB, servedQty: '1' },
+      ]);
+      expect(report.status).toBe(201);
+      dwrId = report.body.id;
+      // Line ids come from the detail view: the create response carries the report.
+      const view = await http()
+        .get(`/projects/dwr/${dwrId}`)
+        .set(auth())
+        .expect(200);
+      firstLineId = view.body.lines[0].id;
+    });
+
+    it('files it against the line and says so on the report', async () => {
+      const added = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(photo('CH 228+200 RHS — before.png', firstLineId))
+        .expect(201);
+
+      expect(added.body.taskId).toBe(firstLineId);
+      // Sniffed from the bytes, not taken from the extension.
+      expect(added.body.mimeType).toBe('image/png');
+
+      const view = await http()
+        .get(`/projects/dwr/${dwrId}`)
+        .set(auth())
+        .expect(200);
+      const filed = view.body.attachments.find(
+        (a: { id: string }) => a.id === added.body.id,
+      );
+      // The binding read back through the report, not merely echoed by the POST that
+      // set it — an echo would pass against a column that was never written.
+      expect(filed.taskId).toBe(firstLineId);
+    });
+
+    it('still takes a file for the report as a whole', async () => {
+      // The report-level case is not a fallback: a general site view or a signed
+      // measurement sheet belongs to no single line, and every file filed before today
+      // is one of these.
+      const added = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(photo('General view.png'))
+        .expect(201);
+
+      expect(added.body.taskId).toBeNull();
+    });
+
+    it('refuses a line that belongs to another report', async () => {
+      // The foreign key only says the line exists. Without the report in the predicate
+      // a photograph could be filed against somebody else's measurement.
+      const other = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemB, servedQty: '1' },
+      ]);
+      expect(other.status).toBe(201);
+      const otherView = await http()
+        .get(`/projects/dwr/${other.body.id}`)
+        .set(auth())
+        .expect(200);
+
+      await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(photo('Wrong report.png', otherView.body.lines[0].id))
+        .expect(404);
+    });
+  });
+
   // ── Pass 1 — the measured quantity, computed by the server ────────────────
 
   describe('Pass 1 — a measured day', () => {

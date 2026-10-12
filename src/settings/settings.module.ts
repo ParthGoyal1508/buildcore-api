@@ -37,6 +37,9 @@ import { LetterKindsController } from './letter-kinds/letter-kinds.controller';
 import { LetterKindsService } from './letter-kinds/letter-kinds.service';
 import { LetterKindFieldsService } from './letter-kinds/letter-kind-fields.service';
 import { LetterTemplatesService } from './letter-templates/letter-templates.service';
+import { StandardTemplatesService } from './letter-templates/standard-templates.service';
+import { TermsTemplatesController } from './terms-templates/terms-templates.controller';
+import { TermsTemplatesService } from './terms-templates/terms-templates.service';
 import { PermissionRefusalsController } from './permission-refusals/permission-refusals.controller';
 import { CashVisibilityController } from './company-selection/cash-visibility.controller';
 import { CompanySelectionController } from './company-selection/company-selection.controller';
@@ -73,6 +76,7 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     DesignationsController,
     DocumentTypesController,
     ShiftsController,
+    TermsTemplatesController,
   ],
   providers: [
     CompaniesService,
@@ -91,6 +95,8 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     SkillCategoriesService,
     KitItemsService,
     LetterTemplatesService,
+    StandardTemplatesService,
+    TermsTemplatesService,
     LetterKindsService,
     // 017 FR-011b (`bugs.md` item 18). A letter kind declares its own fields; the template editor
     // and the renderer both validate against that declaration.
@@ -155,6 +161,8 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     // above.
     KitItemsService,
     LetterTemplatesService,
+    StandardTemplatesService,
+    TermsTemplatesService,
     // 017: `recruitment` and `letters` both resolve kind keys through this rather
     // than reading `settings.LetterKind` (Principle I).
     LetterKindsService,

@@ -77,6 +77,29 @@ export interface NestConfig {
    * a single request can make the server buffer.
    */
   maxRequestBodySize: string;
+  /**
+   * How many reverse proxies sit in front of this API, or `false` for none.
+   *
+   * Express's `trust proxy`. Left `false`, `req.ip` is the address of whatever
+   * connected to the process — which behind a load balancer is the balancer, for every
+   * caller. Three things read `req.ip` and all three are wrong in that state: the auth
+   * rate limiter keys its buckets on it, so every user in the deployment shares one
+   * bucket; the audit log records who did what from where; and the sign-in lockout
+   * counts failures per address.
+   *
+   * **A count, not `true`.** `trust proxy: true` tells Express to believe the
+   * left-most entry in `X-Forwarded-For`, which is a header the client sets — so a
+   * caller could spoof an address and get a fresh lockout and rate-limit bucket per
+   * request. A count makes Express skip exactly that many trusted hops from the right
+   * and take the next one, which cannot be forged by the client as long as the number
+   * matches the real topology.
+   *
+   * Defaults to `false`, so nothing changes until a deployment says otherwise. On
+   * Render, Vercel or any single load balancer, set `TRUST_PROXY=1`. Set it to the
+   * actual number of proxies; too high is the dangerous direction, because each extra
+   * hop moves the trusted boundary one step further into client-supplied text.
+   */
+  trustProxy: number | false;
 }
 
 export interface CorsConfig {
@@ -185,6 +208,31 @@ export interface SecurityConfig {
     ttlSeconds: number;
     /** Max requests per window per source address, for /auth/* (FR-016). */
     limit: number;
+    /**
+     * The window's allowance for `/auth/refresh-token` alone, which is far higher — and
+     * has to be.
+     *
+     * The access token lives in memory and never in storage (research.md §2), so **every
+     * full page load costs exactly one refresh call**; measured, six loads, six calls. At
+     * the shared `limit` of 10 that made ten reloads a minute the ceiling on using the
+     * application, and `@nestjs/throttler` tracks by source address, so behind one office
+     * NAT those ten reloads can come from ten different people. The eleventh answers 429,
+     * which `withAuth` cannot treat as a lapsed session (only a 401 is), so the screen
+     * reports a load failure instead.
+     *
+     * Separating the two is not a loosening of the control that matters. `limit` guards
+     * `/auth/login`, where an attacker supplies a guessable password. This endpoint
+     * presents an httpOnly cookie the browser holds and this application can never read,
+     * and replaying one is already detected and punished by destroying the whole token
+     * family (`REFRESH_REUSE_DETECTED`). The ceiling here is a backstop against volume,
+     * not the defence against theft.
+     *
+     * Still per-address, deliberately: tracking it per session instead would need a
+     * custom tracker over the cookie, and whether `req.ip` is even the caller's address
+     * depends on a `trust proxy` setting this application does not currently configure.
+     * Both are worth deciding on; neither belongs in a defect fix.
+     */
+    refreshLimit: number;
   };
 }
 

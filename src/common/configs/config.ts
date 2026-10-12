@@ -113,6 +113,18 @@ function booleanFromEnv(raw: string | undefined, fallback: boolean): boolean {
   return normalized === 'true' || normalized === '1';
 }
 
+/**
+ * `TRUST_PROXY` as a hop count.
+ *
+ * Accepts a positive integer. Anything else — unset, empty, `false`, `0`, or a word —
+ * is no proxy, because the failure mode of guessing generously is a forgeable client
+ * address rather than a broken request, and nothing on screen would say so.
+ */
+export function trustedProxyHops(raw: string | undefined): number | false {
+  const hops = Number(raw);
+  return Number.isInteger(hops) && hops > 0 ? hops : false;
+}
+
 const config: Config = {
   nest: {
     port: 3000,
@@ -120,6 +132,10 @@ const config: Config = {
     // here. Env-overridable so a fleet capturing larger frames can be accommodated
     // without a code release.
     maxRequestBodySize: process.env.MAX_REQUEST_BODY_SIZE || '10mb',
+    // See NestConfig.trustProxy. Unset means "no proxy", which is the honest default
+    // for local development and the safe one everywhere: believing a forwarded
+    // address nobody put there is how a rate limiter becomes decorative.
+    trustProxy: trustedProxyHops(process.env.TRUST_PROXY),
   },
   cors: {
     enabled: true,
@@ -189,8 +205,11 @@ const config: Config = {
       ),
     },
     throttle: {
-      ttlSeconds: 60,
-      limit: 10,
+      ttlSeconds: numberFromEnv(process.env.AUTH_THROTTLE_TTL_SECONDS, 60),
+      limit: numberFromEnv(process.env.AUTH_THROTTLE_LIMIT, 10),
+      // Env-overridable like every other operational number here, because the right
+      // ceiling depends on how many people sit behind one address.
+      refreshLimit: numberFromEnv(process.env.AUTH_REFRESH_THROTTLE_LIMIT, 120),
     },
   },
   settings: {

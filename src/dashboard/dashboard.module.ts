@@ -6,6 +6,7 @@ import { StorageModule } from '../common/storage/storage.module';
 import { HrModule } from '../hr/hr.module';
 import { PayrollModule } from '../payroll/payroll.module';
 import { PlantModule } from '../plant/plant.module';
+import { InventoryModule } from '../inventory/inventory.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ActivityLogController } from './activity-log/activity-log.controller';
@@ -27,6 +28,16 @@ import { RemindersService } from './reminders/reminders.service';
 import { UNBUILT_MODULE_RULES } from './reminders/unbuilt-module.rules';
 import { AttendanceReportProvider } from './reports/attendance-report.provider';
 import { EmployeeReportProvider } from './reports/employee-report.provider';
+import {
+  EquipmentUtilizationReportProvider,
+  FuelReportProvider,
+  MachineryReportProvider,
+} from './reports/plant-reports.provider';
+import { PayrollReportProvider } from './reports/payroll-report.provider';
+import {
+  PnlReportProvider,
+  ProjectCostReportProvider,
+} from './reports/project-reports.provider';
 import { ExportJobService } from './reports/export/export-job.service';
 import { REPORT_PROVIDERS } from './reports/report.types';
 import { ReportsController } from './reports/reports.controller';
@@ -53,6 +64,21 @@ import {
   UNBUILT_SITE_WIDGET_PLACEHOLDERS,
   UNBUILT_WIDGET_PLACEHOLDERS,
 } from './widgets/unbuilt-module.placeholders';
+import {
+  ActiveProjectsWidget,
+  AlertsRemindersWidget,
+  ContractValueWidget,
+  FuelCostWidget,
+  HireBillsWidget,
+  MachineryAtSiteWidget,
+  MachineryDeployedWidget,
+  MaterialStockValueWidget,
+  MaterialStockWidget,
+  MaterialsCostWidget,
+  SiteFuelConsumedWidget,
+  SiteFuelConsumptionWidget,
+  TotalMachineryWidget,
+} from './widgets/module-kpi.providers';
 import { WIDGET_PROVIDERS, type WidgetProvider } from './widgets/widget.types';
 import type { NotificationProvider } from './notifications/notification.types';
 import type { ReportProvider } from './reports/report.types';
@@ -93,6 +119,21 @@ const WIDGET_CLASSES = [
   RecentLeavesTableWidget,
   WorkersTodayWidget,
   SiteAttendanceTableWidget,
+  // The six whose modules have since been built (2026-10-12) — see
+  // `module-kpi.providers.ts` for why they were placeholders and no longer are.
+  ActiveProjectsWidget,
+  TotalMachineryWidget,
+  ContractValueWidget,
+  MaterialsCostWidget,
+  FuelCostWidget,
+  HireBillsWidget,
+  MachineryDeployedWidget,
+  MachineryAtSiteWidget,
+  MaterialStockValueWidget,
+  MaterialStockWidget,
+  SiteFuelConsumedWidget,
+  SiteFuelConsumptionWidget,
+  AlertsRemindersWidget,
 ] as const;
 
 const NOTIFICATION_CLASSES = [
@@ -105,6 +146,12 @@ const NOTIFICATION_CLASSES = [
 const REPORT_CLASSES = [
   AttendanceReportProvider,
   EmployeeReportProvider,
+  MachineryReportProvider,
+  EquipmentUtilizationReportProvider,
+  FuelReportProvider,
+  ProjectCostReportProvider,
+  PnlReportProvider,
+  PayrollReportProvider,
 ] as const;
 
 const widgetRegistry: Provider = {
@@ -121,6 +168,19 @@ const widgetRegistry: Provider = {
     recentLeavesTable: WidgetProvider,
     workersToday: WidgetProvider,
     siteAttendanceTable: WidgetProvider,
+    activeProjects: WidgetProvider,
+    totalMachinery: WidgetProvider,
+    contractValue: WidgetProvider,
+    materialsCost: WidgetProvider,
+    fuelCost: WidgetProvider,
+    hireBills: WidgetProvider,
+    machineryDeployed: WidgetProvider,
+    machineryAtSite: WidgetProvider,
+    materialStockValue: WidgetProvider,
+    materialStock: WidgetProvider,
+    siteFuelConsumed: WidgetProvider,
+    siteFuelConsumption: WidgetProvider,
+    alertsReminders: WidgetProvider,
   ): WidgetProvider[] => [
     // Company dashboard — contract order.
     totalEmployees,
@@ -129,26 +189,26 @@ const widgetRegistry: Provider = {
     onLeave,
     UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses,
     pendingApprovals,
-    UNBUILT_WIDGET_PLACEHOLDERS.activeProjects,
-    UNBUILT_WIDGET_PLACEHOLDERS.totalMachinery,
-    UNBUILT_WIDGET_PLACEHOLDERS.contractValue,
-    UNBUILT_WIDGET_PLACEHOLDERS.materialsCost,
-    UNBUILT_WIDGET_PLACEHOLDERS.fuelCost,
-    UNBUILT_WIDGET_PLACEHOLDERS.hireBills,
+    activeProjects,
+    totalMachinery,
+    contractValue,
+    materialsCost,
+    fuelCost,
+    hireBills,
     musterStat,
-    UNBUILT_WIDGET_PLACEHOLDERS.alertsReminders,
+    alertsReminders,
     todayAttendanceTable,
     recentLeavesTable,
 
     // Site dashboard — contract order.
     workersToday,
     siteAttendanceTable,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryDeployed,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStockValue,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.machineryAtSite,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumption,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.materialStock,
+    machineryDeployed,
+    siteFuelConsumed,
+    materialStockValue,
+    machineryAtSite,
+    siteFuelConsumption,
+    materialStock,
     UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses,
   ],
 };
@@ -196,6 +256,8 @@ const reportRegistry: Provider = {
   imports: [
     DiscoveryModule,
     HrModule,
+    // For `InventoryService` — the Materials Cost card (2026-10-12).
+    InventoryModule,
     ProjectsModule,
     SettingsModule,
     PlantModule,

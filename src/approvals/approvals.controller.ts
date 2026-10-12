@@ -116,6 +116,24 @@ export class ApprovalsController {
   // ───────────────────────────────────────────────────────────────────────────
   // Chain configuration (T046) — SETTINGS, not approval authority
   // ───────────────────────────────────────────────────────────────────────────
+  //
+  // **`resolveCompanyId(caller)`, never `caller.companyId`** (fixed 2026-10-11).
+  //
+  // Since 019 FR-010 a cross-company caller who has selected a company arrives with
+  // `isSuperAdmin` false and the *selected* company on the RLS context. Reading the
+  // caller's own field instead asked for company A's rows under a context scoped to
+  // company B, and the two halves of the request then disagreed:
+  //
+  //   - reads returned **nothing** — every slot rendered "not set" and the screen said
+  //     the company had no chains, while both were configured all along;
+  //   - the slot-mapping write was refused by the `tenant_isolation` policy
+  //     (`new row violates row-level security policy`), which is not a Prisma error any
+  //     filter maps, so the settings screen showed a bare **500 Internal server error**.
+  //
+  // Neither symptom appears where the database role bypasses RLS — there the same bug
+  // is a silent cross-tenant read, showing one company's approval configuration while
+  // the administrator is working in another. `company-scope.ts` records this as the
+  // exact mistake eight settings readers made before these.
 
   @Get('chains')
   @RequirePermissions(Permission.SETTINGS)
@@ -126,7 +144,10 @@ export class ApprovalsController {
       'chain it entered and an administrator needs to be able to see what that was.',
   })
   async listChains(@UserEntity() caller: AuthenticatedUser) {
-    return this.chains.listChains(rlsContextFor(caller), caller.companyId);
+    return this.chains.listChains(
+      rlsContextFor(caller),
+      resolveCompanyId(caller),
+    );
   }
 
   @Get('director-final')
@@ -203,7 +224,7 @@ export class ApprovalsController {
   ) {
     return this.chains.upsertChain(
       rlsContextFor(caller),
-      { companyId: caller.companyId, ...dto },
+      { companyId: resolveCompanyId(caller), ...dto },
       { userId: caller.id, ipAddress },
     );
   }
@@ -276,7 +297,7 @@ export class ApprovalsController {
   async listSlotMappings(@UserEntity() caller: AuthenticatedUser) {
     const mappings = await this.chains.listSlotMappings(
       rlsContextFor(caller),
-      caller.companyId,
+      resolveCompanyId(caller),
     );
     const byKey = new Map(mappings.map((m) => [m.slotKey, m]));
 
@@ -313,7 +334,7 @@ export class ApprovalsController {
   ) {
     return this.chains.putSlotMapping(
       rlsContextFor(caller),
-      { companyId: caller.companyId, ...dto },
+      { companyId: resolveCompanyId(caller), ...dto },
       { userId: caller.id, ipAddress },
     );
   }
@@ -394,7 +415,7 @@ export class ApprovalsController {
     return this.approvals.resubmit(
       entityType,
       entityId,
-      caller.companyId,
+      resolveCompanyId(caller),
       caller.id,
       caller,
     );

@@ -8,14 +8,6 @@ import {
 } from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
-// `import = require` deliberately, not `import * as`. The app is built by SWC
-// (nest-cli.json), which gives `import * as` true ESM semantics and hands back a
-// namespace object that cannot be constructed; the tests are built by ts-jest, which
-// emits a bare require and constructs fine. The namespace form therefore passes every
-// test and throws "_pdfkit is not a constructor" in the running server. This form emits
-// a bare require under both.
-import PDFDocument = require('pdfkit');
-
 import { ApprovalService } from '../approvals/approvals.service';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -34,6 +26,8 @@ import {
   SIGNATORY_REQUIRED,
 } from './letter-error-codes';
 import { permissionForKind } from './letter-permissions';
+import { formatLetterDate, renderLetterPdf } from './letter-pdf.renderer';
+import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
 import { webRoutes } from '../common/web-routes';
 
@@ -49,6 +43,13 @@ export interface IssuedLetterView {
   candidateId: string | null;
   subjectType: string | null;
   subjectId: string | null;
+  /**
+   * `PRPL/HR/2026-27/0001`, or null for a letter not yet issued (2026-10-11).
+   *
+   * Exposed because it is what a recipient quotes. A letter findable only by an internal
+   * id cannot be looked up from the number printed on the copy in somebody's hand.
+   */
+  referenceNo: string | null;
   version: number;
   isSuperseded: boolean;
   signatoryId: string | null;
@@ -75,6 +76,8 @@ function toView(row: LetterRow): IssuedLetterView {
     candidateId: row.candidateId,
     subjectType: row.subjectType,
     subjectId: row.subjectId,
+    /** Null until issued — the number is allocated then, not at compose. */
+    referenceNo: row.referenceNo,
     version: row.version,
     isSuperseded: row.isSuperseded,
     signatoryId: row.signatoryId,
@@ -89,38 +92,6 @@ function toView(row: LetterRow): IssuedLetterView {
     countersignedAt: row.countersignedAt,
     requiresApproval: row.letterKind.requiresApproval,
   };
-}
-
-/** Renders plain text into a single-column A4 PDF buffer. */
-function renderPdf(
-  title: string,
-  body: string,
-  signature?: { image: Buffer; name: string; title: string },
-): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'A4', margin: 56 });
-    const chunks: Buffer[] = [];
-    doc.on('data', (c: Buffer) => chunks.push(c));
-    doc.on('end', () => resolve(Buffer.concat(chunks)));
-    doc.on('error', reject);
-    doc.fontSize(16).text(title, { align: 'center' });
-    doc.moveDown();
-    doc.fontSize(11).text(body, { align: 'left' });
-    if (signature) {
-      doc.moveDown(2);
-      try {
-        doc.image(signature.image, { width: 140 });
-      } catch {
-        // A signature graphic that pdfkit cannot decode must not lose the letter. The
-        // name and title below still identify the signatory, and `appliedSignatureRef`
-        // still records what was meant to be applied.
-        doc.fontSize(10).text('[signature]');
-      }
-      doc.fontSize(11).text(signature.name);
-      doc.fontSize(10).text(signature.title);
-    }
-    doc.end();
-  });
 }
 
 /**
@@ -253,12 +224,24 @@ export class LettersService {
       });
     }
 
-    const rendered = await this.render(ctx, companyId, letter, variables);
+    // Allocated before the render, because the number is printed on the document. A
+    // reference assigned afterwards would be stored against a PDF that does not carry it.
+    const referenceNo =
+      letter.referenceNo ??
+      (await this.allocateReference(ctx, companyId, letter));
+
+    const rendered = await this.render(
+      ctx,
+      companyId,
+      { ...letter, referenceNo },
+      variables,
+    );
 
     const updated = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.issuedLetter.update({
         where: { id: letter.id },
         data: {
+          referenceNo,
           renderedRef: rendered.ref,
           appliedSignatureRef: rendered.appliedSignatureRef,
           issuedAt: new Date(),
@@ -308,17 +291,24 @@ export class LettersService {
     }
 
     const signatoryId = dto.signatoryId ?? original.signatoryId;
+    // **The reference does not change.** A reissue is the same letter corrected, and
+    // version 2 of PRPL/HR/2026-27/0007 is what the recipient has to be able to match
+    // against the copy they were sent. A new number would read as a second letter.
+    //
+    // The unique index is on `(companyId, referenceNo)`, so the original must give it up
+    // in the same transaction as the replacement takes it — done below, where the
+    // supersede already happens.
     const rendered = await this.render(
       ctx,
       companyId,
-      { ...original, signatoryId },
+      { ...original, signatoryId, referenceNo: original.referenceNo },
       dto.variables,
     );
 
     const created = await withRlsContext(this.prisma, ctx, async (tx) => {
       await tx.issuedLetter.update({
         where: { id: original.id },
-        data: { isSuperseded: true },
+        data: { isSuperseded: true, referenceNo: null },
       });
       return tx.issuedLetter.create({
         data: {
@@ -330,6 +320,11 @@ export class LettersService {
           subjectId: original.subjectId,
           templateId: original.templateId,
           signatoryId,
+          // Taken over from the superseded row, which released it two statements up. The
+          // document that was rendered carries this number; a replacement row without it
+          // would leave the reference printed on a PDF that nothing in the database
+          // claims, and the letter unfindable by the number its recipient quotes.
+          referenceNo: original.referenceNo,
           appliedSignatureRef: rendered.appliedSignatureRef,
           renderedRef: rendered.ref,
           version: original.version + 1,
@@ -468,13 +463,20 @@ export class LettersService {
       templateId: string;
       letterKind: { label: string; requiresSignature: boolean };
       signatoryId: string | null;
+      referenceNo?: string | null;
     },
     variables: Record<string, string>,
   ): Promise<{ ref: string; appliedSignatureRef: string | null }> {
-    const template = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.letterTemplate.findFirst({
-        where: { id: letter.templateId, companyId },
-      }),
+    const [template, company] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.letterTemplate.findFirst({
+          where: { id: letter.templateId, companyId },
+        }),
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+      ]),
     );
     if (!template) {
       throw new ConflictException({
@@ -506,17 +508,92 @@ export class LettersService {
     }
 
     const body = renderTemplate(template.bodyTemplate, variables);
-    const pdf = await renderPdf(
-      letter.letterKind.label.toUpperCase(),
+    const pdf = await renderLetterPdf({
+      title: letter.letterKind.label.toUpperCase(),
       body,
+      letterhead: await this.letterhead(template.letterheadAssetId, company),
+      referenceNo: letter.referenceNo ?? null,
+      // The date the letter bears is the day it is issued. Taken from the clock rather
+      // than from `variables`, so the printed date and `issuedAt` can never disagree —
+      // which, on a document that starts a notice period, is a dispute.
+      issueDate: formatLetterDate(new Date()),
       signature,
-    );
+    });
     const ref = await this.storage.put(
       `${LETTER_NAMESPACE}/${companyId}`,
       pdf,
       'application/pdf',
     );
     return { ref, appliedSignatureRef };
+  }
+
+  /**
+   * The next reference for this company's series (2026-10-11).
+   *
+   * `HR` is in the prefix only for a letter addressed to a person — an employee or a
+   * candidate — so an award to a subcontractor is not filed under HR. The company's short
+   * code and the financial year come from the company row and the clock; see
+   * `letter-reference.ts` for why the series resets itself each April without a job.
+   *
+   * The existing references are read under the same prefix rather than all of them: a
+   * company that has been issuing letters for five years has five years of rows, and only
+   * this year's share a series.
+   */
+  private async allocateReference(
+    ctx: ReturnType<typeof rlsContextFor>,
+    companyId: string,
+    letter: { employeeId: string | null; candidateId: string | null },
+  ): Promise<string> {
+    const forAPerson = Boolean(letter.employeeId ?? letter.candidateId);
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const company = await tx.company.findUnique({
+        where: { id: companyId },
+        select: { shortCode: true },
+      });
+      // `LTR` only if the company row has vanished under us, which RLS makes almost
+      // impossible here. A letter with an odd prefix beats an issue that throws.
+      const prefix = referencePrefix(
+        company?.shortCode ?? 'LTR',
+        forAPerson,
+        new Date(),
+      );
+      const existing = await tx.issuedLetter.findMany({
+        where: { companyId, referenceNo: { startsWith: prefix } },
+        select: { referenceNo: true },
+      });
+      return nextReference(
+        prefix,
+        existing.map((row) => row.referenceNo ?? ''),
+      );
+    });
+  }
+
+  /**
+   * The stationery to print on: the template's own, else the company's, else none.
+   *
+   * `LetterTemplate.letterheadAssetId` has existed since the 017 restructure and was never
+   * read by anything — the column was written at save and ignored at render. It is honoured
+   * here rather than removed, because a company with one letterhead for HR and another for
+   * commercial letters is the case it was added for, and the per-company reference is the
+   * answer for everyone else.
+   *
+   * A reference that no longer resolves returns null rather than throwing. Losing the
+   * artwork must not make a company's letters unissuable; it makes them plain.
+   */
+  private async letterhead(
+    templateRef: string | null,
+    company: { letterheadRef: string | null } | null,
+  ): Promise<Buffer | null> {
+    const ref = templateRef ?? company?.letterheadRef ?? null;
+    if (!ref) return null;
+    try {
+      return await this.storage.get(ref);
+    } catch {
+      this.logger.warn(
+        `Letterhead ${ref} could not be read; rendering on plain paper.`,
+      );
+      return null;
+    }
   }
 
   /**

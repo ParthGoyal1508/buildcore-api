@@ -39,6 +39,16 @@ export class CreateFuelEntryDto {
   @IsOptional()
   @IsString()
   vendorId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Where the fuel was drawn. Omitted, it is taken from where the machine is ' +
+      'currently deployed — which is right at the moment of entry and wrong forever ' +
+      'after, which is why it is stored rather than re-derived on read.',
+  })
+  @IsOptional()
+  @IsString()
+  siteId?: string;
 }
 
 export class ListFuelDto {

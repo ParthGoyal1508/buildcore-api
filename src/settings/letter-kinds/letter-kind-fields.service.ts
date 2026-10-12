@@ -1,10 +1,16 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+} from '@nestjs/common';
 import { LetterFieldSource } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { extractTokens } from '../../recruitment/letters/letter-tokens.util';
+import { LETTER_KIND_KEY_RESERVED } from './letter-kind-error-codes';
+import { LetterKindsService } from './letter-kinds.service';
 
 /** One declared field, as a template editor and a renderer both need it. */
 export interface LetterFieldView {
@@ -62,7 +68,49 @@ export const FORBIDDEN_FIELD_PATH_FRAGMENTS: readonly string[] = [
  */
 @Injectable()
 export class LetterKindFieldsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly kinds: LetterKindsService,
+  ) {}
+
+  /**
+   * The kind these fields belong to — or a refusal.
+   *
+   * **Every one of the four methods below used to take `letterKindId` straight to a query.**
+   * `settings.LetterKindField` carries no `companyId` and has no RLS policy (it is scoped
+   * through its parent kind), so the database was not going to catch an id from another
+   * company either. A field could be read, declared or withdrawn on any kind whose id a
+   * caller could name.
+   *
+   * Worse for the rows that actually exist: every kind in the product today is
+   * product-shipped, and a shipped kind is one row shared by every tenant. So declaring a
+   * field on one changed the field vocabulary for all of them. The rule against that is
+   * already written and already enforced — `update` answers 409
+   * `LETTER_KIND_KEY_RESERVED`, and this controller's own list endpoint documents "a
+   * shipped kind may not be edited or deleted: other companies use the same row". These
+   * four were simply below the level it was enforced at.
+   *
+   * Reading a shipped kind's fields stays open, because that vocabulary *is* the product's
+   * and every company composes templates against it. Only writing is refused.
+   */
+  private async requireOwnKind(
+    ctx: RlsContext,
+    companyId: string,
+    letterKindId: string,
+    intent: 'read' | 'write',
+  ): Promise<void> {
+    const kind = await this.kinds.requireById(ctx, companyId, letterKindId);
+    if (intent === 'write' && kind.companyId === null) {
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          `"${kind.key}" is a product-shipped kind and its fields cannot be changed. ` +
+          `Other companies use the same row. Define your own kind with a different key ` +
+          `if you need different fields.`,
+        code: LETTER_KIND_KEY_RESERVED,
+      });
+    }
+  }
 
   /**
    * Declares or replaces one field on a kind (FR-011b).
@@ -74,6 +122,7 @@ export class LetterKindFieldsService {
    */
   async upsertField(
     ctx: RlsContext,
+    companyId: string,
     letterKindId: string,
     input: {
       token: string;
@@ -110,6 +159,7 @@ export class LetterKindFieldsService {
     }
 
     this.assertPathPermitted(sourcePath);
+    await this.requireOwnKind(ctx, companyId, letterKindId, 'write');
 
     const row = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.letterKindField.upsert({
@@ -159,9 +209,11 @@ export class LetterKindFieldsService {
    */
   async templatesUsingField(
     ctx: RlsContext,
+    companyId: string,
     letterKindId: string,
     token: string,
   ): Promise<{ id: string; name: string; isActive: boolean }[]> {
+    await this.requireOwnKind(ctx, companyId, letterKindId, 'read');
     const templates = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.letterTemplate.findMany({
         where: { letterKindId },
@@ -187,9 +239,11 @@ export class LetterKindFieldsService {
    */
   async removeField(
     ctx: RlsContext,
+    companyId: string,
     letterKindId: string,
     token: string,
   ): Promise<void> {
+    await this.requireOwnKind(ctx, companyId, letterKindId, 'write');
     await withRlsContext(this.prisma, ctx, (tx) =>
       tx.letterKindField.deleteMany({ where: { letterKindId, token } }),
     );
@@ -197,6 +251,23 @@ export class LetterKindFieldsService {
 
   /** Every field one kind declares. */
   async fieldsFor(
+    ctx: RlsContext,
+    companyId: string,
+    letterKindId: string,
+  ): Promise<LetterFieldView[]> {
+    await this.requireOwnKind(ctx, companyId, letterKindId, 'read');
+    return this.declaredFields(ctx, letterKindId);
+  }
+
+  /**
+   * The raw read, without the ownership check.
+   *
+   * Private, and used by `fieldsFor` once it has checked, and by
+   * `assertTemplateFieldsDeclared`, whose caller is validating a template it has already
+   * resolved — the kind there comes off the template row, not off a path parameter, so
+   * there is nothing for a caller to point at a kind that is not theirs.
+   */
+  private async declaredFields(
     ctx: RlsContext,
     letterKindId: string,
   ): Promise<LetterFieldView[]> {
@@ -232,7 +303,7 @@ export class LetterKindFieldsService {
     body: string,
     context: 'save' | 'render',
   ): Promise<void> {
-    const declared = await this.fieldsFor(ctx, letterKindId);
+    const declared = await this.declaredFields(ctx, letterKindId);
     const allowed = new Set(declared.map((field) => field.token));
     const used = extractTokens(body);
     const undeclared = used.filter((token) => !allowed.has(token));

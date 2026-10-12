@@ -425,11 +425,18 @@ export class DwrService {
     companyId: string,
     file: { data: Buffer; fileName: string },
     actor: { userId: string; ipAddress?: string },
+    /**
+     * The measurement line this file is evidence for, where it is evidence for one
+     * (2026-10-11). Omit for a report-level attachment, which is what every file
+     * uploaded before today is.
+     */
+    taskId?: string,
   ): Promise<{
     id: string;
     fileName: string;
     mimeType: string;
     sizeBytes: number;
+    taskId: string | null;
   }> {
     const exists = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dailyWorkReport.findFirst({
@@ -438,6 +445,24 @@ export class DwrService {
       }),
     );
     if (!exists) throw new NotFoundException('Daily work report not found');
+
+    if (taskId) {
+      // **Checked against this report, not merely that the line exists.** Without the
+      // `dwrId` in the predicate a caller could file a photograph against another
+      // report's line, and the database would accept it: the foreign key only says the
+      // line exists. The report's own RLS scope is what makes the 404 safe to give.
+      const line = await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.dWRTask.findFirst({
+          where: { id: taskId, dwrId },
+          select: { id: true },
+        }),
+      );
+      if (!line) {
+        throw new NotFoundException(
+          'That line is not on this daily work report.',
+        );
+      }
+    }
 
     // From the **bytes**, not from the client's `Content-Type` — which is a guess made from a file
     // extension, and which a browser then honours by offering a download instead of opening the
@@ -456,6 +481,7 @@ export class DwrService {
         data: {
           companyId,
           dwrId,
+          taskId: taskId ?? null,
           fileRef,
           fileName: file.fileName,
           mimeType,
@@ -467,6 +493,7 @@ export class DwrService {
           fileName: true,
           mimeType: true,
           sizeBytes: true,
+          taskId: true,
         },
       }),
     );
@@ -658,6 +685,11 @@ export class DwrService {
               mimeType: true,
               sizeBytes: true,
               uploadedAt: true,
+              // Which line this is evidence for, or null for the report as a whole
+              // (2026-10-11). Returned rather than grouped server-side: the screen
+              // renders one list under the report and a thumbnail on each line, and a
+              // pre-grouped shape would make the first of those a second request.
+              taskId: true,
             },
           },
           tasks: {

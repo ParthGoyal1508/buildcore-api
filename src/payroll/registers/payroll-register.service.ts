@@ -284,6 +284,36 @@ export class PayrollRegisterService {
     };
   }
 
+  /**
+   * The processed runs whose period falls in a range, for the Payroll report.
+   *
+   * **Every matching run, not "the run for the month".** `PayrollRun` is not unique on
+   * `(companyId, period)` — the live data has two runs for 2026-09 — so "the September
+   * run" is a question with no single answer, and a report that picked one would be
+   * picking silently. Drafts are excluded for the reason `requireProcessedRun` gives: a
+   * register is what somebody signs off, and signing off figures still expected to move
+   * is the failure it exists to prevent.
+   *
+   * Periods are `YYYY-MM` strings and compared as strings, which is correct for that
+   * format and is how the rest of this module compares them.
+   */
+  async processedRunsBetween(
+    caller: Caller,
+    fromPeriod: string,
+    toPeriod: string,
+  ): Promise<{ id: string; period: string }[]> {
+    return withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.findMany({
+        where: {
+          period: { gte: fromPeriod, lte: toPeriod },
+          status: { not: PayrollRunStatus.draft },
+        },
+        select: { id: true, period: true },
+        orderBy: [{ period: 'asc' }, { createdAt: 'asc' }],
+      }),
+    );
+  }
+
   private async requireProcessedRun(caller: Caller, runId: string) {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({

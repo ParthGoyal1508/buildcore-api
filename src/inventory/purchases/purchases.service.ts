@@ -661,4 +661,40 @@ export class PurchasesService {
     );
     return toNumber(result._sum.amount);
   }
+
+  /**
+   * What the whole company spent on materials in one calendar month (2026-10-12).
+   *
+   * Added for the dashboard's Materials Cost card, which stood as a "waiting on the
+   * inventory module" placeholder for the whole of the time the inventory module has
+   * existed. It lives here rather than in `src/dashboard` because the query is
+   * inventory's — the dashboard may not read `inventory.Purchase` itself (Principle I),
+   * and `materialCostForSites` above is the same reasoning for the project P&L.
+   *
+   * Scoped through `companyScope`, so a cross-company caller who has selected a company
+   * gets that company's figure rather than their own account's.
+   *
+   * Excludes soft-deleted purchases, exactly as every list does: a reversed purchase is
+   * kept so the ledger entry has something to point at, not so it can be counted twice.
+   */
+  async monthlySpend(
+    caller: AuthenticatedUser,
+    month: { from: Date; to: Date },
+    companyId?: string,
+  ): Promise<number> {
+    const result = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.purchase.aggregate({
+          where: {
+            ...companyScope(caller, companyId),
+            deleted: false,
+            date: { gte: month.from, lte: month.to },
+          },
+          _sum: { amount: true },
+        }),
+    );
+    return toNumber(result._sum.amount);
+  }
 }

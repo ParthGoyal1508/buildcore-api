@@ -350,6 +350,34 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // That is the habit, not "run it again afterwards".
           ':(exclude)src/plant/equipment',
           ':(exclude)src/plant/constants',
+          // 2026-10-12, `FuelEntry.siteId`. A fuel entry now records **where** the fuel was
+          // drawn, so the Site Dashboard's two fuel cards can stop being placeholders; the
+          // DTO gains one optional `siteId`. Verified by grep before excluding: this file
+          // contains no `ApprovalService`, no `approvals.submit` and no `ApprovalInstance`,
+          // and `src/plant/fuel/fuel.service.ts` beside it was already excluded above for
+          // the same reason. The per-file assertions still read every plant file that
+          // approves anything.
+          //
+          // **Eleventh time this guard has fired a commit late**, and the tenth note said
+          // exactly how to avoid it: run the diff against the index *before* committing, not
+          // the suite after. I ran the full unit suite before the commit — which passes,
+          // because this check diffs commits and cannot see a working tree — and then did not
+          // re-run it after. The habit is the pre-commit diff; the suite is not a substitute
+          // for it.
+          ':(exclude)src/plant/fuel/dto/fuel.dto.ts',
+          // 2026-10-12, the Machinery and Equipment Utilization reports.
+          // `PlantService` gained a fourth constructor argument — `PlantRefsService`, to
+          // turn the ids it stores as plain columns into the names a report has to carry
+          // — so its spec gained a fourth stub. `plant.service.ts` itself was already
+          // excluded above; its spec was not. Verified by grep: no `ApprovalService`, no
+          // `approvals.submit`, no `ApprovalInstance`.
+          //
+          // **Twelfth time, and the second today.** Both times I ran the full unit suite
+          // before committing, which cannot see a working tree, and the tenth note says
+          // plainly that the pre-commit *diff* is the habit and the suite is not a
+          // substitute. Ran that diff against the index before this commit, which is how
+          // this line came to be written in the same commit as the change.
+          ':(exclude)src/plant/plant.service.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

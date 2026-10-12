@@ -27,6 +27,8 @@ export interface FuelRow {
   amount: number;
   vendorId: string | null;
   vendorName: string | null;
+  siteId: string | null;
+  siteName: string | null;
   variancePercent: number | null;
   varianceAlert: boolean;
   createdAt: Date;
@@ -208,10 +210,16 @@ export class FuelService {
       },
     );
 
-    const vendorNames = await this.refs.vendorNames(
-      caller,
-      rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
-    );
+    const [vendorNames, siteNames] = await Promise.all([
+      this.refs.vendorNames(
+        caller,
+        rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
+      ),
+      this.refs.siteNames(
+        caller,
+        rows.flatMap((row) => (row.siteId ? [row.siteId] : [])),
+      ),
+    ]);
 
     return {
       items: rows.map((row) => ({
@@ -227,6 +235,13 @@ export class FuelService {
         vendorId: row.vendorId,
         vendorName: row.vendorId
           ? vendorNames.get(row.vendorId) ?? 'Unknown vendor'
+          : null,
+        siteId: row.siteId,
+        // Null, not a guess: an entry made before the column existed has no site, and
+        // the only thing available to infer one from is the machine's *current*
+        // deployment — the inference this column exists to replace.
+        siteName: row.siteId
+          ? siteNames.get(row.siteId) ?? 'Unknown site'
           : null,
         variancePercent:
           row.variancePercent === null ? null : Number(row.variancePercent),
@@ -298,6 +313,17 @@ export class FuelService {
           thresholdPercent: threshold,
         });
 
+        /**
+         * Where the fuel was drawn, defaulted from where the machine is deployed.
+         *
+         * Defaulted at *write* time and then stored, which is the entire difference
+         * between this column and reading `deployedSiteId` on every read. The default is
+         * right now and wrong the moment the machine moves — so it is captured now.
+         * A caller may override it, because diesel is routinely drawn somewhere other
+         * than where the machine sleeps.
+         */
+        const siteId = dto.siteId ?? equipment.deployedSiteId ?? null;
+
         const created = await tx.fuelEntry.create({
           data: {
             companyId: equipment.companyId,
@@ -307,6 +333,7 @@ export class FuelService {
             rate: dto.rate,
             amount: Math.round(dto.quantity * dto.rate * 100) / 100,
             vendorId: dto.vendorId ?? null,
+            siteId,
             variancePercent: variance.variancePercent,
             varianceAlert: variance.varianceAlert,
           },
@@ -347,9 +374,16 @@ export class FuelService {
       this.events.emit(FUEL_VARIANCE_EVENT, event);
     }
 
-    const vendorName = created.vendorId
-      ? await this.refs.requireVendorName(caller, created.vendorId)
-      : null;
+    const [vendorName, siteName] = await Promise.all([
+      created.vendorId
+        ? this.refs.requireVendorName(caller, created.vendorId)
+        : null,
+      created.siteId
+        ? this.refs
+            .siteNames(caller, [created.siteId])
+            .then((names) => names.get(created.siteId as string) ?? null)
+        : null,
+    ]);
 
     return {
       id: created.id,
@@ -363,6 +397,8 @@ export class FuelService {
       amount: Number(created.amount),
       vendorId: created.vendorId,
       vendorName,
+      siteId: created.siteId,
+      siteName,
       variancePercent:
         created.variancePercent === null
           ? null

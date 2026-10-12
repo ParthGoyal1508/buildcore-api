@@ -17,12 +17,22 @@ import type { NestConfig } from './configs/config.interface';
  * application under test stays the application that ships.
  */
 export function configureApp(app: INestApplication): void {
+  const nest = app.get(ConfigService).get<NestConfig>('nest');
+
+  /**
+   * Whether `req.ip` is the caller's address or the proxy's — see NestConfig.trustProxy.
+   *
+   * Set here rather than in `main.ts` for the reason this whole file exists: the auth
+   * rate limiter, the audit log and the sign-in lockout all key on `req.ip`, and an e2e
+   * suite running against an app that resolves addresses differently from the one that
+   * ships is a suite that cannot see any of those three being wrong.
+   */
+  app.getHttpAdapter().getInstance().set('trust proxy', nest.trustProxy);
+
   // Photo payloads (base64 enrolment and punch images) are far larger than
   // Express's default allows — see NestConfig.maxRequestBodySize. Read from config
   // rather than written inline, per Principle III.
-  const bodyLimit = app
-    .get(ConfigService)
-    .get<NestConfig>('nest').maxRequestBodySize;
+  const bodyLimit = nest.maxRequestBodySize;
   app.use(json({ limit: bodyLimit }));
   app.use(urlencoded({ extended: true, limit: bodyLimit }));
 

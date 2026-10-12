@@ -46,6 +46,36 @@ export interface WidgetProvider {
    * any one of the three should see that one's share of it.
    */
   readonly requires?: Permission[];
+  /**
+   * What the number means, so the interface can format it (2026-10-12).
+   *
+   * Omitted for a plain count, which renders as itself. `'currency'` marks a rupee
+   * amount: the Contract Value card shipped reading `371100000`, which is ₹37.11 crore
+   * written in a way nobody can read at a glance and easily mistaken for a different
+   * order of magnitude.
+   *
+   * A declared unit rather than the renderer matching on widget id — `WidgetRenderer`
+   * knows no widget's id by design, and a list of "these ids are money" kept on the far
+   * side of the wire is a list that goes stale the first time a widget is added.
+   */
+  readonly valueUnit?: 'currency';
+  /**
+   * A caveat to print beside the value, when the number is true but incomplete
+   * (2026-10-12).
+   *
+   * Per-request, unlike `valueUnit`, because whether a caveat applies depends on the
+   * data: the site fuel cards need one only while the month still contains entries
+   * recorded before `FuelEntry.siteId` existed, and it must stop appearing on its own
+   * once it does not. A static string would either lie later or have to be removed by
+   * hand on a date nobody will remember.
+   *
+   * Return `undefined` for "nothing to add", which is the normal case and the reason
+   * this is optional rather than part of `compute`'s return.
+   *
+   * The sibling of `unavailable.note`, and the same argument: a card that quietly
+   * understates is worse than one that says what it is leaving out.
+   */
+  note?(ctx: DashboardContext): Promise<string | undefined>;
   /** False for a placeholder standing in for a not-yet-built module (spec FR-003). */
   isAvailable(): boolean;
   /** The module a placeholder is waiting on. Read only when `isAvailable()` is false. */
@@ -62,14 +92,48 @@ export type WidgetResult =
       title: string;
       section: WidgetSection;
       value: unknown;
+      valueUnit?: 'currency';
+      /** See `WidgetProvider.note` — a caveat for a figure that is true but partial. */
+      note?: string;
     }
   | {
       id: string;
       displayType: WidgetDisplayType;
       title: string;
       section: WidgetSection;
-      unavailable: { reason: 'module_pending'; module: string };
+      unavailable: {
+        reason: 'module_pending';
+        module: string;
+        /**
+         * Why this card cannot be filled, when "waiting on the {module} module" is not
+         * the true answer (2026-10-12).
+         *
+         * The Statutory Calendar said it was waiting on Challans long after Challans
+         * shipped. The real blocker is that nothing records statutory **due dates** or
+         * what has been **filed** — a different problem with a different fix, and the
+         * stock sentence actively misdirected whoever went looking.
+         */
+        note?: string;
+      };
     };
+
+/**
+ * One row of a `list` widget (2026-10-12).
+ *
+ * A declared shape, because the renderer previously fell back to `JSON.stringify` for
+ * any item that was not a string — so the first list widget to emit objects would have
+ * printed raw JSON onto the dashboard. No widget had, which is the only reason it was
+ * never seen.
+ */
+export interface WidgetListItem {
+  label: string;
+  /** Secondary line — "overdue by 6 days". */
+  detail?: string;
+  /** Drives the row's colour where the interface shows one. */
+  severity?: string;
+  /** Deep link into the owning module's screen, when the source offers one. */
+  href?: string;
+}
 
 /** Multi-provider injection token every widget registers under (research.md §1). */
 export const WIDGET_PROVIDERS = Symbol('WIDGET_PROVIDERS');
@@ -100,7 +164,18 @@ export async function resolveWidget(
     };
   }
   try {
-    return { ...base, value: await provider.compute(ctx) };
+    // Both in flight together: a note that reads the same rows as the value should not
+    // double the card's latency to say one sentence.
+    const [value, note] = await Promise.all([
+      provider.compute(ctx),
+      provider.note ? provider.note(ctx) : Promise.resolve(undefined),
+    ]);
+    return {
+      ...base,
+      value,
+      ...(provider.valueUnit ? { valueUnit: provider.valueUnit } : {}),
+      ...(note ? { note } : {}),
+    };
   } catch {
     return {
       ...base,

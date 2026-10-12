@@ -86,6 +86,8 @@ describe('plant registers both of its categories (T028)', () => {
         registerLogbookSource: () => undefined,
         ...registry,
       } as never,
+      // Reference resolution, for the report methods this suite does not exercise.
+      {} as never,
     );
     return { service, registered };
   };

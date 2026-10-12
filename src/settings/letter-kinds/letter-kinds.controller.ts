@@ -132,8 +132,13 @@ export class LetterKindsController {
   async fields(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.fields_.fieldsFor(rlsContextFor(caller), id);
+    return this.fields_.fieldsFor(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      id,
+    );
   }
 
   @Get(':id/fields/:token/usage')
@@ -151,8 +156,14 @@ export class LetterKindsController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Param('token') token: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.fields_.templatesUsingField(rlsContextFor(caller), id, token);
+    return this.fields_.templatesUsingField(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      id,
+      token,
+    );
   }
 
   @Put(':id/fields/:token')
@@ -175,13 +186,16 @@ export class LetterKindsController {
     @Param('id') id: string,
     @Param('token') token: string,
     @Body() dto: UpsertLetterKindFieldDto,
+    @Query('companyId') companyId?: string,
   ) {
     // The path's token wins over the body's, so a mismatched pair cannot create a field at one name
     // while the caller believes they edited another.
-    return this.fields_.upsertField(rlsContextFor(caller), id, {
-      ...dto,
-      token,
-    });
+    return this.fields_.upsertField(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      id,
+      { ...dto, token },
+    );
   }
 
   @Delete(':id/fields/:token')
@@ -197,8 +211,14 @@ export class LetterKindsController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Param('token') token: string,
+    @Query('companyId') companyId?: string,
   ) {
-    await this.fields_.removeField(rlsContextFor(caller), id, token);
+    await this.fields_.removeField(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      id,
+      token,
+    );
   }
 
   @Delete(':id')

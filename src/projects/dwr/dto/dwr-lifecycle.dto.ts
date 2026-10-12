@@ -1,9 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsNotEmpty,
+  IsOptional,
   IsString,
   MaxLength,
   MinLength,
@@ -108,4 +109,15 @@ export class AddDwrAttachmentDto {
   @IsNotEmpty()
   @MaxLength(255)
   fileName!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The measurement line this file is evidence for (2026-10-11). Omit to attach it ' +
+      'to the report as a whole — the right answer for a general site view or a signed ' +
+      'measurement sheet. A line that is not on this report is refused with a 404.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  taskId?: string;
 }

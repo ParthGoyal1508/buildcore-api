@@ -4,6 +4,7 @@ import { join } from 'path';
 import { LetterFieldSource } from '@prisma/client';
 
 import { LETTER_TOKENS } from '../../recruitment/letters/letter-tokens.util';
+import { LETTER_KIND_KEY_RESERVED } from './letter-kind-error-codes';
 import {
   FORBIDDEN_FIELD_PATH_FRAGMENTS,
   LetterKindFieldsService,
@@ -41,6 +42,24 @@ function seededTokens(): Record<string, string[]> {
   }
   return out;
 }
+
+/**
+ * A stand-in for `LetterKindsService`, which the fields service now consults to answer
+ * "is this kind yours, and is it the product's?" before reading or writing its fields.
+ *
+ * `companyId` defaults to a company, not to null: a null means product-shipped and the
+ * write path refuses those. Tests that want that refusal pass `null` explicitly.
+ */
+const stubKinds = (companyId: string | null = 'company-1') =>
+  ({
+    requireById: async (_ctx: unknown, _companyId: string, id: string) => ({
+      id,
+      key: 'offer',
+      companyId,
+    }),
+  } as never);
+
+const COMPANY = 'company-1';
 
 describe('the backfill preserves every shipped letter type (T135, T139)', () => {
   it('finds the rows it is supposed to be checking', () => {
@@ -111,7 +130,7 @@ describe('validating a template against its own kind (T136, T138)', () => {
     const prisma = {
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     };
-    return new LetterKindFieldsService(prisma as never);
+    return new LetterKindFieldsService(prisma as never, stubKinds());
   };
   const ctx = { isSuperAdmin: true } as never;
 
@@ -186,7 +205,7 @@ describe('validating a template against its own kind (T136, T138)', () => {
 });
 
 describe('a kind cannot declare its way past the PII gate (T141)', () => {
-  const service = new LetterKindFieldsService({} as never);
+  const service = new LetterKindFieldsService({} as never, stubKinds());
 
   it.each(FORBIDDEN_FIELD_PATH_FRAGMENTS)(
     'refuses a path naming %s',
@@ -216,7 +235,7 @@ describe('a kind cannot declare its way past the PII gate (T141)', () => {
 });
 
 describe('resolving a company-defined kind’s fields (T140)', () => {
-  const service = new LetterKindFieldsService({} as never);
+  const service = new LetterKindFieldsService({} as never, stubKinds());
 
   const fields = [
     {
@@ -356,7 +375,7 @@ describe('LetterKindFieldsService.templatesUsingField', () => {
     const prisma = {
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     };
-    return new LetterKindFieldsService(prisma as never);
+    return new LetterKindFieldsService(prisma as never, stubKinds());
   };
   const ctx = { isSuperAdmin: true } as never;
 
@@ -379,7 +398,7 @@ describe('LetterKindFieldsService.templatesUsingField', () => {
     const service = build(TEMPLATES);
 
     await expect(
-      service.templatesUsingField(ctx, 'kind-1', 'siteName'),
+      service.templatesUsingField(ctx, COMPANY, 'kind-1', 'siteName'),
     ).resolves.toEqual([{ id: 't1', name: 'Offer, standard', isActive: true }]);
   });
 
@@ -389,7 +408,7 @@ describe('LetterKindFieldsService.templatesUsingField', () => {
     const service = build(TEMPLATES);
 
     await expect(
-      service.templatesUsingField(ctx, 'kind-1', 'site'),
+      service.templatesUsingField(ctx, COMPANY, 'kind-1', 'site'),
     ).resolves.toEqual([]);
   });
 
@@ -399,7 +418,7 @@ describe('LetterKindFieldsService.templatesUsingField', () => {
     const service = build(TEMPLATES);
 
     await expect(
-      service.templatesUsingField(ctx, 'kind-1', 'neverUsed'),
+      service.templatesUsingField(ctx, COMPANY, 'kind-1', 'neverUsed'),
     ).resolves.toEqual([]);
   });
 
@@ -410,7 +429,80 @@ describe('LetterKindFieldsService.templatesUsingField', () => {
     // administrator decides — and "one live template and one draft" is a different decision from
     // "two live templates".
     await expect(
-      service.templatesUsingField(ctx, 'kind-1', 'candidateName'),
+      service.templatesUsingField(ctx, COMPANY, 'kind-1', 'candidateName'),
     ).resolves.toEqual([{ id: 't2', name: 'Offer, trainee', isActive: false }]);
+  });
+});
+
+describe('a kind’s fields follow the kind’s own ownership rule', () => {
+  /**
+   * `PUT /letter-kinds/:id/fields/:token` wrote straight to `settings.LetterKindField`,
+   * which carries no `companyId` and has no RLS policy. Two consequences, and the second
+   * was live: an id from another company was never checked, and — because every kind in
+   * the product is shipped and a shipped kind is one row shared by every tenant —
+   * declaring a field on one changed the field vocabulary for all of them. Proven against
+   * the running server before this fix: the same call answered 200 while `PUT
+   * /letter-kinds/:id` on the very same kind answered 409 "a product-shipped kind cannot
+   * be edited".
+   *
+   * **Both halves are asserted.** The refusal alone passes for a guard that refuses
+   * everything, which would take a company's own kinds away with it.
+   */
+  const build = (kindCompanyId: string | null) => {
+    const tx = {
+      $executeRaw: async () => 0,
+      letterKindField: {
+        upsert: async () => ({
+          token: 'probe',
+          label: 'Probe',
+          sourceType: LetterFieldSource.manual,
+          sourcePath: null,
+          isRequired: false,
+        }),
+        deleteMany: async () => ({ count: 1 }),
+        findMany: async () => [],
+      },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    return new LetterKindFieldsService(
+      prisma as never,
+      stubKinds(kindCompanyId),
+    );
+  };
+  const ctx = { isSuperAdmin: false, companyId: COMPANY } as never;
+  const field = {
+    token: 'probe',
+    label: 'Probe',
+    sourceType: LetterFieldSource.manual,
+    isRequired: false,
+  };
+
+  it('refuses declaring a field on a product-shipped kind', async () => {
+    await expect(
+      build(null).upsertField(ctx, COMPANY, 'ltrkind_appointment', field),
+    ).rejects.toMatchObject({ response: { code: LETTER_KIND_KEY_RESERVED } });
+  });
+
+  it('allows declaring a field on the company’s own kind', async () => {
+    // The other half. Without it, a guard that refused every write would pass above.
+    await expect(
+      build(COMPANY).upsertField(ctx, COMPANY, 'kind-1', field),
+    ).resolves.toMatchObject({ token: 'probe' });
+  });
+
+  it('refuses withdrawing a field from a product-shipped kind', async () => {
+    await expect(
+      build(null).removeField(ctx, COMPANY, 'ltrkind_appointment', 'probe'),
+    ).rejects.toMatchObject({ response: { code: LETTER_KIND_KEY_RESERVED } });
+  });
+
+  it('still reads a product-shipped kind’s fields', async () => {
+    // Reading is not writing: that vocabulary is the product's and every company composes
+    // templates against it. A guard that refused reads too would empty the editor.
+    await expect(
+      build(null).fieldsFor(ctx, COMPANY, 'ltrkind_appointment'),
+    ).resolves.toEqual([]);
   });
 });

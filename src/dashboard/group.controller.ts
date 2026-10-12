@@ -59,7 +59,17 @@ export class GroupController {
 
   @Get('statutory-calendar')
   @ApiOperation({
-    summary: 'Statutory calendar — unavailable (Challans not built)',
+    summary: 'Statutory calendar — unavailable, and not because of Challans',
+    description:
+      'Challans **are** built: `ChallansService` derives PF, ESIC and PT from a ' +
+      'processed payroll run, and the Challans screen shows them. What a *calendar* ' +
+      'additionally needs is a statutory due date per scheme and a record of what has ' +
+      'already been filed, and nothing captures either — there is deliberately no ' +
+      '`Challan` table (005 research §5). Deriving "pending" from the absence of a ' +
+      'filing record that was never designed to exist would mark every period unfiled ' +
+      'forever.\n\n' +
+      'The card therefore carries its own `note` rather than the stock "waiting on the ' +
+      'challans module" sentence, which was false and sent the reader to the wrong place.',
   })
   statutoryCalendar(): WidgetResult {
     return {
@@ -67,7 +77,11 @@ export class GroupController {
       displayType: 'list',
       title: 'Statutory Calendar',
       section: 'group',
-      unavailable: { reason: 'module_pending', module: 'challans' },
+      unavailable: {
+        reason: 'module_pending',
+        module: 'challans',
+        note: 'Challan amounts are available per payroll run. A calendar also needs due dates and a record of what has been filed, which nothing captures yet.',
+      },
     };
   }
 

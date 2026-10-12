@@ -9,6 +9,15 @@ export interface SelectableCompany {
   id: string;
   name: string;
   selected: boolean;
+  /**
+   * Whether this company has supplied its own logo (2026-10-12).
+   *
+   * A flag rather than letting the shell try `GET /settings/companies/:id/logo` and
+   * handle the 404: the shell renders on every page, and a company with no logo would
+   * otherwise spend a failed request per navigation establishing a fact that never
+   * changes within a session. The interface shows the product mark when this is false.
+   */
+  hasLogo: boolean;
 }
 
 /**
@@ -41,10 +50,19 @@ export class CompanySelectionService {
         (tx) =>
           tx.company.findUnique({
             where: { id: caller.companyId as string },
-            select: { id: true, name: true },
+            select: { id: true, name: true, logoRef: true },
           }),
       );
-      return own ? [{ ...own, selected: true }] : [];
+      return own
+        ? [
+            {
+              id: own.id,
+              name: own.name,
+              selected: true,
+              hasLogo: own.logoRef !== null,
+            },
+          ]
+        : [];
     }
 
     const companies = await withRlsContext(
@@ -52,13 +70,17 @@ export class CompanySelectionService {
       { isSuperAdmin: true },
       (tx) =>
         tx.company.findMany({
-          select: { id: true, name: true },
+          select: { id: true, name: true, logoRef: true },
           orderBy: { name: 'asc' },
         }),
     );
     return companies.map((company) => ({
-      ...company,
+      id: company.id,
+      name: company.name,
       selected: company.id === (selected ?? caller.companyId),
+      // The reference itself is never sent: it is a storage path, and the only thing a
+      // caller can do with it is ask this API for the bytes, which it does by company id.
+      hasLogo: company.logoRef !== null,
     }));
   }
 

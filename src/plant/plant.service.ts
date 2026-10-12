@@ -1,7 +1,10 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { HireBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
-import { withRlsContext } from '../common/prisma/rls-context';
+import { AuthenticatedUser } from '../auth/authenticated-user';
+import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
+import { companyScope } from '../settings/company-scope';
 import {
   EquipmentLogbookDay,
   ProjectSourcesRegistry,
@@ -9,6 +12,7 @@ import {
 } from '../projects/portfolio/project-sources.registry';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { MONTHS_PER_YEAR } from './constants/plant.constants';
+import { PlantRefsService } from './plant-refs.service';
 
 /** Whole months, inclusive of both ends, that a date range covers. */
 function monthsBetween(from: Date, to: Date): number {
@@ -40,6 +44,12 @@ export class PlantService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly sources: ProjectSourcesRegistry,
+    /**
+     * For the two report methods, which turn the ids this schema stores as plain
+     * columns into the names a report has to carry. Same module, and the only
+     * sanctioned route to `settings` and `projects` from here (Principle I).
+     */
+    private readonly refs: PlantRefsService,
   ) {}
 
   /**
@@ -127,6 +137,253 @@ export class PlantService implements OnModuleInit {
    * from "plant has not shipped". */
   isAvailable(): boolean {
     return true;
+  }
+
+  /**
+   * The machines standing at one site (2026-10-12).
+   *
+   * For the Site Dashboard's Machinery Deployed count and its Machinery at Site table,
+   * both of which were "waiting on the machinery module" placeholders. `deployedSiteId`
+   * is the field the equipment register already filters on, so the dashboard and the
+   * register agree by construction.
+   *
+   * Site ids come from the `projects` schema; this only ever compares the one it is
+   * handed against its own column, so no cross-schema read is involved.
+   */
+  async getSiteMachinery(
+    companyId: string,
+    siteId: string,
+  ): Promise<{ id: string; code: string; name: string; status: string }[]> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.equipment.findMany({
+          where: { companyId, deployedSiteId: siteId },
+          select: { id: true, code: true, name: true, status: true },
+          orderBy: { code: 'asc' },
+        }),
+    );
+  }
+
+  /**
+   * The three company-wide plant figures the dashboard shows (2026-10-12).
+   *
+   * One method rather than three, and on this façade rather than by exporting
+   * `EquipmentService`, `FuelService` and `HireBillsService`: this module exports
+   * deliberately little — the note on `FuelRecoveryService` above says why — and three
+   * new exports to render three numbers would widen that surface more than the numbers
+   * are worth. It is also one round trip instead of three.
+   *
+   * `unpaidHireBills` counts everything not yet paid, verified or not. The card answers
+   * "what is outstanding on hired plant", and a bill nobody has verified yet is still
+   * money the company expects to pay — unlike `getMachineryCostByProject` above, which
+   * excludes unverified bills precisely because a P&L must not book a claim as a cost.
+   * The two differ on purpose.
+   */
+  async getCompanyTotals(
+    companyId: string,
+    month: { from: Date; to: Date },
+  ): Promise<{
+    equipmentCount: number;
+    fuelSpend: number;
+    unpaidHireBills: number;
+  }> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const [equipmentCount, fuel, hire] = await Promise.all([
+          tx.equipment.count({ where: { companyId } }),
+          tx.fuelEntry.aggregate({
+            where: { companyId, date: { gte: month.from, lte: month.to } },
+            _sum: { amount: true },
+          }),
+          tx.hireBill.aggregate({
+            where: { companyId, status: { not: HireBillStatus.paid } },
+            _sum: { netPayable: true },
+          }),
+        ]);
+        return {
+          equipmentCount,
+          fuelSpend: Number(fuel._sum.amount ?? 0),
+          unpaidHireBills: Number(hire._sum.netPayable ?? 0),
+        };
+      },
+    );
+  }
+
+  /**
+   * The machinery register, for the Machinery and Equipment Utilization reports.
+   *
+   * One method for both because they are one read with two column sets — the register
+   * and the utilisation figure live on the same row, and two façade methods would be
+   * two queries and two more exports from a module that exports deliberately little.
+   *
+   * Category and site are resolved to **names** here. A report is a file somebody sends
+   * on, and `cmu40n39a0030123nt0se33v5` under a column headed "Site" is the defect the
+   * Employee report shipped with.
+   */
+  async listEquipmentForReport(caller: AuthenticatedUser): Promise<
+    {
+      code: string;
+      name: string;
+      category: string;
+      ownership: string;
+      status: string;
+      site: string;
+      meterType: string;
+      currentReading: number;
+      utilizationPercent: number;
+    }[]
+  > {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.equipment.findMany({
+          where: companyScope(caller),
+          orderBy: { code: 'asc' },
+          select: {
+            code: true,
+            name: true,
+            categoryId: true,
+            ownership: true,
+            status: true,
+            deployedSiteId: true,
+            meterType: true,
+            currentReading: true,
+            utilizationPercent: true,
+          },
+        }),
+    );
+
+    const [categories, siteNames] = await Promise.all([
+      this.refs.categoriesByIds(
+        caller,
+        rows.map((row) => row.categoryId),
+      ),
+      this.refs.siteNames(
+        caller,
+        rows.flatMap((row) => (row.deployedSiteId ? [row.deployedSiteId] : [])),
+      ),
+    ]);
+
+    return rows.map((row) => ({
+      code: row.code,
+      name: row.name,
+      // 'Unknown category', not blank — the same fallback `equipment.service.ts`
+      // uses on the Register. A blank cell reads as "no category", which is a
+      // different fact from "its category has since been deleted".
+      category: categories.get(row.categoryId)?.name ?? 'Unknown category',
+      ownership: row.ownership,
+      status: row.status,
+      site: row.deployedSiteId
+        ? siteNames.get(row.deployedSiteId) ?? ''
+        : 'Not deployed',
+      meterType: row.meterType,
+      currentReading: Number(row.currentReading),
+      utilizationPercent: Number(row.utilizationPercent),
+    }));
+  }
+
+  /**
+   * Every fuel entry in a date range, for the Fuel report.
+   *
+   * `site` is the entry's **own** site, not the machine's present deployment — see
+   * `FuelEntry.siteId`. An entry recorded before that column existed reads "Not
+   * recorded", which is what it is; filling it in from the machine's current site is
+   * the inference the column was added to stop.
+   */
+  async listFuelForReport(
+    caller: AuthenticatedUser,
+    range: { from: Date; to: Date },
+  ): Promise<
+    {
+      date: string;
+      code: string;
+      machine: string;
+      site: string;
+      litres: number;
+      rate: number;
+      amount: number;
+      flagged: string;
+    }[]
+  > {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.fuelEntry.findMany({
+          where: {
+            ...companyScope(caller),
+            date: { gte: range.from, lte: range.to },
+          },
+          orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+          include: { equipment: { select: { code: true, name: true } } },
+        }),
+    );
+
+    const siteNames = await this.refs.siteNames(
+      caller,
+      rows.flatMap((row) => (row.siteId ? [row.siteId] : [])),
+    );
+
+    return rows.map((row) => ({
+      date: row.date.toISOString().slice(0, 10),
+      code: row.equipment.code,
+      machine: row.equipment.name,
+      site: row.siteId ? siteNames.get(row.siteId) ?? '' : 'Not recorded',
+      litres: Number(row.quantity),
+      rate: Number(row.rate),
+      amount: Number(row.amount),
+      // Spelled out rather than a boolean: a report cell reading "false" is a cell
+      // somebody has to stop and interpret.
+      flagged: row.varianceAlert ? 'Yes' : 'No',
+    }));
+  }
+
+  /**
+   * One site's fuel for one month, and how much of its history this cannot see.
+   *
+   * `FuelEntry.siteId` was added on 2026-10-12. Entries made before it have none, and
+   * there is no honest backfill — the only candidate is the machine's *current*
+   * deployment, which would file last month's diesel wherever the machine stands today
+   * and restate the figure every time one moved.
+   *
+   * So `unattributed` is returned alongside the total, and it is not decoration: a site
+   * card showing a confident ₹0 for a month whose entries all predate the column is
+   * worse than one saying it cannot answer yet. The widget reads it and says so.
+   *
+   * Counted for the whole company in the month, not for the site — an entry with no
+   * site cannot be known to belong to this one, which is the entire problem.
+   */
+  async getSiteFuelForMonth(
+    companyId: string,
+    siteId: string,
+    month: { from: Date; to: Date },
+  ): Promise<{ litres: number; spend: number; unattributed: number }> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const period = { gte: month.from, lte: month.to };
+        const [atSite, unattributed] = await Promise.all([
+          tx.fuelEntry.aggregate({
+            where: { companyId, siteId, date: period },
+            _sum: { quantity: true, amount: true },
+          }),
+          tx.fuelEntry.count({
+            where: { companyId, siteId: null, date: period },
+          }),
+        ]);
+        return {
+          litres: Number(atSite._sum.quantity ?? 0),
+          spend: Number(atSite._sum.amount ?? 0),
+          unattributed,
+        };
+      },
+    );
   }
 
   /**

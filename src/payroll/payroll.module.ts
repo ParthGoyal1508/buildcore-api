@@ -103,6 +103,12 @@ import { SalaryService } from './salary/salary.service';
     PayrollEngineService,
     ReimbursementsAdminService,
     PayrollScheduleService,
+    // For the dashboard's Payroll report (2026-10-12), which was a placeholder blaming
+    // "the payroll module" — built since 005. The report is the salary register over a
+    // range of months, and this service already produces that register, reconciliation
+    // check included. A second implementation of net pay is the last thing this product
+    // needs.
+    PayrollRegisterService,
   ],
 })
 export class PayrollModule {}

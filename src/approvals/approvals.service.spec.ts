@@ -1032,19 +1032,14 @@ describe('ApprovalService', () => {
 
     it('returns nothing for a caller with no company rather than everything', async () => {
       const { service } = harness();
-      const page = await service.queueFor({
-        id: 'u',
-        companyId: null,
-        roleIds: [],
-      } as never);
+      // `permissions` is not decoration here: the queue resolves the caller's company
+      // through `effectiveCompanyId`, which asks whether they hold CROSS_COMPANY_ACCESS.
+      // An authenticated caller always carries the array; `as never` is what let this
+      // fixture omit it.
+      const nobody = { id: 'u', companyId: null, roleIds: [], permissions: [] };
+      const page = await service.queueFor(nobody as never);
       expect(page).toEqual({ items: [], nextCursor: null });
-      await expect(
-        service.queueCountFor({
-          id: 'u',
-          companyId: null,
-          roleIds: [],
-        } as never),
-      ).resolves.toBe(0);
+      await expect(service.queueCountFor(nobody as never)).resolves.toBe(0);
     });
   });
 

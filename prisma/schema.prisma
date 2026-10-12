@@ -384,7 +384,39 @@ model Company {
   /// uppercase on write, with a `lower()` functional unique index as the
   /// database-level backstop (FR-004). Drives employee code generation.
   shortCode String  @unique
+  /// **Superseded by `logoRef` below and read by nothing** (2026-10-12). Kept because
+  /// the company form has written it since 002 and the rows hold whatever was typed;
+  /// dropping a column to tidy a field is how somebody's data disappears in a release
+  /// nobody read the notes for. The form no longer offers it.
   logoUrl   String?
+
+  /// The company's own logo, shown wherever the product mark otherwise is (2026-10-12).
+  ///
+  /// A storage reference, not a URL, for the two reasons `Logo` in the web app already
+  /// gives for serving its mark locally: a remote host is latency and availability this
+  /// application does not control and leaks a referrer on every page load, and the one
+  /// part of a precached PWA shell that would still fail offline. Served through the API
+  /// like every other blob, so it is reachable only by a caller who may read this
+  /// company.
+  ///
+  /// Null means the product mark is shown, which is the right answer for a company that
+  /// has not supplied one — not a gap to refuse anything over.
+  logoRef   String?
+
+  /// The company's printed letterhead, as a full-page image (2026-10-11).
+  ///
+  /// A storage reference, not a URL: the file is served through the API like every other
+  /// blob, so it is reachable only by a caller who may read this company.
+  ///
+  /// **A whole page, not a header strip.** The client's two letterheads are full-page
+  /// artwork — header band at the top, contact block and footer rule at the bottom, blank
+  /// between — exactly as their pre-printed stationery is. The renderer draws it to the
+  /// page edges and lays the body inside the clear middle, which is why there is one
+  /// reference here and not a header/footer pair.
+  ///
+  /// Null means letters render on plain paper, which is the correct behaviour for a
+  /// company that has not supplied one — not an error to refuse an issue over.
+  letterheadRef String?
 
   status CompanyStatus @default(active)
 
@@ -593,6 +625,7 @@ model Company {
 
   /// 019 FR-008: users currently working in this company.
   userCompanySelections UserCompanySelection[]
+  TermsTemplate         TermsTemplate[]
 
   @@schema("settings")
 }
@@ -874,6 +907,60 @@ model KitItem {
 /// A per-company letter template with `{{token}}` substitution (011 FR-020, FR-021).
 /// At most one active template per (companyId, letterType) — enforced by a partial
 /// unique index in the migration.
+/// Which document a set of standard terms belongs to (2026-10-11).
+///
+/// A string-keyed enum rather than free text, so a typo cannot create a second,
+/// invisible set of terms that no document will ever read. Extending it is a migration,
+/// which is the right weight: a new kind of document that carries terms is a decision,
+/// not a data entry.
+enum TermsDocumentKind {
+  /// The subcontract award. Defaults into `WorkOrder.terms` when one is raised.
+  work_order
+  /// Letter of intent.
+  letter_of_intent
+  /// Purchase order.
+  purchase_order
+
+  @@schema("settings")
+}
+
+/// The company's standard terms and conditions for one kind of document (2026-10-11).
+///
+/// **Why this is not `LetterTemplate`.** A letter template is a whole letter body with
+/// `{{token}}` substitution, and it already serves LOI and the other issued letters —
+/// that mechanism is not duplicated here. A terms block is a different thing: it is a
+/// clause set that gets copied *into* a document which has its own structure, and
+/// `WorkOrder.terms` is the column that holds the copy.
+///
+/// **Copied in, not read through.** A work order keeps the terms it was raised under,
+/// in its own column, exactly as a bill keeps the rate it was priced at. Editing the
+/// standard set changes what the *next* work order starts from and leaves every award
+/// already signed alone — which is the whole reason the master and the copy are
+/// separate rows rather than one.
+model TermsTemplate {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  documentKind TermsDocumentKind
+
+  /// The clauses, as plain text. Newline-separated; no markup, because what consumes
+  /// this is a PDF table cell and a textarea, neither of which renders any.
+  body String
+
+  /// Who last changed the company's standard terms. `shared.User.id`, a bare id.
+  updatedByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One set per kind per company. A second would make "the standard terms" ambiguous,
+  /// and the defaulting below would have to pick.
+  @@unique([companyId, documentKind])
+  @@index([companyId])
+  @@schema("settings")
+}
+
 model LetterTemplate {
   id        String  @id @default(cuid())
   companyId String
@@ -2028,6 +2115,9 @@ model DWRTask {
   /// have been under-scoped is a commercial question, not a data-entry error.
   exceedsScope Boolean @default(false)
 
+  /// Photographs and other evidence filed against this line (2026-10-11).
+  attachments DWRAttachment[]
+
   engineerName String?
   remark       String?
   layerNo      String?
@@ -2055,6 +2145,23 @@ model DWRAttachment {
   dwrId String
   dwr   DailyWorkReport @relation(fields: [dwrId], references: [id], onDelete: Cascade)
 
+  /// The measurement line this file belongs to, where it belongs to one (2026-10-11).
+  ///
+  /// A site photograph is evidence **for a line** — this chainage, this pour, this quantity —
+  /// and an argument about one line is lost in a pile of twenty files attached to the report.
+  ///
+  /// Nullable, and the nullability is the whole design: an attachment is either a line's or the
+  /// report's. The report-level case is not a fallback, it is the right answer for a general
+  /// site view, a signed measurement sheet or a weather photo, and those are what every
+  /// attachment filed before today is. A second table would have made a file that belongs to
+  /// both impossible to express and given the download two routes to maintain.
+  ///
+  /// `Cascade`, matching `dwrId`: deleting the line deletes the evidence filed against it. The
+  /// alternative — orphaning the photo onto the report — leaves a file whose caption refers to a
+  /// chainage nobody can find.
+  taskId String?
+  task   DWRTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
   /// Opaque `StorageService` reference. Never a URL or a path — see `StorageService.put`.
   fileRef   String
   /// As the uploader's own filesystem spelled it, so the download arrives named.
@@ -2069,6 +2176,7 @@ model DWRAttachment {
 
   @@index([companyId])
   @@index([dwrId])
+  @@index([taskId])
   @@schema("projects")
 }
 
@@ -2281,6 +2389,21 @@ model ClientBill {
   certifiedAmount Decimal?  @db.Decimal(18, 2)
   certifiedAt     DateTime?
 
+  /// The client's own certification document, as they sent it (2026-10-11).
+  ///
+  /// A PDF or a workbook — whatever came back. Columns rather than a table because
+  /// there is one certificate per bill and re-certifying replaces it; a list of
+  /// superseded certificates is a different feature from the one that was asked for,
+  /// and the audit log already records that a re-certification happened.
+  ///
+  /// Four columns and not one, for the reason 017 and 022 both landed on: a bare
+  /// storage reference downloads as an extensionless UUID, and the name and the type
+  /// are what make it open.
+  certificateFileRef   String?
+  certificateFileName  String?
+  certificateMimeType  String?
+  certificateSizeBytes Int?
+
   status ClientBillStatus @default(draft)
 
   submittedAt DateTime?
@@ -2331,6 +2454,22 @@ model ClientBillLine {
 
   /// `quantity × rate × (1 + quotedPercentage)`. Stored for the same reason the rate is frozen.
   amount Decimal @db.Decimal(18, 2)
+
+  /// What the client **certified** for this line, where they said line by line (2026-10-11).
+  ///
+  /// The reported case: nine items billed, eight certified. Until now the whole bill counted
+  /// against the BOQ the moment it left draft, so the ninth item's quantity stayed deducted from
+  /// what was left to bill and nobody could claim it again without over-measuring.
+  ///
+  /// `null` means "not certified line by line" and the billed `quantity` stands — which is the
+  /// right reading both before certification and for a bill certified only as a single figure.
+  /// **Zero is not null**: a line certified at nothing returns its quantity to the outstanding
+  /// BOQ, and that distinction is the whole of this column.
+  ///
+  /// `quantity` is never overwritten. A shortfall is a dispute to pursue, and a system that
+  /// absorbed it would lose the only record that there was one — the same rule `certifiedAmount`
+  /// already follows at the bill level.
+  certifiedQty Decimal? @db.Decimal(18, 3)
 
   /// Whether this line takes the BOQ item past its scope quantity (FR-003).
   ///
@@ -6458,6 +6597,24 @@ model FuelEntry {
   /// → `partners.Vendor` (the filling station or diesel supplier).
   vendorId String?
 
+  /// Where the fuel was drawn. → `projects.Site`, a plain column with no relation, for
+  /// the reason `Purchase.vendorId` is one: Principle I routes a cross-module read
+  /// through the owning module's service, and a declared relation is what would make an
+  /// accidental cross-schema join possible.
+  ///
+  /// **Captured here rather than inferred from the machine's deployment, and that is the
+  /// whole point of the column.** `Equipment.deployedSiteId` says where a machine is
+  /// *now*. Reading a site's fuel through it would file last month's diesel wherever the
+  /// machine happens to stand today, and silently restate every historical figure the
+  /// next time one moved — a site's fuel cost changing because a JCB was transferred is
+  /// a number nobody can reconcile against a delivery note.
+  ///
+  /// Nullable, and permanently so for the rows that predate it. There is no honest
+  /// backfill: the only candidate is the current deployment, which is exactly the
+  /// inference this column exists to replace. Readers must therefore say what they are
+  /// leaving out rather than quietly summing a partial set.
+  siteId String?
+
   /// Computed against the category's threshold at save time and stored (research.md
   /// §3): a later edit to the category's benchmark must not retroactively rewrite
   /// what was flagged, or unflag, months of history.
@@ -6472,6 +6629,8 @@ model FuelEntry {
 
   @@index([companyId, date])
   @@index([companyId, equipmentId, date])
+  /// The Site Dashboard's two fuel cards read one site's entries for one month.
+  @@index([companyId, siteId, date])
   @@schema("plant")
 }
 
@@ -8408,6 +8567,20 @@ model IssuedLetter {
   countersignedRef String?
   countersignedAt  DateTime?
 
+  /// The reference the letter is filed under: `PRPL/HR/2026-27/0001` (2026-10-11).
+  ///
+  /// **Allocated at issue, not at compose.** A composed letter may never be issued — it
+  /// can sit in an approval chain and be rejected — and a number burnt on a document that
+  /// was never sent is a gap in a series somebody has to explain. The same reasoning 028
+  /// recorded for the debit note number, reached the other way round: that one is
+  /// allocated at raise because a raised debit always exists.
+  ///
+  /// Null for every letter issued before this column, and for one still composing. The
+  /// unique index is the guarantee behind the MAX-based allocator in
+  /// `letter-reference.ts`; without it two letters issued in the same instant would take
+  /// the same number and nothing would say so.
+  referenceNo String?
+
   /// Empty until the letter is issued — a composed letter awaiting approval has no
   /// rendered document yet, because rendering it would produce a file indistinguishable
   /// from the real one.
@@ -8429,6 +8602,9 @@ model IssuedLetter {
   @@index([companyId, letterKindId, candidateId])
   /// FR-019: letters where the work is — listed by the opaque subject pair.
   @@index([companyId, subjectType, subjectId])
+  /// Two letters may not be filed under one reference. Postgres does not collide NULLs,
+  /// so letters issued before the column — and letters still composing — are unaffected.
+  @@unique([companyId, referenceNo])
   @@schema("shared")
 }
 

@@ -113,3 +113,45 @@ export class QuarterlyQueryDto {
   @IsString()
   companyId?: string;
 }
+
+/**
+ * Which financial year's slab set, under which regime.
+ *
+ * A DTO rather than three bare `@Query(...)` parameters, because one of them —
+ * `regime: TaxRegime` — made the global `ValidationPipe` validate against a Prisma enum
+ * object as though it were a class. That returns a 500 rather than a 400 for a regime
+ * that is not a regime, and a 500 if the parameter is omitted at all. The same fault as
+ * `list-leave-applications.dto.ts` documents; this was the last site carrying it.
+ */
+export class SlabsQueryDto {
+  @ApiProperty({ example: '2026-27' })
+  @Matches(FY, { message: 'financialYear must be YYYY-YY' })
+  financialYear: string;
+
+  @ApiProperty({ enum: TaxRegime })
+  @IsEnum(TaxRegime)
+  regime: TaxRegime;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+}
+
+/**
+ * A financial year, for the two per-employee reads that take one.
+ *
+ * `form-16/:employeeId` answered **500** with the parameter absent — the year reached
+ * the data builder and was dereferenced — and `declarations/:employeeId` answered
+ * **200**, which is worse: a declaration "for a financial year" returned something for
+ * an unspecified year rather than refusing the question.
+ *
+ * Measured before this existed. Same family as `SlabsQueryDto` above and
+ * `list-leave-applications.dto.ts`: a bare `@Query` the handler assumes is present is a
+ * parameter the global `ValidationPipe` has nothing to refuse.
+ */
+export class FinancialYearQueryDto {
+  @ApiProperty({ example: '2026-27' })
+  @Matches(FY, { message: 'financialYear must be YYYY-YY' })
+  financialYear!: string;
+}

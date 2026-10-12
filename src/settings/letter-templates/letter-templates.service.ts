@@ -11,6 +11,7 @@ import { LetterKindFieldsService } from '../letter-kinds/letter-kind-fields.serv
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../company-scope';
+import { StandardTemplatesService } from './standard-templates.service';
 
 export interface LetterTemplateView {
   id: string;
@@ -64,7 +65,53 @@ export class LetterTemplatesService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly fields: LetterKindFieldsService,
+    private readonly standard: StandardTemplatesService,
   ) {}
+
+  /**
+   * Installs the shipped letter bodies for the caller's company (2026-10-11).
+   *
+   * Here rather than on `StandardTemplatesService` because that one takes a transaction
+   * and knows nothing about callers — it is shaped to run inside company creation. This
+   * is the caller-facing wrapper: it resolves the company the way every other method on
+   * this service does, opens the transaction, and writes the audit entry.
+   */
+  async installStandard(
+    caller: AuthenticatedUser,
+    opts: { replace?: boolean } = {},
+  ): Promise<{ created: string[]; replaced: string[]; skipped: string[] }> {
+    const companyId = companyScope(caller).companyId;
+    if (!companyId) {
+      throw new BadRequestException(
+        'Choose a company before installing its standard letter templates.',
+      );
+    }
+    const result = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => this.standard.install(companyId, tx, opts),
+    );
+    // Only when something changed. An audit entry for a call that created nothing is
+    // noise in the log that somebody later has to read past.
+    if (result.created.length + result.replaced.length > 0) {
+      await this.auditLog.record({
+        // `LETTER`, as every other write in this service records — there is no
+        // LETTER_TEMPLATE entity type, and inventing one here would put these entries
+        // outside the activity log's module mapping.
+        entityType: AuditEntityType.LETTER,
+        action: AuditAction.CREATE,
+        entityId: companyId,
+        // Replacements are logged separately from creations: overwriting a company's
+        // offer letter is a different act from giving it one, and "who replaced our
+        // appointment letter" is a question somebody will ask.
+        changes: { installed: result.created, replaced: result.replaced },
+        accountId: caller.id,
+        companyId,
+        ipAddress: '',
+      });
+    }
+    return result;
+  }
 
   private toView(row: TemplateRow): LetterTemplateView {
     return {

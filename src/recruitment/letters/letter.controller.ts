@@ -44,6 +44,40 @@ export class LetterController {
     private readonly kinds: LetterKindsService,
   ) {}
 
+  /**
+   * Installs the shipped letter bodies for a company that predates them (2026-10-11).
+   *
+   * New companies get these from `CompaniesService.create`. This is for the ones that
+   * already existed — a data migration could not do it, because the bodies live in
+   * TypeScript beside the field declarations they must agree with, and splitting them
+   * into SQL is how a token ends up undeclared and rendered as a blank.
+   *
+   * **Creates only what is missing.** Safe to call repeatedly; it will not restore the
+   * shipped wording over a template the company has rewritten. The response names what
+   * it made and what it left, so "nothing happened" is distinguishable from "nothing
+   * needed to happen".
+   */
+  @Post('letter-templates/install-standard')
+  @RequirePermissions(Permission.SETTINGS)
+  @ApiOperation({
+    summary: 'Install the standard letter templates this product ships',
+    description:
+      'Offer, appointment, relieving, experience, increment and payment advice. ' +
+      'Idempotent: a kind the company already has a template for is **skipped**, ' +
+      'rewritten or not — these are starting values, not managed content.\n\n' +
+      '`?replace=true` overwrites them instead, for a company still holding the short ' +
+      'placeholder bodies this product used to seed. It is an explicit opt-in because ' +
+      'it discards whatever is there, and the response lists what it replaced.',
+  })
+  installStandardTemplates(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('replace') replace?: string,
+  ) {
+    return this.templates.installStandard(caller, {
+      replace: replace === 'true',
+    });
+  }
+
   @Get('letter-templates')
   @ApiOperation({ summary: 'List letter templates' })
   listTemplates(

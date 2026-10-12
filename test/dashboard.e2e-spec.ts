@@ -616,8 +616,60 @@ describe('Dashboard reminders (e2e)', () => {
             entityId: `${PREFIX}audit-project`,
             ipAddress: '127.0.0.1',
           },
+          // One row with a real account on it, for the actor's name. The two above
+          // carry `accountId: null` and resolve to "system", so neither of them can
+          // tell a name apart from an id.
+          {
+            companyId: callerCompanyId,
+            accountId: scopedUserId,
+            action: 'UPDATE',
+            entityType: 'PROJECT',
+            entityId: `${PREFIX}actorrow`,
+            ipAddress: '127.0.0.1',
+          },
         ],
       });
+    });
+
+    /**
+     * The User column names a person.
+     *
+     * Asserted against the user's actual username, not against "is not empty" or "is
+     * not a cuid": a cuid is a non-empty string, so a truthiness check passes against
+     * the defect, and a negative regex passes for any wrong name too. Before this fix
+     * both the feed and the CSV export printed `accountId` verbatim, so an audit trail
+     * answered "who did this" with `cmu40n37h0001123njsvg08v5`.
+     */
+    it('names the actor rather than printing their id', async () => {
+      const res = await http().get('/activity-log').set(auth()).expect(200);
+
+      const row = res.body.entries.find(
+        (entry: { target: string | null }) =>
+          entry.target === `${PREFIX}actorrow`,
+      );
+      const scoped = await sys.user.findUniqueOrThrow({
+        where: { id: scopedUserId },
+        select: { username: true },
+      });
+      expect(row.actor).toBe(scoped.username);
+    });
+
+    it('names the actor in the CSV export too', async () => {
+      // A second route over the same rows, and the one that leaves the building.
+      const scoped = await sys.user.findUniqueOrThrow({
+        where: { id: scopedUserId },
+        select: { username: true },
+      });
+      const res = await http()
+        .get('/activity-log/export')
+        .set(auth())
+        .expect(200);
+
+      const line = res.text
+        .split('\n')
+        .find((l: string) => l.includes(`${PREFIX}actorrow`));
+      expect(line).toContain(scoped.username);
+      expect(line).not.toContain(scopedUserId);
     });
 
     const targets = (body: { entries: { target: string | null }[] }) =>
@@ -711,8 +763,25 @@ describe('Dashboard reminders (e2e)', () => {
       expect(admin).toEqual(expect.arrayContaining(['employee', 'attendance']));
       expect(viewer).not.toContain('employee');
       expect(viewer).not.toContain('attendance');
+      // And every report built on 2026-10-12, each declaring its module's own
+      // permission. Listed one by one rather than as "nothing but placeholders": the
+      // next report added must be *chosen* to be visible here, not become visible by
+      // being forgotten.
+      for (const id of [
+        'payroll',
+        'machinery',
+        'equipment-utilization',
+        'fuel',
+        'project-cost',
+        'pnl',
+      ]) {
+        expect(viewer).not.toContain(id);
+      }
       // Placeholders stay: they carry no rows, only the name of an unbuilt module.
-      expect(viewer).toContain('payroll');
+      // `expense` is the last one — this assertion named `payroll` until Payroll
+      // became a real report with `requires: [PAYROLL]`, at which point a Viewer
+      // correctly stopped seeing it.
+      expect(viewer).toContain('expense');
     });
 
     it('refuses to run the Employee report it did not list', async () => {
@@ -729,6 +798,58 @@ describe('Dashboard reminders (e2e)', () => {
         .set(auth())
         .send({})
         .expect(201);
+    });
+
+    /**
+     * The Department and Designation columns hold names.
+     *
+     * **Asserted on the cell, against the master's own name.** The test above asserts
+     * only that the run returned 201, and it did so happily while both columns were
+     * full of `cmu40n39a0030123nt0se33v5` — in the one report of the roster anybody
+     * can export to a file and send on. Asserting the column *label* reads "Department"
+     * would have passed too; the label was never wrong.
+     */
+    it('names the department and designation rather than their ids', async () => {
+      const employee = await sys.employee.findFirst({
+        where: {
+          companyId: callerCompanyId,
+          isActive: true,
+          departmentId: { not: null },
+          designationId: { not: null },
+        },
+        select: {
+          employeeCode: true,
+          departmentId: true,
+          designationId: true,
+        },
+      });
+      // Not skipped when absent: a test that quietly passes on no data is the failure
+      // mode this suite exists to avoid.
+      expect(employee).not.toBeNull();
+
+      const [department, designation] = await Promise.all([
+        sys.department.findUniqueOrThrow({
+          where: { id: employee.departmentId },
+          select: { name: true },
+        }),
+        sys.designation.findUniqueOrThrow({
+          where: { id: employee.designationId },
+          select: { name: true },
+        }),
+      ]);
+
+      const res = await http()
+        .post('/reports/employee/run')
+        .set(auth())
+        .send({})
+        .expect(201);
+
+      const row = res.body.rows.find(
+        (r: { employeeCode: string }) =>
+          r.employeeCode === employee.employeeCode,
+      );
+      expect(row.department).toBe(department.name);
+      expect(row.designation).toBe(designation.name);
     });
 
     it('refuses the cross-company employee search', async () => {

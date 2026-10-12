@@ -23,6 +23,19 @@ export interface ReportRunParams {
 export interface ReportData {
   columns: { key: string; label: string }[];
   rows: Record<string, unknown>[];
+  /**
+   * Why there is nothing to show, or what is missing from what is (2026-10-12).
+   *
+   * "This report returned no rows" is the interface's only account of an empty result,
+   * and for several reports that is not the interesting fact. The Payroll report returns
+   * nothing when every run in the range is still a draft — a register is produced from a
+   * processed run — and a reader who is told only "no rows" goes looking for missing
+   * employees rather than pressing Process.
+   *
+   * Optional and per-run, like `WidgetProvider.note`: a report whose result is complete
+   * says nothing, and a caveat that applies today must stop appearing once it does not.
+   */
+  note?: string;
 }
 
 /** A report run's output — data for an available type, or the widget-style

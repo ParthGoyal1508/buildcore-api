@@ -727,6 +727,117 @@ describe('Client bills against a BOQ (e2e)', () => {
       expect(res.body.code).toBe('CERTIFIED_EXCEEDS_BILLED');
     });
 
+    /**
+     * The reported case (2026-10-11): nine items billed, eight certified.
+     *
+     * Until now the whole bill counted against the BOQ the moment it left draft, so the
+     * ninth item's quantity stayed deducted from what was left to bill and could never
+     * be claimed again without over-measuring.
+     *
+     * Its own BOQ line and its own bill, because the assertion is an exact outstanding
+     * figure and the suite's other bills already measure against the shared lines.
+     */
+    it('frees the uncertified quantity back to the outstanding BOQ', async () => {
+      const line = await http()
+        .post(`/projects/${projectId}/boq/items`)
+        .set(auth())
+        .send({
+          groupId,
+          boqNo: '1.9',
+          taskName: 'Certification scope test',
+          unit: 'Cum',
+          scopeQty: '100',
+          rate: '200.00',
+        })
+        .expect(201);
+      const itemId = line.body.id;
+
+      const remaining = async () => {
+        const boq = await http()
+          .get(`/projects/client-bills/boq?projectId=${projectId}`)
+          .set(auth())
+          .expect(200);
+        return boq.body.groups
+          .flatMap((g: { items: { id: string }[] }) => g.items)
+          .find((i: { id: string }) => i.id === itemId);
+      };
+
+      const bill = await compose({
+        billNumber: billNumber(),
+        lines: [{ boqTaskItemId: itemId, quantity: 9 }],
+      });
+      await http()
+        .post(`/projects/client-bills/${bill.body.id}/submit`)
+        .set(auth())
+        .expect(201);
+
+      // Submitted and uncertified: all nine hold the scope, so the same work cannot be
+      // billed twice while the bill is with the client.
+      expect((await remaining()).previouslyBilledQty).toBe(9);
+      expect((await remaining()).remainingQty).toBe(91);
+
+      const billLine = bill.body.lines.find(
+        (l: { boqTaskItemId: string }) => l.boqTaskItemId === itemId,
+      );
+      const certified = await http()
+        .post(`/projects/client-bills/${bill.body.id}/certify`)
+        .set(auth())
+        .send({ lines: [{ lineId: billLine.id, certifiedQty: 8 }] })
+        .expect(201);
+
+      // The billed quantity is NOT overwritten — the shortfall is a dispute to pursue.
+      expect(certified.body.lines[0].quantity).toBe(9);
+      expect(certified.body.lines[0].certifiedQty).toBe(8);
+      // 8 × 200 × (1 + quoted), derived from the lines rather than taken alongside them.
+      expect(certified.body.certifiedAmount).toBe(
+        Math.round(8 * 200 * (1 + QUOTED) * 100) / 100,
+      );
+
+      // And the ninth is claimable again. 92, not 91 — the exact figure, because
+      // "more than before" would pass for any number at all.
+      expect((await remaining()).previouslyBilledQty).toBe(8);
+      expect((await remaining()).remainingQty).toBe(92);
+    });
+
+    it('takes the client’s certification document and serves it back', async () => {
+      const bill = await compose({
+        billNumber: billNumber(),
+        lines: [{ boqTaskItemId: item['1.2'].id, quantity: 1 }],
+      });
+      await http()
+        .post(`/projects/client-bills/${bill.body.id}/submit`)
+        .set(auth())
+        .expect(201);
+
+      // Eight bytes of real PDF, so the type is sniffed from the file rather than taken
+      // from a name anybody can mistype.
+      const pdf = Buffer.from('%PDF-1.4\n');
+      const certified = await http()
+        .post(`/projects/client-bills/${bill.body.id}/certify`)
+        .set(auth())
+        .send({
+          certifiedAmount: 1,
+          certificateData: pdf.toString('base64'),
+          certificateFileName: 'RA certification.pdf',
+        })
+        .expect(201);
+
+      expect(certified.body.certificate).toMatchObject({
+        fileName: 'RA certification.pdf',
+        mimeType: 'application/pdf',
+      });
+
+      const download = await http()
+        .get(`/projects/client-bills/${bill.body.id}/certificate`)
+        .set(auth())
+        .expect(200);
+
+      // The bytes back, not merely a 200: a route that served an empty body would pass
+      // a status check and lose the document.
+      expect(download.headers['content-type']).toContain('application/pdf');
+      expect(Buffer.from(download.body).toString()).toBe(pdf.toString());
+    });
+
     it('keeps both figures and reports the shortfall rather than absorbing it', async () => {
       const shortfall = 100;
       const res = await http()

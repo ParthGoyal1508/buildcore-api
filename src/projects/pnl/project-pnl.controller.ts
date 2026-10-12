@@ -13,6 +13,11 @@ import type { Response } from 'express';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import {
+  PnlExportQueryDto,
+  PnlGroupQueryDto,
+  PnlQueryDto,
+} from './dto/pnl-query.dto';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
@@ -55,15 +60,13 @@ export class ProjectPnlController {
   })
   async summary(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('projectId') projectId: string,
-    @Query('period') period: string,
-    @Query('companyId') companyId?: string,
+    @Query() query: PnlQueryDto,
   ) {
     return this.pnl.summaryFor(
       rlsContextFor(caller),
-      resolveCompanyId(caller, companyId),
-      projectId,
-      period,
+      resolveCompanyId(caller, query.companyId),
+      query.projectId,
+      query.period,
     );
   }
 
@@ -119,12 +122,10 @@ export class ProjectPnlController {
   })
   async exportPosition(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('projectId') projectId: string,
-    @Query('period') period: string,
+    @Query() query: PnlExportQueryDto,
     @Res() res: Response,
-    @Query('format') format?: string,
-    @Query('companyId') companyId?: string,
   ) {
+    const { projectId, period, companyId, format } = query;
     const chosen = (format ?? 'pdf').toLowerCase();
     if (chosen !== 'pdf' && chosen !== 'excel') {
       throw new BadRequestException('format must be pdf or excel');
@@ -157,10 +158,9 @@ export class ProjectPnlController {
   })
   async group(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('projectIds') projectIds: string,
-    @Query('period') period: string,
-    @Query('companyId') companyId?: string,
+    @Query() query: PnlGroupQueryDto,
   ) {
+    const { projectIds, period, companyId } = query;
     const ids = projectIds
       .split(',')
       .map((id) => id.trim())
