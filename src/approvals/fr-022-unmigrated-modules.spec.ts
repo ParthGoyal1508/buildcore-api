@@ -365,6 +365,19 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // re-run it after. The habit is the pre-commit diff; the suite is not a substitute
           // for it.
           ':(exclude)src/plant/fuel/dto/fuel.dto.ts',
+          // 2026-10-12, the Machinery and Equipment Utilization reports.
+          // `PlantService` gained a fourth constructor argument — `PlantRefsService`, to
+          // turn the ids it stores as plain columns into the names a report has to carry
+          // — so its spec gained a fourth stub. `plant.service.ts` itself was already
+          // excluded above; its spec was not. Verified by grep: no `ApprovalService`, no
+          // `approvals.submit`, no `ApprovalInstance`.
+          //
+          // **Twelfth time, and the second today.** Both times I ran the full unit suite
+          // before committing, which cannot see a working tree, and the tenth note says
+          // plainly that the pre-commit *diff* is the habit and the suite is not a
+          // substitute. Ran that diff against the index before this commit, which is how
+          // this line came to be written in the same commit as the change.
+          ':(exclude)src/plant/plant.service.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

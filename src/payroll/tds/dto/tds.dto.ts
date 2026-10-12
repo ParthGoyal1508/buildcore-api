@@ -137,3 +137,21 @@ export class SlabsQueryDto {
   @IsString()
   companyId?: string;
 }
+
+/**
+ * A financial year, for the two per-employee reads that take one.
+ *
+ * `form-16/:employeeId` answered **500** with the parameter absent — the year reached
+ * the data builder and was dereferenced — and `declarations/:employeeId` answered
+ * **200**, which is worse: a declaration "for a financial year" returned something for
+ * an unspecified year rather than refusing the question.
+ *
+ * Measured before this existed. Same family as `SlabsQueryDto` above and
+ * `list-leave-applications.dto.ts`: a bare `@Query` the handler assumes is present is a
+ * parameter the global `ValidationPipe` has nothing to refuse.
+ */
+export class FinancialYearQueryDto {
+  @ApiProperty({ example: '2026-27' })
+  @Matches(FY, { message: 'financialYear must be YYYY-YY' })
+  financialYear!: string;
+}

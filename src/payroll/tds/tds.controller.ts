@@ -27,6 +27,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import {
   DeclareTaxDto,
+  FinancialYearQueryDto,
   QuarterlyQueryDto,
   SetTaxSlabsDto,
   SlabsQueryDto,
@@ -103,12 +104,12 @@ export class TdsController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('employeeId') employeeId: string,
-    @Query('financialYear') financialYear: string,
+    @Query() query: FinancialYearQueryDto,
   ) {
     return this.tds.getDeclaration(
       callerFrom(user, request),
       employeeId,
-      financialYear,
+      query.financialYear,
     );
   }
 
@@ -176,12 +177,12 @@ export class TdsController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('employeeId') employeeId: string,
-    @Query('financialYear') financialYear: string,
+    @Query() query: FinancialYearQueryDto,
   ) {
     return this.tds.formSixteenData(
       callerFrom(user, request),
       employeeId,
-      financialYear,
+      query.financialYear,
     );
   }
 }
