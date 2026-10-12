@@ -12,6 +12,7 @@ import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
 import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
 import { nextClientBillNumber } from './bill-number';
+import { balanceColumn } from './package/bill-abstract';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
 import {
   contentDispositionFor,
@@ -147,6 +148,54 @@ export interface BillableBoq {
   unpricedCount: number;
 }
 
+/**
+ * Every figure between the work done and the payable, for a bill settled through a package.
+ *
+ * ## Why this exists
+ *
+ * Reported 2026-10-12: a bill showing Gross ₹50,837.21, Retention ₹2,033.49 and Net ₹56,937.68.
+ * All three were correct and the three together are unreadable — net is **larger** than gross, and
+ * subtracting as the layout invites gives ₹48,803.72, a figure that appears nowhere on the bill.
+ *
+ * The missing rows were the tax added and the tax deducted: ₹4,575.35 CGST, ₹4,575.35 SGST and
+ * ₹1,016.74 TDS. `netAmount` on a packaged bill is the abstract's **payable** — work plus tax, less
+ * recoveries, deductions and TDS — not gross less retention.
+ *
+ * ## In paise, unlike the printed abstract
+ *
+ * `GET /bill-packages/:id/abstract` already serves these, rounded to whole rupees because that is
+ * the client's own document format. Reading it here would put ₹56,938 beside the ₹56,937.68 the
+ * same screen shows for the same bill, which is a worse answer than none. So the figures are taken
+ * from the stored columns and totalled by `balanceColumn` — the one function that forms a block
+ * total — rather than re-added on the way out.
+ */
+export interface BillSettlementView {
+  /** The work at the frozen rates, before any tax. The same figure as `grossAmount`. */
+  workDone: number;
+  releaseWithheld: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  /** Block A — work done, release and the taxes added. */
+  workTotal: number;
+  recoveryDiesel: number;
+  debitAgainstCivil: number;
+  otherRecoveries: number;
+  mechanicalDebit: number;
+  /** Block B. */
+  recoveriesTotal: number;
+  mobilizationAdvance: number;
+  retentionAmount: number;
+  performanceSecurity: number;
+  theftWithheld: number;
+  /** Block C. */
+  deductionsTotal: number;
+  /** Block D — tax deducted at source. */
+  tdsAmount: number;
+  /** A − B − C − D. The same figure as `netAmount`, and the reason it is not gross less retention. */
+  payable: number;
+}
+
 export interface ClientBillView {
   id: string;
   projectId: string;
@@ -180,9 +229,63 @@ export interface ClientBillView {
    */
   certificationVariance: number | null;
   submittedAt: Date | null;
+  /**
+   * How `netAmount` was arrived at, where it came from an issued package (2026-10-12).
+   *
+   * Null for a bill composed on the bill sheet, which carries no tax at all — there `netAmount`
+   * really is gross less retention, and three rows say everything there is to say. Null too while a
+   * package is still a draft, matching `netAmount`, which is also null then: nothing is frozen yet
+   * and a breakdown of figures that are still moving is a breakdown somebody would quote.
+   */
+  settlement: BillSettlementView | null;
   lines: ClientBillLineView[];
   /** True when any line is past its BOQ scope. */
   exceedsScope: boolean;
+}
+
+/** The stored package columns the payable was settled from, as `view` selects them. */
+type SettlementColumns = Omit<
+  Parameters<typeof balanceColumn>[0],
+  'workDone' | 'releaseWithheld'
+> & {
+  status: BillPackageStatus;
+  workDone: Prisma.Decimal;
+  releaseWithheld: Prisma.Decimal;
+};
+
+/**
+ * The abstract column behind a bill's payable, in paise.
+ *
+ * Null for a bill with no package, and null while its package is a draft — the same rule
+ * `netAmount` follows above, because the two must never disagree about whether the figures are
+ * frozen. Totalled by `balanceColumn` rather than summed here: the printed abstract and this screen
+ * then cannot differ by a rounding step.
+ */
+function settlementOf(
+  columns: SettlementColumns | null | undefined,
+): BillSettlementView | null {
+  if (!columns || columns.status === BillPackageStatus.draft) return null;
+  const column = balanceColumn(columns);
+  return {
+    workDone: column.workDone.toNumber(),
+    releaseWithheld: column.releaseWithheld.toNumber(),
+    cgstAmount: column.cgstAmount.toNumber(),
+    sgstAmount: column.sgstAmount.toNumber(),
+    igstAmount: column.igstAmount.toNumber(),
+    workTotal: column.workTotal.toNumber(),
+    recoveryDiesel: column.recoveryDiesel.toNumber(),
+    debitAgainstCivil: column.debitAgainstCivil.toNumber(),
+    otherRecoveries: column.otherRecoveries.toNumber(),
+    mechanicalDebit: column.mechanicalDebit.toNumber(),
+    recoveriesTotal: column.recoveriesTotal.toNumber(),
+    mobilizationAdvance: column.mobilizationAdvance.toNumber(),
+    retentionAmount: column.retentionAmount.toNumber(),
+    performanceSecurity: column.performanceSecurity.toNumber(),
+    theftWithheld: column.theftWithheld.toNumber(),
+    deductionsTotal: column.deductionsTotal.toNumber(),
+    tdsAmount: column.tdsAmount.toNumber(),
+    payable: column.payable.toNumber(),
+  };
 }
 
 /**
@@ -728,8 +831,28 @@ export class ClientBillsService {
             },
             orderBy: { boqTaskItem: { boqNo: 'asc' } },
           },
-          // Only its status — the figures are copied onto this row when the package is issued.
-          package: { select: { status: true } },
+          // The status, and the columns the payable was settled from (2026-10-12) — so the screen
+          // can show what stands between gross and net instead of three rows that will not
+          // subtract. See `BillSettlementView`.
+          package: {
+            select: {
+              status: true,
+              workDone: true,
+              releaseWithheld: true,
+              cgstAmount: true,
+              sgstAmount: true,
+              igstAmount: true,
+              recoveryDiesel: true,
+              debitAgainstCivil: true,
+              otherRecoveries: true,
+              mechanicalDebit: true,
+              mobilizationAdvance: true,
+              retentionAmount: true,
+              performanceSecurity: true,
+              theftWithheld: true,
+              tdsAmount: true,
+            },
+          },
         },
       });
       if (!bill) throw new NotFoundException('Bill not found');
@@ -790,6 +913,7 @@ export class ClientBillsService {
           bill.package?.status === BillPackageStatus.draft
             ? null
             : bill.netAmount.toNumber(),
+        settlement: settlementOf(bill.package),
         certifiedAmount: certified,
         certifiedAt: bill.certifiedAt,
         /**
