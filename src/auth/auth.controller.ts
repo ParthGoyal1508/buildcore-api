@@ -8,7 +8,7 @@ import {
   UnauthorizedException,
   Logger,
 } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerGuard, Throttle } from '@nestjs/throttler';
 import {
   ApiBearerAuth,
   ApiOkResponse,
@@ -30,8 +30,21 @@ import { UserEntity } from '../common/decorators/user.decorator';
 import { ConfigService } from '@nestjs/config';
 import { SecurityConfig } from '../common/configs/config.interface';
 import { SESSION_COOKIE_MISSING } from './session-error-codes';
+import config from '../common/configs/config';
 
 const REFRESH_COOKIE_NAME = 'refreshToken';
+
+/**
+ * The renewal endpoint's own rate limit, read at class-definition time.
+ *
+ * `@Throttle` is a decorator, so its numbers are fixed when this class is defined and
+ * `ConfigService` does not exist yet. Read from the same config module `ThrottlerModule`
+ * is configured from, so there is one definition of the window and not two that drift.
+ */
+const REFRESH_THROTTLE = (() => {
+  const { ttlSeconds, refreshLimit } = config().security.throttle;
+  return { limit: refreshLimit, ttl: ttlSeconds * 1000 };
+})();
 
 @ApiTags('auth')
 @UseGuards(ThrottlerGuard)
@@ -120,6 +133,15 @@ export class AuthController {
   // Exempt: refusing this would end the session mid-change rather than protect
   // anything (010 FR-017a).
   @PasswordChangeExempt()
+  /**
+   * Its own, far higher allowance — see `SecurityConfig.throttle.refreshLimit`.
+   *
+   * The access token is held in memory only, so every full page load spends exactly one
+   * call here. Sharing `/auth/login`'s allowance of ten made ten reloads a minute the
+   * ceiling on using the product, and the limiter tracks by source address, so one
+   * office behind one NAT shares that ten between everybody in it.
+   */
+  @Throttle({ default: REFRESH_THROTTLE })
   @ApiOkResponse({ type: TokenDto })
   async refreshToken(
     @Req() req: Request,

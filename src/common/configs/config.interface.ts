@@ -185,6 +185,31 @@ export interface SecurityConfig {
     ttlSeconds: number;
     /** Max requests per window per source address, for /auth/* (FR-016). */
     limit: number;
+    /**
+     * The window's allowance for `/auth/refresh-token` alone, which is far higher — and
+     * has to be.
+     *
+     * The access token lives in memory and never in storage (research.md §2), so **every
+     * full page load costs exactly one refresh call**; measured, six loads, six calls. At
+     * the shared `limit` of 10 that made ten reloads a minute the ceiling on using the
+     * application, and `@nestjs/throttler` tracks by source address, so behind one office
+     * NAT those ten reloads can come from ten different people. The eleventh answers 429,
+     * which `withAuth` cannot treat as a lapsed session (only a 401 is), so the screen
+     * reports a load failure instead.
+     *
+     * Separating the two is not a loosening of the control that matters. `limit` guards
+     * `/auth/login`, where an attacker supplies a guessable password. This endpoint
+     * presents an httpOnly cookie the browser holds and this application can never read,
+     * and replaying one is already detected and punished by destroying the whole token
+     * family (`REFRESH_REUSE_DETECTED`). The ceiling here is a backstop against volume,
+     * not the defence against theft.
+     *
+     * Still per-address, deliberately: tracking it per session instead would need a
+     * custom tracker over the cookie, and whether `req.ip` is even the caller's address
+     * depends on a `trust proxy` setting this application does not currently configure.
+     * Both are worth deciding on; neither belongs in a defect fix.
+     */
+    refreshLimit: number;
   };
 }
 

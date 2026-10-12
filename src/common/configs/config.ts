@@ -189,8 +189,11 @@ const config: Config = {
       ),
     },
     throttle: {
-      ttlSeconds: 60,
-      limit: 10,
+      ttlSeconds: numberFromEnv(process.env.AUTH_THROTTLE_TTL_SECONDS, 60),
+      limit: numberFromEnv(process.env.AUTH_THROTTLE_LIMIT, 10),
+      // Env-overridable like every other operational number here, because the right
+      // ceiling depends on how many people sit behind one address.
+      refreshLimit: numberFromEnv(process.env.AUTH_REFRESH_THROTTLE_LIMIT, 120),
     },
   },
   settings: {
