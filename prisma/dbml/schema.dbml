@@ -3860,6 +3860,22 @@ Table FuelEntry {
   rate Decimal [not null]
   amount Decimal [not null]
   vendorId String [note: '→ `partners.Vendor` (the filling station or diesel supplier).']
+  siteId String [note: 'Where the fuel was drawn. → `projects.Site`, a plain column with no relation, for
+the reason `Purchase.vendorId` is one: Principle I routes a cross-module read
+through the owning module\'s service, and a declared relation is what would make an
+accidental cross-schema join possible.
+
+**Captured here rather than inferred from the machine\'s deployment, and that is the
+whole point of the column.** `Equipment.deployedSiteId` says where a machine is
+*now*. Reading a site\'s fuel through it would file last month\'s diesel wherever the
+machine happens to stand today, and silently restate every historical figure the
+next time one moved — a site\'s fuel cost changing because a JCB was transferred is
+a number nobody can reconcile against a delivery note.
+
+Nullable, and permanently so for the rows that predate it. There is no honest
+backfill: the only candidate is the current deployment, which is exactly the
+inference this column exists to replace. Readers must therefore say what they are
+leaving out rather than quietly summing a partial set.']
   variancePercent Decimal [note: 'Computed against the category\'s threshold at save time and stored (research.md
 §3): a later edit to the category\'s benchmark must not retroactively rewrite
 what was flagged, or unflag, months of history.']

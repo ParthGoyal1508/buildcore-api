@@ -97,13 +97,6 @@ export const UNBUILT_SITE_WIDGET_PLACEHOLDERS = {
     'kpi',
     'machinery',
   ),
-  fuelConsumed: new PlaceholderWidget(
-    'fuel-consumed',
-    'Fuel Consumed This Month',
-    'site',
-    'kpi',
-    'fuel',
-  ),
   materialStockValue: new PlaceholderWidget(
     'material-stock-value',
     'Material Stock Value',
@@ -117,13 +110,6 @@ export const UNBUILT_SITE_WIDGET_PLACEHOLDERS = {
     'site',
     'table',
     'machinery',
-  ),
-  fuelConsumption: new PlaceholderWidget(
-    'fuel-consumption',
-    'Fuel Consumption',
-    'site',
-    'table',
-    'fuel',
   ),
   materialStock: new PlaceholderWidget(
     'material-stock',

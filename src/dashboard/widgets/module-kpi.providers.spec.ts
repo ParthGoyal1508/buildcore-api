@@ -12,12 +12,11 @@ import {
   MaterialStockValueWidget,
   MaterialStockWidget,
   MaterialsCostWidget,
+  SiteFuelConsumedWidget,
+  SiteFuelConsumptionWidget,
   TotalMachineryWidget,
 } from './module-kpi.providers';
-import {
-  UNBUILT_SITE_WIDGET_PLACEHOLDERS,
-  UNBUILT_WIDGET_PLACEHOLDERS,
-} from './unbuilt-module.placeholders';
+import { UNBUILT_WIDGET_PLACEHOLDERS } from './unbuilt-module.placeholders';
 import { resolveWidget, type WidgetProvider } from './widget.types';
 
 /**
@@ -297,15 +296,88 @@ describe('site dashboard cards for modules that now exist', () => {
     expect(service.getSiteMachinery).not.toHaveBeenCalled();
   });
 
-  it('leaves site fuel unavailable, because a fuel entry has no site', async () => {
-    // `plant.FuelEntry` records which machine was fuelled, not where. Deriving the site
-    // from the machine's current deployment would file last month's diesel wherever that
-    // machine stands today, and restate it every time one moves.
-    const result = await resolveWidget(
-      UNBUILT_SITE_WIDGET_PLACEHOLDERS.fuelConsumed,
-      siteCtx() as any,
-    );
-    expect('unavailable' in result).toBe(true);
+  describe('site fuel', () => {
+    const fuelPlant = (over: Record<string, unknown> = {}) => ({
+      isAvailable: () => true,
+      getSiteFuelForMonth: jest.fn(async () => ({
+        litres: 1240,
+        spend: 112_360,
+        unattributed: 0,
+        ...over,
+      })),
+    });
+
+    it('shows the litres drawn at the site, not a rupee figure', async () => {
+      const result = await resolveWidget(
+        new SiteFuelConsumedWidget(fuelPlant() as any),
+        siteCtx() as any,
+      );
+
+      expect('value' in result && result.value).toBe(1240);
+      // Deliberately absent: 1,240 litres rendered as ₹1,240.00 is a mistake a reader
+      // acts on, and the company-wide Fuel Cost card answers the money question.
+      expect('valueUnit' in result && result.valueUnit).toBeFalsy();
+    });
+
+    it('says how much of the month it cannot attribute, while any is unattributed', async () => {
+      const result = await resolveWidget(
+        new SiteFuelConsumedWidget(fuelPlant({ unattributed: 4 }) as any),
+        siteCtx() as any,
+      );
+
+      // Asserted on the sentence a reader gets, including the count: a card quietly
+      // understating a site's diesel is the defect this note exists to prevent, and
+      // `expect(note).toBeDefined()` would pass for an empty string.
+      expect('note' in result && result.note).toContain('4 fuel entries');
+      expect('note' in result && result.note).toContain('not counted here');
+    });
+
+    it('stops saying it once every entry carries a site', async () => {
+      // The pair, and the point of making the note per-request: it has to clear itself,
+      // or it becomes a permanent caveat on a figure that is no longer partial.
+      const result = await resolveWidget(
+        new SiteFuelConsumedWidget(fuelPlant({ unattributed: 0 }) as any),
+        siteCtx() as any,
+      );
+
+      expect('note' in result).toBe(false);
+    });
+
+    it('puts litres and spend in one table, and reads the aggregate once for both cards', async () => {
+      const service = fuelPlant();
+      const shared = siteCtx() as any;
+      const [consumed, consumption] = await Promise.all([
+        resolveWidget(new SiteFuelConsumedWidget(service as any), shared),
+        resolveWidget(new SiteFuelConsumptionWidget(service as any), shared),
+      ]);
+
+      expect('value' in consumed && consumed.value).toBe(1240);
+      expect('value' in consumption && consumption.value).toEqual({
+        columns: [
+          { key: 'measure', label: 'Measure' },
+          { key: 'value', label: 'This month' },
+        ],
+        rows: [
+          { measure: 'Litres drawn', value: 1240 },
+          { measure: 'Spend (₹)', value: 112_360 },
+        ],
+      });
+      // Two cards and two notes over one aggregate. Without `once` this is four reads.
+      expect(service.getSiteFuelForMonth).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers an honest empty with no site selected, and adds no caveat', async () => {
+      const service = fuelPlant({ unattributed: 9 });
+      const result = await resolveWidget(
+        new SiteFuelConsumedWidget(service as any),
+        ctx(),
+      );
+
+      expect('value' in result && result.value).toBe(0);
+      // No caveat about data nobody asked for: this is the company dashboard path.
+      expect('note' in result).toBe(false);
+      expect(service.getSiteFuelForMonth).not.toHaveBeenCalled();
+    });
   });
 });
 

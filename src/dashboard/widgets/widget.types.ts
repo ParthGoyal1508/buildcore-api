@@ -59,6 +59,23 @@ export interface WidgetProvider {
    * side of the wire is a list that goes stale the first time a widget is added.
    */
   readonly valueUnit?: 'currency';
+  /**
+   * A caveat to print beside the value, when the number is true but incomplete
+   * (2026-10-12).
+   *
+   * Per-request, unlike `valueUnit`, because whether a caveat applies depends on the
+   * data: the site fuel cards need one only while the month still contains entries
+   * recorded before `FuelEntry.siteId` existed, and it must stop appearing on its own
+   * once it does not. A static string would either lie later or have to be removed by
+   * hand on a date nobody will remember.
+   *
+   * Return `undefined` for "nothing to add", which is the normal case and the reason
+   * this is optional rather than part of `compute`'s return.
+   *
+   * The sibling of `unavailable.note`, and the same argument: a card that quietly
+   * understates is worse than one that says what it is leaving out.
+   */
+  note?(ctx: DashboardContext): Promise<string | undefined>;
   /** False for a placeholder standing in for a not-yet-built module (spec FR-003). */
   isAvailable(): boolean;
   /** The module a placeholder is waiting on. Read only when `isAvailable()` is false. */
@@ -76,6 +93,8 @@ export type WidgetResult =
       section: WidgetSection;
       value: unknown;
       valueUnit?: 'currency';
+      /** See `WidgetProvider.note` — a caveat for a figure that is true but partial. */
+      note?: string;
     }
   | {
       id: string;
@@ -145,10 +164,17 @@ export async function resolveWidget(
     };
   }
   try {
+    // Both in flight together: a note that reads the same rows as the value should not
+    // double the card's latency to say one sentence.
+    const [value, note] = await Promise.all([
+      provider.compute(ctx),
+      provider.note ? provider.note(ctx) : Promise.resolve(undefined),
+    ]);
     return {
       ...base,
-      value: await provider.compute(ctx),
+      value,
       ...(provider.valueUnit ? { valueUnit: provider.valueUnit } : {}),
+      ...(note ? { note } : {}),
     };
   } catch {
     return {

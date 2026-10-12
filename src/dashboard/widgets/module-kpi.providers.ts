@@ -75,6 +75,49 @@ function plantTotals(ctx: DashboardContext, plant: PlantService) {
 }
 
 /**
+ * This site's fuel for the current month, fetched once for both fuel cards and their
+ * notes — four reads of the same aggregate otherwise.
+ *
+ * Returns zeroes with nothing unattributed when no site is selected, so the two cards
+ * render an honest empty rather than a caveat about data they were never asked for.
+ */
+function siteFuel(ctx: DashboardContext, plant: PlantService) {
+  if (!ctx.siteId) {
+    return Promise.resolve({ litres: 0, spend: 0, unattributed: 0 });
+  }
+  const siteId = ctx.siteId;
+  return once(ctx, `plant:siteFuel:${siteId}`, () =>
+    plant.getSiteFuelForMonth(ctx.companyId, siteId, monthRange(new Date())),
+  );
+}
+
+/**
+ * The sentence both fuel cards show while the month still holds entries with no site.
+ *
+ * One function because the two cards must not describe the same gap differently, and
+ * `undefined` once the gap closes — which is what makes this self-clearing rather than a
+ * string somebody has to delete on a date nobody will remember.
+ */
+async function fuelAttributionNote(
+  ctx: DashboardContext,
+  plant: PlantService,
+): Promise<string | undefined> {
+  const { unattributed } = await siteFuel(ctx, plant);
+  if (unattributed === 0) return undefined;
+  return (
+    `${unattributed} fuel ${
+      unattributed === 1 ? 'entry' : 'entries'
+    } this month ` +
+    `${unattributed === 1 ? 'was' : 'were'} recorded without a site and ` +
+    `${
+      unattributed === 1 ? 'is' : 'are'
+    } not counted here. Entries made before ` +
+    `12 Oct 2026 carry none, and the machine's present deployment is not evidence of ` +
+    `where its diesel went.`
+  );
+}
+
+/**
  * Projects currently being executed (spec FR-005).
  *
  * `ongoing` only. "Active" on this card means work is happening — a project still in
@@ -227,13 +270,17 @@ export class FuelCostWidget implements WidgetProvider {
 //
 // The Site Dashboard's own placeholders, same story as the company ones above.
 //
-// **Fuel Consumed and Fuel Consumption are deliberately left as placeholders**, and not
-// for the reason their message gives. `plant.FuelEntry` records which *machine* was
-// fuelled and carries no site: the only way to attribute fuel to a site is through the
-// machine's **current** deployment, which would file last month's diesel against wherever
-// that machine happens to stand today, and silently restate the figure every time a
-// machine moves. A site fuel figure needs `siteId` captured on the entry when it is
-// recorded; until then "no answer" beats an answer that rewrites itself.
+// **Fuel Consumed and Fuel Consumption became real on 2026-10-12**, once
+// `FuelEntry.siteId` existed. They could not before, and not for the reason their
+// placeholder gave: the entry recorded which *machine* was fuelled and carried no site,
+// so the only way to attribute fuel to a site was through the machine's **current**
+// deployment — which would file last month's diesel wherever that machine stands today
+// and silently restate the figure every time one moved.
+//
+// The column is nullable and permanently so for the rows that predate it, because the
+// only candidate for a backfill is exactly that inference. So both cards carry a `note`
+// while the month still holds unattributed entries, and the note stops appearing on its
+// own once it does not.
 
 /** The machines standing at the selected site, as a count (spec FR-012). */
 @Injectable()
@@ -281,6 +328,72 @@ export class MachineryAtSiteWidget implements WidgetProvider {
         status: m.status,
       })),
     };
+  }
+}
+
+/**
+ * Litres drawn at the selected site this month (spec FR-012).
+ *
+ * Litres, not rupees — the company-wide Fuel Cost card beside it answers the money
+ * question, and a site engineer reading this one is checking consumption against hours
+ * run. `valueUnit` is therefore deliberately absent: formatting 1,240 litres as
+ * ₹1,240.00 is the kind of mistake a reader acts on.
+ */
+@Injectable()
+export class SiteFuelConsumedWidget implements WidgetProvider {
+  readonly id = 'fuel-consumed';
+  readonly displayType = 'kpi' as const;
+  readonly title = 'Fuel Consumed This Month (litres)';
+  readonly section = 'site' as const;
+  readonly requires = [Permission.FUEL, Permission.MACHINERY];
+  constructor(private readonly plant: PlantService) {}
+  isAvailable(): boolean {
+    return this.plant.isAvailable();
+  }
+  async compute(ctx: DashboardContext): Promise<number> {
+    return (await siteFuel(ctx, this.plant)).litres;
+  }
+  note(ctx: DashboardContext): Promise<string | undefined> {
+    return fuelAttributionNote(ctx, this.plant);
+  }
+}
+
+/**
+ * The same fuel, as litres and rupees side by side (spec FR-012).
+ *
+ * Two figures in a `table` rather than two more KPI cards: the pair is read together —
+ * litres against spend is how a rate that moved gets noticed — and the Site Dashboard
+ * already carries four cards.
+ */
+@Injectable()
+export class SiteFuelConsumptionWidget implements WidgetProvider {
+  readonly id = 'fuel-consumption';
+  readonly displayType = 'table' as const;
+  readonly title = 'Fuel Consumption';
+  readonly section = 'site' as const;
+  readonly requires = [Permission.FUEL, Permission.MACHINERY];
+  constructor(private readonly plant: PlantService) {}
+  isAvailable(): boolean {
+    return this.plant.isAvailable();
+  }
+  async compute(ctx: DashboardContext): Promise<{
+    columns: { key: string; label: string }[];
+    rows: Record<string, unknown>[];
+  }> {
+    const { litres, spend } = await siteFuel(ctx, this.plant);
+    return {
+      columns: [
+        { key: 'measure', label: 'Measure' },
+        { key: 'value', label: 'This month' },
+      ],
+      rows: [
+        { measure: 'Litres drawn', value: litres },
+        { measure: 'Spend (₹)', value: spend },
+      ],
+    };
+  }
+  note(ctx: DashboardContext): Promise<string | undefined> {
+    return fuelAttributionNote(ctx, this.plant);
   }
 }
 

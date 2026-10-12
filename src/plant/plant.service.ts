@@ -205,6 +205,49 @@ export class PlantService implements OnModuleInit {
   }
 
   /**
+   * One site's fuel for one month, and how much of its history this cannot see.
+   *
+   * `FuelEntry.siteId` was added on 2026-10-12. Entries made before it have none, and
+   * there is no honest backfill — the only candidate is the machine's *current*
+   * deployment, which would file last month's diesel wherever the machine stands today
+   * and restate the figure every time one moved.
+   *
+   * So `unattributed` is returned alongside the total, and it is not decoration: a site
+   * card showing a confident ₹0 for a month whose entries all predate the column is
+   * worse than one saying it cannot answer yet. The widget reads it and says so.
+   *
+   * Counted for the whole company in the month, not for the site — an entry with no
+   * site cannot be known to belong to this one, which is the entire problem.
+   */
+  async getSiteFuelForMonth(
+    companyId: string,
+    siteId: string,
+    month: { from: Date; to: Date },
+  ): Promise<{ litres: number; spend: number; unattributed: number }> {
+    return withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      async (tx) => {
+        const period = { gte: month.from, lte: month.to };
+        const [atSite, unattributed] = await Promise.all([
+          tx.fuelEntry.aggregate({
+            where: { companyId, siteId, date: period },
+            _sum: { quantity: true, amount: true },
+          }),
+          tx.fuelEntry.count({
+            where: { companyId, siteId: null, date: period },
+          }),
+        ]);
+        return {
+          litres: Number(atSite._sum.quantity ?? 0),
+          spend: Number(atSite._sum.amount ?? 0),
+          unattributed,
+        };
+      },
+    );
+  }
+
+  /**
    * What machinery cost a project over a period (FR-008, corrected by FR-025).
    *
    * Four components, and the last two are the correction:
