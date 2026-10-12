@@ -216,6 +216,12 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     ProjectDocumentsService,
     ProjectLockGuard,
     ProjectSourcesRegistry,
+    // For the dashboard's P&L and Project Cost reports (2026-10-12). Both were
+    // placeholders blaming "the projects module", which has been built since 008 — and
+    // the figures they need are exactly what this service already produces for the P&L
+    // screen. A second implementation of project revenue and cost would be two answers
+    // to the same question, which is the one thing a report must never be.
+    ProjectPnlService,
   ],
 })
 export class ProjectsModule {}
