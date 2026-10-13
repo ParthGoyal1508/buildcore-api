@@ -155,16 +155,15 @@ describe('The running-account bill package (e2e)', () => {
     if (prisma) {
       // **Nothing here is scoped to the company**, and two rows once were.
       //
-      // `billPackageLineClaim` and `billPackageCheckListAnswer` were deleted by `companyId` while
-      // every other line scoped to this suite's own project. This fixture creates its client
-      // through the API, so its company is whichever company the caller belongs to — on a
-      // developer's machine, the seeded one they are using. Running the suite therefore deleted
-      // every line claim and every check-list answer belonging to every bill in that company,
-      // leaving real issued bills with frozen totals and no lines behind them. It did exactly
-      // that on 2026-10-05.
+      // `billPackageLineClaim` was deleted by `companyId` while every other line scoped to this
+      // suite's own project. This fixture creates its client through the API, so its company is
+      // whichever company the caller belongs to — on a developer's machine, the seeded one they
+      // are using. Running the suite therefore deleted every line claim belonging to every bill in
+      // that company, leaving real issued bills with frozen totals and no lines behind them. It
+      // did exactly that on 2026-10-05.
       //
-      // Both cascade from `BillPackage`, which the next line already deletes by project, so the
-      // two statements were never needed for the cleanup to be complete — only for it to be
+      // It cascades from `BillPackage`, which the next line already deletes by project, so the
+      // statement was never needed for the cleanup to be complete — only for it to be
       // destructive.
       await sys.billPackageDebit.deleteMany({ where: { projectId } });
       await sys.billPackage.deleteMany({ where: { projectId } });
@@ -380,41 +379,6 @@ describe('The running-account bill package (e2e)', () => {
     expect(register.body.recoveredOnThisPackage).toBe('147500.00');
   });
 
-  // ── The check list ───────────────────────────────────────────────────────
-
-  it('keeps an unanswered question distinguishable from one answered no', async () => {
-    const answered = await http()
-      .post(`/projects/bill-packages/${packageId}/check-list`)
-      .set(auth())
-      .send({
-        answers: [
-          { questionKey: 'cumulative_measurement', answer: 'yes' },
-          { questionKey: 'rmc_dispatch_detail', answer: 'no' },
-          // Deliberately omitted: `bar_bending_schedule` stays unanswered.
-        ],
-      })
-      .expect(201);
-
-    const items: { key: string; answer: string | null }[] = answered.body.items;
-    expect(items).toHaveLength(6);
-    expect(items.find((i) => i.key === 'cumulative_measurement')?.answer).toBe(
-      'yes',
-    );
-    expect(items.find((i) => i.key === 'rmc_dispatch_detail')?.answer).toBe(
-      'no',
-    );
-    expect(
-      items.find((i) => i.key === 'bar_bending_schedule')?.answer,
-    ).toBeNull();
-
-    // A gap is an unanswered question **or** one answered no, and it never refuses anything.
-    const gaps: { key: string; state: string }[] = answered.body.gaps;
-    expect(gaps.find((g) => g.key === 'rmc_dispatch_detail')?.state).toBe('no');
-    expect(gaps.find((g) => g.key === 'bar_bending_schedule')?.state).toBe(
-      'unanswered',
-    );
-  });
-
   // ── Pass 4 — issue, and the frozen header ────────────────────────────────
 
   /**
@@ -555,9 +519,6 @@ describe('The running-account bill package (e2e)', () => {
     // below proves the other half.
     expect(issued.body.missingHeaderFields).toContain('issuerPan');
     expect(issued.body.missingHeaderFields).toContain('issuerState');
-    // FR-043a. Three questions were never answered and one was answered no, and none of that
-    // stopped the bill going out.
-    expect(issued.body.checkListGaps.length).toBeGreaterThan(0);
   });
 
   it('freezes the cumulative position at issue, and the next bill reads it', async () => {
@@ -696,12 +657,8 @@ describe('The running-account bill package (e2e)', () => {
     await workbook.xlsx.load(response.body);
     const names = workbook.worksheets.map((sheet) => sheet.name);
 
-    // The five kinds, in the client's order.
-    expect(names.slice(0, 3)).toEqual([
-      'Check List',
-      'Abstract',
-      'BOQ Annexure-I',
-    ]);
+    // The four kinds, in the client's order.
+    expect(names.slice(0, 2)).toEqual(['Abstract', 'BOQ Annexure-I']);
     expect(names[names.length - 1]).toBe('Debit Note');
 
     // **Counted against the claims, not against the schedule** (amended 2026-10-05). A sheet per

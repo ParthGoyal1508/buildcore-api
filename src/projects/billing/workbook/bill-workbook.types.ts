@@ -46,19 +46,6 @@ export interface WorkbookHeader {
   missingFields: string[];
 }
 
-export interface WorkbookCheckListRow {
-  position: number;
-  text: string;
-  /** `yes`, `no`, `not_required`, or null for unanswered — which is not an answer of no (FR-042). */
-  answer: string | null;
-}
-
-export interface WorkbookCheckList {
-  rows: WorkbookCheckListRow[];
-  footer: string;
-  signatories: readonly string[];
-}
-
 /** One row of the abstract: a label and its three columns, already rendered (FR-012a). */
 export interface WorkbookAbstractRow {
   label: string;
@@ -170,7 +157,6 @@ export interface WorkbookDebitRegister {
 /** The whole package, as the renderer receives it. */
 export interface BillWorkbookView {
   header: WorkbookHeader;
-  checkList: WorkbookCheckList;
   abstract: WorkbookAbstract;
   schedule: WorkbookSchedule;
   /** **One per schedule line, including lines with nothing claimed** (FR-030, FR-030a). */

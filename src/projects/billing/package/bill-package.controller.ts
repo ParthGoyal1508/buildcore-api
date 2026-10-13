@@ -26,7 +26,6 @@ import { BillPackageViewBuilder } from './bill-package-view.builder';
 import { DebitNoteService } from './debit-note.service';
 import { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { SetBillLineClaimDto } from './dto/bill-line.dto';
-import { SetCheckListDto } from './dto/check-list.dto';
 import { ComposeBillPackageDto } from './dto/compose-bill.dto';
 import { RecordDebitDto } from './dto/debit-note.dto';
 import { MeasurementSheetService } from './measurement-sheet.service';
@@ -229,38 +228,6 @@ export class BillPackageController {
     );
   }
 
-  @Get('projects/bill-packages/:packageId/check-list')
-  @ApiOperation({ summary: 'The six check-list questions and their answers' })
-  async checkList(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('packageId') packageId: string,
-  ) {
-    return this.packages.checkListFor(rlsContextFor(caller), packageId);
-  }
-
-  @Post('projects/bill-packages/:packageId/check-list')
-  @UseGuards(ProjectLockGuard)
-  @ApiOperation({
-    summary: 'Answer the check list',
-    description:
-      'An answer may be omitted, which leaves the question unanswered — not answered no. Nothing ' +
-      'here ever refuses an issue.',
-  })
-  async setCheckList(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('packageId') packageId: string,
-    @Body() dto: SetCheckListDto,
-    @Query('companyId') companyId?: string,
-  ) {
-    return this.packages.setCheckList(
-      rlsContextFor(caller),
-      resolveCompanyId(caller, companyId),
-      caller.id,
-      packageId,
-      dto.answers,
-    );
-  }
-
   // ── Debits ───────────────────────────────────────────────────────────────
 
   @Post('projects/:projectId/bill-package-debits')
@@ -412,8 +379,8 @@ export class BillPackageController {
     description:
       'Refuses an unpriced line carrying a claim: a zero rate is almost always an unpriced line ' +
       'rather than free work, and issuing one bills the work at nothing while the bill looks ' +
-      'finished. **Reports, never refuses**: the header fields that could not be filled and the ' +
-      'check-list gaps come back in the response.',
+      'finished. **Reports, never refuses**: the header fields that could not be filled come ' +
+      'back in the response.',
   })
   async issue(
     @UserEntity() caller: AuthenticatedUser,

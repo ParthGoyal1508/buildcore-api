@@ -1549,7 +1549,6 @@ reconstructed from the audit trail.']
   lastRevisedByUserId String
   lastRevisionReason String
   claims BillPackageLineClaim [not null]
-  checkListAnswers BillPackageCheckListAnswer [not null]
   recoveredDebits BillPackageDebit [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -1701,29 +1700,6 @@ This table is the **evidence**; the state it establishes lives on the subject �
 `RABill.acknowledgedAt`. Both, because they answer different questions: "show me the copy they
 signed" and "which bills are still unacknowledged", and a file in a list cannot answer the
 second.'
-}
-
-Table BillPackageCheckListAnswer {
-  id String [pk]
-  companyId String [not null]
-  packageId String [not null]
-  package BillPackage [not null]
-  questionKey String [not null, note: 'One of six fixed keys, from `check-list.ts`.']
-  answer CheckListAnswer [note: '**Nullable** — an unanswered question is distinguishable from one answered `no` (FR-042),
-which a boolean could not express. It never refuses an issue (FR-043); the gaps are reported.']
-  answeredByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
-  answeredAt DateTime
-  createdAt DateTime [default: `now()`, not null]
-  updatedAt DateTime [not null]
-
-  indexes {
-    (packageId, questionKey) [unique]
-  }
-
-  Note: 'One of the six fixed check-list questions, answered for one package (023 FR-041 to FR-043a).
-
-The **questions themselves are a constant in code**, not rows: the client reads them by position
-and their wording is part of the format rather than this system\'s data.'
 }
 
 Table RetentionRelease {
@@ -5364,12 +5340,6 @@ Enum SignedCopySubject {
   debit_note
 }
 
-Enum CheckListAnswer {
-  yes
-  no
-  not_required
-}
-
 Enum FaceEnrolmentStatus {
   not_enrolled
   enrolled
@@ -6032,8 +6002,6 @@ Ref: BillPackageDebit.projectId > Project.id [delete: Cascade]
 Ref: BillPackageDebit.recoveredOnPackageId > BillPackage.id [delete: Set Null]
 
 Ref: RABillPayment.raBillId > RABill.id [delete: Restrict]
-
-Ref: BillPackageCheckListAnswer.packageId > BillPackage.id [delete: Cascade]
 
 Ref: RetentionRelease.workOrderId > WorkOrder.id [delete: Cascade]
 

@@ -1,7 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 
 /**
- * The four tables feature 023 creates, under a role that **cannot** bypass row-level security
+ * The three tables feature 023 creates, under a role that **cannot** bypass row-level security
  * (023 FR-050, FR-050a, FR-050b, FR-050c — task T098, T099).
  *
  * ## Why this suite exists, and why it must not be allowed to pass quietly
@@ -29,17 +29,17 @@ import { PrismaClient } from '@prisma/client';
  *
  * ## What is asymmetric here, and why no policy was copied
  *
- * All four of these tables carry their own `companyId`, so each policy is a direct predicate. That
+ * All three of these tables carry their own `companyId`, so each policy is a direct predicate. That
  * is **not** true of the neighbours (research §7):
  *
  * | Table | How it is protected |
  * |---|---|
- * | `BillPackage`, `BillPackageLineClaim`, `BillPackageDebit`, `BillPackageCheckListAnswer` | own `companyId` |
+ * | `BillPackage`, `BillPackageLineClaim`, `BillPackageDebit` | own `companyId` |
  * | `projects."DWRTask"` | correlated lookup on its parent report — **no `companyId` column at all** |
  * | 008's two policies | `USING` only, relying on Postgres applying it to new rows |
  *
  * A `companyId`-keyed policy added beside a parent-lookup one would `AND` with it and hide every
- * row, so each of the four was read before it was written rather than copied from whatever was
+ * row, so each of the three was read before it was written rather than copied from whatever was
  * nearest.
  */
 const PROBE_ROLE = 'buildcore_bill_package_rls_probe';
@@ -49,7 +49,6 @@ const TABLES = [
   'BillPackage',
   'BillPackageLineClaim',
   'BillPackageDebit',
-  'BillPackageCheckListAnswer',
 ] as const;
 
 function probeUrl(adminUrl: string): string {
@@ -61,7 +60,7 @@ function probeUrl(adminUrl: string): string {
 
 jest.setTimeout(120_000);
 
-describe('the bill package’s four tables, under a role that cannot bypass isolation', () => {
+describe('the bill package’s three tables, under a role that cannot bypass isolation', () => {
   let admin: PrismaClient;
   let probe: PrismaClient | null = null;
   let canProbe = false;
@@ -242,7 +241,7 @@ describe('the bill package’s four tables, under a role that cannot bypass isol
     expect(row.rolbypassrls).toBe(false);
   });
 
-  // ── The read half, on each of the four tables. ────────────────────────────
+  // ── The read half, on each of the three tables. ───────────────────────────
 
   it('hides another company’s debit from a tenant-scoped read', async () => {
     const visible = await asProbe(companyB, (tx) =>

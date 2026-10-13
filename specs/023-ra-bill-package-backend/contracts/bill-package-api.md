@@ -201,15 +201,15 @@ document was signed.
 | 409 | `DEBIT_ALREADY_RECOVERED` | applied to a package already, **naming it** (FR-037) — a debit recovered twice is money taken twice. Holds under two simultaneous applications and not only against a second attempt (FR-037a) |
 | 409 | `BILL_PACKAGE_ISSUED` | the target package has been issued (FR-037b) — applying a debit afterwards either moves a figure FR-044 froze or records a recovery the bill never made |
 
-### `PUT /projects/bill-packages/:packageId/check-list` → 200
+### The check list — **withdrawn 2026-10-13**
 
-Six fixed questions in a fixed order with fixed wording; an answer of `yes`, `no`, `not_required`, or
-**absent**, which is distinguishable from `no` (FR-041, FR-042). It never refuses an issue (FR-043) —
-the check list records a fact, and the real document says only that gaps "may delay the process".
+FR-041 to FR-043a are no longer part of this product. Both endpoints, the stored answers, the
+workbook sheet and the PDF page were removed at the client's request, and
+`20261013100000_drop_bill_package_check_list` drops the table and its enum.
 
-The gaps are **returned to the caller that issues the package** (FR-043a), in its response body
-beside `missingHeaderFields`, not merely recorded against the row. "MUST report the gaps" with no
-addressee is satisfied by storing them where nobody looks.
+Left here rather than deleted, because a requirement that simply vanishes from a contract reads as
+one somebody forgot to build. Nothing replaced it: the questions were a paper formality the client
+does not want on this document.
 
 ---
 
@@ -217,8 +217,8 @@ addressee is satisfied by storing them where nobody looks.
 
 ### `GET /projects/bill-packages/:packageId/workbook.xlsx` → 200
 
-Five sheet kinds, one measurement sheet per item including items with nothing this period (FR-024,
-FR-030). Party names and identifiers from the **frozen header** on the package, bound by direction
+Four sheet kinds — five until the check list was withdrawn (see above) — one measurement sheet per
+item including items with nothing this period (FR-024, FR-030). Party names and identifiers from the **frozen header** on the package, bound by direction
 (FR-025, FR-026).
 
 Every figure comes from the stored package; **nothing is recomputed at production time** (FR-028), so
@@ -247,8 +247,7 @@ for a bill issued to a client.
 ### `POST /projects/bill-packages/:packageId/issue` → 200
 
 Freezes every figure and the statutory header (FR-044). Refuses an unpriced line carrying a non-zero
-claim (FR-009). The response carries `missingHeaderFields` and the check-list gaps (FR-027a,
-FR-043a) — reported, never a refusal. An issued package can never be deleted (FR-044a); a draft is
+claim (FR-009). The response carries `missingHeaderFields` (FR-027a) — reported, never a refusal. An issued package can never be deleted (FR-044a); a draft is
 abandoned instead.
 
 ### `POST /projects/bill-packages/:packageId/revise` → 200 · `POST /projects/bill-packages/:packageId/certify` → 200
