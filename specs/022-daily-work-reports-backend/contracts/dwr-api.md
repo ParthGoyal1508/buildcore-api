@@ -69,6 +69,12 @@ and the computed one returned (FR-003, US1 AC4).
 
 Each line comes back with `quantityInForce`, `exceedsScope`, and — where it applies — a note.
 
+**The creation answers `lineIds`: the stored line ids, in the order the lines were sent**
+(2026-10-12). A file is attached to a line, and an entry form holds files before any line has an id
+— the photograph of a pour is picked while the measurement is being typed, and nothing exists until
+the day is saved. Reading the report back and matching its lines by position would be a guess, and a
+guess one row out files a photograph against the wrong chainage.
+
 | Refusal | Code | When |
 |---|---|---|
 | 400 | `DWR_FACTOR_ZERO` | a factor supplied as 0, naming the factor (FR-004) |
@@ -90,11 +96,21 @@ Each line comes back with `quantityInForce`, `exceedsScope`, and — where it ap
 
 ### `PATCH /projects/dwr/:dwrId` → 200
 
-Partial update. Quantities recompute from the new factors (US3 AC1).
+Partial update. Quantities recompute from the new factors (US3 AC1). Answers `lineIds` exactly as a
+creation does — the report's lines as they now stand, in the order they were sent.
+
+**A line sent back with its `id` is kept and edited in place; one that is not sent is removed**
+(2026-10-12). Supplying `lines` used to replace every line — `deleteMany` then `createMany` — on the
+stated grounds that a draft's lines were referenced by nothing. That stopped being true when
+evidence could be filed against a line: `DWRAttachment.taskId` cascades from the line it belongs to,
+so correcting a chainage deleted the photograph that proved the chainage. A caller that sends no ids
+at all gets the old behaviour exactly, every line replaced, so nothing written before this has to
+change.
 
 | Refusal | Code | When |
 |---|---|---|
 | 409 | `DWR_APPROVED_NOT_EDITABLE` | the report is approved — the message names the reversal path (FR-018) |
+| 404 | `DWR_LINE_NOT_ON_THIS_REPORT` | a line `id` that is not one of this report's — accepting it would move another day's measurement, and its photographs, onto this one |
 
 ### `POST /projects/dwr/:dwrId/attachments` → 201 · `GET /projects/dwr/attachments/:attachmentId`
 

@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 import { ClientBillsService } from './client-bills.service';
 
 /**
@@ -583,3 +585,202 @@ function buildBoq(opts: {
   };
   return { service: new ClientBillsService(prisma as never, {} as never) };
 }
+
+/**
+ * How a bill's "Net" is arrived at, when a package settled it (reported 2026-10-12).
+ *
+ * ## The report
+ *
+ * A bill showing Gross ₹50,837.21, Retention ₹2,033.49 and Net ₹56,937.68 — three rows laid out to
+ * be subtracted, where the subtraction gives ₹48,803.72 and the net is *larger* than the gross.
+ * Every figure was right. What was missing from the screen was the ₹9,150.70 of tax added and the
+ * ₹1,016.74 deducted at source.
+ *
+ * ## Vacuity note
+ *
+ * _Asserting a settlement block comes back proves a field._ One wired to the wrong columns, or
+ * summed by a second implementation that drifts from the printed abstract, comes back too. So the
+ * fixture is **that bill**, to the paisa, and the assertions tie the two numbers already on the
+ * screen to each other: the breakdown starts at the gross a reader can see and ends at the net they
+ * are querying.
+ */
+/**
+ * The two rates a quoted bill is priced at, and the step between them (2026-10-13) — reported on
+ * RA-05.
+ *
+ * The line read 37.25 Cum at ₹178.00 for ₹5,915.07, and 37.25 × 178 is ₹6,630.50. Nothing was wrong:
+ * the project is quoted 10.79% below, `lineTotals` applies that **per line**, and the rate printed
+ * beside the amount was the schedule’s, before it. One column was missing and one subtotal, and
+ * without them the sheet is a document whose own figures do not multiply out.
+ *
+ * The fixture is that bill’s two lines, at their real quantities and rates.
+ */
+describe('the rate a quoted line is actually billed at', () => {
+  /** Two decimals, as every money figure in this product is rounded. */
+  const paise = (value: number) => Math.round(value * 100) / 100;
+
+  const ra05 = {
+    items: [
+      item({ id: 'boq-1', boqNo: '1', rate: 178 }),
+      item({ id: 'boq-2', boqNo: '2', rate: 3302 }),
+    ],
+    quotedPercentage: -0.1079,
+  };
+  const lines = [
+    { boqTaskItemId: 'boq-1', quantity: 37.25 },
+    { boqTaskItemId: 'boq-2', quantity: 15.25 },
+  ];
+
+  it('carries a rate that multiplies out to the amount beside it', async () => {
+    const { service } = build(ra05);
+    await service.compose(ctx, 'co-1', compose({ lines }));
+
+    const view = await service.view(ctx, 'bill-1');
+
+    // **The assertion the column exists for.** Quantity times the rate shown equals the amount
+    // shown — on every line, in the reader’s own arithmetic.
+    //
+    // It fails against the defect: the schedule rate gives ₹6,630.50 where the line says ₹5,915.07.
+    // And it fails against the tidy-looking fix, a quoted rate rounded to two decimals like every
+    // other money column — ₹158.79 × 37.25 is ₹5,914.93, twenty-three paise adrift, which is the
+    // same defect again in smaller type.
+    for (const line of view.lines) {
+      expect(paise(line.quantity * line.quotedRate)).toBe(line.amount);
+    }
+
+    // The schedule rate is still carried, unchanged and not replaced: it is what the tender prints
+    // and what a client checks the bill against.
+    expect(view.lines.map((line) => line.rate)).toEqual([178, 3302]);
+    expect(view.lines.map((line) => line.amount)).toEqual([5915.07, 44922.14]);
+  });
+
+  it('shows where the schedule total went, as the client’s own abstract does', async () => {
+    const { service } = build(ra05);
+    await service.compose(ctx, 'co-1', compose({ lines }));
+
+    const view = await service.view(ctx, 'bill-1');
+
+    // 37.25 × 178 plus 15.25 × 3,302, at the schedule’s rates.
+    expect(view.boqGrossAmount).toBe(56986);
+    // Negative, because the quote is below. A reader must not have to infer the direction by
+    // subtracting two totals and noticing which was larger.
+    expect(view.quoteAdjustment).toBe(-6148.79);
+
+    // **The three chain exactly**, which is the point of forming them the way the gross is formed.
+    // A figure half a rupee out would read as an arithmetic error in the bill rather than in the
+    // rounding, on the one block whose purpose is that the sums are checkable.
+    expect(view.boqGrossAmount + view.quoteAdjustment).toBe(view.grossAmount);
+
+    // And the schedule total is not the gross — ₹6,148.79 apart on this bill. A `boqGrossAmount`
+    // that merely echoed the gross would satisfy every assertion above except this one.
+    expect(view.boqGrossAmount).not.toBe(view.grossAmount);
+  });
+
+  it('leaves an at-par bill with one rate, because it has one', async () => {
+    // Nothing to explain where nothing was quoted: the two rates are the same rate, and the screen
+    // reads this to drop the second column rather than print it twice.
+    const { service } = build({ items: [item({ rate: 251 })] });
+    await service.compose(ctx, 'co-1', compose());
+
+    const view = await service.view(ctx, 'bill-1');
+    expect(view.quotedPercentage).toBe(0);
+    expect(view.lines[0].quotedRate).toBe(view.lines[0].rate);
+    expect(view.quoteAdjustment).toBe(0);
+    expect(view.boqGrossAmount).toBe(view.grossAmount);
+  });
+});
+
+describe('the breakdown behind a packaged bill’s net', () => {
+  const dc = (value: string) => new Prisma.Decimal(value);
+
+  /** RA-05 as it stands in the database: 9% CGST, 9% SGST, 4% retention, 2% TDS on the work. */
+  const reported = (status = 'issued') => ({
+    id: 'bill-1',
+    projectId: 'p-1',
+    billNumber: 'RA-05',
+    description: null,
+    billingDate: new Date('2026-10-08'),
+    status: 'submitted',
+    quotedPercentage: dec(-0.1079),
+    grossAmount: dec(50837.21),
+    retentionAmount: dec(2033.49),
+    netAmount: dec(56937.68),
+    certifiedAmount: null,
+    certifiedAt: null,
+    submittedAt: null,
+    lines: [],
+    package: {
+      status,
+      workDone: dc('50837.21'),
+      releaseWithheld: dc('0'),
+      cgstAmount: dc('4575.35'),
+      sgstAmount: dc('4575.35'),
+      igstAmount: dc('0'),
+      recoveryDiesel: dc('0'),
+      debitAgainstCivil: dc('0'),
+      otherRecoveries: dc('0'),
+      mechanicalDebit: dc('0'),
+      mobilizationAdvance: dc('0'),
+      retentionAmount: dc('2033.49'),
+      performanceSecurity: dc('0'),
+      theftWithheld: dc('0'),
+      tdsAmount: dc('1016.74'),
+    },
+  });
+
+  it('explains the net the screen shows, rather than offering a second opinion', async () => {
+    const { service } = build({ bill: reported() });
+
+    const view = await service.view(ctx, 'bill-1');
+    const settlement = view.settlement!;
+
+    // **The two ends tie to what is already on screen.** A breakdown that began somewhere other
+    // than the gross a reader can see, or ended somewhere other than the net they are querying,
+    // would be a third set of figures to reconcile rather than an explanation of these.
+    expect(settlement.workDone).toBe(view.grossAmount);
+    expect(settlement.payable).toBe(view.netAmount);
+
+    // The rows that were missing, and the whole of the difference.
+    expect(settlement.cgstAmount).toBe(4575.35);
+    expect(settlement.sgstAmount).toBe(4575.35);
+    expect(settlement.tdsAmount).toBe(1016.74);
+    expect(settlement.workTotal).toBe(59987.91);
+
+    // A − B − C − D, exactly as the client's own abstract reads.
+    expect(
+      settlement.workTotal -
+        settlement.recoveriesTotal -
+        settlement.deductionsTotal -
+        settlement.tdsAmount,
+    ).toBeCloseTo(settlement.payable, 2);
+
+    // And the subtraction the old layout invited, named so nobody reinstates it: net is **not**
+    // gross less retention, and the gap is 8,134 rupees on this bill alone.
+    expect(view.grossAmount - view.retentionAmount).toBeCloseTo(48803.72, 2);
+    expect(settlement.payable).not.toBeCloseTo(
+      view.grossAmount - view.retentionAmount,
+      2,
+    );
+  });
+
+  it('offers nothing while the package is still a draft', async () => {
+    // The same rule `netAmount` follows, and for the same reason: nothing is frozen yet, and a
+    // breakdown of figures still moving is a breakdown somebody would quote.
+    const { service } = build({ bill: reported('draft') });
+
+    const view = await service.view(ctx, 'bill-1');
+    expect(view.netAmount).toBeNull();
+    expect(view.settlement).toBeNull();
+  });
+
+  it('offers nothing for a bill composed on the sheet, where the three rows are true', async () => {
+    // No package, no tax: there `netAmount` really is gross less retention, and a breakdown would
+    // be four empty rows implying a complexity this bill does not have.
+    const { service, created } = build({});
+    await service.compose(ctx, 'co-1', compose());
+    expect(created[0].netAmount).toBe(25100);
+
+    const view = await service.view(ctx, 'bill-1');
+    expect(view.settlement).toBeNull();
+  });
+});

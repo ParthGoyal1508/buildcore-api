@@ -93,38 +93,6 @@ export function view(over: Partial<BillWorkbookView> = {}): BillWorkbookView {
       billDate: '2026-02-03',
       missingFields: [],
     },
-    checkList: {
-      rows: [
-        {
-          position: 1,
-          text: 'Is cumulative measurement including this bill, Attached?',
-          answer: 'yes',
-        },
-        {
-          position: 2,
-          text: 'Is material issued and reciept till this bills, Attached?',
-          answer: 'not_required',
-        },
-        {
-          position: 3,
-          text: 'Is RMC dispached detail till this bills, Attached?',
-          answer: 'no',
-        },
-        { position: 4, text: 'Is BBS for this bill, Attached?', answer: null },
-        {
-          position: 5,
-          text: 'Is Reconcilication for RMC, STEEL, Shuttering Material and others, Attached?',
-          answer: null,
-        },
-        {
-          position: 6,
-          text: 'Is Debit Note duly review by Planning dept in line with the Scope of Work, Attached?',
-          answer: null,
-        },
-      ],
-      footer: 'Please Note: compliances of the above said check list points…',
-      signatories: ['Prepared by', 'Checked By'],
-    },
     abstract: {
       blocks: [
         {

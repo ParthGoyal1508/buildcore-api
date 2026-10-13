@@ -65,10 +65,10 @@ describe('the page count', () => {
       view({ measurementSheets: sheets }),
     );
 
-    // Check list, abstract, schedule, the measurement sheets, debit register — at least one page
-    // each. More is legitimate: a 312-line schedule spills, and the table starts a new page with
-    // its headers repeated rather than running off the bottom.
-    expect(pageCount(bytes)).toBeGreaterThanOrEqual(4 + sheets.length);
+    // Abstract, schedule, the measurement sheets, debit register — at least one page each. More
+    // is legitimate: a 312-line schedule spills, and the table starts a new page with its headers
+    // repeated rather than running off the bottom.
+    expect(pageCount(bytes)).toBeGreaterThanOrEqual(3 + sheets.length);
   });
 
   it('still gives a page to a line with no history and no daily record', async () => {
@@ -81,7 +81,7 @@ describe('the page count', () => {
     const bytes = await new BillPdfRenderer().render(
       view({ measurementSheets: [empty] }),
     );
-    expect(pageCount(bytes)).toBeGreaterThanOrEqual(5);
+    expect(pageCount(bytes)).toBeGreaterThanOrEqual(4);
     // The item is named on its own page, which is what lets a reader tell which line a page
     // belongs to without counting pages.
     expect(textOf(bytes)).toContain(empty.boqNo);
@@ -134,32 +134,10 @@ describe('what reaches the page', () => {
     // reproduced rather than summarised.
     expect(text).toContain('30 % deduction Shoulder Slope');
     // The sections, in the client's order.
-    expect(text).toContain('CHECK LIST');
     expect(text).toContain('ABSTRACT');
     expect(text).toContain('BOQ ANNEXURE-I');
     expect(text).toContain('MEASUREMENT SHEET');
     expect(text).toContain('DEBIT NOTE');
-  });
-
-  it('leaves every answer column blank for an unanswered question', async () => {
-    // FR-042. An unanswered question is not an answer of no, and a renderer that ticked No for a
-    // blank would be inventing an answer nobody gave — on the sheet whose whole purpose is to say
-    // what was and was not attached.
-    const only = view({
-      checkList: {
-        ...view().checkList,
-        rows: [
-          {
-            position: 1,
-            text: 'Is BBS for this bill, Attached?',
-            answer: null,
-          },
-        ],
-      },
-    });
-    const text = textOf(await new BillPdfRenderer().render(only));
-    expect(text).toContain('Is BBS for this bill, Attached?');
-    expect(text).not.toContain('N/R');
   });
 
   it('prints a missing party identifier blank rather than refusing the document', async () => {

@@ -10,8 +10,15 @@ import { PrismaService } from 'nestjs-prisma';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
-import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
+import {
+  billTotals,
+  lineTotals,
+  money,
+  retentionOn,
+  unitRate,
+} from './bill-totals';
 import { nextClientBillNumber } from './bill-number';
+import { balanceColumn } from './package/bill-abstract';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
 import {
   contentDispositionFor,
@@ -72,7 +79,23 @@ export interface ClientBillLineView {
   unit: string;
   scopeQty: number;
   quantity: number;
+  /** The schedule's own rate, frozen at composition. What the tender document prints. */
   rate: number;
+  /**
+   * That rate after the project's quoted percentage — **the rate the amount was computed at**
+   * (2026-10-13).
+   *
+   * Reported: a line reading 37.25 Cum at ₹178.00 for ₹5,915.07, where 37.25 × 178 is ₹6,630.50.
+   * Both figures were right and the column between them was missing: the project is quoted 10.79%
+   * below, `lineTotals` applies that per line, and the rate on screen was the one before it. A
+   * document whose own columns do not multiply out is a document the reader stops trusting, and
+   * they are right to.
+   *
+   * Carried rather than left to the reader to derive, for the same reason the rate itself is
+   * frozen: the project's percentage can be corrected, and this is the one the bill was priced at.
+   */
+  quotedRate: number;
+  /** `quantity × quotedRate`. */
   amount: number;
   /** Including this bill. */
   cumulativeQty: number;
@@ -147,6 +170,54 @@ export interface BillableBoq {
   unpricedCount: number;
 }
 
+/**
+ * Every figure between the work done and the payable, for a bill settled through a package.
+ *
+ * ## Why this exists
+ *
+ * Reported 2026-10-12: a bill showing Gross ₹50,837.21, Retention ₹2,033.49 and Net ₹56,937.68.
+ * All three were correct and the three together are unreadable — net is **larger** than gross, and
+ * subtracting as the layout invites gives ₹48,803.72, a figure that appears nowhere on the bill.
+ *
+ * The missing rows were the tax added and the tax deducted: ₹4,575.35 CGST, ₹4,575.35 SGST and
+ * ₹1,016.74 TDS. `netAmount` on a packaged bill is the abstract's **payable** — work plus tax, less
+ * recoveries, deductions and TDS — not gross less retention.
+ *
+ * ## In paise, unlike the printed abstract
+ *
+ * `GET /bill-packages/:id/abstract` already serves these, rounded to whole rupees because that is
+ * the client's own document format. Reading it here would put ₹56,938 beside the ₹56,937.68 the
+ * same screen shows for the same bill, which is a worse answer than none. So the figures are taken
+ * from the stored columns and totalled by `balanceColumn` — the one function that forms a block
+ * total — rather than re-added on the way out.
+ */
+export interface BillSettlementView {
+  /** The work at the frozen rates, before any tax. The same figure as `grossAmount`. */
+  workDone: number;
+  releaseWithheld: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  igstAmount: number;
+  /** Block A — work done, release and the taxes added. */
+  workTotal: number;
+  recoveryDiesel: number;
+  debitAgainstCivil: number;
+  otherRecoveries: number;
+  mechanicalDebit: number;
+  /** Block B. */
+  recoveriesTotal: number;
+  mobilizationAdvance: number;
+  retentionAmount: number;
+  performanceSecurity: number;
+  theftWithheld: number;
+  /** Block C. */
+  deductionsTotal: number;
+  /** Block D — tax deducted at source. */
+  tdsAmount: number;
+  /** A − B − C − D. The same figure as `netAmount`, and the reason it is not gross less retention. */
+  payable: number;
+}
+
 export interface ClientBillView {
   id: string;
   projectId: string;
@@ -155,6 +226,24 @@ export interface ClientBillView {
   billingDate: Date;
   status: ClientBillStatus;
   quotedPercentage: number;
+  /**
+   * These lines at the **schedule's** rates, before the quoted percentage (2026-10-13).
+   *
+   * With `quoteAdjustment` it is the two rows above the work done: what the schedule says the work
+   * comes to, what the quote takes off or adds, and the gross. The client's own abstract prints the
+   * same three — `TOTAL`, `Total Amount after 14.92% below`, `Total Payable Amount` — because a
+   * reader checking a bill against the tender starts from the schedule figure and needs to see
+   * where it went.
+   *
+   * Formed per line and then summed, exactly as the gross is, so that
+   * `boqGrossAmount + quoteAdjustment === grossAmount` holds to the paisa rather than nearly.
+   */
+  boqGrossAmount: number;
+  /**
+   * `grossAmount − boqGrossAmount`. **Negative where the quote is below the schedule**, which is
+   * the common case and the one a reader must not have to infer from two totals.
+   */
+  quoteAdjustment: number;
   grossAmount: number;
   retentionAmount: number;
   /**
@@ -180,9 +269,63 @@ export interface ClientBillView {
    */
   certificationVariance: number | null;
   submittedAt: Date | null;
+  /**
+   * How `netAmount` was arrived at, where it came from an issued package (2026-10-12).
+   *
+   * Null for a bill composed on the bill sheet, which carries no tax at all — there `netAmount`
+   * really is gross less retention, and three rows say everything there is to say. Null too while a
+   * package is still a draft, matching `netAmount`, which is also null then: nothing is frozen yet
+   * and a breakdown of figures that are still moving is a breakdown somebody would quote.
+   */
+  settlement: BillSettlementView | null;
   lines: ClientBillLineView[];
   /** True when any line is past its BOQ scope. */
   exceedsScope: boolean;
+}
+
+/** The stored package columns the payable was settled from, as `view` selects them. */
+type SettlementColumns = Omit<
+  Parameters<typeof balanceColumn>[0],
+  'workDone' | 'releaseWithheld'
+> & {
+  status: BillPackageStatus;
+  workDone: Prisma.Decimal;
+  releaseWithheld: Prisma.Decimal;
+};
+
+/**
+ * The abstract column behind a bill's payable, in paise.
+ *
+ * Null for a bill with no package, and null while its package is a draft — the same rule
+ * `netAmount` follows above, because the two must never disagree about whether the figures are
+ * frozen. Totalled by `balanceColumn` rather than summed here: the printed abstract and this screen
+ * then cannot differ by a rounding step.
+ */
+function settlementOf(
+  columns: SettlementColumns | null | undefined,
+): BillSettlementView | null {
+  if (!columns || columns.status === BillPackageStatus.draft) return null;
+  const column = balanceColumn(columns);
+  return {
+    workDone: column.workDone.toNumber(),
+    releaseWithheld: column.releaseWithheld.toNumber(),
+    cgstAmount: column.cgstAmount.toNumber(),
+    sgstAmount: column.sgstAmount.toNumber(),
+    igstAmount: column.igstAmount.toNumber(),
+    workTotal: column.workTotal.toNumber(),
+    recoveryDiesel: column.recoveryDiesel.toNumber(),
+    debitAgainstCivil: column.debitAgainstCivil.toNumber(),
+    otherRecoveries: column.otherRecoveries.toNumber(),
+    mechanicalDebit: column.mechanicalDebit.toNumber(),
+    recoveriesTotal: column.recoveriesTotal.toNumber(),
+    mobilizationAdvance: column.mobilizationAdvance.toNumber(),
+    retentionAmount: column.retentionAmount.toNumber(),
+    performanceSecurity: column.performanceSecurity.toNumber(),
+    theftWithheld: column.theftWithheld.toNumber(),
+    deductionsTotal: column.deductionsTotal.toNumber(),
+    tdsAmount: column.tdsAmount.toNumber(),
+    payable: column.payable.toNumber(),
+  };
 }
 
 /**
@@ -728,8 +871,28 @@ export class ClientBillsService {
             },
             orderBy: { boqTaskItem: { boqNo: 'asc' } },
           },
-          // Only its status — the figures are copied onto this row when the package is issued.
-          package: { select: { status: true } },
+          // The status, and the columns the payable was settled from (2026-10-12) — so the screen
+          // can show what stands between gross and net instead of three rows that will not
+          // subtract. See `BillSettlementView`.
+          package: {
+            select: {
+              status: true,
+              workDone: true,
+              releaseWithheld: true,
+              cgstAmount: true,
+              sgstAmount: true,
+              igstAmount: true,
+              recoveryDiesel: true,
+              debitAgainstCivil: true,
+              otherRecoveries: true,
+              mechanicalDebit: true,
+              mobilizationAdvance: true,
+              retentionAmount: true,
+              performanceSecurity: true,
+              theftWithheld: true,
+              tdsAmount: true,
+            },
+          },
         },
       });
       if (!bill) throw new NotFoundException('Bill not found');
@@ -749,6 +912,10 @@ export class ClientBillsService {
         { upToBillDate: bill.billingDate, includeBillId: bill.id },
       );
 
+      // Frozen onto the bill at composition, so a correction to the project's percentage does not
+      // restate a bill already raised.
+      const quoted = bill.quotedPercentage.toNumber();
+
       const lines: ClientBillLineView[] = bill.lines.map((line) => {
         const scopeQty = line.boqTaskItem.scopeQty.toNumber();
         const cumulativeQty = cumulative.get(line.boqTaskItemId) ?? 0;
@@ -763,6 +930,7 @@ export class ClientBillsService {
           scopeQty,
           quantity: line.quantity.toNumber(),
           rate: line.rate.toNumber(),
+          quotedRate: unitRate(line.rate.toNumber() * (1 + quoted)),
           amount: line.amount.toNumber(),
           cumulativeQty,
           remainingQty: Math.round((scopeQty - cumulativeQty) * 1000) / 1000,
@@ -774,6 +942,17 @@ export class ClientBillsService {
         };
       });
 
+      // The same lines at the schedule's own rates. Rounded per line and then summed, which is how
+      // the gross was formed — sum first and the two totals disagree by a paisa or two, on the one
+      // screen whose whole purpose is that figures reconcile.
+      const boqGrossAmount = money(
+        bill.lines.reduce(
+          (sum, line) =>
+            sum + money(line.quantity.toNumber() * line.rate.toNumber()),
+          0,
+        ),
+      );
+
       const certified = bill.certifiedAmount?.toNumber() ?? null;
       return {
         id: bill.id,
@@ -782,7 +961,11 @@ export class ClientBillsService {
         description: bill.description,
         billingDate: bill.billingDate,
         status: bill.status,
-        quotedPercentage: bill.quotedPercentage.toNumber(),
+        quotedPercentage: quoted,
+        boqGrossAmount,
+        // Derived from the stored gross rather than re-applying the percentage: the gross is what
+        // the bill was raised at, and a second multiplication is a second opinion about it.
+        quoteAdjustment: money(bill.grossAmount.toNumber() - boqGrossAmount),
         grossAmount: bill.grossAmount.toNumber(),
         retentionAmount: bill.retentionAmount.toNumber(),
         // No net until the package that decides the recoveries, deductions and tax is issued.
@@ -790,6 +973,7 @@ export class ClientBillsService {
           bill.package?.status === BillPackageStatus.draft
             ? null
             : bill.netAmount.toNumber(),
+        settlement: settlementOf(bill.package),
         certifiedAmount: certified,
         certifiedAt: bill.certifiedAt,
         /**

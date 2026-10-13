@@ -39,6 +39,25 @@ export interface BillOutstandingView {
   payments: PaymentView[];
 }
 
+/**
+ * One project's subcontractor billing position (2026-10-12).
+ *
+ * Raised and certified are separate counts because they answer different questions — "how much
+ * have they claimed" and "how much have we agreed" — and the gap between the two is a negotiation
+ * in progress rather than an error.
+ */
+export interface ProjectBillingPosition {
+  /** Every bill against the project, whatever its status. */
+  raisedCount: number;
+  raisedAmount: string;
+  /** Those that reached `approved`, which is what certifies a subcontractor bill. */
+  certifiedCount: number;
+  certifiedAmount: string;
+  paidAmount: string;
+  /** **Derived, never stored** — certified less paid. */
+  outstandingAmount: string;
+}
+
 /** One subcontractor's position across every bill of theirs (FR-021). */
 export interface SubcontractorOutstandingView {
   partnerId: string;
@@ -184,6 +203,60 @@ export class BillPaymentsService {
         where: { id: paymentId },
       });
       if (removed.count === 0) throw new NotFoundException('Payment not found');
+    });
+  }
+
+  /**
+   * A whole project's position across its subcontractor bills (2026-10-12).
+   *
+   * Here rather than in `ProjectsService` so there is **one** definition of what "certified" and
+   * "paid" mean for a running-account bill. The rule is not obvious — certified is `netPayable` on
+   * a bill that reached `approved`, not `amount`, and not a bill in any other status — and this
+   * class's docblock is where it is written down. A second summation computed next to the project
+   * query would be free to drift from it, and the two figures would then disagree on screens that
+   * sit beside each other.
+   *
+   * Decimal throughout, for the reason recorded above: a project's bills summed as JavaScript
+   * numbers leave an outstanding of a fraction of a paisa on a project that is fully settled.
+   */
+  async positionForProject(
+    ctx: RlsContext,
+    projectId: string,
+  ): Promise<ProjectBillingPosition> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const bills = await tx.rABill.findMany({
+        where: { projectId },
+        select: {
+          status: true,
+          amount: true,
+          netPayable: true,
+          payments: { select: { amount: true } },
+        },
+      });
+
+      const certified = bills.filter(
+        (bill) => bill.status === RaBillStatus.approved,
+      );
+      const sum = <T>(rows: T[], of: (row: T) => Prisma.Decimal) =>
+        rows.reduce((total, row) => total.plus(of(row)), ZERO);
+
+      const certifiedAmount = sum(certified, (bill) => bill.netPayable);
+      // Paid across **every** bill, not only the certified ones. A payment cannot be recorded
+      // against an uncertified bill — `record` refuses it — so this is the same set by another
+      // route; summing the wider one means a bill whose status is later corrected cannot strand
+      // money that has demonstrably left.
+      const paidAmount = sum(bills, (bill) =>
+        sum(bill.payments, (payment) => payment.amount),
+      );
+
+      return {
+        raisedCount: bills.length,
+        raisedAmount: sum(bills, (bill) => bill.amount).toFixed(2),
+        certifiedCount: certified.length,
+        certifiedAmount: certifiedAmount.toFixed(2),
+        paidAmount: paidAmount.toFixed(2),
+        outstandingAmount: certifiedAmount.minus(paidAmount).toFixed(2),
+      };
     });
   }
 

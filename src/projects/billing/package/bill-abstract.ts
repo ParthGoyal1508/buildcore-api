@@ -267,7 +267,7 @@ export function billAbstract(input: AbstractInput): BillAbstract {
     oneTime.performanceSecurity,
   );
 
-  const thisBill = balance({
+  const thisBill = balanceColumn({
     workDone,
     releaseWithheld: entered.releaseWithheld,
     cgstAmount,
@@ -285,7 +285,7 @@ export function billAbstract(input: AbstractInput): BillAbstract {
   });
 
   const uptoPrevious = input.previous ?? zeroColumn();
-  const uptoDate = balance({
+  const uptoDate = balanceColumn({
     workDone: uptoPrevious.workDone.plus(thisBill.workDone),
     releaseWithheld: uptoPrevious.releaseWithheld.plus(
       thisBill.releaseWithheld,
@@ -358,8 +358,17 @@ function guardOneTime(
   return entered;
 }
 
-/** Totals a column's rows. The only place a block total is formed. */
-function balance(
+/**
+ * Totals a column's rows. The only place a block total is formed.
+ *
+ * **Exported since 2026-10-12** so a screen reading a package's *stored* figures gets its block
+ * totals from here too. A client bill's "Net" is this column's `payable` — tax in, retention and
+ * TDS out — and the screen showing it had only gross, retention and that payable, so the three
+ * read as if they should subtract and did not. Rebuilding the column here rather than adding the
+ * four missing rows up on the way out is what keeps that screen and the printed abstract from ever
+ * disagreeing by a rounding step.
+ */
+export function balanceColumn(
   rows: Omit<
     AbstractColumn,
     | 'workTotal'

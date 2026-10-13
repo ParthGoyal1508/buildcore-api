@@ -328,6 +328,20 @@ const config: Config = {
           80,
         ),
       },
+      // A photograph printed into the DPR workbook beside the line it is evidence for
+      // (2026-10-12). Sized for a spreadsheet rather than for storage: ~480px is a picture
+      // somebody can see the work in on screen or on an A4 printout, and embedding the stored
+      // original would put several megabytes into a file that gets emailed.
+      dprForm: {
+        maxDimension: numberFromEnv(
+          process.env.WORKSPACE_DPR_FORM_PHOTO_MAX_DIMENSION,
+          480,
+        ),
+        jpegQuality: numberFromEnv(
+          process.env.WORKSPACE_DPR_FORM_PHOTO_JPEG_QUALITY,
+          72,
+        ),
+      },
       // Punch photos only need to be recognisable to a human reviewer; ~640px at
       // q72 lands around 30 KB, which is what keeps blob storage bounded.
       punch: {

@@ -53,6 +53,21 @@ export const DWR_ERRORS = {
   approverIsAuthor: 'DWR_APPROVER_IS_AUTHOR',
   /** An approved report cannot be edited. The message names the reversal path (FR-018). */
   approvedNotEditable: 'DWR_APPROVED_NOT_EDITABLE',
+  /**
+   * An approved report takes no further evidence (2026-10-12).
+   *
+   * Its own code rather than `approvedNotEditable`: the caller was attaching a file, not editing a
+   * measurement, and a message about editing sends them looking for a field they never touched.
+   * Both name the same remedy — reverse it first.
+   */
+  approvedTakesNoEvidence: 'DWR_APPROVED_TAKES_NO_EVIDENCE',
+  /**
+   * An edit sent back a line id that is not one of this report's (2026-10-12).
+   *
+   * Refused rather than treated as a new line: a line kept by id keeps its evidence, so accepting
+   * a stranger's id would move one report's photographs onto another report's day.
+   */
+  lineNotOnThisReport: 'DWR_LINE_NOT_ON_THIS_REPORT',
   /** A line could not be moved, so none were (FR-013, FR-013a). Names the line. */
   approvalIncomplete: 'DWR_APPROVAL_INCOMPLETE',
 

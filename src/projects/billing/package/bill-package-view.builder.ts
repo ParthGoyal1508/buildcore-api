@@ -97,10 +97,9 @@ export class BillPackageViewBuilder {
     );
     if (!pkg) throw new NotFoundException('Bill package not found');
 
-    const [packageView, abstract, checkList, register] = await Promise.all([
+    const [packageView, abstract, register] = await Promise.all([
       this.packages.view(ctx, packageId),
       this.packages.abstractFor(ctx, packageId),
-      this.packages.checkListFor(ctx, packageId),
       this.debits.registerFor(ctx, packageId),
     ]);
 
@@ -191,15 +190,6 @@ export class BillPackageViewBuilder {
 
     return {
       header,
-      checkList: {
-        rows: checkList.items.map((item) => ({
-          position: item.position,
-          text: item.text,
-          answer: item.answer,
-        })),
-        footer: checkList.footer,
-        signatories: checkList.signatories,
-      },
       abstract: {
         blocks: [
           {

@@ -105,6 +105,16 @@ export class ZeroFactorError extends Error {
 export const FULL_DAY = new Prisma.Decimal(1);
 
 /**
+ * What an **omitted** factor counts as — the value the six columns default to.
+ *
+ * Named here, beside the rule it comes from, because one path needs to write it explicitly.
+ * Creating a row may leave a factor out and take the column default; updating one may not, because
+ * on an update "absent" means "leave what is there", and a dimension cleared on a form would keep
+ * the figure it was cleared from while the quantity beside it was recomputed without it.
+ */
+export const NEUTRAL_FACTOR = 1;
+
+/**
  * `nos1 × nos2 × length × breadth × depth × density` (FR-003, FR-004).
  *
  * An **omitted** factor is 1: an unused dimension should be multiplicatively neutral, which is why

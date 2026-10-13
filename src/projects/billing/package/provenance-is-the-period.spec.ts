@@ -34,7 +34,6 @@ const PACKAGE_MODELS = [
   'BillPackage',
   'BillPackageLineClaim',
   'BillPackageDebit',
-  'BillPackageCheckListAnswer',
 ];
 
 const MEASUREMENT_MODELS = ['DailyWorkReport', 'DWRTask', 'DWRAttachment'];
@@ -50,7 +49,7 @@ function modelBody(source: string, model: string): string {
 describe('provenance is the period, not a recorded link', () => {
   const source = stripComments(readFileSync(SCHEMA, 'utf8'));
 
-  it('finds all four package models, so the rest of this suite means something', () => {
+  it('finds all three package models, so the rest of this suite means something', () => {
     // Without this the assertions below would pass vacuously against a renamed model — the same
     // non-vacuity reasoning the isolation probe uses, and for the same reason.
     for (const model of PACKAGE_MODELS) {

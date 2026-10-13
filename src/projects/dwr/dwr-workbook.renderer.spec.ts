@@ -53,6 +53,7 @@ function view(overrides: Partial<DwrWorkbookView> = {}): DwrWorkbookView {
         target: '0.900',
         engineerName: 'S. Patil',
         remarks: 'Chemical spray pending',
+        photos: [],
       },
       {
         srNo: 2,
@@ -72,6 +73,7 @@ function view(overrides: Partial<DwrWorkbookView> = {}): DwrWorkbookView {
         target: null,
         engineerName: null,
         remarks: null,
+        photos: [],
       },
     ],
     ...overrides,
@@ -97,6 +99,103 @@ function rowLabelled(sheet: ExcelJS.Worksheet, label: string): unknown[] {
 }
 
 describe('the printable daily form', () => {
+  /**
+   * A photograph is evidence **for a measurement**, and the form has to say which (2026-10-12).
+   *
+   * ## Vacuity note
+   *
+   * _Asserting the workbook holds an image proves an image._ A renderer that embedded the wrong
+   * photograph, or put every photograph under the first line's caption, embeds exactly as many
+   * images as a correct one — and the reader who finds out is the client being shown a picture of
+   * a different chainage as proof of this one. So these assert the **bytes that went in** and the
+   * **row they were anchored to, relative to the caption naming their line**.
+   */
+  describe('the photographs filed against a line', () => {
+    const PHOTO = Buffer.from('jpeg-bytes-of-the-pour-at-71-200');
+
+    const withPhotos = () =>
+      view({
+        lines: view().lines.map((line, index) =>
+          index === 0
+            ? {
+                ...line,
+                photos: [
+                  {
+                    fileName: 'CH 71+200 RHS before.jpg',
+                    image: { data: PHOTO, width: 120, height: 90 },
+                  },
+                ],
+              }
+            : {
+                ...line,
+                photos: [
+                  { fileName: 'Signed measurement sheet.pdf', image: null },
+                ],
+              },
+        ),
+      });
+
+    it('embeds the picture it was given, under a caption naming that line', async () => {
+      const workbook = await readBack(
+        await new DwrWorkbookRenderer().render(withPhotos()),
+      );
+      const sheet = workbook.worksheets[0];
+
+      // The caption, found by its content: the serial number and the chainage, which is how a
+      // reader ties a picture to a row of the table above.
+      let captionRow = 0;
+      sheet.eachRow((row, number) => {
+        const text = String(row.getCell(1).value ?? '');
+        if (text.startsWith('Sr. No. 1 ·')) captionRow = number;
+      });
+      expect(captionRow).toBeGreaterThan(0);
+      expect(String(sheet.getRow(captionRow).getCell(1).value)).toContain(
+        '71+200 – 71+450',
+      );
+
+      // **The bytes, not the count.** One image of the wrong pour is one image either way.
+      const images = sheet.getImages();
+      expect(images).toHaveLength(1);
+      const media = workbook.getImage(Number(images[0].imageId));
+      expect(Buffer.from(media.buffer as unknown as Uint8Array)).toEqual(PHOTO);
+
+      // And anchored below its own caption rather than floating anywhere in the sheet — the
+      // binding is positional for the reader, so it is positional in the assertion.
+      expect(images[0].range.tl.nativeRow).toBeGreaterThanOrEqual(captionRow);
+    });
+
+    it('names an attachment it cannot draw instead of dropping it', async () => {
+      const sheet = (
+        await readBack(await new DwrWorkbookRenderer().render(withPhotos()))
+      ).worksheets[0];
+
+      // A signed PDF is evidence too. A form that silently omitted it would disagree with the
+      // screen the reader was just looking at.
+      let named = '';
+      sheet.eachRow((row) => {
+        const text = String(row.getCell(1).value ?? '');
+        if (text.startsWith('Signed measurement sheet.pdf')) named = text;
+      });
+      expect(named).toContain('not a picture');
+      // And no picture was invented for it.
+      expect(sheet.getImages()).toHaveLength(1);
+    });
+
+    it('writes no photographs block at all when nothing is filed', async () => {
+      const sheet = (
+        await readBack(await new DwrWorkbookRenderer().render(view()))
+      ).worksheets[0];
+
+      let heading = false;
+      sheet.eachRow((row) => {
+        if (String(row.getCell(1).value ?? '') === 'Photographs')
+          heading = true;
+      });
+      expect(heading).toBe(false);
+      expect(sheet.getImages()).toHaveLength(0);
+    });
+  });
+
   it('names its sheet the way the client names theirs', async () => {
     const workbook = await readBack(
       await new DwrWorkbookRenderer().render(view()),

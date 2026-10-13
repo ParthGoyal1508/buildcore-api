@@ -119,7 +119,6 @@ export class BillPdfRenderer {
       doc.on('error', reject);
     });
 
-    this.checkListPage(doc, view);
     this.abstractPage(doc, view);
     this.schedulePage(doc, view);
     // **One per schedule line, including lines with nothing claimed this period** (FR-030). The
@@ -262,58 +261,6 @@ export class BillPdfRenderer {
         doc.text(label, MARGIN + index * half, y + 4, { width: half });
       },
     );
-  }
-
-  private checkListPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
-    this.page(doc, 'portrait');
-    this.title(
-      doc,
-      view.header.issuer.name,
-      'CHECK LIST for Subcontractor Bill',
-      A4_WIDTH,
-    );
-    this.headerBlock(doc, ...billHeaderPairs(view), A4_WIDTH);
-
-    const width = A4_WIDTH - MARGIN * 2;
-    this.table(
-      doc,
-      [
-        { header: 'S. No.', width: 40, align: 'center' },
-        { header: 'Check list', width: width - 40 - 150 },
-        { header: 'Yes', width: 50, align: 'center' },
-        { header: 'No', width: 50, align: 'center' },
-        { header: 'Not required', width: 50, align: 'center' },
-      ],
-      view.checkList.rows.map((row) => [
-        String(row.position),
-        row.text,
-        // An unanswered question leaves **every** column blank (FR-042). "We checked and it is not
-        // attached" and "nobody has looked" are different facts, and a tick in the No column for
-        // the second would be this renderer inventing an answer nobody gave.
-        row.answer === 'yes' ? 'Y' : '',
-        row.answer === 'no' ? 'N' : '',
-        row.answer === 'not_required' ? 'N/R' : '',
-      ]),
-    );
-
-    doc.moveDown(1).fontSize(SIZE.small).text(view.checkList.footer, {
-      width,
-      align: 'left',
-    });
-
-    doc.moveDown(2).fontSize(SIZE.body);
-    const half = width / 2;
-    const y = doc.y;
-    view.checkList.signatories.forEach((name, index) => {
-      doc.text(name, MARGIN + index * half, y, { width: half });
-      doc.text('Name & Designation', MARGIN + index * half, y + 28, {
-        width: half,
-      });
-      doc
-        .moveTo(MARGIN + index * half, y + 26)
-        .lineTo(MARGIN + index * half + half - 20, y + 26)
-        .stroke();
-    });
   }
 
   private abstractPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {

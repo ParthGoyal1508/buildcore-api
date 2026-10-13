@@ -22,7 +22,7 @@
  * limit applies. Naming by content is the thing that fails; naming by position is the thing that
  * cannot.
  *
- * The five fixed sheets keep readable names, which are short by construction and checked here
+ * The fixed sheets keep readable names, which are short by construction and checked here
  * anyway, because a constant somebody edits later is a constant nobody re-checks.
  */
 
@@ -33,7 +33,6 @@ export const SHEET_NAME_MAX = 31;
 export const SHEET_NAME_FORBIDDEN = /[:\\/?*[\]]/;
 
 export const FIXED_SHEET_NAMES = {
-  checkList: 'Check List',
   abstract: 'Abstract',
   schedule: 'BOQ Annexure-I',
   debitRegister: 'Debit Note',

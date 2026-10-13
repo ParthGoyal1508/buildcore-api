@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   Max,
@@ -15,6 +16,30 @@ import {
 import { CreateDwrLineDto, MAX_DWR_LINES } from './create-dwr.dto';
 
 /**
+ * One line of an edit: everything a new line carries, plus **which existing line it is**.
+ *
+ * A separate class rather than an optional field on `CreateDwrLineDto`, so a creation that sends an
+ * id is a 400 under `forbidNonWhitelisted` rather than a value quietly dropped. There is nothing an
+ * id could mean on a report that does not exist yet.
+ */
+export class UpdateDwrLineDto extends CreateDwrLineDto {
+  /**
+   * The stored line this one replaces. Omit for a line being added.
+   *
+   * **Omitting it on a line that already exists deletes its evidence.** Attachments cascade from
+   * the line they are filed against, so a line that is not sent back by id is removed along with
+   * every photograph of the work it measured. That is the right answer when a measurement is
+   * deleted and the wrong one when a chainage is corrected, and only the caller knows which it
+   * meant — which is why this is sent rather than inferred.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  id?: string;
+}
+
+/**
  * Editing a report (022 FR-018, US3 AC1).
  *
  * **No `workDate` and no `dprNumber`.** Both are deliberately absent rather than optional. A
@@ -22,8 +47,9 @@ import { CreateDwrLineDto, MAX_DWR_LINES } from './create-dwr.dto';
  * day while keeping the number people have filed it under, which is not an edit but a forgery of a
  * second report. The remedy is to delete the draft and record the right day.
  *
- * Supplying `lines` **replaces** them wholesale. A draft's lines are referenced by nothing — only
- * approval creates references — so diffing them would be machinery with no beneficiary.
+ * Supplying `lines` **replaces** them. A line sent back with its `id` is kept and edited in place;
+ * one that is not sent is removed. See {@link UpdateDwrLineDto.id} for why that distinction had to
+ * exist, and `DwrService.update` for what it costs.
  */
 export class UpdateDwrDto {
   @ApiPropertyOptional()
@@ -72,12 +98,12 @@ export class UpdateDwrDto {
   @MaxLength(120)
   layer?: string;
 
-  /** Replaces every line. Omit to leave them untouched. */
-  @ApiPropertyOptional({ type: [CreateDwrLineDto] })
+  /** The report's lines after this edit. Omit to leave them untouched. */
+  @ApiPropertyOptional({ type: [UpdateDwrLineDto] })
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(MAX_DWR_LINES)
   @ValidateNested({ each: true })
-  @Type(() => CreateDwrLineDto)
-  lines?: CreateDwrLineDto[];
+  @Type(() => UpdateDwrLineDto)
+  lines?: UpdateDwrLineDto[];
 }

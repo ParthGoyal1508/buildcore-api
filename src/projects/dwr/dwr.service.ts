@@ -16,6 +16,8 @@ import {
 import { OnEvent } from '@nestjs/event-emitter';
 import { PrismaService } from 'nestjs-prisma';
 
+import config from '../../common/configs/config';
+import { fitImage } from '../../common/storage/image-fit';
 import { AuditLogService } from '../../auth/audit-log.service';
 import {
   APPROVAL_COMPLETED_EVENT,
@@ -38,11 +40,16 @@ import {
 import { StorageService } from '../../common/storage/storage.service';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
 import { formatChainage } from './chainage';
-import type { DwrWorkbookView } from './dwr-workbook.renderer';
+import type {
+  DwrWorkbookPhoto,
+  DwrWorkbookView,
+} from './dwr-workbook.renderer';
 import { DwrWorkbookRenderer } from './dwr-workbook.renderer';
 import {
+  FACTOR_NAMES,
   FULL_DAY,
   MeasurementLine,
+  NEUTRAL_FACTOR,
   ZeroFactorError,
   quantityColumnsFor,
   storedQuantityInForce,
@@ -54,7 +61,7 @@ import {
   DWR_PAGE_SIZE_MAX,
   ListDwrDto,
 } from './dto/dwr-query.dto';
-import { UpdateDwrDto } from './dto/update-dwr.dto';
+import { UpdateDwrDto, UpdateDwrLineDto } from './dto/update-dwr.dto';
 
 /** Separates the project code from the sequence in a report number (FR-002a). */
 /**
@@ -113,6 +120,17 @@ export interface CreatedDwr {
   status: DwrStatus;
   /** Facts reported **alongside** success, never instead of it (FR-025, US1 AC8, FR-006). */
   warnings: DwrWarning[];
+  /**
+   * The stored line ids, **in the order the lines were sent** (2026-10-12).
+   *
+   * Returned because a file is attached to a line, and an entry form has files in hand before any
+   * line has an id — the photograph of a pour is picked while the measurement is being typed, and
+   * the report does not exist until the day is saved. Without this the client would have to read
+   * the report back and match its lines by position, which is a guess: `findMany` returns rows in
+   * no promised order, and a guess that lands one row out files a photograph against the wrong
+   * chainage, where it argues for a quantity it is not evidence of.
+   */
+  lineIds: string[];
 }
 
 /**
@@ -182,6 +200,8 @@ export class DwrService {
     const lines = (input.lines ?? []).map((line, index) =>
       narrowLine(line, index),
     );
+
+    let lineIds: string[] = [];
 
     const created = await withRlsContext(this.prisma, ctx, async (tx) => {
       const project = await tx.project.findFirst({
@@ -256,11 +276,19 @@ export class DwrService {
 
       if (lines.length > 0) {
         // One statement, not one per line (research §8). See this class's docblock.
-        await tx.dWRTask.createMany({
-          data: lines.map((line, index) =>
-            this.lineRow(report.id, line, input.lines![index], boqItems),
-          ),
-        });
+        //
+        // `createManyAndReturn` rather than `createMany` so the caller learns which row is which.
+        // `INSERT … RETURNING` answers in the order it was given, so the nth id belongs to the nth
+        // line sent — see `CreatedDwr.lineIds` for why anything weaker is a photograph filed
+        // against the wrong measurement.
+        lineIds = (
+          await tx.dWRTask.createManyAndReturn({
+            data: lines.map((line, index) =>
+              this.lineRow(report.id, line, input.lines![index], boqItems),
+            ),
+            select: { id: true },
+          })
+        ).map((row) => row.id);
 
         for (const [index, line] of lines.entries()) {
           const raw = input.lines![index];
@@ -299,7 +327,7 @@ export class DwrService {
       ipAddress: actor.ipAddress,
     });
 
-    return { ...created, warnings };
+    return { ...created, warnings, lineIds };
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -320,8 +348,15 @@ export class DwrService {
     companyId: string,
     input: UpdateDwrDto,
     actor: { userId: string; ipAddress?: string },
-  ): Promise<{ id: string; status: DwrStatus; warnings: DwrWarning[] }> {
+  ): Promise<{
+    id: string;
+    status: DwrStatus;
+    warnings: DwrWarning[];
+    /** This report's lines as they now stand — see {@link CreatedDwr.lineIds}. */
+    lineIds: string[];
+  }> {
     const warnings: DwrWarning[] = [];
+    let lineIds: string[] = [];
 
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
       const report = await tx.dailyWorkReport.findFirst({
@@ -348,16 +383,85 @@ export class DwrService {
           input.lines,
         );
 
-        // Replaced wholesale rather than diffed. A draft's lines are not referenced by anything —
-        // only approval creates references — so a diff would be machinery with no beneficiary.
-        await tx.dWRTask.deleteMany({ where: { dwrId } });
-        if (lines.length > 0) {
-          await tx.dWRTask.createMany({
-            data: lines.map((line, index) =>
-              this.lineRow(dwrId, line, input.lines![index], boqItems),
+        /**
+         * **Diffed by id, not replaced wholesale** (2026-10-12).
+         *
+         * It was replaced wholesale, on the stated grounds that a draft's lines are referenced by
+         * nothing. That stopped being true when evidence could be filed against a line:
+         * `DWRAttachment.taskId` cascades from the line it belongs to, so deleting every line to
+         * write them back deleted every photograph filed against them. Correcting a chainage
+         * destroyed the photograph that proved the chainage — silently, and with no way to
+         * recover the bytes, since the only copy had been uploaded from a phone at site.
+         *
+         * So a line the caller sends back by id keeps its identity and is updated in place; one it
+         * does not send is deleted, taking its evidence with it, which is what removing a
+         * measurement means. A caller that sends no ids at all gets the old behaviour exactly —
+         * every line replaced — so nothing that predates this has to change to keep working.
+         *
+         * An id that is not one of this report's lines is refused rather than ignored: it would
+         * otherwise re-point one report's measurement at another report's day.
+         */
+        const existing = new Set(
+          (
+            await tx.dWRTask.findMany({
+              where: { dwrId },
+              select: { id: true },
+            })
+          ).map((row) => row.id),
+        );
+        const sent = input.lines.map((line) => line.id ?? null);
+        for (const id of sent) {
+          if (id !== null && !existing.has(id)) {
+            throw new NotFoundException({
+              code: DWR_ERRORS.lineNotOnThisReport,
+              message: `Line ${id} does not belong to this report.`,
+            });
+          }
+        }
+
+        const keptIds = sent.filter((id): id is string => id !== null);
+        // `notIn: []` is written out rather than relied on: it is the whole-table case, and a
+        // delete whose correctness rests on how an ORM renders an empty list is a delete nobody
+        // should have to look up.
+        await tx.dWRTask.deleteMany({
+          where: {
+            dwrId,
+            ...(keptIds.length > 0 ? { id: { notIn: keptIds } } : {}),
+          },
+        });
+
+        // One statement each, unlike the create path's single insert: an update writes different
+        // values to each row and SQL has no bulk form for that. A report claims seventeen lines in
+        // the client's real bill, so this is seventeen statements inside one transaction.
+        for (const [index, line] of lines.entries()) {
+          const id = sent[index];
+          if (id === null) continue;
+          await tx.dWRTask.update({
+            where: { id },
+            data: this.lineEdit(
+              this.lineRow(dwrId, line, input.lines[index], boqItems),
             ),
           });
         }
+
+        // The ids, in the order the lines were sent: the kept ones as they came in, the new ones
+        // in the order the insert returned them.
+        const resolved: (string | null)[] = sent.slice();
+        const added = lines
+          .map((line, index) => ({ line, index }))
+          .filter(({ index }) => sent[index] === null);
+        if (added.length > 0) {
+          const created = await tx.dWRTask.createManyAndReturn({
+            data: added.map(({ line, index }) =>
+              this.lineRow(dwrId, line, input.lines![index], boqItems),
+            ),
+            select: { id: true },
+          });
+          added.forEach(({ index }, n) => {
+            resolved[index] = created[n].id;
+          });
+        }
+        lineIds = resolved.filter((id): id is string => id !== null);
 
         for (const [index, line] of lines.entries()) {
           const raw = input.lines[index];
@@ -373,6 +477,18 @@ export class DwrService {
             });
           }
         }
+      }
+
+      if (!input.lines) {
+        // Lines untouched, so the ids are read rather than produced. Answering `[]` here would
+        // read as "this report has no lines", which is a different fact and usually a false one.
+        lineIds = (
+          await tx.dWRTask.findMany({
+            where: { dwrId },
+            select: { id: true },
+            orderBy: { id: 'asc' },
+          })
+        ).map((row) => row.id);
       }
 
       return tx.dailyWorkReport.update({
@@ -403,7 +519,7 @@ export class DwrService {
       ipAddress: actor.ipAddress,
     });
 
-    return { ...result, warnings };
+    return { ...result, warnings, lineIds };
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -441,10 +557,35 @@ export class DwrService {
     const exists = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dailyWorkReport.findFirst({
         where: { id: dwrId },
-        select: { id: true },
+        select: { id: true, status: true },
       }),
     );
     if (!exists) throw new NotFoundException('Daily work report not found');
+
+    // **An approved report takes no further evidence** (2026-10-12).
+    //
+    // Approval moved this report's quantities onto the BOQ, and a bill may already have been
+    // built from them. Evidence filed afterwards is evidence the approver never saw, attached to
+    // a figure they have already certified — so the record of what was approved would no longer
+    // be what was approved.
+    //
+    // Refused here rather than only hidden on the screen. The control is gone from the report
+    // page in the same change, but a hidden control over an open endpoint is a control in
+    // appearance only — this repository's own words, and the reason FR-013's rate lock is
+    // enforced in a service rather than by a disabled input.
+    //
+    // The way to add something to an approved day is the way to change anything else about one:
+    // reverse it, with a reason, which is recorded. The message says so rather than leaving the
+    // caller to discover it.
+    if (exists.status === DwrStatus.approved) {
+      throw new ConflictException({
+        code: DWR_ERRORS.approvedTakesNoEvidence,
+        message:
+          'This report is approved, and approving it moved executed quantities a bill may ' +
+          'depend on. Reverse it first, with a reason — filing evidence against it now would ' +
+          'add to a record somebody has already certified.',
+      });
+    }
 
     if (taskId) {
       // **Checked against this report, not merely that the line exists.** Without the
@@ -693,6 +834,11 @@ export class DwrService {
             },
           },
           tasks: {
+            // In the order they were entered (2026-10-12). `findMany` promises no order at all,
+            // and an edit now updates rows in place rather than reinserting them, so a corrected
+            // measurement could otherwise come back somewhere else on the sheet than it was typed.
+            // Line ids are time-ordered, so ascending id is entry order.
+            orderBy: { id: 'asc' },
             select: {
               id: true,
               boqItemId: true,
@@ -880,6 +1026,11 @@ export class DwrService {
             },
           },
           tasks: {
+            // In the order they were entered (2026-10-12). `findMany` promises no order at all,
+            // and an edit now updates rows in place rather than reinserting them, so a corrected
+            // measurement could otherwise come back somewhere else on the sheet than it was typed.
+            // Line ids are time-ordered, so ascending id is entry order.
+            orderBy: { id: 'asc' },
             select: {
               id: true,
               paymentMode: true,
@@ -911,7 +1062,7 @@ export class DwrService {
     );
     if (!report) throw new NotFoundException('Daily work report not found');
 
-    const [company, names] = await Promise.all([
+    const [company, names, photos] = await Promise.all([
       withRlsContext(this.prisma, ctx, (tx) =>
         tx.company.findFirst({
           where: { id: companyId },
@@ -922,6 +1073,7 @@ export class DwrService {
         report.createdByUserId,
         report.submittedByUserId,
       ]),
+      this.linePhotosFor(ctx, dwrId),
     ]);
 
     const workDate = report.workDate.toISOString().slice(0, 10);
@@ -971,6 +1123,9 @@ export class DwrService {
           target: task.boqItem?.perDayQty?.toFixed(3) ?? null,
           engineerName: task.engineerName,
           remarks: task.boqItem ? task.remark : null,
+          // The evidence for this measurement, printed under the table (2026-10-12). Empty where
+          // there is none, which is most lines.
+          photos: photos.get(task.id) ?? [],
         };
       }),
     };
@@ -981,6 +1136,77 @@ export class DwrService {
       // the cuid, which is the defect 017 fixed for every other download in this system.
       filename: `${report.dprNumber} ${workDate}.xlsx`,
     };
+  }
+
+  /**
+   * Every file filed against a line of this report, scaled for the printable form.
+   *
+   * ## Why the bytes are read here rather than in the renderer
+   *
+   * The renderer holds no database and no storage client, deliberately — `DwrWorkbookRenderer`'s
+   * docblock says why, and it is the same reason every figure reaches it already formatted. So
+   * fetching and scaling is this service's work, and what crosses the boundary is a picture and
+   * the size to draw it.
+   *
+   * ## What is deliberately not here
+   *
+   * Report-level attachments — the signed measurement sheet, the general site view — are **not**
+   * printed. They belong to the day rather than to any line, and this block exists to put a
+   * photograph beside the measurement it argues for. Printing them too would be a reasonable
+   * second step and is not what was asked for.
+   *
+   * A file that is not a picture is carried with a null image rather than dropped, so the form can
+   * name it. A storage read that fails is treated the same way: a workbook that fails to download
+   * because one photograph is missing from the blob store is worse than one that says so.
+   */
+  private async linePhotosFor(
+    ctx: RlsContext,
+    dwrId: string,
+  ): Promise<Map<string, DwrWorkbookPhoto[]>> {
+    const files = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dWRAttachment.findMany({
+        where: { dwrId, taskId: { not: null } },
+        select: {
+          taskId: true,
+          fileRef: true,
+          fileName: true,
+          mimeType: true,
+        },
+        orderBy: { uploadedAt: 'asc' },
+      }),
+    );
+    if (files.length === 0) return new Map();
+
+    const { maxDimension, jpegQuality } =
+      config().workspace.imageProcessing.dprForm;
+
+    const loaded = await Promise.all(
+      files.map(async (file) => {
+        if (!file.mimeType.startsWith('image/')) return { file, image: null };
+        try {
+          const bytes = await this.storage.get(file.fileRef);
+          return {
+            file,
+            image: await fitImage(bytes, maxDimension, jpegQuality),
+          };
+        } catch {
+          return { file, image: null };
+        }
+      }),
+    );
+
+    // Filled in a second pass rather than inside the `Promise.all`, so two photographs on one line
+    // print in the order they were uploaded rather than in the order their reads happened to
+    // finish.
+    const byLine = new Map<string, DwrWorkbookPhoto[]>();
+    for (const { file, image } of loaded) {
+      const key = file.taskId!;
+      byLine.set(key, [
+        ...(byLine.get(key) ?? []),
+        { fileName: file.fileName, image },
+      ]);
+    }
+    return byLine;
   }
 
   /** The logbook day for every equipment a report's lines name, in one call per machine. */
@@ -1828,6 +2054,28 @@ export class DwrService {
   }
 
   /** Builds one `DWRTask` row. */
+  /**
+   * The same row, as an **update** rather than an insert.
+   *
+   * Only the six factors differ, and they differ for a reason that is easy to miss: `lineRow`
+   * leaves an omitted factor `undefined`, which on an insert means "take the column default" — 1,
+   * the neutral value — and on an update means "leave what is there". A width cleared on the entry
+   * form would therefore keep the width it was cleared from, while `actualQty` beside it was
+   * recomputed without it. The measurement sheet would then print dimensions that do not multiply
+   * to the quantity printed next to them, which is the one thing on that sheet a reviewer checks.
+   */
+  private lineEdit(
+    row: Prisma.DWRTaskCreateManyInput,
+  ): Prisma.DWRTaskUncheckedUpdateInput {
+    const { dwrId: _dwrId, ...rest } = row;
+    return {
+      ...rest,
+      ...Object.fromEntries(
+        FACTOR_NAMES.map((name) => [name, row[name] ?? NEUTRAL_FACTOR]),
+      ),
+    };
+  }
+
   private lineRow(
     dwrId: string,
     line: MeasurementLine,

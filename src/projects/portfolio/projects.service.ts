@@ -26,6 +26,7 @@ import {
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
+import { BillPaymentsService } from '../billing/payments/bill-payments.service';
 import {
   ProjectDocumentReadiness,
   ProjectDocumentsService,
@@ -131,7 +132,70 @@ export interface ProjectDetail {
       issuedQuantity: number;
     }[];
     dwrSummary: { count: number; latestDate: Date | null };
-    billSummary: { totalBills: number; totalExpenses: number };
+    /**
+     * **Subcontractor running-account bills** — `RABill`, the RA bills tab. Money going out.
+     *
+     * The name is kept as it was found rather than corrected to `subcontractorBillSummary`,
+     * because it is a published field and renaming it would break every client that reads it for
+     * nothing a comment cannot fix. The label on the screen says which it is, which is where the
+     * ambiguity actually bit: a project has a Client bills tab and an RA bills tab, and the
+     * overview card said only "Bills".
+     *
+     * Every status, drafts included — this is "how many bills exist against this project", not
+     * "how many have been approved".
+     */
+    billSummary: {
+      totalBills: number;
+      totalExpenses: number;
+      /**
+       * Certified, paid and still owed (2026-10-12).
+       *
+       * `totalBills`/`totalExpenses` above are everything **raised**, drafts included. These are
+       * the money questions, and they are not the same question: a bill is raised when a
+       * subcontractor claims, certified when we agree, and paid when it leaves. Derived by
+       * `BillPaymentsService.positionForProject`, which is where the rule that certified means
+       * `netPayable` on an `approved` bill is written down.
+       *
+       * Strings, because they are `Decimal` — a project's bills summed as JavaScript numbers leave
+       * a fraction of a paisa outstanding on a project that is fully settled.
+       */
+      certifiedBills: number;
+      certifiedAmount: string;
+      paidAmount: string;
+      outstandingAmount: string;
+    };
+    /**
+     * **Client bills** — `ClientBill`, the Client bills tab. Money coming in (2026-10-12).
+     *
+     * A separate model from `RABill` and never counted in the figure above, which is why the
+     * overview could show six bills booked against a project that had also billed its client
+     * several lakh and say nothing about it.
+     *
+     * `totalBilled` is the sum of `netAmount` — gross less retention, which is what the client is
+     * actually asked to pay — and `totalCertified` the sum of what they agreed to. The two are
+     * reported separately rather than netted because the variance between them is the thing a
+     * project manager chases; a single figure can only say one of them.
+     */
+    clientBillSummary: {
+      totalBills: number;
+      totalBilled: number;
+      totalCertified: number;
+      /** How many of those bills carry a certified figure, so "₹0 certified" is readable. */
+      certifiedCount: number;
+    };
+    /**
+     * The project's revenue ledger — **not** client bill receipts (2026-10-12).
+     *
+     * `Revenue` is a hand-kept list of money received or expected "outside the RA bill process", as
+     * its own docblock says, and nothing links a row of it to a client bill. So this is what it has
+     * always been, and the screen now labels it as such: a project that has certified ten lakh of
+     * client bills still reads ₹0 here if nobody typed a revenue row, and that is not a defect in
+     * this figure.
+     *
+     * **Money received against a client bill is recorded nowhere in this system.** There is no
+     * equivalent of `RABillPayment` on the client side. Reporting this ledger as though it were one
+     * would be a figure that looks like an answer and is not one.
+     */
     revenueSummary: { totalReceived: number; totalPending: number };
   };
   /**
@@ -176,6 +240,9 @@ export class ProjectsService {
     // the dashboard asks it through `ProjectDocumentsService`'s exported method rather
     // than by reading the table.
     private readonly documents: ProjectDocumentsService,
+    // 2026-10-12. What a subcontractor bill has been certified and paid at is that service's
+    // rule, not a second summation written here — see `positionForProject`.
+    private readonly billPayments: BillPaymentsService,
   ) {}
 
   /** See `ClientsService.targetCompanyOf()` for why the caller's own company is the
@@ -470,8 +537,8 @@ export class ProjectsService {
     assertInScope(caller, project, `Project ${id}`);
 
     const ownData = await withRlsContext(this.prisma, ctx, async (tx) => {
-      const [siteIds, dwrCount, latestDwr, bills, revenues] = await Promise.all(
-        [
+      const [siteIds, dwrCount, latestDwr, bills, revenues, clientBills] =
+        await Promise.all([
           tx.site.findMany({
             where: { projectId: id },
             select: { id: true },
@@ -490,9 +557,14 @@ export class ProjectsService {
             where: { projectId: id },
             select: { amount: true, status: true },
           }),
-        ],
-      );
-      return { siteIds, dwrCount, latestDwr, bills, revenues };
+          // The other direction (2026-10-12). `netAmount` rather than `grossAmount`: retention is
+          // the client's money held back, not a figure they were asked for.
+          tx.clientBill.findMany({
+            where: { projectId: id },
+            select: { netAmount: true, certifiedAmount: true },
+          }),
+        ]);
+      return { siteIds, dwrCount, latestDwr, bills, revenues, clientBills };
     });
 
     const employees = await this.employees.listActiveBySiteIds(
@@ -500,11 +572,10 @@ export class ProjectsService {
       ownData.siteIds.map((site) => site.id),
     );
 
-    const documentReadiness = await this.documents.readinessForOne(
-      ctx,
-      project.companyId,
-      id,
-    );
+    const [documentReadiness, position] = await Promise.all([
+      this.documents.readinessForOne(ctx, project.companyId, id),
+      this.billPayments.positionForProject(ctx, id),
+    ]);
 
     const companyId = project.companyId;
     const plant = this.sources.machinerySource();
@@ -537,6 +608,26 @@ export class ProjectsService {
             (sum, bill) => sum + Number(bill.amount),
             0,
           ),
+          certifiedBills: position.certifiedCount,
+          certifiedAmount: position.certifiedAmount,
+          paidAmount: position.paidAmount,
+          outstandingAmount: position.outstandingAmount,
+        },
+        clientBillSummary: {
+          totalBills: ownData.clientBills.length,
+          totalBilled: ownData.clientBills.reduce(
+            (sum, bill) => sum + Number(bill.netAmount),
+            0,
+          ),
+          // Null is "not certified yet", which is not zero — a bill certified at nil and a bill
+          // nobody has looked at are different facts, and only the count tells them apart.
+          totalCertified: ownData.clientBills.reduce(
+            (sum, bill) => sum + Number(bill.certifiedAmount ?? 0),
+            0,
+          ),
+          certifiedCount: ownData.clientBills.filter(
+            (bill) => bill.certifiedAmount !== null,
+          ).length,
         },
         revenueSummary: { totalReceived, totalPending },
       },

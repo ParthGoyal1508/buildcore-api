@@ -52,7 +52,7 @@ async function allCells(bytes: Buffer): Promise<string[]> {
 }
 
 describe('the sheet count', () => {
-  it('equals the number of schedule lines plus the four fixed sheets', async () => {
+  it('equals the number of schedule lines plus the three fixed sheets', async () => {
     // T074, FR-030a. **Asserted as a count computed from the input**, not a number typed here. An
     // assertion over the sheets a workbook contains passes just as happily over a short list — and
     // a workbook with a missing sheet opens perfectly, so nothing else would catch it.
@@ -66,7 +66,7 @@ describe('the sheet count', () => {
 
     const names = await sheetNames(await renderer.render(subject));
 
-    expect(names).toHaveLength(subject.measurementSheets.length + 4);
+    expect(names).toHaveLength(subject.measurementSheets.length + 3);
     expect(names).toEqual(renderer.sheetNamesFor(subject));
   });
 
@@ -98,16 +98,15 @@ describe('the sheet count', () => {
   });
 });
 
-describe('the five sheet kinds, in the client’s order', () => {
+describe('the four sheet kinds, in the client’s order', () => {
   it('are present and in order', async () => {
     // T077a, FR-024, SC-002. A reviewer finds each figure by where it sits, and a workbook carrying
-    // all five in a different order is one they have to search.
+    // all four in a different order is one they have to search.
     const renderer = new BillWorkbookRenderer();
 
     const names = await sheetNames(await renderer.render(view()));
 
     expect(names).toEqual([
-      'Check List',
       'Abstract',
       'BOQ Annexure-I',
       'M-001',

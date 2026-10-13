@@ -2684,9 +2684,8 @@ model BillPackage {
   lastRevisedByUserId String?
   lastRevisionReason  String?
 
-  claims           BillPackageLineClaim[]
-  checkListAnswers BillPackageCheckListAnswer[]
-  recoveredDebits  BillPackageDebit[]
+  claims          BillPackageLineClaim[]
+  recoveredDebits BillPackageDebit[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2954,44 +2953,6 @@ model SignedCopy {
   updatedAt DateTime @updatedAt
 
   @@index([companyId, subjectType, subjectId])
-  @@schema("projects")
-}
-
-/// One of the six fixed check-list questions, answered for one package (023 FR-041 to FR-043a).
-///
-/// The **questions themselves are a constant in code**, not rows: the client reads them by position
-/// and their wording is part of the format rather than this system's data.
-model BillPackageCheckListAnswer {
-  id        String @id @default(cuid())
-  companyId String
-
-  packageId String
-  package   BillPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
-
-  /// One of six fixed keys, from `check-list.ts`.
-  questionKey String
-
-  /// **Nullable** — an unanswered question is distinguishable from one answered `no` (FR-042),
-  /// which a boolean could not express. It never refuses an issue (FR-043); the gaps are reported.
-  answer CheckListAnswer?
-
-  /// `shared.User.id`. Bare id — see the schema-level note.
-  answeredByUserId String?
-  answeredAt       DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([packageId, questionKey])
-  @@index([companyId])
-  @@schema("projects")
-}
-
-enum CheckListAnswer {
-  yes
-  no
-  not_required
-
   @@schema("projects")
 }
 
@@ -8597,14 +8558,14 @@ model IssuedLetter {
 
   createdAt DateTime @default(now())
 
+  /// Two letters may not be filed under one reference. Postgres does not collide NULLs,
+  /// so letters issued before the column — and letters still composing — are unaffected.
+  @@unique([companyId, referenceNo])
   @@index([companyId])
   @@index([companyId, letterKindId, employeeId])
   @@index([companyId, letterKindId, candidateId])
   /// FR-019: letters where the work is — listed by the opaque subject pair.
   @@index([companyId, subjectType, subjectId])
-  /// Two letters may not be filed under one reference. Postgres does not collide NULLs,
-  /// so letters issued before the column — and letters still composing — are unaffected.
-  @@unique([companyId, referenceNo])
   @@schema("shared")
 }
 

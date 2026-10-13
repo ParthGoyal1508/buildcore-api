@@ -8,7 +8,6 @@ import {
   BillDirection,
   BillPackageStatus,
   BillTaxBasis,
-  CheckListAnswer,
   ClaimProposalSource,
   ClientBillStatus,
   DwrStatus,
@@ -27,12 +26,6 @@ import { lineTotals, money } from '../bill-totals';
 import type { AbstractColumn } from './bill-abstract';
 import { billAbstract, displayRupees } from './bill-abstract';
 import { decideTaxBasis } from './bill-tax';
-import {
-  CHECK_LIST_FOOTER,
-  CHECK_LIST_SIGNATORIES,
-  checkListGaps,
-  mergeCheckList,
-} from './check-list';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { BILLING_ERRORS } from '../billing-error-codes';
 import { PACKAGE_ERRORS } from './package-error-codes';
@@ -969,10 +962,9 @@ export class BillPackageService {
    * "nobody has priced this", not "this is free", so issuing one bills work at zero and nothing
    * downstream would notice a bill that was quietly short.
    *
-   * Reports, never refuses: the header fields that could not be filled (FR-027, FR-027a) and the
-   * check-list gaps (FR-043, FR-043a). The client's own footer says non-compliance "may delay the
-   * process", which is a human judgement rather than a validation rule — and a bill blocked by an
-   * unticked box is a bill nobody can send while the person who could tick it is on site.
+   * Reports, never refuses: the header fields that could not be filled (FR-027, FR-027a). A bill
+   * blocked by a field nobody has recorded is a bill nobody can send while the person who could
+   * record it is on site, so the gap is stated and the bill goes out.
    */
   async issue(
     ctx: RlsContext,
@@ -982,7 +974,6 @@ export class BillPackageService {
   ): Promise<{
     package: BillPackageView;
     missingHeaderFields: string[];
-    checkListGaps: ReturnType<typeof checkListGaps>;
   }> {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
@@ -1004,9 +995,6 @@ export class BillPackageService {
               },
               raBillLine: { select: { rate: true } },
             },
-          },
-          checkListAnswers: {
-            select: { questionKey: true, answer: true, answeredAt: true },
           },
         },
       });
@@ -1115,16 +1103,12 @@ export class BillPackageService {
         });
       }
 
-      return {
-        missing: header.missing,
-        gaps: checkListGaps(mergeCheckList(pkg.checkListAnswers)),
-      };
+      return { missing: header.missing };
     });
 
     return {
       package: await this.view(ctx, packageId),
       missingHeaderFields: result.missing,
-      checkListGaps: result.gaps,
     };
   }
 
@@ -1728,6 +1712,7 @@ export class BillPackageService {
       status: BillPackageStatus;
       issuedAt: string | null;
       payable: string;
+      counterpartyKey: string;
     }[]
   > {
     return withRlsContext(this.prisma, ctx, async (tx) => {
@@ -1743,6 +1728,7 @@ export class BillPackageService {
           status: true,
           issuedAt: true,
           payable: true,
+          counterpartyKey: true,
         },
       });
       return rows.map((row) => ({
@@ -1754,97 +1740,24 @@ export class BillPackageService {
         status: row.status,
         issuedAt: row.issuedAt?.toISOString() ?? null,
         payable: displayRupees(row.payable),
+        /**
+         * **Who this bill is to** — the work order for a subcontractor, the client for the client
+         * (2026-10-13).
+         *
+         * The running number is per counterparty, so two subcontractors on one project both hold
+         * an RA-01, and a list carrying only the label cannot tell them apart. Reported against the
+         * screen that prints every package on a project in one table: the direction column was the
+         * only thing separating two rows reading `RA-04`, and it does not separate two
+         * subcontractors from each other at all.
+         *
+         * The **key**, not a name. `WorkOrder.partnerId` is a bare column with no relation by
+         * Principle I — the vendor register is another module's schema — so resolving the name
+         * here would cross a boundary this schema deliberately does not cross. The screen already
+         * holds both lists and does the lookup it already does for the composer.
+         */
+        counterpartyKey: row.counterpartyKey,
       }));
     });
-  }
-
-  /**
-   * The six check-list questions and whatever has been answered (FR-041, FR-042, FR-043a).
-   *
-   * All six come back whether or not they carry an answer, and the gaps come back beside them — a
-   * question absent from a response and a question answered no are indistinguishable to the caller,
-   * and the caller is a document somebody signs.
-   */
-  async checkListFor(
-    ctx: RlsContext,
-    packageId: string,
-  ): Promise<{
-    items: ReturnType<typeof mergeCheckList>;
-    gaps: ReturnType<typeof checkListGaps>;
-    footer: string;
-    signatories: readonly string[];
-  }> {
-    return withRlsContext(this.prisma, ctx, async (tx) => {
-      const pkg = await tx.billPackage.findFirst({
-        where: { id: packageId },
-        select: {
-          checkListAnswers: {
-            select: { questionKey: true, answer: true, answeredAt: true },
-          },
-        },
-      });
-      if (!pkg) throw new NotFoundException('Bill package not found');
-      const items = mergeCheckList(pkg.checkListAnswers);
-      return {
-        items,
-        gaps: checkListGaps(items),
-        footer: CHECK_LIST_FOOTER,
-        signatories: CHECK_LIST_SIGNATORIES,
-      };
-    });
-  }
-
-  /** Answers the check list. An omitted answer leaves the question unanswered (FR-042). */
-  async setCheckList(
-    ctx: RlsContext,
-    companyId: string,
-    userId: string | null,
-    packageId: string,
-    answers: { questionKey: string; answer?: CheckListAnswer }[],
-  ): Promise<ReturnType<BillPackageService['checkListFor']>> {
-    await withRlsContext(this.prisma, ctx, async (tx) => {
-      const pkg = await tx.billPackage.findFirst({
-        where: { id: packageId },
-        select: { id: true, status: true },
-      });
-      if (!pkg) throw new NotFoundException('Bill package not found');
-      if (pkg.status !== BillPackageStatus.draft) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: PACKAGE_ERRORS.packageIssued,
-          message:
-            'This package has been issued. The check list records what was attached when the ' +
-            'bill went out, so it does not change afterwards.',
-        });
-      }
-
-      // One statement per answer is at most six round trips, which is bounded by the format
-      // itself — there are six questions and there will always be six.
-      for (const answer of answers) {
-        await tx.billPackageCheckListAnswer.upsert({
-          where: {
-            packageId_questionKey: {
-              packageId,
-              questionKey: answer.questionKey,
-            },
-          },
-          create: {
-            companyId,
-            packageId,
-            questionKey: answer.questionKey,
-            answer: answer.answer ?? null,
-            answeredByUserId: answer.answer ? userId : null,
-            answeredAt: answer.answer ? new Date() : null,
-          },
-          update: {
-            answer: answer.answer ?? null,
-            answeredByUserId: answer.answer ? userId : null,
-            answeredAt: answer.answer ? new Date() : null,
-          },
-        });
-      }
-    });
-    return this.checkListFor(ctx, packageId);
   }
 
   /** A package and its claims, as a caller reads them. */

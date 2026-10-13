@@ -27,6 +27,25 @@ export interface DwrWorkbookLine {
   target: string | null;
   engineerName: string | null;
   remarks: string | null;
+  /**
+   * The evidence filed against this measurement (2026-10-12).
+   *
+   * Bytes, already scaled, for the same reason every figure above is already formatted: a renderer
+   * that could fetch could also decide how big a picture should be, and the form would then be
+   * free to differ from what the caller asked for.
+   *
+   * `image` is null for an attachment that is not a picture — a signed PDF, say. Those are named
+   * rather than dropped, because a form that silently omits an attachment disagrees with the
+   * screen the reader was looking at.
+   */
+  photos: DwrWorkbookPhoto[];
+}
+
+/** One file filed against a measurement, ready to place. */
+export interface DwrWorkbookPhoto {
+  fileName: string;
+  /** JPEG bytes and the size to draw them at, or null where the file is not a picture. */
+  image: { data: Buffer; width: number; height: number } | null;
 }
 
 /**
@@ -136,6 +155,7 @@ export class DwrWorkbookRenderer {
     writeHeader(sheet, view);
     writeTable(sheet, view);
     writeFooter(sheet, view);
+    writePhotographs(workbook, sheet, view);
 
     const bytes = await workbook.xlsx.writeBuffer();
     return Buffer.from(bytes);
@@ -227,6 +247,94 @@ function writeTable(sheet: ExcelJS.Worksheet, view: DwrWorkbookView): void {
     row.getCell(3).alignment = { wrapText: true, vertical: 'top' };
     row.getCell(4).alignment = { wrapText: true, vertical: 'top' };
   }
+}
+
+/**
+ * The photographs, under the table, each captioned with the measurement it is evidence for.
+ *
+ * ## Why a block below rather than a column beside
+ *
+ * The table above is the client's own measurement sheet, column for column and under their words
+ * — that is what makes it a document they recognise. A picture in a row forces that row to the
+ * height of the picture, so a report with photographs on five of its lines becomes a measurement
+ * sheet whose figures are a screen apart from each other, and the column that carries them is one
+ * the client's form does not have.
+ *
+ * So the measurements stay exactly as they were and the pictures follow, each under a caption
+ * naming its serial number and chainage. The binding a reader needs — *which* line this is of —
+ * is stated in words rather than implied by a row position, which also survives the sheet being
+ * printed across two pages.
+ *
+ * Each picture gets a row of its own, sized to the picture, so two photographs on one line cannot
+ * overlap: `exceljs` floats an image over the grid at a fixed size and does nothing to make room
+ * for it.
+ */
+function writePhotographs(
+  workbook: ExcelJS.Workbook,
+  sheet: ExcelJS.Worksheet,
+  view: DwrWorkbookView,
+): void {
+  const withPhotos = view.lines.filter((line) => line.photos.length > 0);
+  if (withPhotos.length === 0) return;
+
+  sheet.addRow([]);
+  const heading = sheet.addRow(['Photographs']);
+  heading.font = { bold: true, size: 12 };
+  sheet.mergeCells(heading.number, 1, heading.number, COLUMNS.length);
+
+  for (const line of withPhotos) {
+    const where = [
+      `Sr. No. ${line.srNo}`,
+      line.boqNo,
+      chainageCaption(line),
+      line.activity,
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(' · ');
+
+    const caption = sheet.addRow([where]);
+    caption.font = { bold: true };
+    sheet.mergeCells(caption.number, 1, caption.number, COLUMNS.length);
+
+    for (const photo of line.photos) {
+      // Named and nothing else where the file is not a picture — the PDF, or whatever libvips
+      // could not read. Saying so is the difference between "there is no photograph" and "there
+      // is one you cannot see here", and only the second sends the reader to the screen for it.
+      const name = sheet.addRow([
+        photo.image
+          ? photo.fileName
+          : `${photo.fileName} — attached to this line, not a picture`,
+      ]);
+      name.font = { size: 9, color: { argb: 'FF666666' } };
+      sheet.mergeCells(name.number, 1, name.number, COLUMNS.length);
+
+      if (!photo.image) continue;
+
+      const id = workbook.addImage({
+        buffer: photo.image.data as unknown as ExcelJS.Buffer,
+        extension: 'jpeg',
+      });
+      const row = sheet.addRow([]);
+      // Excel row heights are points; an image is placed in pixels, at 96 dpi against 72 pt/inch.
+      row.height = photo.image.height * (POINTS_PER_INCH / PIXELS_PER_INCH);
+      sheet.addImage(id, {
+        tl: { col: 0, row: row.number - 1 },
+        ext: { width: photo.image.width, height: photo.image.height },
+      });
+    }
+  }
+}
+
+/** Excel measures a row's height in points and places a picture in pixels at 96 dpi. */
+const POINTS_PER_INCH = 72;
+const PIXELS_PER_INCH = 96;
+
+/** `13+000 – 14+000`, or the single end where only one was recorded. */
+function chainageCaption(line: DwrWorkbookLine): string | null {
+  if (line.chainageFrom && line.chainageTo) {
+    return `${line.chainageFrom} – ${line.chainageTo}`;
+  }
+  return line.chainageFrom ?? line.chainageTo ?? null;
 }
 
 function writeFooter(sheet: ExcelJS.Worksheet, view: DwrWorkbookView): void {

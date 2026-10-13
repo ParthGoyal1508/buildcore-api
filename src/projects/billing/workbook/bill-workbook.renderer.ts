@@ -8,7 +8,6 @@ import {
   measurementSheetName,
 } from './sheet-names';
 import { writeAbstractSheet } from './sheets/abstract.sheet';
-import { writeCheckListSheet } from './sheets/check-list.sheet';
 import { writeDebitNoteSheet } from './sheets/debit-note.sheet';
 import { writeMeasurementSheet } from './sheets/measurement.sheet';
 import { writeScheduleSheet } from './sheets/schedule.sheet';
@@ -67,10 +66,6 @@ export class BillWorkbookRenderer {
 
     const used = new Set<string>();
 
-    writeCheckListSheet(
-      workbook.addWorksheet(assertSheetName(FIXED_SHEET_NAMES.checkList, used)),
-      view,
-    );
     writeAbstractSheet(
       workbook.addWorksheet(assertSheetName(FIXED_SHEET_NAMES.abstract, used)),
       view,
@@ -113,7 +108,6 @@ export class BillWorkbookRenderer {
    */
   sheetNamesFor(view: BillWorkbookView): string[] {
     return [
-      FIXED_SHEET_NAMES.checkList,
       FIXED_SHEET_NAMES.abstract,
       FIXED_SHEET_NAMES.schedule,
       ...view.measurementSheets.map((_, index) =>
