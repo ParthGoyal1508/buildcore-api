@@ -59,6 +59,18 @@ export interface AbstractRates {
   sgstFraction: Fraction;
   igstFraction: Fraction;
   tdsFraction: Fraction;
+  /**
+   * The two a **government client's** payment abstract recovers and a subcontractor's does not
+   * (2026-10-13): the labour welfare cess, and tax deducted at source under GST — which is a
+   * separate deduction from `tdsFraction`, remitted to a different authority under a different
+   * return, and shown on its own line of the client's own document at its own 2%.
+   *
+   * Zero on a bill to a subcontractor, where neither applies, so the same arithmetic serves both
+   * directions and the difference between the two documents is entirely in how the rows are
+   * grouped.
+   */
+  labourCessFraction: Fraction;
+  gstTdsFraction: Fraction;
 }
 
 /** The figures a person enters for a month. No rate derives any of these. */
@@ -74,6 +86,16 @@ export interface EnteredAmounts {
    * having its sign guessed here.
    */
   releaseWithheld: Prisma.Decimal;
+  /**
+   * Taken off the work **before tax** — row 1B of the client's payment abstract, where the taxable
+   * amount is `1A - 1B` (2026-10-13).
+   *
+   * The distinction from `releaseWithheld` is the whole reason it is a second field: that one sits
+   * beside the work in block A and is not taxed, so it moves the payable and not the tax. This one
+   * moves the base every rate in the document applies to — the taxes, the cess, both deductions at
+   * source and the retention are each a percentage of the work **after** it.
+   */
+  workDeduction: Prisma.Decimal;
   recoveryDiesel: Prisma.Decimal;
   debitAgainstCivil: Prisma.Decimal;
   otherRecoveries: Prisma.Decimal;
@@ -122,6 +144,10 @@ export interface AbstractInput {
 /** One of the abstract's three money columns. Every figure full-precision. */
 export interface AbstractColumn {
   workDone: Prisma.Decimal;
+  /** Row 1B. Subtracted from the work before anything is computed over it. */
+  workDeduction: Prisma.Decimal;
+  /** `workDone - workDeduction`. The base every rate in the document applies to. */
+  taxableAmount: Prisma.Decimal;
   releaseWithheld: Prisma.Decimal;
   cgstAmount: Prisma.Decimal;
   sgstAmount: Prisma.Decimal;
@@ -129,6 +155,9 @@ export interface AbstractColumn {
   /** Block A. */
   workTotal: Prisma.Decimal;
 
+  /** A client's two statutory recoveries. Zero on a bill to a subcontractor. */
+  labourCessAmount: Prisma.Decimal;
+  gstTdsAmount: Prisma.Decimal;
   recoveryDiesel: Prisma.Decimal;
   debitAgainstCivil: Prisma.Decimal;
   otherRecoveries: Prisma.Decimal;
@@ -146,6 +175,30 @@ export interface AbstractColumn {
   tdsAmount: Prisma.Decimal;
   /** Block D. */
   taxDeductionsTotal: Prisma.Decimal;
+
+  /**
+   * B + C + D — everything taken off block A (2026-10-13).
+   *
+   * The subcontractor's abstract never prints it, because it prints the three blocks separately. A
+   * government client's prints only this, as *Total Recoveries (2A+2B+2C+2D)*, and its payable is
+   * block A less this one figure. Carried on the column rather than summed in the renderer so the
+   * two documents cannot come to disagree about what was withheld.
+   */
+  totalWithheld: Prisma.Decimal;
+
+  /**
+   * What `totalWithheld` holds that a **client's** abstract has no named row for (2026-10-13).
+   *
+   * Zero on every bill composed under the client format, whose four recoveries are the whole of it,
+   * and zero on every bill to a subcontractor, which prints its three blocks in full. Non-zero only
+   * on a client bill that was given a diesel recovery or a theft withholding before the format
+   * existed — one draft, on this developer's database, for ₹199.96.
+   *
+   * Carried so the client's sheet can print it rather than leave it out: the figure still comes off
+   * the payable, and a document whose own subtraction does not reach its own total is the defect
+   * this feature was opened to fix.
+   */
+  unlistedWithheld: Prisma.Decimal;
 
   /** A − B − C − D. **May be negative** (FR-022). */
   payable: Prisma.Decimal;
@@ -190,11 +243,15 @@ const sum = (...values: Prisma.Decimal[]): Prisma.Decimal =>
 export function zeroColumn(): AbstractColumn {
   return {
     workDone: ZERO,
+    workDeduction: ZERO,
+    taxableAmount: ZERO,
     releaseWithheld: ZERO,
     cgstAmount: ZERO,
     sgstAmount: ZERO,
     igstAmount: ZERO,
     workTotal: ZERO,
+    labourCessAmount: ZERO,
+    gstTdsAmount: ZERO,
     recoveryDiesel: ZERO,
     debitAgainstCivil: ZERO,
     otherRecoveries: ZERO,
@@ -207,6 +264,8 @@ export function zeroColumn(): AbstractColumn {
     deductionsTotal: ZERO,
     tdsAmount: ZERO,
     taxDeductionsTotal: ZERO,
+    totalWithheld: ZERO,
+    unlistedWithheld: ZERO,
     payable: ZERO,
   };
 }
@@ -246,15 +305,25 @@ export function billAbstract(input: AbstractInput): BillAbstract {
   // FR-015a: the base is the work done, before any recovery, deduction or withholding. This is what
   // reproduces the real document's 1,65,751.74 exactly, and a base of the post-retention figure or
   // the tax-inclusive total would not.
-  const cgstAmount = intra ? workDone.times(rates.cgstFraction) : ZERO;
-  const sgstAmount = intra ? workDone.times(rates.sgstFraction) : ZERO;
-  const igstAmount = intra ? ZERO : workDone.times(rates.igstFraction);
+  //
+  // **The base is the work less row 1B**, which is what the client's own abstract calls the
+  // *Taxable Amount* and computes as `1A - 1B`. Where nothing is deducted — every bill this
+  // product has issued so far — it is the work done, so no existing figure moves.
+  const taxable = workDone.minus(entered.workDeduction);
+  const cgstAmount = intra ? taxable.times(rates.cgstFraction) : ZERO;
+  const sgstAmount = intra ? taxable.times(rates.sgstFraction) : ZERO;
+  const igstAmount = intra ? ZERO : taxable.times(rates.igstFraction);
 
   // FR-018a and FR-019a: both over the work done before tax, recoveries and other deductions — not
   // over the payable that tax deducted is subtracted from. Five per cent of the right base
   // reproduces the sample's 92,084.30 and five per cent of the tax-inclusive total does not.
-  const retentionAmount = workDone.times(rates.retentionFraction);
-  const tdsAmount = workDone.times(rates.tdsFraction);
+  const retentionAmount = taxable.times(rates.retentionFraction);
+  const tdsAmount = taxable.times(rates.tdsFraction);
+
+  // The client's two, over the same base as everything else. The sample abstract takes all four of
+  // its recoveries over the *Total Value of Work Done*, and each reproduces to the paisa there.
+  const labourCessAmount = taxable.times(rates.labourCessFraction);
+  const gstTdsAmount = taxable.times(rates.gstTdsFraction);
 
   const mobilizationAdvance = guardOneTime(
     'mobilizationAdvance',
@@ -269,10 +338,13 @@ export function billAbstract(input: AbstractInput): BillAbstract {
 
   const thisBill = balanceColumn({
     workDone,
+    workDeduction: entered.workDeduction,
     releaseWithheld: entered.releaseWithheld,
     cgstAmount,
     sgstAmount,
     igstAmount,
+    labourCessAmount,
+    gstTdsAmount,
     recoveryDiesel: entered.recoveryDiesel,
     debitAgainstCivil: entered.debitAgainstCivil,
     otherRecoveries: entered.otherRecoveries,
@@ -287,12 +359,17 @@ export function billAbstract(input: AbstractInput): BillAbstract {
   const uptoPrevious = input.previous ?? zeroColumn();
   const uptoDate = balanceColumn({
     workDone: uptoPrevious.workDone.plus(thisBill.workDone),
+    workDeduction: uptoPrevious.workDeduction.plus(thisBill.workDeduction),
     releaseWithheld: uptoPrevious.releaseWithheld.plus(
       thisBill.releaseWithheld,
     ),
     cgstAmount: uptoPrevious.cgstAmount.plus(thisBill.cgstAmount),
     sgstAmount: uptoPrevious.sgstAmount.plus(thisBill.sgstAmount),
     igstAmount: uptoPrevious.igstAmount.plus(thisBill.igstAmount),
+    labourCessAmount: uptoPrevious.labourCessAmount.plus(
+      thisBill.labourCessAmount,
+    ),
+    gstTdsAmount: uptoPrevious.gstTdsAmount.plus(thisBill.gstTdsAmount),
     recoveryDiesel: uptoPrevious.recoveryDiesel.plus(thisBill.recoveryDiesel),
     debitAgainstCivil: uptoPrevious.debitAgainstCivil.plus(
       thisBill.debitAgainstCivil,
@@ -371,21 +448,27 @@ function guardOneTime(
 export function balanceColumn(
   rows: Omit<
     AbstractColumn,
+    | 'taxableAmount'
     | 'workTotal'
     | 'recoveriesTotal'
     | 'deductionsTotal'
     | 'taxDeductionsTotal'
+    | 'totalWithheld'
+    | 'unlistedWithheld'
     | 'payable'
   >,
 ): AbstractColumn {
   const workTotal = sum(
     rows.workDone,
+    rows.workDeduction.negated(),
     rows.releaseWithheld,
     rows.cgstAmount,
     rows.sgstAmount,
     rows.igstAmount,
   );
   const recoveriesTotal = sum(
+    rows.labourCessAmount,
+    rows.gstTdsAmount,
     rows.recoveryDiesel,
     rows.debitAgainstCivil,
     rows.otherRecoveries,
@@ -398,19 +481,30 @@ export function balanceColumn(
     rows.theftWithheld,
   );
   const taxDeductionsTotal = rows.tdsAmount;
+  const totalWithheld = sum(
+    recoveriesTotal,
+    deductionsTotal,
+    taxDeductionsTotal,
+  );
 
   return {
     ...rows,
+    taxableAmount: rows.workDone.minus(rows.workDeduction),
     workTotal,
     recoveriesTotal,
     deductionsTotal,
     taxDeductionsTotal,
+    totalWithheld,
+    // Everything withheld, less the four rows a client's abstract names. The subtraction on that
+    // document has to reach its own payable whatever the package carries.
+    unlistedWithheld: totalWithheld
+      .minus(rows.labourCessAmount)
+      .minus(rows.tdsAmount)
+      .minus(rows.gstTdsAmount)
+      .minus(rows.retentionAmount),
     // FR-021, and FR-022: never clamped at zero. A bill whose debits exceed its work is a real
     // outcome the client's own format expresses, and clamping would hide money the company is owed
     // back behind a payable of nothing.
-    payable: workTotal
-      .minus(recoveriesTotal)
-      .minus(deductionsTotal)
-      .minus(taxDeductionsTotal),
+    payable: workTotal.minus(totalWithheld),
   };
 }

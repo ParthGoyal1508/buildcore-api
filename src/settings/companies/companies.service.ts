@@ -465,21 +465,17 @@ export class CompaniesService {
       sgstFraction?: number;
       igstFraction?: number;
       tdsFraction?: number;
+      gstTdsFraction?: number;
     },
     actor: { userId: string; ipAddress?: string },
-  ): Promise<{
-    cgstFraction: string;
-    sgstFraction: string;
-    igstFraction: string;
-    tdsFraction: string;
-  }> {
+  ): Promise<ReturnType<CompaniesService['getBillingTaxRates']>> {
     const before = await this.getBillingTaxRates(companyId);
 
     await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.company.update({
         where: { id: companyId },
         data: {
-          // Field by field, so a request naming one rate cannot blank the other three.
+          // Field by field, so a request naming one rate cannot blank the others.
           ...(rates.cgstFraction !== undefined
             ? { cgstFraction: rates.cgstFraction }
             : {}),
@@ -491,6 +487,9 @@ export class CompaniesService {
             : {}),
           ...(rates.tdsFraction !== undefined
             ? { tdsFraction: rates.tdsFraction }
+            : {}),
+          ...(rates.gstTdsFraction !== undefined
+            ? { gstTdsFraction: rates.gstTdsFraction }
             : {}),
         },
       }),
@@ -531,6 +530,17 @@ export class CompaniesService {
     sgstFraction: string;
     igstFraction: string;
     tdsFraction: string;
+    /** Tax deducted at source under GST — a different deduction from `tdsFraction`. */
+    gstTdsFraction: string;
+    /**
+     * The labour welfare cess a government client recovers, as a fraction (2026-10-13).
+     *
+     * **`bocwCessRate`, widened — not a second column.** It is the same statutory 1% this product
+     * already configures for 007's cess calculation, and a second place to record it is a second
+     * place to get it wrong. Six decimals here because that is the precision a bill freezes at;
+     * the stored column is four, which `0.0100` fits exactly.
+     */
+    labourCessFraction: string;
   }> {
     const company = await withRlsContext(
       this.prisma,
@@ -543,6 +553,8 @@ export class CompaniesService {
             sgstFraction: true,
             igstFraction: true,
             tdsFraction: true,
+            gstTdsFraction: true,
+            bocwCessRate: true,
           },
         }),
     );
@@ -554,6 +566,8 @@ export class CompaniesService {
       sgstFraction: company.sgstFraction.toFixed(6),
       igstFraction: company.igstFraction.toFixed(6),
       tdsFraction: company.tdsFraction.toFixed(6),
+      gstTdsFraction: company.gstTdsFraction.toFixed(6),
+      labourCessFraction: company.bocwCessRate.toFixed(6),
     };
   }
 

@@ -35,6 +35,19 @@ import { IsNumberString, IsOptional } from 'class-validator';
  */
 export class SetBillAdjustmentsDto {
   /**
+   * Taken off the work **before tax** — row 1B of a government client's payment abstract, where the
+   * taxable amount is `1A - 1B` (2026-10-13).
+   *
+   * Not the same field as `releaseWithheld` below, and the difference is which figures it moves:
+   * this one changes the base the taxes, the cess, both deductions at source and the retention are
+   * each computed over, and that one sits beside the work untaxed.
+   */
+  @ApiPropertyOptional({ example: '0.00' })
+  @IsOptional()
+  @IsNumberString()
+  workDeduction?: string;
+
+  /**
    * An amount held back from release this month, in block A beside the work done.
    *
    * Signed on purpose: a withholding that *reduces* the block is entered as a negative figure

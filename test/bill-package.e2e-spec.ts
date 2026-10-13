@@ -401,7 +401,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '1000.00', theftWithheld: '250.00' })
+      .send({ workDeduction: '1250.00' })
       .expect(200);
 
     const after = await http()
@@ -409,26 +409,39 @@ describe('The running-account bill package (e2e)', () => {
       .set(auth())
       .expect(200);
 
-    expect(Number(after.body.columns.thisBill.recoveryDiesel)).toBe(1000);
-    expect(Number(after.body.columns.thisBill.theftWithheld)).toBe(250);
-    expect(Number(after.body.columns.thisBill.payable)).toBe(
-      Number(before.body.columns.thisBill.payable) - 1250,
-    );
+    expect(Number(after.body.columns.thisBill.workDeduction)).toBe(1250);
+    // 1B comes off the work **before** tax, so the payable moves by more than the deduction: the
+    // tax on it goes too, and so does every percentage computed over the base. Asserting a move of
+    // exactly 1,250 would be asserting that it is an ordinary recovery, which is the one thing it
+    // is not.
+    expect(
+      Number(before.body.columns.thisBill.payable) -
+        Number(after.body.columns.thisBill.payable),
+    ).toBeGreaterThan(1250);
 
     // Omission leaves a column alone; an explicit zero sets it. A caller posting the whole set
     // every time would otherwise be indistinguishable from one clearing what it did not render.
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ theftWithheld: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
 
     const third = await http()
       .get(`/projects/bill-packages/${packageId}/abstract`)
       .set(auth())
       .expect(200);
-    expect(Number(third.body.columns.thisBill.recoveryDiesel)).toBe(1000);
-    expect(Number(third.body.columns.thisBill.theftWithheld)).toBe(0);
+    expect(Number(third.body.columns.thisBill.workDeduction)).toBe(0);
+
+    // **A bill to the client has no row for a diesel recovery** (2026-10-13), so the figure is
+    // refused rather than taken off the payable through a total nothing on the sheet accounts for.
+    // The subcontractor's abstract is where that judgement belongs.
+    const wrongDirection = await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '1000.00' })
+      .expect(400);
+    expect(wrongDirection.body.fields).toEqual(['recoveryDiesel']);
 
     // A computed figure is not an adjustable one: a bill stating a retention its own frozen rate
     // does not produce is a bill whose arithmetic has stopped being checkable.
@@ -442,7 +455,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
   });
 
@@ -472,7 +485,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '133742.00' })
+      .send({ workDeduction: '133742.00' })
       .expect(200);
 
     const pdf = await http()
@@ -499,7 +512,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
   });
 

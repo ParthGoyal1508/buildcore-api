@@ -712,10 +712,13 @@ describe('the breakdown behind a packaged bill’s net', () => {
     package: {
       status,
       workDone: dc('50837.21'),
+      workDeduction: dc('0'),
       releaseWithheld: dc('0'),
       cgstAmount: dc('4575.35'),
       sgstAmount: dc('4575.35'),
       igstAmount: dc('0'),
+      labourCessAmount: dc('0'),
+      gstTdsAmount: dc('0'),
       recoveryDiesel: dc('0'),
       debitAgainstCivil: dc('0'),
       otherRecoveries: dc('0'),

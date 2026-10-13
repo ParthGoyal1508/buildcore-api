@@ -99,6 +99,17 @@ export interface FrozenRates {
   sgstFraction: string;
   igstFraction: string;
   tdsFraction: string;
+  /**
+   * The two a **government client's** payment abstract recovers (2026-10-13).
+   *
+   * **Zero on a bill to a subcontractor**, where neither applies: a main contractor does not
+   * withhold a labour cess from the people doing the work, and the GST deduction at source is a
+   * government department's obligation, not his. Frozen at zero there rather than left out, so one
+   * arithmetic serves both documents and the difference between them is entirely in how the rows
+   * are grouped.
+   */
+  labourCessFraction: string;
+  gstTdsFraction: string;
 }
 
 export interface ComposeBillPackageInput {
@@ -179,6 +190,7 @@ export interface BillPackageView {
  * does not produce.
  */
 const ADJUSTABLE = [
+  'workDeduction',
   'releaseWithheld',
   'recoveryDiesel',
   'debitAgainstCivil',
@@ -191,8 +203,23 @@ const ADJUSTABLE = [
   'performanceSecurityTotal',
 ] as const satisfies readonly (keyof SetBillAdjustmentsDto)[];
 
+/**
+ * Which of those each direction's abstract actually has a row for (2026-10-13).
+ *
+ * A government client's payment abstract carries row 1B and nothing else enterable: its four
+ * recoveries are statutory percentages this computes, not judgements anybody types. A
+ * subcontractor's carries the judgements and has no 1B.
+ */
+const CLIENT_ADJUSTABLE = ['workDeduction'] as const;
+const SUBCONTRACTOR_ADJUSTABLE = ADJUSTABLE.filter(
+  (key) => key !== 'workDeduction',
+);
+
 const dec = (value: Prisma.Decimal | string | number): Prisma.Decimal =>
   new Prisma.Decimal(value);
+
+/** A rate that does not apply, at the precision every frozen rate is recorded to. */
+const ZERO_FRACTION = '0.000000';
 
 /**
  * Composing a running-account bill package (023 US1, FR-001 to FR-012b).
@@ -356,9 +383,18 @@ export class BillPackageService {
     }
 
     const tax = await this.companies.getBillingTaxRates(companyId);
+    const client = direction === BillDirection.to_client;
     return {
       retentionFraction: retention.toFixed(6),
-      ...tax,
+      cgstFraction: tax.cgstFraction,
+      sgstFraction: tax.sgstFraction,
+      igstFraction: tax.igstFraction,
+      tdsFraction: tax.tdsFraction,
+      // **Only on a bill to the client.** Charging a subcontractor a labour cess and a GST
+      // deduction at source would take three per cent off every subcontractor bill this product
+      // has ever produced, quietly, and each would still balance.
+      labourCessFraction: client ? tax.labourCessFraction : ZERO_FRACTION,
+      gstTdsFraction: client ? tax.gstTdsFraction : ZERO_FRACTION,
     };
   }
 
@@ -684,6 +720,8 @@ export class BillPackageService {
           sgstFraction: rates.sgstFraction,
           igstFraction: rates.igstFraction,
           tdsFraction: rates.tdsFraction,
+          labourCessFraction: rates.labourCessFraction,
+          gstTdsFraction: rates.gstTdsFraction,
           taxBasis: taxDecision.basis,
           taxBasisSource: taxDecision.source,
           externalBillNo: input.externalBillNo ?? null,
@@ -1236,6 +1274,9 @@ export class BillPackageService {
       sgstFraction: Prisma.Decimal;
       igstFraction: Prisma.Decimal;
       tdsFraction: Prisma.Decimal;
+      labourCessFraction: Prisma.Decimal;
+      gstTdsFraction: Prisma.Decimal;
+      workDeduction: Prisma.Decimal;
       releaseWithheld: Prisma.Decimal;
       recoveryDiesel: Prisma.Decimal;
       debitAgainstCivil: Prisma.Decimal;
@@ -1257,6 +1298,7 @@ export class BillPackageService {
     const abstract = billAbstract({
       workDone,
       entered: {
+        workDeduction: pkg.workDeduction,
         releaseWithheld: pkg.releaseWithheld,
         recoveryDiesel: pkg.recoveryDiesel,
         debitAgainstCivil: pkg.debitAgainstCivil,
@@ -1272,6 +1314,8 @@ export class BillPackageService {
         sgstFraction: pkg.sgstFraction,
         igstFraction: pkg.igstFraction,
         tdsFraction: pkg.tdsFraction,
+        labourCessFraction: pkg.labourCessFraction,
+        gstTdsFraction: pkg.gstTdsFraction,
       },
       taxBasis: pkg.taxBasis,
       previous,
@@ -1295,12 +1339,17 @@ export class BillPackageService {
       igstAmount: thisBill.igstAmount,
       retentionAmount: thisBill.retentionAmount,
       tdsAmount: thisBill.tdsAmount,
+      labourCessAmount: thisBill.labourCessAmount,
+      gstTdsAmount: thisBill.gstTdsAmount,
       payable: thisBill.payable,
       workDoneUptoDate: uptoDate.workDone,
+      workDeductionUptoDate: uptoDate.workDeduction,
       releaseWithheldUptoDate: uptoDate.releaseWithheld,
       cgstAmountUptoDate: uptoDate.cgstAmount,
       sgstAmountUptoDate: uptoDate.sgstAmount,
       igstAmountUptoDate: uptoDate.igstAmount,
+      labourCessAmountUptoDate: uptoDate.labourCessAmount,
+      gstTdsAmountUptoDate: uptoDate.gstTdsAmount,
       recoveryDieselUptoDate: uptoDate.recoveryDiesel,
       debitAgainstCivilUptoDate: uptoDate.debitAgainstCivil,
       otherRecoveriesUptoDate: uptoDate.otherRecoveries,
@@ -1333,7 +1382,12 @@ export class BillPackageService {
     await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
         where: { id: packageId },
-        select: { id: true, status: true, sequenceNo: true },
+        select: {
+          id: true,
+          status: true,
+          sequenceNo: true,
+          direction: true,
+        },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
       if (pkg.status !== BillPackageStatus.draft) {
@@ -1346,6 +1400,37 @@ export class BillPackageService {
             )} has been issued, so its recoveries and ` +
             'deductions cannot change. Record them on the next bill — a deduction added after ' +
             'issue is either a change to a signed document or one this bill never made.',
+        });
+      }
+
+      // **A field the bill's own abstract has no row for is refused, not accepted and hidden**
+      // (2026-10-13). The two documents carry different figures: a client's payment abstract has
+      // row 1B and four statutory recoveries, a subcontractor's has the judgements a quantity
+      // surveyor makes about a month. Every one of them still comes off the payable through
+      // `totalWithheld`, so a diesel recovery entered on a bill to the client would reduce what
+      // the client pays by an amount appearing nowhere on the sheet they are sent.
+      const permitted =
+        pkg.direction === BillDirection.to_client
+          ? CLIENT_ADJUSTABLE
+          : SUBCONTRACTOR_ADJUSTABLE;
+      const refused = ADJUSTABLE.filter(
+        (key) =>
+          input[key] !== undefined &&
+          !(permitted as readonly string[]).includes(key),
+      );
+      if (refused.length > 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: PACKAGE_ERRORS.rateMissing,
+          message:
+            `A bill to ${
+              pkg.direction === BillDirection.to_client
+                ? 'the client'
+                : 'a subcontractor'
+            } has no row for ${refused.join(', ')}, so ` +
+            'the figure would be taken off the payable without appearing on the document. ' +
+            'Record it on a bill in the other direction, or as a debit note.',
+          fields: refused,
         });
       }
 
@@ -1549,6 +1634,7 @@ export class BillPackageService {
         workDone:
           pkg.clientBill?.grossAmount ?? pkg.raBill?.grossAmount ?? dec(0),
         entered: {
+          workDeduction: pkg.workDeduction,
           releaseWithheld: pkg.releaseWithheld,
           recoveryDiesel: pkg.recoveryDiesel,
           debitAgainstCivil: pkg.debitAgainstCivil,
@@ -1564,6 +1650,8 @@ export class BillPackageService {
           sgstFraction: pkg.sgstFraction,
           igstFraction: pkg.igstFraction,
           tdsFraction: pkg.tdsFraction,
+          labourCessFraction: pkg.labourCessFraction,
+          gstTdsFraction: pkg.gstTdsFraction,
         },
         taxBasis: pkg.taxBasis,
         previous,
@@ -1593,6 +1681,8 @@ export class BillPackageService {
           sgstFraction: pkg.sgstFraction.toFixed(6),
           igstFraction: pkg.igstFraction.toFixed(6),
           tdsFraction: pkg.tdsFraction.toFixed(6),
+          labourCessFraction: pkg.labourCessFraction.toFixed(6),
+          gstTdsFraction: pkg.gstTdsFraction.toFixed(6),
         },
         columns: {
           thisBill: renderColumn(abstract.thisBill),
@@ -1665,35 +1755,61 @@ export class BillPackageService {
     });
     if (!previous) return null;
 
+    // **Read from the stored columns, not recomputed** (FR-014). `payableUptoDate` in particular is
+    // the figure the previous bill was issued at, and re-deriving it would make a drift between the
+    // stored total and its own components invisible — which is the one thing this column exists to
+    // make visible.
+    const recoveriesTotal = previous.labourCessAmountUptoDate
+      .plus(previous.gstTdsAmountUptoDate)
+      .plus(previous.recoveryDieselUptoDate)
+      .plus(previous.debitAgainstCivilUptoDate)
+      .plus(previous.otherRecoveriesUptoDate)
+      .plus(previous.mechanicalDebitUptoDate);
+    const deductionsTotal = previous.mobilizationAdvanceUptoDate
+      .plus(previous.retentionAmountUptoDate)
+      .plus(previous.performanceSecurityUptoDate)
+      .plus(previous.theftWithheldUptoDate);
+
     return {
       workDone: previous.workDoneUptoDate,
+      workDeduction: previous.workDeductionUptoDate,
       releaseWithheld: previous.releaseWithheldUptoDate,
       cgstAmount: previous.cgstAmountUptoDate,
       sgstAmount: previous.sgstAmountUptoDate,
       igstAmount: previous.igstAmountUptoDate,
+      taxableAmount: previous.workDoneUptoDate.minus(
+        previous.workDeductionUptoDate,
+      ),
       workTotal: previous.workDoneUptoDate
+        .minus(previous.workDeductionUptoDate)
         .plus(previous.releaseWithheldUptoDate)
         .plus(previous.cgstAmountUptoDate)
         .plus(previous.sgstAmountUptoDate)
         .plus(previous.igstAmountUptoDate),
+      labourCessAmount: previous.labourCessAmountUptoDate,
+      gstTdsAmount: previous.gstTdsAmountUptoDate,
       recoveryDiesel: previous.recoveryDieselUptoDate,
       debitAgainstCivil: previous.debitAgainstCivilUptoDate,
       otherRecoveries: previous.otherRecoveriesUptoDate,
       mechanicalDebit: previous.mechanicalDebitUptoDate,
-      recoveriesTotal: previous.recoveryDieselUptoDate
-        .plus(previous.debitAgainstCivilUptoDate)
-        .plus(previous.otherRecoveriesUptoDate)
-        .plus(previous.mechanicalDebitUptoDate),
+      recoveriesTotal,
       mobilizationAdvance: previous.mobilizationAdvanceUptoDate,
       retentionAmount: previous.retentionAmountUptoDate,
       performanceSecurity: previous.performanceSecurityUptoDate,
       theftWithheld: previous.theftWithheldUptoDate,
-      deductionsTotal: previous.mobilizationAdvanceUptoDate
-        .plus(previous.retentionAmountUptoDate)
-        .plus(previous.performanceSecurityUptoDate)
-        .plus(previous.theftWithheldUptoDate),
+      deductionsTotal,
       tdsAmount: previous.tdsAmountUptoDate,
       taxDeductionsTotal: previous.tdsAmountUptoDate,
+      totalWithheld: recoveriesTotal
+        .plus(deductionsTotal)
+        .plus(previous.tdsAmountUptoDate),
+      unlistedWithheld: recoveriesTotal
+        .plus(deductionsTotal)
+        .plus(previous.tdsAmountUptoDate)
+        .minus(previous.labourCessAmountUptoDate)
+        .minus(previous.tdsAmountUptoDate)
+        .minus(previous.gstTdsAmountUptoDate)
+        .minus(previous.retentionAmountUptoDate),
       payable: previous.payableUptoDate,
     };
   }
@@ -1884,6 +2000,8 @@ export class BillPackageService {
           sgstFraction: pkg.sgstFraction.toFixed(6),
           igstFraction: pkg.igstFraction.toFixed(6),
           tdsFraction: pkg.tdsFraction.toFixed(6),
+          labourCessFraction: pkg.labourCessFraction.toFixed(6),
+          gstTdsFraction: pkg.gstTdsFraction.toFixed(6),
         },
         claims,
         // Counted, not refused — FR-009's refusal is at issue. Reported here so the engineer sees it

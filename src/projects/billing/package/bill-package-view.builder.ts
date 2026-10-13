@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { BillDirection, BillPackageStatus } from '@prisma/client';
+import { BillDirection, BillPackageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../../common/prisma/rls-context';
@@ -10,6 +10,7 @@ import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
 } from '../workbook/bill-workbook.types';
+import type { FrozenRates } from './bill-package.service';
 import { BillPackageService, packageLabel } from './bill-package.service';
 import { DebitNoteService } from './debit-note.service';
 import { MeasurementSheetService } from './measurement-sheet.service';
@@ -191,96 +192,10 @@ export class BillPackageViewBuilder {
     return {
       header,
       abstract: {
-        blocks: [
-          {
-            title: 'A. WORK',
-            rows: [
-              row('Work Done amount', abstract.columns, 'workDone'),
-              row(
-                'Release withheld amount',
-                abstract.columns,
-                'releaseWithheld',
-              ),
-              row('CGST', abstract.columns, 'cgstAmount'),
-              row('SGST', abstract.columns, 'sgstAmount'),
-              row('IGST', abstract.columns, 'igstAmount'),
-              {
-                ...row('Total Amount (A)', abstract.columns, 'workTotal'),
-                isTotal: true,
-              },
-            ],
-          },
-          {
-            title: 'B. RECOVERIES',
-            rows: [
-              row('Recovery of Diesel', abstract.columns, 'recoveryDiesel'),
-              row('Debit against Civil', abstract.columns, 'debitAgainstCivil'),
-              row('Other Recoveries', abstract.columns, 'otherRecoveries'),
-              row(
-                'Mechanical Debit — as per enclosure',
-                abstract.columns,
-                'mechanicalDebit',
-              ),
-              {
-                ...row(
-                  'Total Recoveries (B)',
-                  abstract.columns,
-                  'recoveriesTotal',
-                ),
-                isTotal: true,
-              },
-            ],
-          },
-          {
-            title: 'C. DEDUCTIONS',
-            rows: [
-              row(
-                'Deduction for Mobilization Advance',
-                abstract.columns,
-                'mobilizationAdvance',
-                {
-                  fullyRecovered:
-                    pkg.mobilizationAdvanceTotal !== null &&
-                    pkg.mobilizationAdvance.isZero(),
-                },
-              ),
-              row('Retention money', abstract.columns, 'retentionAmount'),
-              row(
-                'Performance Security (as per contract)',
-                abstract.columns,
-                'performanceSecurity',
-                {
-                  fullyRecovered:
-                    pkg.performanceSecurityTotal !== null &&
-                    pkg.performanceSecurity.isZero(),
-                },
-              ),
-              row(
-                'Amount Withheld for Theft items (Including GST)',
-                abstract.columns,
-                'theftWithheld',
-              ),
-              {
-                ...row(
-                  'Total Deductions (C)',
-                  abstract.columns,
-                  'deductionsTotal',
-                ),
-                isTotal: true,
-              },
-            ],
-          },
-          {
-            title: 'D. TAX DEDUCTIONS',
-            rows: [
-              row('Income Tax TDS', abstract.columns, 'tdsAmount'),
-              {
-                ...row('Total (D)', abstract.columns, 'taxDeductionsTotal'),
-                isTotal: true,
-              },
-            ],
-          },
-        ],
+        blocks:
+          pkg.direction === BillDirection.to_client
+            ? clientBlocks(abstract)
+            : subcontractorBlocks(abstract, pkg),
         payable: row('AMOUNT PAYABLE', abstract.columns, 'payable'),
         netPayable: row('NET PAYBLE AMOUNT', abstract.columns, 'payable'),
         taxBasis: abstract.taxBasis,
@@ -357,6 +272,183 @@ type Columns = {
   uptoPrevious: Record<string, string>;
   uptoDate: Record<string, string>;
 };
+
+/** The rates an abstract was computed at, for the labels that state them. */
+type Abstract = {
+  columns: Columns;
+  rates: FrozenRates;
+};
+
+/**
+ * A rate as a label says it: `0.090000` → `9%`, `0.010000` → `1%`, `0.020000` → `2%`.
+ *
+ * **Built from the frozen fraction, never typed into the label.** The client's own abstract heads
+ * each row with the rate it was computed at — *CGST 9%*, *Labour Cess @ 1%* — and a heading typed
+ * as text would go on saying nine per cent after somebody changed the rate to eight, on a document
+ * whose whole purpose is that the arithmetic can be checked against the heading.
+ */
+function percent(fraction: string | undefined): string {
+  const value = Number(fraction ?? 0) * 100;
+  return `${Number.isInteger(value) ? value : Number(value.toFixed(4))}%`;
+}
+
+/**
+ * The payment abstract a **government client** reads (2026-10-13).
+ *
+ * Shaped on the authority's own sheet — *Value of Work Done* with the bill of quantities and a
+ * deduction, then the taxes, then four statutory recoveries and one total. Two documents, one
+ * arithmetic: every figure here comes from the same column the subcontractor's four blocks come
+ * from, and only the grouping differs.
+ *
+ * Two rows show the same figure on purpose. *Total Value of Work Done (1A-1B)* and *Taxable Amount*
+ * are the same number, and the client's sheet prints both — the first is what the work came to, the
+ * second is what the tax was computed on, and they are equal only because nothing here is exempt.
+ */
+function clientBlocks(abstract: Abstract) {
+  const { columns, rates } = abstract;
+  return [
+    {
+      title: '1. VALUE OF WORK DONE',
+      rows: [
+        row('A) Bill of Quantities', columns, 'workDone'),
+        row('B) Deduction', columns, 'workDeduction'),
+        {
+          ...row('Total Value of Work Done (1A-1B)', columns, 'taxableAmount'),
+          isTotal: true,
+        },
+        row('Taxable Amount', columns, 'taxableAmount'),
+        row(`CGST ${percent(rates.cgstFraction)}`, columns, 'cgstAmount'),
+        row(`SGST ${percent(rates.sgstFraction)}`, columns, 'sgstAmount'),
+        row(`IGST ${percent(rates.igstFraction)}`, columns, 'igstAmount'),
+        {
+          ...row('Invoice Value / Work Done Value', columns, 'workTotal'),
+          isTotal: true,
+        },
+      ],
+    },
+    {
+      title: '2. RECOVERIES',
+      rows: [
+        row(
+          `(A) Labour Cess @ ${percent(rates.labourCessFraction)}`,
+          columns,
+          'labourCessAmount',
+        ),
+        row(
+          `(B) Advance Income Tax @ ${percent(rates.tdsFraction)}`,
+          columns,
+          'tdsAmount',
+        ),
+        row(
+          `(C) GST TDS @ ${percent(rates.gstTdsFraction)}`,
+          columns,
+          'gstTdsAmount',
+        ),
+        row(
+          `(D) Security Deposit/Retention Money @ ${percent(
+            rates.retentionFraction,
+          )}`,
+          columns,
+          'retentionAmount',
+        ),
+        // Nil on every bill composed under this format, and printed anyway — like the IGST row
+        // above it on an intra-state bill. It is non-zero only where a figure was recorded against
+        // a client bill under the subcontractor shape, and leaving it out would make the total
+        // below unreachable from the rows above it.
+        row('(E) Other recoveries recorded', columns, 'unlistedWithheld'),
+        {
+          // **B + C + D, not block B.** The client's sheet has one recoveries total and its payable
+          // is block 1 less that figure, so a total covering only the four rows above would leave a
+          // document whose own subtraction does not reach its own payable the moment anything else
+          // on the package is non-zero.
+          ...row('Total Recoveries (2A+2B+2C+2D)', columns, 'totalWithheld'),
+          isTotal: true,
+        },
+      ],
+    },
+  ];
+}
+
+/** The four blocks a subcontractor's abstract has always had (023 FR-012 to FR-023). */
+function subcontractorBlocks(
+  abstract: Abstract,
+  pkg: {
+    mobilizationAdvanceTotal: Prisma.Decimal | null;
+    mobilizationAdvance: Prisma.Decimal;
+    performanceSecurityTotal: Prisma.Decimal | null;
+    performanceSecurity: Prisma.Decimal;
+  },
+) {
+  const { columns } = abstract;
+  return [
+    {
+      title: 'A. WORK',
+      rows: [
+        row('Work Done amount', columns, 'workDone'),
+        row('Release withheld amount', columns, 'releaseWithheld'),
+        row('CGST', columns, 'cgstAmount'),
+        row('SGST', columns, 'sgstAmount'),
+        row('IGST', columns, 'igstAmount'),
+        { ...row('Total Amount (A)', columns, 'workTotal'), isTotal: true },
+      ],
+    },
+    {
+      title: 'B. RECOVERIES',
+      rows: [
+        row('Recovery of Diesel', columns, 'recoveryDiesel'),
+        row('Debit against Civil', columns, 'debitAgainstCivil'),
+        row('Other Recoveries', columns, 'otherRecoveries'),
+        row('Mechanical Debit — as per enclosure', columns, 'mechanicalDebit'),
+        {
+          ...row('Total Recoveries (B)', columns, 'recoveriesTotal'),
+          isTotal: true,
+        },
+      ],
+    },
+    {
+      title: 'C. DEDUCTIONS',
+      rows: [
+        row(
+          'Deduction for Mobilization Advance',
+          columns,
+          'mobilizationAdvance',
+          {
+            fullyRecovered:
+              pkg.mobilizationAdvanceTotal !== null &&
+              pkg.mobilizationAdvance.isZero(),
+          },
+        ),
+        row('Retention money', columns, 'retentionAmount'),
+        row(
+          'Performance Security (as per contract)',
+          columns,
+          'performanceSecurity',
+          {
+            fullyRecovered:
+              pkg.performanceSecurityTotal !== null &&
+              pkg.performanceSecurity.isZero(),
+          },
+        ),
+        row(
+          'Amount Withheld for Theft items (Including GST)',
+          columns,
+          'theftWithheld',
+        ),
+        {
+          ...row('Total Deductions (C)', columns, 'deductionsTotal'),
+          isTotal: true,
+        },
+      ],
+    },
+    {
+      title: 'D. TAX DEDUCTIONS',
+      rows: [
+        row('Income Tax TDS', columns, 'tdsAmount'),
+        { ...row('Total (D)', columns, 'taxDeductionsTotal'), isTotal: true },
+      ],
+    },
+  ];
+}
 
 function row(
   label: string,

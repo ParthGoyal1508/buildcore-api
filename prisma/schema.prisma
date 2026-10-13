@@ -401,7 +401,7 @@ model Company {
   ///
   /// Null means the product mark is shown, which is the right answer for a company that
   /// has not supplied one — not a gap to refuse anything over.
-  logoRef   String?
+  logoRef String?
 
   /// The company's printed letterhead, as a full-page image (2026-10-11).
   ///
@@ -485,6 +485,18 @@ model Company {
   igstFraction Decimal @default(0.180000) @db.Decimal(8, 6)
   /// Income tax deducted at source on a works contract.
   tdsFraction  Decimal @default(0.020000) @db.Decimal(8, 6)
+
+  /// **Tax deducted at source under GST**, which is a different deduction from `tdsFraction`
+  /// (2026-10-13).
+  ///
+  /// A government client's payment abstract recovers both, each at 2%, on separate lines: income
+  /// tax under the Income Tax Act and GST TDS under section 51. One column holding both would halve
+  /// one of them on every bill, and the two are remitted to different authorities under different
+  /// returns.
+  ///
+  /// The labour cess the same abstract recovers is **not** here — it is `bocwCessRate` above, the
+  /// same statutory 1% this product already configures for 007's cess calculation.
+  gstTdsFraction Decimal @default(0.020000) @db.Decimal(8, 6)
 
   /// The labour wage cycle a payment sheet's period defaults to (013 FR-041) —
   /// independent of the monthly salary `payCycle` above, because daily-wage labour
@@ -2565,6 +2577,15 @@ model BillPackage {
   igstFraction      Decimal @db.Decimal(8, 6)
   tdsFraction       Decimal @db.Decimal(8, 6)
 
+  /// The two a **government client's** payment abstract recovers that a subcontractor's does not
+  /// (2026-10-13). Frozen like every other rate, and zero on a bill to a subcontractor — where the
+  /// deductions are the ones a main contractor makes, not the ones a department withholds.
+  ///
+  /// Defaulted at zero so the migration leaves every bill already issued reproducing exactly as it
+  /// stands. A bill composed after this carries the company's own rates.
+  labourCessFraction Decimal @default(0) @db.Decimal(8, 6)
+  gstTdsFraction     Decimal @default(0) @db.Decimal(8, 6)
+
   /// Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
   ///
   /// The source is stored because a client record carries no `state` today, so for a bill issued to
@@ -2580,10 +2601,19 @@ model BillPackage {
   // which deduction accounts for the difference, and a bucket cannot answer.
 
   workDone        Decimal @default(0) @db.Decimal(18, 2)
+  /// **Taken off the work before tax** — row 1B of a government client's payment abstract, where
+  /// the taxable amount is `1A - 1B` (2026-10-13). Distinct from `releaseWithheld`, which sits
+  /// beside the work in block A and is not taxed: this one changes the base every rate applies to.
+  workDeduction   Decimal @default(0) @db.Decimal(18, 2)
   releaseWithheld Decimal @default(0) @db.Decimal(18, 2)
   cgstAmount      Decimal @default(0) @db.Decimal(18, 2)
   sgstAmount      Decimal @default(0) @db.Decimal(18, 2)
   igstAmount      Decimal @default(0) @db.Decimal(18, 2)
+
+  /// The two statutory recoveries on a bill **to a client**, each a rate over the work done
+  /// (2026-10-13). Zero on a bill to a subcontractor, where neither applies.
+  labourCessAmount Decimal @default(0) @db.Decimal(18, 2)
+  gstTdsAmount     Decimal @default(0) @db.Decimal(18, 2)
 
   recoveryDiesel    Decimal @default(0) @db.Decimal(18, 2)
   debitAgainstCivil Decimal @default(0) @db.Decimal(18, 2)
@@ -2621,10 +2651,13 @@ model BillPackage {
   // whatever. The identity has to be able to fail or it is not worth asserting.
 
   workDoneUptoDate            Decimal @default(0) @db.Decimal(18, 2)
+  workDeductionUptoDate       Decimal @default(0) @db.Decimal(18, 2)
   releaseWithheldUptoDate     Decimal @default(0) @db.Decimal(18, 2)
   cgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
   sgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
   igstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
+  labourCessAmountUptoDate    Decimal @default(0) @db.Decimal(18, 2)
+  gstTdsAmountUptoDate        Decimal @default(0) @db.Decimal(18, 2)
   recoveryDieselUptoDate      Decimal @default(0) @db.Decimal(18, 2)
   debitAgainstCivilUptoDate   Decimal @default(0) @db.Decimal(18, 2)
   otherRecoveriesUptoDate     Decimal @default(0) @db.Decimal(18, 2)

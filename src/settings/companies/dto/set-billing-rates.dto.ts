@@ -60,4 +60,23 @@ export class SetBillingRatesDto {
   @Min(0)
   @Max(1)
   tdsFraction?: number;
+
+  /**
+   * Tax deducted at source **under GST**, which a government client recovers alongside the income
+   * tax one and on its own line (2026-10-13).
+   *
+   * Two columns rather than one at 4%: they are remitted to different authorities under different
+   * returns, and a single figure cannot be reconciled against either.
+   *
+   * The labour cess the same abstract recovers is not here — it is `bocwCessRate`, already
+   * configured for 007's cess calculation, and a second place to record one statutory percentage
+   * is a second place for it to be wrong.
+   */
+  @ApiPropertyOptional({ minimum: 0, maximum: 1, example: 0.02 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 6 })
+  @Min(0)
+  @Max(1)
+  gstTdsFraction?: number;
 }

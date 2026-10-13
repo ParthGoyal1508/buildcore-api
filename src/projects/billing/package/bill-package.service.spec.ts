@@ -166,6 +166,8 @@ function build(opts: {
             sgstFraction: dec(0.09),
             igstFraction: dec(0.18),
             tdsFraction: dec(0.02),
+            labourCessFraction: dec(0.01),
+            gstTdsFraction: dec(0.02),
             counterpartyKey: 'client-1',
             claims: [],
           };
@@ -196,6 +198,8 @@ function build(opts: {
           sgstFraction: dec(String(args.data.sgstFraction)),
           igstFraction: dec(String(args.data.igstFraction)),
           tdsFraction: dec(String(args.data.tdsFraction)),
+          labourCessFraction: dec(String(args.data.labourCessFraction)),
+          gstTdsFraction: dec(String(args.data.gstTdsFraction)),
           counterpartyKey: args.data.counterpartyKey,
           taxBasis: args.data.taxBasis,
           taxBasisSource: args.data.taxBasisSource,
@@ -344,6 +348,9 @@ function build(opts: {
       sgstFraction: '0.090000',
       igstFraction: '0.180000',
       tdsFraction: '0.020000',
+      gstTdsFraction: '0.020000',
+      // `bocwCessRate`, widened — the same statutory 1% 007 already configures.
+      labourCessFraction: '0.010000',
     }),
     // Both parties in Rajasthan, as the client's own package has them.
     getBillingIdentity: async () => ({

@@ -878,10 +878,13 @@ export class ClientBillsService {
             select: {
               status: true,
               workDone: true,
+              workDeduction: true,
               releaseWithheld: true,
               cgstAmount: true,
               sgstAmount: true,
               igstAmount: true,
+              labourCessAmount: true,
+              gstTdsAmount: true,
               recoveryDiesel: true,
               debitAgainstCivil: true,
               otherRecoveries: true,

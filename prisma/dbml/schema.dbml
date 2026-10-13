@@ -257,6 +257,16 @@ visible as a difference between two bills rather than as a silent re-derivation 
   sgstFraction Decimal [not null, default: 0.09]
   igstFraction Decimal [not null, default: 0.18]
   tdsFraction Decimal [not null, default: 0.02, note: 'Income tax deducted at source on a works contract.']
+  gstTdsFraction Decimal [not null, default: 0.02, note: '**Tax deducted at source under GST**, which is a different deduction from `tdsFraction`
+(2026-10-13).
+
+A government client\'s payment abstract recovers both, each at 2%, on separate lines: income
+tax under the Income Tax Act and GST TDS under section 51. One column holding both would halve
+one of them on every bill, and the two are remitted to different authorities under different
+returns.
+
+The labour cess the same abstract recovers is **not** here — it is `bocwCessRate` above, the
+same statutory 1% this product already configures for 007\'s cess calculation.']
   labourWageCycle LabourWageCycle [not null, default: 'weekly', note: 'The labour wage cycle a payment sheet\'s period defaults to (013 FR-041) —
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
@@ -1473,6 +1483,13 @@ counterparty.']
   sgstFraction Decimal [not null]
   igstFraction Decimal [not null]
   tdsFraction Decimal [not null]
+  labourCessFraction Decimal [not null, default: 0, note: 'The two a **government client\'s** payment abstract recovers that a subcontractor\'s does not
+(2026-10-13). Frozen like every other rate, and zero on a bill to a subcontractor — where the
+deductions are the ones a main contractor makes, not the ones a department withholds.
+
+Defaulted at zero so the migration leaves every bill already issued reproducing exactly as it
+stands. A bill composed after this carries the company\'s own rates.']
+  gstTdsFraction Decimal [not null, default: 0]
   taxBasis BillTaxBasis [not null, note: 'Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
 
 The source is stored because a client record carries no `state` today, so for a bill issued to
@@ -1480,10 +1497,16 @@ a client the fallback to the project\'s flag is the likely path rather than the 
 A fallback recorded and shown to nobody is a tax decision nobody made.']
   taxBasisSource BillTaxBasisSource [not null]
   workDone Decimal [not null, default: 0]
+  workDeduction Decimal [not null, default: 0, note: '**Taken off the work before tax** — row 1B of a government client\'s payment abstract, where
+the taxable amount is `1A - 1B` (2026-10-13). Distinct from `releaseWithheld`, which sits
+beside the work in block A and is not taxed: this one changes the base every rate applies to.']
   releaseWithheld Decimal [not null, default: 0]
   cgstAmount Decimal [not null, default: 0]
   sgstAmount Decimal [not null, default: 0]
   igstAmount Decimal [not null, default: 0]
+  labourCessAmount Decimal [not null, default: 0, note: 'The two statutory recoveries on a bill **to a client**, each a rate over the work done
+(2026-10-13). Zero on a bill to a subcontractor, where neither applies.']
+  gstTdsAmount Decimal [not null, default: 0]
   recoveryDiesel Decimal [not null, default: 0]
   debitAgainstCivil Decimal [not null, default: 0]
   otherRecoveries Decimal [not null, default: 0]
@@ -1503,10 +1526,13 @@ this month are the same row. Recovered-to-date is the `…UptoDate` cumulative b
 target was the only missing half. Nullable because a contract may carry neither.']
   performanceSecurityTotal Decimal
   workDoneUptoDate Decimal [not null, default: 0]
+  workDeductionUptoDate Decimal [not null, default: 0]
   releaseWithheldUptoDate Decimal [not null, default: 0]
   cgstAmountUptoDate Decimal [not null, default: 0]
   sgstAmountUptoDate Decimal [not null, default: 0]
   igstAmountUptoDate Decimal [not null, default: 0]
+  labourCessAmountUptoDate Decimal [not null, default: 0]
+  gstTdsAmountUptoDate Decimal [not null, default: 0]
   recoveryDieselUptoDate Decimal [not null, default: 0]
   debitAgainstCivilUptoDate Decimal [not null, default: 0]
   otherRecoveriesUptoDate Decimal [not null, default: 0]

@@ -26,9 +26,14 @@ const RATES = {
   sgstFraction: d('0.090000'),
   igstFraction: d('0.180000'),
   tdsFraction: d('0.020000'),
+  // Zero, because RA-12 is a bill **to a subcontractor** and neither applies there. The client's
+  // own abstract is reproduced separately, at its own rates.
+  labourCessFraction: d(0),
+  gstTdsFraction: d(0),
 };
 
 const NOTHING_ENTERED = {
+  workDeduction: d(0),
   releaseWithheld: d(0),
   recoveryDiesel: d(0),
   debitAgainstCivil: d(0),
@@ -370,5 +375,113 @@ describe('displayRupees', () => {
     expect(displayRupees(new Prisma.Decimal('92084.30'))).toBe('92084');
     expect(displayRupees(new Prisma.Decimal('0.5'))).toBe('1');
     expect(displayRupees(new Prisma.Decimal('-0.5'))).toBe('-1');
+  });
+});
+
+/**
+ * The **client's** payment abstract, reproduced (2026-10-13).
+ *
+ * Figures transcribed from the authority's own sheet for *Widening & Strengthening of Road NH-52
+ * (Deva Khera) to NH-148D (Dhor)*, RA Bill 2, up-to-date column — not inferred. A government
+ * client's abstract is a different document from a subcontractor's: its recoveries are four
+ * statutory percentages rather than the judgements a quantity surveyor enters, and two of them,
+ * the labour cess and the deduction at source under GST, had nowhere to be recorded at all.
+ *
+ *     Value of Work Done            8,83,21,358.05
+ *     Labour Cess @ 1%                  8,83,213.58
+ *     Advance Income Tax @ 2%          17,66,427.16
+ *     GST TDS @ 2%                     17,66,427.16
+ *     Security Deposit/Retention @ 5%  44,16,067.90
+ *     Total Recoveries                 88,32,135.80
+ */
+describe('the client’s own payment abstract, reproduced', () => {
+  const CLIENT_RATES = {
+    retentionFraction: d('0.050000'),
+    cgstFraction: d('0.090000'),
+    sgstFraction: d('0.090000'),
+    igstFraction: d('0.180000'),
+    tdsFraction: d('0.020000'),
+    labourCessFraction: d('0.010000'),
+    gstTdsFraction: d('0.020000'),
+  };
+
+  const sheet = input({
+    workDone: d('88321358.05'),
+    rates: CLIENT_RATES,
+  });
+
+  it('reaches all four of the authority’s recoveries, to the paisa', () => {
+    const { thisBill } = billAbstract(sheet);
+
+    // **Each asserted separately, and the two new ones against the two that already existed.**
+    // A single assertion on the total would pass for a labour cess computed at the income-tax rate
+    // and an income tax computed at the cess rate — the pair sums to the same figure, and this is a
+    // document whose rows are checked one at a time by somebody reconciling a return.
+    expect(thisBill.labourCessAmount.toFixed(2)).toBe('883213.58');
+    expect(thisBill.tdsAmount.toFixed(2)).toBe('1766427.16');
+    expect(thisBill.gstTdsAmount.toFixed(2)).toBe('1766427.16');
+    expect(thisBill.retentionAmount.toFixed(2)).toBe('4416067.90');
+
+    // **A measurement, not an assertion** — the house treatment for a divergence from a client's
+    // own paper, as `client-bills.e2e-spec.ts` gives the two quoted totals.
+    //
+    // The sheet prints 88,32,135.80 and this produces 88,32,135.81. Both are right and they differ
+    // because the authority's spreadsheet adds the four *displayed* two-decimal figures, where this
+    // file's rule — settled from the subcontractor document, see the one-rupee proof in
+    // `bill-abstract.ts` — adds at full precision and rounds once. Four rows ending .5805, .161,
+    // .161 and .9025 come to .805, which rounds up.
+    //
+    // Pinned so that a future change to the rounding rule has to come past this line and say so.
+    expect(thisBill.totalWithheld.toFixed(2)).toBe('8832135.81');
+    expect(
+      thisBill.totalWithheld.minus(d('8832135.80')).abs().toNumber(),
+    ).toBeLessThanOrEqual(0.01);
+
+    // The cess is a *different* rate from the two deductions at source, which is the whole reason
+    // it is its own column: one column holding both would make this equality true by construction.
+    expect(thisBill.labourCessAmount.equals(thisBill.tdsAmount)).toBe(false);
+  });
+
+  it('takes nothing of the kind off a bill to a subcontractor', () => {
+    // The guard that matters most. `resolveRates` freezes both at zero for `to_subcontractor`, and
+    // a bill that quietly recovered a labour cess and a GST deduction from a subcontractor would be
+    // three per cent short on every payment and would still balance on its own face.
+    const subcontractor = billAbstract(input({ workDone: d('88321358.05') }));
+
+    expect(subcontractor.thisBill.labourCessAmount.isZero()).toBe(true);
+    expect(subcontractor.thisBill.gstTdsAmount.isZero()).toBe(true);
+    expect(subcontractor.thisBill.totalWithheld).not.toEqual(
+      billAbstract(sheet).thisBill.totalWithheld,
+    );
+  });
+
+  it('computes every rate over the work less row 1B, as the sheet’s own formula does', () => {
+    // *Total Value of Work Done (1A-1B)* is what the authority's sheet labels its taxable amount,
+    // and every percentage below it is taken over that figure rather than over the gross.
+    const withDeduction = billAbstract({
+      ...sheet,
+      entered: { ...NOTHING_ENTERED, workDeduction: d('8321358.05') },
+    });
+
+    expect(withDeduction.thisBill.taxableAmount.toFixed(2)).toBe('80000000.00');
+    // 1% and 5% of eight crore, not of the gross — the assertion fails if the base is `workDone`,
+    // where the figures would be the ones in the test above.
+    expect(withDeduction.thisBill.labourCessAmount.toFixed(2)).toBe(
+      '800000.00',
+    );
+    expect(withDeduction.thisBill.retentionAmount.toFixed(2)).toBe(
+      '4000000.00',
+    );
+    expect(withDeduction.thisBill.cgstAmount.toFixed(2)).toBe('7200000.00');
+  });
+
+  it('balances: the payable is block 1 less the one recoveries total', () => {
+    // The identity the client's sheet states as `Payable Amount (1-3)`. `totalWithheld` is B+C+D
+    // rather than block B alone, so this holds whatever else the package carries — which is what
+    // stops a figure entered on the wrong row from vanishing out of the subtraction.
+    const { thisBill } = billAbstract(sheet);
+    expect(thisBill.payable).toEqual(
+      thisBill.workTotal.minus(thisBill.totalWithheld),
+    );
   });
 });
