@@ -61,11 +61,15 @@ export function withRlsContext<T>(
   const companyId = isSuperAdmin ? '' : ctx.companyId ?? '';
 
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.is_super_admin', ${
-      isSuperAdmin ? 'true' : 'false'
-    }, true)`;
-    await tx.$executeRaw`SELECT set_config('app.current_company_id', ${companyId}, true)`;
-    // The session's time zone, pinned to UTC for the length of this transaction (025 FR-041).
+    // One statement, not three (2026-10-14). Each statement is a round trip to the database,
+    // and in production the API and the database are not on the same machine: every request
+    // opens several of these transactions, so three separate `set_config`s were most of the
+    // latency a deployed request paid before it had read a single row.
+    //
+    // `app.is_super_admin` and `app.current_company_id` are what every tenant-scoped table's
+    // `tenant_isolation` RLS policy checks.
+    //
+    // `TimeZone`: the session's time zone, pinned to UTC for the length of this transaction (025 FR-041).
     //
     // **Found on 2026-10-05 by asking a running server for one day's measurement and being told
     // nothing had happened.** Every `DateTime` column in this schema is `timestamp without time
@@ -85,7 +89,9 @@ export function withRlsContext<T>(
     // Safe because this codebase computes every date in JavaScript — `zonedDateOnly` does the one
     // genuine time-zone conversion the product needs, against the configured company time zone, and
     // no query reads the clock from the database except one `NOW()` writing an `updatedAt`.
-    await tx.$executeRaw`SELECT set_config('TimeZone', 'UTC', true)`;
+    await tx.$executeRaw`SELECT set_config('app.is_super_admin', ${
+      isSuperAdmin ? 'true' : 'false'
+    }, true), set_config('app.current_company_id', ${companyId}, true), set_config('TimeZone', 'UTC', true)`;
     return fn(tx);
   });
 }

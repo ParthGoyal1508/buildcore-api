@@ -167,23 +167,26 @@ export class CompanySelectionService {
       return null;
     }
 
-    const row = await withRlsContext(
+    // One transaction for both reads: this runs on every authenticated request, and each
+    // transaction costs several round trips to the database before the read itself.
+    const { row, company } = await withRlsContext(
       this.prisma,
       { isSuperAdmin: true },
-      (tx) =>
-        tx.userCompanySelection.findUnique({ where: { userId: caller.id } }),
+      async (tx) => {
+        const row = await tx.userCompanySelection.findUnique({
+          where: { userId: caller.id },
+        });
+        const company = row
+          ? await tx.company.findUnique({
+              where: { id: row.companyId },
+              select: { id: true },
+            })
+          : null;
+        return { row, company };
+      },
     );
     if (!row) return null;
 
-    const company = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.company.findUnique({
-          where: { id: row.companyId },
-          select: { id: true },
-        }),
-    );
     if (!company) {
       await this.clear(caller.id);
       return null;
