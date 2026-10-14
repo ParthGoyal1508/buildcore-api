@@ -45,6 +45,7 @@ export class ProjectLetterSource implements OnModuleInit {
             orderNumber: true,
             startDate: true,
             expectedEndDate: true,
+            cgstApplicable: true,
             client: { select: { name: true, address: true } },
           },
         }),
@@ -67,6 +68,9 @@ export class ProjectLetterSource implements OnModuleInit {
       // nothing in the shape the letters registry resolves (`standard-letter-templates.spec`).
       clientName: project.client?.name ?? '',
       clientAddress: project.client?.address ?? '',
+      // The project's GST choice (2026-10-14), so a work order splits its tax the way every
+      // bill on the project does.
+      gstOnBills: project.cgstApplicable ? 'CGST + SGST' : 'IGST',
     };
   }
 }

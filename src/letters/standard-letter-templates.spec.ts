@@ -4,8 +4,10 @@ import { FORBIDDEN_FIELD_PATH_FRAGMENTS } from '../settings/letter-kinds/letter-
 import { parseBlocks } from './letter-pdf.renderer';
 import {
   STANDARD_LETTER_TEMPLATES,
+  SUPPLIED_TOKENS,
   tokensIn,
 } from './standard-letter-templates';
+import { LINE_ITEM_INPUTS } from './line-items';
 
 /**
  * The shipped letter bodies (2026-10-11; transfer, termination and F&F added 2026-10-13).
@@ -44,19 +46,31 @@ describe('standard letter templates', () => {
 
   describe.each(STANDARD_LETTER_TEMPLATES)('$kindKey', (template) => {
     const declared = new Set(template.fields.map((f) => f.token));
-    const used = tokensIn(template.body);
+    // The item table's inputs are read by the expansion, not the body (`line-items.ts`), so a
+    // body printing the table uses them through it.
+    const used = [
+      ...tokensIn(template.body),
+      ...(tokensIn(template.body).includes('lineItemsTable')
+        ? LINE_ITEM_INPUTS.filter((t) => declared.has(t))
+        : []),
+    ];
 
     it('declares every token the body uses', () => {
       // The direction that matters: an undeclared token is never asked for and renders
       // as a blank in a signed document.
-      expect(used.filter((t) => !declared.has(t))).toEqual([]);
+      // Less the ones the render supplies — the date, the reference, the table and its totals.
+      expect(
+        used.filter((t) => !declared.has(t) && !SUPPLIED_TOKENS.has(t)),
+      ).toEqual([]);
     });
 
     it('uses every token it declares', () => {
       // The other direction. A declared token the body does not use is a question put to
       // whoever is issuing the letter whose answer goes nowhere — and it trains people to
       // type into boxes that do not matter.
-      expect([...declared].filter((t) => !used.includes(t))).toEqual([]);
+      expect(
+        [...declared].filter((t) => !(used as string[]).includes(t)),
+      ).toEqual([]);
     });
 
     it('gives every non-manual field a source path', () => {

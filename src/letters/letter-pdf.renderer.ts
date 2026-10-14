@@ -101,10 +101,46 @@ export interface RenderLetterInput {
    * signature graphic either.
    */
   draft?: boolean;
+  /**
+   * The company's logo and name across the top of the first page, in place of the letterhead
+   * artwork (2026-10-14). The client's work order and purchase order are not written on
+   * letterhead: each opens with the logo, the company name and the registered office, then the
+   * document. Set, the letterhead is not drawn even when there is one.
+   */
+  brandHeader?: BrandHeader;
+  /**
+   * Two signing blocks at the foot of every page — the work order's "For Parth Realcon Private
+   * Limited / For M/s …", each over "Authorized Signatory" (2026-10-14). A work order is signed
+   * page by page, so the place for the signatures is on every page, not only the last.
+   */
+  pageFooter?: { left: string; right: string };
+  /** What the reference is called on this document — "LOI No.", "WO No.". "Ref. No." if unset. */
+  referenceLabel?: string;
 }
 
-/** One parsed block of the body: a run of prose, or a table. */
+export interface BrandHeader {
+  logo: Buffer | null;
+  name: string;
+  /** Registered office, phone, email, website — one line each, blank ones left out. */
+  lines: string[];
+}
+
+/**
+ * One parsed block of the body: a run of prose, a table, or one of three markers a template
+ * writes on a line of its own (2026-10-14):
+ *
+ * - `## Heading` — a heading, in bold. The work order runs to seven pages of numbered clauses
+ *   whose headings are what a reader navigates by.
+ * - `[[pagebreak]]` — the rest starts on a new page. The LOI's BOQ is an annexure, and an
+ *   annexure begins on its own page.
+ * - `[[signature]]` — where the signature goes, when it is not at the end. The LOI and the
+ *   purchase order are signed by the company and *then* carry the vendor's acceptance; at the
+ *   end, the company's signature would sit under the vendor's acceptance block.
+ */
 type Block =
+  | { kind: 'heading'; text: string }
+  | { kind: 'break' }
+  | { kind: 'signature' }
   | { kind: 'text'; lines: string[] }
   | {
       kind: 'table';
@@ -149,6 +185,20 @@ export function parseBlocks(body: string): Block[] {
 
   for (const line of body.split('\n')) {
     const trimmed = line.trim();
+    if (trimmed === '[[pagebreak]]' || trimmed === '[[signature]]') {
+      flushText();
+      flushTable();
+      blocks.push({
+        kind: trimmed === '[[pagebreak]]' ? 'break' : 'signature',
+      });
+      continue;
+    }
+    if (trimmed.startsWith('## ')) {
+      flushText();
+      flushTable();
+      blocks.push({ kind: 'heading', text: trimmed.slice(3).trim() });
+      continue;
+    }
     const isRow =
       trimmed.length > 1 && trimmed.startsWith('|') && trimmed.endsWith('|');
     if (!isRow) {
@@ -191,9 +241,30 @@ function columnWidths(rows: string[][], measure: (s: string) => number) {
       24,
     ),
   );
-  const total = natural.reduce((a, b) => a + b, 0);
   const usable = CONTENT_WIDTH - count * 2 * CELL_PAD;
-  return natural.map((w) => (w / total) * usable + 2 * CELL_PAD);
+  const total = natural.reduce((a, b) => a + b, 0);
+  if (total <= usable) {
+    return natural.map((w) => (w / total) * usable + 2 * CELL_PAD);
+  }
+  // Too wide for the page: the widest columns give up the space, not every column in
+  // proportion (2026-10-14). Shrunk proportionally, a work order's seven columns wrapped its
+  // rates mid-figure — "4,850." over "00" — to make room for a description that would have
+  // wrapped happily. Taking the excess off the top leaves the short columns their width.
+  const widths = [...natural];
+  let excess = total - usable;
+  while (excess > 0.5) {
+    const widest = Math.max(...widths);
+    const atWidest = widths.filter((w) => w >= widest - 0.01).length;
+    const next = Math.max(0, ...widths.filter((w) => w < widest - 0.01));
+    // Bring the widest down towards the next widest, or by the whole excess if that is less.
+    const cut = Math.min((widest - next) * atWidest, excess);
+    const each = cut / atWidest;
+    for (let i = 0; i < widths.length; i++) {
+      if (widths[i] >= widest - 0.01) widths[i] -= each;
+    }
+    excess -= cut;
+  }
+  return widths.map((w) => w + 2 * CELL_PAD);
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- pdfkit ships no types for the
@@ -206,10 +277,12 @@ function drawTable(
   rows: string[][],
   headed: boolean,
   newPage: () => void,
+  bottomLimit: number,
 ): void {
   doc.fontSize(TABLE_SIZE);
-  const widths = columnWidths(rows, (s) => doc.widthOfString(s));
-  const bottomLimit = PAGE.height - SAFE.bottom;
+  // Measured in the body face, with a margin for the bold heading row — measured exactly, a
+  // heading like "S.No." broke over two lines in its own column.
+  const widths = columnWidths(rows, (s) => doc.widthOfString(s) * 1.08);
 
   rows.forEach((row, rowIndex) => {
     const isHeading = headed && rowIndex === 0;
@@ -279,22 +352,56 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     // is most of the file. `openImage` registers it as one XObject that every page points
     // at — and it is also where a corrupt file throws, so the fallback lives here rather
     // than being retried per page.
-    let stationeryImage: unknown = null;
-    if (input.letterhead) {
+    const open = (bytes: Buffer | null | undefined): unknown => {
+      if (!bytes) return null;
       try {
-        stationeryImage = doc.openImage(input.letterhead);
+        return doc.openImage(bytes);
       } catch {
-        // A letterhead pdfkit cannot decode must not lose the letter. It renders on plain
-        // paper; the words are the document.
-        stationeryImage = null;
+        // Artwork pdfkit cannot decode must not lose the letter. It renders without it;
+        // the words are the document.
+        return null;
       }
-    }
+    };
+    const brand = input.brandHeader ?? null;
+    const stationeryImage = brand ? null : open(input.letterhead);
+    const logoImage: any = brand ? open(brand.logo) : null;
+
+    // The clear band. Letterhead artwork reserves its own header and footer; a page that
+    // prints its own header (the work order's logo band) only needs a margin, plus room at the
+    // foot for the signing blocks when it carries them. Plain paper keeps the letterhead's
+    // geometry, so a company that uploads one later does not see its letters reflow.
+    const geometry = brand
+      ? { top: 40, bottom: input.pageFooter ? 96 : 56 }
+      : { top: SAFE.top, bottom: SAFE.bottom };
+    const bottomLimit = PAGE.height - geometry.bottom;
+
     const stationery = () => {
       if (!stationeryImage) return;
       doc.image(stationeryImage, 0, 0, {
         width: PAGE.width,
         height: PAGE.height,
       });
+    };
+
+    const footer = () => {
+      if (!input.pageFooter) return;
+      const top = PAGE.height - geometry.bottom + 22;
+      const half = CONTENT_WIDTH / 2;
+      doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
+      doc.text(input.pageFooter.left, SAFE.left, top, { width: half - 10 });
+      doc.text(input.pageFooter.right, SAFE.left + half, top, {
+        width: half,
+        align: 'right',
+      });
+      doc.font('Helvetica').fontSize(9);
+      doc.text('Authorized Signatory', SAFE.left, top + 40, {
+        width: half - 10,
+      });
+      doc.text('Authorized Signatory', SAFE.left + half, top + 40, {
+        width: half,
+        align: 'right',
+      });
+      doc.fontSize(BODY_SIZE);
     };
 
     const draftMark = () => {
@@ -324,12 +431,51 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     const newPage = () => {
       doc.addPage();
       stationery();
+      footer();
       draftMark();
       doc.x = SAFE.left;
-      doc.y = SAFE.top;
+      doc.y = geometry.top;
     };
 
     newPage();
+
+    if (brand) {
+      // Logo on the left, the name and the registered office beside it, a rule under both —
+      // the band the client's work order and purchase order open with.
+      const top = doc.y;
+      let textLeft = SAFE.left;
+      let logoBottom = top;
+      if (logoImage) {
+        const scale = Math.min(120 / logoImage.width, 56 / logoImage.height);
+        doc.image(logoImage, SAFE.left, top, {
+          width: logoImage.width * scale,
+          height: logoImage.height * scale,
+        });
+        textLeft = SAFE.left + logoImage.width * scale + 14;
+        logoBottom = top + logoImage.height * scale;
+      }
+      const textWidth = SAFE.left + CONTENT_WIDTH - textLeft;
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(15)
+        .fillColor('#000000')
+        .text((brand.name ?? '').toUpperCase(), textLeft, top, {
+          width: textWidth,
+        });
+      doc.font('Helvetica').fontSize(8.5);
+      for (const line of brand.lines) {
+        doc.text(line, textLeft, doc.y + 1, { width: textWidth });
+      }
+      const ruleAt = Math.max(doc.y, logoBottom) + 8;
+      doc
+        .lineWidth(1)
+        .strokeColor('#333333')
+        .moveTo(SAFE.left, ruleAt)
+        .lineTo(SAFE.left + CONTENT_WIDTH, ruleAt)
+        .stroke();
+      doc.font('Helvetica').fontSize(BODY_SIZE).fillColor('#000000');
+      doc.y = ruleAt + 12;
+    }
 
     // Reference and date on one line, as every document the client sent carries them.
     // Skipped entirely when neither is known, rather than printing an empty rule.
@@ -337,10 +483,15 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       doc.fontSize(BODY_SIZE).fillColor('#000000');
       const top = doc.y;
       if (input.referenceNo) {
-        doc.text(`Ref. No.: ${input.referenceNo}`, SAFE.left, top, {
-          width: CONTENT_WIDTH / 2,
-          align: 'left',
-        });
+        doc.text(
+          `${input.referenceLabel ?? 'Ref. No.'}: ${input.referenceNo}`,
+          SAFE.left,
+          top,
+          {
+            width: CONTENT_WIDTH / 2,
+            align: 'left',
+          },
+        );
       }
       if (input.issueDate) {
         doc.text(
@@ -368,12 +519,16 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     doc.y += 14;
 
     const blocks = parseBlocks(input.body);
+    // Where the signature goes: at a `[[signature]]` marker, else after everything.
+    let signatureAt = blocks.findIndex((b) => b.kind === 'signature');
+    if (signatureAt < 0) signatureAt = blocks.length;
+
     // The closing line — "For Parth Realcon Private Limited" — belongs with the signature under
     // it. Rendered as part of the body, a long letter put the closing at the foot of one page and
-    // the signature alone on the next (2026-10-14). So the last paragraph of the body is split off
-    // and moved over together with the signature when the two do not fit.
+    // the signature alone on the next (2026-10-14). So the last paragraph before the signature is
+    // split off and moved over together with the signature when the two do not fit.
     let closing: string | null = null;
-    const last = blocks[blocks.length - 1];
+    const last = blocks[signatureAt - 1];
     if (input.signature && last?.kind === 'text') {
       const lines = [...last.lines];
       while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
@@ -385,19 +540,36 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       }
     }
 
-    for (const block of blocks) {
+    const drawBlock = (block: Block) => {
+      if (block.kind === 'break') {
+        newPage();
+        return;
+      }
+      if (block.kind === 'signature') return;
+      if (block.kind === 'heading') {
+        // A heading never ends a page: it moves over with at least two lines of what it heads.
+        if (bottomLimit - doc.y < BODY_SIZE * 4) newPage();
+        doc.y += 4;
+        doc
+          .font('Helvetica-Bold')
+          .fontSize(BODY_SIZE)
+          .text(block.text, SAFE.left, doc.y, { width: CONTENT_WIDTH });
+        doc.font('Helvetica');
+        doc.y += 3;
+        return;
+      }
       if (block.kind === 'table') {
         doc.y += 4;
-        drawTable(doc, block.rows, block.headed, newPage);
+        drawTable(doc, block.rows, block.headed, newPage, bottomLimit);
         doc.y += 8;
-        continue;
+        return;
       }
       // pdfkit paginates prose itself, but only against its own margins — which are zero
       // here — so the bottom limit is given explicitly and `height` makes it break rather
       // than run over the footer artwork.
       let remaining = block.lines.join('\n');
       while (remaining.length > 0) {
-        const available = PAGE.height - SAFE.bottom - doc.y;
+        const available = bottomLimit - doc.y;
         if (available < BODY_SIZE * 2) {
           newPage();
           continue;
@@ -417,7 +589,9 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         remaining = remaining.slice(consumed).replace(/^\s+/, '');
         newPage();
       }
-    }
+    };
+
+    blocks.slice(0, signatureAt).forEach(drawBlock);
 
     if (closing !== null) {
       const height = doc.heightOfString(closing, {
@@ -426,7 +600,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       });
       // The blank line that separated it from the paragraph above, which the split took away.
       const gap = doc.currentLineHeight(true) + LINE_GAP;
-      if (PAGE.height - SAFE.bottom - doc.y < gap + height + SIGNATURE_BLOCK) {
+      if (bottomLimit - doc.y < gap + height + SIGNATURE_BLOCK) {
         newPage();
       } else {
         doc.y += gap;
@@ -439,7 +613,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     }
 
     if (input.signature) {
-      if (PAGE.height - SAFE.bottom - doc.y < SIGNATURE_BLOCK) newPage();
+      if (bottomLimit - doc.y < SIGNATURE_BLOCK) newPage();
       doc.y += 18;
       const top = doc.y;
       const image = input.signature.image;
@@ -486,7 +660,12 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         .text(input.signature.title, SAFE.left, doc.y, {
           width: CONTENT_WIDTH,
         });
+      doc.fontSize(BODY_SIZE);
+      doc.y += 10;
     }
+
+    // Whatever follows the signature — the vendor's acceptance, an annexure.
+    blocks.slice(signatureAt + 1).forEach(drawBlock);
 
     doc.end();
   });

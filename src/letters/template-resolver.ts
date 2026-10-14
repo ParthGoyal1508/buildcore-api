@@ -2,8 +2,16 @@ import { BadRequestException } from '@nestjs/common';
 
 import { DOCUMENT_TYPE_RESTRICTED } from './letter-error-codes';
 
-/** `{{token}}`, the same shape 011 established for recruitment templates. */
-const TOKEN_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
+/**
+ * `{{token}}`, the same shape 011 established for recruitment templates.
+ *
+ * `{{?token}}` is the same token marked optional (2026-10-14): a line holding one that resolves
+ * blank is left out entirely. The purchase order's notes — training, site support, inventory —
+ * apply to some orders and not others, and "Training: " printed with nothing after it reads as
+ * something forgotten rather than something that does not apply.
+ */
+const TOKEN_RE = /\{\{\s*\??\s*([\w.]+)\s*\}\}/g;
+const OPTIONAL_TOKEN_RE = /\{\{\s*\?\s*([\w.]+)\s*\}\}/g;
 
 /** One document type, as the resolver needs to see it. */
 export interface ResolverDocumentType {
@@ -91,11 +99,22 @@ export function renderTemplate(
   // break would end the row mid-cell and spill the rest out of the table, so there it is joined.
   return body
     .split('\n')
+    .filter((line) => {
+      OPTIONAL_TOKEN_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = OPTIONAL_TOKEN_RE.exec(line)) !== null) {
+        if (!(values[match[1]] ?? '').trim()) return false;
+      }
+      return true;
+    })
     .map((line) => {
       const inTable = line.trimStart().startsWith('|');
       return line.replace(TOKEN_RE, (_, token: string) => {
         const value = (values[token] ?? '').replace(/\r\n?/g, '\n');
-        return inTable
+        // A value that is itself table rows — the item table a commercial letter expands from
+        // its lines — keeps its line breaks wherever it stands: joined, it would be one row.
+        const isTable = value.trimStart().startsWith('|');
+        return inTable && !isTable
           ? value
               .split('\n')
               .map((part) => part.trim())

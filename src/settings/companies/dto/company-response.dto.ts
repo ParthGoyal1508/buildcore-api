@@ -17,6 +17,9 @@ export class CompanyResponseDto {
   @ApiPropertyOptional() city: string | null;
   @ApiPropertyOptional() state: string | null;
   @ApiPropertyOptional() pinCode: string | null;
+  @ApiPropertyOptional() phone: string | null;
+  @ApiPropertyOptional() email: string | null;
+  @ApiPropertyOptional() website: string | null;
   @ApiPropertyOptional() pfEstablishmentCode: string | null;
   @ApiPropertyOptional() esicCode: string | null;
   @ApiPropertyOptional() professionalTaxRegNumber: string | null;
