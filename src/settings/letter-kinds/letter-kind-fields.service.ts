@@ -373,6 +373,12 @@ export class LetterKindFieldsService {
     fields: LetterFieldView[],
     records: Partial<Record<LetterFieldSource, Record<string, unknown>>>,
     supplied: Record<string, string>,
+    /**
+     * For a preview (2026-10-14): a required value that is missing prints as its label in
+     * brackets — "[Scope of work / supply]" — instead of refusing. The preview is how somebody
+     * finds out what is still missing, so it cannot be the thing that refuses to show them.
+     */
+    options: { lenient?: boolean } = {},
   ): Record<string, string> {
     const values: Record<string, string> = {};
     const missing: string[] = [];
@@ -382,7 +388,8 @@ export class LetterKindFieldsService {
         const value = supplied[field.token];
         if (value === undefined || value === '') {
           if (field.isRequired) missing.push(field.token);
-          values[field.token] = '';
+          values[field.token] =
+            options.lenient && field.isRequired ? `[${field.label}]` : '';
           continue;
         }
         values[field.token] = value;
@@ -399,13 +406,14 @@ export class LetterKindFieldsService {
         : undefined;
       if (raw === undefined || raw === null || raw === '') {
         if (field.isRequired) missing.push(field.token);
-        values[field.token] = '';
+        values[field.token] =
+          options.lenient && field.isRequired ? `[${field.label}]` : '';
         continue;
       }
       values[field.token] = stringify(raw);
     }
 
-    if (missing.length > 0) {
+    if (missing.length > 0 && !options.lenient) {
       throw new BadRequestException({
         statusCode: 400,
         code: 'LETTER_REQUIRED_FIELD_UNRESOLVED',

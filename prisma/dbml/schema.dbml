@@ -5059,6 +5059,12 @@ FR-013 requires a previously issued letter to render as it was issued, and a
 signatory\'s graphic can be replaced. An implementation storing only `signatoryId`
 silently rewrites history the first time somebody uploads a new signature.']
   signatory Signatory
+  composedVariables Json [note: 'What was typed when the letter was composed (2026-10-14), kept for its issue.
+
+A letter that needs an approval is composed now and issued later, often from another
+screen, and until this column nothing typed at compose survived to the issue — the vendor
+and scope of a work order were asked for, approved, and then printed blank. Values typed at
+issue still win over these. Null for letters composed before this existed.']
   appliedSignatureRef String
   countersignedRef String [note: 'FR-017: the executed copy that comes back, and FR-018\'s issued-vs-executed
 distinction, which is rendered from whether this is null.']

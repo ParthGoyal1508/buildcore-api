@@ -145,6 +145,70 @@ export class CandidateService {
   }
 
   /** Unmasked candidate detail — access is audit-logged (FR-006/READ). */
+  /**
+   * How a candidate got where they are (2026-10-14) — every stage change, in order, with who made
+   * it. **Carries no contact details**, so it is read without the audited reveal `findOne` is:
+   * the pipeline's candidate panel shows it on open, and unmasking the phone and email every time
+   * somebody looked at a candidate's history would make the mask decorative.
+   */
+  async timeline(caller: AuthenticatedUser, id: string) {
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const row = await tx.candidate.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          companyId: true,
+          deletedAt: true,
+          createdAt: true,
+          rejectionReason: true,
+          stageHistory: { orderBy: { occurredAt: 'asc' } },
+        },
+      });
+      if (!row || row.deletedAt) {
+        throw new NotFoundException(`Candidate ${id} not found`);
+      }
+      assertInScope(caller, row, `Candidate ${id}`);
+
+      const actorIds = [
+        ...new Set(
+          row.stageHistory
+            .map((h) => h.actorId)
+            .filter((a): a is string => Boolean(a)),
+        ),
+      ];
+      const actors = actorIds.length
+        ? await tx.user.findMany({
+            where: { id: { in: actorIds } },
+            select: {
+              id: true,
+              displayName: true,
+              firstname: true,
+              lastname: true,
+            },
+          })
+        : [];
+      const nameOf = new Map(
+        actors.map((u) => [
+          u.id,
+          u.displayName ??
+            ([u.firstname, u.lastname].filter(Boolean).join(' ') || null),
+        ]),
+      );
+
+      return {
+        addedAt: row.createdAt.toISOString(),
+        rejectionReason: row.rejectionReason,
+        stages: row.stageHistory.map((h) => ({
+          fromStage: h.fromStage,
+          toStage: h.toStage,
+          occurredAt: h.occurredAt.toISOString(),
+          remarks: h.remarks,
+          actorName: h.actorId ? nameOf.get(h.actorId) ?? null : null,
+        })),
+      };
+    });
+  }
+
   async findOne(caller: AuthenticatedUser, id: string, ipAddress: string) {
     const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.candidate.findUnique({

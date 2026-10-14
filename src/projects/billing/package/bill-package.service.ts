@@ -53,6 +53,11 @@ import {
   packageLabel,
 } from '../bill-number';
 import { compareBoqNo, sortByBoqNo } from '../../boq/boq-order';
+import {
+  AWARD_LINE_ORDER,
+  nonBoqAwardNo,
+  compareAwardLines,
+} from './award-line-number';
 
 /**
  * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
@@ -383,7 +388,7 @@ export class BillPackageService {
 
     const award = await tx.workOrderBOQItem.findMany({
       where: { workOrderId, workOrder: { projectId } },
-      orderBy: [{ createdAt: 'asc' }],
+      orderBy: AWARD_LINE_ORDER,
       select: {
         id: true,
         description: true,
@@ -395,12 +400,13 @@ export class BillPackageService {
       },
     });
 
-    return award.map((item, index) => ({
+    let untied = 0;
+    return award.map((item) => ({
       id: item.id,
       // An award line carries no number of its own. Its BOQ line's is used where it has one, and a
-      // positional number otherwise — stated rather than left blank, because every sheet in the
+      // non-BOQ line is numbered `NB-n` — stated rather than left blank, because every sheet in the
       // client's package is found by its number.
-      boqNo: item.boqTaskItem?.boqNo ?? `A.${index + 1}`,
+      boqNo: item.boqTaskItem?.boqNo ?? nonBoqAwardNo(++untied),
       description: item.description,
       unit: item.unit,
       scopeQty: item.awardedQty,
@@ -2953,9 +2959,22 @@ export class BillPackageService {
               a.clientBillLine.boqTaskItem.boqNo,
               b.clientBillLine.boqTaskItem.boqNo,
             )
-          : (a.raBillLine?.workOrderBoqItem.createdAt.getTime() ?? 0) -
-            (b.raBillLine?.workOrderBoqItem.createdAt.getTime() ?? 0),
+          : a.raBillLine && b.raBillLine
+          ? compareAwardLines(
+              a.raBillLine.workOrderBoqItem,
+              b.raBillLine.workOrderBoqItem,
+            )
+          : 0,
       );
+      // A subcontractor's non-BOQ award lines, numbered in that order (see `award-line-number.ts`).
+      let untied = 0;
+      const nonBoqNo = new Map<string, string>();
+      for (const claim of pkg.claims) {
+        const award = claim.raBillLine?.workOrderBoqItem;
+        if (award && award.boqTaskItemId === null) {
+          nonBoqNo.set(award.id, nonBoqAwardNo(++untied));
+        }
+      }
 
       const claims: BillPackageClaimView[] = pkg.claims.map((claim) => {
         const client = claim.clientBillLine;
@@ -2985,6 +3004,7 @@ export class BillPackageService {
           boqNo:
             client?.boqTaskItem.boqNo ??
             ra?.workOrderBoqItem.boqTaskItem?.boqNo ??
+            (ra ? nonBoqNo.get(ra.workOrderBoqItem.id) : undefined) ??
             '',
           description:
             client?.boqTaskItem.taskName ??

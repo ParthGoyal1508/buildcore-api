@@ -315,6 +315,14 @@ describe('resolving a company-defined kind’s fields (T140)', () => {
     expect(() => service.resolve(fields, {}, {})).toThrow(/employeeName/);
   });
 
+  it('on a preview, shows a missing required value as its label instead of refusing', () => {
+    // A preview is how somebody finds out what is still missing, so it cannot refuse to show it.
+    const values = service.resolve(fields, {}, {}, { lenient: true });
+    expect(values.employeeName).toBe('[Employee name]');
+    // Optional fields stay blank — bracketing those would ask for values nobody needs.
+    expect(values.siteName).toBe('');
+  });
+
   it('refuses a stored field whose path is forbidden, at resolve time', () => {
     // A row written before `assertPathPermitted` existed would otherwise still resolve.
     expect(() =>

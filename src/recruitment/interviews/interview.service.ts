@@ -203,9 +203,18 @@ export class InterviewService {
             comments: dto.comments,
           },
         });
+        // Completed once **every** panel member has given theirs (2026-10-14). It used to be
+        // completed by the first, and the screens offer feedback only on a scheduled interview,
+        // so on a two-person panel the second interviewer could never record theirs.
+        const given = await tx.interviewFeedback.count({
+          where: { interviewId },
+        });
+        const everyone = given >= interview.interviewers.length;
         return tx.interview.update({
           where: { id: interviewId },
-          data: { status: InterviewStatus.completed },
+          data: {
+            status: everyone ? InterviewStatus.completed : interview.status,
+          },
         });
       },
     );

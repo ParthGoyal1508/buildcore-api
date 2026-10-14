@@ -85,5 +85,24 @@ export function renderTemplate(
   body: string,
   values: Record<string, string>,
 ): string {
-  return body.replace(TOKEN_RE, (_, token: string) => values[token] ?? '');
+  // Line by line, because a value typed over several lines (an address, payment terms — the
+  // project composer offers a multi-line box for them since 2026-10-14) means two things. In
+  // running text each line of it is a line of the letter. Inside a table row (`| … |`) a line
+  // break would end the row mid-cell and spill the rest out of the table, so there it is joined.
+  return body
+    .split('\n')
+    .map((line) => {
+      const inTable = line.trimStart().startsWith('|');
+      return line.replace(TOKEN_RE, (_, token: string) => {
+        const value = (values[token] ?? '').replace(/\r\n?/g, '\n');
+        return inTable
+          ? value
+              .split('\n')
+              .map((part) => part.trim())
+              .filter(Boolean)
+              .join('; ')
+          : value;
+      });
+    })
+    .join('\n');
 }

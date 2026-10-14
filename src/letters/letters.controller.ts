@@ -55,13 +55,14 @@ export class LettersController {
     @Query('candidateId') candidateId?: string,
     @Query('includeSuperseded') includeSuperseded?: string,
   ) {
-    return this.letters.listForSubject(caller, {
+    const views = await this.letters.listForSubject(caller, {
       subjectType,
       subjectId,
       employeeId,
       candidateId,
       includeSuperseded: includeSuperseded === 'true',
     });
+    return this.letters.withApprovals(caller, views);
   }
 
   // Declared before `:id/...` routes for readability; `prefill` cannot collide with them
@@ -94,7 +95,10 @@ export class LettersController {
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: ComposeLetterDto,
   ) {
-    return this.letters.compose(caller, dto);
+    const [view] = await this.letters.withApprovals(caller, [
+      await this.letters.compose(caller, dto),
+    ]);
+    return view;
   }
 
   @Post(':id/issue')
@@ -165,5 +169,42 @@ export class LettersController {
       `attachment; filename="${view.letterKindKey}-v${view.version}.pdf"`,
     );
     res.send(data);
+  }
+
+  @Post('preview')
+  @ApiOperation({
+    summary: 'Preview a letter before composing it',
+    description:
+      'Takes the compose body and returns the PDF it would issue — marked DRAFT, with no ' +
+      'reference and no signature graphic. Writes nothing. A missing required value prints as ' +
+      'its label in brackets instead of being refused.',
+  })
+  async previewNew(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: ComposeLetterDto,
+    @Res() res: Response,
+  ) {
+    const pdf = await this.letters.previewNew(caller, dto);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    res.send(pdf);
+  }
+
+  @Get(':id/preview')
+  @ApiOperation({
+    summary:
+      'Preview a composed letter — what its approver reads before deciding',
+    description:
+      'Marked DRAFT. Refused once issued: download the issued document instead.',
+  })
+  async previewComposed(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const pdf = await this.letters.previewComposed(caller, id);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"');
+    res.send(pdf);
   }
 }

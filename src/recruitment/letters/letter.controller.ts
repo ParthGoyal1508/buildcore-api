@@ -78,6 +78,9 @@ export class LetterController {
   }
 
   @Get('letter-templates')
+  // Recruitment's own templates, and Settings → Letter templates, which manages every kind's
+  // (2026-10-14). Either permission — the guard passes on any one listed.
+  @RequirePermissions(Permission.RECRUITMENT, Permission.SETTINGS)
   @ApiOperation({ summary: 'List letter templates' })
   listTemplates(
     @UserEntity() caller: AuthenticatedUser,
@@ -101,6 +104,9 @@ export class LetterController {
    * than just the token.
    */
   @Post('letter-templates')
+  // Recruitment's own templates, and Settings → Letter templates, which manages every kind's
+  // (2026-10-14). Either permission — the guard passes on any one listed.
+  @RequirePermissions(Permission.RECRUITMENT, Permission.SETTINGS)
   @ApiOperation({
     summary: 'Create a letter template',
     description:
@@ -132,6 +138,9 @@ export class LetterController {
   }
 
   @Patch('letter-templates/:id')
+  // Recruitment's own templates, and Settings → Letter templates, which manages every kind's
+  // (2026-10-14). Either permission — the guard passes on any one listed.
+  @RequirePermissions(Permission.RECRUITMENT, Permission.SETTINGS)
   @ApiOperation({
     summary: 'Edit a letter template',
     description:

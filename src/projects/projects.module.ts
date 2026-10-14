@@ -50,6 +50,8 @@ import { ProjectsService } from './portfolio/projects.service';
 import { SitesController } from './sites/sites.controller';
 import { SitesService } from './sites/sites.service';
 import { ProjectDocumentUploadController } from './documents/project-document-upload.controller';
+import { LettersModule } from '../letters/letters.module';
+import { ProjectLetterSource } from './portfolio/project-letter-source';
 
 /**
  * The `projects` module.
@@ -72,7 +74,12 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
   // revising a certified bill's quantities raises a fresh instance rather than editing a completed
   // decision. `src/projects` keeps no approval mechanism of its own — `fr-022-unmigrated-modules`
   // still asserts that per file.
-  imports: [SettingsModule, ApprovalsModule, forwardRef(() => HrModule)],
+  imports: [
+    SettingsModule,
+    ApprovalsModule,
+    LettersModule,
+    forwardRef(() => HrModule),
+  ],
   // `ProjectDocumentsController` is FIRST on purpose. Nest matches routes in
   // registration order, and its path `/projects/document-requirements` is a literal
   // that `ProjectsController`'s `GET /projects/:id` would otherwise swallow — the
@@ -135,6 +142,8 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // 021 US1: registers this register with `SearchSourcesRegistry` on init. The query
     // lives here because `projects` owns the table (Principle I).
     ProjectSearchSource,
+    // 2026-10-14: answers for a project when a work order, LOI or PO is filled in.
+    ProjectLetterSource,
     ClientsService,
     SitesService,
     ProjectsService,
