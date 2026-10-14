@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsNotEmpty,
   IsNumberString,
   IsOptional,
   IsString,
@@ -37,4 +38,58 @@ export class SetBillLineClaimDto {
   @IsString()
   @MaxLength(1000)
   reason?: string;
+}
+
+/**
+ * A non-BOQ item added to a bill to the client (2026-10-14): work the tendered BOQ does not list.
+ * The amount is `quantity × rate`, with no tender premium — an extra item is priced by agreement.
+ */
+export class AddNonBoqItemDto {
+  @ApiProperty({ example: 'Providing and fixing km stones (extra item)' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  description: string;
+
+  @ApiProperty({ example: 'Nos', description: 'Cum, Sqm, Rmt, Nos…' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  unit: string;
+
+  @ApiProperty({
+    example: '12',
+    description: 'Quantity, or number, billed on this bill.',
+  })
+  @IsNumberString()
+  quantity: string;
+
+  @ApiProperty({
+    example: '1450.00',
+    description: 'Agreed rate per unit, in rupees.',
+  })
+  @IsNumberString()
+  rate: string;
+}
+
+/** Corrects a non-BOQ item — only while no issued bill carries it. Omitted fields are unchanged. */
+export class UpdateNonBoqItemDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  description?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(20)
+  unit?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsNumberString()
+  rate?: string;
 }

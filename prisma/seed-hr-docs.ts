@@ -413,7 +413,11 @@ async function main() {
           bankName: sc === 'PRPL' ? 'HDFC Bank' : 'Bank of Maharashtra',
           bankBranch: sc === 'PRPL' ? 'Koramangala' : 'Baner',
           ifscCode: sc === 'PRPL' ? 'HDFC0000053' : 'MAHB0001234',
-          bankAccountNumberEncrypted: encryptPii(`5010023456${p.code}`),
+          // Local only: the cipher key here is this machine's `STORAGE_ENCRYPTION_KEY`, and a
+          // deployed server holds a different one — ciphertext it could never read back.
+          bankAccountNumberEncrypted: TARGET.isLocal
+            ? encryptPii(`5010023456${p.code}`)
+            : null,
           bankAccountHolderName: `${p.firstName} ${p.lastName}`.toUpperCase(),
           mobile: p.mobile,
           email: `${p.firstName}.${p.lastName}@${spec.domain}`.toLowerCase(),
@@ -862,7 +866,8 @@ async function processLastMonth(
         processedAt: now,
       },
     });
-  });
+  // A remote database is a network hop per statement; the 5 s default expires mid-run.
+  }, { timeout: 120_000, maxWait: 30_000 });
   return `${month.period} run ${run.id} processed with ${employees.length} slip(s)`;
 }
 

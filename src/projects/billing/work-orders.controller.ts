@@ -17,6 +17,8 @@ import {
 } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
+import { ApprovalService } from '../../approvals/approvals.service';
+import { ACTION_WORK_ORDER_AWARD } from '../../approvals/default-chains';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
@@ -47,7 +49,10 @@ import { WorkOrdersService } from './work-orders.service';
 @RequirePermissions(Permission.PROJECT_FINANCIALS)
 @Controller('projects/work-orders')
 export class WorkOrdersController {
-  constructor(private readonly workOrders: WorkOrdersService) {}
+  constructor(
+    private readonly workOrders: WorkOrdersService,
+    private readonly approvals: ApprovalService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -78,9 +83,22 @@ export class WorkOrdersController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'One work order' })
+  @ApiOperation({
+    summary: 'One work order, with the caller’s place in its award approval',
+  })
   async view(@UserEntity() caller: AuthenticatedUser, @Param('id') id: string) {
-    return this.workOrders.view(rlsContextFor(caller), id);
+    const view = await this.workOrders.view(rlsContextFor(caller), id);
+    return {
+      ...view,
+      // `canActNow` is what puts Approve / Reject on the work order itself, for the person whose
+      // turn it is (2026-10-14) — the same as a bill package. Without it the approver had to find
+      // the award in the Approvals inbox.
+      approval: await this.approvals.stateOf(
+        ACTION_WORK_ORDER_AWARD,
+        id,
+        caller,
+      ),
+    };
   }
 
   @Patch(':id')

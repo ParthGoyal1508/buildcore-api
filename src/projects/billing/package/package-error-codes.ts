@@ -66,6 +66,10 @@ export const PACKAGE_ERRORS = {
   debitAlreadyRecovered: 'DEBIT_ALREADY_RECOVERED',
   /** A recovery would carry the amount recovered to date past its recorded total (FR-020b). */
   recoveryExceedsTotal: 'BILL_RECOVERY_EXCEEDS_TOTAL',
+  /** A non-BOQ item another bill already carries cannot be removed or re-priced (2026-10-14). */
+  nonBoqItemInUse: 'NON_BOQ_ITEM_IN_USE',
+  /** A subcontractor's non-BOQ items go on the work order, not on the bill (2026-10-14). */
+  nonBoqOnSubcontractorBill: 'NON_BOQ_ON_SUBCONTRACTOR_BILL',
 } as const;
 
 export type PackageErrorCode =

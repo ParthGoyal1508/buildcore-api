@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -36,7 +37,11 @@ import {
   SetBillDeductionLinesDto,
   WithdrawBillPackageDto,
 } from './dto/bill-lifecycle.dto';
-import { SetBillLineClaimDto } from './dto/bill-line.dto';
+import {
+  AddNonBoqItemDto,
+  SetBillLineClaimDto,
+  UpdateNonBoqItemDto,
+} from './dto/bill-line.dto';
 import { ComposeBillPackageDto } from './dto/compose-bill.dto';
 import { RecordDebitDto } from './dto/debit-note.dto';
 import { MeasurementSheetService } from './measurement-sheet.service';
@@ -140,6 +145,70 @@ export class BillPackageController {
       packageId,
       claimId,
       dto,
+    );
+  }
+
+  @Post('projects/bill-packages/:packageId/non-boq-items')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Add a non-BOQ item to a draft bill to the client',
+    description:
+      'Work the tendered BOQ does not list. The item joins the project’s BOQ in its “Non-BOQ ' +
+      'items” section (NB-1, NB-2…), so later bills carry it with its quantity up to previous. ' +
+      'Billed at `quantity × rate` with no tender premium. A subcontractor’s non-BOQ items go on ' +
+      'the work order instead.',
+  })
+  async addNonBoqItem(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: AddNonBoqItemDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.packages.addNonBoqItem(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      packageId,
+      dto,
+    );
+  }
+
+  @Patch('projects/bill-packages/:packageId/non-boq-items/:itemId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Correct a non-BOQ item’s description, unit or rate',
+    description:
+      'Refused once an issued bill carries the item: that bill stated it at this rate.',
+  })
+  async updateNonBoqItem(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Param('itemId') itemId: string,
+    @Body() dto: UpdateNonBoqItemDto,
+  ) {
+    return this.packages.updateNonBoqItem(
+      rlsContextFor(caller),
+      packageId,
+      itemId,
+      dto,
+    );
+  }
+
+  @Delete('projects/bill-packages/:packageId/non-boq-items/:itemId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Remove a non-BOQ item from a draft bill and the project',
+    description:
+      'Refused when another bill carries it — set its quantity to zero on this bill instead.',
+  })
+  async removeNonBoqItem(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Param('itemId') itemId: string,
+  ) {
+    return this.packages.removeNonBoqItem(
+      rlsContextFor(caller),
+      packageId,
+      itemId,
     );
   }
 
