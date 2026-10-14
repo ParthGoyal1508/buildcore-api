@@ -1934,6 +1934,20 @@ model BOQTaskItem {
   /// The variation order this line came in under, where there is one.
   variationRef String?
 
+  /// **A non-BOQ item** — work the tendered BOQ does not list, added while raising a bill to the
+  /// client (2026-10-14). Extra items in PWD terms.
+  ///
+  /// Kept as a BOQ line, in the project's own "Non-BOQ items" section, rather than as a second kind
+  /// of bill line: what a client's abstract shows for one — up to previous, this bill, up to date —
+  /// is exactly what it shows for a BOQ line, and the cumulative columns are keyed by BOQ line. A
+  /// separate table would have needed every one of those rebuilt for it.
+  ///
+  /// What makes it different, and why it is a flag: it is billed **at the rate entered, without the
+  /// tender premium** (an extra item is priced by agreement or analysis, not by the bid); it has no
+  /// scope, so it is never "over scope"; and no daily work report measures it, so a bill proposes
+  /// nothing for it and the quantity is the one entered on the bill.
+  nonBoq Boolean @default(false)
+
   dwrTasks        DWRTask[]
   clientBillLines ClientBillLine[]
   awardLines      WorkOrderBOQItem[]

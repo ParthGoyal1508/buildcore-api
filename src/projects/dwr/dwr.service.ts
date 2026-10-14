@@ -1984,6 +1984,7 @@ export class DwrService {
         scopeQty: true,
         doneQty: true,
         isEstimate: true,
+        nonBoq: true,
         group: { select: { projectId: true, isEstimate: true } },
       },
     });
@@ -2002,6 +2003,20 @@ export class DwrService {
       }
       // The costing schedule, not the contract one. Checked on both the line and its section
       // because the estimate import sets both, and a line moved between them must not slip through.
+      // A non-BOQ item is measured on the bill that adds it, not on site reports (2026-10-14): a
+      // daily quantity against it would be read by nothing.
+      if (item.nonBoq) {
+        throw new BadRequestException({
+          code: DWR_ERRORS.boqItemIsEstimate,
+          message:
+            `${item.boqNo} is a non-BOQ item. Its quantity is entered on the bill to the client ` +
+            'that carries it, not on a daily work report.',
+          detail: {
+            reportingProjectId: projectId,
+            lines: [{ boqItemId: item.id, boqNo: item.boqNo }],
+          },
+        });
+      }
       if (item.isEstimate || item.group.isEstimate) {
         costing.push({ boqItemId: item.id, boqNo: item.boqNo });
         continue;

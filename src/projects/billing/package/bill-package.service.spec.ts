@@ -30,6 +30,7 @@ interface BoqFixture {
   boqNo: string;
   rate: number;
   scopeQty: number;
+  nonBoq?: boolean;
 }
 
 interface AwardFixture {
@@ -74,6 +75,10 @@ function build(opts: {
   existingBills?: string[];
   /** The claim `setClaim` reads, for the reason tests. */
   claim?: Record<string, unknown>;
+  /** The tender premium, as a fraction. */
+  quotedPercentage?: number;
+  /** The bill line `setClaim` carries a claim onto. */
+  claimLine?: { rate: number; nonBoq: boolean; quotedPercentage: number };
 }): Built {
   const direction = opts.direction ?? BillDirection.to_client;
   const boq = opts.boq ?? [
@@ -83,6 +88,8 @@ function build(opts: {
   const claims: Record<string, unknown>[] = [];
   const billLines: Record<string, unknown>[] = [];
   const claimUpdates: Record<string, unknown>[] = [];
+  const lineUpdates: Record<string, unknown>[] = [];
+  const billUpdates: Record<string, unknown>[] = [];
   let pkgRow: Record<string, unknown> | null = null;
   let billRow: Record<string, unknown> | null = null;
   let writes = 0;
@@ -97,7 +104,7 @@ function build(opts: {
         id: 'p-1',
         clientId: 'client-1',
         cgstApplicable: true,
-        quotedPercentage: dec(0),
+        quotedPercentage: dec(opts.quotedPercentage ?? 0),
         clientRetentionFraction:
           opts.clientRetentionFraction === null
             ? null
@@ -128,6 +135,7 @@ function build(opts: {
           unit: 'Cum',
           scopeQty: dec(item.scopeQty),
           rate: dec(item.rate),
+          nonBoq: item.nonBoq ?? false,
         })),
     },
     workOrderBOQItem: {
@@ -224,6 +232,10 @@ function build(opts: {
         billRow = args.data;
         return { id: 'bill-1' };
       },
+      update: async (args: { data: Record<string, unknown> }) => {
+        billUpdates.push(args.data);
+        return args.data;
+      },
     },
     rABill: {
       // Read by `nextRaBillNumber` (027) to continue this work order's sequence. A read, so it
@@ -235,6 +247,10 @@ function build(opts: {
         writes += 1;
         billRow = args.data;
         return { id: 'bill-1' };
+      },
+      update: async (args: { data: Record<string, unknown> }) => {
+        billUpdates.push(args.data);
+        return args.data;
       },
     },
     clientBillLine: {
@@ -248,6 +264,24 @@ function build(opts: {
           boqTaskItemId: row.boqTaskItemId as string,
         }));
       },
+      findUniqueOrThrow: async () => ({
+        rate: dec(opts.claimLine?.rate ?? 0),
+        boqTaskItem: { nonBoq: opts.claimLine?.nonBoq ?? false },
+        clientBill: {
+          quotedPercentage: dec(opts.claimLine?.quotedPercentage ?? 0),
+        },
+      }),
+      update: async (args: { data: Record<string, unknown> }) => {
+        lineUpdates.push(args.data);
+        return args.data;
+      },
+      aggregate: async () => ({
+        _sum: {
+          amount: lineUpdates.length
+            ? dec(Number(lineUpdates[lineUpdates.length - 1].amount))
+            : dec(0),
+        },
+      }),
     },
     rABillLine: {
       createManyAndReturn: async (args: {
@@ -260,6 +294,18 @@ function build(opts: {
           workOrderBoqItemId: row.workOrderBoqItemId as string,
         }));
       },
+      findUniqueOrThrow: async () => ({
+        rate: dec(opts.claimLine?.rate ?? 0),
+      }),
+      update: async (args: { data: Record<string, unknown> }) => {
+        lineUpdates.push(args.data);
+        return args.data;
+      },
+      aggregate: async () => ({
+        _sum: {
+          amount: dec(Number(lineUpdates[lineUpdates.length - 1]?.amount ?? 0)),
+        },
+      }),
     },
     billPackageLineClaim: {
       createMany: async (args: { data: Record<string, unknown>[] }) => {
@@ -407,7 +453,7 @@ function build(opts: {
     pkg: () => pkgRow,
     bill: () => billRow,
     // Exposed for the reason tests.
-    ...({ claimUpdates } as Record<string, unknown>),
+    ...({ claimUpdates, lineUpdates, billUpdates } as Record<string, unknown>),
   } as Built & { claimUpdates: Record<string, unknown>[] };
 }
 
@@ -709,6 +755,38 @@ describe('the award line with no measurement source', () => {
   });
 });
 
+describe('a client’s non-BOQ item on a later bill', () => {
+  // 2026-10-14. A non-BOQ item added on one bill is a BOQ line flagged `nonBoq`, so every later bill
+  // to the client lists it — but no daily report measures it, and the tender premium is not its.
+
+  it('is proposed with no measurement source, and priced without the premium', async () => {
+    const built = build({
+      boq: [
+        { id: 'boq-1', boqNo: '1.1', rate: 100, scopeQty: 1000 },
+        { id: 'nb-1', boqNo: 'NB-1', rate: 1450, scopeQty: 0, nonBoq: true },
+      ],
+      approved: { 'boq-1': '10', 'nb-1': '99' },
+      quotedPercentage: 0.1,
+    });
+
+    await built.service.compose({ isSuperAdmin: true }, 'c-1', {
+      ...period,
+      direction: BillDirection.to_client,
+    });
+
+    const extra = built.claims.find((_, index) => index === 1);
+    expect(extra).toMatchObject({
+      proposedQty: null,
+      proposalSource: ClaimProposalSource.no_measurement_source,
+      claimedQty: 0,
+    });
+    // The BOQ line carries the premium (10 × 100 × 1.1); the non-BOQ line, at zero, carries nothing
+    // and is never "over scope" for having none.
+    expect(Number(built.billLines[0].amount)).toBe(1100);
+    expect(built.billLines[1]).toMatchObject({ exceedsScope: false });
+  });
+});
+
 describe('setting a claim', () => {
   const draftClaim = (proposed: number | null) => ({
     id: 'claim-1',
@@ -768,16 +846,93 @@ describe('setting a claim', () => {
     });
   });
 
-  it('needs a reason for any claim against a line with no measurement source', async () => {
-    const built = build({ claim: draftClaim(null) });
+  it('takes a claim on a line with no measurement source without a reason', async () => {
+    // 2026-10-14. A non-BOQ item is measured on the bill itself: there is no proposal to depart
+    // from, so nothing to argue.
+    const built = build({ claim: draftClaim(null) }) as Built & {
+      claimUpdates: Record<string, unknown>[];
+    };
 
-    await expect(
-      built.service.setClaim({ isSuperAdmin: true }, 'pkg-1', 'claim-1', {
+    await built.service
+      .setClaim({ isSuperAdmin: true }, 'pkg-1', 'claim-1', {
         claimedQty: '12.000',
-      }),
-    ).rejects.toMatchObject({
-      response: { code: 'BILL_CLAIM_NEEDS_REASON' },
+      })
+      .catch(() => undefined);
+
+    expect(built.claimUpdates[0]).toMatchObject({
+      varianceQty: null,
+      reason: null,
+      overClaimed: false,
     });
+  });
+
+  it('carries the claimed quantity onto the bill line and the bill’s gross', async () => {
+    // Until 2026-10-14 a claim edit changed the claim alone: the line kept its proposed amount and
+    // the bill billed the proposal, whatever was claimed.
+    const built = build({
+      claim: {
+        ...draftClaim(1),
+        clientBillLineId: 'line-1',
+        raBillLineId: null,
+        package: { status: 'draft', clientBillId: 'bill-1', raBillId: null },
+      },
+      claimLine: { rate: 1000, nonBoq: false, quotedPercentage: 0.1 },
+    }) as Built & Record<string, Record<string, unknown>[]>;
+
+    await built.service
+      .setClaim({ isSuperAdmin: true }, 'pkg-1', 'claim-1', {
+        claimedQty: '0.700',
+        reason: 'shoulder not dressed',
+      })
+      .catch(() => undefined);
+
+    // 0.7 × 1000 × 1.10 — the bill's premium applies to a BOQ line.
+    expect(Number(built.lineUpdates[0].amount)).toBe(770);
+    expect(Number(built.billUpdates[0].grossAmount)).toBe(770);
+  });
+
+  it('carries a subcontractor’s non-BOQ award line onto the RA bill', async () => {
+    // An award line tied to no BOQ line is proposed nothing; its quantity is the one entered here.
+    const built = build({
+      direction: BillDirection.to_subcontractor,
+      claim: {
+        ...draftClaim(null),
+        clientBillLineId: null,
+        raBillLineId: 'ra-line-1',
+        package: { status: 'draft', clientBillId: null, raBillId: 'ra-1' },
+      },
+      claimLine: { rate: 5000, nonBoq: true, quotedPercentage: 0 },
+    }) as Built & Record<string, Record<string, unknown>[]>;
+
+    await built.service
+      .setClaim({ isSuperAdmin: true }, 'pkg-1', 'claim-1', {
+        claimedQty: '3',
+      })
+      .catch(() => undefined);
+
+    expect(Number(built.lineUpdates[0].amount)).toBe(15000);
+    expect(Number(built.billUpdates[0].grossAmount)).toBe(15000);
+    expect(Number(built.billUpdates[0].netPayable)).toBe(15000);
+  });
+
+  it('bills a non-BOQ line at its own rate, without the premium', async () => {
+    const built = build({
+      claim: {
+        ...draftClaim(null),
+        clientBillLineId: 'line-1',
+        raBillLineId: null,
+        package: { status: 'draft', clientBillId: 'bill-1', raBillId: null },
+      },
+      claimLine: { rate: 1450, nonBoq: true, quotedPercentage: 0.1 },
+    }) as Built & Record<string, Record<string, unknown>[]>;
+
+    await built.service
+      .setClaim({ isSuperAdmin: true }, 'pkg-1', 'claim-1', {
+        claimedQty: '12',
+      })
+      .catch(() => undefined);
+
+    expect(Number(built.lineUpdates[0].amount)).toBe(17400);
   });
 
   it('refuses to edit a line on an issued package', async () => {

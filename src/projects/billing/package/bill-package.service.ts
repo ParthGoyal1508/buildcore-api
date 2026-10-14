@@ -52,7 +52,7 @@ import {
   sequenceOf,
   packageLabel,
 } from '../bill-number';
-import { sortByBoqNo } from '../../boq/boq-order';
+import { compareBoqNo, sortByBoqNo } from '../../boq/boq-order';
 
 /**
  * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
@@ -100,6 +100,11 @@ export interface ScheduleLine {
   boqTaskItemId: string | null;
   /** The rate is still 0: "nobody has priced this", not "this is free" (FR-009). */
   unpriced: boolean;
+  /**
+   * Work outside the tendered BOQ (2026-10-14): a client's non-BOQ item, or an award line mapped to
+   * no BOQ line. Billed at its own rate with no premium, no scope and no measurement to propose.
+   */
+  nonBoq: boolean;
 }
 
 /** One proposed line, before anything is written. */
@@ -164,6 +169,8 @@ export interface BillPackageClaimView {
   remainingQty: string;
   exceedsScope: boolean;
   unpriced: boolean;
+  /** Outside the tendered BOQ: a client's non-BOQ item, or an award line mapped to no BOQ line. */
+  nonBoq: boolean;
 }
 
 export interface BillPackageView {
@@ -180,6 +187,11 @@ export interface BillPackageView {
   claims: BillPackageClaimView[];
   /** Lines whose rate is 0 and whose claim is non-zero. Refused at **issue**, not here (FR-009). */
   unpricedClaimedCount: number;
+  /**
+   * The non-BOQ lines this bill claims, counted and summed (2026-10-14) — what an approver is shown
+   * before approving: work billed at a rate nobody bid, on a quantity no daily report measured.
+   */
+  nonBoqSummary: { count: number; amount: string };
   /**
    * The most recent approved daily report on the project — **read only when this package proposed
    * nothing at all**, and null otherwise.
@@ -263,6 +275,9 @@ const SUBCONTRACTOR_ADJUSTABLE = ADJUSTABLE.filter(
 const dec = (value: Prisma.Decimal | string | number): Prisma.Decimal =>
   new Prisma.Decimal(value);
 
+/** The BOQ section a project's non-BOQ items are kept in. Sorts after every numbered section. */
+const NON_BOQ_SECTION_NO = 'NB';
+
 /** A rate that does not apply, at the precision every frozen rate is recorded to. */
 const ZERO_FRACTION = '0.000000';
 
@@ -337,6 +352,7 @@ export class BillPackageService {
           unit: true,
           scopeQty: true,
           rate: true,
+          nonBoq: true,
         },
       });
       // Text order puts 10 before 2 — see `boq-order.ts`.
@@ -351,6 +367,7 @@ export class BillPackageService {
         // A client bill measures the BOQ, so the line *is* the measured line.
         boqTaskItemId: item.id,
         unpriced: item.rate.isZero(),
+        nonBoq: item.nonBoq,
       }));
     }
 
@@ -390,6 +407,7 @@ export class BillPackageService {
       rate: item.rate,
       boqTaskItemId: item.boqTaskItemId,
       unpriced: item.rate.isZero(),
+      nonBoq: item.boqTaskItemId === null,
     }));
   }
 
@@ -645,9 +663,13 @@ export class BillPackageService {
           {
             quantity: Number(proposal.proposedQty ?? 0),
             rate: proposal.line.rate.toNumber(),
-            scopeQty: proposal.line.scopeQty.toNumber(),
+            // A non-BOQ item has no scope, so it is never over one.
+            ...(proposal.line.nonBoq
+              ? {}
+              : { scopeQty: proposal.line.scopeQty.toNumber() }),
           },
-          quotedPercentage,
+          // Billed at the rate agreed for it: the tender premium is a bid on the BOQ's lines.
+          proposal.line.nonBoq ? 0 : quotedPercentage,
         ),
       }));
       const gross = money(
@@ -826,7 +848,7 @@ export class BillPackageService {
     // one-line-per-item rule would not catch it, because they are two different lines.
     const seen = new Map<string, string[]>();
     for (const line of schedule) {
-      if (!line.boqTaskItemId) continue;
+      if (!line.boqTaskItemId || line.nonBoq) continue;
       const against = seen.get(line.boqTaskItemId) ?? [];
       against.push(line.boqNo);
       seen.set(line.boqTaskItemId, against);
@@ -851,7 +873,9 @@ export class BillPackageService {
     }
 
     return schedule.map((line) => {
-      if (!line.boqTaskItemId) {
+      // A non-BOQ item is a BOQ line no daily report measures, so it has a line id and still no
+      // source — proposing its (always zero) measurement would read as "nothing done this month".
+      if (!line.boqTaskItemId || line.nonBoq) {
         return {
           line,
           proposedQty: null,
@@ -946,7 +970,11 @@ export class BillPackageService {
           id: true,
           proposedQty: true,
           proposalSource: true,
-          package: { select: { status: true } },
+          clientBillLineId: true,
+          raBillLineId: true,
+          package: {
+            select: { status: true, clientBillId: true, raBillId: true },
+          },
         },
       });
       if (!claim) throw new NotFoundException('Bill line not found');
@@ -965,22 +993,19 @@ export class BillPackageService {
       const variance = proposed === null ? null : claimed.minus(proposed);
       const reason = input.reason?.trim() ? input.reason.trim() : null;
 
-      // A claim against a line with no measurement source is not a variance from anything, so it
-      // needs a reason of its own kind: there is nothing to reduce or exceed, only a figure somebody
-      // has to stand behind.
-      const needsReason =
-        variance === null ? !claimed.isZero() : !variance.isZero();
+      // A line with no measurement source — a non-BOQ item, an award line mapped to no BOQ line — is
+      // measured on the bill itself (2026-10-14). There is no proposal to depart from, so nothing to
+      // argue and no reason demanded; one given is kept. A departure *from* a measurement still
+      // needs its reason.
+      const needsReason = variance !== null && !variance.isZero();
       if (needsReason && !reason) {
         throw new BadRequestException({
           statusCode: 400,
           code: PACKAGE_ERRORS.claimNeedsReason,
           message:
-            variance === null
-              ? 'There is no approved measurement behind this line, so a claim on it needs a ' +
-                'written reason.'
-              : 'This claim differs from the approved measurement, so it needs a written reason. ' +
-                'The reason is reproduced on the measurement sheet verbatim — it is the argument ' +
-                'the document exists to settle.',
+            'This claim differs from the approved measurement, so it needs a written reason. ' +
+            'The reason is reproduced on the measurement sheet verbatim — it is the argument ' +
+            'the document exists to settle.',
         });
       }
 
@@ -990,15 +1015,394 @@ export class BillPackageService {
           claimedQty: claimed,
           varianceQty: variance,
           // Cleared where the claim matches its proposal (FR-004a).
-          reason: needsReason ? reason : null,
+          reason: needsReason || variance === null ? reason : null,
           overClaimed:
             proposed !== null && claimed.greaterThan(proposed) ? true : false,
         },
       });
+      await this.writeClaimToBill(tx, claim, claimed);
       return null;
     });
 
     return this.view(ctx, packageId);
+  }
+
+  /**
+   * Carries a claimed quantity onto the bill line it measures, and the bill's gross with it
+   * (2026-10-14).
+   *
+   * **Until this, editing a claim changed the claim and nothing else.** The line kept the proposed
+   * quantity and amount, and the bill its proposed gross — and the abstract, the documents and the
+   * payable all read those. So a reduced claim still billed the full measurement, and a line with
+   * no measurement (proposed at zero) billed nothing whatever was typed against it. Non-BOQ items
+   * are measured only on the bill, so for them it was the whole of the feature.
+   *
+   * The amount comes from `lineTotals`, the one definition of a line's amount; the premium is the
+   * bill's frozen one, except on a non-BOQ item, which is billed at its own rate.
+   */
+  private async writeClaimToBill(
+    tx: Prisma.TransactionClient,
+    claim: {
+      clientBillLineId: string | null;
+      raBillLineId: string | null;
+      package: { clientBillId: string | null; raBillId: string | null };
+    },
+    claimed: Prisma.Decimal,
+  ): Promise<void> {
+    if (claim.clientBillLineId && claim.package.clientBillId) {
+      const line = await tx.clientBillLine.findUniqueOrThrow({
+        where: { id: claim.clientBillLineId },
+        select: {
+          rate: true,
+          boqTaskItem: { select: { nonBoq: true } },
+          clientBill: { select: { quotedPercentage: true } },
+        },
+      });
+      const totals = lineTotals(
+        { quantity: claimed.toNumber(), rate: line.rate.toNumber() },
+        line.boqTaskItem.nonBoq
+          ? 0
+          : line.clientBill.quotedPercentage.toNumber(),
+      );
+      await tx.clientBillLine.update({
+        where: { id: claim.clientBillLineId },
+        data: { quantity: claimed, amount: totals.amount },
+      });
+      await this.writeGross(tx, { clientBillId: claim.package.clientBillId });
+    } else if (claim.raBillLineId && claim.package.raBillId) {
+      const line = await tx.rABillLine.findUniqueOrThrow({
+        where: { id: claim.raBillLineId },
+        select: { rate: true },
+      });
+      const totals = lineTotals({
+        quantity: claimed.toNumber(),
+        rate: line.rate.toNumber(),
+      });
+      await tx.rABillLine.update({
+        where: { id: claim.raBillLineId },
+        data: { quantity: claimed, amount: totals.amount },
+      });
+      await this.writeGross(tx, { raBillId: claim.package.raBillId });
+    }
+  }
+
+  /**
+   * A draft bill's gross, re-summed from its lines — the sum of the printed amounts, as
+   * `bill-totals.ts` requires. Net is left equal to gross: issue writes the real net beside the
+   * frozen abstract, and a draft has none yet.
+   */
+  private async writeGross(
+    tx: Prisma.TransactionClient,
+    bill: { clientBillId?: string; raBillId?: string },
+  ): Promise<void> {
+    if (bill.clientBillId) {
+      const sum = await tx.clientBillLine.aggregate({
+        where: { clientBillId: bill.clientBillId },
+        _sum: { amount: true },
+      });
+      const gross = sum._sum.amount ?? dec(0);
+      await tx.clientBill.update({
+        where: { id: bill.clientBillId },
+        data: { grossAmount: gross, netAmount: gross },
+      });
+    } else if (bill.raBillId) {
+      const sum = await tx.rABillLine.aggregate({
+        where: { raBillId: bill.raBillId },
+        _sum: { amount: true },
+      });
+      const gross = sum._sum.amount ?? dec(0);
+      await tx.rABill.update({
+        where: { id: bill.raBillId },
+        data: { amount: gross, grossAmount: gross, netPayable: gross },
+      });
+    }
+  }
+
+  /**
+   * Adds a non-BOQ item to a draft bill to the client (2026-10-14).
+   *
+   * The item is written to the project's BOQ, in its "Non-BOQ items" section, numbered `NB-1`,
+   * `NB-2`… — so every later bill to this client lists it again with its quantity up to previous,
+   * which is how a running-account abstract carries an extra item. On this bill it is measured at
+   * the quantity entered.
+   *
+   * **A subcontractor's are not added here.** Their extra work is part of what they were awarded, so
+   * it goes on the work order first and every bill under it lists it (decided 2026-10-14).
+   */
+  async addNonBoqItem(
+    ctx: RlsContext,
+    companyId: string,
+    packageId: string,
+    input: {
+      description: string;
+      unit: string;
+      quantity: string;
+      rate: string;
+    },
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await this.draftClientPackage(tx, packageId);
+
+      let section = await tx.bOQTaskGroup.findFirst({
+        where: {
+          projectId: pkg.projectId,
+          boqNo: NON_BOQ_SECTION_NO,
+          isEstimate: false,
+        },
+        select: { id: true },
+      });
+      if (!section) {
+        section = await tx.bOQTaskGroup.create({
+          data: {
+            companyId,
+            projectId: pkg.projectId,
+            boqNo: NON_BOQ_SECTION_NO,
+            name: 'Non-BOQ items',
+            scopeQty: 0,
+          },
+          select: { id: true },
+        });
+      }
+      const existing = await tx.bOQTaskItem.findMany({
+        where: { groupId: section.id },
+        select: { boqNo: true },
+      });
+      const next =
+        existing.reduce((max, item) => {
+          const n = Number(item.boqNo.replace(/^NB-/, ''));
+          return Number.isFinite(n) && n > max ? n : max;
+        }, 0) + 1;
+
+      const rate = dec(input.rate);
+      const item = await tx.bOQTaskItem.create({
+        data: {
+          companyId,
+          groupId: section.id,
+          boqNo: `NB-${next}`,
+          taskName: input.description.trim(),
+          unit: input.unit.trim(),
+          scopeQty: 0,
+          rate,
+          nonBoq: true,
+          isVariation: true,
+        },
+        select: { id: true },
+      });
+
+      const quantity = dec(input.quantity);
+      const totals = lineTotals({
+        quantity: quantity.toNumber(),
+        rate: rate.toNumber(),
+      });
+      const line = await tx.clientBillLine.create({
+        data: {
+          companyId,
+          clientBillId: pkg.clientBillId,
+          boqTaskItemId: item.id,
+          quantity,
+          rate,
+          amount: totals.amount,
+          exceedsScope: false,
+        },
+        select: { id: true },
+      });
+      await tx.billPackageLineClaim.create({
+        data: {
+          companyId,
+          packageId: pkg.id,
+          clientBillLineId: line.id,
+          proposedQty: null,
+          proposalSource: ClaimProposalSource.no_measurement_source,
+          claimedQty: quantity,
+          varianceQty: null,
+          reason: null,
+          overClaimed: false,
+        },
+      });
+      await this.writeGross(tx, { clientBillId: pkg.clientBillId });
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Corrects a non-BOQ item's description, unit or rate — **only while no issued bill carries it**.
+   * Once one has gone out at a rate, that rate is what the client was billed; a different figure
+   * for the same item belongs on a new item.
+   */
+  async updateNonBoqItem(
+    ctx: RlsContext,
+    packageId: string,
+    itemId: string,
+    input: { description?: string; unit?: string; rate?: string },
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await this.draftClientPackage(tx, packageId);
+      const item = await this.nonBoqItemOn(tx, pkg, itemId);
+      await this.refuseIfIssuedElsewhere(
+        tx,
+        pkg,
+        itemId,
+        item.boqNo,
+        'changed',
+      );
+
+      await tx.bOQTaskItem.update({
+        where: { id: itemId },
+        data: {
+          ...(input.description?.trim()
+            ? { taskName: input.description.trim() }
+            : {}),
+          ...(input.unit?.trim() ? { unit: input.unit.trim() } : {}),
+          ...(input.rate !== undefined ? { rate: dec(input.rate) } : {}),
+        },
+      });
+      if (input.rate !== undefined) {
+        const rate = dec(input.rate);
+        const lines = await tx.clientBillLine.findMany({
+          where: {
+            boqTaskItemId: itemId,
+            clientBill: { package: { status: BillPackageStatus.draft } },
+          },
+          select: { id: true, quantity: true, clientBillId: true },
+        });
+        for (const line of lines) {
+          await tx.clientBillLine.update({
+            where: { id: line.id },
+            data: {
+              rate,
+              amount: lineTotals({
+                quantity: line.quantity.toNumber(),
+                rate: rate.toNumber(),
+              }).amount,
+            },
+          });
+          await this.writeGross(tx, { clientBillId: line.clientBillId });
+        }
+      }
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Takes a non-BOQ item off this draft bill and out of the project — **only while no other bill
+   * carries it**. One that has been billed before stays, and is set to zero on this bill instead.
+   */
+  async removeNonBoqItem(
+    ctx: RlsContext,
+    packageId: string,
+    itemId: string,
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await this.draftClientPackage(tx, packageId);
+      const item = await this.nonBoqItemOn(tx, pkg, itemId);
+      const elsewhere = await tx.clientBillLine.count({
+        where: {
+          boqTaskItemId: itemId,
+          clientBillId: { not: pkg.clientBillId },
+        },
+      });
+      if (elsewhere > 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.nonBoqItemInUse,
+          message:
+            `${item.boqNo} is on another bill to this client, so it cannot be removed from the ` +
+            'project. Set its quantity on this bill to zero instead.',
+        });
+      }
+      // The claim cascades with the line; the line is removed before the item it points at.
+      await tx.clientBillLine.deleteMany({
+        where: { boqTaskItemId: itemId, clientBillId: pkg.clientBillId },
+      });
+      await tx.bOQTaskItem.delete({ where: { id: itemId } });
+      await this.writeGross(tx, { clientBillId: pkg.clientBillId });
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /** A draft package to the client, or the refusal that says why a non-BOQ item cannot go on it. */
+  private async draftClientPackage(
+    tx: Prisma.TransactionClient,
+    packageId: string,
+  ): Promise<{ id: string; projectId: string; clientBillId: string }> {
+    const pkg = await tx.billPackage.findFirst({
+      where: { id: packageId },
+      select: {
+        id: true,
+        projectId: true,
+        status: true,
+        direction: true,
+        clientBillId: true,
+      },
+    });
+    if (!pkg) throw new NotFoundException('Bill package not found');
+    if (pkg.direction !== BillDirection.to_client || !pkg.clientBillId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PACKAGE_ERRORS.nonBoqOnSubcontractorBill,
+        message:
+          'A subcontractor’s non-BOQ items are part of their award. Add the item to the work ' +
+          'order, and it is listed on every bill raised under it.',
+      });
+    }
+    if (pkg.status !== BillPackageStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.packageIssued,
+        message:
+          'Only a draft bill takes new items. Withdraw it from approval first, or add the item ' +
+          'to the next bill.',
+      });
+    }
+    return {
+      id: pkg.id,
+      projectId: pkg.projectId,
+      clientBillId: pkg.clientBillId,
+    };
+  }
+
+  private async nonBoqItemOn(
+    tx: Prisma.TransactionClient,
+    pkg: { projectId: string },
+    itemId: string,
+  ): Promise<{ boqNo: string }> {
+    const item = await tx.bOQTaskItem.findFirst({
+      where: { id: itemId, nonBoq: true, group: { projectId: pkg.projectId } },
+      select: { boqNo: true },
+    });
+    if (!item) throw new NotFoundException('Non-BOQ item not found');
+    return item;
+  }
+
+  private async refuseIfIssuedElsewhere(
+    tx: Prisma.TransactionClient,
+    pkg: { clientBillId: string },
+    itemId: string,
+    boqNo: string,
+    verb: string,
+  ): Promise<void> {
+    const issued = await tx.clientBillLine.count({
+      where: {
+        boqTaskItemId: itemId,
+        clientBillId: { not: pkg.clientBillId },
+        clientBill: {
+          package: {
+            status: {
+              notIn: [BillPackageStatus.draft, BillPackageStatus.abandoned],
+            },
+          },
+        },
+      },
+    });
+    if (issued > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.nonBoqItemInUse,
+        message:
+          `${boqNo} has already gone to the client on an earlier bill, so it cannot be ${verb}: ` +
+          'that bill stated it at this description and rate. Add a new item for the difference.',
+      });
+    }
   }
 
   /**
@@ -2509,6 +2913,7 @@ export class BillPackageService {
                       taskName: true,
                       unit: true,
                       scopeQty: true,
+                      nonBoq: true,
                     },
                   },
                 },
@@ -2525,6 +2930,8 @@ export class BillPackageService {
                       description: true,
                       unit: true,
                       awardedQty: true,
+                      boqTaskItemId: true,
+                      createdAt: true,
                       boqTaskItem: { select: { boqNo: true } },
                     },
                   },
@@ -2536,9 +2943,28 @@ export class BillPackageService {
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
 
+      // **In schedule order, every time** (2026-10-14). Read without an order, the rows came back
+      // in whatever order the table held them — and an edited claim is a rewritten row, so the line
+      // just saved jumped elsewhere in the grid. A client bill reads in BOQ order (non-BOQ items,
+      // `NB-n`, last); a subcontractor's in award order, as `resolveSchedule` lists it.
+      pkg.claims.sort((a, b) =>
+        a.clientBillLine && b.clientBillLine
+          ? compareBoqNo(
+              a.clientBillLine.boqTaskItem.boqNo,
+              b.clientBillLine.boqTaskItem.boqNo,
+            )
+          : (a.raBillLine?.workOrderBoqItem.createdAt.getTime() ?? 0) -
+            (b.raBillLine?.workOrderBoqItem.createdAt.getTime() ?? 0),
+      );
+
       const claims: BillPackageClaimView[] = pkg.claims.map((claim) => {
         const client = claim.clientBillLine;
         const ra = claim.raBillLine;
+        const nonBoq = client
+          ? client.boqTaskItem.nonBoq
+          : ra
+          ? ra.workOrderBoqItem.boqTaskItemId === null
+          : false;
         const rate = client?.rate ?? ra?.rate ?? dec(0);
         const scopeQty =
           client?.boqTaskItem.scopeQty ??
@@ -2547,7 +2973,10 @@ export class BillPackageService {
         const totals = lineTotals({
           quantity: Number(claim.claimedQty),
           rate: rate.toNumber(),
-          scopeQty: scopeQty.toNumber(),
+          // A client's non-BOQ item has no scope to be over.
+          ...(client?.boqTaskItem.nonBoq
+            ? {}
+            : { scopeQty: scopeQty.toNumber() }),
         });
         return {
           id: claim.id,
@@ -2577,8 +3006,12 @@ export class BillPackageService {
           remainingQty: totals.remainingQty.toFixed(3),
           exceedsScope: totals.exceedsScope,
           unpriced: rate.isZero(),
+          nonBoq,
         };
       });
+      const nonBoqClaimed = claims.filter(
+        (claim) => claim.nonBoq && Number(claim.claimedQty) !== 0,
+      );
 
       // Asked for only when it explains something. A package that proposed figures needs no
       // account of itself, and the query is skipped rather than its answer discarded.
@@ -2620,6 +3053,12 @@ export class BillPackageService {
         unpricedClaimedCount: claims.filter(
           (claim) => claim.unpriced && Number(claim.claimedQty) !== 0,
         ).length,
+        nonBoqSummary: {
+          count: nonBoqClaimed.length,
+          amount: money(
+            nonBoqClaimed.reduce((sum, claim) => sum + Number(claim.amount), 0),
+          ).toFixed(2),
+        },
         latestApprovedWork: latestApproved
           ? {
               workDate: iso(latestApproved.workDate),

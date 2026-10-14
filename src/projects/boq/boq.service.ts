@@ -46,6 +46,8 @@ export interface BoqItemView {
    * one schedule with doubled quantities.
    */
   isEstimate: boolean;
+  /** Added on a bill to the client, outside the tendered BOQ (2026-10-14). Not measured by DWR. */
+  nonBoq: boolean;
   /** Exactly one of the five, always (FR-048). `onTrack` means no alert. */
   state: LineState;
 }
@@ -102,6 +104,7 @@ const ITEM_SELECT = {
   duration: true,
   isVariation: true,
   isEstimate: true,
+  nonBoq: true,
 } as const;
 
 /**
@@ -256,6 +259,8 @@ export class BoqService {
       if (group.isEstimate) continue;
       for (const item of group.items) {
         if (item.isEstimate) continue;
+        // A non-BOQ item has no programme: it was billed, not planned.
+        if (item.nonBoq) continue;
         // `onTrack` is the absence of an alert, so it belongs on the tree and not here. Putting it
         // in one of the four would report work that needs nobody's attention as needing it today,
         // which is the defect the old three-group definition had in the other direction.
@@ -557,6 +562,7 @@ type ItemRow = {
   duration: number | null;
   isVariation: boolean;
   isEstimate: boolean;
+  nonBoq: boolean;
 };
 
 const MS_PER_DAY = 86_400_000;
@@ -574,6 +580,7 @@ function viewOf(item: ItemRow, asOf: Date): BoqItemView {
     scopeQty: item.scopeQty.toFixed(3),
     rate: item.rate.toFixed(2),
     isEstimate: item.isEstimate,
+    nonBoq: item.nonBoq,
     doneQty: item.doneQty.toFixed(3),
     pendingQty: pending.toFixed(3),
     perDayQty: item.perDayQty?.toFixed(3) ?? null,

@@ -1026,6 +1026,18 @@ Carried on the line rather than inferred from a date, because a variation agreed
 a scope item added by a late correction look identical by timestamp and are different facts to
 a client.']
   variationRef String [note: 'The variation order this line came in under, where there is one.']
+  nonBoq Boolean [not null, default: false, note: '**A non-BOQ item** — work the tendered BOQ does not list, added while raising a bill to the
+client (2026-10-14). Extra items in PWD terms.
+
+Kept as a BOQ line, in the project\'s own "Non-BOQ items" section, rather than as a second kind
+of bill line: what a client\'s abstract shows for one — up to previous, this bill, up to date —
+is exactly what it shows for a BOQ line, and the cumulative columns are keyed by BOQ line. A
+separate table would have needed every one of those rebuilt for it.
+
+What makes it different, and why it is a flag: it is billed **at the rate entered, without the
+tender premium** (an extra item is priced by agreement or analysis, not by the bid); it has no
+scope, so it is never "over scope"; and no daily work report measures it, so a bill proposes
+nothing for it and the quantity is the one entered on the bill.']
   dwrTasks DWRTask [not null]
   clientBillLines ClientBillLine [not null]
   awardLines WorkOrderBOQItem [not null]

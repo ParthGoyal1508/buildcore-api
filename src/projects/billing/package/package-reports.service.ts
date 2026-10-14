@@ -396,7 +396,7 @@ export class PackageReportsService {
               clientBillLine: {
                 select: {
                   boqTaskItemId: true,
-                  boqTaskItem: { select: { boqNo: true } },
+                  boqTaskItem: { select: { boqNo: true, nonBoq: true } },
                 },
               },
             },
@@ -449,7 +449,7 @@ export class PackageReportsService {
         claimedQty: Prisma.Decimal;
         clientBillLine: {
           boqTaskItemId: string;
-          boqTaskItem: { boqNo: string };
+          boqTaskItem: { boqNo: string; nonBoq: boolean };
         } | null;
       }[];
     }[],
@@ -480,7 +480,9 @@ export class PackageReportsService {
       const lines = [];
       for (const claim of pkg.claims) {
         const line = claim.clientBillLine;
-        if (!line) continue;
+        // A non-BOQ item is measured on the bill and by no daily report, so there is no approved
+        // figure to hold it against — every one would read as a reversal after issue.
+        if (!line || line.boqTaskItem.nonBoq) continue;
         const now = new Prisma.Decimal(
           approvedNow.get(line.boqTaskItemId) ?? '0',
         );
