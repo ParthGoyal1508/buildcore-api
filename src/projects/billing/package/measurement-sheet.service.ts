@@ -7,6 +7,7 @@ import { withRlsContext } from '../../../common/prisma/rls-context';
 import type { EquipmentLogbookDay } from '../../portfolio/project-sources.registry';
 import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
 import { packageLabel } from './bill-package.service';
+import { AWARD_LINE_ORDER, nonBoqAwardNo } from './award-line-number';
 
 /** One period this item has been claimed in, as the sheet lists it. */
 export interface ClaimHistoryRow {
@@ -306,6 +307,7 @@ export class MeasurementSheetService {
     const award = await tx.workOrderBOQItem.findFirst({
       where: { id: scheduleLineId },
       select: {
+        workOrderId: true,
         description: true,
         unit: true,
         boqTaskItemId: true,
@@ -313,8 +315,20 @@ export class MeasurementSheetService {
       },
     });
     if (!award) throw new NotFoundException('Schedule line not found');
+    // A non-BOQ award line is numbered among its work order's untied lines, as the bill numbers it.
+    let boqNo = award.boqTaskItem?.boqNo ?? '';
+    if (award.boqTaskItemId === null) {
+      const untied = await tx.workOrderBOQItem.findMany({
+        where: { workOrderId: award.workOrderId, boqTaskItemId: null },
+        orderBy: AWARD_LINE_ORDER,
+        select: { id: true },
+      });
+      boqNo = nonBoqAwardNo(
+        untied.findIndex((line) => line.id === scheduleLineId) + 1,
+      );
+    }
     return {
-      boqNo: award.boqTaskItem?.boqNo ?? '',
+      boqNo,
       description: award.description,
       unit: award.unit,
       boqTaskItemId: award.boqTaskItemId,
