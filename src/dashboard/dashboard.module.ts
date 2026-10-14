@@ -61,20 +61,13 @@ import {
   WorkersTodayWidget,
 } from './widgets/site-widgets.providers';
 import {
-  UNBUILT_SITE_WIDGET_PLACEHOLDERS,
-  UNBUILT_WIDGET_PLACEHOLDERS,
-} from './widgets/unbuilt-module.placeholders';
-import {
   ActiveProjectsWidget,
   AlertsRemindersWidget,
   ContractValueWidget,
-  FuelCostWidget,
-  HireBillsWidget,
   MachineryAtSiteWidget,
   MachineryDeployedWidget,
   MaterialStockValueWidget,
   MaterialStockWidget,
-  MaterialsCostWidget,
   SiteFuelConsumedWidget,
   SiteFuelConsumptionWidget,
   TotalMachineryWidget,
@@ -119,14 +112,13 @@ const WIDGET_CLASSES = [
   RecentLeavesTableWidget,
   WorkersTodayWidget,
   SiteAttendanceTableWidget,
-  // The six whose modules have since been built (2026-10-12) — see
-  // `module-kpi.providers.ts` for why they were placeholders and no longer are.
+  // The cards whose modules have since been built (2026-10-12) — see
+  // `module-kpi.providers.ts` for why they were placeholders and no longer are. The
+  // three cost cards (materials, fuel, hire bills) left on 2026-10-15 with the other
+  // expense widgets, at the client's request.
   ActiveProjectsWidget,
   TotalMachineryWidget,
   ContractValueWidget,
-  MaterialsCostWidget,
-  FuelCostWidget,
-  HireBillsWidget,
   MachineryDeployedWidget,
   MachineryAtSiteWidget,
   MaterialStockValueWidget,
@@ -171,9 +163,6 @@ const widgetRegistry: Provider = {
     activeProjects: WidgetProvider,
     totalMachinery: WidgetProvider,
     contractValue: WidgetProvider,
-    materialsCost: WidgetProvider,
-    fuelCost: WidgetProvider,
-    hireBills: WidgetProvider,
     machineryDeployed: WidgetProvider,
     machineryAtSite: WidgetProvider,
     materialStockValue: WidgetProvider,
@@ -187,14 +176,13 @@ const widgetRegistry: Provider = {
     presentToday,
     absentToday,
     onLeave,
-    UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses,
+    // Monthly Expenses (a placeholder) and the Materials / Fuel / Hire Bills cost cards
+    // used to sit here. Removed 2026-10-15: the client wants no expense widgets on the
+    // home dashboard — that money is read on Plant and Inventory, where it has context.
     pendingApprovals,
     activeProjects,
     totalMachinery,
     contractValue,
-    materialsCost,
-    fuelCost,
-    hireBills,
     musterStat,
     alertsReminders,
     todayAttendanceTable,
@@ -209,7 +197,8 @@ const widgetRegistry: Provider = {
     machineryAtSite,
     siteFuelConsumption,
     materialStock,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses,
+    // Recent Expenses (a placeholder for a module that does not exist) removed
+    // 2026-10-15 with the company dashboard's expense cards.
   ],
 };
 

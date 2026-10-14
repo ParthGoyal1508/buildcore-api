@@ -40,11 +40,11 @@ import type { WidgetListItem, WidgetProvider } from './widget.types';
  *
  * ## What is NOT made real here
  *
- * `monthlyExpenses` and `recentExpenses` stay placeholders. There is no expenses module:
- * nothing in this product records a general expense, and a "Monthly Expenses" card
- * invented by adding up materials, fuel and hire bills would be a figure with no
- * definition anybody agreed, presented with the authority of a measured one. "Coming
- * soon — waiting on the expenses module" remains the true answer for those two.
+ * `monthlyExpenses` and `recentExpenses` were never made real — there is no expenses
+ * module, and a "Monthly Expenses" card invented by adding up materials, fuel and hire
+ * bills would be a figure with no agreed definition. Since 2026-10-15 they are not on the
+ * dashboard at all: the client asked for the expense cards to go, so the placeholders
+ * were unregistered rather than left saying "coming soon" (see the note further down).
  */
 
 /** The calendar month `when` falls in, as a UTC range. */
@@ -60,13 +60,12 @@ function monthRange(when: Date): { from: Date; to: Date } {
 }
 
 /**
- * Plant's three company figures, fetched **once per request** however many of the three
- * cards are on screen.
+ * Plant's company figures, fetched **once per request**.
  *
- * Without this the machinery, fuel and hire-bill cards would each run the same three
- * aggregates — nine queries to render three numbers — because every provider resolves in
- * parallel and none knows the others exist. `once` is the mechanism the attendance cards
- * already share for the same reason.
+ * Written when the machinery, fuel and hire-bill cards all read it — without `once` they
+ * ran the same three aggregates each. Since 2026-10-15 only Total Machinery remains (the
+ * two cost cards left the dashboard with the other expense widgets); the memoisation is
+ * kept so a second Plant card added later does not quietly double the reads again.
  */
 function plantTotals(ctx: DashboardContext, plant: PlantService) {
   return once(ctx, 'plant:companyTotals', () =>
@@ -192,79 +191,18 @@ export class TotalMachineryWidget implements WidgetProvider {
   }
 }
 
-/**
- * What is owed on hired plant (spec FR-005).
+/*
+ * **Hire Bills Outstanding, Materials Cost (This Month) and Fuel Cost (This Month) were
+ * removed on 2026-10-15**, along with the Monthly Expenses and Recent Expenses
+ * placeholders. The client asked for the expense widgets off the dashboard: the home page
+ * is for what is happening (people, projects, machines, approvals, alerts), and the money
+ * going out is read on the module screens that own it — Plant → Hire Bills, Plant → Fuel,
+ * Inventory → Purchases — where it has the context a bare monthly figure lacks. Removing
+ * them also took the materials-spend aggregate off every dashboard load.
  *
- * The **unpaid** total, not the month's billing. A dashboard figure answers "what needs
- * attention", and a bill already paid needs none.
- *
- * It counts unverified bills too, which `getMachineryCostByProject` deliberately does not:
- * a P&L must not book an unverified claim as a cost, but money the company expects to pay
- * is exactly what an outstanding figure is for. `PlantService.getCompanyTotals` records
- * the same distinction where it computes it.
+ * `plantTotals` above still serves Total Machinery; it is kept as-is rather than narrowed,
+ * because `PlantService.getCompanyTotals` belongs to Plant.
  */
-@Injectable()
-export class HireBillsWidget implements WidgetProvider {
-  readonly id = 'hire-bills';
-  readonly displayType = 'kpi' as const;
-  readonly title = 'Hire Bills Outstanding';
-  readonly valueUnit = 'currency' as const;
-  readonly section = 'sidebar' as const;
-  readonly requires = [Permission.HIRE_BILLS, Permission.MACHINERY];
-  constructor(private readonly plant: PlantService) {}
-  isAvailable(): boolean {
-    return this.plant.isAvailable();
-  }
-  async compute(ctx: DashboardContext): Promise<number> {
-    return (await plantTotals(ctx, this.plant)).unpaidHireBills;
-  }
-}
-
-/**
- * Materials bought this month (spec FR-005).
- *
- * The period is in the title because the figure is meaningless without it: this
- * company has ₹93 lakh of purchases on record and none dated this month, so a card
- * reading "Materials Cost ₹0.00" says "we buy nothing" when it means "nothing yet in
- * October".
- */
-@Injectable()
-export class MaterialsCostWidget implements WidgetProvider {
-  readonly id = 'materials-cost';
-  readonly displayType = 'kpi' as const;
-  readonly title = 'Materials Cost (This Month)';
-  readonly valueUnit = 'currency' as const;
-  readonly section = 'sidebar' as const;
-  readonly requires = [Permission.INVENTORY];
-  constructor(private readonly inventory: InventoryService) {}
-  isAvailable(): boolean {
-    return true;
-  }
-  compute(ctx: DashboardContext): Promise<number> {
-    return this.inventory.getMaterialsSpendForMonth(
-      ctx.user,
-      monthRange(new Date()),
-    );
-  }
-}
-
-/** Fuel issued this month (spec FR-005). */
-@Injectable()
-export class FuelCostWidget implements WidgetProvider {
-  readonly id = 'fuel-cost';
-  readonly displayType = 'kpi' as const;
-  readonly title = 'Fuel Cost (This Month)';
-  readonly valueUnit = 'currency' as const;
-  readonly section = 'sidebar' as const;
-  readonly requires = [Permission.FUEL, Permission.MACHINERY];
-  constructor(private readonly plant: PlantService) {}
-  isAvailable(): boolean {
-    return this.plant.isAvailable();
-  }
-  async compute(ctx: DashboardContext): Promise<number> {
-    return (await plantTotals(ctx, this.plant)).fuelSpend;
-  }
-}
 
 // ─────────────────────────────────────────────────────────── site dashboard ──
 //

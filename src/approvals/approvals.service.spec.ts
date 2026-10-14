@@ -1026,6 +1026,9 @@ describe('ApprovalService', () => {
         subject: 'Rajesh Kulkarni — 11 Sep, out of geofence',
         levelLabel: 'First approver',
         requestedByName: 'Name originator-1',
+        // The module the Approvals screen groups the queue by (2026-10-15).
+        module: 'attendance',
+        moduleLabel: 'Attendance',
       });
       expect(typeof page.items[0].ageHours).toBe('number');
     });

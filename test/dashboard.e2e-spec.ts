@@ -730,7 +730,7 @@ describe('Dashboard reminders (e2e)', () => {
    * also what a broken endpoint returns.
    */
   describe('dashboard entitlement from a Site Engineer’s seat (2026-10-10)', () => {
-    it('withholds the HR widgets and keeps the placeholders', async () => {
+    it('withholds the HR widgets and keeps the ungated ones', async () => {
       const ids = async (t: string) =>
         (
           await http().get('/dashboard/widgets').set(auth(t)).expect(200)
@@ -745,8 +745,20 @@ describe('Dashboard reminders (e2e)', () => {
       // — which is the point, the filter is per widget and not a blanket.
       expect(engineer).not.toContain('total-employees');
       expect(engineer).toContain('recent-leaves');
-      // Placeholders carry no data and belong to everyone.
-      expect(engineer).toContain('monthly-expenses');
+      // A widget declaring no permission belongs to everyone. This used to be the
+      // Monthly Expenses placeholder; it left the dashboard on 2026-10-15 with every
+      // other expense card, so Alerts & Reminders — filtered by the engine, not here —
+      // is the ungated card now.
+      expect(engineer).toContain('alerts-reminders');
+      // And the expense cards are gone for everybody, the admin included.
+      for (const id of [
+        'monthly-expenses',
+        'materials-cost',
+        'fuel-cost',
+        'hire-bills',
+      ]) {
+        expect(admin).not.toContain(id);
+      }
     });
 
     it('lists no real report type to a Viewer, who holds REPORTS and no module', async () => {

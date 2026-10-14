@@ -30,8 +30,10 @@ import { UserEntity } from '../common/decorators/user.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { DEFAULT_SLOT_ORDER, SLOT_LABELS } from './approval-slots';
+import { ApprovalHistoryService } from './approval-history.service';
 import { ApprovalService } from './approvals.service';
 import { ChainsService } from './chains.service';
+import { ApprovalHistoryQueryDto } from './dto/approval-history-query.dto';
 import { ApprovalQueueQueryDto } from './dto/approval-queue-query.dto';
 import {
   PutSlotMappingDto,
@@ -69,6 +71,7 @@ export class ApprovalsController {
   constructor(
     private readonly approvals: ApprovalService,
     private readonly chains: ChainsService,
+    private readonly historyList: ApprovalHistoryService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -111,6 +114,28 @@ export class ApprovalsController {
   })
   async queueCount(@UserEntity() caller: AuthenticatedUser) {
     return { count: await this.approvals.queueCountFor(caller) };
+  }
+
+  @Get('history')
+  @SelfService()
+  @ApiOperation({
+    summary:
+      'Past and in-flight approvals the caller may read, chain by chain (2026-10-15)',
+    description:
+      'Every item the caller could open the per-item history of: they hold the ' +
+      'permission its module declared (`viewPermission`), or they raised, were ' +
+      'delegated or decided it. `scope=mine` keeps only the second kind.\n\n' +
+      'Each row carries the whole chain for the current round — every level, who ' +
+      'decided it, when, with what remark, and which level it waits on — plus the ' +
+      'decisions of earlier rounds, its module, and a link to the item. `modules` ' +
+      'counts the items per module under the status and scope filters, so the screen ' +
+      'can group and filter without a second call.',
+  })
+  async approvalHistory(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: ApprovalHistoryQueryDto,
+  ) {
+    return this.historyList.historyFor(caller, query);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
