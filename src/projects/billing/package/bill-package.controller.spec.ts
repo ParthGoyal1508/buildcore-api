@@ -1,3 +1,5 @@
+import { BadRequestException } from '@nestjs/common';
+
 import { BillPackageController } from './bill-package.controller';
 
 /**
@@ -48,6 +50,7 @@ describe('certifying with a certified copy', () => {
       {} as never,
       clientBills as never,
       signedCopies as never,
+      {} as never,
     );
     return { subject, calls };
   }
@@ -101,6 +104,13 @@ describe('certifying with a certified copy', () => {
       certificateData: data,
     });
     expect(calls.upload).toHaveLength(0);
+    // No lines posted: certified as one figure.
+    expect(calls.certify[0]).toEqual([
+      expect.anything(),
+      'u-1',
+      'pkg-1',
+      { certifiedAmount: '1000.00', remarks: null, lines: null },
+    ]);
     expect(calls.attach[0]).toEqual([
       expect.anything(),
       'cb-1',
@@ -119,5 +129,112 @@ describe('certifying with a certified copy', () => {
     expect(calls.upload).toHaveLength(0);
     expect(calls.attach).toHaveLength(0);
     expect(calls.reread).toBe(0);
+  });
+});
+
+/**
+ * Reading a certified copy (2026-10-15): a workbook is read, anything else comes back unreadable
+ * with every line listed for manual entry — never a failed request.
+ */
+describe('reading a certified copy', () => {
+  const caller = { id: 'u-1', companyId: 'co-1', permissions: [] };
+  const lines = [
+    {
+      lineId: 'l-1',
+      boqNo: '1.1',
+      description: 'Filling pot-holes',
+      unit: 'Sqm',
+      billedQty: 100,
+      rate: 250,
+    },
+  ];
+
+  function controller(read: (data: Buffer) => Promise<unknown>) {
+    const packages = {
+      certifiedCopyLines: async () => ({ lines, quotedPercentage: 0.05 }),
+    };
+    return new BillPackageController(
+      packages as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { read } as never,
+    );
+  }
+
+  it('says a PDF cannot be read, and lists the lines for manual entry', async () => {
+    let opened = false;
+    const subject = controller(async () => {
+      opened = true;
+      return [];
+    });
+    const result = await subject.readCertifiedCopy(caller as never, 'pkg-1', {
+      data: Buffer.from('%PDF-1.4 certified').toString('base64'),
+      fileName: 'RA-04.pdf',
+    });
+    expect(opened).toBe(false);
+    expect(result).toMatchObject({
+      readable: false,
+      reason: expect.stringMatching(/PDF/),
+      quotedPercentage: 0.05,
+    });
+    expect(result.lines[0]).toMatchObject({
+      lineId: 'l-1',
+      certifiedQty: null,
+    });
+  });
+
+  it('without a file, returns the lines alone for manual entry', async () => {
+    const subject = controller(async () => {
+      throw new Error('not opened');
+    });
+    const result = await subject.readCertifiedCopy(
+      caller as never,
+      'pkg-1',
+      {},
+    );
+    expect(result).toMatchObject({ readable: false, reason: null });
+    expect(result.lines).toHaveLength(1);
+  });
+
+  it('turns a workbook the reader refuses into a reason, not an error', async () => {
+    const subject = controller(async () => {
+      throw new BadRequestException({
+        statusCode: 400,
+        message:
+          'This workbook opened but contains no sheets with any content.',
+      });
+    });
+    const result = await subject.readCertifiedCopy(caller as never, 'pkg-1', {
+      data: Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0]).toString('base64'),
+      fileName: 'RA-04.xlsx',
+    });
+    expect(result.readable).toBe(false);
+    expect(result.reason).toMatch(/no sheets with any content/);
+  });
+
+  it('reads a workbook', async () => {
+    const subject = controller(async () => [
+      {
+        name: 'Abstract',
+        rows: [
+          { rowNumber: 1, cells: ['Item No', 'Certified Qty'] },
+          { rowNumber: 2, cells: [1.1, 95] },
+        ],
+      },
+    ]);
+    const result = await subject.readCertifiedCopy(caller as never, 'pkg-1', {
+      data: Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0]).toString('base64'),
+      fileName: 'renamed.bin',
+    });
+    expect(result.readable).toBe(true);
+    expect(result.lines[0]).toMatchObject({
+      certifiedQty: 95,
+      source: { sheet: 'Abstract', row: 2 },
+    });
   });
 });

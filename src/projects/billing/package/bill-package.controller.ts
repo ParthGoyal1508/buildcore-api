@@ -37,6 +37,7 @@ import {
   ReviseBillPackageDto,
   SetBillDeductionLinesDto,
   WithdrawBillPackageDto,
+  ReadCertifiedCopyDto,
 } from './dto/bill-lifecycle.dto';
 import {
   AddNonBoqItemDto,
@@ -47,6 +48,12 @@ import { ComposeBillPackageDto } from './dto/compose-bill.dto';
 import { RecordDebitDto } from './dto/debit-note.dto';
 import { MeasurementSheetService } from './measurement-sheet.service';
 import { PackageReportsService } from './package-reports.service';
+import { BoqWorkbookReader } from '../../boq/boq-workbook.reader';
+import {
+  CertifiedCopyReading,
+  readCertifiedCopy,
+  unreadableCopy,
+} from './certified-copy.reader';
 
 const CONTENT_TYPES = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -96,6 +103,7 @@ export class BillPackageController {
     private readonly approvals: ApprovalService,
     private readonly clientBills: ClientBillsService,
     private readonly signedCopies: SignedCopiesService,
+    private readonly workbooks: BoqWorkbookReader,
   ) {}
 
   // ── Composition ──────────────────────────────────────────────────────────
@@ -658,6 +666,71 @@ export class BillPackageController {
     );
   }
 
+  @Post('projects/bill-packages/:packageId/certified-copy/read')
+  @ApiOperation({
+    summary:
+      'Read the client’s certified copy for the quantity passed on each line',
+    description:
+      '**Writes nothing** (2026-10-15). A bill to the client only. The certified copy — usually ' +
+      'the bill’s own workbook with the client’s figures in it — is read for an item-number ' +
+      'column and a certified quantity column (headed certified / passed / approved, else this ' +
+      'bill, else up-to-date less previous, else a lone Qty column), and its rows matched to the ' +
+      'bill’s lines by BOQ item number, then by exact description.\n\n' +
+      'Every line that billed anything comes back with `certifiedQty` — `null` where the copy ' +
+      'does not mention it — and where it was read from. Rows with a quantity that matched no ' +
+      'line are listed in `unmatchedRows`. A PDF, an image, or a workbook nothing could be read ' +
+      'from comes back `readable: false` with the reason, and the lines for manual entry. The ' +
+      'figures are confirmed on screen and sent to Certify as `lines`. Sent without `data`, the ' +
+      'lines alone come back (`readable: false`, `reason: null`), for entering them by hand.',
+  })
+  async readCertifiedCopy(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: ReadCertifiedCopyDto,
+  ): Promise<CertifiedCopyReading & { quotedPercentage: number }> {
+    const { lines, quotedPercentage } = await this.packages.certifiedCopyLines(
+      rlsContextFor(caller),
+      packageId,
+    );
+    // No file: the lines alone, for entering what the client certified by hand.
+    if (!dto.data) {
+      return { ...unreadableCopy(lines, null), quotedPercentage };
+    }
+    const data = Buffer.from(dto.data, 'base64');
+    const kind = documentKind(data, dto.fileName ?? '');
+    if (kind !== 'workbook') {
+      return {
+        ...unreadableCopy(
+          lines,
+          kind === 'pdf'
+            ? 'A PDF cannot be read for quantities. Enter what the client certified below.'
+            : kind === 'image'
+            ? 'A photo or scan cannot be read for quantities. Enter what the client certified below.'
+            : 'This file is not an Excel workbook, so it cannot be read for quantities. Enter ' +
+              'what the client certified below.',
+        ),
+        quotedPercentage,
+      };
+    }
+    try {
+      const sheets = await this.workbooks.read(data);
+      return { ...readCertifiedCopy(sheets, lines), quotedPercentage };
+    } catch (error) {
+      // The reader refuses an oversized, corrupt or empty workbook with a message meant for whoever
+      // uploaded it; here that is a reason to enter the figures by hand, not a failed request.
+      const message = (error as { response?: { message?: unknown } }).response
+        ?.message;
+      if (typeof message !== 'string') throw error;
+      return {
+        ...unreadableCopy(
+          lines,
+          `${message} Enter what the client certified below.`,
+        ),
+        quotedPercentage,
+      };
+    }
+  }
+
   @Post('projects/bill-packages/:packageId/certify')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
@@ -678,8 +751,9 @@ export class BillPackageController {
   ) {
     const ctx = rlsContextFor(caller);
     const view = await this.packages.certify(ctx, caller.id, packageId, {
-      certifiedAmount: dto.certifiedAmount,
+      certifiedAmount: dto.certifiedAmount ?? null,
       remarks: dto.remarks ?? null,
+      lines: dto.lines ?? null,
     });
     if (!dto.certificateData) return view;
 
@@ -752,4 +826,31 @@ export class BillPackageController {
       resolveCompanyId(caller, companyId),
     );
   }
+}
+
+/**
+ * What a certified copy is, by its first bytes — the extension only where the bytes say nothing
+ * (2026-10-15). A renamed file is the common case; see `BoqWorkbookReader`.
+ */
+function documentKind(
+  data: Buffer,
+  fileName: string,
+): 'workbook' | 'pdf' | 'image' | 'other' {
+  const head = data.subarray(0, 8);
+  if (head.subarray(0, 4).toString('latin1') === '%PDF') return 'pdf';
+  if (
+    head.subarray(0, 4).equals(Buffer.from([0x50, 0x4b, 0x03, 0x04])) ||
+    head.equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]))
+  ) {
+    return 'workbook';
+  }
+  if (
+    head.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff])) ||
+    head.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47])) ||
+    /\.(jpe?g|png|gif|webp|heic|bmp|tiff?)$/i.test(fileName)
+  ) {
+    return 'image';
+  }
+  if (/\.pdf$/i.test(fileName)) return 'pdf';
+  return 'other';
 }

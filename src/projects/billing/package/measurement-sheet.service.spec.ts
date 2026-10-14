@@ -27,11 +27,16 @@ interface ClaimFixture {
   claimedQty: string;
   reason?: string | null;
   overClaimed?: boolean;
+  /** What the client certified on this claim's bill line, where they said (2026-10-15). */
+  certifiedQty?: string | null;
+  certifiedAt?: string | null;
 }
 
 function build(opts: {
   /** This package. */
   sequenceNo?: number;
+  /** When this package was issued; absent for a draft. */
+  issuedAt?: string;
   /** Every claim against the item, across packages. */
   claims?: ClaimFixture[];
   /** What the logbook source returns, by date. Absent dates are absent. */
@@ -49,8 +54,15 @@ function build(opts: {
     claimedQty: d(claim.claimedQty),
     reason: claim.reason ?? null,
     overClaimed: claim.overClaimed ?? false,
+    clientBillLine: {
+      certifiedQty:
+        claim.certifiedQty === undefined || claim.certifiedQty === null
+          ? null
+          : d(claim.certifiedQty),
+    },
     package: {
       sequenceNo: claim.sequenceNo,
+      certifiedAt: claim.certifiedAt ? new Date(claim.certifiedAt) : null,
       periodFrom: new Date(claim.periodFrom),
       periodTo: new Date(claim.periodTo),
     },
@@ -68,6 +80,7 @@ function build(opts: {
         sequenceNo,
         periodFrom: new Date('2025-12-21'),
         periodTo: new Date('2025-12-23'),
+        issuedAt: opts.issuedAt ? new Date(opts.issuedAt) : null,
       }),
     },
     billPackageLineClaim: {
@@ -404,5 +417,93 @@ describe('datesBetween', () => {
     expect(
       datesBetween(new Date('2025-12-30'), new Date('2026-01-02')),
     ).toEqual(['2025-12-30', '2025-12-31', '2026-01-01', '2026-01-02']);
+  });
+});
+
+/**
+ * Billed 100, the client passed 95 (2026-10-15): the 5 stay outstanding for the next bill.
+ */
+describe('up to previous after a line-by-line certificate', () => {
+  const certified = (overrides: Partial<ClaimFixture>): ClaimFixture[] => [
+    {
+      packageId: 'pkg-11',
+      sequenceNo: 11,
+      periodFrom: '2025-11-21',
+      periodTo: '2025-12-20',
+      status: 'certified',
+      claimedQty: '100.000',
+      certifiedQty: '95.000',
+      certifiedAt: '2025-12-28',
+      ...overrides,
+    },
+    {
+      packageId: 'pkg-this',
+      sequenceNo: 12,
+      periodFrom: '2025-12-21',
+      periodTo: '2025-12-23',
+      status: 'draft',
+      claimedQty: '5.000',
+    },
+  ];
+
+  it('counts what was certified, not what was billed, and says what is outstanding', async () => {
+    const service = build({ claims: certified({}) });
+    const { footer } = await service.sheetFor(
+      { isSuperAdmin: true },
+      'pkg-this',
+      'boq-1',
+    );
+    expect(footer.uptoPreviousQty).toBe('95.000');
+    expect(footer.uncertifiedPreviousQty).toBe('5.000');
+    // The 5 claimed again on this bill bring the item back to the 100 measured.
+    expect(footer.uptoDateQty).toBe('100.000');
+  });
+
+  it('counts a line certified at zero as zero — zero is not null', async () => {
+    const service = build({ claims: certified({ certifiedQty: '0' }) });
+    const { footer } = await service.sheetFor(
+      { isSuperAdmin: true },
+      'pkg-this',
+      'boq-1',
+    );
+    expect(footer.uptoPreviousQty).toBe('0.000');
+    expect(footer.uncertifiedPreviousQty).toBe('100.000');
+  });
+
+  it('keeps the billed quantity for a bill certified only as one figure', async () => {
+    const service = build({ claims: certified({ certifiedQty: null }) });
+    const { footer } = await service.sheetFor(
+      { isSuperAdmin: true },
+      'pkg-this',
+      'boq-1',
+    );
+    expect(footer.uptoPreviousQty).toBe('100.000');
+    expect(footer.uncertifiedPreviousQty).toBe('0.000');
+  });
+
+  it('does not rewrite an issued bill with a certificate that arrived after it went out', async () => {
+    const service = build({
+      claims: certified({ certifiedAt: '2026-01-05' }),
+      issuedAt: '2025-12-30',
+    });
+    const { footer } = await service.sheetFor(
+      { isSuperAdmin: true },
+      'pkg-this',
+      'boq-1',
+    );
+    expect(footer.uptoPreviousQty).toBe('100.000');
+  });
+
+  it('reads a certificate that arrived before this bill was issued', async () => {
+    const service = build({
+      claims: certified({ certifiedAt: '2025-12-28' }),
+      issuedAt: '2025-12-30',
+    });
+    const { footer } = await service.sheetFor(
+      { isSuperAdmin: true },
+      'pkg-this',
+      'boq-1',
+    );
+    expect(footer.uptoPreviousQty).toBe('95.000');
   });
 });

@@ -10,6 +10,7 @@ import { PrismaService } from 'nestjs-prisma';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
+import { assertCertifiedLines, certifiedAmountOf } from './certified-lines';
 import {
   billTotals,
   lineTotals,
@@ -635,32 +636,24 @@ export class ClientBillsService {
       }
 
       const certifiedLines = input.lines ?? [];
-      for (const line of certifiedLines) {
-        const billed = bill.lines.find((row) => row.id === line.lineId);
-        if (!billed) {
-          throw new NotFoundException(
-            `Line ${line.lineId} is not on this bill.`,
-          );
-        }
-        if (line.certifiedQty > billed.quantity.toNumber()) {
-          // The same refusal the total already gives, at line level and for the same
-          // reason: a client cannot certify work nobody claimed.
-          throw new BadRequestException({
-            statusCode: 400,
-            code: BILLING_ERRORS.certifiedExceedsBilled,
-            message:
-              `Certified ${line.certifiedQty} on a line billed at ` +
-              `${billed.quantity.toNumber()}. Raise a further bill for the extra work rather ` +
-              `than certifying above this one.`,
-          });
-        }
-      }
+      // The checks and the pricing are shared with the bill package's Certify (2026-10-15) —
+      // see `certified-lines.ts`.
+      const billLines = bill.lines.map((line) => ({
+        id: line.id,
+        quantity: line.quantity.toNumber(),
+        rate: line.rate.toNumber(),
+      }));
+      assertCertifiedLines(billLines, certifiedLines);
 
       // **Derived from the lines when there are lines**, never taken alongside them. A
-      // certified total and a set of certified lines that disagree is two answers to
-      // one question, and the lines are the ones the outstanding BOQ is counted from.
+      // certified total and a set of certified lines that disagree is two answers to one
+      // question, and the lines are the ones the outstanding BOQ is counted from.
       const certifiedAmount = certifiedLines.length
-        ? this.amountOfCertified(bill, certifiedLines)
+        ? certifiedAmountOf(
+            billLines,
+            certifiedLines,
+            bill.quotedPercentage.toNumber(),
+          )
         : input.certifiedAmount ?? 0;
 
       if (certifiedAmount > bill.grossAmount.toNumber()) {
@@ -702,32 +695,6 @@ export class ClientBillsService {
     });
 
     return this.view(ctx, billId);
-  }
-
-  /**
-   * What the certified quantities come to, at the rates and quote the bill was priced at.
-   *
-   * A line the client said nothing about keeps its billed quantity — omission is "not
-   * said", not "certified at nothing". A client returning a certificate that covers half
-   * the schedule has said nothing about the other half, and reading silence as a
-   * rejection would quietly halve the bill.
-   */
-  private amountOfCertified(
-    bill: {
-      quotedPercentage: Prisma.Decimal;
-      lines: { id: string; quantity: Prisma.Decimal; rate: Prisma.Decimal }[];
-    },
-    certified: { lineId: string; certifiedQty: number }[],
-  ): number {
-    const byId = new Map(
-      certified.map((row) => [row.lineId, row.certifiedQty]),
-    );
-    const quoted = bill.quotedPercentage.toNumber();
-    const total = bill.lines.reduce((sum, line) => {
-      const qty = byId.get(line.id) ?? line.quantity.toNumber();
-      return sum + qty * line.rate.toNumber() * (1 + quoted);
-    }, 0);
-    return Math.round(total * 100) / 100;
   }
 
   /** The client's certification document, through `StorageService` like every other upload. */

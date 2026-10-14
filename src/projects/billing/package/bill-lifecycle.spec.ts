@@ -116,6 +116,7 @@ function build(pkg: Record<string, unknown>) {
     abandoned,
     deductionWrites,
     raBillUpdates,
+    tx: tx as Record<string, unknown>,
   };
 }
 
@@ -253,6 +254,165 @@ describe('sharing and certifying', () => {
     await service.certify(ctx, 'u-1', 'pkg-1', { certifiedAmount: '1000.00' });
     expect(row.status).toBe(BillPackageStatus.certified);
     expect(raBillUpdates[0]).toMatchObject({ status: 'approved' });
+  });
+});
+
+/**
+ * Certifying a bill to the client line by line (2026-10-15): billed 100, the client passed 95.
+ */
+describe('certifying a client bill line by line', () => {
+  function clientBuild() {
+    const built = build({
+      status: BillPackageStatus.issued,
+      direction: BillDirection.to_client,
+      clientBillId: 'cb-1',
+      raBillId: null,
+    });
+    const lineWrites: { id: string; certifiedQty: unknown }[] = [];
+    const resets: Record<string, unknown>[] = [];
+    const billUpdates: Record<string, unknown>[] = [];
+    Object.assign(built.tx, {
+      clientBill: {
+        findUniqueOrThrow: async () => ({
+          quotedPercentage: d('0.10'),
+          lines: [
+            {
+              id: 'l-1',
+              quantity: d('100'),
+              rate: d('250'),
+              boqTaskItem: { nonBoq: false },
+            },
+            {
+              id: 'l-2',
+              quantity: d('40'),
+              rate: d('90'),
+              boqTaskItem: { nonBoq: false },
+            },
+            {
+              id: 'l-nb',
+              quantity: d('2'),
+              rate: d('1000'),
+              boqTaskItem: { nonBoq: true },
+            },
+          ],
+        }),
+        update: async (args: { data: Record<string, unknown> }) => {
+          billUpdates.push(args.data);
+          return {};
+        },
+      },
+      clientBillLine: {
+        updateMany: async (args: { where: Record<string, unknown> }) => {
+          resets.push(args.where);
+          return { count: 0 };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: { certifiedQty: unknown };
+        }) => {
+          lineWrites.push({ id: args.where.id, ...args.data });
+          return {};
+        },
+      },
+    });
+    return { ...built, lineWrites, resets, billUpdates };
+  }
+
+  it('writes each line’s certified quantity and derives the certified figure from them', async () => {
+    const { service, row, lineWrites, billUpdates } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      // Ignored: the lines are the answer.
+      certifiedAmount: '1.00',
+      lines: [
+        { lineId: 'l-1', certifiedQty: 95 },
+        { lineId: 'l-nb', certifiedQty: 0 },
+      ],
+    });
+    expect(lineWrites).toEqual([
+      { id: 'l-1', certifiedQty: 95 },
+      { id: 'l-nb', certifiedQty: 0 },
+    ]);
+    // 95 × 250 × 1.10 + 40 × 90 × 1.10 (not said: billed stands) + 0 on the non-BOQ item.
+    const expected = '30085.00';
+    expect((row.certifiedAmount as Prisma.Decimal).toFixed(2)).toBe(expected);
+    expect((billUpdates[0].certifiedAmount as Prisma.Decimal).toFixed(2)).toBe(
+      expected,
+    );
+    expect(billUpdates[0].status).toBe('certified');
+  });
+
+  it('comes to exactly the gross when every line is certified in full', async () => {
+    const { service, row } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      lines: [
+        { lineId: 'l-1', certifiedQty: 100 },
+        { lineId: 'l-2', certifiedQty: 40 },
+        { lineId: 'l-nb', certifiedQty: 2 },
+      ],
+    });
+    // 27,500 + 3,960 + 2,000 (the non-BOQ item at its own rate, no premium).
+    expect((row.certifiedAmount as Prisma.Decimal).toFixed(2)).toBe('33460.00');
+  });
+
+  it('refuses a line certified above what it was billed at', async () => {
+    const { service, lineWrites } = clientBuild();
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'l-1', certifiedQty: 101 }],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CERTIFIED_EXCEEDS_BILLED' },
+    });
+    expect(lineWrites).toHaveLength(0);
+  });
+
+  it('refuses a line that is not on this bill', async () => {
+    const { service } = clientBuild();
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'elsewhere', certifiedQty: 1 }],
+      }),
+    ).rejects.toThrow(/not on this bill/);
+  });
+
+  it('returns lines not posted to “not said”, so a stale answer cannot linger', async () => {
+    const { service, resets } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      lines: [{ lineId: 'l-1', certifiedQty: 95 }],
+    });
+    expect(resets[0]).toEqual({
+      clientBillId: 'cb-1',
+      id: { notIn: ['l-1'] },
+    });
+  });
+
+  it('certifying as one figure clears an earlier line-by-line answer', async () => {
+    const { service, resets, lineWrites } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', { certifiedAmount: '30000.00' });
+    expect(resets[0]).toEqual({ clientBillId: 'cb-1' });
+    expect(lineWrites).toHaveLength(0);
+  });
+
+  it('refuses lines on a subcontractor’s bill', async () => {
+    const { service } = build({
+      status: BillPackageStatus.issued,
+      raBillId: 'ra-1',
+      clientBillId: null,
+    });
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'l-1', certifiedQty: 1 }],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CERTIFIED_LINES_CLIENT_ONLY' },
+    });
+  });
+
+  it('refuses a certify with neither a figure nor lines', async () => {
+    const { service } = clientBuild();
+    await expect(service.certify(ctx, 'u-1', 'pkg-1', {})).rejects.toThrow(
+      /certified amount/,
+    );
   });
 });
 

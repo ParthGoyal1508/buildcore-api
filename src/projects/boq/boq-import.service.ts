@@ -87,7 +87,7 @@ export interface ValidationReport {
  * A text cell passes through verbatim. Plenty of real item numbers are text — `3.19.1`, `88(a)` —
  * and reformatting those would be inventing a number the file does not contain.
  */
-function itemNumber(cell: unknown, fallback: number): string {
+export function itemNumber(cell: unknown, fallback: number): string {
   if (typeof cell !== 'number' || !Number.isFinite(cell)) {
     return String(cell ?? fallback);
   }
