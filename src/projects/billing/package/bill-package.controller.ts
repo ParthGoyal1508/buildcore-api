@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { Permission, SignedCopySubject } from '@prisma/client';
 import type { Response } from 'express';
 
 import { ApprovalService } from '../../../approvals/approvals.service';
@@ -26,6 +26,7 @@ import { rlsContextFor } from '../../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../../settings/company-scope';
 import { ProjectLockGuard } from '../../guards/project-lock.guard';
 import { ClientBillsService } from '../client-bills.service';
+import { SignedCopiesService } from '../payments/signed-copies.service';
 import { BillPackageService } from './bill-package.service';
 import { BillPackageViewBuilder } from './bill-package-view.builder';
 import { DebitNoteService } from './debit-note.service';
@@ -94,6 +95,7 @@ export class BillPackageController {
     private readonly views: BillPackageViewBuilder,
     private readonly approvals: ApprovalService,
     private readonly clientBills: ClientBillsService,
+    private readonly signedCopies: SignedCopiesService,
   ) {}
 
   // ── Composition ──────────────────────────────────────────────────────────
@@ -663,31 +665,49 @@ export class BillPackageController {
     description:
       'On a bill to the client, what the client certified. On a subcontractor’s, the company ' +
       'certifying it — which releases it for payment and for a payment advice. Kept **beside** ' +
-      'the billed figure and never instead of it.',
+      'the billed figure and never instead of it.\n\n' +
+      'The certified copy (`certificateData`) is filed for either direction: on a bill to the ' +
+      'client as the client bill’s certificate, on a subcontractor’s as a signed copy of its RA ' +
+      'bill, received today — which also acknowledges the bill. The returned view’s ' +
+      '`certifiedCopy` says which download serves it.',
   })
   async certify(
     @UserEntity() caller: AuthenticatedUser,
     @Param('packageId') packageId: string,
     @Body() dto: CertifyBillPackageDto,
   ) {
-    const view = await this.packages.certify(
-      rlsContextFor(caller),
-      caller.id,
-      packageId,
-      { certifiedAmount: dto.certifiedAmount, remarks: dto.remarks ?? null },
-    );
+    const ctx = rlsContextFor(caller);
+    const view = await this.packages.certify(ctx, caller.id, packageId, {
+      certifiedAmount: dto.certifiedAmount,
+      remarks: dto.remarks ?? null,
+    });
+    if (!dto.certificateData) return view;
+
+    const file = {
+      data: Buffer.from(dto.certificateData, 'base64'),
+      fileName: dto.certificateFileName ?? 'certificate',
+    };
     // The client's certification document, filed where the client bill has always kept it.
-    if (dto.certificateData && view.clientBillId) {
-      await this.clientBills.attachCertificate(
-        rlsContextFor(caller),
-        view.clientBillId,
-        {
-          data: Buffer.from(dto.certificateData, 'base64'),
-          fileName: dto.certificateFileName ?? 'certificate',
-        },
+    if (view.clientBillId) {
+      await this.clientBills.attachCertificate(ctx, view.clientBillId, file);
+    } else if (view.raBillId) {
+      // A subcontractor's certified copy (2026-10-14), filed as a **signed copy of the RA bill**
+      // rather than in a column of its own: that is where the countersigned bill was always kept,
+      // its download already exists, and the first one filed sets `acknowledgedAt` — the state the
+      // outstanding views read. Received today, because Certify is the moment it came back.
+      await this.signedCopies.upload(
+        ctx,
+        await this.packages.companyOf(ctx, packageId),
+        SignedCopySubject.ra_bill,
+        view.raBillId,
+        { ...file, receivedOn: new Date().toISOString().slice(0, 10) },
+        { userId: caller.id },
       );
+    } else {
+      return view;
     }
-    return view;
+    // Read again, so the response carries the copy just filed.
+    return this.packages.view(ctx, packageId);
   }
 
   // ── The two reports the decisions oblige ─────────────────────────────────

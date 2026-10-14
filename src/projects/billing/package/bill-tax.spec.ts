@@ -11,22 +11,9 @@ import { decideTaxBasis, stateCodeOf } from './bill-tax';
  * why they need writing by hand.
  */
 describe('deciding the tax basis', () => {
-  it('reads the same state from both numbers and applies the half-rate pair', () => {
-    expect(
-      decideTaxBasis({
-        issuerGstin: '08AABCH1234D1ZX',
-        receiverGstin: '08AAMCP8659H1Z2',
-        projectCgstApplicable: false,
-      }),
-    ).toMatchObject({
-      basis: BillTaxBasis.intra_state,
-      source: BillTaxBasisSource.derived_from_gstin,
-      issuerStateCode: '08',
-      receiverStateCode: '08',
-    });
-  });
-
-  it('applies the full-rate tax across states', () => {
+  it('charges CGST + SGST where the project says so, whatever the two numbers read', () => {
+    // 2026-10-14. The company holds more than one GSTIN, so the numbers cannot settle it — the
+    // project's choice does. Here the numbers are in different states and the project wins.
     expect(
       decideTaxBasis({
         issuerGstin: '08AABCH1234D1ZX',
@@ -34,30 +21,27 @@ describe('deciding the tax basis', () => {
         projectCgstApplicable: true,
       }),
     ).toMatchObject({
+      basis: BillTaxBasis.intra_state,
+      source: BillTaxBasisSource.from_project_flag,
+      issuerStateCode: '08',
+      receiverStateCode: '27',
+    });
+  });
+
+  it('charges IGST where the project says so, even with both numbers in one state', () => {
+    expect(
+      decideTaxBasis({
+        issuerGstin: '08AABCH1234D1ZX',
+        receiverGstin: '08AAMCP8659H1Z2',
+        projectCgstApplicable: false,
+      }),
+    ).toMatchObject({
       basis: BillTaxBasis.inter_state,
-      source: BillTaxBasisSource.derived_from_gstin,
+      source: BillTaxBasisSource.from_project_flag,
     });
   });
 
-  it('derives from the numbers rather than from the project’s flag, where it can', () => {
-    // FR-016. The flag is set once when a project is created and cannot know which subcontractor a
-    // bill is going to — so where the registration numbers can answer, they do, and the flag's
-    // disagreement is overruled rather than averaged.
-    const decision = decideTaxBasis({
-      issuerGstin: '08AABCH1234D1ZX',
-      receiverGstin: '08AAMCP8659H1Z2',
-      // Says inter-state. The numbers say otherwise.
-      projectCgstApplicable: false,
-    });
-
-    expect(decision.basis).toBe(BillTaxBasis.intra_state);
-    expect(decision.source).toBe(BillTaxBasisSource.derived_from_gstin);
-  });
-
-  it('falls back to the project’s flag and says that it did', () => {
-    // FR-016a. `Client` carries no `state` column today, so on a bill issued to a client this is
-    // the likely path rather than the exceptional one — and a fallback recorded on a row and shown
-    // to nobody is a tax decision nobody made.
+  it('reports the state codes it could read, beside the project’s choice', () => {
     const decision = decideTaxBasis({
       issuerGstin: '08AABCH1234D1ZX',
       receiverGstin: null,
@@ -70,18 +54,6 @@ describe('deciding the tax basis', () => {
       issuerStateCode: '08',
       receiverStateCode: null,
     });
-  });
-
-  it('needs both numbers, not one', () => {
-    // Knowing only our own state says nothing about whether the other party is in it. One-sided
-    // knowledge reads as a derivation while being a guess, so it reports as the fallback it is.
-    expect(
-      decideTaxBasis({
-        issuerGstin: null,
-        receiverGstin: '08AAMCP8659H1Z2',
-        projectCgstApplicable: false,
-      }).source,
-    ).toBe(BillTaxBasisSource.from_project_flag);
   });
 
   it('refuses to read a state out of a number that does not carry one', () => {

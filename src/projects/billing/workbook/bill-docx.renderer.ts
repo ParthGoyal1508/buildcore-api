@@ -16,6 +16,7 @@ import {
 
 import type { BillWorkbookView } from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
+import { subcontractorSignatures } from './signature-block';
 
 const BORDER = { style: BorderStyle.SINGLE, size: 4, color: '999999' };
 const BORDERS = {
@@ -77,7 +78,7 @@ export class BillDocxRenderer {
                 }),
               ],
             }),
-            ...this.signatures(),
+            ...this.signatures(view),
           ],
         },
         ...(options.abstractOnly ? [] : [this.annexures(view)]),
@@ -309,7 +310,49 @@ export class BillDocxRenderer {
     return table(rows);
   }
 
-  private signatures(): Paragraph[] {
+  /**
+   * The sign-off under the abstract.
+   *
+   * A subcontractor's bill prints the client's own block (2026-10-14): each caption, a space to
+   * sign in, and the designation under it — with the subcontractor's name under "Accepted by",
+   * since accepting the bill is theirs to do (`subcontractorSignatures`). A bill to the client
+   * keeps the two bare caption lines it always printed; its output is deliberately unchanged.
+   */
+  private signatures(view: BillWorkbookView): Paragraph[] {
+    const rows = subcontractorSignatures(view.header);
+    if (rows) {
+      const pair = (
+        left: string,
+        right: string,
+        options: { bold: boolean; before: number; last?: boolean },
+      ) =>
+        new Paragraph({
+          spacing: { before: options.before },
+          tabStops: [{ type: 'left', position: 6000 }],
+          // Kept with the paragraph that follows, so Word never breaks the block between a
+          // caption and the name signing under it. Not the last line, which would otherwise drag the
+          // whole block onto the annexures' page.
+          keepNext: !options.last,
+          keepLines: true,
+          children: [
+            new TextRun({ text: left, bold: options.bold }),
+            new TextRun({ text: `\t${right}`, bold: options.bold }),
+          ],
+        });
+      return rows.flatMap((row, index) => [
+        pair(row.left.caption, row.right.caption, {
+          bold: true,
+          before: index === 0 ? 480 : 360,
+        }),
+        // The space a pen needs sits in the spacing above the designation.
+        pair(row.left.signatory, row.right.signatory, {
+          bold: false,
+          before: 720,
+          last: index === rows.length - 1,
+        }),
+      ]);
+    }
+
     const line = (left: string, right: string) =>
       new Paragraph({
         spacing: { before: 480 },

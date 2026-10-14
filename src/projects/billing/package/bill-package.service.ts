@@ -16,6 +16,7 @@ import {
   DwrStatus,
   Prisma,
   RaBillStatus,
+  SignedCopySubject,
   WorkOrderStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -234,6 +235,21 @@ export interface BillPackageView {
   workOrderId: string | null;
   /** The client's id, or the work order's — what the running number is counted per. */
   counterpartyKey: string;
+  /**
+   * The certified copy filed at Certify, once the bill is certified (2026-10-14) — null before, and
+   * null where none was filed.
+   *
+   * Each direction keeps it where that direction already kept such a document, so this only says
+   * **which** download serves it: `client_certificate` is the client bill's certificate
+   * (`GET projects/client-bills/:clientBillId/certificate`); `signed_copy` is the latest signed
+   * copy on the RA bill (`GET projects/signed-copies/:signedCopyId/file`). One field rather than
+   * two, so the screen asks one question — "is there a certified copy?" — whichever way the bill
+   * runs.
+   */
+  certifiedCopy:
+    | { kind: 'client_certificate'; clientBillId: string; fileName: string }
+    | { kind: 'signed_copy'; signedCopyId: string; fileName: string }
+    | null;
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
@@ -1658,10 +1674,8 @@ export class BillPackageService {
       // because the table carried neither column, so every bill issued to a client reported two
       // missing header fields — on the real RA-12 those two rows are filled in by hand.
       //
-      // They do **not** move the tax decision: `decideTaxBasis` reads the two GSTINs, whose first
-      // two characters are the state code, so a client with a GSTIN has always been taxed
-      // correctly. These are what the header *prints*, which is a smaller claim than it looks and
-      // worth stating precisely rather than overselling.
+      // They do **not** move the tax decision, which is the project's own choice (2026-10-14).
+      // These are what the header *prints*.
       //
       // A client recorded before these columns existed still reports them missing, which is the
       // right answer: unrecorded is not the same as absent from the model.
@@ -2041,6 +2055,22 @@ export class BillPackageService {
       }
     });
     return this.view(ctx, packageId);
+  }
+
+  /**
+   * The company a package belongs to (2026-10-14) — where Certify files a subcontractor's certified
+   * copy. The package's own, not the caller's: a cross-company caller may have no company selected,
+   * and a file stored under the wrong company is one its owners cannot read back.
+   */
+  async companyOf(ctx: RlsContext, packageId: string): Promise<string> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { companyId: true },
+      }),
+    );
+    if (!pkg) throw new NotFoundException('Bill package not found');
+    return pkg.companyId;
   }
 
   /**
@@ -2903,6 +2933,9 @@ export class BillPackageService {
         include: {
           deductionLines: { orderBy: { sortOrder: 'asc' } },
           raBill: { select: { workOrderId: true } },
+          clientBill: {
+            select: { certificateFileRef: true, certificateFileName: true },
+          },
           claims: {
             include: {
               clientBillLine: {
@@ -3049,6 +3082,36 @@ export class BillPackageService {
           })
         : null;
 
+      // The certified copy, read only once there is a certification for it to be the copy of. On a
+      // subcontractor's bill it is the newest signed copy on the RA bill — the one Certify filed,
+      // unless somebody filed a better scan after it.
+      const certified = pkg.status === BillPackageStatus.certified;
+      const signedCopy =
+        certified && pkg.raBillId
+          ? await tx.signedCopy.findFirst({
+              where: {
+                subjectType: SignedCopySubject.ra_bill,
+                subjectId: pkg.raBillId,
+              },
+              select: { id: true, fileName: true },
+              orderBy: [{ receivedOn: 'desc' }, { uploadedAt: 'desc' }],
+            })
+          : null;
+      const certifiedCopy: BillPackageView['certifiedCopy'] =
+        certified && pkg.clientBillId && pkg.clientBill?.certificateFileRef
+          ? {
+              kind: 'client_certificate',
+              clientBillId: pkg.clientBillId,
+              fileName: pkg.clientBill.certificateFileName ?? 'certificate',
+            }
+          : signedCopy
+          ? {
+              kind: 'signed_copy',
+              signedCopyId: signedCopy.id,
+              fileName: signedCopy.fileName,
+            }
+          : null;
+
       return {
         id: pkg.id,
         projectId: pkg.projectId,
@@ -3104,6 +3167,7 @@ export class BillPackageService {
         clientBillId: pkg.clientBillId,
         workOrderId: pkg.raBill?.workOrderId ?? null,
         counterpartyKey: pkg.counterpartyKey,
+        certifiedCopy,
       };
     });
   }

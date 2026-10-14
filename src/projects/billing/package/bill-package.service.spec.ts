@@ -592,11 +592,9 @@ describe('composing a bill package', () => {
     ).rejects.toMatchObject({ response: { code: 'BILL_PERIOD_INVERTED' } });
   });
 
-  it('records the tax basis it derived, and that it derived it', async () => {
-    // T044a. Both parties' registration numbers begin 08, as the client's own package has them, so
-    // the half-rate pair applies and the source says the numbers decided it — not the project's
-    // flag, which a bill cannot trust because it was set before anybody knew which subcontractor
-    // this would be.
+  it('records the tax basis the project chose, and that the project chose it', async () => {
+    // 2026-10-14. The project's CGST + SGST / IGST choice decides every bill on it; the company
+    // holds more than one GSTIN, so the two parties' numbers cannot.
     const built = build({
       direction: BillDirection.to_subcontractor,
       award: [
@@ -619,7 +617,7 @@ describe('composing a bill package', () => {
 
     expect(built.pkg()).toMatchObject({
       taxBasis: 'intra_state',
-      taxBasisSource: 'derived_from_gstin',
+      taxBasisSource: 'from_project_flag',
     });
   });
 

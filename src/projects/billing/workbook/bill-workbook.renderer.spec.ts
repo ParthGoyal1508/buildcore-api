@@ -179,6 +179,49 @@ describe('both directions, one renderer', () => {
   });
 });
 
+describe('the subcontractor’s sign-off under the abstract (2026-10-14)', () => {
+  async function abstractCells(header: Partial<BillWorkbookView['header']>) {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(
+      (await new BillWorkbookRenderer().render(
+        view({ header: { ...view().header, ...header } }),
+      )) as unknown as ExcelJS.Buffer,
+    );
+    const rows: string[][] = [];
+    // Every row by its number, empty ones included — the empty rows are the space to sign in.
+    const sheet = workbook.getWorksheet('Abstract');
+    for (let number = 1; number <= (sheet?.rowCount ?? 0); number += 1) {
+      const cells: string[] = [];
+      sheet
+        ?.getRow(number)
+        .eachCell({ includeEmpty: true }, (cell) =>
+          cells.push(String(cell.value ?? '')),
+        );
+      rows.push(cells);
+    }
+    return rows;
+  }
+
+  it('prints captions, a space to sign, and the designations — the subcontractor accepting', async () => {
+    const rows = await abstractCells({ direction: 'to_subcontractor' });
+    const find = (text: string) =>
+      rows.findIndex((cells) => cells.includes(text));
+    expect(rows[find('Prepared by')]).toContain('Checked by');
+    expect(rows[find('Site Engineer')]).toContain('Site In-charge');
+    expect(rows[find('Accepted by')]).toContain('Approved by');
+    expect(rows[find('Project head')]).toContain(subcontractor.name as string);
+    // Two rows left empty to sign in, between each caption and its designation.
+    expect(find('Site Engineer') - find('Prepared by')).toBe(3);
+    expect(find('Project head') - find('Accepted by')).toBe(3);
+  });
+
+  it('prints nothing of the kind on a bill to the client', async () => {
+    const rows = (await abstractCells({ direction: 'to_client' })).flat();
+    expect(rows).not.toContain('Prepared by');
+    expect(rows).not.toContain('Project head');
+  });
+});
+
 describe('produced twice', () => {
   it('is identical in every cell', async () => {
     // T075, FR-028, SC-009. **Not byte-for-byte** — a workbook file records when it was written, so

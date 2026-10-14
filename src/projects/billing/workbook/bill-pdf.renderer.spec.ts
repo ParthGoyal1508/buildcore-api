@@ -162,6 +162,90 @@ describe('what reaches the page', () => {
   });
 });
 
+describe('the subcontractor’s sign-off under the abstract (2026-10-14)', () => {
+  const abstractText = async (
+    header: Partial<ReturnType<typeof view>['header']>,
+  ) =>
+    textOf(
+      await new BillPdfRenderer().render(
+        view({ header: { ...view().header, ...header } }),
+        { abstractOnly: true },
+      ),
+    );
+
+  it('prints the client’s block, with the subcontractor under "Accepted by"', async () => {
+    const text = await abstractText({ direction: 'to_subcontractor' });
+    for (const caption of [
+      'Prepared by',
+      'Checked by',
+      'Site Engineer',
+      'Site In-charge',
+      'Accepted by',
+      'Approved by',
+      'Project head',
+    ]) {
+      expect(text).toContain(caption);
+    }
+    // The order is the layout: captions above their designations, the receiver's name in the
+    // "Accepted by" slot.
+    expect(text.indexOf('Accepted by')).toBeLessThan(
+      text.lastIndexOf(subcontractor.name as string),
+    );
+    expect(text.indexOf('Site Engineer')).toBeLessThan(
+      text.indexOf('Accepted by'),
+    );
+  });
+
+  it('falls back to "Sub-Contractor" where the receiver is unnamed', async () => {
+    const text = await abstractText({
+      direction: 'to_subcontractor',
+      receiver: party({ name: null }),
+    });
+    expect(text).toContain('Sub-Contractor');
+  });
+
+  it('prints nothing of the kind on a bill to the client', async () => {
+    const text = await abstractText({ direction: 'to_client' });
+    expect(text).not.toContain('Prepared by');
+    expect(text).not.toContain('Project head');
+  });
+
+  it('moves the whole block to a new page rather than splitting it', async () => {
+    // Enough abstract rows to leave the page nearly full, so the block cannot fit beneath them.
+    const base = view();
+    const filler = Array.from({ length: 55 }, (_, index) => ({
+      label: `Filler row ${index + 1}`,
+      uptoDate: '1.00',
+      uptoPrevious: '1.00',
+      thisMonth: '-',
+    }));
+    const bytes = await new BillPdfRenderer().render(
+      view({
+        header: { ...base.header, direction: 'to_subcontractor' },
+        abstract: {
+          ...base.abstract,
+          blocks: [{ title: 'Filler', rows: filler }],
+        },
+      }),
+      { abstractOnly: true },
+    );
+    expect(pageCount(bytes)).toBe(2);
+    // Every caption and designation landed on the same (last) page.
+    const raw = bytes.toString('latin1');
+    const streams = [...raw.matchAll(/stream\r?\n([\s\S]*?)endstream/g)]
+      .map(([, body]) => {
+        try {
+          return textOf(Buffer.from(`stream\n${body}endstream`, 'latin1'));
+        } catch {
+          return '';
+        }
+      })
+      .filter((text) => text.includes('Prepared by'));
+    expect(streams).toHaveLength(1);
+    expect(streams[0]).toContain('Project head');
+  });
+});
+
 describe('what the renderer can reach', () => {
   it('takes no constructor argument, so it cannot query', () => {
     // The same assertion the workbook renderer carries, for the same reason: an absence nothing

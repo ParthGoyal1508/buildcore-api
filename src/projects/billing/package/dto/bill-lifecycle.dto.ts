@@ -32,8 +32,9 @@ export class CertifyBillPackageDto {
 
   @ApiPropertyOptional({
     description:
-      'A bill to the client only: the client’s certification document, base64-encoded. ' +
-      'Replaces any copy already held.',
+      'The certified copy, base64-encoded (PDF, image or spreadsheet). On a bill to the client, ' +
+      'the client’s certification document, replacing any copy already held. On a ' +
+      'subcontractor’s bill (2026-10-14), filed as a signed copy of its RA bill.',
   })
   @IsOptional()
   @IsString()

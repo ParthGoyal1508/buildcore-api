@@ -38,10 +38,7 @@ export interface TaxBasisInput {
   issuerGstin?: string | null;
   receiverGstin?: string | null;
   /**
-   * The project's existing flag: true where the half-rate pair applies.
-   *
-   * The fallback, and only the fallback. A flag set once when the project was created cannot know
-   * which subcontractor a bill is going to.
+   * The project's choice: true for CGST + SGST, false for IGST. It decides the basis.
    */
   projectCgstApplicable: boolean;
 }
@@ -59,30 +56,25 @@ export function stateCodeOf(gstin?: string | null): string | null {
   return /^\d{2}$/.test(head) ? head : null;
 }
 
+/**
+ * **The project decides** (2026-10-14).
+ *
+ * This used to derive the basis from the two parties' GSTINs and fall back to the project only where
+ * one was missing. The company holds more than one registration, so its own GSTIN is not one fixed
+ * state, and comparing it against the other party's answered a question nobody had asked. The
+ * project now carries an explicit choice — CGST + SGST or IGST — and every bill on it, to the client
+ * and from each subcontractor, follows that choice.
+ *
+ * The state codes are still read and reported, so a reviewer can see both parties' registrations
+ * beside the tax that was charged.
+ */
 export function decideTaxBasis(input: TaxBasisInput): TaxBasisDecision {
-  const issuerStateCode = stateCodeOf(input.issuerGstin);
-  const receiverStateCode = stateCodeOf(input.receiverGstin);
-
-  if (issuerStateCode && receiverStateCode) {
-    return {
-      basis:
-        issuerStateCode === receiverStateCode
-          ? BillTaxBasis.intra_state
-          : BillTaxBasis.inter_state,
-      source: BillTaxBasisSource.derived_from_gstin,
-      issuerStateCode,
-      receiverStateCode,
-    };
-  }
-
-  // Both numbers are needed, not one: knowing only our own state says nothing about whether the
-  // other party is in it. One-sided knowledge reads as a derivation while being a guess.
   return {
     basis: input.projectCgstApplicable
       ? BillTaxBasis.intra_state
       : BillTaxBasis.inter_state,
     source: BillTaxBasisSource.from_project_flag,
-    issuerStateCode,
-    receiverStateCode,
+    issuerStateCode: stateCodeOf(input.issuerGstin),
+    receiverStateCode: stateCodeOf(input.receiverGstin),
   };
 }

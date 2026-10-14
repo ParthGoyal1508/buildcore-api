@@ -322,3 +322,104 @@ describe('a subcontractor bill’s own deduction lines', () => {
     );
   });
 });
+
+/**
+ * The certified copy on the package view (2026-10-14) — one field saying which download serves it,
+ * whichever way the bill runs, and nothing before the bill is certified.
+ */
+describe('the certified copy on the view', () => {
+  function viewing(
+    pkg: Record<string, unknown>,
+    copies: { id: string; fileName: string }[] = [],
+  ) {
+    const asked: unknown[] = [];
+    const row = {
+      id: 'pkg-1',
+      projectId: 'p-1',
+      direction: BillDirection.to_subcontractor,
+      sequenceNo: 3,
+      periodFrom: new Date('2026-09-01'),
+      periodTo: new Date('2026-09-30'),
+      status: BillPackageStatus.certified,
+      retentionFraction: d('0.05'),
+      cgstFraction: d('0.09'),
+      sgstFraction: d('0.09'),
+      igstFraction: d('0'),
+      tdsFraction: d('0.01'),
+      labourCessFraction: d('0.01'),
+      gstTdsFraction: d('0'),
+      claims: [],
+      deductionLines: [],
+      raBill: null,
+      clientBill: null,
+      raBillId: null,
+      clientBillId: null,
+      certifiedAmount: null,
+      revisionCount: 0,
+      counterpartyKey: 'wo-1',
+      ...pkg,
+    };
+    const tx = {
+      $executeRaw: async () => 0,
+      billPackage: { findFirst: async () => row },
+      signedCopy: {
+        findFirst: async (args: unknown) => {
+          asked.push(args);
+          return copies[0] ?? null;
+        },
+      },
+    };
+    const service = new BillPackageService(
+      {
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { view: () => service.view(ctx, 'pkg-1'), asked };
+  }
+
+  it('points a certified subcontractor bill at the newest signed copy on its RA bill', async () => {
+    const { view, asked } = viewing({ raBillId: 'ra-1' }, [
+      { id: 'copy-2', fileName: 'RA-03 certified.pdf' },
+    ]);
+    expect((await view()).certifiedCopy).toEqual({
+      kind: 'signed_copy',
+      signedCopyId: 'copy-2',
+      fileName: 'RA-03 certified.pdf',
+    });
+    expect(asked[0]).toMatchObject({
+      where: { subjectType: 'ra_bill', subjectId: 'ra-1' },
+    });
+  });
+
+  it('points a certified bill to the client at the client bill’s certificate', async () => {
+    const { view } = viewing({
+      direction: BillDirection.to_client,
+      clientBillId: 'cb-1',
+      clientBill: {
+        certificateFileRef: 'ref-1',
+        certificateFileName: 'RA-09 certification.pdf',
+      },
+    });
+    expect((await view()).certifiedCopy).toEqual({
+      kind: 'client_certificate',
+      clientBillId: 'cb-1',
+      fileName: 'RA-09 certification.pdf',
+    });
+  });
+
+  it('is null where none was filed, and before the bill is certified', async () => {
+    expect((await viewing({ raBillId: 'ra-1' }).view()).certifiedCopy).toBe(
+      null,
+    );
+    const issued = viewing({ raBillId: 'ra-1', status: 'issued' }, [
+      { id: 'copy-1', fileName: 'early scan.pdf' },
+    ]);
+    expect((await issued.view()).certifiedCopy).toBe(null);
+    // Not even asked: a copy filed before certification is not the certified copy.
+    expect(issued.asked).toHaveLength(0);
+  });
+});
