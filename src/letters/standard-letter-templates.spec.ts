@@ -25,12 +25,15 @@ import {
 describe('standard letter templates', () => {
   const byKey = new Map(STANDARD_LETTER_TEMPLATES.map((t) => [t.kindKey, t]));
 
-  it('ships the nine the client asked for', () => {
+  it('ships the nine the client asked for, and the three project letters', () => {
     expect([...byKey.keys()].sort()).toEqual([
       'appointment',
       'experience',
       'fnf_settlement',
       'increment',
+      'letter_loi',
+      'letter_purchase_order',
+      'letter_work_order',
       'offer',
       'payment_advice',
       'relieving',

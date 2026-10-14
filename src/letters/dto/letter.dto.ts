@@ -121,4 +121,15 @@ export class PrefillLetterQueryDto {
   @IsOptional()
   @IsString()
   candidateId?: string;
+
+  /** A project letter's subject — its project fields pre-fill from it (2026-10-14). */
+  @ApiPropertyOptional({ example: 'project' })
+  @IsOptional()
+  @IsString()
+  subjectType?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  subjectId?: string;
 }

@@ -97,4 +97,24 @@ describe('template resolver — substitution', () => {
       renderTemplate('Dear {{name}}, {{missing}}.', { name: 'Anil' }),
     ).toBe('Dear Anil, .');
   });
+
+  it('keeps a multi-line value as lines in running text', () => {
+    expect(
+      renderTemplate('To,\n{{address}}\n\nDear Sir', {
+        address: 'Plot 14, Industrial Area\r\nKota Road\nBundi',
+      }),
+    ).toBe('To,\nPlot 14, Industrial Area\nKota Road\nBundi\n\nDear Sir');
+  });
+
+  it('joins a multi-line value inside a table row, which a line break would split', () => {
+    // A work order's payment terms sit in `| Payment terms | {{paymentTerms}} |`. Typed over
+    // three lines, the row ended mid-cell and the rest printed outside the table.
+    expect(
+      renderTemplate('| Payment terms | {{terms}} |', {
+        terms: '10% advance\n\n80% against RA bills\n10% on completion ',
+      }),
+    ).toBe(
+      '| Payment terms | 10% advance; 80% against RA bills; 10% on completion |',
+    );
+  });
 });

@@ -11,8 +11,10 @@ import {
   AuditEntityType,
   LetterFieldSource,
   Prisma,
+  TermsDocumentKind,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import type { ApprovalInstanceView } from '../approvals/approval.types';
 import { ApprovalService } from '../approvals/approvals.service';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
@@ -40,6 +42,7 @@ import { formatLetterDate, renderLetterPdf } from './letter-pdf.renderer';
 import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
 import { webRoutes } from '../common/web-routes';
+import { TermsTemplatesService } from '../settings/terms-templates/terms-templates.service';
 
 /** Where letter PDFs live in blob storage. */
 export const LETTER_NAMESPACE = 'letter';
@@ -70,6 +73,15 @@ export interface IssuedLetterView {
   status: 'composed' | 'issued' | 'executed';
   countersignedAt: Date | null;
   requiresApproval: boolean;
+  /**
+   * Where a composed letter stands in its approval chain, for this caller (2026-10-14).
+   *
+   * The screens were built to read this — `canActNow` puts Approve / Reject on the letter for the
+   * person whose turn it is, and `state: 'approved'` is what offers Issue — and nothing ever sent
+   * it. So a gated letter sat at "Composed" with only a Download that could not succeed. Null for
+   * an ungated kind, and once no instance exists.
+   */
+  approval?: ApprovalInstanceView | null;
 }
 
 /** One declared field with the value the records give it — what the compose form opens with. */
@@ -92,6 +104,21 @@ export interface LetterPrefillView {
 interface LetterRecipient {
   employeeId?: string | null;
   candidateId?: string | null;
+  /** A project letter's subject — the record its `project` fields read (2026-10-14). */
+  subjectType?: string | null;
+  subjectId?: string | null;
+}
+
+/** What was typed at compose, as stored. Anything not a string is ignored. */
+function composedOf(
+  value: Prisma.JsonValue | null | undefined,
+): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string',
+    ),
+  );
 }
 
 type RlsCtx = ReturnType<typeof rlsContextFor>;
@@ -151,6 +178,7 @@ export class LettersService {
     private readonly approvals: ApprovalService,
     private readonly fields: LetterKindFieldsService,
     private readonly records: LetterRecordSources,
+    private readonly terms: TermsTemplatesService,
   ) {}
 
   /**
@@ -173,6 +201,8 @@ export class LettersService {
       letterKindKey: string;
       employeeId?: string;
       candidateId?: string;
+      subjectType?: string;
+      subjectId?: string;
     },
   ): Promise<LetterPrefillView> {
     const companyId = this.companyOf(caller);
@@ -255,16 +285,18 @@ export class LettersService {
     // — the records may well have moved on by then, and the letter should say what is
     // true on the day it goes out.
     const gated = Boolean(kind.requiresApproval && kind.approvalActionType);
-    const variables = gated
-      ? {}
-      : await this.finalVariables(
-          caller,
-          ctx,
-          companyId,
-          kind.id,
-          dto,
-          dto.variables ?? {},
-        );
+    // Resolved for a gated kind too (2026-10-14) — not to render, but so a missing required
+    // value is refused now, while the person who knows it is at the form, rather than at issue
+    // after an approver has already approved a letter that cannot be produced.
+    const resolvedNow = await this.finalVariables(
+      caller,
+      ctx,
+      companyId,
+      kind.id,
+      dto,
+      dto.variables ?? {},
+    );
+    const variables = gated ? {} : resolvedNow;
 
     const row = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.issuedLetter.create({
@@ -277,6 +309,7 @@ export class LettersService {
           subjectId: dto.subjectId ?? null,
           templateId: template.id,
           signatoryId: dto.signatoryId ?? null,
+          composedVariables: dto.variables ?? {},
           // Composed, not issued: no rendered document yet, because a rendered draft is
           // a file indistinguishable from the real thing.
           renderedRef: '',
@@ -324,7 +357,8 @@ export class LettersService {
       companyId,
       letter.letterKindId,
       letter,
-      variables,
+      // What was typed at compose, with anything typed now over it.
+      { ...composedOf(letter.composedVariables), ...variables },
     );
     return this.issueResolved(caller, companyId, ctx, letter, resolved);
   }
@@ -420,13 +454,17 @@ export class LettersService {
     const signatoryId = dto.signatoryId ?? original.signatoryId;
     // Re-resolved from the records, with the correction typed over them — so a reissue
     // after a pay revision carries the new figures without HR retyping the whole letter.
+    const typed = {
+      ...composedOf(original.composedVariables),
+      ...(dto.variables ?? {}),
+    };
     const variables = await this.finalVariables(
       caller,
       ctx,
       companyId,
       original.letterKindId,
       original,
-      dto.variables ?? {},
+      typed,
     );
     // **The reference does not change.** A reissue is the same letter corrected, and
     // version 2 of PRPL/HR/2026-27/0007 is what the recipient has to be able to match
@@ -457,6 +495,7 @@ export class LettersService {
           subjectId: original.subjectId,
           templateId: original.templateId,
           signatoryId,
+          composedVariables: typed,
           // Taken over from the superseded row, which released it two statements up. The
           // document that was rendered carries this number; a replacement row without it
           // would leave the reference printed on a PDF that nothing in the database
@@ -591,6 +630,127 @@ export class LettersService {
       .map(toView);
   }
 
+  /**
+   * A letter as it would be issued, before it is composed (2026-10-14) — what the composer's
+   * Preview shows. Writes nothing: no row, no reference, no approval. A missing required value
+   * prints as its label in brackets rather than refusing, because finding those is what a
+   * preview is for.
+   */
+  async previewNew(
+    caller: AuthenticatedUser,
+    dto: ComposeLetterDto,
+  ): Promise<Buffer> {
+    const companyId = this.companyOf(caller);
+    const ctx = rlsContextFor(caller);
+    const kind = await this.kinds.requireByKey(
+      ctx,
+      companyId,
+      dto.letterKindKey,
+    );
+    this.assertMayActOnKind(caller, kind.key);
+    this.assertExactlyOneSubject(dto);
+    const template = await this.requireTemplate(
+      ctx,
+      companyId,
+      kind.id,
+      kind.label,
+    );
+    const variables = await this.finalVariables(
+      caller,
+      ctx,
+      companyId,
+      kind.id,
+      dto,
+      dto.variables ?? {},
+      { lenient: true },
+    );
+    const { pdf } = await this.renderDocument(
+      ctx,
+      companyId,
+      {
+        templateId: template.id,
+        letterKind: kind,
+        signatoryId: dto.signatoryId ?? null,
+      },
+      variables,
+      true,
+    );
+    return pdf;
+  }
+
+  /**
+   * A composed letter as it would be issued — what an approver reads before deciding. Refused
+   * once it is issued: the issued document is the one to read then, and it can be downloaded.
+   */
+  async previewComposed(
+    caller: AuthenticatedUser,
+    letterId: string,
+  ): Promise<Buffer> {
+    const companyId = this.companyOf(caller);
+    const ctx = rlsContextFor(caller);
+    const letter = await this.requireLetter(ctx, companyId, letterId);
+    this.assertMayActOnKind(caller, letter.letterKind.key);
+    this.assertNotIssued(letter);
+    const variables = await this.finalVariables(
+      caller,
+      ctx,
+      companyId,
+      letter.letterKindId,
+      letter,
+      composedOf(letter.composedVariables),
+      { lenient: true },
+    );
+    const { pdf } = await this.renderDocument(
+      ctx,
+      companyId,
+      letter,
+      variables,
+      true,
+    );
+    return pdf;
+  }
+
+  /**
+   * Attaches each gated letter's approval state for this caller — one read per approval action,
+   * not one per letter (`statesOf` exists to avoid exactly that N+1).
+   */
+  async withApprovals(
+    caller: AuthenticatedUser,
+    views: IssuedLetterView[],
+  ): Promise<IssuedLetterView[]> {
+    const kinds = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.letterKind.findMany({
+          where: { id: { in: [...new Set(views.map((v) => v.letterKindId))] } },
+          select: { id: true, approvalActionType: true },
+        }),
+    );
+    const actionOf = new Map(kinds.map((k) => [k.id, k.approvalActionType]));
+    const byAction = new Map<string, string[]>();
+    for (const view of views) {
+      const action = actionOf.get(view.letterKindId);
+      if (!view.requiresApproval || !action) continue;
+      byAction.set(action, [...(byAction.get(action) ?? []), view.id]);
+    }
+    const states = new Map<string, ApprovalInstanceView>();
+    for (const [action, ids] of byAction) {
+      // A letter's instance is raised with the action as its entity type — see `raiseApproval`.
+      for (const [id, state] of await this.approvals.statesOf(
+        action,
+        ids,
+        caller,
+      )) {
+        states.set(id, state);
+      }
+    }
+    return views.map((view) => ({
+      ...view,
+      approval: states.get(view.id) ?? null,
+    }));
+  }
+
   // ── internals ──────────────────────────────────────────────────────────────
 
   /**
@@ -615,6 +775,7 @@ export class LettersService {
     letterKindId: string,
     recipient: LetterRecipient,
     supplied: Record<string, string>,
+    options: { lenient?: boolean } = {},
   ): Promise<Record<string, string>> {
     const declared = await this.fields.fieldsFor(ctx, companyId, letterKindId);
     if (declared.length === 0) return { ...supplied };
@@ -627,7 +788,12 @@ export class LettersService {
         ? { ...field, sourceType: LetterFieldSource.manual, sourcePath: null }
         : field,
     );
-    const resolved = this.fields.resolve(asResolved, records, supplied);
+    const resolved = this.fields.resolve(
+      asResolved,
+      records,
+      supplied,
+      options,
+    );
     return { ...supplied, ...resolved };
   }
 
@@ -645,15 +811,18 @@ export class LettersService {
     companyId: string,
     recipient: LetterRecipient,
   ): Promise<Partial<Record<LetterFieldSource, Record<string, unknown>>>> {
-    const [employee, candidate, company] = await Promise.all([
+    const [employee, candidate, project, company] = await Promise.all([
       recipient.employeeId
         ? this.records.resolve(caller, 'employee', recipient.employeeId)
         : null,
       recipient.candidateId
         ? this.records.resolve(caller, 'candidate', recipient.candidateId)
         : null,
-      withRlsContext(this.prisma, ctx, (tx) =>
-        tx.company.findUnique({
+      recipient.subjectType === 'project' && recipient.subjectId
+        ? this.records.resolve(caller, 'project', recipient.subjectId)
+        : null,
+      withRlsContext(this.prisma, ctx, async (tx) => {
+        const row = await tx.company.findUnique({
           where: { id: companyId },
           select: {
             name: true,
@@ -663,20 +832,33 @@ export class LettersService {
             state: true,
             pinCode: true,
           },
-        }),
-      ),
+        });
+        if (!row) return null;
+        // The company's standard terms for each commercial document, as Settings holds them
+        // (2026-10-14). They were set there and printed nowhere: a work order, LOI or PO went
+        // out with none of the clauses the company had written. Read here so a letter's
+        // `terms.workOrder` field reaches them; Settings falls back to the shipped set.
+        const [workOrder, letterOfIntent, purchaseOrder] = await Promise.all([
+          this.terms.bodyFor(tx, companyId, TermsDocumentKind.work_order),
+          this.terms.bodyFor(tx, companyId, TermsDocumentKind.letter_of_intent),
+          this.terms.bodyFor(tx, companyId, TermsDocumentKind.purchase_order),
+        ]);
+        return { ...row, terms: { workOrder, letterOfIntent, purchaseOrder } };
+      }),
     ]);
 
     const records: Partial<Record<LetterFieldSource, Record<string, unknown>>> =
       {};
     if (employee) records.employee = employee;
     if (candidate) records.candidate = candidate;
+    if (project) records.project = project;
     if (company) {
       const place = [company.address, company.city, company.state]
         .map((part) => part?.trim())
         .filter(Boolean)
         .join(', ');
       records.company = {
+        terms: company.terms,
         name: company.name,
         shortCode: company.shortCode,
         address: company.pinCode
@@ -709,6 +891,37 @@ export class LettersService {
     },
     variables: Record<string, string>,
   ): Promise<{ ref: string; appliedSignatureRef: string | null }> {
+    const { pdf, appliedSignatureRef } = await this.renderDocument(
+      ctx,
+      companyId,
+      letter,
+      variables,
+      false,
+    );
+    const ref = await this.storage.put(
+      `${LETTER_NAMESPACE}/${companyId}`,
+      pdf,
+      'application/pdf',
+    );
+    return { ref, appliedSignatureRef };
+  }
+
+  /**
+   * The document, rendered and not stored. `draft` is a preview's: marked DRAFT on every page,
+   * no reference, and the signatory named but their graphic left off — see `LetterSignature`.
+   */
+  private async renderDocument(
+    ctx: ReturnType<typeof rlsContextFor>,
+    companyId: string,
+    letter: {
+      templateId: string;
+      letterKind: { label: string; requiresSignature: boolean };
+      signatoryId: string | null;
+      referenceNo?: string | null;
+    },
+    variables: Record<string, string>,
+    draft: boolean,
+  ): Promise<{ pdf: Buffer; appliedSignatureRef: string | null }> {
     const [template, company] = await withRlsContext(this.prisma, ctx, (tx) =>
       Promise.all([
         tx.letterTemplate.findFirst({
@@ -741,32 +954,34 @@ export class LettersService {
       // this letter with whatever image the signatory has *today* — FR-013 says a
       // previously issued letter renders as it was issued, and a signature that silently
       // changes is the one thing a signature may never do.
-      appliedSignatureRef = signatory.signatureRef;
+      appliedSignatureRef = draft ? null : signatory.signatureRef;
       signature = {
-        image: await this.storage.get(signatory.signatureRef),
+        image: draft ? null : await this.storage.get(signatory.signatureRef),
         name: signatory.name,
         title: signatory.title,
       };
     }
 
-    const body = renderTemplate(template.bodyTemplate, variables);
+    // The date in the body is the date on the letter — the same clock as the header below, so
+    // "Issued on" and the printed date cannot disagree. A body could reference `issueDate` and
+    // nothing ever supplied it, which printed "Issued on ." on every work order.
+    const body = renderTemplate(template.bodyTemplate, {
+      issueDate: formatLetterDate(new Date()),
+      ...variables,
+    });
     const pdf = await renderLetterPdf({
       title: letter.letterKind.label.toUpperCase(),
       body,
       letterhead: await this.letterhead(template.letterheadAssetId, company),
-      referenceNo: letter.referenceNo ?? null,
+      referenceNo: draft ? null : letter.referenceNo ?? null,
       // The date the letter bears is the day it is issued. Taken from the clock rather
       // than from `variables`, so the printed date and `issuedAt` can never disagree —
       // which, on a document that starts a notice period, is a dispute.
       issueDate: formatLetterDate(new Date()),
       signature,
+      draft,
     });
-    const ref = await this.storage.put(
-      `${LETTER_NAMESPACE}/${companyId}`,
-      pdf,
-      'application/pdf',
-    );
-    return { ref, appliedSignatureRef };
+    return { pdf, appliedSignatureRef };
   }
 
   /**

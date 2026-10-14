@@ -171,6 +171,7 @@ function harness(
     approvals,
     fields,
     records,
+    { bodyFor: async () => '1. Standard terms.' } as never,
   );
   // What the body was rendered with — the observable half of pre-fill.
   const render = jest.spyOn(service as any, 'render'); // eslint-disable-line @typescript-eslint/no-explicit-any

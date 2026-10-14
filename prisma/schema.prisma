@@ -8699,6 +8699,14 @@ model IssuedLetter {
   /// silently rewrites history the first time somebody uploads a new signature.
   signatoryId         String?
   signatory           Signatory? @relation(fields: [signatoryId], references: [id], onDelete: SetNull)
+
+  /// What was typed when the letter was composed (2026-10-14), kept for its issue.
+  ///
+  /// A letter that needs an approval is composed now and issued later, often from another
+  /// screen, and until this column nothing typed at compose survived to the issue — the vendor
+  /// and scope of a work order were asked for, approved, and then printed blank. Values typed at
+  /// issue still win over these. Null for letters composed before this existed.
+  composedVariables   Json?
   appliedSignatureRef String?
 
   /// FR-017: the executed copy that comes back, and FR-018's issued-vs-executed

@@ -67,7 +67,12 @@ const SIGNATURE_MAX_HEIGHT = 52;
 const SIGNATURE_BLOCK = 18 + SIGNATURE_MAX_HEIGHT + 6 + 26;
 
 export interface LetterSignature {
-  image: Buffer;
+  /**
+   * The graphic. **Null on a preview** (2026-10-14): the name and title print, the graphic
+   * does not. A preview is a file the browser keeps, and a signed one would be the signed
+   * letter without the issue — the reason the letters module never hands the graphic out.
+   */
+  image: Buffer | null;
   name: string;
   title: string;
 }
@@ -90,6 +95,12 @@ export interface RenderLetterInput {
   /** Printed top-right, opposite the reference. */
   issueDate?: string | null;
   signature?: LetterSignature;
+  /**
+   * A preview, not the letter (2026-10-14): every page is marked DRAFT across its face. Nothing
+   * a preview produces may be mistaken for what was issued — it has no reference number and no
+   * signature graphic either.
+   */
+  draft?: boolean;
 }
 
 /** One parsed block of the body: a run of prose, or a table. */
@@ -226,7 +237,13 @@ function drawTable(
         // Numbers right, labels left — read off the cell's own content rather than
         // configured, because a column of figures is recognisable and a template author
         // should not have to declare it.
-        align: /^[₹\s]*[\d,.\-()]+$/.test(cell ?? '') ? 'right' : 'left',
+        // A date ("31.12.2026") is made of the same characters and is not a figure: right-
+        // aligned it read as an amount in the middle of a work order's terms (2026-10-14).
+        align:
+          /^[₹\s]*[\d,.\-()]+$/.test(cell ?? '') &&
+          !/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test((cell ?? '').trim())
+            ? 'right'
+            : 'left',
       });
       x += widths[i];
     });
@@ -280,9 +297,34 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       });
     };
 
+    const draftMark = () => {
+      if (!input.draft) return;
+      doc
+        .save()
+        .rotate(-35, { origin: [PAGE.width / 2, PAGE.height / 2] })
+        .font('Helvetica-Bold')
+        .fontSize(64)
+        .fillColor('#d1d5db')
+        .fillOpacity(0.55)
+        .text('DRAFT - NOT ISSUED', 0, PAGE.height / 2 - 40, {
+          width: PAGE.width,
+          align: 'center',
+          lineBreak: false,
+        })
+        .restore();
+      // Restored to the body's settings, not merely un-rotated: `save`/`restore` keep the
+      // transform but not the font size, and a page started mid-paragraph carried on in 64pt.
+      doc
+        .font('Helvetica')
+        .fontSize(BODY_SIZE)
+        .fillOpacity(1)
+        .fillColor('#000000');
+    };
+
     const newPage = () => {
       doc.addPage();
       stationery();
+      draftMark();
       doc.x = SAFE.left;
       doc.y = SAFE.top;
     };
@@ -325,7 +367,25 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     doc.font('Helvetica').fontSize(BODY_SIZE);
     doc.y += 14;
 
-    for (const block of parseBlocks(input.body)) {
+    const blocks = parseBlocks(input.body);
+    // The closing line — "For Parth Realcon Private Limited" — belongs with the signature under
+    // it. Rendered as part of the body, a long letter put the closing at the foot of one page and
+    // the signature alone on the next (2026-10-14). So the last paragraph of the body is split off
+    // and moved over together with the signature when the two do not fit.
+    let closing: string | null = null;
+    const last = blocks[blocks.length - 1];
+    if (input.signature && last?.kind === 'text') {
+      const lines = [...last.lines];
+      while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+      const breakAt = lines.map((l) => l.trim()).lastIndexOf('');
+      const tail = lines.slice(breakAt + 1);
+      if (tail.length > 0 && tail.length <= 3) {
+        closing = tail.join('\n');
+        last.lines = lines.slice(0, breakAt + 1);
+      }
+    }
+
+    for (const block of blocks) {
       if (block.kind === 'table') {
         doc.y += 4;
         drawTable(doc, block.rows, block.headed, newPage);
@@ -359,32 +419,62 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       }
     }
 
+    if (closing !== null) {
+      const height = doc.heightOfString(closing, {
+        width: CONTENT_WIDTH,
+        lineGap: LINE_GAP,
+      });
+      // The blank line that separated it from the paragraph above, which the split took away.
+      const gap = doc.currentLineHeight(true) + LINE_GAP;
+      if (PAGE.height - SAFE.bottom - doc.y < gap + height + SIGNATURE_BLOCK) {
+        newPage();
+      } else {
+        doc.y += gap;
+      }
+      doc.text(closing, SAFE.left, doc.y, {
+        width: CONTENT_WIDTH,
+        align: 'left',
+        lineGap: LINE_GAP,
+      });
+    }
+
     if (input.signature) {
       if (PAGE.height - SAFE.bottom - doc.y < SIGNATURE_BLOCK) newPage();
       doc.y += 18;
       const top = doc.y;
-      try {
-        // Measured, not assumed. The cursor used to advance by a fixed 46pt, which is
-        // about right for a wide, short signature scan and wrong for anything else: a
-        // portrait graphic drew 184pt tall and the signatory's name printed across the
-        // middle of it. `openImage` gives the real aspect ratio, and the drawn box is
-        // capped so a tall scan cannot reach into the footer artwork.
-        const graphic = doc.openImage(input.signature.image);
-        const scale = Math.min(
-          SIGNATURE_WIDTH / graphic.width,
-          SIGNATURE_MAX_HEIGHT / graphic.height,
-        );
-        const height = graphic.height * scale;
-        doc.image(graphic, SAFE.left, top, {
-          width: graphic.width * scale,
-          height,
-        });
-        doc.y = top + height + 6;
-      } catch {
-        // Same reasoning as the letterhead: a graphic that will not decode must not cost
-        // the letter. The name and title below still identify who signed.
-        doc.fontSize(9).text('[signature]', SAFE.left, top);
-        doc.y = top + 16;
+      const image = input.signature.image;
+      if (!image) {
+        // A preview: where the graphic will go, said rather than drawn.
+        doc
+          .fontSize(9)
+          .fillColor('#6b7280')
+          .text('[Signature applied on issue]', SAFE.left, top + 12);
+        doc.fillColor('#000000');
+        doc.y = top + 36;
+      } else {
+        try {
+          // Measured, not assumed. The cursor used to advance by a fixed 46pt, which is
+          // about right for a wide, short signature scan and wrong for anything else: a
+          // portrait graphic drew 184pt tall and the signatory's name printed across the
+          // middle of it. `openImage` gives the real aspect ratio, and the drawn box is
+          // capped so a tall scan cannot reach into the footer artwork.
+          const graphic = doc.openImage(image);
+          const scale = Math.min(
+            SIGNATURE_WIDTH / graphic.width,
+            SIGNATURE_MAX_HEIGHT / graphic.height,
+          );
+          const height = graphic.height * scale;
+          doc.image(graphic, SAFE.left, top, {
+            width: graphic.width * scale,
+            height,
+          });
+          doc.y = top + height + 6;
+        } catch {
+          // Same reasoning as the letterhead: a graphic that will not decode must not cost
+          // the letter. The name and title below still identify who signed.
+          doc.fontSize(9).text('[signature]', SAFE.left, top);
+          doc.y = top + 16;
+        }
       }
       doc
         .fontSize(BODY_SIZE)

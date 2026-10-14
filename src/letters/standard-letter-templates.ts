@@ -172,6 +172,46 @@ const SALUTATION = employee(
 /** The company block every letter closes with. */
 const COMPANY_FIELD = company('companyName', 'Company name', 'name');
 
+/** Shorthand for a field read off the project a letter is issued on (2026-10-14). */
+const project = (
+  token: string,
+  label: string,
+  sourcePath: string,
+  isRequired = true,
+): StandardField => ({
+  token,
+  label,
+  sourceType: LetterFieldSource.project,
+  sourcePath,
+  isRequired,
+});
+
+/**
+ * Who a project letter is addressed to, and for what. Typed: a work order, LOI or purchase
+ * order goes to a vendor or subcontractor the project record does not name, for a scope only the
+ * person issuing it can state.
+ */
+const AWARD_RECIPIENT_FIELDS = [
+  manual('vendorName', 'Issued to (vendor / subcontractor)'),
+  manual('vendorAddress', 'Their address', false),
+  manual('scope', 'Scope of work / supply'),
+];
+
+/**
+ * The company's standard terms for the document, as Settings → Terms holds them (2026-10-14).
+ * Pre-filled into the composer, where they can be edited for one letter without changing the
+ * standard set.
+ */
+const termsField = (sourcePath: string): StandardField =>
+  company('termsAndConditions', 'Terms and conditions', sourcePath);
+
+/** The project the letter is issued on, read from its record. */
+const PROJECT_FIELDS = [
+  project('projectName', 'Project', 'name'),
+  project('projectLocation', 'Project location', 'location', false),
+  project('clientName', 'Client', 'clientName', false),
+];
+
 export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   // ───────────────────────────────────────────────────────────── offer ──────
   {
@@ -1038,6 +1078,118 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       manual('siteName', 'Site name'),
       manual('paymentAmount', 'Payment amount'),
       manual('tdsAmount', 'TDS amount', false),
+      COMPANY_FIELD,
+    ],
+  },
+  // ─────────────────────────────────────────── project letters (2026-10-14) ──
+  // Issued from a project's Letters tab, with the project as the subject. Until these shipped
+  // the three kinds had no declared field at all, so the composer asked for nothing and every
+  // one printed "Letter of intent for ." on the company's letterhead, signed.
+  {
+    kindKey: 'letter_loi',
+    name: 'Letter of intent',
+    body: [
+      'To,',
+      '{{vendorName}}',
+      '{{vendorAddress}}',
+      '',
+      'Sub: Letter of intent for {{scope}} - {{projectName}}.',
+      '',
+      'Dear Sir / Madam,',
+      '',
+      'With reference to your offer and the discussions held, we are pleased to convey our ' +
+        'intent to award you the work of {{scope}} at {{projectName}}, {{projectLocation}} ' +
+        '(client: {{clientName}}), for an estimated value of {{orderValue}}.',
+      '',
+      'Kindly confirm your acceptance of this letter by return.',
+      '',
+      'Terms and conditions:',
+      '{{termsAndConditions}}',
+      '',
+      'For {{companyName}}',
+    ].join('\n'),
+    fields: [
+      ...AWARD_RECIPIENT_FIELDS,
+      manual('orderValue', 'Estimated value'),
+      ...PROJECT_FIELDS,
+      termsField('terms.letterOfIntent'),
+      COMPANY_FIELD,
+    ],
+  },
+  {
+    kindKey: 'letter_work_order',
+    name: 'Work order',
+    body: [
+      'To,',
+      '{{vendorName}}',
+      '{{vendorAddress}}',
+      '',
+      'Sub: Work order for {{scope}} - {{projectName}}.',
+      '',
+      'Dear Sir / Madam,',
+      '',
+      'You are hereby awarded the work of {{scope}} at {{projectName}}, {{projectLocation}} ' +
+        '(client: {{clientName}}), for a value of {{orderValue}}.',
+      '',
+      '| Particulars | Details |',
+      '| --- | --- |',
+      '| Work order value | {{orderValue}} |',
+      '| Completion by | {{completionDate}} |',
+      '| Payment terms | {{paymentTerms}} |',
+      '',
+      'Kindly sign and return a copy of this order as your acceptance.',
+      '',
+      'Terms and conditions:',
+      '{{termsAndConditions}}',
+      '',
+      'For {{companyName}}',
+    ].join('\n'),
+    fields: [
+      ...AWARD_RECIPIENT_FIELDS,
+      manual('orderValue', 'Work order value'),
+      manual('completionDate', 'Completion by'),
+      manual('paymentTerms', 'Payment terms'),
+      ...PROJECT_FIELDS,
+      termsField('terms.workOrder'),
+      COMPANY_FIELD,
+    ],
+  },
+  {
+    kindKey: 'letter_purchase_order',
+    name: 'Purchase order',
+    body: [
+      'To,',
+      '{{vendorName}}',
+      '{{vendorAddress}}',
+      '',
+      'Sub: Purchase order for {{scope}} - {{projectName}}.',
+      '',
+      'Dear Sir / Madam,',
+      '',
+      'Please supply the following to our site at {{projectName}}, {{projectLocation}} ' +
+        '(client: {{clientName}}):',
+      '',
+      '| Particulars | Details |',
+      '| --- | --- |',
+      '| Material / supply | {{scope}} |',
+      '| Order value | {{orderValue}} |',
+      '| Delivery by | {{completionDate}} |',
+      '| Payment terms | {{paymentTerms}} |',
+      '',
+      'Kindly quote this order number on every invoice and delivery challan.',
+      '',
+      'Terms and conditions:',
+      '{{termsAndConditions}}',
+      '',
+      'For {{companyName}}',
+    ].join('\n'),
+    fields: [
+      ...AWARD_RECIPIENT_FIELDS,
+      manual('orderValue', 'Order value'),
+      manual('completionDate', 'Delivery by'),
+      manual('paymentTerms', 'Payment terms'),
+      ...PROJECT_FIELDS,
+      termsField('terms.purchaseOrder'),
       COMPANY_FIELD,
     ],
   },

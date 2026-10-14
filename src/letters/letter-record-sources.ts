@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 
 /** The record kinds a business module can answer for. `company` is read inside letters. */
-export type LetterRecordSourceType = 'employee' | 'candidate';
+export type LetterRecordSourceType = 'employee' | 'candidate' | 'project';
 
 /**
  * Reads one record for a letter, as a plain object `LetterKindField.sourcePath` is resolved
