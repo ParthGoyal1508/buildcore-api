@@ -44,6 +44,15 @@ export class CandidateController {
     return this.candidates.findAll(caller, query);
   }
 
+  @Get(':id/timeline')
+  @ApiOperation({
+    summary:
+      'Every stage change, in order, with who made it — no contact details',
+  })
+  timeline(@UserEntity() caller: AuthenticatedUser, @Param('id') id: string) {
+    return this.candidates.timeline(caller, id);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Unmasked candidate detail (audit-logged READ)' })
   findOne(
