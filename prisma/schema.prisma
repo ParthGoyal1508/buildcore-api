@@ -349,6 +349,13 @@ enum Permission {
   /// value this feature adds.
   RECRUITMENT_APPROVE
 
+  /// Issuing the HR & Payroll letters (2026-10-15): appointment, experience, relieving,
+  /// increment, termination, transfer and the F&F sheet. Its own permission rather than
+  /// `EMPLOYEES` or `PAYROLL`, because those open the HR module to site and accounts roles
+  /// who must not put an employment decision in writing — the client's rule is that HR, and
+  /// only HR, issues these. The offer letter stays with `RECRUITMENT`.
+  HR_LETTERS
+
   /// Added by 012 (FR-033). Registering, allocating, transferring, inspecting and
   /// requesting project assets. `INVENTORY` is deliberately not reused: a storekeeper
   /// who issues cement is not thereby accountable for who is holding the total
@@ -432,6 +439,12 @@ model Company {
   city    String?
   state   String?
   pinCode String?
+  /// How the company is reached, printed under its name at the head of a work order or purchase
+  /// order (2026-10-14) — the client's formats carry "Ph:", "Email:" and "Website:" beside the
+  /// registered office. Optional: a document prints the lines that are filled.
+  phone   String?
+  email   String?
+  website String?
 
   pfEstablishmentCode      String?
   esicCode                 String?

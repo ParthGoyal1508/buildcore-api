@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -18,6 +20,27 @@ export interface SelectableCompany {
    * changes within a session. The interface shows the product mark when this is false.
    */
   hasLogo: boolean;
+  /**
+   * A fingerprint of the logo currently in force, or null when there is none (2026-10-14).
+   *
+   * The shell puts this in the logo's URL (`?v=`), which is what lets the image be cached
+   * for a year and still change the moment somebody uploads a new one: a new upload gets a new
+   * storage reference and so a new fingerprint, and the old URL is simply never asked for
+   * again. Before this, the logo was re-downloaded on every company switch — the "logo takes
+   * too long to load when switching companies" report — because nothing could tell the client
+   * whether the copy it already had was still the right one.
+   *
+   * A hash of the reference rather than the reference itself, which is a storage path and stays
+   * server-side (see the note in `selectableFor`).
+   */
+  logoVersion: string | null;
+}
+
+/** The fingerprint `SelectableCompany.logoVersion` carries — see there. */
+export function logoVersionOf(logoRef: string | null): string | null {
+  return logoRef
+    ? createHash('sha256').update(logoRef).digest('hex').slice(0, 16)
+    : null;
 }
 
 /**
@@ -60,6 +83,7 @@ export class CompanySelectionService {
               name: own.name,
               selected: true,
               hasLogo: own.logoRef !== null,
+              logoVersion: logoVersionOf(own.logoRef),
             },
           ]
         : [];
@@ -81,6 +105,7 @@ export class CompanySelectionService {
       // The reference itself is never sent: it is a storage path, and the only thing a
       // caller can do with it is ask this API for the bytes, which it does by company id.
       hasLogo: company.logoRef !== null,
+      logoVersion: logoVersionOf(company.logoRef),
     }));
   }
 

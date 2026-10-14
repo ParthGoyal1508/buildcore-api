@@ -220,6 +220,30 @@ describe('letter PDF renderer', () => {
     });
   });
 
+  describe('the heading', () => {
+    it('reads a [[title]] marker as where the heading goes', () => {
+      // The relieving letter prints its heading under the name and project lines (2026-10-15).
+      const blocks = parseBlocks('Name: - A\nProject: - B\n[[title]]\nDear A');
+      expect(blocks.map((b) => b.kind)).toEqual(['text', 'title', 'text']);
+    });
+
+    it('renders a format with no heading, and one with it above the reference', async () => {
+      for (const input of [
+        { title: '' },
+        { title: 'TRANSFER LETTER', titleFirst: true },
+      ]) {
+        const pdf = await renderLetterPdf({
+          ...input,
+          body: 'Dear A,\n\nBody.',
+          letterhead: null,
+          referenceNo: 'PRPL/HR/2026-27/0001',
+          issueDate: '15/10/2026',
+        });
+        expect(pageCount(pdf)).toBe(1);
+      }
+    });
+  });
+
   describe('the date a letter bears', () => {
     it('writes the day first, as the client’s own documents do', () => {
       // 16/09/2026, not 09/16/2026. Their appointment letter carries the first form, and

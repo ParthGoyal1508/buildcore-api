@@ -1,4 +1,4 @@
-import { webRoutes } from './web-routes';
+import { repairStoredApprovalHref, webRoutes } from './web-routes';
 
 /**
  * These are routes in **another repository**, so nothing here can prove the page exists. What this
@@ -66,5 +66,25 @@ describe('webRoutes', () => {
 
   it('sends a fuel exception to the screen that lists exceptions', () => {
     expect(webRoutes.plantFuel()).toBe('/dashboard/plant/fuel');
+  });
+});
+
+describe('repairStoredApprovalHref (2026-10-15)', () => {
+  it('rewrites the three dead links still stored on older approval items', () => {
+    expect(repairStoredApprovalHref('/dashboard/hr/payroll/runs/run-1')).toBe(
+      '/dashboard/hr/payroll/run-1',
+    );
+    expect(repairStoredApprovalHref('/settings/approvals/director-final')).toBe(
+      '/dashboard/settings/approvals',
+    );
+    expect(repairStoredApprovalHref('/projects/p1/ra-bills/b1')).toBe(
+      '/dashboard/projects/portfolio/p1/ra-bills',
+    );
+  });
+
+  it('leaves every other href, and a missing one, exactly as stored', () => {
+    const fine = '/dashboard/projects/portfolio/p1/ra-bills';
+    expect(repairStoredApprovalHref(fine)).toBe(fine);
+    expect(repairStoredApprovalHref(null)).toBeNull();
   });
 });

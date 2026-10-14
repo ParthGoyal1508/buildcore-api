@@ -70,7 +70,7 @@ export class SlipDeliveryService {
     private readonly pdf: SalaryPdfService,
     private readonly schedule: PayrollScheduleService,
     /**
-     * For the identity block and the letterhead (2026-10-13), so an emailed payslip is the same
+     * For the identity block and the logo (2026-10-13; the logo since 2026-10-15), so an emailed payslip is the same
      * document the employee downloads rather than the bare layout it used to be.
      */
     private readonly salary: SalaryService,
@@ -242,7 +242,7 @@ export class SlipDeliveryService {
   ): Promise<void> {
     if (employeeIds.length === 0) return;
 
-    const [company, employees, slips, letterhead] = await Promise.all([
+    const [company, employees, slips, logo] = await Promise.all([
       withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
         tx.company.findUnique({
           where: { id: run.companyId },
@@ -258,7 +258,7 @@ export class SlipDeliveryService {
         }),
       ),
       // Once per run, not per employee: one company, one sheet of stationery.
-      this.salary.letterheadForCompany(run.companyId),
+      this.salary.logoForCompany(run.companyId),
     ]);
     const slipOf = new Map(slips.map((s) => [s.employeeId, s]));
     const label = periodLabel(run.period);
@@ -287,7 +287,7 @@ export class SlipDeliveryService {
         // that disagrees with the screen is a wage dispute.
         const identity = await this.salary.slipIdentityFor(ctx, employee);
         const view = slipViewFrom(slip, employee.employeeCode, identity);
-        const pdf = await this.pdf.render(view, nameOf(employee), letterhead);
+        const pdf = await this.pdf.render(view, nameOf(employee), logo);
         await this.email.sendPayslipEmail({
           to: address,
           employeeName: nameOf(employee),

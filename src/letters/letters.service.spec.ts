@@ -1,3 +1,4 @@
+import { permissionForKind } from './letter-permissions';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Permission } from '@prisma/client';
 
@@ -201,7 +202,7 @@ const callerWith = (...permissions: Permission[]) =>
   } as any);
 
 const financeCaller = callerWith(Permission.PROJECT_FINANCIALS);
-const hrCaller = callerWith(Permission.EMPLOYEES);
+const hrCaller = callerWith(Permission.HR_LETTERS);
 
 const composeWorkOrder = {
   letterKindKey: 'letter_work_order',
@@ -209,6 +210,23 @@ const composeWorkOrder = {
   subjectId: 'v-1',
   variables: { vendorName: 'Shree', amount: '4,50,000' },
 };
+
+describe('who issues an HR letter (2026-10-15)', () => {
+  it('is HR_LETTERS alone — EMPLOYEES and PAYROLL do not carry it', () => {
+    for (const kind of [
+      'appointment',
+      'experience',
+      'relieving',
+      'increment',
+      'termination',
+      'transfer',
+      'fnf_settlement',
+    ]) {
+      expect(permissionForKind(kind)).toBe(Permission.HR_LETTERS);
+    }
+    expect(permissionForKind('offer')).toBe(Permission.RECRUITMENT);
+  });
+});
 
 describe('LettersService — the 016 gate (T041, T045, FR-015a)', () => {
   it('raises the chain for a gated kind and stops, without rendering', async () => {
@@ -321,6 +339,64 @@ describe('LettersService — per-kind authority (contract Part 2)', () => {
         letterKindKey: 'site_pass',
       }),
     ).resolves.toBeDefined();
+  });
+});
+
+describe('LettersService — listing by kind, and what was typed (2026-10-15)', () => {
+  const PURCHASE_ORDER = kind({
+    id: 'k-po',
+    key: 'letter_purchase_order',
+    label: 'Purchase order',
+  });
+
+  it('lists one kind across every subject — Inventory’s purchase orders', async () => {
+    const { service, tx } = harness({ kind: PURCHASE_ORDER });
+    await service.listForSubject(callerWith(Permission.INVENTORY), {
+      letterKindKey: 'letter_purchase_order',
+    });
+    const where = (
+      tx.issuedLetter.findMany.mock.calls[0] as unknown as [
+        { where: Record<string, unknown> },
+      ]
+    )[0].where;
+    expect(where.letterKind).toEqual({ key: 'letter_purchase_order' });
+    expect(where).not.toHaveProperty('subjectType');
+  });
+
+  it('hands back the typed values, undeclared ones included, and nothing it resolved', async () => {
+    // A work order's record sends its own id as `workOrderId`, which no template declares; the
+    // record finds its LOI and work order again by it. The letters module stores it and returns
+    // it — it never reads it.
+    const { service } = harness({
+      kind: WORK_ORDER,
+      letter: {
+        composedVariables: { vendorName: 'Shree', workOrderId: 'wo-1' },
+      },
+    });
+    const view = await service.compose(financeCaller, {
+      ...composeWorkOrder,
+      variables: { vendorName: 'Shree', workOrderId: 'wo-1' },
+    });
+    expect(view.composedVariables).toEqual({
+      vendorName: 'Shree',
+      workOrderId: 'wo-1',
+    });
+  });
+
+  it('lets a purchase order be composed by whoever buys, not by project finance', async () => {
+    const { service } = harness({ kind: PURCHASE_ORDER });
+    const compose = {
+      letterKindKey: 'letter_purchase_order',
+      subjectType: 'vendor',
+      subjectId: 'v-1',
+      variables: { vendorName: 'Shree' },
+    };
+    await expect(
+      service.compose(callerWith(Permission.INVENTORY), compose),
+    ).resolves.toBeDefined();
+    await expect(
+      service.compose(financeCaller, compose),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });
 

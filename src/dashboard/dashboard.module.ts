@@ -42,7 +42,6 @@ import { ExportJobService } from './reports/export/export-job.service';
 import { REPORT_PROVIDERS } from './reports/report.types';
 import { ReportsController } from './reports/reports.controller';
 import { ReportsService } from './reports/reports.service';
-import { UNBUILT_REPORT_PLACEHOLDERS } from './reports/unbuilt-report.placeholders';
 import { SiteDashboardController } from './site-dashboard.controller';
 import { TodayAttendanceTableWidget } from './widgets/attendance-table.provider';
 import { CompanyDataService } from './widgets/company-data.service';
@@ -54,6 +53,7 @@ import {
   TotalEmployeesWidget,
 } from './widgets/company-kpi.providers';
 import { GroupCompanyCardProvider } from './widgets/group-company-card.provider';
+import { StatutoryCalendarProvider } from './widgets/statutory-calendar.provider';
 import { MusterStatWidget } from './widgets/muster-stat.provider';
 import { RecentLeavesTableWidget } from './widgets/recent-leaves-table.provider';
 import {
@@ -61,20 +61,13 @@ import {
   WorkersTodayWidget,
 } from './widgets/site-widgets.providers';
 import {
-  UNBUILT_SITE_WIDGET_PLACEHOLDERS,
-  UNBUILT_WIDGET_PLACEHOLDERS,
-} from './widgets/unbuilt-module.placeholders';
-import {
   ActiveProjectsWidget,
   AlertsRemindersWidget,
   ContractValueWidget,
-  FuelCostWidget,
-  HireBillsWidget,
   MachineryAtSiteWidget,
   MachineryDeployedWidget,
   MaterialStockValueWidget,
   MaterialStockWidget,
-  MaterialsCostWidget,
   SiteFuelConsumedWidget,
   SiteFuelConsumptionWidget,
   TotalMachineryWidget,
@@ -119,14 +112,13 @@ const WIDGET_CLASSES = [
   RecentLeavesTableWidget,
   WorkersTodayWidget,
   SiteAttendanceTableWidget,
-  // The six whose modules have since been built (2026-10-12) — see
-  // `module-kpi.providers.ts` for why they were placeholders and no longer are.
+  // The cards whose modules have since been built (2026-10-12) — see
+  // `module-kpi.providers.ts` for why they were placeholders and no longer are. The
+  // three cost cards (materials, fuel, hire bills) left on 2026-10-15 with the other
+  // expense widgets, at the client's request.
   ActiveProjectsWidget,
   TotalMachineryWidget,
   ContractValueWidget,
-  MaterialsCostWidget,
-  FuelCostWidget,
-  HireBillsWidget,
   MachineryDeployedWidget,
   MachineryAtSiteWidget,
   MaterialStockValueWidget,
@@ -171,9 +163,6 @@ const widgetRegistry: Provider = {
     activeProjects: WidgetProvider,
     totalMachinery: WidgetProvider,
     contractValue: WidgetProvider,
-    materialsCost: WidgetProvider,
-    fuelCost: WidgetProvider,
-    hireBills: WidgetProvider,
     machineryDeployed: WidgetProvider,
     machineryAtSite: WidgetProvider,
     materialStockValue: WidgetProvider,
@@ -187,14 +176,13 @@ const widgetRegistry: Provider = {
     presentToday,
     absentToday,
     onLeave,
-    UNBUILT_WIDGET_PLACEHOLDERS.monthlyExpenses,
+    // Monthly Expenses (a placeholder) and the Materials / Fuel / Hire Bills cost cards
+    // used to sit here. Removed 2026-10-15: the client wants no expense widgets on the
+    // home dashboard — that money is read on Plant and Inventory, where it has context.
     pendingApprovals,
     activeProjects,
     totalMachinery,
     contractValue,
-    materialsCost,
-    fuelCost,
-    hireBills,
     musterStat,
     alertsReminders,
     todayAttendanceTable,
@@ -209,7 +197,8 @@ const widgetRegistry: Provider = {
     machineryAtSite,
     siteFuelConsumption,
     materialStock,
-    UNBUILT_SITE_WIDGET_PLACEHOLDERS.recentExpenses,
+    // Recent Expenses (a placeholder for a module that does not exist) removed
+    // 2026-10-15 with the company dashboard's expense cards.
   ],
 };
 
@@ -223,10 +212,10 @@ const notificationRegistry: Provider = {
 const reportRegistry: Provider = {
   provide: REPORT_PROVIDERS,
   inject: [...REPORT_CLASSES],
-  useFactory: (...providers: ReportProvider[]): ReportProvider[] => [
-    ...providers,
-    ...UNBUILT_REPORT_PLACEHOLDERS,
-  ],
+  // The "Expense" placeholder — a report type for a module that does not exist — was listed
+  // here after the real ones until 2026-10-15, when the client asked for expenses to go from
+  // Reports as they went from the dashboards. It was the last placeholder.
+  useFactory: (...providers: ReportProvider[]): ReportProvider[] => providers,
 };
 
 /**
@@ -287,6 +276,7 @@ const reportRegistry: Provider = {
     CompanyDataService,
     DashboardService,
     GroupCompanyCardProvider,
+    StatutoryCalendarProvider,
     ActivityLogService,
     NotificationsService,
     ReportsService,

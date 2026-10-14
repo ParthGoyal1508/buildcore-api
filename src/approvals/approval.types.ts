@@ -167,6 +167,9 @@ export interface DecideApprovalInput {
 export interface ApprovalQueueEntry {
   instanceId: string;
   actionType: string;
+  /** Which module this belongs to, for grouping the queue (2026-10-15). */
+  module: string;
+  moduleLabel: string;
   entityType: string;
   entityId: string;
   subject: string;
@@ -224,4 +227,100 @@ export interface ApprovalRefusal {
   statusCode: number;
   message: string;
   code: ApprovalErrorCode;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The history listing (2026-10-15)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where one level of a chain stands, for the current round.
+ *
+ * `not_reached` is a level the item never got to — rejected at level 1 of 3, or
+ * withdrawn — and is told apart from `upcoming` so a finished chain never reads as
+ * though it were still waiting on somebody.
+ */
+export type ApprovalStepStatus =
+  | 'approved'
+  | 'rejected'
+  | 'returned'
+  | 'current'
+  | 'upcoming'
+  | 'not_reached';
+
+/** One level of the chain as the history screen renders it. */
+export interface ApprovalHistoryStep {
+  position: number;
+  /** The level's own label, else the canonical slot label ("HR", "Director"). */
+  label: string;
+  slotKey: string;
+  isFinalAuthority: boolean;
+  status: ApprovalStepStatus;
+  /** Who decided at this level this round. Null until somebody has. */
+  actorName: string | null;
+  decidedAt: Date | null;
+  reason: string | null;
+}
+
+/**
+ * One item in the approval history — a whole chain, not one decision (2026-10-15).
+ *
+ * The client asked to see "the approval hierarchy and who approved what". A flat list of
+ * decisions answers the second half and loses the first: it cannot show the Director
+ * level an item has not reached yet, or that a rejection at level 1 means levels 2 and 3
+ * never ran. So the row is the chain, level by level, with each level's decision
+ * attached where there is one.
+ *
+ * No amount: the spine holds none, and cannot read the item to find one (research.md
+ * §1). Where a module puts the figure in `subject` — client bills do — it shows there.
+ */
+export interface ApprovalHistoryEntry {
+  instanceId: string;
+  actionType: string;
+  /** See `approval-modules.ts`. Resolved here so the web keeps no copy of the mapping. */
+  module: string;
+  moduleLabel: string;
+  entityType: string;
+  entityId: string;
+  subject: string;
+  href: string | null;
+  state: ApprovalState;
+  round: number;
+  returnCount: number;
+  currentPosition: number;
+  totalLevels: number;
+  requestedById: string | null;
+  /** "The system" for a scheduled item, matching the queue and `toView`. */
+  requestedByName: string;
+  requestedAt: Date;
+  /** When the chain finished — the last state change of a closed item. Null while open. */
+  closedAt: Date | null;
+  /** The level it waits on, while pending. */
+  awaitingLabel: string | null;
+  /** A one-off reassignment's named person (FR-019), when there is one. */
+  delegatedToName: string | null;
+  /** The chain, level by level, for the current round. */
+  steps: ApprovalHistoryStep[];
+  /** Decisions from rounds before this one, oldest first — the trace of every return. */
+  earlierDecisions: ApprovalDecisionView[];
+  /** Whether this caller raised, was delegated, or decided on this item. */
+  viewerTookPart: boolean;
+}
+
+/** How many items each module holds under the current filters, for the group headers. */
+export interface ApprovalModuleCount {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/** A page of the approval history. */
+export interface ApprovalHistoryPage {
+  items: ApprovalHistoryEntry[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** Every module with at least one item under the status and scope filters — the
+   * module filter itself is not applied here, so the chips can offer the others. */
+  modules: ApprovalModuleCount[];
 }

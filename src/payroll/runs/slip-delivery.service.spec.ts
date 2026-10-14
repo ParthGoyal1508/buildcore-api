@@ -134,7 +134,7 @@ function build(opts: {
     outstandingApproval: async () => opts.outstandingApproval ?? null,
   };
   const salary = {
-    letterheadForCompany: async () => null,
+    logoForCompany: async () => null,
     slipIdentityFor: async () => undefined,
   };
 

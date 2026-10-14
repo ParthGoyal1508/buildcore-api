@@ -11,12 +11,13 @@ import { EmployeesService } from '../hr/employees/employees.service';
 import { buildDashboardContext } from './context';
 import { EmployeeSearchQueryDto } from './dto/employee-search-query.dto';
 import { GroupCompanyCardProvider } from './widgets/group-company-card.provider';
+import { StatutoryCalendarProvider } from './widgets/statutory-calendar.provider';
 import type { WidgetResult } from './widgets/widget.types';
 
 /**
  * The Group Dashboard (feature 004, US6): per-company cards + Group Total, a
- * cross-company employee search, and the not-yet-built statutory calendar. Scope is
- * the caller's accessible companies (spec FR-014–FR-017, FR-022).
+ * cross-company employee search, and the statutory calendar. Scope is the caller's
+ * accessible companies (spec FR-014–FR-017, FR-022).
  *
  * **Two of the three handlers override the class's `DASHBOARD` with `EMPLOYEES`
  * (2026-10-10).** Both read employee data: the cards carry each company's headcount,
@@ -31,8 +32,11 @@ import type { WidgetResult } from './widgets/widget.types';
  * the direction that matters least — they can already read the roster itself, and the
  * web shell still gates the page on both.
  *
- * `statutory-calendar` keeps `DASHBOARD`: it returns a fixed "module pending" envelope
- * and reads nothing.
+ * `statutory-calendar` keeps `DASHBOARD` at the route (2026-10-15). Since it became real
+ * it does read payroll figures, but gates them itself, per scheme, on the permissions
+ * the Challans and payroll screens use — a route-level `PAYROLL` would have hidden PF and
+ * ESIC dates from a `CHALLANS`-only accountant who can open the challans themselves.
+ * A caller holding neither gets an empty calendar.
  */
 @ApiTags('Dashboard')
 @ApiBearerAuth()
@@ -42,6 +46,7 @@ import type { WidgetResult } from './widgets/widget.types';
 export class GroupController {
   constructor(
     private readonly groupCards: GroupCompanyCardProvider,
+    private readonly calendar: StatutoryCalendarProvider,
     private readonly employees: EmployeesService,
   ) {}
 
@@ -51,7 +56,11 @@ export class GroupController {
     summary: 'One card per accessible company, plus Group Total',
     description:
       'Each card carries that company’s headcount, so this needs `EMPLOYEES` rather ' +
-      'than the `DASHBOARD` the rest of the module runs on.',
+      'than the `DASHBOARD` the rest of the module runs on. Beyond headcount a card ' +
+      'carries ongoing projects and their contract value, the latest processed ' +
+      'payroll run’s gross and PF + ESIC challan totals (with its month), active ' +
+      'loans outstanding and required company documents missing — each present only ' +
+      'when the caller holds the permission of the screen it comes from.',
   })
   async companies(@UserEntity() user: AuthenticatedUser, @Ip() ip: string) {
     return this.groupCards.buildCards(buildDashboardContext(user, ip));
@@ -59,30 +68,27 @@ export class GroupController {
 
   @Get('statutory-calendar')
   @ApiOperation({
-    summary: 'Statutory calendar — unavailable, and not because of Challans',
+    summary:
+      'Statutory due dates for the next 45 days, across accessible companies',
     description:
-      'Challans **are** built: `ChallansService` derives PF, ESIC and PT from a ' +
-      'processed payroll run, and the Challans screen shows them. What a *calendar* ' +
-      'additionally needs is a statutory due date per scheme and a record of what has ' +
-      'already been filed, and nothing captures either — there is deliberately no ' +
-      '`Challan` table (005 research §5). Deriving "pending" from the absence of a ' +
-      'filing record that was never designed to exist would mark every period unfiled ' +
-      'forever.\n\n' +
-      'The card therefore carries its own `note` rather than the stock "waiting on the ' +
-      'challans module" sentence, which was false and sent the reader to the wrong place.',
+      'Computed, not recorded. PF and ESIC fall due on the 15th of the month after the ' +
+      'payroll month, TDS on salary on the 7th (30 April for March). Each item names the ' +
+      'company, scheme, payroll month, due date, days remaining and — once that month ' +
+      'has a processed run — the amount the run puts on the challan (via ' +
+      '`ChallansService`, the same figures the Challans screen shows). Dates passed in ' +
+      'the last 7 days stay listed with a negative `daysRemaining`.\n\n' +
+      'Still **not** a filing tracker: there is deliberately no `Challan` table (005 ' +
+      'research §5), so nothing says whether a payment was made and nothing here ' +
+      'claims it. Professional Tax is omitted — its due date is set per state and the ' +
+      'product holds no per-state rule.\n\n' +
+      'Schemes are gated per item: PF/ESIC need `CHALLANS` or `PAYROLL`, TDS needs ' +
+      '`PAYROLL`.',
   })
-  statutoryCalendar(): WidgetResult {
-    return {
-      id: 'statutory-calendar',
-      displayType: 'list',
-      title: 'Statutory Calendar',
-      section: 'group',
-      unavailable: {
-        reason: 'module_pending',
-        module: 'challans',
-        note: 'Challan amounts are available per payroll run. A calendar also needs due dates and a record of what has been filed, which nothing captures yet.',
-      },
-    };
+  statutoryCalendar(
+    @UserEntity() user: AuthenticatedUser,
+    @Ip() ip: string,
+  ): Promise<WidgetResult> {
+    return this.calendar.build(buildDashboardContext(user, ip));
   }
 
   @Get('employees/search')

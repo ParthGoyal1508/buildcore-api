@@ -70,6 +70,12 @@ export const PACKAGE_ERRORS = {
   nonBoqItemInUse: 'NON_BOQ_ITEM_IN_USE',
   /** A subcontractor's non-BOQ items go on the work order, not on the bill (2026-10-14). */
   nonBoqOnSubcontractorBill: 'NON_BOQ_ON_SUBCONTRACTOR_BILL',
+  /**
+   * Certified quantities line by line, or a certified copy read for them, on a subcontractor's bill
+   * (2026-10-15). The company certifies those itself, as one figure; line-by-line certification is
+   * the client's, and is what the outstanding BOQ is counted from.
+   */
+  certifiedLinesClientOnly: 'CERTIFIED_LINES_CLIENT_ONLY',
 } as const;
 
 export type PackageErrorCode =

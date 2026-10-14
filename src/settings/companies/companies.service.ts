@@ -29,6 +29,7 @@ import { ItemCategoriesService } from '../item-masters/item-categories.service';
 import { VendorCategoriesService } from '../vendor-categories/vendor-categories.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { logoVersionOf } from '../company-selection/company-selection.service';
 
 /** Where company letterheads live in blob storage (2026-10-11). */
 const LETTERHEAD_NAMESPACE = 'letterhead';
@@ -262,7 +263,7 @@ export class CompaniesService {
   async getLogo(
     caller: AuthenticatedUser,
     companyId: string,
-  ): Promise<{ bytes: Buffer; contentType: string }> {
+  ): Promise<{ bytes: Buffer; contentType: string; version: string }> {
     const company = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -279,6 +280,7 @@ export class CompaniesService {
     return {
       bytes,
       contentType: detectContentType(bytes)?.contentType ?? 'image/png',
+      version: logoVersionOf(company.logoRef) as string,
     };
   }
 
@@ -861,6 +863,9 @@ export class CompaniesService {
             city: dto.city ?? null,
             state: dto.state ?? null,
             pinCode: dto.pinCode ?? null,
+            phone: dto.phone ?? null,
+            email: dto.email ?? null,
+            website: dto.website ?? null,
             pfEstablishmentCode: dto.pfEstablishmentCode ?? null,
             esicCode: dto.esicCode ?? null,
             professionalTaxRegNumber: dto.professionalTaxRegNumber ?? null,

@@ -38,6 +38,7 @@ import {
   APPROVAL_VIEW_FORBIDDEN,
   ApprovalErrorCode,
 } from './approval-error-codes';
+import { moduleOf } from './approval-modules';
 import { labelForSlot } from './approval-slots';
 import {
   ApprovalDecisionView,
@@ -52,6 +53,7 @@ import {
 } from './approval.types';
 import { ChainsService } from './chains.service';
 import { actorNameOf } from '../common/actor-name';
+import { repairStoredApprovalHref, webRoutes } from '../common/web-routes';
 import { ACTION_DIRECTOR_FINAL_SET_CHANGE } from './default-chains';
 
 /** The event a module listens for to learn its item finished the chain (T013). */
@@ -1084,13 +1086,17 @@ export class ApprovalService {
         const level = instance.chain.levels.find(
           (l) => l.position === instance.currentPosition,
         );
+        const module = moduleOf(instance.chain.actionType);
         return {
           instanceId: instance.id,
           actionType: instance.chain.actionType,
+          module: module.key,
+          moduleLabel: module.label,
           entityType: instance.entityType,
           entityId: instance.entityId,
           subject: instance.subject,
-          href: instance.href,
+          // Stored at submit time; see `repairStoredApprovalHref` for the legacy links.
+          href: repairStoredApprovalHref(instance.href),
           requestedById: instance.originatorUserId,
           // Matches `toView`: a scheduled run has no person behind it, and "Unknown user"
           // would read as data we lost rather than a fact we know.
@@ -1332,7 +1338,7 @@ export class ApprovalService {
       entityId: companyId,
       originatorUserId: caller.id,
       subject: `Director approval requirements — ${changes.length} change(s) proposed`,
-      href: '/settings/approvals/director-final',
+      href: webRoutes.settingsApprovals(),
       viewPermission: Permission.COMPANY_SETTINGS,
     });
 

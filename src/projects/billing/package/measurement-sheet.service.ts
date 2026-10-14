@@ -81,6 +81,12 @@ export interface MeasurementFooter {
    */
   uptoPreviousQty: string;
   uptoDateQty: string;
+  /**
+   * How much less than billed the client certified on the earlier bills counted above (2026-10-15)
+   * — billed 100, passed 95, this is `"5.000"`. Already left out of `uptoPreviousQty`: it is
+   * outstanding, and this bill may claim it again. `"0.000"` where nothing was short.
+   */
+  uncertifiedPreviousQty: string;
   /** Which package the up-to-previous figure was read from, so a reviewer can go and look. */
   uptoPreviousFrom: string | null;
 }
@@ -137,6 +143,7 @@ export class MeasurementSheetService {
           sequenceNo: true,
           periodFrom: true,
           periodTo: true,
+          issuedAt: true,
         },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
@@ -237,6 +244,7 @@ export class MeasurementSheetService {
       direction: BillDirection;
       counterpartyKey: string;
       sequenceNo: number;
+      issuedAt?: Date | null;
     },
     scheduleLineId: string,
     thisBillQty: Prisma.Decimal,
@@ -258,22 +266,43 @@ export class MeasurementSheetService {
       },
       select: {
         claimedQty: true,
-        package: { select: { sequenceNo: true } },
+        clientBillLine: { select: { certifiedQty: true } },
+        package: { select: { sequenceNo: true, certifiedAt: true } },
       },
       orderBy: { package: { sequenceNo: 'desc' } },
     });
 
     // Every issued package before this one, summed — which is the predecessor's own up-to-previous
     // plus its own claim, read from the rows rather than reconstructed from this bill's figures.
-    const uptoPreviousQty = earlier.reduce(
-      (total, claim) => total.plus(claim.claimedQty),
-      ZERO,
-    );
+    //
+    // **What the client certified, where they said line by line** (2026-10-15) — the rule
+    // `ClientBillsService.previouslyBilled` has counted the outstanding BOQ by since 2026-10-11.
+    // Billed 100 and passed 95 is 95 up to previous, and the 5 are outstanding for this bill to
+    // claim again; counting the 100 would leave them claimable only by over-measuring. `null` is
+    // "not said line by line" and the claim stands; zero is not null.
+    //
+    // A certificate that arrived **after this bill was issued** is not read into it: an issued
+    // bill's figures are what it said when it went out (FR-045), and its up-to-previous changing
+    // under it because an earlier bill was certified later would rewrite a sent document.
+    let uncertified = ZERO;
+    const uptoPreviousQty = earlier.reduce((total, claim) => {
+      const certified = claim.clientBillLine?.certifiedQty ?? null;
+      const certifiedInTime =
+        certified !== null &&
+        (!pkg.issuedAt ||
+          (claim.package.certifiedAt !== null &&
+            claim.package.certifiedAt !== undefined &&
+            claim.package.certifiedAt <= pkg.issuedAt));
+      if (!certifiedInTime) return total.plus(claim.claimedQty);
+      uncertified = uncertified.plus(claim.claimedQty.minus(certified));
+      return total.plus(certified);
+    }, ZERO);
 
     return {
       thisBillQty: thisBillQty.toFixed(3),
       uptoPreviousQty: uptoPreviousQty.toFixed(3),
       uptoDateQty: uptoPreviousQty.plus(thisBillQty).toFixed(3),
+      uncertifiedPreviousQty: uncertified.toFixed(3),
       uptoPreviousFrom:
         earlier.length > 0 ? packageLabel(earlier[0].package.sequenceNo) : null,
     };

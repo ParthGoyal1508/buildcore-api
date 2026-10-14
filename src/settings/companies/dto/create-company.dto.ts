@@ -11,6 +11,7 @@ import {
   Matches,
   Max,
   Min,
+  IsEmail,
 } from 'class-validator';
 
 /**
@@ -88,6 +89,22 @@ export class CreateCompanyDto {
   @IsOptional()
   @Matches(/^[0-9]{6}$/, { message: 'pinCode must be 6 digits' })
   pinCode?: string;
+
+  /** Printed at the head of a work order or purchase order (2026-10-14). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  website?: string;
 
   @ApiPropertyOptional()
   @IsOptional()

@@ -48,3 +48,6 @@ export type LetterErrorCode =
   | typeof LETTER_KIND_FORBIDDEN
   | typeof SIGNATORY_REQUIRED
   | typeof LETTER_TEMPLATE_STANDARD_LOCKED;
+
+/** An item line on a work order, LOI or purchase order that cannot be read (2026-10-14). */
+export const LETTER_LINE_ITEMS_UNREADABLE = 'LETTER_LINE_ITEMS_UNREADABLE';

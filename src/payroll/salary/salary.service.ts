@@ -163,29 +163,37 @@ export class SalaryService {
      */
     private readonly pii: PiiCipherService,
     /**
-     * For the letterhead the payslip prints on (2026-10-13). Through the exported settings service
+     * For the logo the payslip prints in its header (2026-10-15; the letterhead before that). Through the exported settings service
      * rather than a read of `settings.Company` — Principle I.
      */
     private readonly companies: CompaniesService,
   ) {}
 
   /**
-   * The company stationery the caller's payslip prints on, or null for plain paper (2026-10-13).
+   * The company logo the caller's payslip carries in its header, or null (2026-10-15).
+   *
+   * Was the letterhead until 2026-10-15. The client's payslip format is not written on
+   * letterhead: its header is the company's name and its logo, and nothing else.
    *
    * Kept **out of** `SalarySlipView` deliberately: the view is also the JSON response, and image
-   * bytes there would ship a 70 KB letterhead with every payslip the app fetches.
+   * bytes there would ship the logo with every payslip the app fetches.
    */
-  async letterheadFor(caller: Caller): Promise<Buffer | null> {
+  async logoFor(caller: Caller): Promise<Buffer | null> {
     const employee = await this.employees.requireByUserId(
       caller.rls,
       caller.userId,
     );
-    return this.companies.getLetterheadImage(employee.companyId);
+    return this.logoForCompany(employee.companyId);
   }
 
   /** The same, by company, for slip delivery — which already holds the run's company. */
-  letterheadForCompany(companyId: string): Promise<Buffer | null> {
-    return this.companies.getLetterheadImage(companyId);
+  async logoForCompany(companyId: string): Promise<Buffer | null> {
+    try {
+      return (await this.companies.getDocumentIdentity(companyId)).logo;
+    } catch {
+      // A company row that cannot be read prints the name alone; a payslip must still render.
+      return null;
+    }
   }
 
   /**

@@ -116,6 +116,7 @@ function build(pkg: Record<string, unknown>) {
     abandoned,
     deductionWrites,
     raBillUpdates,
+    tx: tx as Record<string, unknown>,
   };
 }
 
@@ -256,6 +257,165 @@ describe('sharing and certifying', () => {
   });
 });
 
+/**
+ * Certifying a bill to the client line by line (2026-10-15): billed 100, the client passed 95.
+ */
+describe('certifying a client bill line by line', () => {
+  function clientBuild() {
+    const built = build({
+      status: BillPackageStatus.issued,
+      direction: BillDirection.to_client,
+      clientBillId: 'cb-1',
+      raBillId: null,
+    });
+    const lineWrites: { id: string; certifiedQty: unknown }[] = [];
+    const resets: Record<string, unknown>[] = [];
+    const billUpdates: Record<string, unknown>[] = [];
+    Object.assign(built.tx, {
+      clientBill: {
+        findUniqueOrThrow: async () => ({
+          quotedPercentage: d('0.10'),
+          lines: [
+            {
+              id: 'l-1',
+              quantity: d('100'),
+              rate: d('250'),
+              boqTaskItem: { nonBoq: false },
+            },
+            {
+              id: 'l-2',
+              quantity: d('40'),
+              rate: d('90'),
+              boqTaskItem: { nonBoq: false },
+            },
+            {
+              id: 'l-nb',
+              quantity: d('2'),
+              rate: d('1000'),
+              boqTaskItem: { nonBoq: true },
+            },
+          ],
+        }),
+        update: async (args: { data: Record<string, unknown> }) => {
+          billUpdates.push(args.data);
+          return {};
+        },
+      },
+      clientBillLine: {
+        updateMany: async (args: { where: Record<string, unknown> }) => {
+          resets.push(args.where);
+          return { count: 0 };
+        },
+        update: async (args: {
+          where: { id: string };
+          data: { certifiedQty: unknown };
+        }) => {
+          lineWrites.push({ id: args.where.id, ...args.data });
+          return {};
+        },
+      },
+    });
+    return { ...built, lineWrites, resets, billUpdates };
+  }
+
+  it('writes each line’s certified quantity and derives the certified figure from them', async () => {
+    const { service, row, lineWrites, billUpdates } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      // Ignored: the lines are the answer.
+      certifiedAmount: '1.00',
+      lines: [
+        { lineId: 'l-1', certifiedQty: 95 },
+        { lineId: 'l-nb', certifiedQty: 0 },
+      ],
+    });
+    expect(lineWrites).toEqual([
+      { id: 'l-1', certifiedQty: 95 },
+      { id: 'l-nb', certifiedQty: 0 },
+    ]);
+    // 95 × 250 × 1.10 + 40 × 90 × 1.10 (not said: billed stands) + 0 on the non-BOQ item.
+    const expected = '30085.00';
+    expect((row.certifiedAmount as Prisma.Decimal).toFixed(2)).toBe(expected);
+    expect((billUpdates[0].certifiedAmount as Prisma.Decimal).toFixed(2)).toBe(
+      expected,
+    );
+    expect(billUpdates[0].status).toBe('certified');
+  });
+
+  it('comes to exactly the gross when every line is certified in full', async () => {
+    const { service, row } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      lines: [
+        { lineId: 'l-1', certifiedQty: 100 },
+        { lineId: 'l-2', certifiedQty: 40 },
+        { lineId: 'l-nb', certifiedQty: 2 },
+      ],
+    });
+    // 27,500 + 3,960 + 2,000 (the non-BOQ item at its own rate, no premium).
+    expect((row.certifiedAmount as Prisma.Decimal).toFixed(2)).toBe('33460.00');
+  });
+
+  it('refuses a line certified above what it was billed at', async () => {
+    const { service, lineWrites } = clientBuild();
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'l-1', certifiedQty: 101 }],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CERTIFIED_EXCEEDS_BILLED' },
+    });
+    expect(lineWrites).toHaveLength(0);
+  });
+
+  it('refuses a line that is not on this bill', async () => {
+    const { service } = clientBuild();
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'elsewhere', certifiedQty: 1 }],
+      }),
+    ).rejects.toThrow(/not on this bill/);
+  });
+
+  it('returns lines not posted to “not said”, so a stale answer cannot linger', async () => {
+    const { service, resets } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', {
+      lines: [{ lineId: 'l-1', certifiedQty: 95 }],
+    });
+    expect(resets[0]).toEqual({
+      clientBillId: 'cb-1',
+      id: { notIn: ['l-1'] },
+    });
+  });
+
+  it('certifying as one figure clears an earlier line-by-line answer', async () => {
+    const { service, resets, lineWrites } = clientBuild();
+    await service.certify(ctx, 'u-1', 'pkg-1', { certifiedAmount: '30000.00' });
+    expect(resets[0]).toEqual({ clientBillId: 'cb-1' });
+    expect(lineWrites).toHaveLength(0);
+  });
+
+  it('refuses lines on a subcontractor’s bill', async () => {
+    const { service } = build({
+      status: BillPackageStatus.issued,
+      raBillId: 'ra-1',
+      clientBillId: null,
+    });
+    await expect(
+      service.certify(ctx, 'u-1', 'pkg-1', {
+        lines: [{ lineId: 'l-1', certifiedQty: 1 }],
+      }),
+    ).rejects.toMatchObject({
+      response: { code: 'CERTIFIED_LINES_CLIENT_ONLY' },
+    });
+  });
+
+  it('refuses a certify with neither a figure nor lines', async () => {
+    const { service } = clientBuild();
+    await expect(service.certify(ctx, 'u-1', 'pkg-1', {})).rejects.toThrow(
+      /certified amount/,
+    );
+  });
+});
+
 describe('a subcontractor bill’s own deduction lines', () => {
   it('sums recoveries and deductions separately onto the package', async () => {
     const { service, updates, deductionWrites } = build({});
@@ -320,5 +480,106 @@ describe('a subcontractor bill’s own deduction lines', () => {
     await expect(service.setDeductionLines(ctx, 'pkg-1', [])).rejects.toThrow(
       /Withdraw it/,
     );
+  });
+});
+
+/**
+ * The certified copy on the package view (2026-10-14) — one field saying which download serves it,
+ * whichever way the bill runs, and nothing before the bill is certified.
+ */
+describe('the certified copy on the view', () => {
+  function viewing(
+    pkg: Record<string, unknown>,
+    copies: { id: string; fileName: string }[] = [],
+  ) {
+    const asked: unknown[] = [];
+    const row = {
+      id: 'pkg-1',
+      projectId: 'p-1',
+      direction: BillDirection.to_subcontractor,
+      sequenceNo: 3,
+      periodFrom: new Date('2026-09-01'),
+      periodTo: new Date('2026-09-30'),
+      status: BillPackageStatus.certified,
+      retentionFraction: d('0.05'),
+      cgstFraction: d('0.09'),
+      sgstFraction: d('0.09'),
+      igstFraction: d('0'),
+      tdsFraction: d('0.01'),
+      labourCessFraction: d('0.01'),
+      gstTdsFraction: d('0'),
+      claims: [],
+      deductionLines: [],
+      raBill: null,
+      clientBill: null,
+      raBillId: null,
+      clientBillId: null,
+      certifiedAmount: null,
+      revisionCount: 0,
+      counterpartyKey: 'wo-1',
+      ...pkg,
+    };
+    const tx = {
+      $executeRaw: async () => 0,
+      billPackage: { findFirst: async () => row },
+      signedCopy: {
+        findFirst: async (args: unknown) => {
+          asked.push(args);
+          return copies[0] ?? null;
+        },
+      },
+    };
+    const service = new BillPackageService(
+      {
+        $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+      } as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    return { view: () => service.view(ctx, 'pkg-1'), asked };
+  }
+
+  it('points a certified subcontractor bill at the newest signed copy on its RA bill', async () => {
+    const { view, asked } = viewing({ raBillId: 'ra-1' }, [
+      { id: 'copy-2', fileName: 'RA-03 certified.pdf' },
+    ]);
+    expect((await view()).certifiedCopy).toEqual({
+      kind: 'signed_copy',
+      signedCopyId: 'copy-2',
+      fileName: 'RA-03 certified.pdf',
+    });
+    expect(asked[0]).toMatchObject({
+      where: { subjectType: 'ra_bill', subjectId: 'ra-1' },
+    });
+  });
+
+  it('points a certified bill to the client at the client bill’s certificate', async () => {
+    const { view } = viewing({
+      direction: BillDirection.to_client,
+      clientBillId: 'cb-1',
+      clientBill: {
+        certificateFileRef: 'ref-1',
+        certificateFileName: 'RA-09 certification.pdf',
+      },
+    });
+    expect((await view()).certifiedCopy).toEqual({
+      kind: 'client_certificate',
+      clientBillId: 'cb-1',
+      fileName: 'RA-09 certification.pdf',
+    });
+  });
+
+  it('is null where none was filed, and before the bill is certified', async () => {
+    expect((await viewing({ raBillId: 'ra-1' }).view()).certifiedCopy).toBe(
+      null,
+    );
+    const issued = viewing({ raBillId: 'ra-1', status: 'issued' }, [
+      { id: 'copy-1', fileName: 'early scan.pdf' },
+    ]);
+    expect((await issued.view()).certifiedCopy).toBe(null);
+    // Not even asked: a copy filed before certification is not the certified copy.
+    expect(issued.asked).toHaveLength(0);
   });
 });

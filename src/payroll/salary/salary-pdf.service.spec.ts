@@ -73,16 +73,19 @@ const slip: SalarySlipView = {
 
 describe('SalaryPdfService figure mapping', () => {
   it('maps every deduction to its own line, in the client’s order, ending with the total', () => {
-    // `docs/HR_DOCS/Parth_Realcon_Payslip.docx`: PF, ESI, PT, (Welfare), Loan, Advance, (Mobile),
-    // (Other), TDS. The bracketed heads have no counterpart in this system and are not printed; the
-    // fuel recovery takes the "Other" slot under its own name (020 FR-007).
+    // `docs/HR_DOCS/Parth_Realcon_Payslip.docx`: PF, ESI, PT, Welfare, Loan, Advance, Mobile Bill,
+    // Other Deduction, TDS. Since 2026-10-15 every one of its rows is printed: Welfare and Mobile
+    // Bill have no counterpart in this system and carry null (an em dash on the page); the fuel
+    // recovery is the "Other Deduction" and says so (020 FR-007).
     expect(deductionRows(slip)).toEqual([
       ['Provident Fund', 2160],
       ['ESI', 243],
       ['Professional Tax', 200],
+      ['Welfare', null],
       ['Loan', 1500],
       ['Advance', 500],
-      ['Fuel Recovery', 750],
+      ['Mobile Bill', null],
+      ['Other Deduction (Fuel Recovery)', 750],
       ['T.D.S.', 0],
       ['Total Deduction', 5353],
     ]);
@@ -98,7 +101,7 @@ describe('SalaryPdfService figure mapping', () => {
     // They are informational; showing them among deductions would imply the employee paid them.
     // Asserted as a count on purpose: it has to be updated deliberately when a real deduction is
     // added — which is the check working, not noise.
-    expect(deductionRows(slip)).toHaveLength(8);
+    expect(deductionRows(slip)).toHaveLength(10);
     expect(deductionRows(slip).at(-1)?.[1]).toBe(slip.deductions.total);
   });
 
@@ -158,15 +161,21 @@ describe('rupeesInWords', () => {
  * must differ — a sample with LOP zero throughout would be no evidence that proration happened.
  */
 describe('earnings, Rate and Amount', () => {
-  it('prints only the heads the system pays, in the docx’s order, ending with gross', () => {
-    // No Dearness Allowance, Medical/Conveyance Reimbursement or Food Allowance: the salary
-    // structure has none, and a printed head asserts an entitlement.
+  it('prints the docx’s rows in its order, the system’s own heads after them, ending with gross', () => {
+    // Changed deliberately on 2026-10-15: the client asked for their format strictly, so its
+    // Dearness Allowance, Medical/Conveyance Reimbursement and Food Allowance rows are printed —
+    // with dashes, since the salary structure pays none of them. Site Allowance and Overtime,
+    // which it does pay, take the blank rows the docx leaves before Gross Earnings.
     expect(earningRows(slip)).toEqual([
       ['Basic', 20000, 18000],
+      ['Dearness Allowance', null, null],
       ['House Rent Allowance', 8000, 7200],
       ['Conveyance Allowance', 1778, 1600],
-      ['Site Allowance', 2778, 2500],
       ['Special Allowance', 1333, 1200],
+      ['Medical Reimbursement', null, null],
+      ['Conveyance Reimbursement', null, null],
+      ['Food Allowance', null, null],
+      ['Site Allowance', 2778, 2500],
       ['Overtime', null, 1800],
       ['Gross Earnings', 35667, 32300],
     ]);
@@ -188,6 +197,8 @@ describe('earnings, Rate and Amount', () => {
       },
     };
     expect(earningRows(legacy).every(([, rate]) => rate === null)).toBe(true);
+    // …while the Amounts it did store are still there.
+    expect(earningRows(legacy)[0]).toEqual(['Basic', null, 18000]);
     // And it still renders — a legacy slip must not fail to print.
     const pdf = await new SalaryPdfService().render(legacy, 'Asha Pawar');
     expect(pdf.length).toBeGreaterThan(500);
@@ -224,7 +235,6 @@ describe('the employee panel and bank block', () => {
       ['Designation', 'Total Days'],
       ['P.F. No.', 'E.S.I. No.'],
       ['O.T. Hours', 'Date of Joining'],
-      ['Paid Days', 'LOP Days'],
     ]);
     expect(rows[1][0]).toEqual(["Father's / Spouse's Name", 'Hans Raj']);
     expect(rows[4][1]).toEqual(['E.S.I. No.', '1234567890']);
@@ -245,10 +255,9 @@ describe('the employee panel and bank block', () => {
     const rows = identityRows(slip, identity);
     expect(rows[3][1]).toEqual(['Total Days', '31']);
     expect(rows[5][0]).toEqual(['O.T. Hours', '12']);
-    expect(rows[6]).toEqual([
-      ['Paid Days', '28.5'],
-      ['LOP Days', '2.5'],
-    ]);
+    // The docx's six rows and no others (2026-10-15) — the paid / LOP row this used to add is
+    // not in the client's format.
+    expect(rows).toHaveLength(6);
     // The slip stores paid days, not their breakdown into worked, weekly off and leave.
     expect([rows[0][1][1], rows[1][1][1], rows[2][1][1]]).toEqual([
       '—',
@@ -288,36 +297,29 @@ describe('the employee panel and bank block', () => {
     expect(periodLabel('nonsense')).toBe('nonsense');
   });
 
-  it('renders on plain paper with the company header', async () => {
-    const pdf = await new SalaryPdfService().render(
-      { ...slip, identity },
-      'Dinesh Sharma',
-    );
-    expect(pdf.subarray(0, 4).toString('ascii')).toBe('%PDF');
-    // One page: the payslip must fit on a single A4 sheet.
-    expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1);
-  });
-
-  it('renders on the letterhead, still on one page, and survives one it cannot decode', async () => {
-    // A 1×1 PNG stands in for the stationery.
+  it('renders the company header on one page, with or without a logo', async () => {
+    // The docx's header is the company name and its logo — not the letterhead (2026-10-15).
+    // A 1×1 PNG stands in for the logo.
     const png = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
       'base64',
     );
     const service = new SalaryPdfService();
     const plain = await service.render({ ...slip, identity }, 'Dinesh Sharma');
-    const onStationery = await service.render(
+    const withLogo = await service.render(
       { ...slip, identity },
       'Dinesh Sharma',
       png,
     );
-    expect(onStationery.toString('latin1')).toContain('/Subtype /Image');
+    expect(plain.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    expect(withLogo.toString('latin1')).toContain('/Subtype /Image');
     expect(plain.toString('latin1')).not.toContain('/Subtype /Image');
-    expect(
-      onStationery.toString('latin1').match(/\/Type \/Page\b/g),
-    ).toHaveLength(1);
+    // One page: the payslip must fit on a single A4 sheet.
+    for (const pdf of [plain, withLogo]) {
+      expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1);
+    }
 
-    // A corrupt letterhead must not cost the employee their payslip.
+    // A logo that is not an image must not cost the employee their payslip.
     const garbage = await service.render(
       { ...slip, identity },
       'Dinesh Sharma',

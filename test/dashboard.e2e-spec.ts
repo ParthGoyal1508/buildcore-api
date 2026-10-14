@@ -730,7 +730,7 @@ describe('Dashboard reminders (e2e)', () => {
    * also what a broken endpoint returns.
    */
   describe('dashboard entitlement from a Site Engineer’s seat (2026-10-10)', () => {
-    it('withholds the HR widgets and keeps the placeholders', async () => {
+    it('withholds the HR widgets and keeps the ungated ones', async () => {
       const ids = async (t: string) =>
         (
           await http().get('/dashboard/widgets').set(auth(t)).expect(200)
@@ -745,8 +745,20 @@ describe('Dashboard reminders (e2e)', () => {
       // — which is the point, the filter is per widget and not a blanket.
       expect(engineer).not.toContain('total-employees');
       expect(engineer).toContain('recent-leaves');
-      // Placeholders carry no data and belong to everyone.
-      expect(engineer).toContain('monthly-expenses');
+      // A widget declaring no permission belongs to everyone. This used to be the
+      // Monthly Expenses placeholder; it left the dashboard on 2026-10-15 with every
+      // other expense card, so Alerts & Reminders — filtered by the engine, not here —
+      // is the ungated card now.
+      expect(engineer).toContain('alerts-reminders');
+      // And the expense cards are gone for everybody, the admin included.
+      for (const id of [
+        'monthly-expenses',
+        'materials-cost',
+        'fuel-cost',
+        'hire-bills',
+      ]) {
+        expect(admin).not.toContain(id);
+      }
     });
 
     it('lists no real report type to a Viewer, who holds REPORTS and no module', async () => {
@@ -777,11 +789,10 @@ describe('Dashboard reminders (e2e)', () => {
       ]) {
         expect(viewer).not.toContain(id);
       }
-      // Placeholders stay: they carry no rows, only the name of an unbuilt module.
-      // `expense` is the last one — this assertion named `payroll` until Payroll
-      // became a real report with `requires: [PAYROLL]`, at which point a Viewer
-      // correctly stopped seeing it.
-      expect(viewer).toContain('expense');
+      // No placeholder report is listed to anybody since 2026-10-15: `expense`, the last, went
+      // when the client asked for expenses to go from Reports.
+      expect(admin).not.toContain('expense');
+      expect(viewer).not.toContain('expense');
     });
 
     it('refuses to run the Employee report it did not list', async () => {
@@ -866,6 +877,25 @@ describe('Dashboard reminders (e2e)', () => {
       await http().get('/group/companies').set(auth(engineerToken)).expect(403);
 
       await http().get('/group/companies').set(auth()).expect(200);
+    });
+
+    // 2026-10-15: the calendar is computed now, not a "module pending" placeholder, and
+    // it gates its payroll figures per scheme rather than at the route — so the engineer
+    // (DASHBOARD, no PAYROLL or CHALLANS) reaches it and is given no dates.
+    it('computes the statutory calendar, showing no payroll dates without payroll access', async () => {
+      const admin = await http()
+        .get('/group/statutory-calendar')
+        .set(auth())
+        .expect(200);
+      expect(admin.body.unavailable).toBeUndefined();
+      expect(Array.isArray(admin.body.value.items)).toBe(true);
+
+      const engineer = await http()
+        .get('/group/statutory-calendar')
+        .set(auth(engineerToken))
+        .expect(200);
+      expect(engineer.body.value.schemes).toEqual([]);
+      expect(engineer.body.value.items).toEqual([]);
     });
   });
 });

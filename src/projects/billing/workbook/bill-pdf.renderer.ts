@@ -10,6 +10,7 @@ import type {
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
+import { subcontractorSignatures } from './signature-block';
 
 /**
  * The bill package as a PDF (025 FR-042).
@@ -348,6 +349,64 @@ export class BillPdfRenderer {
         `Tax basis: ${view.abstract.taxBasis} (${view.abstract.taxBasisSource})`,
         { width },
       );
+
+    this.signatureBlock(doc, view);
+  }
+
+  /**
+   * The subcontractor's sign-off under the abstract (2026-10-14) — see `subcontractorSignatures`
+   * for who signs where and why a bill to the client prints none.
+   *
+   * **Kept whole on one page.** The block is measured before it is drawn and, if it would cross the
+   * bottom margin, starts a fresh page of its own: a "Prepared by" at the foot of one page and its
+   * "Approved by" at the head of the next is a signature somebody signs without seeing what it
+   * approves.
+   */
+  private signatureBlock(
+    doc: PDFKit.PDFDocument,
+    view: BillWorkbookView,
+  ): void {
+    const rows = subcontractorSignatures(view.header);
+    if (!rows) return;
+
+    const width = doc.page.width - MARGIN * 2;
+    const half = width / 2;
+    // Caption, the space a pen needs, the designation, and a gap before the next pair.
+    const CAPTION = 12;
+    const SIGNING_SPACE = 36;
+    const SIGNATORY = 12;
+    const GAP = 14;
+    const rowHeight = CAPTION + SIGNING_SPACE + SIGNATORY + GAP;
+    const lead = 18;
+    const height = lead + rowHeight * rows.length;
+
+    if (doc.y + height > doc.page.height - MARGIN) {
+      this.page(
+        doc,
+        doc.page.width > doc.page.height ? 'landscape' : 'portrait',
+      );
+    } else {
+      doc.y += lead;
+    }
+
+    let y = doc.y;
+    doc.fontSize(SIZE.body);
+    for (const row of rows) {
+      [row.left, row.right].forEach((slot, index) => {
+        const x = MARGIN + index * half;
+        doc
+          .font('Helvetica-Bold')
+          .text(slot.caption, x, y, { width: half - 20 });
+        doc
+          .font('Helvetica')
+          .text(slot.signatory, x, y + CAPTION + SIGNING_SPACE, {
+            width: half - 20,
+          });
+      });
+      y += rowHeight;
+    }
+    doc.x = MARGIN;
+    doc.y = y;
   }
 
   private schedulePage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {

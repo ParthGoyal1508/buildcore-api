@@ -3,6 +3,7 @@ import { DiscoveryModule } from '@nestjs/core';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { UsersModule } from '../users/users.module';
+import { ApprovalHistoryService } from './approval-history.service';
 import { ApprovalsController } from './approvals.controller';
 import { ApprovalService } from './approvals.service';
 import { ChainsService } from './chains.service';
@@ -40,6 +41,7 @@ import { ReconciliationService } from './reconciliation.service';
   controllers: [ApprovalsController],
   providers: [
     ApprovalService,
+    ApprovalHistoryService,
     ChainsService,
     ReconciliationService,
     ReconciliationCron,

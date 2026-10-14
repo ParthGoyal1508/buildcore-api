@@ -219,6 +219,11 @@ company that has not supplied one — not an error to refuse an issue over.']
   city String
   state String
   pinCode String
+  phone String [note: 'How the company is reached, printed under its name at the head of a work order or purchase
+order (2026-10-14) — the client\'s formats carry "Ph:", "Email:" and "Website:" beside the
+registered office. Optional: a document prints the lines that are filled.']
+  email String
+  website String
   pfEstablishmentCode String
   esicCode String
   professionalTaxRegNumber String
@@ -5178,6 +5183,7 @@ Enum Permission {
   HIRE_BILLS
   RECRUITMENT
   RECRUITMENT_APPROVE
+  HR_LETTERS
   ASSETS
   ASSETS_APPROVE
   CASH_ENTRY

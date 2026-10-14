@@ -1,5 +1,6 @@
 import {
   Controller,
+  HttpCode,
   Post,
   Body,
   Req,
@@ -22,6 +23,11 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { TokenDto } from './dto/token.dto';
 import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
+import {
+  ConfirmPasswordDto,
+  ConfirmPasswordResultDto,
+} from './dto/confirm-password.dto';
+import { SelfService } from '../common/decorators/route-access.decorator';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { AuthenticatedUser } from './authenticated-user';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
@@ -168,6 +174,33 @@ export class AuthController {
     // is now configurable — hardcoding `/auth` here would silently stop clearing the
     // cookie the moment the deployment moved it (015 FR-011).
     res.clearCookie(REFRESH_COOKIE_NAME, this.refreshCookieOptions());
+  }
+
+  /**
+   * Re-enter your own password before a sensitive act (2026-10-14).
+   *
+   * Returns a ten-minute confirmation scoped to one purpose and one account, which the act's
+   * own endpoint then requires in `X-Confirmation-Token` — so hiding the control in the
+   * interface is not the only thing standing between a borrowed session and the setting.
+   *
+   * `@SelfService()`: it acts only on the caller's own credential. Which callers may confirm
+   * for which purpose is decided per purpose in `AuthService.confirmPassword`.
+   *
+   * Rate-limited by the controller's `ThrottlerGuard` at sign-in's allowance (no override),
+   * because it is the same guess-a-password surface sign-in is.
+   */
+  @Post('confirm-password')
+  @HttpCode(200)
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @SelfService()
+  @ApiOkResponse({ type: ConfirmPasswordResultDto })
+  async confirmPassword(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() { password, purpose }: ConfirmPasswordDto,
+    @Req() req: Request,
+  ): Promise<ConfirmPasswordResultDto> {
+    return this.auth.confirmPassword(caller, password, purpose, req.ip);
   }
 
   @Post('admin/reset-password')

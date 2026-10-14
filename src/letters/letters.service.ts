@@ -16,6 +16,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 import type { ApprovalInstanceView } from '../approvals/approval.types';
 import { ApprovalService } from '../approvals/approvals.service';
+import { ACTION_LETTER_PURCHASE_ORDER } from '../approvals/default-chains';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
@@ -32,13 +33,20 @@ import { ComposeLetterDto, ReissueLetterDto } from './dto/letter.dto';
 import {
   LETTER_ALREADY_ISSUED,
   LETTER_KIND_FORBIDDEN,
+  LETTER_LINE_ITEMS_UNREADABLE,
   LETTER_NOT_ISSUED,
   LETTER_TEMPLATE_MISSING,
   SIGNATORY_REQUIRED,
 } from './letter-error-codes';
 import { permissionForKind } from './letter-permissions';
 import { LetterRecordSources } from './letter-record-sources';
-import { formatLetterDate, renderLetterPdf } from './letter-pdf.renderer';
+import {
+  BrandHeader,
+  formatLetterDate,
+  renderLetterPdf,
+} from './letter-pdf.renderer';
+import { LETTER_LAYOUTS } from './letter-layouts';
+import { expandLineItems, LineItemsError } from './line-items';
 import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
 import { webRoutes } from '../common/web-routes';
@@ -73,6 +81,17 @@ export interface IssuedLetterView {
   status: 'composed' | 'issued' | 'executed';
   countersignedAt: Date | null;
   requiresApproval: boolean;
+  /**
+   * What was typed at compose, as stored (2026-10-15) — the values the screen sent, never the
+   * ones read from records.
+   *
+   * Returned so the screen that composed a letter can find it again by what it put there: a
+   * work order's record sends its own id as an undeclared variable, and lists the LOI and work
+   * order letters carrying it. The pair stays opaque — this module stores the values and hands
+   * them back; it neither reads nor interprets one. Nothing here is more than the issued
+   * document already prints, and the list is filtered by the kind's permission as before.
+   */
+  composedVariables: Record<string, string>;
   /**
    * Where a composed letter stands in its approval chain, for this caller (2026-10-14).
    *
@@ -152,6 +171,7 @@ function toView(row: LetterRow): IssuedLetterView {
         : 'composed',
     countersignedAt: row.countersignedAt,
     requiresApproval: row.letterKind.requiresApproval,
+    composedVariables: composedOf(row.composedVariables),
   };
 }
 
@@ -296,6 +316,7 @@ export class LettersService {
       dto,
       dto.variables ?? {},
     );
+    this.assertLineItemsReadable(kind.key, resolvedNow);
     const variables = gated ? {} : resolvedNow;
 
     const row = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -601,6 +622,11 @@ export class LettersService {
       subjectId?: string;
       employeeId?: string;
       candidateId?: string;
+      /**
+       * One kind across every subject (2026-10-15) — Inventory's purchase-order list, which
+       * belongs to no single vendor.
+       */
+      letterKindKey?: string;
       includeSuperseded?: boolean;
     },
   ): Promise<IssuedLetterView[]> {
@@ -616,6 +642,9 @@ export class LettersService {
             ...(query.subjectId ? { subjectId: query.subjectId } : {}),
             ...(query.employeeId ? { employeeId: query.employeeId } : {}),
             ...(query.candidateId ? { candidateId: query.candidateId } : {}),
+            ...(query.letterKindKey
+              ? { letterKind: { key: query.letterKindKey } }
+              : {}),
             ...(query.includeSuperseded ? {} : { isSuperseded: false }),
           },
           include: { letterKind: true },
@@ -831,6 +860,10 @@ export class LettersService {
             city: true,
             state: true,
             pinCode: true,
+            gstin: true,
+            pan: true,
+            phone: true,
+            email: true,
           },
         });
         if (!row) return null;
@@ -861,6 +894,10 @@ export class LettersService {
         terms: company.terms,
         name: company.name,
         shortCode: company.shortCode,
+        gstin: company.gstin,
+        pan: company.pan,
+        phone: company.phone,
+        email: company.email,
         address: company.pinCode
           ? `${place}${place ? ' - ' : ''}${company.pinCode}`
           : place,
@@ -885,7 +922,7 @@ export class LettersService {
     companyId: string,
     letter: {
       templateId: string;
-      letterKind: { label: string; requiresSignature: boolean };
+      letterKind: { key: string; label: string; requiresSignature: boolean };
       signatoryId: string | null;
       referenceNo?: string | null;
     },
@@ -907,6 +944,29 @@ export class LettersService {
   }
 
   /**
+   * Refuses item lines that cannot be read, naming the line (2026-10-14). Checked at compose so
+   * the person typing them hears about it — not the approver, at issue, of a work order that
+   * cannot be produced.
+   */
+  private assertLineItemsReadable(
+    kindKey: string,
+    variables: Record<string, string>,
+  ): void {
+    try {
+      expandLineItems(kindKey, variables);
+    } catch (error) {
+      if (error instanceof LineItemsError) {
+        throw new BadRequestException({
+          statusCode: 400,
+          message: error.message,
+          code: LETTER_LINE_ITEMS_UNREADABLE,
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
    * The document, rendered and not stored. `draft` is a preview's: marked DRAFT on every page,
    * no reference, and the signatory named but their graphic left off — see `LetterSignature`.
    */
@@ -915,7 +975,7 @@ export class LettersService {
     companyId: string,
     letter: {
       templateId: string;
-      letterKind: { label: string; requiresSignature: boolean };
+      letterKind: { key: string; label: string; requiresSignature: boolean };
       signatoryId: string | null;
       referenceNo?: string | null;
     },
@@ -929,7 +989,18 @@ export class LettersService {
         }),
         tx.company.findUnique({
           where: { id: companyId },
-          select: { letterheadRef: true },
+          select: {
+            letterheadRef: true,
+            logoRef: true,
+            name: true,
+            address: true,
+            city: true,
+            state: true,
+            pinCode: true,
+            phone: true,
+            email: true,
+            website: true,
+          },
         }),
       ]),
     );
@@ -965,19 +1036,50 @@ export class LettersService {
     // The date in the body is the date on the letter — the same clock as the header below, so
     // "Issued on" and the printed date cannot disagree. A body could reference `issueDate` and
     // nothing ever supplied it, which printed "Issued on ." on every work order.
+    // The item table and the totals worked out from it, for the kinds that print one. A
+    // preview with unreadable lines says so where the table goes; an issue cannot get here
+    // with them, because compose refused them.
+    let derived: Record<string, string> = {};
+    try {
+      derived = expandLineItems(letter.letterKind.key, variables);
+    } catch (error) {
+      if (!(draft && error instanceof LineItemsError)) throw error;
+      derived = { lineItemsTable: `[Items: ${error.message}]` };
+    }
+    const issueDate = formatLetterDate(new Date());
+    const layout = LETTER_LAYOUTS[letter.letterKind.key];
+
+    // The date in the body is the date on the letter — the same clock as the header below, so
+    // "Issued on" and the printed date cannot disagree. A body could reference `issueDate` and
+    // nothing ever supplied it, which printed "Issued on ." on every work order. The reference
+    // likewise: a purchase order quotes its own number in its body.
     const body = renderTemplate(template.bodyTemplate, {
-      issueDate: formatLetterDate(new Date()),
+      issueDate,
+      referenceNo: draft ? '(assigned on issue)' : letter.referenceNo ?? '',
       ...variables,
+      ...derived,
     });
     const pdf = await renderLetterPdf({
-      title: letter.letterKind.label.toUpperCase(),
+      title: layout?.title ?? letter.letterKind.label.toUpperCase(),
       body,
-      letterhead: await this.letterhead(template.letterheadAssetId, company),
-      referenceNo: draft ? null : letter.referenceNo ?? null,
+      letterhead: layout?.brandHeader
+        ? null
+        : await this.letterhead(template.letterheadAssetId, company),
+      brandHeader: layout?.brandHeader
+        ? await this.brandHeader(company)
+        : undefined,
+      pageFooter: layout?.pageFooter?.(variables),
+      referenceLabel: layout?.referenceLabel,
+      titleFirst: layout?.titleFirst,
+      acceptanceLabel: layout?.acceptanceLabel,
+      // A format that prints its reference and date in its own table (the F&F sheet) gets them
+      // through the body's `{{referenceNo}}` and `{{issueDate}}` above, and not a second time here.
+      referenceNo:
+        draft || layout?.referenceInBody ? null : letter.referenceNo ?? null,
       // The date the letter bears is the day it is issued. Taken from the clock rather
       // than from `variables`, so the printed date and `issuedAt` can never disagree —
       // which, on a document that starts a notice period, is a dispute.
-      issueDate: formatLetterDate(new Date()),
+      issueDate: layout?.referenceInBody ? null : issueDate,
       signature,
       draft,
     });
@@ -1023,6 +1125,57 @@ export class LettersService {
         existing.map((row) => row.referenceNo ?? ''),
       );
     });
+  }
+
+  /**
+   * The logo-and-name band a work order or purchase order opens with (2026-10-14): the logo,
+   * the company name, and the registered office with whichever of phone, email and website
+   * Settings holds. A logo that cannot be read prints the name alone.
+   */
+  private async brandHeader(
+    company: {
+      name: string;
+      logoRef: string | null;
+      address: string | null;
+      city: string | null;
+      state: string | null;
+      pinCode: string | null;
+      phone: string | null;
+      email: string | null;
+      website: string | null;
+    } | null,
+  ): Promise<BrandHeader> {
+    if (!company) return { logo: null, name: '', lines: [] };
+    const place = [company.address, company.city, company.state]
+      .map((part) => part?.trim())
+      .filter(Boolean)
+      .join(', ');
+    const office = company.pinCode ? `${place} - ${company.pinCode}` : place;
+    const contact = [
+      company.phone ? `Ph: ${company.phone}` : null,
+      company.email ? `Email: ${company.email}` : null,
+    ]
+      .filter(Boolean)
+      .join('  |  ');
+    let logo: Buffer | null = null;
+    if (company.logoRef) {
+      try {
+        logo = await this.storage.get(company.logoRef);
+      } catch {
+        this.logger.warn(
+          `Logo ${company.logoRef} could not be read; printing the name alone.`,
+        );
+      }
+    }
+    return {
+      logo,
+      name: company.name ?? '',
+      lines: [
+        office ? `Registered Office: ${office}` : '',
+        contact,
+        company.website ? `Website: ${company.website}` : '',
+      ].filter(Boolean),
+    };
   }
 
   /**
@@ -1127,9 +1280,13 @@ export class LettersService {
         // project's own tab, everything else is listed under Recruitment. Neither has a page
         // per letter, so both land on the list that contains it. `/dashboard/letters/:id`,
         // which this was, is a page that exists in neither place.
+        // A purchase order addressed to a vendor is listed on Inventory's purchase-order page
+        // (2026-10-15); one raised on a project before that keeps its project tab.
         href:
           letter.subjectType === 'project' && letter.subjectId
             ? webRoutes.projectLetters(letter.subjectId)
+            : letter.letterKind.key === ACTION_LETTER_PURCHASE_ORDER
+            ? webRoutes.inventoryPurchaseOrders()
             : webRoutes.recruitmentLetters(),
         viewPermission: permissionForKind(letter.letterKind.key),
       });

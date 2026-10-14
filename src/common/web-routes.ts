@@ -82,6 +82,15 @@ export const webRoutes = {
    */
   recruitmentLetters: (): string => '/dashboard/recruitment/letters',
 
+  /**
+   * Purchase orders, which belong to no project (2026-10-15).
+   *
+   * `app/dashboard/inventory/purchase-orders/page.tsx`, which lists every purchase-order letter
+   * with its approval inline. A PO is addressed to a vendor, so neither the project tab nor the
+   * recruitment list would show it.
+   */
+  inventoryPurchaseOrders: (): string => '/dashboard/inventory/purchase-orders',
+
   /** `app/dashboard/hr/employees/[id]/page.tsx`. Exit clearance is a panel on this page. */
   employee: (employeeId: string): string =>
     `/dashboard/hr/employees/${employeeId}`,
@@ -105,4 +114,37 @@ export const webRoutes = {
    * calls them "the part of this screen somebody has to act on".
    */
   plantFuel: (): string => '/dashboard/plant/fuel',
+
+  /**
+   * `app/dashboard/settings/approvals/page.tsx`, which carries the director-final set and its
+   * pending change. The spine's own director-final submission linked to
+   * `/settings/approvals/director-final` — no `/dashboard`, and a sub-page that never existed —
+   * until 2026-10-15.
+   */
+  settingsApprovals: (): string => '/dashboard/settings/approvals',
 } as const;
+
+/**
+ * Hrefs stored on approval items before the routes above were corrected (2026-10-15).
+ *
+ * `ApprovalInstance.href` is written once, at submit time, so fixing a module's link fixes only
+ * the items it raises afterwards. Items raised before 2026-10-06 still carry
+ * `/projects/:id/ra-bills/:billId` (an API path) and `/dashboard/hr/payroll/runs/:id`, and every
+ * director-final change before 2026-10-15 carries `/settings/approvals/director-final` — all
+ * three 404 in buildcore-web. On 2026-10-15 these were 45 of the 90 stored approval links. Rewritten on read, in the one
+ * place the Approvals screen's links come through, rather than by a data migration: the patterns
+ * are exact and finite, and a read-time repair cannot damage a row.
+ */
+export function repairStoredApprovalHref(href: string | null): string | null {
+  if (!href) return href;
+  const payrollRun = /^\/dashboard\/hr\/payroll\/runs\/([^/?#]+)$/.exec(href);
+  if (payrollRun) return webRoutes.payrollRun(payrollRun[1]);
+  // The API resource path the RA-bill link used before 2026-10-06 — no `/dashboard`, and a
+  // per-bill segment no page serves. The bill is listed on its project's RA-bills tab.
+  const raBill = /^\/projects\/([^/?#]+)\/ra-bills(?:\/[^/?#]+)?$/.exec(href);
+  if (raBill) return webRoutes.projectRaBills(raBill[1]);
+  if (href === '/settings/approvals/director-final') {
+    return webRoutes.settingsApprovals();
+  }
+  return href;
+}

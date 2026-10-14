@@ -43,7 +43,8 @@ export class LettersController {
   @ApiOperation({
     summary: 'Letters for a subject — where the work is (FR-019)',
     description:
-      'Filter by the opaque `subjectType`/`subjectId` pair, or by employee or candidate. ' +
+      'Filter by the opaque `subjectType`/`subjectId` pair, or by employee or candidate, ' +
+      'and/or by `letterKindKey`. ' +
       'The pair is never resolved into a vendor or project by this module; the module ' +
       'that owns the subject resolves it.',
   })
@@ -54,12 +55,15 @@ export class LettersController {
     @Query('employeeId') employeeId?: string,
     @Query('candidateId') candidateId?: string,
     @Query('includeSuperseded') includeSuperseded?: string,
+    // One kind across every subject (2026-10-15) — Inventory lists every purchase order.
+    @Query('letterKindKey') letterKindKey?: string,
   ) {
     const views = await this.letters.listForSubject(caller, {
       subjectType,
       subjectId,
       employeeId,
       candidateId,
+      letterKindKey,
       includeSuperseded: includeSuperseded === 'true',
     });
     return this.letters.withApprovals(caller, views);

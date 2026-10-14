@@ -28,15 +28,14 @@ class PlaceholderWidget implements WidgetProvider {
   }
 }
 
-/** Company-dashboard placeholders, in the order the contract lists them. */
+/**
+ * Company-dashboard placeholders, in the order the contract lists them.
+ *
+ * `monthlyExpenses` (and the site dashboard's `recentExpenses`) were deleted on
+ * 2026-10-15 rather than kept for later: the client asked for expense widgets off the
+ * dashboard altogether, so there is no future card for them to stand in for.
+ */
 export const UNBUILT_WIDGET_PLACEHOLDERS = {
-  monthlyExpenses: new PlaceholderWidget(
-    'monthly-expenses',
-    'Monthly Expenses',
-    'kpi',
-    'kpi',
-    'expenses',
-  ),
   activeProjects: new PlaceholderWidget(
     'active-projects',
     'Active Projects',
@@ -117,12 +116,5 @@ export const UNBUILT_SITE_WIDGET_PLACEHOLDERS = {
     'site',
     'table',
     'inventory',
-  ),
-  recentExpenses: new PlaceholderWidget(
-    'recent-expenses',
-    'Recent Expenses',
-    'site',
-    'table',
-    'expenses',
   ),
 } as const;

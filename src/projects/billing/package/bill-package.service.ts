@@ -16,6 +16,7 @@ import {
   DwrStatus,
   Prisma,
   RaBillStatus,
+  SignedCopySubject,
   WorkOrderStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -40,6 +41,9 @@ import { CompaniesService } from '../../../settings/companies/companies.service'
 import { DwrPeriodFiguresService } from '../../dwr/dwr-period-figures.service';
 import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
 import { lineTotals, money } from '../bill-totals';
+import type { CertifiedLine } from '../certified-lines';
+import { assertCertifiedLines, certifiedAmountOf } from '../certified-lines';
+import type { CertifiedCopyLine } from './certified-copy.reader';
 import type { AbstractColumn } from './bill-abstract';
 import { balanceColumn, billAbstract, displayRupees } from './bill-abstract';
 import { decideTaxBasis } from './bill-tax';
@@ -176,6 +180,14 @@ export interface BillPackageClaimView {
   unpriced: boolean;
   /** Outside the tendered BOQ: a client's non-BOQ item, or an award line mapped to no BOQ line. */
   nonBoq: boolean;
+  /**
+   * What the client certified on this line, where they said line by line (2026-10-15). `null` is
+   * "not said" — before certification, on a bill certified as one figure, and always on a
+   * subcontractor's — and the claimed quantity stands. Zero is not null.
+   */
+  certifiedQty: string | null;
+  /** The client bill line this claim measures — what Certify's `lines` name. Null on a subcontractor's. */
+  billLineId: string | null;
 }
 
 export interface BillPackageView {
@@ -234,6 +246,21 @@ export interface BillPackageView {
   workOrderId: string | null;
   /** The client's id, or the work order's — what the running number is counted per. */
   counterpartyKey: string;
+  /**
+   * The certified copy filed at Certify, once the bill is certified (2026-10-14) — null before, and
+   * null where none was filed.
+   *
+   * Each direction keeps it where that direction already kept such a document, so this only says
+   * **which** download serves it: `client_certificate` is the client bill's certificate
+   * (`GET projects/client-bills/:clientBillId/certificate`); `signed_copy` is the latest signed
+   * copy on the RA bill (`GET projects/signed-copies/:signedCopyId/file`). One field rather than
+   * two, so the screen asks one question — "is there a certified copy?" — whichever way the bill
+   * runs.
+   */
+  certifiedCopy:
+    | { kind: 'client_certificate'; clientBillId: string; fileName: string }
+    | { kind: 'signed_copy'; signedCopyId: string; fileName: string }
+    | null;
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
@@ -1658,10 +1685,8 @@ export class BillPackageService {
       // because the table carried neither column, so every bill issued to a client reported two
       // missing header fields — on the real RA-12 those two rows are filled in by hand.
       //
-      // They do **not** move the tax decision: `decideTaxBasis` reads the two GSTINs, whose first
-      // two characters are the state code, so a client with a GSTIN has always been taxed
-      // correctly. These are what the header *prints*, which is a smaller claim than it looks and
-      // worth stating precisely rather than overselling.
+      // They do **not** move the tax decision, which is the project's own choice (2026-10-14).
+      // These are what the header *prints*.
       //
       // A client recorded before these columns existed still reports them missing, which is the
       // right answer: unrecorded is not the same as absent from the model.
@@ -1974,12 +1999,27 @@ export class BillPackageService {
    * variance between the two is what a project manager chases, and overwriting the billed amount
    * erases the fact that there was a shortfall at all. A certified bill may be certified again to
    * correct the figure; the latest stands.
+   *
+   * **Line by line, on a bill to the client** (2026-10-15). The client's engineer passes quantities,
+   * not a total: billed 100, passed 95. Given `lines`, each line's certified quantity is written to
+   * its `ClientBillLine.certifiedQty` and the certified figure is **derived from them** — the same
+   * checks and the same pricing as the old sheet's Certify (`certified-lines.ts`), so the posted
+   * `certifiedAmount` is ignored rather than allowed to disagree. The 5 units not passed then count
+   * as unbilled wherever the outstanding BOQ is read, and can be claimed again.
+   *
+   * Certifying again replaces the whole line-by-line answer: lines not posted go back to "not said"
+   * (`null`), and certifying as a single figure clears them all — otherwise a stale 95 from an
+   * earlier certificate would keep counting against a figure that no longer mentions it.
    */
   async certify(
     ctx: RlsContext,
     userId: string | null,
     packageId: string,
-    input: { certifiedAmount: string; remarks?: string | null },
+    input: {
+      certifiedAmount?: string | null;
+      remarks?: string | null;
+      lines?: CertifiedLine[] | null;
+    },
   ): Promise<BillPackageView> {
     await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
@@ -1988,6 +2028,7 @@ export class BillPackageService {
           id: true,
           status: true,
           sequenceNo: true,
+          direction: true,
           clientBillId: true,
           raBillId: true,
         },
@@ -2006,12 +2047,89 @@ export class BillPackageService {
         });
       }
 
+      const byLine = input.lines ?? null;
+      if (
+        byLine &&
+        (pkg.direction !== BillDirection.to_client || !pkg.clientBillId)
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: PACKAGE_ERRORS.certifiedLinesClientOnly,
+          message:
+            'Quantities are certified line by line only on a bill to the client. Certify a ' +
+            'subcontractor’s bill as one figure.',
+        });
+      }
+
+      let certifiedAmount: Prisma.Decimal;
+      if (byLine && pkg.clientBillId) {
+        const bill = await tx.clientBill.findUniqueOrThrow({
+          where: { id: pkg.clientBillId },
+          select: {
+            quotedPercentage: true,
+            lines: {
+              select: {
+                id: true,
+                quantity: true,
+                rate: true,
+                boqTaskItem: { select: { nonBoq: true } },
+              },
+            },
+          },
+        });
+        const billLines = bill.lines.map((line) => ({
+          id: line.id,
+          quantity: line.quantity.toNumber(),
+          rate: line.rate.toNumber(),
+          nonBoq: line.boqTaskItem.nonBoq,
+        }));
+        assertCertifiedLines(billLines, byLine);
+        certifiedAmount = dec(
+          certifiedAmountOf(
+            billLines,
+            byLine,
+            bill.quotedPercentage.toNumber(),
+          ).toFixed(2),
+        );
+        // The whole answer replaces the last one — see the method note.
+        await tx.clientBillLine.updateMany({
+          where: {
+            clientBillId: pkg.clientBillId,
+            id: { notIn: byLine.map((line) => line.lineId) },
+          },
+          data: { certifiedQty: null },
+        });
+        for (const line of byLine) {
+          await tx.clientBillLine.update({
+            where: { id: line.lineId },
+            data: { certifiedQty: line.certifiedQty },
+          });
+        }
+      } else {
+        if (
+          input.certifiedAmount === undefined ||
+          input.certifiedAmount === null
+        ) {
+          throw new BadRequestException(
+            'Give the certified amount, or the certified quantity of each line.',
+          );
+        }
+        certifiedAmount = dec(input.certifiedAmount);
+        if (pkg.clientBillId) {
+          // One figure says nothing line by line; an earlier line-by-line answer no longer stands.
+          await tx.clientBillLine.updateMany({
+            where: { clientBillId: pkg.clientBillId },
+            data: { certifiedQty: null },
+          });
+        }
+      }
+
       const now = new Date();
       await tx.billPackage.update({
         where: { id: pkg.id },
         data: {
           status: BillPackageStatus.certified,
-          certifiedAmount: dec(input.certifiedAmount),
+          certifiedAmount,
           certifiedAt: now,
           certifiedByUserId: userId,
           certifiedRemarks: input.remarks?.trim() || null,
@@ -2025,7 +2143,7 @@ export class BillPackageService {
           where: { id: pkg.clientBillId },
           data: {
             status: ClientBillStatus.certified,
-            certifiedAmount: dec(input.certifiedAmount),
+            certifiedAmount,
             certifiedAt: now,
           },
         });
@@ -2041,6 +2159,90 @@ export class BillPackageService {
       }
     });
     return this.view(ctx, packageId);
+  }
+
+  /**
+   * The lines a certified copy is read against (2026-10-15): every line of a bill to the client
+   * that billed anything, in BOQ order. A line billed at nothing has nothing to certify, and listing
+   * the whole BOQ would bury the dozen lines that were billed among the hundreds that were not.
+   */
+  async certifiedCopyLines(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<{ lines: CertifiedCopyLine[]; quotedPercentage: number }> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          direction: true,
+          status: true,
+          sequenceNo: true,
+          clientBill: {
+            select: {
+              quotedPercentage: true,
+              lines: {
+                where: { quantity: { gt: 0 } },
+                select: {
+                  id: true,
+                  quantity: true,
+                  rate: true,
+                  boqTaskItem: {
+                    select: {
+                      boqNo: true,
+                      taskName: true,
+                      unit: true,
+                      nonBoq: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.direction !== BillDirection.to_client || !pkg.clientBill) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: PACKAGE_ERRORS.certifiedLinesClientOnly,
+          message:
+            'A certified copy is read for quantities only on a bill to the client.',
+        });
+      }
+      const lines = pkg.clientBill.lines
+        .sort((a, b) => compareBoqNo(a.boqTaskItem.boqNo, b.boqTaskItem.boqNo))
+        .map((line) => ({
+          lineId: line.id,
+          boqNo: line.boqTaskItem.boqNo,
+          description: line.boqTaskItem.taskName,
+          unit: line.boqTaskItem.unit,
+          billedQty: line.quantity.toNumber(),
+          rate: line.rate.toNumber(),
+          nonBoq: line.boqTaskItem.nonBoq,
+        }));
+      // The premium the bill was priced at, so the screen can price the certified quantities the
+      // way `certifiedAmountOf` will — a non-BOQ line without it.
+      return {
+        lines,
+        quotedPercentage: pkg.clientBill.quotedPercentage.toNumber(),
+      };
+    });
+  }
+
+  /**
+   * The company a package belongs to (2026-10-14) — where Certify files a subcontractor's certified
+   * copy. The package's own, not the caller's: a cross-company caller may have no company selected,
+   * and a file stored under the wrong company is one its owners cannot read back.
+   */
+  async companyOf(ctx: RlsContext, packageId: string): Promise<string> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { companyId: true },
+      }),
+    );
+    if (!pkg) throw new NotFoundException('Bill package not found');
+    return pkg.companyId;
   }
 
   /**
@@ -2135,7 +2337,10 @@ export class BillPackageService {
         `${packageLabel(pkg.sequenceNo)}${
           counterparty ? ` · ${counterparty}` : ''
         } · ` +
-        `payable ₹${abstract.columns.thisBill.payable}`,
+        // Indian grouping, whole rupees — the queue printed `₹1453401` (2026-10-15).
+        `payable ₹${Math.round(
+          Number(abstract.columns.thisBill.payable),
+        ).toLocaleString('en-IN')}`,
       href: webRoutes.projectBillPackage(pkg.projectId, pkg.id),
       viewPermission: Permission.PROJECT_FINANCIALS,
     });
@@ -2903,6 +3108,9 @@ export class BillPackageService {
         include: {
           deductionLines: { orderBy: { sortOrder: 'asc' } },
           raBill: { select: { workOrderId: true } },
+          clientBill: {
+            select: { certificateFileRef: true, certificateFileName: true },
+          },
           claims: {
             include: {
               clientBillLine: {
@@ -2912,6 +3120,7 @@ export class BillPackageService {
                   amount: true,
                   quantity: true,
                   exceedsScope: true,
+                  certifiedQty: true,
                   boqTaskItem: {
                     select: {
                       id: true,
@@ -3027,6 +3236,8 @@ export class BillPackageService {
           exceedsScope: totals.exceedsScope,
           unpriced: rate.isZero(),
           nonBoq,
+          certifiedQty: client?.certifiedQty?.toFixed(3) ?? null,
+          billLineId: client?.id ?? null,
         };
       });
       const nonBoqClaimed = claims.filter(
@@ -3048,6 +3259,36 @@ export class BillPackageService {
             orderBy: { workDate: 'desc' },
           })
         : null;
+
+      // The certified copy, read only once there is a certification for it to be the copy of. On a
+      // subcontractor's bill it is the newest signed copy on the RA bill — the one Certify filed,
+      // unless somebody filed a better scan after it.
+      const certified = pkg.status === BillPackageStatus.certified;
+      const signedCopy =
+        certified && pkg.raBillId
+          ? await tx.signedCopy.findFirst({
+              where: {
+                subjectType: SignedCopySubject.ra_bill,
+                subjectId: pkg.raBillId,
+              },
+              select: { id: true, fileName: true },
+              orderBy: [{ receivedOn: 'desc' }, { uploadedAt: 'desc' }],
+            })
+          : null;
+      const certifiedCopy: BillPackageView['certifiedCopy'] =
+        certified && pkg.clientBillId && pkg.clientBill?.certificateFileRef
+          ? {
+              kind: 'client_certificate',
+              clientBillId: pkg.clientBillId,
+              fileName: pkg.clientBill.certificateFileName ?? 'certificate',
+            }
+          : signedCopy
+          ? {
+              kind: 'signed_copy',
+              signedCopyId: signedCopy.id,
+              fileName: signedCopy.fileName,
+            }
+          : null;
 
       return {
         id: pkg.id,
@@ -3104,6 +3345,7 @@ export class BillPackageService {
         clientBillId: pkg.clientBillId,
         workOrderId: pkg.raBill?.workOrderId ?? null,
         counterpartyKey: pkg.counterpartyKey,
+        certifiedCopy,
       };
     });
   }

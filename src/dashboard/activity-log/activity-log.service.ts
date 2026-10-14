@@ -14,6 +14,11 @@ import {
   moduleForEntityType,
   visibleEntityTypes,
 } from './module-bucket-mapping';
+import {
+  describeEvent,
+  targetLabelOf,
+  targetLabelsFor,
+} from './activity-descriptions';
 
 /** One row of the Activity Log feed (contracts/dashboard-api.md). */
 export interface ActivityLogEntry {
@@ -21,7 +26,12 @@ export interface ActivityLogEntry {
   actor: string;
   action: AuditAction;
   module: string;
+  /** The record's id, as recorded. */
   target: string | null;
+  /** The record as a reader should see it — its name, or the kind of record (2026-10-15). */
+  targetLabel: string | null;
+  /** A sentence for an event "Viewed"/"Updated" would misdescribe; shown instead of both. */
+  description: string | null;
   timestamp: string;
 }
 
@@ -67,16 +77,21 @@ export class ActivityLogService {
     );
     const hasMore = rows.length > PAGE_SIZE;
     const page_ = rows.slice(0, PAGE_SIZE);
-    const names = await actorNamesFor(
-      this.prisma,
-      page_.map((row) => row.accountId),
-    );
+    const [names, labels] = await Promise.all([
+      actorNamesFor(
+        this.prisma,
+        page_.map((row) => row.accountId),
+      ),
+      targetLabelsFor(this.prisma, page_),
+    ]);
     const entries = page_.map((row) => ({
       id: row.id,
       actor: this.actorOf(row, names),
       action: row.action,
       module: moduleForEntityType(row.entityType),
       target: row.entityId,
+      targetLabel: targetLabelOf(row, labels),
+      description: describeEvent(row),
       timestamp: row.createdAt.toISOString(),
     }));
     return { entries, hasMore };
@@ -93,10 +108,13 @@ export class ActivityLogService {
         orderBy: { createdAt: 'desc' },
       }),
     );
-    const names = await actorNamesFor(
-      this.prisma,
-      rows.map((row) => row.accountId),
-    );
+    const [names, labels] = await Promise.all([
+      actorNamesFor(
+        this.prisma,
+        rows.map((row) => row.accountId),
+      ),
+      targetLabelsFor(this.prisma, rows),
+    ]);
     return rows.map((row) => {
       const { before, after } = this.beforeAfter(row.changes);
       return {
@@ -104,7 +122,13 @@ export class ActivityLogService {
         user: this.actorOf(row, names),
         action: row.action,
         module: moduleForEntityType(row.entityType),
-        entity: `${row.entityType}${row.entityId ? `:${row.entityId}` : ''}`,
+        // The name beside the id, so the export reads as well as the screen and still joins back.
+        entity: [
+          describeEvent(row) ?? targetLabelOf(row, labels),
+          row.entityId ? `(${row.entityType}:${row.entityId})` : row.entityType,
+        ]
+          .filter(Boolean)
+          .join(' '),
         before,
         after,
       };
