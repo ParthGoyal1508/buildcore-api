@@ -487,5 +487,8 @@ export class AlertsRemindersWidget implements WidgetProvider {
   }
 }
 
-/** How many reminders the card shows before "see all" on the Reminders screen. */
-const ALERTS_ON_DASHBOARD = 6;
+/**
+ * How many reminders the card shows before "see all" on the Reminders screen. Five since
+ * 2026-10-15, the same as the approvals card beside it, so the two read alike.
+ */
+const ALERTS_ON_DASHBOARD = 5;
