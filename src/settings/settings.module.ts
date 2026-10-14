@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
+import { PasswordConfirmationService } from '../auth/password-confirmation.service';
 import { ApprovalsModule } from '../approvals/approvals.module';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
@@ -80,6 +81,9 @@ import { CompanySelectionService } from './company-selection/company-selection.s
   ],
   providers: [
     CompaniesService,
+    // Stateless: it only signs and verifies, so a second instance here beside AuthModule's costs
+    // nothing and avoids importing AuthModule into Settings for one class.
+    PasswordConfirmationService,
     CompanyDocumentsService,
     RolesService,
     UsersAdminService,

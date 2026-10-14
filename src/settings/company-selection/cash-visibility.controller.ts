@@ -1,11 +1,29 @@
-import { Body, Controller, Get, Patch, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Headers,
+  Patch,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { AuditAction, AuditEntityType, Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import {
+  CONFIRMATION_TOKEN_HEADER,
+  PasswordConfirmationService,
+} from '../../auth/password-confirmation.service';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -20,6 +38,25 @@ import { CashVisibilityDto } from './dto/cash-visibility.dto';
  * and **read** to see it: the verb decides, so the GET below needs only read. FR-016's "restrict
  * who can change the setting" is that permission, and its "record every change" is the existing
  * audit log, which already carries actor and time.
+ *
+ * ## Super Admin only, behind the caller's own password (2026-10-14)
+ *
+ * The client moved this out of the top bar and into Settings with: "This is a sensitive
+ * permission, so it should stay hidden by default and only Super Admins should be able to reach
+ * it. To reveal it, the Super Admin must enter their own password in Settings."
+ *
+ * So both routes now also require **`CROSS_COMPANY_ACCESS`** — which is what this codebase means
+ * by Super Admin (`rlsContextFor`, `dwr.service.ts`, `users-admin.service.ts` all key the role's
+ * powers to that permission, never to its renameable display name). It is checked here rather than
+ * by adding it to `@RequirePermissions`, because that decorator admits a caller holding **any** of
+ * the listed permissions, and this needs both.
+ *
+ * The **change** additionally requires a live password confirmation from
+ * `POST /auth/confirm-password` in `X-Confirmation-Token`. The interface hides the switch until
+ * the password is entered; this is what makes that more than a hidden switch — a session left
+ * open on somebody's desk cannot flip the setting by calling the API directly. Reading the current
+ * value does not need one: it tells a Super Admin nothing they could not change anyway, and the
+ * interface needs it to show the state it is about to reveal.
  */
 @ApiTags('Settings')
 @ApiBearerAuth()
@@ -30,7 +67,19 @@ export class CashVisibilityController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly passwordConfirmation: PasswordConfirmationService,
   ) {}
+
+  /** Super Admin is `CROSS_COMPANY_ACCESS` — see the class note. */
+  private assertSuperAdmin(caller: AuthenticatedUser): void {
+    if (!caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'SUPER_ADMIN_ONLY',
+        message: 'Only a Super Admin can view or change cash visibility.',
+      });
+    }
+  }
 
   @Get()
   @ApiOperation({ summary: 'Whether cash amounts are currently hidden' })
@@ -38,6 +87,7 @@ export class CashVisibilityController {
     @UserEntity() caller: AuthenticatedUser,
     @Query('companyId') companyId?: string,
   ) {
+    this.assertSuperAdmin(caller);
     const resolved = resolveCompanyId(caller, companyId);
     const company = await withRlsContext(
       this.prisma,
@@ -58,13 +108,23 @@ export class CashVisibilityController {
       'A **display** control. FR-017: nothing is deleted or altered while it is on, and ' +
       'turning it off restores every figure exactly. Amounts are returned as null with ' +
       '`amountHidden: true` beside them rather than as zero — a zero is a figure, and a ' +
-      'spreadsheet summing a column cannot tell one from a hidden value.',
+      'spreadsheet summing a column cannot tell one from a hidden value.\n\n' +
+      'Super Admin only, and only with a live confirmation from ' +
+      '`POST /auth/confirm-password` (purpose `cash-visibility`) in `X-Confirmation-Token`.',
   })
+  @ApiHeader({ name: 'X-Confirmation-Token', required: true })
   async update(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CashVisibilityDto,
+    @Headers(CONFIRMATION_TOKEN_HEADER) confirmationToken?: string,
     @Query('companyId') companyId?: string,
   ) {
+    this.assertSuperAdmin(caller);
+    this.passwordConfirmation.assertConfirmed(
+      confirmationToken,
+      caller.id,
+      'cash-visibility',
+    );
     const resolved = resolveCompanyId(caller, companyId);
     const updated = await withRlsContext(
       this.prisma,
@@ -83,7 +143,10 @@ export class CashVisibilityController {
       entityType: AuditEntityType.COMPANY,
       action: AuditAction.UPDATE,
       entityId: resolved,
-      changes: { hideCashTransactions: dto.hideCashTransactions },
+      changes: {
+        hideCashTransactions: dto.hideCashTransactions,
+        confirmedByPassword: true,
+      },
       accountId: caller.id,
       companyId: resolved,
       ipAddress: 'settings/cash-visibility',

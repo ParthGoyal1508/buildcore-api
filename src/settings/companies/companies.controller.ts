@@ -9,6 +9,7 @@ import {
   Res,
   UseGuards,
   Put,
+  Query,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -192,12 +193,37 @@ export class CompaniesController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Res() res: Response,
+    @Query('v') requestedVersion?: string,
   ): Promise<void> {
-    const { bytes, contentType } = await this.companiesService.getLogo(
+    const { bytes, contentType, version } = await this.companiesService.getLogo(
       caller,
       id,
     );
     res.setHeader('Content-Type', contentType);
+    res.setHeader('ETag', `"logo-${version}"`);
+    /**
+     * Cache headers (2026-10-14 — "the company logo takes too long to load when switching
+     * companies").
+     *
+     * A request that names the version currently in force (`?v=`, from the selectable-companies
+     * list) is asking for bytes that can never change under that URL — a new upload is a new
+     * version and so a new URL — so it may be kept for a year without revalidating. `private`,
+     * because the image sits behind the session: a browser may keep it, a shared proxy may not.
+     *
+     * Anything else (no `v`, or a stale one) gets `no-cache` with the ETag: still storable, but
+     * checked each time, so a client holding an outdated URL converges on the new logo with a
+     * 304-sized round trip rather than a full download.
+     */
+    res.setHeader(
+      'Cache-Control',
+      requestedVersion === version
+        ? 'private, max-age=31536000, immutable'
+        : 'private, no-cache',
+    );
+    if (res.req.headers['if-none-match'] === `"logo-${version}"`) {
+      res.status(304).end();
+      return;
+    }
     res.status(200).send(bytes);
   }
 

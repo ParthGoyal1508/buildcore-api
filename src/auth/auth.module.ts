@@ -10,6 +10,7 @@ import { JwtStrategy } from './jwt.strategy';
 import { RefreshTokenService } from './refresh-token.service';
 import { RefreshTokenCleanupCron } from './refresh-token-cleanup.cron';
 import { AuditLogService } from './audit-log.service';
+import { PasswordConfirmationService } from './password-confirmation.service';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { SecurityConfig } from '../common/configs/config.interface';
 
@@ -39,7 +40,8 @@ import { SecurityConfig } from '../common/configs/config.interface';
     RefreshTokenService,
     RefreshTokenCleanupCron,
     AuditLogService,
+    PasswordConfirmationService,
   ],
-  exports: [JwtAuthGuard, PermissionsGuard],
+  exports: [JwtAuthGuard, PermissionsGuard, PasswordConfirmationService],
 })
 export class AuthModule {}

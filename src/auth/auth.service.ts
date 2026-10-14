@@ -1,5 +1,6 @@
 import { PrismaService } from 'nestjs-prisma';
 import {
+  AuditAction,
   AuditEntityType,
   CredentialOrigin,
   Permission,
@@ -24,6 +25,10 @@ import { SecurityConfig } from '../common/configs/config.interface';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { AuthenticatedUser, toAuthenticatedUser } from './authenticated-user';
 import { SESSION_EXPIRED, SESSION_REVOKED } from './session-error-codes';
+import {
+  ConfirmationPurpose,
+  PasswordConfirmationService,
+} from './password-confirmation.service';
 
 const GENERIC_INVALID_CREDENTIALS = 'Invalid email or password';
 
@@ -53,6 +58,7 @@ export class AuthService {
     private readonly refreshTokenService: RefreshTokenService,
     private readonly auditLogService: AuditLogService,
     private readonly emailService: EmailService,
+    private readonly passwordConfirmation: PasswordConfirmationService,
   ) {}
 
   private accessTokenFor(user: AuthenticatedUser): string {
@@ -303,6 +309,97 @@ export class AuthService {
         }),
     );
     return user ? toAuthenticatedUser(user) : null;
+  }
+
+  /**
+   * Re-checks the signed-in caller's own password before a sensitive act and returns a
+   * short-lived confirmation for it (2026-10-14 — "To reveal it, the Super Admin must enter
+   * their own password in Settings").
+   *
+   * **The same brute-force rules as sign-in.** A session left open on a shared machine is
+   * exactly the attacker this exists to stop, so a wrong password here counts toward the same
+   * lockout counter `login()` keeps — otherwise this endpoint would be a password-guessing
+   * channel that never locks. A locked account is refused before the password is looked at,
+   * as at sign-in. The controller adds the per-address rate limit sign-in already has.
+   *
+   * **Every attempt is audited.** A refusal is recorded as a `LOGIN_FAILURE`, so it surfaces
+   * wherever failed sign-ins are already watched; a success as a read of the caller's own
+   * account, with the purpose it was spent on.
+   *
+   * **403, never 401**, for every refusal — see `PasswordConfirmationService` for why a 401
+   * would sign the user out.
+   */
+  async confirmPassword(
+    caller: AuthenticatedUser,
+    password: string,
+    purpose: ConfirmationPurpose,
+    ipAddress: string,
+  ): Promise<{ confirmationToken: string; expiresAt: string }> {
+    const required = this.passwordConfirmation.requiredPermission(purpose);
+    if (!required || !caller.permissions.includes(required)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'CONFIRMATION_NOT_PERMITTED',
+        message:
+          'Your role does not include the setting this confirmation is for.',
+      });
+    }
+
+    if (caller.lockedUntil && caller.lockedUntil > new Date()) {
+      throw new HttpException(
+        {
+          message: `Account temporarily locked. Try again after ${caller.lockedUntil.toISOString()}.`,
+        },
+        423,
+      );
+    }
+
+    const valid = await this.passwordService.validatePassword(
+      password,
+      caller.password,
+    );
+    if (!valid) {
+      const { maxAttempts, durationMinutes } =
+        this.configService.get<SecurityConfig>('security').lockout;
+      await this.registerFailedAttempt(caller, maxAttempts, durationMinutes);
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.LOGIN_FAILURE,
+        {
+          accountId: caller.id,
+          companyId: caller.companyId,
+          ipAddress,
+          changes: { event: 'password_confirmation_failed', purpose },
+        },
+      );
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'PASSWORD_INCORRECT',
+        message: 'That password is not correct.',
+      });
+    }
+
+    if (caller.consecutiveFailures > 0) {
+      // A correct password clears the count, exactly as a successful sign-in does — or a few
+      // typos spread over a week would lock somebody out on their next honest slip.
+      await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.user.update({
+          where: { id: caller.id },
+          data: { consecutiveFailures: 0 },
+        }),
+      );
+    }
+
+    await this.auditLogService.record({
+      entityType: AuditEntityType.USER_ACCOUNT,
+      action: AuditAction.READ,
+      entityId: caller.id,
+      accountId: caller.id,
+      companyId: caller.companyId,
+      ipAddress,
+      changes: { event: 'password_confirmed', purpose },
+    });
+
+    return this.passwordConfirmation.issue(caller.id, purpose);
   }
 
   /**

@@ -408,14 +408,40 @@ describe('Company selection and cash visibility (e2e)', () => {
   });
 
   it('hides cash amounts when the company asks, and alters no data (FR-014, FR-017)', async () => {
+    // A Super Admin (`CROSS_COMPANY_ACCESS`), and only behind a password confirmation
+    // (2026-10-14) — the client moved the switch into Settings, Super Admin only.
     const admin = await makeUser('cashadmin', companyA, [
       Permission.COMPANY_SETTINGS,
       Permission.PROJECTS,
+      Permission.CROSS_COMPANY_ACCESS,
     ]);
+
+    // No confirmation: refused, and with a 403 rather than the 401 that signs a client out.
+    await http()
+      .patch('/settings/cash-visibility')
+      .set(auth(admin.token))
+      .send({ hideCashTransactions: true })
+      .expect(403);
+
+    await http()
+      .post('/auth/confirm-password')
+      .set(auth(admin.token))
+      .send({ password: 'wrong-password', purpose: 'cash-visibility' })
+      .expect(403);
+
+    const confirmed = await http()
+      .post('/auth/confirm-password')
+      .set(auth(admin.token))
+      .send({ password: 'secret42', purpose: 'cash-visibility' })
+      .expect(200);
+    const confirmation = {
+      'X-Confirmation-Token': confirmed.body.confirmationToken as string,
+    };
 
     await http()
       .patch('/settings/cash-visibility')
       .set(auth(admin.token))
+      .set(confirmation)
       .send({ hideCashTransactions: true })
       .expect(200);
 
@@ -436,11 +462,12 @@ describe('Company selection and cash visibility (e2e)', () => {
     await http()
       .patch('/settings/cash-visibility')
       .set(auth(admin.token))
+      .set(confirmation)
       .send({ hideCashTransactions: false })
       .expect(200);
   });
 
-  it('refuses the toggle to a caller without COMPANY_SETTINGS (FR-016)', async () => {
+  it('refuses the toggle to a caller who is not a Super Admin (FR-016, 2026-10-14)', async () => {
     const res = await http()
       .patch('/settings/cash-visibility')
       .set(auth(singleToken))
