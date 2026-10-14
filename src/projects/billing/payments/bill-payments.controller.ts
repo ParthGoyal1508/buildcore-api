@@ -3,7 +3,9 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -26,7 +28,12 @@ import { PermissionsGuard } from '../../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../../settings/company-scope';
 import { BillPaymentsService } from './bill-payments.service';
-import { RecordPaymentDto, UploadSignedCopyDto } from './dto/bill-payment.dto';
+import {
+  RecordPaymentDto,
+  SetPayeeBankDto,
+  UploadSignedCopyDto,
+} from './dto/bill-payment.dto';
+import { PaymentAdviceService } from './payment-advice.service';
 import { SignedCopiesService } from './signed-copies.service';
 
 /**
@@ -49,6 +56,7 @@ export class BillPaymentsController {
   constructor(
     private readonly payments: BillPaymentsService,
     private readonly signedCopies: SignedCopiesService,
+    private readonly advice: PaymentAdviceService,
   ) {}
 
   // ── Payments ─────────────────────────────────────────────────────────────
@@ -82,6 +90,80 @@ export class BillPaymentsController {
       dto,
       { userId: caller.id },
     );
+  }
+
+  @Get('projects/ra-bills/:raBillId/payee')
+  @ApiOperation({
+    summary:
+      'Who a bill is paid to, with the bank details its payment advice will print',
+    description: '`missing` names the bank fields the vendor record lacks.',
+  })
+  async payee(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('raBillId') raBillId: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.advice.payeeFor(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      raBillId,
+    );
+  }
+
+  @Patch('projects/ra-bills/:raBillId/payee/bank')
+  @ApiOperation({
+    summary: 'Fill in the payee’s bank details from the bill being paid',
+    description:
+      'Written to the vendor record, so the next advice to the same vendor has them too.',
+  })
+  async setPayeeBank(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('raBillId') raBillId: string,
+    @Body() dto: SetPayeeBankDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.advice.setPayeeBank(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      raBillId,
+      dto,
+    );
+  }
+
+  @Get('projects/ra-bill-payments/:paymentId/advice.:format')
+  @ApiOperation({
+    summary: 'The payment advice for one payment, as PDF or Word',
+    description:
+      '`format` is `pdf` or `docx`. Carries the company’s name, logo and registered address, the ' +
+      'vendor’s bank details from their record, and the payment’s bank reference and transaction ' +
+      'number. Only for a certified bill.',
+  })
+  async paymentAdvice(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('paymentId') paymentId: string,
+    @Param('format') format: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ): Promise<void> {
+    if (format !== 'pdf' && format !== 'docx') {
+      throw new NotFoundException(
+        `No ${format} rendering of a payment advice.`,
+      );
+    }
+    const { bytes, filename } = await this.advice.documentFor(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      paymentId,
+      format,
+    );
+    res.setHeader(
+      'Content-Type',
+      format === 'pdf'
+        ? 'application/pdf'
+        : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(bytes);
   }
 
   @Delete('projects/ra-bill-payments/:paymentId')

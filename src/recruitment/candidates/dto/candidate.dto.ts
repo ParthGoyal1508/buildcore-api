@@ -41,6 +41,21 @@ export class CreateCandidateDto {
   @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(120) fullName!: string;
   @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(20) phone!: string;
   @ApiProperty() @IsEmail() email!: string;
+  /**
+   * Both printed on the offer letter and carried onto the employee at joining
+   * (`address` becomes their permanent address). Optional: a candidate is often
+   * entered from a phone call, and the letter lets HR type what is missing.
+   */
+  @ApiPropertyOptional({ description: 'Father’s name, as letters print it.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  fatherName?: string;
+  @ApiPropertyOptional({ description: 'Postal address, one line.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string;
   @ApiProperty()
   @IsNumber({ maxDecimalPlaces: 1 })
   @Min(0)

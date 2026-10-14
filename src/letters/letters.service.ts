@@ -6,7 +6,12 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  LetterFieldSource,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { ApprovalService } from '../approvals/approvals.service';
 import { AuditLogService } from '../auth/audit-log.service';
@@ -14,6 +19,10 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
 import { DocumentTypesService } from '../settings/reference-data/document-types.service';
+import {
+  LetterFieldView,
+  LetterKindFieldsService,
+} from '../settings/letter-kinds/letter-kind-fields.service';
 import { LetterKindsService } from '../settings/letter-kinds/letter-kinds.service';
 import { LetterTemplatesService } from '../settings/letter-templates/letter-templates.service';
 import { SignatoriesService } from '../settings/signatories/signatories.service';
@@ -26,6 +35,7 @@ import {
   SIGNATORY_REQUIRED,
 } from './letter-error-codes';
 import { permissionForKind } from './letter-permissions';
+import { LetterRecordSources } from './letter-record-sources';
 import { formatLetterDate, renderLetterPdf } from './letter-pdf.renderer';
 import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
@@ -61,6 +71,30 @@ export interface IssuedLetterView {
   countersignedAt: Date | null;
   requiresApproval: boolean;
 }
+
+/** One declared field with the value the records give it — what the compose form opens with. */
+export interface PrefilledLetterField {
+  token: string;
+  label: string;
+  sourceType: LetterFieldSource;
+  isRequired: boolean;
+  /** `''` when no record holds it: HR types it, or the letter is refused at issue if required. */
+  value: string;
+}
+
+export interface LetterPrefillView {
+  letterKindKey: string;
+  letterKindLabel: string;
+  fields: PrefilledLetterField[];
+}
+
+/** Who a letter is about, for reading the records its fields resolve against. */
+interface LetterRecipient {
+  employeeId?: string | null;
+  candidateId?: string | null;
+}
+
+type RlsCtx = ReturnType<typeof rlsContextFor>;
 
 type LetterRow = Prisma.IssuedLetterGetPayload<{
   include: { letterKind: true };
@@ -115,7 +149,68 @@ export class LettersService {
     private readonly documentTypes: DocumentTypesService,
     private readonly signatories: SignatoriesService,
     private readonly approvals: ApprovalService,
+    private readonly fields: LetterKindFieldsService,
+    private readonly records: LetterRecordSources,
   ) {}
+
+  /**
+   * The compose form, filled in from the records (2026-10-13).
+   *
+   * Every field the kind declares, each with the value the employee, candidate and company
+   * records give it — so HR opens a letter that already says who it is to, at what
+   * designation, on what pay, and edits only what the system cannot know. A `manual`
+   * field, and a record field nobody holds, come back as `''`.
+   *
+   * **Never refuses for a missing value.** This is the form, not the letter: a blank here
+   * is a question for HR, and `compose` is where a required blank becomes a refusal. The
+   * per-kind permission is checked all the same, because the values are the employee's pay
+   * and exit figures and the kind's permission is what decides who may read them in a
+   * letter.
+   */
+  async prefill(
+    caller: AuthenticatedUser,
+    query: {
+      letterKindKey: string;
+      employeeId?: string;
+      candidateId?: string;
+    },
+  ): Promise<LetterPrefillView> {
+    const companyId = this.companyOf(caller);
+    const ctx = rlsContextFor(caller);
+    const kind = await this.kinds.requireByKey(
+      ctx,
+      companyId,
+      query.letterKindKey,
+    );
+    this.assertMayActOnKind(caller, kind.key);
+    if (query.employeeId && query.candidateId) {
+      throw new BadRequestException(
+        'A letter is to an employee or to a candidate, not both.',
+      );
+    }
+
+    const declared = await this.fields.fieldsFor(ctx, companyId, kind.id);
+    const records = await this.recordsFor(caller, ctx, companyId, query);
+    // Resolved as if nothing were required: the point is to show what is known, and the
+    // refusal belongs to the moment somebody tries to issue with a gap.
+    const values = this.fields.resolve(
+      declared.map((field) => ({ ...field, isRequired: false })),
+      records,
+      {},
+    );
+
+    return {
+      letterKindKey: kind.key,
+      letterKindLabel: kind.label,
+      fields: declared.map((field) => ({
+        token: field.token,
+        label: field.label,
+        sourceType: field.sourceType,
+        isRequired: field.isRequired,
+        value: values[field.token] ?? '',
+      })),
+    };
+  }
 
   /**
    * Compose a letter, and issue it when nothing is gating it (FR-015a).
@@ -154,6 +249,23 @@ export class LettersService {
     );
     await this.assertTemplateIsRenderable(companyId, template.bodyTemplate);
 
+    // Resolved before the row is written, for a kind that issues straight away: a letter
+    // missing a required value is refused here rather than left behind as a composed row
+    // nobody asked for. A gated kind is resolved again at `issue`, once its chain completes
+    // — the records may well have moved on by then, and the letter should say what is
+    // true on the day it goes out.
+    const gated = Boolean(kind.requiresApproval && kind.approvalActionType);
+    const variables = gated
+      ? {}
+      : await this.finalVariables(
+          caller,
+          ctx,
+          companyId,
+          kind.id,
+          dto,
+          dto.variables ?? {},
+        );
+
     const row = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.issuedLetter.create({
         data: {
@@ -181,7 +293,7 @@ export class LettersService {
       return toView(row);
     }
 
-    return this.issue(caller, row.id, dto.variables);
+    return this.issueResolved(caller, companyId, ctx, row, variables);
   }
 
   /**
@@ -195,22 +307,37 @@ export class LettersService {
   async issue(
     caller: AuthenticatedUser,
     letterId: string,
-    variables: Record<string, string>,
+    variables: Record<string, string> = {},
   ): Promise<IssuedLetterView> {
     const companyId = this.companyOf(caller);
     const ctx = rlsContextFor(caller);
     const letter = await this.requireLetter(ctx, companyId, letterId);
     this.assertMayActOnKind(caller, letter.letterKind.key);
+    this.assertNotIssued(letter);
 
-    if (letter.issuedAt !== null) {
-      throw new ConflictException({
-        statusCode: 409,
-        message:
-          'This letter has already been issued. Correcting an issued letter is a ' +
-          'reissue, which supersedes it and keeps both versions retrievable.',
-        code: LETTER_ALREADY_ISSUED,
-      });
-    }
+    // Re-read from the letter's own recipient, which is what keeps a letter composed
+    // before pre-fill existed — or composed weeks ago and held in an approval chain —
+    // issuable with nothing but the values HR wants to override.
+    const resolved = await this.finalVariables(
+      caller,
+      ctx,
+      companyId,
+      letter.letterKindId,
+      letter,
+      variables,
+    );
+    return this.issueResolved(caller, companyId, ctx, letter, resolved);
+  }
+
+  /** Issue with the final variables already resolved — shared by `compose` and `issue`. */
+  private async issueResolved(
+    caller: AuthenticatedUser,
+    companyId: string,
+    ctx: RlsCtx,
+    letter: LetterRow,
+    variables: Record<string, string>,
+  ): Promise<IssuedLetterView> {
+    this.assertNotIssued(letter);
 
     if (
       letter.letterKind.requiresApproval &&
@@ -291,6 +418,16 @@ export class LettersService {
     }
 
     const signatoryId = dto.signatoryId ?? original.signatoryId;
+    // Re-resolved from the records, with the correction typed over them — so a reissue
+    // after a pay revision carries the new figures without HR retyping the whole letter.
+    const variables = await this.finalVariables(
+      caller,
+      ctx,
+      companyId,
+      original.letterKindId,
+      original,
+      dto.variables ?? {},
+    );
     // **The reference does not change.** A reissue is the same letter corrected, and
     // version 2 of PRPL/HR/2026-27/0007 is what the recipient has to be able to match
     // against the copy they were sent. A new number would read as a second letter.
@@ -302,7 +439,7 @@ export class LettersService {
       ctx,
       companyId,
       { ...original, signatoryId, referenceNo: original.referenceNo },
-      dto.variables,
+      variables,
     );
 
     const created = await withRlsContext(this.prisma, ctx, async (tx) => {
@@ -455,6 +592,111 @@ export class LettersService {
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
+
+  /**
+   * The values a letter is rendered with: the records first, anything HR typed over them.
+   *
+   * A non-empty supplied value wins over the record for the same token — that is the
+   * "HR may override any of them" half of pre-fill — and an empty one does not, so a form
+   * submitted with a field cleared falls back to the record rather than printing a blank.
+   * The overridden fields are resolved as `manual`, which is what they now are: typed.
+   *
+   * `resolve()` then refuses a required field nobody could supply, with
+   * `LETTER_REQUIRED_FIELD_UNRESOLVED` naming it.
+   *
+   * Supplied values for tokens the kind does not declare are passed through untouched. A
+   * kind with no declared fields — a work order defined before field declarations existed
+   * — renders from `variables` exactly as it always did.
+   */
+  private async finalVariables(
+    caller: AuthenticatedUser,
+    ctx: RlsCtx,
+    companyId: string,
+    letterKindId: string,
+    recipient: LetterRecipient,
+    supplied: Record<string, string>,
+  ): Promise<Record<string, string>> {
+    const declared = await this.fields.fieldsFor(ctx, companyId, letterKindId);
+    if (declared.length === 0) return { ...supplied };
+
+    const records = await this.recordsFor(caller, ctx, companyId, recipient);
+    const typed = (token: string) =>
+      typeof supplied[token] === 'string' && supplied[token].trim() !== '';
+    const asResolved: LetterFieldView[] = declared.map((field) =>
+      typed(field.token)
+        ? { ...field, sourceType: LetterFieldSource.manual, sourcePath: null }
+        : field,
+    );
+    const resolved = this.fields.resolve(asResolved, records, supplied);
+    return { ...supplied, ...resolved };
+  }
+
+  /**
+   * The records a letter's fields read: its recipient, through whichever business module
+   * registered for it, and the company, read here.
+   *
+   * The company is a `settings` row and this module already reads it for the letterhead
+   * and the reference prefix; it needs no registry. The registered address is joined into
+   * one line, the way a letter prints it.
+   */
+  private async recordsFor(
+    caller: AuthenticatedUser,
+    ctx: RlsCtx,
+    companyId: string,
+    recipient: LetterRecipient,
+  ): Promise<Partial<Record<LetterFieldSource, Record<string, unknown>>>> {
+    const [employee, candidate, company] = await Promise.all([
+      recipient.employeeId
+        ? this.records.resolve(caller, 'employee', recipient.employeeId)
+        : null,
+      recipient.candidateId
+        ? this.records.resolve(caller, 'candidate', recipient.candidateId)
+        : null,
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            name: true,
+            shortCode: true,
+            address: true,
+            city: true,
+            state: true,
+            pinCode: true,
+          },
+        }),
+      ),
+    ]);
+
+    const records: Partial<Record<LetterFieldSource, Record<string, unknown>>> =
+      {};
+    if (employee) records.employee = employee;
+    if (candidate) records.candidate = candidate;
+    if (company) {
+      const place = [company.address, company.city, company.state]
+        .map((part) => part?.trim())
+        .filter(Boolean)
+        .join(', ');
+      records.company = {
+        name: company.name,
+        shortCode: company.shortCode,
+        address: company.pinCode
+          ? `${place}${place ? ' - ' : ''}${company.pinCode}`
+          : place,
+      };
+    }
+    return records;
+  }
+
+  private assertNotIssued(letter: { issuedAt: Date | null }): void {
+    if (letter.issuedAt === null) return;
+    throw new ConflictException({
+      statusCode: 409,
+      message:
+        'This letter has already been issued. Correcting an issued letter is a ' +
+        'reissue, which supersedes it and keeps both versions retrievable.',
+      code: LETTER_ALREADY_ISSUED,
+    });
+  }
 
   private async render(
     ctx: ReturnType<typeof rlsContextFor>,

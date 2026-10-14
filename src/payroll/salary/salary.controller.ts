@@ -77,10 +77,17 @@ export class SalaryController {
   ): Promise<void> {
     // Rendered from the value `getSlip` returns, not from a second query, so the
     // PDF can never show different figures from the JSON (research.md §7).
-    const slip = await this.salary.getSlip(callerFrom(user, request), period);
+    // The letterhead is fetched beside the slip rather than carried in it: the view is the JSON
+    // response too, and image bytes do not belong there.
+    const caller = callerFrom(user, request);
+    const [slip, letterhead] = await Promise.all([
+      this.salary.getSlip(caller, period),
+      this.salary.letterheadFor(caller),
+    ]);
     const pdf = await this.pdf.render(
       slip,
       `${user.firstname ?? ''} ${user.lastname ?? ''}`.trim(),
+      letterhead,
     );
 
     response.setHeader('Content-Type', 'application/pdf');

@@ -135,40 +135,61 @@ export class OfferService {
     return this.toView(created);
   }
 
-  /** Renders the offer letter and issues the offer, advancing the candidate. */
+  /**
+   * Renders the offer letter and issues the offer, advancing the candidate.
+   *
+   * Three steps rather than one transaction (2026-10-14). The letter is composed by
+   * `LettersService`, which commits in its own transactions — it allocates a reference
+   * number, renders the PDF on the company letterhead and stores it — so it cannot run inside
+   * the offer's. The offer is therefore validated, the letter generated, and the offer issued
+   * in a second transaction that re-checks it is still a draft. A letter whose offer then
+   * fails to issue stays on file unattached, which is visible and harmless; an offer marked
+   * issued with no letter would be neither.
+   */
   async generate(
     caller: AuthenticatedUser,
     offerId: string,
     ipAddress: string,
+    options: { variables?: Record<string, string>; signatoryId?: string } = {},
   ) {
+    const loadDraft = async (tx: Prisma.TransactionClient) => {
+      const offer = await tx.offer.findUnique({ where: { id: offerId } });
+      if (!offer || offer.deletedAt) {
+        throw new NotFoundException(`Offer ${offerId} not found`);
+      }
+      assertInScope(caller, offer, `Offer ${offerId}`);
+      if (offer.status !== OfferStatus.draft) {
+        throw new ConflictException('Only a draft offer can be generated');
+      }
+      return offer;
+    };
+
+    const offer = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      loadDraft,
+    );
+    if (
+      offer.outsideBudget &&
+      !caller.permissions.includes(Permission.RECRUITMENT_APPROVE)
+    ) {
+      throw new ForbiddenException(
+        'This offer exceeds the budgeted maximum and needs approval to issue.',
+      );
+    }
+
+    const letterId = await this.letters.generateForOffer(
+      caller,
+      offer,
+      ipAddress,
+      options,
+    );
+
     const issued = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const offer = await tx.offer.findUnique({ where: { id: offerId } });
-        if (!offer || offer.deletedAt) {
-          throw new NotFoundException(`Offer ${offerId} not found`);
-        }
-        assertInScope(caller, offer, `Offer ${offerId}`);
-        if (offer.status !== OfferStatus.draft) {
-          throw new ConflictException('Only a draft offer can be generated');
-        }
-        if (
-          offer.outsideBudget &&
-          !caller.permissions.includes(Permission.RECRUITMENT_APPROVE)
-        ) {
-          throw new ForbiddenException(
-            'This offer exceeds the budgeted maximum and needs approval to issue.',
-          );
-        }
-
-        const letterId = await this.letters.generateForOffer(
-          caller,
-          offer,
-          ipAddress,
-          tx,
-        );
-
+        await loadDraft(tx);
         const candidate = await tx.candidate.findUnique({
           where: { id: offer.candidateId },
         });

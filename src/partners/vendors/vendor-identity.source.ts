@@ -5,6 +5,7 @@ import { withRlsContext } from '../../common/prisma/rls-context';
 import type {
   ProjectVendorIdentitySource,
   VendorBillingIdentity,
+  VendorPaymentIdentity,
 } from '../../projects/portfolio/project-sources.registry';
 import { ProjectSourcesRegistry } from '../../projects/portfolio/project-sources.registry';
 
@@ -70,5 +71,68 @@ export class VendorIdentitySource
         }),
     );
     return vendor ?? null;
+  }
+
+  /** The vendor's bank details, for the payment advice. Same scoping as above. */
+  async getPaymentIdentity(
+    vendorId: string,
+    companyId: string,
+  ): Promise<VendorPaymentIdentity | null> {
+    const vendor = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.vendor.findFirst({
+          where: { id: vendorId, companyId },
+          select: {
+            code: true,
+            name: true,
+            bankName: true,
+            bankBranch: true,
+            bankAccountNumber: true,
+            bankAccountHolderName: true,
+            ifscCode: true,
+          },
+        }),
+    );
+    return vendor ?? null;
+  }
+
+  /**
+   * Fills in bank details from the bill being paid (2026-10-13). Only the fields given change, and
+   * an empty string clears one — the person paying is the one who has the bank's letter in hand.
+   */
+  async setBankDetails(
+    vendorId: string,
+    companyId: string,
+    details: Partial<
+      Pick<
+        VendorPaymentIdentity,
+        | 'bankName'
+        | 'bankBranch'
+        | 'bankAccountNumber'
+        | 'bankAccountHolderName'
+        | 'ifscCode'
+      >
+    >,
+  ): Promise<VendorPaymentIdentity | null> {
+    const data: Record<string, string | null> = {};
+    for (const [key, value] of Object.entries(details)) {
+      if (value === undefined) continue;
+      const trimmed = value?.trim() ?? '';
+      data[key] =
+        trimmed === ''
+          ? null
+          : key === 'ifscCode'
+          ? trimmed.toUpperCase()
+          : trimmed;
+    }
+    await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId },
+      (tx) =>
+        tx.vendor.updateMany({ where: { id: vendorId, companyId }, data }),
+    );
+    return this.getPaymentIdentity(vendorId, companyId);
   }
 }

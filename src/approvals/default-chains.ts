@@ -126,6 +126,18 @@ export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
 export const ACTION_RA_BILL = 'ra_bill';
 
 /**
+ * Approving a bill to the client before it is issued (2026-10-13).
+ *
+ * A subcontractor's bill package goes through `ra_bill`, the chain that has always decided
+ * subcontractor bills; a bill to the client had no chain at all and went out on one person's
+ * click. One Director level by default, configurable per company in Settings → Approvals.
+ */
+export const ACTION_CLIENT_BILL = 'client_bill';
+
+/** The entity a bill package is submitted to the spine as, for either direction. */
+export const ENTITY_BILL_PACKAGE = 'bill_package';
+
+/**
  * Awarding a work order to a subcontractor (028 FR-009).
  *
  * **The control was inverted.** A work order committing the company to several crore went `active`
@@ -287,6 +299,7 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
   // about what the client confirmed and an RA bill is not on it.
   [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  [ACTION_CLIENT_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // 028 FR-009 and FR-010. Both one Director level, for the reason each constant gives. Seeded here
   // so a company gets them on creation like every other chain — a chain installed per company by
   // hand is a configuration visit the deployment should have made.

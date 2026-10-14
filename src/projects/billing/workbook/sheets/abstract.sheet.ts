@@ -20,7 +20,7 @@ export function writeAbstractSheet(
   sheet: ExcelJS.Worksheet,
   view: BillWorkbookView,
 ): void {
-  writeHeaderBlock(sheet, view.header, 'ABSTRACT SHEET');
+  writeHeaderBlock(sheet, view.header, view.abstract.title ?? 'ABSTRACT SHEET');
 
   const head = sheet.addRow([
     '',
@@ -61,15 +61,27 @@ export function writeAbstractSheet(
   ]);
   payable.font = { bold: true };
 
-  const net = sheet.addRow([
-    '',
-    view.abstract.netPayable.label,
-    'Rs.',
-    view.abstract.netPayable.uptoDate,
-    view.abstract.netPayable.uptoPrevious,
-    view.abstract.netPayable.thisMonth,
-  ]);
-  net.font = { bold: true, size: 12 };
+  if (view.abstract.netPayable) {
+    const net = sheet.addRow([
+      '',
+      view.abstract.netPayable.label,
+      'Rs.',
+      view.abstract.netPayable.uptoDate,
+      view.abstract.netPayable.uptoPrevious,
+      view.abstract.netPayable.thisMonth,
+    ]);
+    net.font = { bold: true, size: 12 };
+  }
+  if (view.abstract.amountInWords) {
+    const words = sheet.addRow([
+      '',
+      'Amount In Words',
+      '',
+      view.abstract.amountInWords,
+    ]);
+    words.font = { bold: true };
+    sheet.mergeCells(words.number, 4, words.number, 6);
+  }
 
   // Which tax applied and how that was decided, on the face of the document (FR-016a). A client
   // record carries no state today, so the fallback is the ordinary path on a bill to a client — and

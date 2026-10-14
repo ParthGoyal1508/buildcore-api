@@ -110,6 +110,11 @@ function isAllowed(line: string): boolean {
     return true;
   }
   if (file === 'src/metadata.ts') return true;
+  // A test fixture, not a write (2026-10-14): `{ mode: 'Cash' }` there simulates a payment the
+  // caller recorded, to check the advice says "in cash" rather than claiming a bank credit. Named
+  // by file rather than exempting every spec, so a fixture elsewhere is still looked at.
+  if (file === 'src/projects/billing/payments/payment-advice.spec.ts')
+    return true;
   const trimmed = code.trim();
   if (trimmed.startsWith('*') || trimmed.startsWith('//')) return true;
 

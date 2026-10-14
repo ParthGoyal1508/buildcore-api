@@ -79,6 +79,8 @@ function build(opts: {
         })),
       update: async (args: { data: Record<string, unknown> }) => args.data,
     },
+    // A bill raised on the sheet, not through a package — the old routes still serve it.
+    billPackage: { findFirst: async () => null },
     clientBill: {
       create: async (args: { data: Record<string, unknown> }) => {
         if (opts.duplicateNumber) {
@@ -712,10 +714,13 @@ describe('the breakdown behind a packaged bill’s net', () => {
     package: {
       status,
       workDone: dc('50837.21'),
+      workDeduction: dc('0'),
       releaseWithheld: dc('0'),
       cgstAmount: dc('4575.35'),
       sgstAmount: dc('4575.35'),
       igstAmount: dc('0'),
+      labourCessAmount: dc('0'),
+      gstTdsAmount: dc('0'),
       recoveryDiesel: dc('0'),
       debitAgainstCivil: dc('0'),
       otherRecoveries: dc('0'),
@@ -724,6 +729,8 @@ describe('the breakdown behind a packaged bill’s net', () => {
       retentionAmount: dc('2033.49'),
       performanceSecurity: dc('0'),
       theftWithheld: dc('0'),
+      customRecoveries: dc('0'),
+      customDeductions: dc('0'),
       tdsAmount: dc('1016.74'),
     },
   });

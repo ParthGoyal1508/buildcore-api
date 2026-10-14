@@ -17,6 +17,7 @@ import { UserEntity } from '../common/decorators/user.decorator';
 import {
   ComposeLetterDto,
   CountersignedLetterDto,
+  PrefillLetterQueryDto,
   ReissueLetterDto,
 } from './dto/letter.dto';
 import { LettersService } from './letters.service';
@@ -63,6 +64,24 @@ export class LettersController {
     });
   }
 
+  // Declared before `:id/...` routes for readability; `prefill` cannot collide with them
+  // anyway, since none of them is a bare `GET /letters/:id`.
+  @Get('prefill')
+  @ApiOperation({
+    summary: 'The compose form, pre-filled from the records',
+    description:
+      'Every field the kind declares, with the value the employee, candidate and company ' +
+      'records give it (`""` when nothing does). Never refuses for a missing value — that ' +
+      'happens at compose, with `LETTER_REQUIRED_FIELD_UNRESOLVED`. Requires the kind’s ' +
+      'own permission, as every letter route does.',
+  })
+  async prefill(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: PrefillLetterQueryDto,
+  ) {
+    return this.letters.prefill(caller, query);
+  }
+
   @Post()
   @ApiOperation({
     summary: 'Compose a letter, issuing it when nothing gates it',
@@ -90,7 +109,7 @@ export class LettersController {
     @Param('id') id: string,
     @Body() dto: ReissueLetterDto,
   ) {
-    return this.letters.issue(caller, id, dto.variables);
+    return this.letters.issue(caller, id, dto.variables ?? {});
   }
 
   @Post(':id/reissue')

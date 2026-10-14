@@ -71,6 +71,17 @@ export class CreateEmployeeDto {
   @MaxLength(10)
   title?: string;
 
+  /**
+   * Printed on the appointment, experience and relieving letters ("S/o …"), which is
+   * the only reason it is held. Plain text and optional: not every employee record
+   * comes with one, and a letter that needs it lets HR type it at issue.
+   */
+  @ApiPropertyOptional({ description: 'Father’s name, as letters print it.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  fatherName?: string;
+
   @ApiPropertyOptional({ description: 'YYYY-MM-DD' })
   @IsOptional()
   @IsDateString()

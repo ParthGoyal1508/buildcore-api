@@ -50,6 +50,8 @@ function build(
 
   const tx = {
     $executeRaw: async () => 0,
+    // A bill raised on the sheet, not through a package — the old routes still serve it.
+    billPackage: { findFirst: async () => null },
     clientBill: {
       findFirst: async () => bill,
       findMany: async () => (bill ? [bill] : []),

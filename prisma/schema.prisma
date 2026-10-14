@@ -401,7 +401,7 @@ model Company {
   ///
   /// Null means the product mark is shown, which is the right answer for a company that
   /// has not supplied one — not a gap to refuse anything over.
-  logoRef   String?
+  logoRef String?
 
   /// The company's printed letterhead, as a full-page image (2026-10-11).
   ///
@@ -485,6 +485,18 @@ model Company {
   igstFraction Decimal @default(0.180000) @db.Decimal(8, 6)
   /// Income tax deducted at source on a works contract.
   tdsFraction  Decimal @default(0.020000) @db.Decimal(8, 6)
+
+  /// **Tax deducted at source under GST**, which is a different deduction from `tdsFraction`
+  /// (2026-10-13).
+  ///
+  /// A government client's payment abstract recovers both, each at 2%, on separate lines: income
+  /// tax under the Income Tax Act and GST TDS under section 51. One column holding both would halve
+  /// one of them on every bill, and the two are remitted to different authorities under different
+  /// returns.
+  ///
+  /// The labour cess the same abstract recovers is **not** here — it is `bocwCessRate` above, the
+  /// same statutory 1% this product already configures for 007's cess calculation.
+  gstTdsFraction Decimal @default(0.020000) @db.Decimal(8, 6)
 
   /// The labour wage cycle a payment sheet's period defaults to (013 FR-041) —
   /// independent of the monthly salary `payCycle` above, because daily-wage labour
@@ -2565,6 +2577,15 @@ model BillPackage {
   igstFraction      Decimal @db.Decimal(8, 6)
   tdsFraction       Decimal @db.Decimal(8, 6)
 
+  /// The two a **government client's** payment abstract recovers that a subcontractor's does not
+  /// (2026-10-13). Frozen like every other rate, and zero on a bill to a subcontractor — where the
+  /// deductions are the ones a main contractor makes, not the ones a department withholds.
+  ///
+  /// Defaulted at zero so the migration leaves every bill already issued reproducing exactly as it
+  /// stands. A bill composed after this carries the company's own rates.
+  labourCessFraction Decimal @default(0) @db.Decimal(8, 6)
+  gstTdsFraction     Decimal @default(0) @db.Decimal(8, 6)
+
   /// Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
   ///
   /// The source is stored because a client record carries no `state` today, so for a bill issued to
@@ -2580,10 +2601,19 @@ model BillPackage {
   // which deduction accounts for the difference, and a bucket cannot answer.
 
   workDone        Decimal @default(0) @db.Decimal(18, 2)
+  /// **Taken off the work before tax** — row 1B of a government client's payment abstract, where
+  /// the taxable amount is `1A - 1B` (2026-10-13). Distinct from `releaseWithheld`, which sits
+  /// beside the work in block A and is not taxed: this one changes the base every rate applies to.
+  workDeduction   Decimal @default(0) @db.Decimal(18, 2)
   releaseWithheld Decimal @default(0) @db.Decimal(18, 2)
   cgstAmount      Decimal @default(0) @db.Decimal(18, 2)
   sgstAmount      Decimal @default(0) @db.Decimal(18, 2)
   igstAmount      Decimal @default(0) @db.Decimal(18, 2)
+
+  /// The two statutory recoveries on a bill **to a client**, each a rate over the work done
+  /// (2026-10-13). Zero on a bill to a subcontractor, where neither applies.
+  labourCessAmount Decimal @default(0) @db.Decimal(18, 2)
+  gstTdsAmount     Decimal @default(0) @db.Decimal(18, 2)
 
   recoveryDiesel    Decimal @default(0) @db.Decimal(18, 2)
   debitAgainstCivil Decimal @default(0) @db.Decimal(18, 2)
@@ -2621,10 +2651,13 @@ model BillPackage {
   // whatever. The identity has to be able to fail or it is not worth asserting.
 
   workDoneUptoDate            Decimal @default(0) @db.Decimal(18, 2)
+  workDeductionUptoDate       Decimal @default(0) @db.Decimal(18, 2)
   releaseWithheldUptoDate     Decimal @default(0) @db.Decimal(18, 2)
   cgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
   sgstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
   igstAmountUptoDate          Decimal @default(0) @db.Decimal(18, 2)
+  labourCessAmountUptoDate    Decimal @default(0) @db.Decimal(18, 2)
+  gstTdsAmountUptoDate        Decimal @default(0) @db.Decimal(18, 2)
   recoveryDieselUptoDate      Decimal @default(0) @db.Decimal(18, 2)
   debitAgainstCivilUptoDate   Decimal @default(0) @db.Decimal(18, 2)
   otherRecoveriesUptoDate     Decimal @default(0) @db.Decimal(18, 2)
@@ -2635,6 +2668,30 @@ model BillPackage {
   theftWithheldUptoDate       Decimal @default(0) @db.Decimal(18, 2)
   tdsAmountUptoDate           Decimal @default(0) @db.Decimal(18, 2)
   payableUptoDate             Decimal @default(0) @db.Decimal(18, 2)
+
+  /// The sum of the free-form recovery / deduction lines (`BillPackageDeduction`), this bill and
+  /// cumulative. Subcontractor bills only; block B and block C respectively.
+  customRecoveries         Decimal @default(0) @db.Decimal(18, 2)
+  customDeductions         Decimal @default(0) @db.Decimal(18, 2)
+  customRecoveriesUptoDate Decimal @default(0) @db.Decimal(18, 2)
+  customDeductionsUptoDate Decimal @default(0) @db.Decimal(18, 2)
+
+  /// Approval (the `client_bill` / `ra_bill` chain).
+  submittedAt      DateTime?
+  approvedAt       DateTime?
+  approvedByUserId String?
+
+  /// Recorded by hand once the issued bill has been sent to the counterparty.
+  sharedAt       DateTime?
+  sharedByUserId String?
+  /// Who it went to and how — "accounts@pwd.gov.in, WhatsApp to site engineer".
+  sharedTo       String?
+
+  /// What the counterparty (client) or the company (subcontractor) certified, beside the billed figure.
+  certifiedAmount   Decimal?  @db.Decimal(18, 2)
+  certifiedAt       DateTime?
+  certifiedByUserId String?
+  certifiedRemarks  String?
 
   // --- Frozen statutory header (FR-026, FR-028) ----------------------------------------------
   //
@@ -2686,6 +2743,7 @@ model BillPackage {
 
   claims          BillPackageLineClaim[]
   recoveredDebits BillPackageDebit[]
+  deductionLines  BillPackageDeduction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2721,10 +2779,53 @@ enum BillTaxBasisSource {
 
 enum BillPackageStatus {
   draft
+  /// Sent into the approval chain (`client_bill` or `ra_bill`). Locked against edits until the chain
+  /// finishes or the author withdraws it.
+  pending_approval
+  /// The chain completed. May now be issued — nothing leaves the company unapproved.
+  approved
   issued
   certified
   abandoned
 
+  @@schema("projects")
+}
+
+enum BillDeductionSection {
+  /// Block B of the subcontractor abstract.
+  recovery
+  /// Block C of the subcontractor abstract.
+  deduction
+
+  @@schema("projects")
+}
+
+/// A recovery or deduction line the user adds to a subcontractor bill (2026-10-13).
+///
+/// The fixed rows (diesel, civil, theft…) are one contractor's sheet; every other contractor names
+/// their own. A line's cumulative position is carried by its **label**: the previous issued bill's
+/// line with the same label and section supplies "upto previous", frozen on this line at issue.
+model BillPackageDeduction {
+  id        String @id @default(cuid())
+  companyId String
+
+  packageId String
+  package   BillPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+
+  section   BillDeductionSection
+  label     String
+  amount    Decimal              @db.Decimal(18, 2)
+  sortOrder Int                  @default(0)
+
+  /// Frozen at issue. Null while the bill is not yet issued.
+  uptoPrevious Decimal? @db.Decimal(18, 2)
+  uptoDate     Decimal? @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
+  @@index([packageId])
   @@schema("projects")
 }
 
@@ -2897,6 +2998,19 @@ model RABillPayment {
   /// it differently and a format imposed here would be wrong for the next one.
   reference  String?
   remarks    String?
+
+  /// The bank's own transaction number, distinct from the reference (UTR) — both print on the
+  /// payment advice.
+  transactionNo String?
+  /// Tax deducted at source on this payment, printed on the payment advice. Not subtracted from
+  /// `amount`, which is what was actually paid.
+  tdsAmount     Decimal @default(0) @db.Decimal(18, 2)
+  /// How the money moved — NEFT, RTGS, IMPS, UPI, Cheque, Cash. Printed on the payment advice as
+  /// *Bank Transaction Mode*; finer than `instrument`, which only says bank, cheque or cash.
+  mode          String?
+  /// The advice's *Particulars* — a payment voucher number such as `10/2026-27`. The bill number
+  /// prints when nothing is entered.
+  particulars   String?
 
   /// `shared.User.id`. Bare id — see the schema-level note.
   recordedByUserId String?
@@ -3285,6 +3399,8 @@ model Employee {
   firstName     String?
   lastName      String?
   title         String?
+  /// Printed as "S/O" on HR letters. Not regulated PII; captured at hiring.
+  fatherName    String?
   dob           DateTime?      @db.Date
   gender        Gender?
   maritalStatus MaritalStatus?
@@ -3406,9 +3522,46 @@ model Employee {
   /// 020 FR-011: which location this employee's punches validate against, and its history.
   locationAssignments EmployeeLocationAssignment[]
 
+  /// Pay revisions, oldest first. The increment letter reads the latest one.
+  salaryRevisions SalaryRevision[]
+
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([siteId])
+  @@schema("hr")
+}
+
+/// One pay revision: the heads before and after, and the day it took effect.
+///
+/// The employee's own salary columns stay the figures payroll pays; a revision is the dated
+/// record of why they changed, which is what an increment letter states. Recording one writes
+/// the new heads onto the employee in the same transaction, so the two cannot disagree.
+model SalaryRevision {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  effectiveFrom DateTime @db.Date
+
+  previousBasic            Decimal? @db.Decimal(12, 2)
+  previousHra              Decimal? @db.Decimal(12, 2)
+  previousConveyance       Decimal? @db.Decimal(12, 2)
+  previousSiteAllowance    Decimal? @db.Decimal(12, 2)
+  previousSpecialAllowance Decimal? @db.Decimal(12, 2)
+
+  basic            Decimal? @db.Decimal(12, 2)
+  hra              Decimal? @db.Decimal(12, 2)
+  conveyance       Decimal? @db.Decimal(12, 2)
+  siteAllowance    Decimal? @db.Decimal(12, 2)
+  specialAllowance Decimal? @db.Decimal(12, 2)
+
+  remarks         String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([employeeId, effectiveFrom])
   @@schema("hr")
 }
 
@@ -4849,6 +5002,13 @@ model Vendor {
   city    String?
   state   String?
   pinCode String?
+
+  /// Where the company pays this vendor — printed on the payment advice (2026-10-13).
+  bankName              String?
+  bankBranch            String?
+  bankAccountNumber     String?
+  bankAccountHolderName String?
+  ifscCode              String?
 
   /// Almost always INR. Carried per-vendor because import suppliers are invoiced in
   /// their own currency and the rate at which that was converted must be recorded
@@ -8273,6 +8433,10 @@ model Candidate {
   requisition   Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
 
   fullName             String
+  /// Printed as "S/O" on the offer letter, and carried to the employee at joining.
+  fatherName           String?
+  /// Postal address the offer letter is sent to, carried to the employee at joining.
+  address              String?
   phone                String
   email                String
   totalExperienceYears Decimal  @db.Decimal(4, 1)

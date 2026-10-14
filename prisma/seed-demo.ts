@@ -1350,6 +1350,8 @@ interface CompanySpec {
   gstin: string;
   pan: string;
   emailDomain: string;
+  /** The company's full-page letterhead artwork, relative to the repo root. */
+  letterhead?: string;
   sites: { name: string; lat: number; lng: number; address: string }[];
   clients: { name: string; city: string }[];
   projects: {
@@ -1400,6 +1402,7 @@ const COMPANIES: CompanySpec[] = [
     gstin: '29AAGCP4821H1Z5',
     pan: 'AAGCP4821H',
     emailDomain: 'parthrealcon.com',
+    letterhead: 'docs/Parth_Realcon.jpeg',
     sites: [
       {
         name: 'Whitefield Tech Park — Phase II',
@@ -2367,6 +2370,19 @@ async function main() {
         bonusRate: money(8.33),
       },
     });
+    // Written after the create because the blob is namespaced by the company's id, exactly as
+    // `CompaniesService.setLetterhead` stores it. Local targets only — see `assertTarget`.
+    if (spec.letterhead && TARGET.isLocal) {
+      await prisma.company.update({
+        where: { id: company.id },
+        data: {
+          letterheadRef: await writeBlob(
+            `letterhead/${company.id}`,
+            await fs.readFile(resolvePath(process.cwd(), spec.letterhead)),
+          ),
+        },
+      });
+    }
     console.log(`\n  ${company.name} (${company.shortCode})`);
     await seedCompanyDefaults(
       company.id,

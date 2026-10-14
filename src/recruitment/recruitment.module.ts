@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { HrModule } from '../hr/hr.module';
+import { LettersModule } from '../letters/letters.module';
+import { ProjectsModule } from '../projects/projects.module';
 import { SettingsModule } from '../settings/settings.module';
 import { RecruitmentRefsService } from './recruitment-refs.service';
 import { RecruitmentService } from './recruitment.service';
@@ -19,6 +21,7 @@ import { OnboardingController } from './onboarding/onboarding.controller';
 import { OnboardingService } from './onboarding/onboarding.service';
 import { LetterController } from './letters/letter.controller';
 import { LetterService } from './letters/letter.service';
+import { RecruitmentLetterSource } from './letters/recruitment-letter-source';
 import { ResignationController } from './resignations/resignation.controller';
 import { ResignationService } from './resignations/resignation.service';
 import { RecruitmentReportsController } from './reports/recruitment-reports.controller';
@@ -35,7 +38,10 @@ import { RecruitmentReportsService } from './reports/recruitment-reports.service
  * F&F flows read this module through (FR-065).
  */
 @Module({
-  imports: [SettingsModule, HrModule],
+  // `LettersModule` to register the candidate record (and the resignation half of the
+  // employee record) that letters pre-fill from; `ProjectsModule` for the offer's place of
+  // posting, named through its services (2026-10-13). Neither imports this module back.
+  imports: [SettingsModule, HrModule, LettersModule, ProjectsModule],
   controllers: [
     RequisitionController,
     CandidateController,
@@ -59,6 +65,7 @@ import { RecruitmentReportsService } from './reports/recruitment-reports.service
     LetterService,
     ResignationService,
     RecruitmentReportsService,
+    RecruitmentLetterSource,
     AuditLogService,
   ],
   exports: [RecruitmentService],

@@ -378,6 +378,11 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // substitute. Ran that diff against the index before this commit, which is how
           // this line came to be written in the same commit as the change.
           ':(exclude)src/plant/plant.service.spec.ts',
+          // Owned by the payment advice (2026-10-13, commit 17696c0): the vendor's bank name, branch
+          // and account number, printed on the advice a vendor receives when the company pays a bill.
+          // Fields on the create/update DTO only — no approval path of any kind, and the per-file
+          // `approve()` assertions above still enforce that `src/partners` keeps its own mechanism.
+          ':(exclude)src/partners/vendors/dto/vendor.dto.ts',
         ],
         {
           cwd: REPO_ROOT,

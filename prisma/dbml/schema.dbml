@@ -257,6 +257,16 @@ visible as a difference between two bills rather than as a silent re-derivation 
   sgstFraction Decimal [not null, default: 0.09]
   igstFraction Decimal [not null, default: 0.18]
   tdsFraction Decimal [not null, default: 0.02, note: 'Income tax deducted at source on a works contract.']
+  gstTdsFraction Decimal [not null, default: 0.02, note: '**Tax deducted at source under GST**, which is a different deduction from `tdsFraction`
+(2026-10-13).
+
+A government client\'s payment abstract recovers both, each at 2%, on separate lines: income
+tax under the Income Tax Act and GST TDS under section 51. One column holding both would halve
+one of them on every bill, and the two are remitted to different authorities under different
+returns.
+
+The labour cess the same abstract recovers is **not** here — it is `bocwCessRate` above, the
+same statutory 1% this product already configures for 007\'s cess calculation.']
   labourWageCycle LabourWageCycle [not null, default: 'weekly', note: 'The labour wage cycle a payment sheet\'s period defaults to (013 FR-041) —
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
@@ -1473,6 +1483,13 @@ counterparty.']
   sgstFraction Decimal [not null]
   igstFraction Decimal [not null]
   tdsFraction Decimal [not null]
+  labourCessFraction Decimal [not null, default: 0, note: 'The two a **government client\'s** payment abstract recovers that a subcontractor\'s does not
+(2026-10-13). Frozen like every other rate, and zero on a bill to a subcontractor — where the
+deductions are the ones a main contractor makes, not the ones a department withholds.
+
+Defaulted at zero so the migration leaves every bill already issued reproducing exactly as it
+stands. A bill composed after this carries the company\'s own rates.']
+  gstTdsFraction Decimal [not null, default: 0]
   taxBasis BillTaxBasis [not null, note: 'Which tax applies, **and how that was decided** (FR-016, FR-016a, research §5).
 
 The source is stored because a client record carries no `state` today, so for a bill issued to
@@ -1480,10 +1497,16 @@ a client the fallback to the project\'s flag is the likely path rather than the 
 A fallback recorded and shown to nobody is a tax decision nobody made.']
   taxBasisSource BillTaxBasisSource [not null]
   workDone Decimal [not null, default: 0]
+  workDeduction Decimal [not null, default: 0, note: '**Taken off the work before tax** — row 1B of a government client\'s payment abstract, where
+the taxable amount is `1A - 1B` (2026-10-13). Distinct from `releaseWithheld`, which sits
+beside the work in block A and is not taxed: this one changes the base every rate applies to.']
   releaseWithheld Decimal [not null, default: 0]
   cgstAmount Decimal [not null, default: 0]
   sgstAmount Decimal [not null, default: 0]
   igstAmount Decimal [not null, default: 0]
+  labourCessAmount Decimal [not null, default: 0, note: 'The two statutory recoveries on a bill **to a client**, each a rate over the work done
+(2026-10-13). Zero on a bill to a subcontractor, where neither applies.']
+  gstTdsAmount Decimal [not null, default: 0]
   recoveryDiesel Decimal [not null, default: 0]
   debitAgainstCivil Decimal [not null, default: 0]
   otherRecoveries Decimal [not null, default: 0]
@@ -1503,10 +1526,13 @@ this month are the same row. Recovered-to-date is the `…UptoDate` cumulative b
 target was the only missing half. Nullable because a contract may carry neither.']
   performanceSecurityTotal Decimal
   workDoneUptoDate Decimal [not null, default: 0]
+  workDeductionUptoDate Decimal [not null, default: 0]
   releaseWithheldUptoDate Decimal [not null, default: 0]
   cgstAmountUptoDate Decimal [not null, default: 0]
   sgstAmountUptoDate Decimal [not null, default: 0]
   igstAmountUptoDate Decimal [not null, default: 0]
+  labourCessAmountUptoDate Decimal [not null, default: 0]
+  gstTdsAmountUptoDate Decimal [not null, default: 0]
   recoveryDieselUptoDate Decimal [not null, default: 0]
   debitAgainstCivilUptoDate Decimal [not null, default: 0]
   otherRecoveriesUptoDate Decimal [not null, default: 0]
@@ -1517,6 +1543,21 @@ target was the only missing half. Nullable because a contract may carry neither.
   theftWithheldUptoDate Decimal [not null, default: 0]
   tdsAmountUptoDate Decimal [not null, default: 0]
   payableUptoDate Decimal [not null, default: 0]
+  customRecoveries Decimal [not null, default: 0, note: 'The sum of the free-form recovery / deduction lines (`BillPackageDeduction`), this bill and
+cumulative. Subcontractor bills only; block B and block C respectively.']
+  customDeductions Decimal [not null, default: 0]
+  customRecoveriesUptoDate Decimal [not null, default: 0]
+  customDeductionsUptoDate Decimal [not null, default: 0]
+  submittedAt DateTime [note: 'Approval (the `client_bill` / `ra_bill` chain).']
+  approvedAt DateTime
+  approvedByUserId String
+  sharedAt DateTime [note: 'Recorded by hand once the issued bill has been sent to the counterparty.']
+  sharedByUserId String
+  sharedTo String [note: 'Who it went to and how — "accounts@pwd.gov.in, WhatsApp to site engineer".']
+  certifiedAmount Decimal [note: 'What the counterparty (client) or the company (subcontractor) certified, beside the billed figure.']
+  certifiedAt DateTime
+  certifiedByUserId String
+  certifiedRemarks String
   issuerName String
   issuerGstin String
   issuerPan String
@@ -1550,6 +1591,7 @@ reconstructed from the audit trail.']
   lastRevisionReason String
   claims BillPackageLineClaim [not null]
   recoveredDebits BillPackageDebit [not null]
+  deductionLines BillPackageDeduction [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1558,6 +1600,27 @@ reconstructed from the audit trail.']
   }
 
   Note: 'One bill made into a package, for one period, in one direction (023 FR-001).'
+}
+
+Table BillPackageDeduction {
+  id String [pk]
+  companyId String [not null]
+  packageId String [not null]
+  package BillPackage [not null]
+  section BillDeductionSection [not null]
+  label String [not null]
+  amount Decimal [not null]
+  sortOrder Int [not null, default: 0]
+  uptoPrevious Decimal [note: 'Frozen at issue. Null while the bill is not yet issued.']
+  uptoDate Decimal
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'A recovery or deduction line the user adds to a subcontractor bill (2026-10-13).
+
+The fixed rows (diesel, civil, theft…) are one contractor\'s sheet; every other contractor names
+their own. A line\'s cumulative position is carried by its **label**: the previous issued bill\'s
+line with the same label and section supplies "upto previous", frozen on this line at issue.'
 }
 
 Table BillPackageLineClaim {
@@ -1659,6 +1722,14 @@ deletes, and a cascade here would take the record of money having moved with it.
   reference String [note: 'UTR, cheque number, the reference on an adjustment memo. Free text because every bank spells
 it differently and a format imposed here would be wrong for the next one.']
   remarks String
+  transactionNo String [note: 'The bank\'s own transaction number, distinct from the reference (UTR) — both print on the
+payment advice.']
+  tdsAmount Decimal [not null, default: 0, note: 'Tax deducted at source on this payment, printed on the payment advice. Not subtracted from
+`amount`, which is what was actually paid.']
+  mode String [note: 'How the money moved — NEFT, RTGS, IMPS, UPI, Cheque, Cash. Printed on the payment advice as
+*Bank Transaction Mode*; finer than `instrument`, which only says bank, cheque or cash.']
+  particulars String [note: 'The advice\'s *Particulars* — a payment voucher number such as `10/2026-27`. The bill number
+prints when nothing is entered.']
   recordedByUserId String [note: '`shared.User.id`. Bare id — see the schema-level note.']
   recordedAt DateTime [default: `now()`, not null]
   createdAt DateTime [default: `now()`, not null]
@@ -1941,6 +2012,7 @@ one account per employee, any number of employees with no account.']
   firstName String
   lastName String
   title String
+  fatherName String [note: 'Printed as "S/O" on HR letters. Not regulated PII; captured at hiring.']
   dob DateTime
   gender Gender
   maritalStatus MaritalStatus
@@ -2038,6 +2110,7 @@ somebody can still fix it.']
   salaryAdvances SalaryAdvance [not null]
   punchRefusals PunchRefusal [not null, note: '020 FR-013c: punches refused for this employee.']
   locationAssignments EmployeeLocationAssignment [not null, note: '020 FR-011: which location this employee\'s punches validate against, and its history.']
+  salaryRevisions SalaryRevision [not null, note: 'Pay revisions, oldest first. The increment letter reads the latest one.']
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -2047,6 +2120,33 @@ somebody can still fix it.']
 account to the site, shift, and attendance data that hang off it. A future HR &
 Payroll admin feature extends this (department, designation, joining date)
 rather than redefining it (research.md §9).'
+}
+
+Table SalaryRevision {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  effectiveFrom DateTime [not null]
+  previousBasic Decimal
+  previousHra Decimal
+  previousConveyance Decimal
+  previousSiteAllowance Decimal
+  previousSpecialAllowance Decimal
+  basic Decimal
+  hra Decimal
+  conveyance Decimal
+  siteAllowance Decimal
+  specialAllowance Decimal
+  remarks String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One pay revision: the heads before and after, and the day it took effect.
+
+The employee\'s own salary columns stay the figures payroll pays; a revision is the dated
+record of why they changed, which is what an increment letter states. Recording one writes
+the new heads onto the employee in the same transaction, so the two cannot disagree.'
 }
 
 Table FaceEnrolment {
@@ -2887,6 +2987,11 @@ PRD specifies a free-text section rather than a closed enum.']
   city String
   state String
   pinCode String
+  bankName String [note: 'Where the company pays this vendor — printed on the payment advice (2026-10-13).']
+  bankBranch String
+  bankAccountNumber String
+  bankAccountHolderName String
+  ifscCode String
   vendorCurrency String [not null, default: 'INR', note: 'Almost always INR. Carried per-vendor because import suppliers are invoiced in
 their own currency and the rate at which that was converted must be recorded
 with the vendor rather than inferred later.']
@@ -4748,6 +4853,8 @@ Table Candidate {
   requisitionId String [not null]
   requisition Requisition [not null]
   fullName String [not null]
+  fatherName String [note: 'Printed as "S/O" on the offer letter, and carried to the employee at joining.']
+  address String [note: 'Postal address the offer letter is sent to, carried to the employee at joining.']
   phone String [not null]
   email String [not null]
   totalExperienceYears Decimal [not null]
@@ -5318,9 +5425,16 @@ Enum BillTaxBasisSource {
 
 Enum BillPackageStatus {
   draft
+  pending_approval
+  approved
   issued
   certified
   abandoned
+}
+
+Enum BillDeductionSection {
+  recovery
+  deduction
 }
 
 Enum ClaimProposalSource {
@@ -5991,6 +6105,8 @@ Ref: BillPackage.clientBillId - ClientBill.id [delete: Cascade]
 
 Ref: BillPackage.raBillId - RABill.id [delete: Cascade]
 
+Ref: BillPackageDeduction.packageId > BillPackage.id [delete: Cascade]
+
 Ref: BillPackageLineClaim.packageId > BillPackage.id [delete: Cascade]
 
 Ref: BillPackageLineClaim.clientBillLineId - ClientBillLine.id [delete: Cascade]
@@ -6016,6 +6132,8 @@ Ref: RABillLine.workOrderBoqItemId > WorkOrderBOQItem.id [delete: Restrict]
 Ref: ProjectBudget.projectId > Project.id [delete: Cascade]
 
 Ref: ProjectDocument.projectId > Project.id [delete: Cascade]
+
+Ref: SalaryRevision.employeeId > Employee.id [delete: Cascade]
 
 Ref: FaceEnrolment.employeeId - Employee.id [delete: Cascade]
 

@@ -52,30 +52,29 @@ export class LetterController {
    * TypeScript beside the field declarations they must agree with, and splitting them
    * into SQL is how a token ends up undeclared and rendered as a blank.
    *
-   * **Creates only what is missing.** Safe to call repeatedly; it will not restore the
-   * shipped wording over a template the company has rewritten. The response names what
-   * it made and what it left, so "nothing happened" is distinguishable from "nothing
-   * needed to happen".
+   * **Brings them up to the standard wording** (2026-10-14). The wording of these kinds is
+   * the same for every company: a missing template is created, one that differs in body or
+   * name is rewritten, one that matches is left alone. The application start does the same
+   * for every company, so on a running server this normally reports nothing to change. The
+   * response names what it made, what it rewrote and what it left, so "nothing happened" is
+   * distinguishable from "nothing needed to happen".
+   *
+   * `?replace=true` used to be the opt-in to overwrite; overwriting is now the rule, and the
+   * parameter is ignored if sent.
    */
   @Post('letter-templates/install-standard')
   @RequirePermissions(Permission.SETTINGS)
   @ApiOperation({
     summary: 'Install the standard letter templates this product ships',
     description:
-      'Offer, appointment, relieving, experience, increment and payment advice. ' +
-      'Idempotent: a kind the company already has a template for is **skipped**, ' +
-      'rewritten or not — these are starting values, not managed content.\n\n' +
-      '`?replace=true` overwrites them instead, for a company still holding the short ' +
-      'placeholder bodies this product used to seed. It is an explicit opt-in because ' +
-      'it discards whatever is there, and the response lists what it replaced.',
+      'Offer, appointment, experience, relieving, increment, transfer, termination, F&F ' +
+      'settlement and payment advice. Idempotent: a missing template is **created**, one ' +
+      'whose body or name differs from the standard wording is **replaced**, and one that ' +
+      'already matches is **skipped**. The same synchronisation runs on every application ' +
+      'start, so this normally reports nothing to change.',
   })
-  installStandardTemplates(
-    @UserEntity() caller: AuthenticatedUser,
-    @Query('replace') replace?: string,
-  ) {
-    return this.templates.installStandard(caller, {
-      replace: replace === 'true',
-    });
+  installStandardTemplates(@UserEntity() caller: AuthenticatedUser) {
+    return this.templates.installStandard(caller);
   }
 
   @Get('letter-templates')
@@ -133,7 +132,15 @@ export class LetterController {
   }
 
   @Patch('letter-templates/:id')
-  @ApiOperation({ summary: 'Edit a letter template' })
+  @ApiOperation({
+    summary: 'Edit a letter template',
+    description:
+      'The body and name of a template for a shipped kind with a standard template (offer, ' +
+      'appointment, relieving …) cannot be changed: the wording is the same for every company ' +
+      'and is restored on every start. Such an edit is refused with 409 ' +
+      '`LETTER_TEMPLATE_STANDARD_LOCKED`; `isActive` and `letterheadAssetId` remain editable. ' +
+      'Templates for company-defined kinds are fully editable.',
+  })
   async updateTemplate(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,

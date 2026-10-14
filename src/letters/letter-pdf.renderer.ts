@@ -95,33 +95,45 @@ export interface RenderLetterInput {
 /** One parsed block of the body: a run of prose, or a table. */
 type Block =
   | { kind: 'text'; lines: string[] }
-  | { kind: 'table'; rows: string[][] };
+  | {
+      kind: 'table';
+      rows: string[][];
+      /**
+       * Whether the first row is a heading: true when a `| --- |` separator follows it.
+       * A table without one is a run of label / value rows — the payment advice's bank
+       * details, the F&F sheet's employee block — and printing its first label in bold
+       * makes one arbitrary row look like a column heading.
+       */
+      headed: boolean;
+    };
 
 /**
  * Splits a body into prose and pipe tables.
  *
  * A table is a run of consecutive lines that begin and end with `|`. A row of nothing but
  * dashes and pipes is a header separator and is dropped — it marks the first row as a
- * heading rather than being content.
+ * heading rather than being content, and a table without one has no heading row.
  *
  * Pipe tables rather than a second column on `LetterTemplate`, or a structured annexure
- * type: the salary annexure and the payment advice's particulars are the only two tables
- * the client's documents contain, both are small, and both are already edited as part of
- * the body in the template screen that exists. A schema for them would be a table engine
- * nobody asked for, and the body would then have two editors.
+ * type: the client's tables — the salary annexure, the payment advice's particulars, the
+ * F&F settlement sheet's sections — are small grids of labels and figures, and are already
+ * edited as part of the body in the template screen that exists. A schema for them would
+ * be a table engine nobody asked for, and the body would then have two editors.
  */
 export function parseBlocks(body: string): Block[] {
   const blocks: Block[] = [];
   let text: string[] = [];
   let table: string[][] = [];
+  let headed = false;
 
   const flushText = () => {
     if (text.length) blocks.push({ kind: 'text', lines: text });
     text = [];
   };
   const flushTable = () => {
-    if (table.length) blocks.push({ kind: 'table', rows: table });
+    if (table.length) blocks.push({ kind: 'table', rows: table, headed });
     table = [];
+    headed = false;
   };
 
   for (const line of body.split('\n')) {
@@ -140,7 +152,10 @@ export function parseBlocks(body: string): Block[] {
       .map((c) => c.trim());
     // A separator row carries no content. Dropped rather than rendered as a row of
     // dashes, which is what it looks like if you take it literally.
-    if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+    if (cells.every((c) => /^:?-{2,}:?$/.test(c))) {
+      if (table.length === 1) headed = true;
+      continue;
+    }
     table.push(cells);
   }
   flushText();
@@ -175,13 +190,18 @@ function columnWidths(rows: string[][], measure: (s: string) => number) {
 type Doc = any;
 
 /** Draws one table, breaking it across pages a row at a time. */
-function drawTable(doc: Doc, rows: string[][], newPage: () => void): void {
+function drawTable(
+  doc: Doc,
+  rows: string[][],
+  headed: boolean,
+  newPage: () => void,
+): void {
   doc.fontSize(TABLE_SIZE);
   const widths = columnWidths(rows, (s) => doc.widthOfString(s));
   const bottomLimit = PAGE.height - SAFE.bottom;
 
   rows.forEach((row, rowIndex) => {
-    const isHeading = rowIndex === 0;
+    const isHeading = headed && rowIndex === 0;
     doc.font(isHeading ? 'Helvetica-Bold' : 'Helvetica');
 
     const heights = row.map((cell, i) =>
@@ -308,7 +328,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     for (const block of parseBlocks(input.body)) {
       if (block.kind === 'table') {
         doc.y += 4;
-        drawTable(doc, block.rows, newPage);
+        drawTable(doc, block.rows, block.headed, newPage);
         doc.y += 8;
         continue;
       }

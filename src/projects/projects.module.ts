@@ -21,9 +21,12 @@ import { BillPackageService } from './billing/package/bill-package.service';
 import { DebitNoteService } from './billing/package/debit-note.service';
 import { BillPaymentsController } from './billing/payments/bill-payments.controller';
 import { BillPaymentsService } from './billing/payments/bill-payments.service';
+import { PaymentAdviceRenderer } from './billing/payments/payment-advice.renderer';
+import { PaymentAdviceService } from './billing/payments/payment-advice.service';
 import { SignedCopiesService } from './billing/payments/signed-copies.service';
 import { MeasurementSheetService } from './billing/package/measurement-sheet.service';
 import { PackageReportsService } from './billing/package/package-reports.service';
+import { BillDocxRenderer } from './billing/workbook/bill-docx.renderer';
 import { BillPdfRenderer } from './billing/workbook/bill-pdf.renderer';
 import { BillWorkbookRenderer } from './billing/workbook/bill-workbook.renderer';
 import { DwrPeriodFiguresService } from './dwr/dwr-period-figures.service';
@@ -170,10 +173,13 @@ import { ProjectDocumentUploadController } from './documents/project-document-up
     // 028 FR-020. The countersigned copy, which acknowledges the document rather than only being
     // filed beside it.
     SignedCopiesService,
+    PaymentAdviceService,
+    PaymentAdviceRenderer,
     PackageReportsService,
     BillPackageViewBuilder,
     BillWorkbookRenderer,
     BillPdfRenderer,
+    BillDocxRenderer,
     ImportBatchStore,
     // 022 US5, which 008 specified in August and never built. `BoqService.updateDoneQty` was
     // written then, exported from this module **for this caller**, and had no caller for two

@@ -7,6 +7,11 @@
  */
 export const BILLING_ERRORS = {
   /**
+   * The old sheet's submit, revise or certify, asked of a bill raised through a bill package
+   * (2026-10-14). The package is the one place it is approved, issued and certified.
+   */
+  raisedThroughPackage: 'BILL_RAISED_THROUGH_PACKAGE',
+  /**
    * A BOQ line whose rate is still 0 (FR-002).
    *
    * **Refused rather than billed at zero.** The rate column defaults to 0 because the table was

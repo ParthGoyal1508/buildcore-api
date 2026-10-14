@@ -11,7 +11,7 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { EmailService } from '../../shared/email/email.service';
 import { SalaryPdfService, periodLabel } from '../salary/salary-pdf.service';
-import { slipViewFrom } from '../salary/salary.service';
+import { SalaryService, slipViewFrom } from '../salary/salary.service';
 import { PayrollScheduleService } from './payroll-schedule.service';
 
 /** One row of the delivery report (FR-006). */
@@ -69,6 +69,11 @@ export class SlipDeliveryService {
     private readonly email: EmailService,
     private readonly pdf: SalaryPdfService,
     private readonly schedule: PayrollScheduleService,
+    /**
+     * For the identity block and the letterhead (2026-10-13), so an emailed payslip is the same
+     * document the employee downloads rather than the bare layout it used to be.
+     */
+    private readonly salary: SalaryService,
   ) {}
 
   /**
@@ -237,7 +242,7 @@ export class SlipDeliveryService {
   ): Promise<void> {
     if (employeeIds.length === 0) return;
 
-    const [company, employees, slips] = await Promise.all([
+    const [company, employees, slips, letterhead] = await Promise.all([
       withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
         tx.company.findUnique({
           where: { id: run.companyId },
@@ -252,6 +257,8 @@ export class SlipDeliveryService {
           where: { employeeId: { in: employeeIds }, period: run.period },
         }),
       ),
+      // Once per run, not per employee: one company, one sheet of stationery.
+      this.salary.letterheadForCompany(run.companyId),
     ]);
     const slipOf = new Map(slips.map((s) => [s.employeeId, s]));
     const label = periodLabel(run.period);
@@ -278,8 +285,9 @@ export class SlipDeliveryService {
         // The same `SalarySlipView` the JSON endpoint and the download produce, through the one
         // mapper. Three code paths reading the same rows could still round differently, and a slip
         // that disagrees with the screen is a wage dispute.
-        const view = slipViewFrom(slip, employee.employeeCode);
-        const pdf = await this.pdf.render(view, nameOf(employee));
+        const identity = await this.salary.slipIdentityFor(ctx, employee);
+        const view = slipViewFrom(slip, employee.employeeCode, identity);
+        const pdf = await this.pdf.render(view, nameOf(employee), letterhead);
         await this.email.sendPayslipEmail({
           to: address,
           employeeName: nameOf(employee),

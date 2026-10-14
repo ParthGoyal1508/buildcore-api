@@ -44,6 +44,8 @@ export interface WorkbookHeader {
   billDate: string;
   /** What could not be filled (FR-027). Reported on the workbook, never a refusal. */
   missingFields: string[];
+  /** Which way the bill runs — decides the header's vocabulary. Absent reads as a subcontractor's. */
+  direction?: 'to_client' | 'to_subcontractor';
 }
 
 /** One row of the abstract: a label and its three columns, already rendered (FR-012a). */
@@ -64,9 +66,14 @@ export interface WorkbookAbstractRow {
 }
 
 export interface WorkbookAbstract {
+  /** "PAYMENT ABSTRACT" on a bill to the client, "ABSTRACT SHEET" on a subcontractor's. */
+  title?: string;
   blocks: { title: string; rows: WorkbookAbstractRow[] }[];
   payable: WorkbookAbstractRow;
-  netPayable: WorkbookAbstractRow;
+  /** The subcontractor sheet's closing NET PAYABLE row. Absent on the client's, which has one. */
+  netPayable?: WorkbookAbstractRow | null;
+  /** This bill's payable, spelled out — "Rupees Eleven Lakh … Only". */
+  amountInWords?: string;
   /** Which tax applied and how that was decided, printed so a reviewer can check it (FR-016a). */
   taxBasis: string;
   taxBasisSource: string;

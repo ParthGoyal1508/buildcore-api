@@ -174,6 +174,8 @@ export class CandidateService {
       fullName: row.fullName,
       phone: row.phone,
       email: row.email,
+      fatherName: row.fatherName,
+      address: row.address,
       totalExperienceYears: row.totalExperienceYears.toNumber(),
       currentEmployer: row.currentEmployer,
       currentCtc: row.currentCtc ? row.currentCtc.toNumber() : null,
@@ -202,6 +204,8 @@ export class CandidateService {
       fullName: string;
       phone: string;
       email: string;
+      fatherName?: string;
+      address?: string;
       totalExperienceYears: number;
       currentEmployer?: string;
       currentCtc?: number;
@@ -252,6 +256,8 @@ export class CandidateService {
             fullName: dto.fullName.trim(),
             phone: dto.phone.trim(),
             email: dto.email.trim(),
+            fatherName: dto.fatherName?.trim() || null,
+            address: dto.address?.trim() || null,
             totalExperienceYears: dto.totalExperienceYears,
             currentEmployer: dto.currentEmployer ?? null,
             currentCtc: dto.currentCtc ?? null,

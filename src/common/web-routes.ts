@@ -47,6 +47,14 @@ export const webRoutes = {
     `/dashboard/projects/portfolio/${projectId}/ra-bills`,
 
   /**
+   * One bill package — a client or subcontractor bill — with its approve / reject buttons inline.
+   *
+   * `app/dashboard/projects/portfolio/[id]/bill-packages/[packageId]/page.tsx`.
+   */
+  projectBillPackage: (projectId: string, packageId: string): string =>
+    `/dashboard/projects/portfolio/${projectId}/bill-packages/${packageId}`,
+
+  /**
    * A project's daily work reports, where a submitted one is approved or returned.
    *
    * `app/dashboard/projects/portfolio/[id]/dwr/page.tsx`. The report id is not in the path for

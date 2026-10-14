@@ -1,10 +1,12 @@
+import { rupeesInWords } from '../../common/rupees-in-words';
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { PayrollRunStatus, SalarySlip } from '@prisma/client';
+import { Employee, PayrollRunStatus, SalarySlip } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
+import { CompaniesService } from '../../settings/companies/companies.service';
 
 /** Payroll runs an employee may see a slip for. A `draft` run has no publishable
  * figures — its numbers are still being worked on (FR-024). */
@@ -43,6 +45,37 @@ export interface SlipIdentity {
   panNumber: string | null;
   pfNumber: string | null;
   pfUan: string | null;
+  /**
+   * Added 2026-10-13 for the client's revised payslip (`docs/HR_DOCS/Parth_Realcon_Payslip.docx`),
+   * which prints a father's/spouse's name, the ESI number and a fuller bank block. Optional so a
+   * caller holding an identity built before them still compiles; absent prints an em dash.
+   */
+  fatherName?: string | null;
+  esiNumber?: string | null;
+  bankBranch?: string | null;
+  ifscCode?: string | null;
+  /** The name the bank holds against the account — the bank sheet's own field — not the HR name. */
+  bankAccountHolderName?: string | null;
+}
+
+/** The employee columns the identity block is built from — a full `Employee` row satisfies it. */
+export interface SlipIdentitySource {
+  firstName: string | null;
+  lastName: string | null;
+  companyId: string;
+  departmentId: string | null;
+  designationId: string | null;
+  dateOfJoining: Date | null;
+  bankName: string | null;
+  bankAccountNumberEncrypted: string | null;
+  panEncrypted: string | null;
+  pfNumber: string | null;
+  uan: string | null;
+  fatherName?: string | null;
+  esicNumber?: string | null;
+  bankBranch?: string | null;
+  ifscCode?: string | null;
+  bankAccountHolderName?: string | null;
 }
 
 export interface SalarySlipView {
@@ -129,7 +162,44 @@ export class SalaryService {
      * is **masked** here, unlike on the bank transfer sheet — see `maskAccount`.
      */
     private readonly pii: PiiCipherService,
+    /**
+     * For the letterhead the payslip prints on (2026-10-13). Through the exported settings service
+     * rather than a read of `settings.Company` — Principle I.
+     */
+    private readonly companies: CompaniesService,
   ) {}
+
+  /**
+   * The company stationery the caller's payslip prints on, or null for plain paper (2026-10-13).
+   *
+   * Kept **out of** `SalarySlipView` deliberately: the view is also the JSON response, and image
+   * bytes there would ship a 70 KB letterhead with every payslip the app fetches.
+   */
+  async letterheadFor(caller: Caller): Promise<Buffer | null> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    return this.companies.getLetterheadImage(employee.companyId);
+  }
+
+  /** The same, by company, for slip delivery — which already holds the run's company. */
+  letterheadForCompany(companyId: string): Promise<Buffer | null> {
+    return this.companies.getLetterheadImage(companyId);
+  }
+
+  /**
+   * The identity block for an employee other than the caller — slip delivery's case (2026-10-13).
+   *
+   * Emailed payslips were rendered without it and so printed a different document from the one the
+   * employee downloads. Same builder, so the two cannot drift.
+   */
+  slipIdentityFor(
+    rls: Caller['rls'],
+    employee: SlipIdentitySource,
+  ): Promise<SlipIdentity> {
+    return this.identityFor({ rls } as Caller, employee);
+  }
 
   /** Periods whose run has been processed or paid (FR-024). */
   async getAvailablePeriods(caller: Caller): Promise<string[]> {
@@ -170,7 +240,68 @@ export class SalaryService {
       caller.rls,
       caller.userId,
     );
+    return this.publishedSlipOf(caller, employee, period);
+  }
 
+  /**
+   * Any employee's published slip, for HR (2026-10-14).
+   *
+   * Slip delivery could only email a payslip; HR had no way to look at the one it was sending. The
+   * same rules as the employee's own — published runs only, same 404 — and the same builder, so
+   * HR's copy and the employee's copy are one document. The employee is read under the caller's
+   * RLS context, so another company's id is a 404 like any other.
+   */
+  async getSlipForEmployee(
+    caller: Caller,
+    employeeId: string,
+    period: string,
+  ): Promise<{
+    slip: SalarySlipView;
+    employeeName: string;
+    companyId: string;
+  }> {
+    const employee = await this.employees.getById(caller.rls, employeeId);
+    if (!employee) throw new NotFoundException('Employee not found.');
+    const slip = await this.publishedSlipOf(caller, employee, period);
+    return {
+      slip,
+      employeeName: slip.identity?.employeeName ?? '',
+      companyId: employee.companyId,
+    };
+  }
+
+  /** Published periods with a slip for one employee — the HR picker's options. */
+  async availablePeriodsForEmployee(
+    caller: Caller,
+    employeeId: string,
+  ): Promise<string[]> {
+    const employee = await this.employees.getById(caller.rls, employeeId);
+    if (!employee) throw new NotFoundException('Employee not found.');
+    const [runs, slips] = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      Promise.all([
+        tx.payrollRun.findMany({
+          where: {
+            companyId: employee.companyId,
+            status: { in: [...PUBLISHED_STATUSES] },
+          },
+          select: { period: true },
+          orderBy: { period: 'desc' },
+        }),
+        tx.salarySlip.findMany({
+          where: { employeeId: employee.id },
+          select: { period: true },
+        }),
+      ]),
+    );
+    const owned = new Set(slips.map((s) => s.period));
+    return runs.map((r) => r.period).filter((period) => owned.has(period));
+  }
+
+  private async publishedSlipOf(
+    caller: Caller,
+    employee: Employee,
+    period: string,
+  ): Promise<SalarySlipView> {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({
         where: { companyId: employee.companyId, period },
@@ -214,19 +345,7 @@ export class SalaryService {
    */
   private async identityFor(
     caller: Caller,
-    employee: {
-      firstName: string | null;
-      lastName: string | null;
-      companyId: string;
-      departmentId: string | null;
-      designationId: string | null;
-      dateOfJoining: Date | null;
-      bankName: string | null;
-      bankAccountNumberEncrypted: string | null;
-      panEncrypted: string | null;
-      pfNumber: string | null;
-      uan: string | null;
-    },
+    employee: SlipIdentitySource,
   ): Promise<SlipIdentity> {
     const [company, department, designation] = await Promise.all([
       withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
@@ -287,6 +406,11 @@ export class SalaryService {
       panNumber: this.pii.decrypt(employee.panEncrypted),
       pfNumber: employee.pfNumber,
       pfUan: employee.uan,
+      fatherName: employee.fatherName ?? null,
+      esiNumber: employee.esicNumber ?? null,
+      bankBranch: employee.bankBranch ?? null,
+      ifscCode: employee.ifscCode ?? null,
+      bankAccountHolderName: employee.bankAccountHolderName ?? null,
     };
   }
 }
@@ -403,110 +527,4 @@ function toView(
   };
 }
 
-const ONES = [
-  '',
-  'One',
-  'Two',
-  'Three',
-  'Four',
-  'Five',
-  'Six',
-  'Seven',
-  'Eight',
-  'Nine',
-  'Ten',
-  'Eleven',
-  'Twelve',
-  'Thirteen',
-  'Fourteen',
-  'Fifteen',
-  'Sixteen',
-  'Seventeen',
-  'Eighteen',
-  'Nineteen',
-];
-const TENS = [
-  '',
-  '',
-  'Twenty',
-  'Thirty',
-  'Forty',
-  'Fifty',
-  'Sixty',
-  'Seventy',
-  'Eighty',
-  'Ninety',
-];
-
-/** Under 100, spelled out. */
-function twoDigitsInWords(value: number): string {
-  if (value < 20) {
-    return ONES[value];
-  }
-  const tens = TENS[Math.floor(value / 10)];
-  const ones = ONES[value % 10];
-  return ones ? `${tens} ${ones}` : tens;
-}
-
-/**
- * A non-negative integer in words, on the Indian numbering system.
- *
- * The crore group recurses rather than calling `twoDigitsInWords` directly: a
- * figure of a hundred crore or more has a three-digit crore count, and spelling it
- * with a two-digit speller would silently produce `undefined` in the middle of a
- * payslip.
- */
-function integerInWords(value: number): string {
-  if (value === 0) {
-    return 'Zero';
-  }
-
-  const groups: Array<[number, string]> = [
-    [10_000_000, 'Crore'],
-    [100_000, 'Lakh'],
-    [1_000, 'Thousand'],
-    [100, 'Hundred'],
-  ];
-
-  let remainder = value;
-  const parts: string[] = [];
-  for (const [divisor, label] of groups) {
-    const count = Math.floor(remainder / divisor);
-    if (count > 0) {
-      parts.push(
-        `${
-          count >= 100 ? integerInWords(count) : twoDigitsInWords(count)
-        } ${label}`,
-      );
-      remainder %= divisor;
-    }
-  }
-  if (remainder > 0) {
-    parts.push(twoDigitsInWords(remainder));
-  }
-  return parts.join(' ');
-}
-
-/**
- * A rupee amount in words, on the Indian numbering system (lakh/crore).
- *
- * Not a generic English number speller: an Indian payslip is expected to read
- * "One Lakh Twenty Thousand", and rendering "One Hundred Twenty Thousand" on a
- * statutory wage document would look wrong to every person who receives one.
- */
-export function rupeesInWords(amount: number): string {
-  if (!Number.isFinite(amount)) {
-    return '';
-  }
-  const negative = amount < 0;
-  const absolute = Math.abs(amount);
-  const rupees = Math.floor(absolute);
-  const paise = Math.round((absolute - rupees) * 100);
-
-  const rupeeWords = `${negative ? 'Minus ' : ''}${integerInWords(
-    rupees,
-  )} Rupees`;
-  return paise > 0
-    ? `${rupeeWords} and ${twoDigitsInWords(paise)} Paise Only`
-    : `${rupeeWords} Only`;
-}
+export { rupeesInWords } from '../../common/rupees-in-words';

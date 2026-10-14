@@ -33,6 +33,7 @@ import { LetterKindsService } from './letter-kinds.service';
 import { LetterKindFieldsService } from './letter-kind-fields.service';
 import { UpsertLetterKindFieldDto } from './dto/letter-kind-field.dto';
 import { resolveCompanyId } from '../company-scope';
+import { LETTER_READ_PERMISSIONS } from '../../letters/letter-permissions';
 
 /**
  * Letter kinds as data (017 US5, FR-011, FR-022).
@@ -58,6 +59,8 @@ export class LetterKindsController {
   ) {}
 
   @Get()
+  // Read by the letter composer, so open to anyone who can issue a letter (2026-10-14).
+  @RequirePermissions(...LETTER_READ_PERMISSIONS)
   @ApiOperation({
     summary: 'Every kind this company may use — its own, plus the shipped ones',
     description:

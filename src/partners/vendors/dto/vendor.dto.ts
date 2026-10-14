@@ -214,6 +214,40 @@ export class CreateVendorDto {
   @Matches(/^[0-9]{6}$/, { message: 'pinCode must be 6 digits' })
   pinCode?: string;
 
+  // Where the company pays this vendor — printed on the payment advice (2026-10-13).
+  @ApiPropertyOptional({ example: 'Bank of Baroda' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  bankName?: string;
+
+  @ApiPropertyOptional({ example: 'Deoli' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  bankBranch?: string;
+
+  @ApiPropertyOptional({ example: '09310400000526' })
+  @IsOptional()
+  @Matches(/^[0-9A-Za-z]{6,34}$/, {
+    message: 'bankAccountNumber must be 6 to 34 letters or digits',
+  })
+  bankAccountNumber?: string;
+
+  @ApiPropertyOptional({ example: 'Tirupati Enterprises' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  bankAccountHolderName?: string;
+
+  @ApiPropertyOptional({ example: 'BARB0DEOLIX' })
+  @IsOptional()
+  @Matches(/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/, {
+    message:
+      'ifscCode must look like BARB0DEOLIX — four letters, a zero, six characters',
+  })
+  ifscCode?: string;
+
   @ApiPropertyOptional({ default: 'INR' })
   @IsOptional()
   @IsString()

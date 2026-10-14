@@ -166,8 +166,12 @@ function build(opts: {
             sgstFraction: dec(0.09),
             igstFraction: dec(0.18),
             tdsFraction: dec(0.02),
+            labourCessFraction: dec(0.01),
+            gstTdsFraction: dec(0.02),
             counterpartyKey: 'client-1',
             claims: [],
+            deductionLines: [],
+            revisionCount: 0,
           };
         }
         // The overlap check.
@@ -185,6 +189,8 @@ function build(opts: {
         writes += 1;
         pkgRow = {
           id: 'pkg-1',
+          deductionLines: [],
+          revisionCount: 0,
           projectId: 'p-1',
           direction,
           sequenceNo: args.data.sequenceNo,
@@ -196,6 +202,8 @@ function build(opts: {
           sgstFraction: dec(String(args.data.sgstFraction)),
           igstFraction: dec(String(args.data.igstFraction)),
           tdsFraction: dec(String(args.data.tdsFraction)),
+          labourCessFraction: dec(String(args.data.labourCessFraction)),
+          gstTdsFraction: dec(String(args.data.gstTdsFraction)),
           counterpartyKey: args.data.counterpartyKey,
           taxBasis: args.data.taxBasis,
           taxBasisSource: args.data.taxBasisSource,
@@ -344,6 +352,9 @@ function build(opts: {
       sgstFraction: '0.090000',
       igstFraction: '0.180000',
       tdsFraction: '0.020000',
+      gstTdsFraction: '0.020000',
+      // `bocwCessRate`, widened — the same statutory 1% 007 already configures.
+      labourCessFraction: '0.010000',
     }),
     // Both parties in Rajasthan, as the client's own package has them.
     getBillingIdentity: async () => ({
@@ -370,11 +381,22 @@ function build(opts: {
     }),
   };
 
+  const approvals = {
+    submitted: [] as Record<string, unknown>[],
+    submit: async (input: Record<string, unknown>) => {
+      approvals.submitted.push(input);
+      return {};
+    },
+    abandon: async () => undefined,
+    stateOfSystem: async () => null,
+  };
+
   const service = new BillPackageService(
     prisma as never,
     periodFigures as never,
     companies as never,
     sources as never,
+    approvals as never,
   );
 
   return {
@@ -801,6 +823,7 @@ describe('listing a project’s bill packages', () => {
     };
     return new BillPackageService(
       prisma as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

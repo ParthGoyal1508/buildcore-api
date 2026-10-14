@@ -4,6 +4,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { AuditLogService } from '../auth/audit-log.service';
 import { SettingsModule } from '../settings/settings.module';
 import { LettersController } from './letters.controller';
+import { LetterRecordSources } from './letter-record-sources';
 import { LettersService } from './letters.service';
 
 /**
@@ -22,9 +23,13 @@ import { LettersService } from './letters.service';
 @Module({
   imports: [SettingsModule, ApprovalsModule],
   controllers: [LettersController],
-  providers: [LettersService, AuditLogService],
+  providers: [LettersService, LetterRecordSources, AuditLogService],
   // Exported so project, candidate and vendor screens list their letters through a
   // service method instead of reading `shared.IssuedLetter` themselves (T062).
-  exports: [LettersService],
+  //
+  // `LetterRecordSources` is exported the other way round: `hr` and `recruitment` import
+  // this module to *register into* it, which is how a letter pre-fills from an employee
+  // without this module importing either of them (2026-10-13).
+  exports: [LettersService, LetterRecordSources],
 })
 export class LettersModule {}

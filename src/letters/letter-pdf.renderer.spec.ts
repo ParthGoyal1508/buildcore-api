@@ -89,14 +89,27 @@ describe('letter PDF renderer', () => {
         letterhead: null,
       });
       // pdfkit writes text into a compressed stream, so the glyphs are not greppable.
-      // What is checkable is that the table did not become one long prose paragraph:
-      // against a literal renderer the separator adds a line and the page grows.
-      const withoutSeparator = await renderLetterPdf({
+      // What is checkable is that a second separator changes nothing: against a literal
+      // renderer each one adds a line of dashes and the page grows. (Compared with a
+      // second separator rather than none, because the first one also makes the first
+      // row a bold heading, which legitimately changes the bytes.)
+      const doubleSeparator = await renderLetterPdf({
         title: 'ANNEXURE',
-        body: '| Head | Monthly |\n| Basic | 20,000 |',
+        body: '| Head | Monthly |\n| --- | --- |\n| --- | --- |\n| Basic | 20,000 |',
         letterhead: null,
       });
-      expect(pdf.length).toBe(withoutSeparator.length);
+      expect(pdf.length).toBe(doubleSeparator.length);
+    });
+
+    it('treats the first row as a heading only when a separator follows it', () => {
+      // The F&F sheet and the payment advice are label / value grids with no heading
+      // row; bolding their first label made one arbitrary row look like a heading.
+      const [headed] = parseBlocks(
+        '| Head | Monthly |\n| --- | --- |\n| Basic | 1 |',
+      );
+      const [plain] = parseBlocks('| Employee | Ravi |\n| Code | PR-1 |');
+      expect(headed).toMatchObject({ kind: 'table', headed: true });
+      expect(plain).toMatchObject({ kind: 'table', headed: false });
     });
   });
 

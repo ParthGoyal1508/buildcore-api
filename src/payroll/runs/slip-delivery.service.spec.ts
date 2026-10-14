@@ -133,6 +133,10 @@ function build(opts: {
   const schedule = {
     outstandingApproval: async () => opts.outstandingApproval ?? null,
   };
+  const salary = {
+    letterheadForCompany: async () => null,
+    slipIdentityFor: async () => undefined,
+  };
 
   return {
     service: new SlipDeliveryService(
@@ -140,6 +144,7 @@ function build(opts: {
       email as never,
       pdf as never,
       schedule as never,
+      salary as never,
     ),
     writes,
     sent,

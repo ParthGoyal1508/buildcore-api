@@ -21,6 +21,7 @@ import { rlsContextFor } from '../../common/prisma/rls-context';
 import { CreateSignatoryDto, UpdateSignatoryDto } from './dto/signatory.dto';
 import { SignatoriesService } from './signatories.service';
 import { resolveCompanyId } from '../company-scope';
+import { LETTER_READ_PERMISSIONS } from '../../letters/letter-permissions';
 
 /**
  * Signatories (017 US4, FR-016).
@@ -38,6 +39,8 @@ export class SignatoriesController {
   constructor(private readonly signatories: SignatoriesService) {}
 
   @Get()
+  // Read by the letter composer, so open to anyone who can issue a letter (2026-10-14).
+  @RequirePermissions(...LETTER_READ_PERMISSIONS)
   @ApiOperation({ summary: 'Named signatories available to sign letters' })
   async list(
     @UserEntity() caller: AuthenticatedUser,

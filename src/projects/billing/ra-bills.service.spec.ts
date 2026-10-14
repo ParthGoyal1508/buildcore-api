@@ -77,6 +77,8 @@ function build(opts: {
           _sum: { quantity: dec(qty) },
         })),
     },
+    // A bill raised on the sheet, not through a package — the old routes still serve it.
+    billPackage: { findFirst: async () => null },
     rABill: {
       create: async (args: { data: Record<string, unknown> }) => {
         created.push(args.data);

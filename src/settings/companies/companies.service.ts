@@ -306,6 +306,29 @@ export class CompaniesService {
     };
   }
 
+  /**
+   * The letterhead's bytes for another module's document, or null (2026-10-13).
+   *
+   * For the payslip, which `payroll` prints on the company's stationery and which Principle I
+   * forbids it from reading `settings.Company` for. Unlike `getLetterhead` above — the settings
+   * screen's read, where an absent letterhead is a 404 worth showing — this never throws: a company
+   * with no letterhead, or one whose file no longer resolves, still pays its people, and their
+   * payslips print on plain paper.
+   */
+  async getLetterheadImage(companyId: string): Promise<Buffer | null> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+    );
+    if (!company?.letterheadRef) return null;
+    return this.storage.get(company.letterheadRef).catch(() => null);
+  }
+
   async setPunchAccuracyMaxMetres(
     companyId: string,
     metres: number | null,
@@ -465,21 +488,17 @@ export class CompaniesService {
       sgstFraction?: number;
       igstFraction?: number;
       tdsFraction?: number;
+      gstTdsFraction?: number;
     },
     actor: { userId: string; ipAddress?: string },
-  ): Promise<{
-    cgstFraction: string;
-    sgstFraction: string;
-    igstFraction: string;
-    tdsFraction: string;
-  }> {
+  ): Promise<ReturnType<CompaniesService['getBillingTaxRates']>> {
     const before = await this.getBillingTaxRates(companyId);
 
     await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.company.update({
         where: { id: companyId },
         data: {
-          // Field by field, so a request naming one rate cannot blank the other three.
+          // Field by field, so a request naming one rate cannot blank the others.
           ...(rates.cgstFraction !== undefined
             ? { cgstFraction: rates.cgstFraction }
             : {}),
@@ -491,6 +510,9 @@ export class CompaniesService {
             : {}),
           ...(rates.tdsFraction !== undefined
             ? { tdsFraction: rates.tdsFraction }
+            : {}),
+          ...(rates.gstTdsFraction !== undefined
+            ? { gstTdsFraction: rates.gstTdsFraction }
             : {}),
         },
       }),
@@ -531,6 +553,17 @@ export class CompaniesService {
     sgstFraction: string;
     igstFraction: string;
     tdsFraction: string;
+    /** Tax deducted at source under GST — a different deduction from `tdsFraction`. */
+    gstTdsFraction: string;
+    /**
+     * The labour welfare cess a government client recovers, as a fraction (2026-10-13).
+     *
+     * **`bocwCessRate`, widened — not a second column.** It is the same statutory 1% this product
+     * already configures for 007's cess calculation, and a second place to record it is a second
+     * place to get it wrong. Six decimals here because that is the precision a bill freezes at;
+     * the stored column is four, which `0.0100` fits exactly.
+     */
+    labourCessFraction: string;
   }> {
     const company = await withRlsContext(
       this.prisma,
@@ -543,6 +576,8 @@ export class CompaniesService {
             sgstFraction: true,
             igstFraction: true,
             tdsFraction: true,
+            gstTdsFraction: true,
+            bocwCessRate: true,
           },
         }),
     );
@@ -554,6 +589,8 @@ export class CompaniesService {
       sgstFraction: company.sgstFraction.toFixed(6),
       igstFraction: company.igstFraction.toFixed(6),
       tdsFraction: company.tdsFraction.toFixed(6),
+      gstTdsFraction: company.gstTdsFraction.toFixed(6),
+      labourCessFraction: company.bocwCessRate.toFixed(6),
     };
   }
 
@@ -594,6 +631,61 @@ export class CompaniesService {
       throw new NotFoundException('Company not found');
     }
     return company;
+  }
+
+  /**
+   * What a company-issued document prints at its head: name, full address and logo (2026-10-13).
+   *
+   * For the payment advice, which carries each company's own mark and registered address. The logo
+   * comes back as bytes, or null where none is uploaded — a missing logo prints the name alone
+   * rather than refusing the document.
+   */
+  async getDocumentIdentity(companyId: string): Promise<{
+    name: string;
+    address: string | null;
+    gstin: string | null;
+    pan: string | null;
+    logo: Buffer | null;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            name: true,
+            address: true,
+            city: true,
+            state: true,
+            pinCode: true,
+            gstin: true,
+            pan: true,
+            logoRef: true,
+          },
+        }),
+    );
+    if (!company) throw new NotFoundException('Company not found');
+    const place = [company.city, company.state].filter(Boolean).join(', ');
+    const address =
+      [
+        company.address,
+        place && company.pinCode
+          ? `${place} - ${company.pinCode}`
+          : place || company.pinCode,
+      ]
+        .filter(Boolean)
+        .join(', ') || null;
+    const logo = company.logoRef
+      ? await this.storage.get(company.logoRef).catch(() => null)
+      : null;
+    return {
+      name: company.name,
+      address,
+      gstin: company.gstin,
+      pan: company.pan,
+      logo,
+    };
   }
 
   /**
@@ -847,9 +939,9 @@ export class CompaniesService {
         });
 
         // The shipped letter bodies — offer, appointment, relieving, experience,
-        // increment and payment advice (2026-10-11). Starting values: `install` creates
-        // only what is missing, so a company that rewrites its offer letter keeps the
-        // rewrite. Same contract as the approval chains seeded above.
+        // increment, transfer, termination, F&F and payment advice (2026-10-11). Unlike the
+        // approval chains above these are not starting values: the standard wording is the
+        // same for every company and is re-applied on every start (2026-10-14).
         await this.standardTemplates.install(company.id, tx);
 
         await tx.employeeCodeSequence.create({

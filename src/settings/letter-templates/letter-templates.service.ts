@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,11 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../company-scope';
 import { StandardTemplatesService } from './standard-templates.service';
+import { LETTER_TEMPLATE_STANDARD_LOCKED } from '../../letters/letter-error-codes';
+import {
+  StandardLetterTemplate,
+  standardTemplateFor,
+} from '../../letters/standard-letter-templates';
 
 export interface LetterTemplateView {
   id: string;
@@ -78,7 +84,6 @@ export class LetterTemplatesService {
    */
   async installStandard(
     caller: AuthenticatedUser,
-    opts: { replace?: boolean } = {},
   ): Promise<{ created: string[]; replaced: string[]; skipped: string[] }> {
     const companyId = companyScope(caller).companyId;
     if (!companyId) {
@@ -89,7 +94,7 @@ export class LetterTemplatesService {
     const result = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) => this.standard.install(companyId, tx, opts),
+      (tx) => this.standard.install(companyId, tx),
     );
     // Only when something changed. An audit entry for a call that created nothing is
     // noise in the log that somebody later has to read past.
@@ -111,6 +116,48 @@ export class LetterTemplatesService {
       });
     }
     return result;
+  }
+
+  /**
+   * The standard template a kind's wording is managed by, or null when the company owns it.
+   *
+   * Managed means: a **shipped** kind (`companyId` null) for which this product ships a body.
+   * A company-defined kind that happens to share a key is the company's own.
+   */
+  private managedStandard(kind: {
+    key: string;
+    companyId: string | null;
+  }): StandardLetterTemplate | null {
+    if (kind.companyId !== null) return null;
+    return standardTemplateFor(kind.key) ?? null;
+  }
+
+  /**
+   * Refuses a write that would change the wording of a managed template (2026-10-14).
+   *
+   * Only a *change* is refused: a save that sends the standard body and name back unchanged —
+   * which is what an editor form that posts every field does when somebody only flipped
+   * `isActive` — goes through. The active flag and the letterhead stay the company's.
+   */
+  private assertWordingNotManaged(
+    kind: { key: string; label: string; companyId: string | null },
+    dto: { name?: string; bodyTemplate?: string },
+  ): void {
+    const standard = this.managedStandard(kind);
+    if (!standard) return;
+    const bodyChanges =
+      dto.bodyTemplate !== undefined && dto.bodyTemplate !== standard.body;
+    const nameChanges =
+      dto.name !== undefined && dto.name.trim() !== standard.name;
+    if (!bodyChanges && !nameChanges) return;
+    throw new ConflictException({
+      statusCode: 409,
+      code: LETTER_TEMPLATE_STANDARD_LOCKED,
+      message:
+        `The ${kind.label} uses the standard wording, which is the same for every company ` +
+        'and is restored on every update of the application — an edit here would be ' +
+        'silently overwritten. Its letterhead and whether it is active can still be changed.',
+    });
   }
 
   private toView(row: TemplateRow): LetterTemplateView {
@@ -182,6 +229,20 @@ export class LetterTemplatesService {
       );
     }
 
+    // A second template for a managed kind would have its wording overwritten at the next
+    // start like the first, so creating one is the same refusal as editing one. Read under the
+    // caller's own RLS context: shipped kinds are visible to every company.
+    const kind = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.letterKind.findUnique({
+          where: { id: dto.letterKindId },
+          select: { key: true, label: true, companyId: true },
+        }),
+    );
+    if (kind) this.assertWordingNotManaged(kind, dto);
+
     // Before the transaction, so a refusal costs nothing and the error is about the template rather
     // than about a rolled-back write.
     await this.fields.assertTemplateFieldsDeclared(
@@ -244,10 +305,16 @@ export class LetterTemplatesService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const existing = await tx.letterTemplate.findUnique({ where: { id } });
+        const existing = await tx.letterTemplate.findUnique({
+          where: { id },
+          include: {
+            letterKind: { select: { key: true, label: true, companyId: true } },
+          },
+        });
         if (!existing)
           throw new NotFoundException(`Letter template ${id} not found`);
         assertInScope(caller, existing, `Letter template ${id}`);
+        this.assertWordingNotManaged(existing.letterKind, dto);
 
         // Validated against the existing row's kind, not against anything in the DTO — a template's
         // kind is not editable, and reading it from the request would let a caller point validation

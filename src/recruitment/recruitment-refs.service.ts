@@ -9,7 +9,6 @@ import { CompaniesService } from '../settings/companies/companies.service';
 import { DocumentTypesService } from '../settings/reference-data/document-types.service';
 import { ReferenceDataService } from '../settings/reference-data/reference-data.service';
 import { KitItemsService } from '../settings/kit-items/kit-items.service';
-import { LetterTemplatesService } from '../settings/letter-templates/letter-templates.service';
 import { EmployeesService } from '../hr/employees/employees.service';
 import { EmployeeDocumentsService } from '../hr/employees/documents/employee-documents.service';
 import { ExitService } from '../hr/offboarding/exit.service';
@@ -34,7 +33,6 @@ export class RecruitmentRefsService {
     private readonly documentTypes: DocumentTypesService,
     private readonly referenceData: ReferenceDataService,
     private readonly kitItems: KitItemsService,
-    private readonly letterTemplates: LetterTemplatesService,
     private readonly companies: CompaniesService,
     private readonly configService: ConfigService,
   ) {}
@@ -105,15 +103,6 @@ export class RecruitmentRefsService {
     tx: Prisma.TransactionClient,
   ) {
     return this.kitItems.defaultsForCompany(caller, companyId, tx);
-  }
-
-  /** The active letter template for a kind, or null (the caller raises 409). */
-  async getActiveTemplate(
-    companyId: string,
-    letterKindId: string,
-    tx: Prisma.TransactionClient,
-  ) {
-    return this.letterTemplates.getActive(companyId, letterKindId, tx);
   }
 
   /** Whether the employee's F&F run is processed — gates relieving letters (FR-023). */

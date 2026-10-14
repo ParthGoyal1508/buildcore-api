@@ -12,7 +12,12 @@ import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-co
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 import { pdfDigits } from './pdf-text';
-import { ACTION_DWR } from '../src/approvals/default-chains';
+import {
+  ACTION_CLIENT_BILL,
+  ACTION_DWR,
+  ENTITY_BILL_PACKAGE,
+} from '../src/approvals/default-chains';
+import { BillPackageService } from '../src/projects/billing/package/bill-package.service';
 import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 
 /**
@@ -149,7 +154,30 @@ describe('The running-account bill package (e2e)', () => {
     // The `dwr` chain: as of 2026-10-10 a daily report is submitted to the approval spine, and
     // three blocks below record and approve one to give a package something to propose from.
     await ensureApprovalChain(sys, companyId, ACTION_DWR);
+    // 2026-10-13: a bill is approved before it is issued.
+    await ensureApprovalChain(sys, companyId, ACTION_CLIENT_BILL);
   });
+
+  /**
+   * Sends a draft through approval the way the product does — the real submit endpoint, then the
+   * spine's completion event — so the issue tests below issue an approved bill. Deciding as a
+   * slot-holder is `ra-bills.e2e-spec.ts`'s subject; here only the hand-off matters.
+   */
+  const approve = async (id: string) => {
+    const submitted = await http()
+      .post(`/projects/bill-packages/${id}/submit`)
+      .set(auth())
+      .expect(201);
+    expect(submitted.body.status).toBe('pending_approval');
+    await app.get(BillPackageService).onApprovalCompleted({
+      entityType: ENTITY_BILL_PACKAGE,
+      entityId: id,
+      companyId,
+      instanceId: '',
+    });
+    approvedIds.push(id);
+  };
+  const approvedIds: string[] = [];
 
   afterAll(async () => {
     if (prisma) {
@@ -165,6 +193,20 @@ describe('The running-account bill package (e2e)', () => {
       // It cascades from `BillPackage`, which the next line already deletes by project, so the
       // statement was never needed for the cleanup to be complete — only for it to be
       // destructive.
+      await sys.approvalDecision.deleteMany({
+        where: {
+          approvalInstance: {
+            entityType: ENTITY_BILL_PACKAGE,
+            entityId: { in: approvedIds },
+          },
+        },
+      });
+      await sys.approvalInstance.deleteMany({
+        where: {
+          entityType: ENTITY_BILL_PACKAGE,
+          entityId: { in: approvedIds },
+        },
+      });
       await sys.billPackageDebit.deleteMany({ where: { projectId } });
       await sys.billPackage.deleteMany({ where: { projectId } });
       await sys.clientBillLine.deleteMany({
@@ -401,7 +443,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '1000.00', theftWithheld: '250.00' })
+      .send({ workDeduction: '1250.00' })
       .expect(200);
 
     const after = await http()
@@ -409,26 +451,39 @@ describe('The running-account bill package (e2e)', () => {
       .set(auth())
       .expect(200);
 
-    expect(Number(after.body.columns.thisBill.recoveryDiesel)).toBe(1000);
-    expect(Number(after.body.columns.thisBill.theftWithheld)).toBe(250);
-    expect(Number(after.body.columns.thisBill.payable)).toBe(
-      Number(before.body.columns.thisBill.payable) - 1250,
-    );
+    expect(Number(after.body.columns.thisBill.workDeduction)).toBe(1250);
+    // 1B comes off the work **before** tax, so the payable moves by more than the deduction: the
+    // tax on it goes too, and so does every percentage computed over the base. Asserting a move of
+    // exactly 1,250 would be asserting that it is an ordinary recovery, which is the one thing it
+    // is not.
+    expect(
+      Number(before.body.columns.thisBill.payable) -
+        Number(after.body.columns.thisBill.payable),
+    ).toBeGreaterThan(1250);
 
     // Omission leaves a column alone; an explicit zero sets it. A caller posting the whole set
     // every time would otherwise be indistinguishable from one clearing what it did not render.
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ theftWithheld: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
 
     const third = await http()
       .get(`/projects/bill-packages/${packageId}/abstract`)
       .set(auth())
       .expect(200);
-    expect(Number(third.body.columns.thisBill.recoveryDiesel)).toBe(1000);
-    expect(Number(third.body.columns.thisBill.theftWithheld)).toBe(0);
+    expect(Number(third.body.columns.thisBill.workDeduction)).toBe(0);
+
+    // **A bill to the client has no row for a diesel recovery** (2026-10-13), so the figure is
+    // refused rather than taken off the payable through a total nothing on the sheet accounts for.
+    // The subcontractor's abstract is where that judgement belongs.
+    const wrongDirection = await http()
+      .patch(`/projects/bill-packages/${packageId}/adjustments`)
+      .set(auth())
+      .send({ recoveryDiesel: '1000.00' })
+      .expect(400);
+    expect(wrongDirection.body.fields).toEqual(['recoveryDiesel']);
 
     // A computed figure is not an adjustable one: a bill stating a retention its own frozen rate
     // does not produce is a bill whose arithmetic has stopped being checkable.
@@ -442,7 +497,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
   });
 
@@ -472,7 +527,7 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '133742.00' })
+      .send({ workDeduction: '133742.00' })
       .expect(200);
 
     const pdf = await http()
@@ -499,11 +554,19 @@ describe('The running-account bill package (e2e)', () => {
     await http()
       .patch(`/projects/bill-packages/${packageId}/adjustments`)
       .set(auth())
-      .send({ recoveryDiesel: '0.00' })
+      .send({ workDeduction: '0.00' })
       .expect(200);
   });
 
+  it('refuses to issue a bill nobody has approved', async () => {
+    await http()
+      .post(`/projects/bill-packages/${packageId}/issue`)
+      .set(auth())
+      .expect(409);
+  });
+
   it('issues the bill, reporting the header gaps rather than refusing', async () => {
+    await approve(packageId);
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
       .set(auth())
@@ -581,6 +644,27 @@ describe('The running-account bill package (e2e)', () => {
     expect(bill).toBeDefined();
     expect(bill.status).toBe('submitted');
     expect(bill.submittedAt).not.toBeNull();
+  });
+
+  it('names its package on the client bill, and refuses the old submit and certify there', async () => {
+    // 2026-10-14: one bill, one approval. The Client bills tab used to offer its own submit and
+    // certify beside the package's, and the two decided different things about the same bill.
+    const bills = await http()
+      .get(`/projects/client-bills?projectId=${projectId}`)
+      .set(auth())
+      .expect(200);
+    const bill = bills.body.find(
+      (row: { package?: { id: string } | null }) =>
+        row.package?.id === packageId,
+    );
+    expect(bill.package).toMatchObject({ id: packageId, status: 'issued' });
+
+    const certify = await http()
+      .post(`/projects/client-bills/${bill.id}/certify`)
+      .set(auth())
+      .send({ certifiedAmount: 1 })
+      .expect(409);
+    expect(certify.body.code).toBe('BILL_RAISED_THROUGH_PACKAGE');
   });
 
   it('refuses recoveries changed after the bill has been issued', async () => {
@@ -840,6 +924,7 @@ describe('The running-account bill package (e2e)', () => {
       })
       .expect(201);
 
+    await approve(second.body.id);
     const issued = await http()
       .post(`/projects/bill-packages/${second.body.id}/issue`)
       .set(auth())
@@ -856,6 +941,40 @@ describe('The running-account bill package (e2e)', () => {
     });
     expect(frozen.issuerState).toBe('08');
     expect(frozen.issuerPan).toBe('AABCP1234F');
+  });
+
+  it('produces the bill as Word, and the client’s Payment Abstract alone', async () => {
+    const binary = (
+      res: request.Response,
+      cb: (e: Error | null, b: Buffer) => void,
+    ) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    };
+    const docx = await http()
+      .get(`/projects/bill-packages/${packageId}/document.docx`)
+      .set(auth())
+      .buffer(true)
+      .parse(binary)
+      .expect(200);
+    expect(docx.headers['content-type']).toContain('wordprocessingml');
+    expect((docx.body as Buffer).subarray(0, 2).toString()).toBe('PK');
+
+    const abstract = await http()
+      .get(`/projects/bill-packages/${packageId}/document.pdf?part=abstract`)
+      .set(auth())
+      .buffer(true)
+      .parse(binary)
+      .expect(200);
+    expect(abstract.headers['content-disposition']).toContain(
+      'Payment Abstract',
+    );
+
+    await http()
+      .get(`/projects/bill-packages/${packageId}/document.exe`)
+      .set(auth())
+      .expect(404);
   });
 
   it('produces the same bill as a PDF, from the same figures', async () => {
@@ -1268,6 +1387,7 @@ describe('The running-account bill package (e2e)', () => {
       // there is no payable. Gross-as-net was the old answer and the document never agreed.
       expect((await listed()).netAmount).toBeNull();
 
+      await approve(secondPackageId);
       await http()
         .post(`/projects/bill-packages/${secondPackageId}/issue`)
         .set(auth())

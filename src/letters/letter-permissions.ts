@@ -27,6 +27,12 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   // letter states a figure the payroll run has to match, and whoever may change pay is
   // the person who may put it in writing.
   increment: Permission.PAYROLL,
+  // Ending somebody's employment is an employment decision, so it sits with relieving
+  // and experience rather than with payroll (2026-10-13).
+  termination: Permission.EMPLOYEES,
+  // The F&F sheet states what the company will pay a leaver, line by line — the same
+  // figures the F&F payroll run settles, so it belongs to whoever runs payroll.
+  fnf_settlement: Permission.PAYROLL,
 
   // The three that commit money. `PROJECT_FINANCIALS` rather than `PROJECTS`: issuing a
   // work order is a spending decision, and 009 and 013 both established that spending
@@ -63,3 +69,18 @@ export const LETTER_KIND_DEFAULT_PERMISSION: Permission = Permission.SETTINGS;
 export function permissionForKind(key: string): Permission {
   return LETTER_KIND_PERMISSIONS[key] ?? LETTER_KIND_DEFAULT_PERMISSION;
 }
+
+/**
+ * Everyone who may issue some kind of letter, plus administrators (2026-10-14).
+ *
+ * The kinds list and the signatories list are what the composer needs before it can issue
+ * anything. Both were `SETTINGS`-only, so an HR user holding `EMPLOYEES` could compose a
+ * relieving letter but not see which kinds exist or pick who signs it. Reading them is
+ * granted to anyone who can issue at least one kind; changing them stays `SETTINGS`.
+ */
+export const LETTER_READ_PERMISSIONS: Permission[] = [
+  ...new Set([
+    LETTER_KIND_DEFAULT_PERMISSION,
+    ...Object.values(LETTER_KIND_PERMISSIONS),
+  ]),
+];

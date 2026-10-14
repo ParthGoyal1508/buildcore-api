@@ -106,11 +106,41 @@ export interface VendorBillingIdentity {
   address: string | null;
 }
 
+/** Where the company pays a vendor — what a payment advice prints (2026-10-13). */
+export interface VendorPaymentIdentity {
+  code: string;
+  name: string;
+  bankName: string | null;
+  bankBranch: string | null;
+  bankAccountNumber: string | null;
+  bankAccountHolderName: string | null;
+  ifscCode: string | null;
+}
+
 export interface ProjectVendorIdentitySource {
   getBillingIdentity(
     vendorId: string,
     companyId: string,
   ): Promise<VendorBillingIdentity | null>;
+  getPaymentIdentity(
+    vendorId: string,
+    companyId: string,
+  ): Promise<VendorPaymentIdentity | null>;
+  /** Fills in a vendor's bank details from the bill being paid. Only the fields given change. */
+  setBankDetails(
+    vendorId: string,
+    companyId: string,
+    details: Partial<
+      Pick<
+        VendorPaymentIdentity,
+        | 'bankName'
+        | 'bankBranch'
+        | 'bankAccountNumber'
+        | 'bankAccountHolderName'
+        | 'ifscCode'
+      >
+    >,
+  ): Promise<VendorPaymentIdentity | null>;
 }
 
 export interface ProjectLogbookSource {
