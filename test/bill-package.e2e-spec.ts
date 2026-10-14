@@ -646,6 +646,27 @@ describe('The running-account bill package (e2e)', () => {
     expect(bill.submittedAt).not.toBeNull();
   });
 
+  it('names its package on the client bill, and refuses the old submit and certify there', async () => {
+    // 2026-10-14: one bill, one approval. The Client bills tab used to offer its own submit and
+    // certify beside the package's, and the two decided different things about the same bill.
+    const bills = await http()
+      .get(`/projects/client-bills?projectId=${projectId}`)
+      .set(auth())
+      .expect(200);
+    const bill = bills.body.find(
+      (row: { package?: { id: string } | null }) =>
+        row.package?.id === packageId,
+    );
+    expect(bill.package).toMatchObject({ id: packageId, status: 'issued' });
+
+    const certify = await http()
+      .post(`/projects/client-bills/${bill.id}/certify`)
+      .set(auth())
+      .send({ certifiedAmount: 1 })
+      .expect(409);
+    expect(certify.body.code).toBe('BILL_RAISED_THROUGH_PACKAGE');
+  });
+
   it('refuses recoveries changed after the bill has been issued', async () => {
     // The same reasoning that refuses a debit applied after issue: a deduction recorded afterwards
     // is either an edit to a signed document or one the bill never actually made.

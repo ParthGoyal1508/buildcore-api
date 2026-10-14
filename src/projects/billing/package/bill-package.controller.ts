@@ -24,6 +24,7 @@ import { PermissionsGuard } from '../../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../../settings/company-scope';
 import { ProjectLockGuard } from '../../guards/project-lock.guard';
+import { ClientBillsService } from '../client-bills.service';
 import { BillPackageService } from './bill-package.service';
 import { BillPackageViewBuilder } from './bill-package-view.builder';
 import { DebitNoteService } from './debit-note.service';
@@ -87,6 +88,7 @@ export class BillPackageController {
     private readonly reports: PackageReportsService,
     private readonly views: BillPackageViewBuilder,
     private readonly approvals: ApprovalService,
+    private readonly clientBills: ClientBillsService,
   ) {}
 
   // ── Composition ──────────────────────────────────────────────────────────
@@ -599,10 +601,24 @@ export class BillPackageController {
     @Param('packageId') packageId: string,
     @Body() dto: CertifyBillPackageDto,
   ) {
-    return this.packages.certify(rlsContextFor(caller), caller.id, packageId, {
-      certifiedAmount: dto.certifiedAmount,
-      remarks: dto.remarks ?? null,
-    });
+    const view = await this.packages.certify(
+      rlsContextFor(caller),
+      caller.id,
+      packageId,
+      { certifiedAmount: dto.certifiedAmount, remarks: dto.remarks ?? null },
+    );
+    // The client's certification document, filed where the client bill has always kept it.
+    if (dto.certificateData && view.clientBillId) {
+      await this.clientBills.attachCertificate(
+        rlsContextFor(caller),
+        view.clientBillId,
+        {
+          data: Buffer.from(dto.certificateData, 'base64'),
+          fileName: dto.certificateFileName ?? 'certificate',
+        },
+      );
+    }
+    return view;
   }
 
   // ── The two reports the decisions oblige ─────────────────────────────────

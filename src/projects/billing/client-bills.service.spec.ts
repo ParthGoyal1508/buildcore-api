@@ -79,6 +79,8 @@ function build(opts: {
         })),
       update: async (args: { data: Record<string, unknown> }) => args.data,
     },
+    // A bill raised on the sheet, not through a package — the old routes still serve it.
+    billPackage: { findFirst: async () => null },
     clientBill: {
       create: async (args: { data: Record<string, unknown> }) => {
         if (opts.duplicateNumber) {

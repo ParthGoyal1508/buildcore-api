@@ -17,7 +17,7 @@ import {
   retentionOn,
   unitRate,
 } from './bill-totals';
-import { nextClientBillNumber } from './bill-number';
+import { nextClientBillNumber, packageLabel } from './bill-number';
 import { balanceColumn } from './package/bill-abstract';
 import { compareBoqNo, sortByBoqNo } from '../boq/boq-order';
 import {
@@ -219,6 +219,8 @@ export interface BillSettlementView {
 }
 
 export interface ClientBillView {
+  /** The bill package it is approved, issued and certified through. Null for an old sheet bill. */
+  package?: { id: string; label: string; status: BillPackageStatus } | null;
   id: string;
   projectId: string;
   billNumber: string;
@@ -545,6 +547,7 @@ export class ClientBillsService {
    * ones that do.
    */
   async submit(ctx: RlsContext, billId: string): Promise<ClientBillView> {
+    await this.refuseIfPackaged(ctx, billId, 'sent for approval and issued');
     await withRlsContext(this.prisma, ctx, async (tx) => {
       const bill = await tx.clientBill.findFirst({
         where: { id: billId },
@@ -608,6 +611,7 @@ export class ClientBillsService {
     billId: string,
     input: CertifyBillInput,
   ): Promise<ClientBillView> {
+    await this.refuseIfPackaged(ctx, billId, 'certified');
     // Stored before the transaction, like every other upload in this product: a blob
     // written inside one is orphaned by a rollback, and the reference below is what
     // makes it findable.
@@ -727,6 +731,59 @@ export class ClientBillsService {
   }
 
   /** The client's certification document, through `StorageService` like every other upload. */
+  /**
+   * Files the client's certification document against a bill certified on its bill package
+   * (2026-10-14) — the bill package's Certify carries it, so the certificate is kept where it
+   * always was and the existing download serves it.
+   */
+  async attachCertificate(
+    ctx: RlsContext,
+    billId: string,
+    file: { data: Buffer; fileName: string },
+  ): Promise<void> {
+    const certificate = await this.storeCertificate(ctx, billId, file);
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.clientBill.update({
+        where: { id: billId },
+        data: {
+          certificateFileRef: certificate.fileRef,
+          certificateFileName: certificate.fileName,
+          certificateMimeType: certificate.mimeType,
+          certificateSizeBytes: certificate.sizeBytes,
+        },
+      }),
+    );
+  }
+
+  /**
+   * Refuses the old submit and certify on a bill raised through a bill package (2026-10-14).
+   * The package is where it is approved, issued and certified; a second route here started a
+   * second, unrelated decision on the same bill.
+   */
+  private async refuseIfPackaged(
+    ctx: RlsContext,
+    billId: string,
+    action: string,
+  ): Promise<void> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { clientBillId: billId },
+        select: { sequenceNo: true },
+      }),
+    );
+    if (pkg) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.raisedThroughPackage,
+        message:
+          `This bill is ${packageLabel(
+            pkg.sequenceNo,
+          )} on the RA bills page, which is where it ` +
+          `is ${action}. Open it there.`,
+      });
+    }
+  }
+
   private async storeCertificate(
     ctx: RlsContext,
     billId: string,
@@ -884,6 +941,8 @@ export class ClientBillsService {
           // subtract. See `BillSettlementView`.
           package: {
             select: {
+              id: true,
+              sequenceNo: true,
               status: true,
               workDone: true,
               workDeduction: true,
@@ -987,6 +1046,14 @@ export class ClientBillsService {
             ? null
             : bill.netAmount.toNumber(),
         settlement: settlementOf(bill.package),
+        // Where this bill is approved, issued and certified (2026-10-14) — the tab links there.
+        package: bill.package
+          ? {
+              id: bill.package.id,
+              label: packageLabel(bill.package.sequenceNo),
+              status: bill.package.status,
+            }
+          : null,
         certifiedAmount: certified,
         certifiedAt: bill.certifiedAt,
         /**

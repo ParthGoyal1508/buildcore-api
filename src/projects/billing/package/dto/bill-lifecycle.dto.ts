@@ -29,6 +29,23 @@ export class CertifyBillPackageDto {
   @IsString()
   @MaxLength(1000)
   remarks?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'A bill to the client only: the client’s certification document, base64-encoded. ' +
+      'Replaces any copy already held.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  certificateData?: string;
+
+  @ApiPropertyOptional({ example: 'RA-09 certification.pdf' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  certificateFileName?: string;
 }
 
 export class ReviseBillPackageDto {

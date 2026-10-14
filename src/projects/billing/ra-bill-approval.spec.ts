@@ -102,6 +102,8 @@ function build(opts: {
           : [];
       },
     },
+    // A bill raised on the sheet, not through a package — the old routes still serve it.
+    billPackage: { findFirst: async () => null },
     rABill: {
       findFirst: async () => bill,
       update: async (args: { data: Record<string, unknown> }) => {

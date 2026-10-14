@@ -27,7 +27,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { BILLING_ERRORS } from './billing-error-codes';
-import { nextRaBillNumber } from './bill-number';
+import { nextRaBillNumber, packageLabel } from './bill-number';
 import {
   billTotals,
   lineTotals,
@@ -172,6 +172,16 @@ export interface RaBillView {
    */
   pnlAmount: number;
   lines: RaBillLineView[];
+  /**
+   * The bill package this bill is raised through, where it is approved, issued, certified and
+   * paid (2026-10-14). Null for a bill raised on the old sheet. The tabs that list bills show this
+   * status and link here rather than offering approval of their own: one bill, one approval.
+   */
+  package: {
+    id: string;
+    label: string;
+    status: BillPackageStatus;
+  } | null;
 }
 
 /**
@@ -716,11 +726,37 @@ export class RaBillsService {
     });
   }
 
+  /** See `ClientBillsService.refuseIfPackaged` — the same rule for a subcontractor's bill. */
+  private async refuseIfPackaged(
+    ctx: RlsContext,
+    billId: string,
+    action: string,
+  ): Promise<void> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { raBillId: billId },
+        select: { sequenceNo: true },
+      }),
+    );
+    if (pkg) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: BILLING_ERRORS.raisedThroughPackage,
+        message:
+          `This bill is ${packageLabel(
+            pkg.sequenceNo,
+          )} on the RA bills page, which is where it ` +
+          `is ${action}. Open it there.`,
+      });
+    }
+  }
+
   async submitForCertification(
     ctx: RlsContext,
     caller: AuthenticatedUser,
     billId: string,
   ): Promise<RaBillView> {
+    await this.refuseIfPackaged(ctx, billId, 'sent for approval');
     const bill = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findFirst({
         where: { id: billId },
@@ -799,6 +835,11 @@ export class RaBillsService {
     billId: string,
     input: ReviseRaBillInput,
   ): Promise<RaBillView> {
+    await this.refuseIfPackaged(
+      ctx,
+      billId,
+      'changed — withdraw it to a draft and edit its quantities',
+    );
     if (input.lines.length === 0) {
       throw new BadRequestException({
         statusCode: 400,
@@ -1114,7 +1155,7 @@ export class RaBillsService {
           lines: { include: { workOrderBoqItem: true } },
           // Only its status. The figures themselves are copied onto this row when the package is
           // issued; what the package is needed for here is whether that has happened yet.
-          package: { select: { status: true } },
+          package: { select: { id: true, status: true, sequenceNo: true } },
         },
       });
       if (!bill) throw new NotFoundException('RA bill not found');
@@ -1152,7 +1193,11 @@ export class RaBillsService {
       // recoveries and deductions are still being decided there, and tax is applied there too.
       // Reporting gross as the net — which is what the row holds, its own deduction columns
       // having been retired by 028 — states a figure the bill itself will not agree with.
-      const unsettled = bill.package?.status === BillPackageStatus.draft;
+      // Frozen only at issue — a bill with its approver is still unsettled.
+      const unsettled =
+        !!bill.package &&
+        bill.package.status !== BillPackageStatus.issued &&
+        bill.package.status !== BillPackageStatus.certified;
       return {
         id: bill.id,
         projectId: bill.projectId,
@@ -1170,6 +1215,13 @@ export class RaBillsService {
         // Gross, never net. See the class docblock and `bill-totals.ts`.
         pnlAmount: gross,
         lines,
+        package: bill.package
+          ? {
+              id: bill.package.id,
+              label: packageLabel(bill.package.sequenceNo),
+              status: bill.package.status,
+            }
+          : null,
       };
     });
   }
