@@ -34,12 +34,18 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   // figures the F&F payroll run settles, so it belongs to whoever runs payroll.
   fnf_settlement: Permission.PAYROLL,
 
-  // The three that commit money. `PROJECT_FINANCIALS` rather than `PROJECTS`: issuing a
-  // work order is a spending decision, and 009 and 013 both established that spending
-  // decisions are separable from the module's read permission.
+  // The two that commit a project's money. `PROJECT_FINANCIALS` rather than `PROJECTS`:
+  // issuing a work order is a spending decision, and 009 and 013 both established that
+  // spending decisions are separable from the module's read permission.
   letter_work_order: Permission.PROJECT_FINANCIALS,
   letter_loi: Permission.PROJECT_FINANCIALS,
-  letter_purchase_order: Permission.PROJECT_FINANCIALS,
+  // A purchase order is not a project's (2026-10-15): the client buys materials for the
+  // company, against the item master, from Inventory → Purchase Orders — addressed to the
+  // vendor, not to a site. So it sits with the people who buy, `INVENTORY`, as the indent
+  // and service order do. It still commits money, and the spending decision is the
+  // director-final approval chain every PO passes through before it can be issued — not
+  // which module's read permission the person composing it holds.
+  letter_purchase_order: Permission.INVENTORY,
 
   // A payment leaving the company against a vendor's bill (2026-10-11). Money, so it
   // sits with the three above rather than with procurement paperwork — a payment advice

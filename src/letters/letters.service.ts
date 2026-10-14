@@ -16,6 +16,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 import type { ApprovalInstanceView } from '../approvals/approval.types';
 import { ApprovalService } from '../approvals/approvals.service';
+import { ACTION_LETTER_PURCHASE_ORDER } from '../approvals/default-chains';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
@@ -80,6 +81,17 @@ export interface IssuedLetterView {
   status: 'composed' | 'issued' | 'executed';
   countersignedAt: Date | null;
   requiresApproval: boolean;
+  /**
+   * What was typed at compose, as stored (2026-10-15) — the values the screen sent, never the
+   * ones read from records.
+   *
+   * Returned so the screen that composed a letter can find it again by what it put there: a
+   * work order's record sends its own id as an undeclared variable, and lists the LOI and work
+   * order letters carrying it. The pair stays opaque — this module stores the values and hands
+   * them back; it neither reads nor interprets one. Nothing here is more than the issued
+   * document already prints, and the list is filtered by the kind's permission as before.
+   */
+  composedVariables: Record<string, string>;
   /**
    * Where a composed letter stands in its approval chain, for this caller (2026-10-14).
    *
@@ -159,6 +171,7 @@ function toView(row: LetterRow): IssuedLetterView {
         : 'composed',
     countersignedAt: row.countersignedAt,
     requiresApproval: row.letterKind.requiresApproval,
+    composedVariables: composedOf(row.composedVariables),
   };
 }
 
@@ -609,6 +622,11 @@ export class LettersService {
       subjectId?: string;
       employeeId?: string;
       candidateId?: string;
+      /**
+       * One kind across every subject (2026-10-15) — Inventory's purchase-order list, which
+       * belongs to no single vendor.
+       */
+      letterKindKey?: string;
       includeSuperseded?: boolean;
     },
   ): Promise<IssuedLetterView[]> {
@@ -624,6 +642,9 @@ export class LettersService {
             ...(query.subjectId ? { subjectId: query.subjectId } : {}),
             ...(query.employeeId ? { employeeId: query.employeeId } : {}),
             ...(query.candidateId ? { candidateId: query.candidateId } : {}),
+            ...(query.letterKindKey
+              ? { letterKind: { key: query.letterKindKey } }
+              : {}),
             ...(query.includeSuperseded ? {} : { isSuperseded: false }),
           },
           include: { letterKind: true },
@@ -1254,9 +1275,13 @@ export class LettersService {
         // project's own tab, everything else is listed under Recruitment. Neither has a page
         // per letter, so both land on the list that contains it. `/dashboard/letters/:id`,
         // which this was, is a page that exists in neither place.
+        // A purchase order addressed to a vendor is listed on Inventory's purchase-order page
+        // (2026-10-15); one raised on a project before that keeps its project tab.
         href:
           letter.subjectType === 'project' && letter.subjectId
             ? webRoutes.projectLetters(letter.subjectId)
+            : letter.letterKind.key === ACTION_LETTER_PURCHASE_ORDER
+            ? webRoutes.inventoryPurchaseOrders()
             : webRoutes.recruitmentLetters(),
         viewPermission: permissionForKind(letter.letterKind.key),
       });

@@ -82,6 +82,15 @@ export const webRoutes = {
    */
   recruitmentLetters: (): string => '/dashboard/recruitment/letters',
 
+  /**
+   * Purchase orders, which belong to no project (2026-10-15).
+   *
+   * `app/dashboard/inventory/purchase-orders/page.tsx`, which lists every purchase-order letter
+   * with its approval inline. A PO is addressed to a vendor, so neither the project tab nor the
+   * recruitment list would show it.
+   */
+  inventoryPurchaseOrders: (): string => '/dashboard/inventory/purchase-orders',
+
   /** `app/dashboard/hr/employees/[id]/page.tsx`. Exit clearance is a panel on this page. */
   employee: (employeeId: string): string =>
     `/dashboard/hr/employees/${employeeId}`,
