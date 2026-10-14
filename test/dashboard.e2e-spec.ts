@@ -789,11 +789,10 @@ describe('Dashboard reminders (e2e)', () => {
       ]) {
         expect(viewer).not.toContain(id);
       }
-      // Placeholders stay: they carry no rows, only the name of an unbuilt module.
-      // `expense` is the last one — this assertion named `payroll` until Payroll
-      // became a real report with `requires: [PAYROLL]`, at which point a Viewer
-      // correctly stopped seeing it.
-      expect(viewer).toContain('expense');
+      // No placeholder report is listed to anybody since 2026-10-15: `expense`, the last, went
+      // when the client asked for expenses to go from Reports.
+      expect(admin).not.toContain('expense');
+      expect(viewer).not.toContain('expense');
     });
 
     it('refuses to run the Employee report it did not list', async () => {

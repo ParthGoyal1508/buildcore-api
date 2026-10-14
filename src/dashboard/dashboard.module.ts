@@ -42,7 +42,6 @@ import { ExportJobService } from './reports/export/export-job.service';
 import { REPORT_PROVIDERS } from './reports/report.types';
 import { ReportsController } from './reports/reports.controller';
 import { ReportsService } from './reports/reports.service';
-import { UNBUILT_REPORT_PLACEHOLDERS } from './reports/unbuilt-report.placeholders';
 import { SiteDashboardController } from './site-dashboard.controller';
 import { TodayAttendanceTableWidget } from './widgets/attendance-table.provider';
 import { CompanyDataService } from './widgets/company-data.service';
@@ -212,10 +211,10 @@ const notificationRegistry: Provider = {
 const reportRegistry: Provider = {
   provide: REPORT_PROVIDERS,
   inject: [...REPORT_CLASSES],
-  useFactory: (...providers: ReportProvider[]): ReportProvider[] => [
-    ...providers,
-    ...UNBUILT_REPORT_PLACEHOLDERS,
-  ],
+  // The "Expense" placeholder — a report type for a module that does not exist — was listed
+  // here after the real ones until 2026-10-15, when the client asked for expenses to go from
+  // Reports as they went from the dashboards. It was the last placeholder.
+  useFactory: (...providers: ReportProvider[]): ReportProvider[] => providers,
 };
 
 /**
