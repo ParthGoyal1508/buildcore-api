@@ -383,6 +383,11 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // Fields on the create/update DTO only — no approval path of any kind, and the per-file
           // `approve()` assertions above still enforce that `src/partners` keeps its own mechanism.
           ':(exclude)src/partners/vendors/dto/vendor.dto.ts',
+          // Owned by project letters (2026-10-14, commit 950defb): registers a project with the
+          // letters record registry so a work order, LOI or PO can print the project, its location
+          // and client. Reads a project row and nothing else — no `ApprovalService`, no
+          // `approvals.submit`, no `ApprovalInstance`; verified by grep before excluding.
+          ':(exclude)src/projects/portfolio/project-letter-source.ts',
         ],
         {
           cwd: REPO_ROOT,
