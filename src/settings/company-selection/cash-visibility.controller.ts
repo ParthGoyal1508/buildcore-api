@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Get,
   Headers,
+  Ip,
   Patch,
   Query,
   UseGuards,
@@ -116,6 +117,7 @@ export class CashVisibilityController {
   async update(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CashVisibilityDto,
+    @Ip() ipAddress: string,
     @Headers(CONFIRMATION_TOKEN_HEADER) confirmationToken?: string,
     @Query('companyId') companyId?: string,
   ) {
@@ -144,12 +146,16 @@ export class CashVisibilityController {
       action: AuditAction.UPDATE,
       entityId: resolved,
       changes: {
+        // Named so the activity log can say what changed rather than print the company's id.
+        event: 'cash_visibility_changed',
         hideCashTransactions: dto.hideCashTransactions,
         confirmedByPassword: true,
       },
       accountId: caller.id,
       companyId: resolved,
-      ipAddress: 'settings/cash-visibility',
+      // The caller's address, as every other entry carries. It held the route's own path until
+      // 2026-10-15, which left the one sensitive change in the log with no idea where it came from.
+      ipAddress,
     });
 
     return updated;

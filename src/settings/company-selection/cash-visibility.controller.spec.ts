@@ -71,13 +71,20 @@ describe('CashVisibilityController', () => {
       controller.update(
         superAdmin,
         { hideCashTransactions: true },
+        '203.0.113.7',
         confirmationToken,
       ),
     ).resolves.toEqual({ hideCashTransactions: true });
     expect(update).toHaveBeenCalled();
     expect(audit.record).toHaveBeenCalledWith(
       expect.objectContaining({
-        changes: { hideCashTransactions: true, confirmedByPassword: true },
+        changes: {
+          event: 'cash_visibility_changed',
+          hideCashTransactions: true,
+          confirmedByPassword: true,
+        },
+        // The caller's address, not the route's path (2026-10-15).
+        ipAddress: '203.0.113.7',
       }),
     );
   });
@@ -86,7 +93,11 @@ describe('CashVisibilityController', () => {
     const { controller, update } = build();
     expect(
       await codeOf(
-        controller.update(superAdmin, { hideCashTransactions: true }),
+        controller.update(
+          superAdmin,
+          { hideCashTransactions: true },
+          '203.0.113.7',
+        ),
       ),
     ).toBe(CONFIRMATION_REQUIRED);
     expect(update).not.toHaveBeenCalled();
@@ -103,6 +114,7 @@ describe('CashVisibilityController', () => {
         controller.update(
           superAdmin,
           { hideCashTransactions: true },
+          '203.0.113.7',
           confirmationToken,
         ),
       ),
@@ -118,6 +130,7 @@ describe('CashVisibilityController', () => {
         controller.update(
           companyAdmin,
           { hideCashTransactions: true },
+          '203.0.113.7',
           confirmationToken,
         ),
       ),
