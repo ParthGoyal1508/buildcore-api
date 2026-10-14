@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { AuditAction, AuditEntityType } from '@prisma/client';
+import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 
+import { SalaryRevisionsService } from '../salary-revisions/salary-revisions.service';
 import { EmployeesService } from './employees.service';
 import { PiiCipherService } from './pii-cipher.service';
 
@@ -54,9 +55,16 @@ function build(txOverrides: Record<string, unknown> = {}) {
   // withRlsContext opens a transaction and issues two set_config statements via
   // the `$executeRaw` template tag before handing the client to the callback, so
   // the stub has to provide both.
+  const salaryRevision = {
+    create: jest.fn(async ({ data }) => ({ id: 'rev-1', ...data })),
+  };
   const prisma = {
     $transaction: jest.fn(async (cb: (tx: unknown) => unknown) =>
-      cb({ employee, $executeRaw: jest.fn().mockResolvedValue(undefined) }),
+      cb({
+        employee,
+        salaryRevision,
+        $executeRaw: jest.fn().mockResolvedValue(undefined),
+      }),
     ),
   } as never;
 
@@ -65,13 +73,29 @@ function build(txOverrides: Record<string, unknown> = {}) {
     getNextEmployeeCode: jest.fn().mockResolvedValue('ACME-0007'),
   };
 
+  // The real revisions service, so the revision an employee edit records is the one the
+  // revisions endpoint would have recorded — not a stub's idea of it.
+  const salaryRevisions = new SalaryRevisionsService(
+    prisma,
+    auditLog as never,
+    { get: () => ({ timezone: 'Asia/Kolkata' }) } as never,
+  );
+
   const service = new EmployeesService(
     prisma,
     fakeCipher,
     codes as never,
     auditLog as never,
+    salaryRevisions,
   );
-  return { service, employee, auditLog, codes };
+  return {
+    service,
+    employee,
+    auditLog,
+    codes,
+    salaryRevision,
+    salaryRevisions,
+  };
 }
 
 describe('EmployeesService — statutory tab validation (T020)', () => {
@@ -228,5 +252,104 @@ describe('EmployeesService — audited PII reveal', () => {
       service.revealPii(CALLER, 'other', { field: 'pan' } as never),
     ).rejects.toBeInstanceOf(NotFoundException);
     expect(auditLog.record).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmployeesService — salary edits are revisions (2026-10-14)', () => {
+  const D = (n: number) => new Prisma.Decimal(n);
+  const PAY = {
+    basic: D(20000),
+    hra: D(8000),
+    conveyanceAllowance: D(1600),
+    siteAllowance: null,
+    specialAllowance: D(400),
+  };
+
+  it('records a revision dated today with the old heads and the merged new ones', async () => {
+    const { service, employee, salaryRevision, salaryRevisions, auditLog } =
+      build();
+    employee.findFirst.mockResolvedValue(employeeRow(PAY));
+    employee.update.mockResolvedValue(
+      employeeRow({ ...PAY, basic: D(22000), siteAllowance: D(500) }),
+    );
+
+    await service.update(CALLER, 'emp-1', {
+      basic: 22000,
+      siteAllowance: 500,
+    } as never);
+
+    expect(salaryRevision.create).toHaveBeenCalledTimes(1);
+    const data = salaryRevision.create.mock.calls[0][0].data;
+    expect(data).toMatchObject({
+      companyId: 'co-1',
+      employeeId: 'emp-1',
+      effectiveFrom: new Date(salaryRevisions.today()),
+      previousBasic: D(20000),
+      previousHra: D(8000),
+      previousConveyance: D(1600),
+      previousSiteAllowance: null,
+      previousSpecialAllowance: D(400),
+      // Untouched heads carry over; the changed ones are the merged values.
+      basic: D(22000),
+      hra: D(8000),
+      conveyance: D(1600),
+      siteAllowance: D(500),
+      specialAllowance: D(400),
+      createdByUserId: 'user-1',
+    });
+    expect(auditLog.record.mock.calls[0][0].changes).toEqual({
+      fields: ['basic', 'siteAllowance'],
+      salaryRevisionId: 'rev-1',
+    });
+  });
+
+  it('records nothing when the salary fields are sent unchanged', async () => {
+    const { service, employee, salaryRevision } = build();
+    employee.findFirst.mockResolvedValue(employeeRow(PAY));
+    employee.update.mockResolvedValue(employeeRow(PAY));
+
+    await service.update(CALLER, 'emp-1', { basic: 20000 } as never);
+
+    expect(salaryRevision.create).not.toHaveBeenCalled();
+  });
+
+  it('records nothing for an edit that does not touch pay', async () => {
+    const { service, employee, salaryRevision } = build();
+    employee.findFirst.mockResolvedValue(employeeRow(PAY));
+    employee.update.mockResolvedValue(employeeRow(PAY));
+
+    await service.update(CALLER, 'emp-1', { firstName: 'Asha' } as never);
+
+    expect(salaryRevision.create).not.toHaveBeenCalled();
+  });
+
+  it('allows a second revision on the same day', async () => {
+    const { service, employee, salaryRevision } = build();
+    employee.findFirst.mockResolvedValue(employeeRow(PAY));
+    employee.update.mockResolvedValueOnce(
+      employeeRow({ ...PAY, basic: D(21000) }),
+    );
+    await service.update(CALLER, 'emp-1', { basic: 21000 } as never);
+
+    employee.findFirst.mockResolvedValue(
+      employeeRow({ ...PAY, basic: D(21000) }),
+    );
+    employee.update.mockResolvedValueOnce(
+      employeeRow({ ...PAY, basic: D(23000) }),
+    );
+    await service.update(CALLER, 'emp-1', { basic: 23000 } as never);
+
+    expect(salaryRevision.create).toHaveBeenCalledTimes(2);
+    expect(salaryRevision.create.mock.calls[1][0].data).toMatchObject({
+      previousBasic: D(21000),
+      basic: D(23000),
+    });
+  });
+
+  it('does not record the initial salary at create as a revision', async () => {
+    const { service, employee, salaryRevision } = build();
+    employee.create.mockResolvedValue(employeeRow(PAY));
+    await service.create(CALLER, 'co-1', { basic: 20000 } as never);
+    expect(salaryRevision.create).not.toHaveBeenCalled();
   });
 });

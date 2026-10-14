@@ -18,6 +18,11 @@ import type {
 } from './dto/create-employee.dto';
 import type { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { PiiCipherService } from './pii-cipher.service';
+import {
+  EMPLOYEE_SALARY_COLUMNS,
+  SalaryRevisionsService,
+  headsOfEmployee,
+} from '../salary-revisions/salary-revisions.service';
 
 /** The four regulated-PII fields, mapped to the columns that store them. */
 const PII_COLUMNS = {
@@ -58,6 +63,7 @@ export class EmployeesService {
     private readonly pii: PiiCipherService,
     private readonly employeeCode: EmployeeCodeService,
     private readonly auditLog: AuditLogService,
+    private readonly salaryRevisions: SalaryRevisionsService,
   ) {}
 
   /** The employee record for an account, or null if the account has none. */
@@ -349,11 +355,50 @@ export class EmployeesService {
       esicNumber: dto.esicNumber ?? existing.esicNumber,
     });
 
-    const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.update({
-        where: { id: employeeId },
-        data: this.toColumns(dto) as Prisma.EmployeeUncheckedUpdateInput,
-      }),
+    // A salary edited here is a salary revision (2026-10-14). The increment letter quotes the
+    // latest revision's "revised from ₹X to ₹Y", so a pay change made on the employee form that
+    // left no revision behind would leave that letter quoting the change *before* it — or, for
+    // an employee never revised through the revisions screen, nothing at all. Recorded in the
+    // same transaction as the update, with the heads re-read inside it, so the snapshot of what
+    // was replaced is the row the update actually replaced.
+    const touchesSalary = EMPLOYEE_SALARY_COLUMNS.some(
+      (column) => dto[column] !== undefined,
+    );
+    const { updated, revisionId } = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const before = touchesSalary
+          ? await tx.employee.findFirst({
+              where: { id: employeeId },
+              select: {
+                basic: true,
+                hra: true,
+                conveyanceAllowance: true,
+                siteAllowance: true,
+                specialAllowance: true,
+              },
+            })
+          : null;
+        const updated = await tx.employee.update({
+          where: { id: employeeId },
+          data: this.toColumns(dto) as Prisma.EmployeeUncheckedUpdateInput,
+        });
+        if (!before) return { updated, revisionId: null };
+        // Dated today in the business time zone, as the revisions endpoint bounds its dates.
+        // Several on one day are allowed: each edit is its own step, and the latest is the
+        // one the letter quotes.
+        const recorded = await this.salaryRevisions.recordInTx(tx, {
+          companyId: updated.companyId,
+          employeeId,
+          effectiveFrom: this.salaryRevisions.today(),
+          previous: headsOfEmployee(before),
+          next: headsOfEmployee(updated),
+          remarks: 'Changed on the employee record',
+          createdByUserId: caller.userId,
+        });
+        return { updated, revisionId: recorded?.revision.id ?? null };
+      },
     );
 
     // The changed field *names* only — never the values. A before/after snapshot
@@ -363,7 +408,10 @@ export class EmployeesService {
       entityType: AuditEntityType.EMPLOYEE,
       action: AuditAction.UPDATE,
       entityId: employeeId,
-      changes: { fields: Object.keys(dto) },
+      changes: {
+        fields: Object.keys(dto),
+        ...(revisionId ? { salaryRevisionId: revisionId } : {}),
+      },
       accountId: caller.userId,
       companyId: existing.companyId,
       ipAddress: caller.ipAddress,

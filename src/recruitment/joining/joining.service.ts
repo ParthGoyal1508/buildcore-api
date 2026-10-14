@@ -124,7 +124,10 @@ export class JoiningService {
       designationId: offer.designationId,
       dateOfJoining: dto.actualJoiningDate,
       reportingToEmployeeId: offer.reportingManagerEmployeeId,
-      permanentAddress: dto.permanentAddress,
+      // The joining form's address wins; the one captured on the candidate is the
+      // fallback, so an address typed once at application is not asked for twice.
+      permanentAddress: dto.permanentAddress || candidate.address || undefined,
+      fatherName: candidate.fatherName ?? undefined,
       mobile: /^\d{10}$/.test(candidate.phone) ? candidate.phone : undefined,
       emergencyContactName: dto.emergencyContact,
     } as CreateEmployeeDto;

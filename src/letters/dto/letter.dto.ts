@@ -54,12 +54,17 @@ export class ComposeLetterDto {
   @IsString()
   subjectId?: string;
 
-  @ApiProperty({
-    description: 'Template variable values, `{{token}}` → text.',
+  @ApiPropertyOptional({
+    description:
+      'Template variable values, `{{token}}` → text. Optional since 2026-10-13: a ' +
+      'declared field is read from the employee, candidate or company record, and a ' +
+      'non-empty value here overrides it. Only `manual` fields and corrections need ' +
+      'sending. See `GET /letters/prefill`.',
     example: { vendorName: 'Shree Constructions', amount: '4,50,000' },
   })
+  @IsOptional()
   @IsObject()
-  variables: Record<string, string>;
+  variables?: Record<string, string>;
 
   @ApiPropertyOptional({
     description:
@@ -73,9 +78,14 @@ export class ComposeLetterDto {
 
 /** Re-render an issued letter (FR-014) — supersede, never overwrite. */
 export class ReissueLetterDto {
-  @ApiProperty({ description: 'The corrected variable values.' })
+  @ApiPropertyOptional({
+    description:
+      'Values typed over the record-derived ones. Empty or absent tokens are re-read ' +
+      'from the records.',
+  })
+  @IsOptional()
   @IsObject()
-  variables: Record<string, string>;
+  variables?: Record<string, string>;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -93,4 +103,22 @@ export class CountersignedLetterDto {
   @IsString()
   @MaxLength(100)
   contentType: string;
+}
+
+/** `GET /letters/prefill` — the compose form, filled in from the records (2026-10-13). */
+export class PrefillLetterQueryDto {
+  @ApiProperty({ example: 'appointment' })
+  @IsString()
+  @MinLength(1)
+  letterKindKey: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  employeeId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  candidateId?: string;
 }

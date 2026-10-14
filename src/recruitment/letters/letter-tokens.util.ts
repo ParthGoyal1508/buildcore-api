@@ -92,10 +92,8 @@ export function extractTokens(body: string): string[] {
  * fixture `letter-kind-field.spec.ts` checks that backfill against.
  */
 
-/** Substitutes `{{token}}` with values; an unresolved token renders empty. */
-export function renderTemplate(
-  body: string,
-  values: Record<string, string>,
-): string {
-  return body.replace(TOKEN_RE, (_, token: string) => values[token] ?? '');
-}
+/*
+ * `renderTemplate()` lived here too, and went with recruitment's own PDF renderer on
+ * 2026-10-14: recruitment's letters are composed by `LettersService` now, which substitutes
+ * through `src/letters/template-resolver.ts`.
+ */

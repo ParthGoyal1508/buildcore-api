@@ -30,10 +30,21 @@ export const LETTER_KIND_FORBIDDEN = 'LETTER_KIND_FORBIDDEN';
 /** A kind requiring a signature was issued without naming a signatory. */
 export const SIGNATORY_REQUIRED = 'SIGNATORY_REQUIRED';
 
+/**
+ * An edit to the body or name of a template whose wording this product manages (2026-10-14).
+ *
+ * The shipped kinds with a standard template (offer, appointment, relieving …) carry the same
+ * wording for every company, re-applied on every application start. Accepting the edit would
+ * look like it worked and then be silently undone at the next deploy, so it is refused instead.
+ */
+export const LETTER_TEMPLATE_STANDARD_LOCKED =
+  'LETTER_TEMPLATE_STANDARD_LOCKED';
+
 export type LetterErrorCode =
   | typeof DOCUMENT_TYPE_RESTRICTED
   | typeof LETTER_TEMPLATE_MISSING
   | typeof LETTER_ALREADY_ISSUED
   | typeof LETTER_NOT_ISSUED
   | typeof LETTER_KIND_FORBIDDEN
-  | typeof SIGNATORY_REQUIRED;
+  | typeof SIGNATORY_REQUIRED
+  | typeof LETTER_TEMPLATE_STANDARD_LOCKED;

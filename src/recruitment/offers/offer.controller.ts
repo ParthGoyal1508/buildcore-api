@@ -21,6 +21,7 @@ import {
   CreateOfferDto,
   DeclineOfferDto,
 } from './dto/offer.dto';
+import { GenerateOfferLetterDto } from '../letters/dto/letter.dto';
 import { OfferService } from './offer.service';
 
 @ApiTags('Recruitment')
@@ -57,8 +58,11 @@ export class OfferController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Ip() ip: string,
+    // Optional: a request with no body generates as before, with the letter's manual
+    // fields (duty hours) to be supplied or refused by name.
+    @Body() dto: GenerateOfferLetterDto = {},
   ) {
-    return this.offers.generate(caller, id, ip);
+    return this.offers.generate(caller, id, ip, dto);
   }
 
   @Patch('offers/:id/accept')

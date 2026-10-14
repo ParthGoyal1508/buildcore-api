@@ -2012,6 +2012,7 @@ one account per employee, any number of employees with no account.']
   firstName String
   lastName String
   title String
+  fatherName String [note: 'Printed as "S/O" on HR letters. Not regulated PII; captured at hiring.']
   dob DateTime
   gender Gender
   maritalStatus MaritalStatus
@@ -2109,6 +2110,7 @@ somebody can still fix it.']
   salaryAdvances SalaryAdvance [not null]
   punchRefusals PunchRefusal [not null, note: '020 FR-013c: punches refused for this employee.']
   locationAssignments EmployeeLocationAssignment [not null, note: '020 FR-011: which location this employee\'s punches validate against, and its history.']
+  salaryRevisions SalaryRevision [not null, note: 'Pay revisions, oldest first. The increment letter reads the latest one.']
 
   indexes {
     (companyId, employeeCode) [unique]
@@ -2118,6 +2120,33 @@ somebody can still fix it.']
 account to the site, shift, and attendance data that hang off it. A future HR &
 Payroll admin feature extends this (department, designation, joining date)
 rather than redefining it (research.md §9).'
+}
+
+Table SalaryRevision {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  effectiveFrom DateTime [not null]
+  previousBasic Decimal
+  previousHra Decimal
+  previousConveyance Decimal
+  previousSiteAllowance Decimal
+  previousSpecialAllowance Decimal
+  basic Decimal
+  hra Decimal
+  conveyance Decimal
+  siteAllowance Decimal
+  specialAllowance Decimal
+  remarks String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One pay revision: the heads before and after, and the day it took effect.
+
+The employee\'s own salary columns stay the figures payroll pays; a revision is the dated
+record of why they changed, which is what an increment letter states. Recording one writes
+the new heads onto the employee in the same transaction, so the two cannot disagree.'
 }
 
 Table FaceEnrolment {
@@ -4824,6 +4853,8 @@ Table Candidate {
   requisitionId String [not null]
   requisition Requisition [not null]
   fullName String [not null]
+  fatherName String [note: 'Printed as "S/O" on the offer letter, and carried to the employee at joining.']
+  address String [note: 'Postal address the offer letter is sent to, carried to the employee at joining.']
   phone String [not null]
   email String [not null]
   totalExperienceYears Decimal [not null]
@@ -6101,6 +6132,8 @@ Ref: RABillLine.workOrderBoqItemId > WorkOrderBOQItem.id [delete: Restrict]
 Ref: ProjectBudget.projectId > Project.id [delete: Cascade]
 
 Ref: ProjectDocument.projectId > Project.id [delete: Cascade]
+
+Ref: SalaryRevision.employeeId > Employee.id [delete: Cascade]
 
 Ref: FaceEnrolment.employeeId - Employee.id [delete: Cascade]
 

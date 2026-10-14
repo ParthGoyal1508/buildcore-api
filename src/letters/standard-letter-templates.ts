@@ -1,36 +1,56 @@
 import { LetterFieldSource } from '@prisma/client';
 
 /**
- * The letters the client actually sends, as templates (2026-10-11).
+ * The letters the client actually sends, as templates (2026-10-11, extended 2026-10-13).
  *
  * ## Where these came from
  *
- * Six Word documents the client supplied, transcribed: their offer letter, appointment
- * letter with Annexure I, relieving letter, increment letter and payment advice — plus an
- * experience letter drafted here, because the file named "Experience Letter.docx" is
- * headed *Relieving Letter* and the client confirmed it is the relieving one. The
- * experience letter is the only body in this file that is not their own wording, and it is
- * marked as such where it is defined so nobody mistakes it for a transcription.
+ * The Word documents the client supplied (`docs/HR_DOCS/`), transcribed: offer letter,
+ * appointment letter with Annexure I, experience letter, relieving letter, increment
+ * letter, transfer letter, termination letter and the full & final settlement sheet — plus
+ * the payment advice. In every one of their files the variable text is highlighted yellow;
+ * each highlighted run is a token here, and the unhighlighted wording is theirs.
+ *
+ * Two of their files are named after each other's contents, which is worth knowing before
+ * anybody "corrects" a body against them: "Experience Letter (1).docx" carries the
+ * certifying text ("worked as … from … to … posted at … with our entire satisfaction") but
+ * is headed *Relieving Letter*, and "Reliving Letter.docx" carries the resignation-accepted
+ * text. Each template takes the wording that fits its kind; the heading on the page is the
+ * kind's label, which the renderer prints, not a line in the body.
  *
  * Names, salaries and addresses in the source documents belonged to real people. Every one
- * is a token here; none of them survive as text.
+ * is a token here; none of them survive as text. So do the copy-paste slips: the transfer
+ * letter's last sentence names a different project ("Jaipur Ring Road") from the one the
+ * employee is being transferred to, and here both are the destination.
  *
  * ## Why the bodies live in code
  *
- * `LetterTemplate` rows are per company and editable — that is the point of the template
- * screen, and a company that rewrites its offer letter must keep the rewrite. So these are
- * **starting values**, installed once per company and never pushed again, exactly as
- * `ChainsService.seedDefaultsForCompany` treats the approval chains. The alternative, a
- * body read from code at render time, would silently discard an edit the first time
- * anybody made one.
+ * `LetterTemplate` rows are per company, because composing resolves the company's active row
+ * for the kind. They used to be **starting values**, installed once and then the company's to
+ * rewrite. Since 2026-10-14 they are not: the standard wording is the same for every company,
+ * and `StandardTemplatesService` brings every company's copy of these kinds up to the body and
+ * name below on every application start (creating it where missing). Editing the body or name
+ * of one of these templates is refused (`LETTER_TEMPLATE_STANDARD_LOCKED`) — it would be
+ * silently overwritten at the next start. A change to the wording is a change to this file.
+ *
+ * Company-defined kinds, and shipped kinds with no entry here, keep their own editable
+ * templates.
  *
  * ## Tokens and their sources
  *
  * Every token is declared with where its value comes from, because a token with no
  * declaration renders blank, and a blank in a signed letter is indistinguishable from a
- * deliberate omission. `employee` and `candidate` fields are read off the record;
- * `manual` means typed at issue, which is the honest answer for a reporting manager's
- * mobile number or the particulars of a bank transfer.
+ * deliberate omission. `employee` and `candidate` fields are read off the record whose
+ * keys the letters registry publishes (`fullName`, `designation`, `basicAnnual`,
+ * `revision.ctc`, `fnf.net` …) and **pre-fill** the compose screen; HR can still overwrite
+ * any of them before issuing. `manual` means typed at issue, which is the honest answer for
+ * whom work is handed over to or the particulars of a bank transfer.
+ *
+ * `isRequired` is false where a blank is a legitimate outcome — a father's name the record
+ * never held, a mobile number, every line of the F&F sheet nobody has a figure for yet —
+ * and true for the facts a letter exists to state: whose it is, what post, which dates.
+ * Those stay required even when the record may lack them, so the gap is typed rather than
+ * printed.
  *
  * The salary annexure uses **the heads this system actually holds** — Basic, HRA,
  * Conveyance, Site Allowance, Special Allowance — not the Dearness and Medical rows the
@@ -51,7 +71,7 @@ export interface StandardField {
 export interface StandardLetterTemplate {
   /** The shipped `LetterKind.key` this template is for. */
   kindKey: string;
-  /** Shown in the template list; the company may rename its copy. */
+  /** Shown in the template list. Managed like the body: a company copy is renamed back. */
   name: string;
   body: string;
   fields: StandardField[];
@@ -114,10 +134,10 @@ const company = (
 /**
  * Who the letter is about, in the third person.
  *
- * Fields rather than fixed wording, and rather than a guess. A relieving letter is about
- * one named person whose pronouns the HR office knows and this system does not — the
- * client's own draft says "he" throughout because it was written for one man. The default
- * offered is they/them/their, which is correct for anybody.
+ * Fields rather than fixed wording. An experience letter is about one named person — the
+ * client's own draft says "he" throughout because it was written for one man. The record
+ * derives the forms from the employee's gender (they/them/their when it is not recorded,
+ * which is correct for anybody), and HR can overwrite them at issue like any other field.
  *
  * **Three forms, because English needs three.** Rendering the first draft of these
  * templates produced "we found *he* a sincere employee" and "we wish *his* good luck":
@@ -126,11 +146,27 @@ const company = (
  * substitution, and "he is amiable in nature" mid-paragraph is the other half of the same
  * bug.
  */
-const PRONOUN_SUBJECT = manual('pronounSubject', 'Pronoun — they / he / she');
-const PRONOUN_OBJECT = manual('pronounObject', 'Pronoun — them / him / her');
-const PRONOUN_POSSESSIVE = manual(
+const PRONOUN_OBJECT = employee(
+  'pronounObject',
+  'Pronoun — them / him / her',
+  'pronounObject',
+);
+const PRONOUN_POSSESSIVE = employee(
   'pronounPossessive',
   'Pronoun — their / his / her',
+  'pronounPossessive',
+);
+
+/**
+ * "Mr." / "Ms.", as the client's letters address people. Not required: the record leaves
+ * it empty when neither a title nor a gender is held, and a letter reading "Dear Ravi
+ * Sharma" is correct, where one reading "Dear Mr. Ravi Sharma" for a woman is not.
+ */
+const SALUTATION = employee(
+  'salutation',
+  'Salutation — Mr. / Ms.',
+  'salutation',
+  false,
 );
 
 /** The company block every letter closes with. */
@@ -225,15 +261,30 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       candidate('address', 'Address', 'address', false),
       candidate('mobile', 'Mobile', 'phone', false),
       candidate('email', 'Email', 'email', false),
-      manual('postOffered', 'Post offered'),
-      manual('placeOfPosting', 'Place of posting'),
-      manual('joiningDate', 'Expected joining date'),
-      manual('reportingManager', 'Reporting manager'),
-      manual('reportingManagerMobile', 'Reporting manager’s mobile', false),
+      // The terms come off the candidate's latest offer, which is where Recruitment
+      // recorded them; HR still sees and can change each one before the letter is issued.
+      candidate('postOffered', 'Post offered', 'offer.designation'),
+      candidate('placeOfPosting', 'Place of posting', 'offer.placeOfPosting'),
+      candidate('joiningDate', 'Expected joining date', 'offer.joiningDate'),
+      candidate(
+        'reportingManager',
+        'Reporting manager',
+        'offer.reportingManager',
+      ),
+      candidate(
+        'reportingManagerMobile',
+        'Reporting manager’s mobile',
+        'offer.reportingManagerMobile',
+        false,
+      ),
       manual('dutyStart', 'Duty start time'),
       manual('dutyEnd', 'Duty end time'),
-      manual('probationMonths', 'Probation period (months)'),
-      manual('noticeDays', 'Notice period (days)'),
+      candidate(
+        'probationMonths',
+        'Probation period (months)',
+        'offer.probationMonths',
+      ),
+      candidate('noticeDays', 'Notice period (days)', 'offer.noticeDays'),
       COMPANY_FIELD,
     ],
   },
@@ -384,34 +435,27 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     fields: [
       employee('employeeName', 'Employee name', 'fullName'),
       employee('fatherName', 'Father’s name', 'fatherName', false),
-      employee('address', 'Address', 'permanentAddress', false),
+      employee('address', 'Address', 'address', false),
       employee('mobile', 'Mobile', 'phone', false),
       employee('email', 'Email', 'email', false),
-      employee('designation', 'Designation', 'designation.name'),
-      manual('placeOfPosting', 'Place of posting'),
+      employee('designation', 'Designation', 'designation'),
+      employee('placeOfPosting', 'Place of posting', 'placeOfPosting'),
       manual('responsibilities', 'Area of responsibility'),
-      manual('contractStartDate', 'Contract start date'),
+      employee('contractStartDate', 'Contract start date', 'dateOfJoining'),
       manual('probationMonths', 'Probation period (months)'),
       manual('noticeMonths', 'Notice period (months)'),
       manual('paidLeavesPerMonth', 'Paid leave days per month'),
       manual('retirementAge', 'Retirement age'),
       // The annexure, off the employee's own salary heads. Annual figures are the
-      // monthly ones × 12, resolved alongside them rather than typed — see
-      // `letter-prefill.ts`, which is also why these are `employee` and not `manual`.
+      // monthly ones × 12, resolved by the employee record alongside them (`basicAnnual`
+      // beside `basic`) rather than typed, which is why these are `employee` and not
+      // `manual`.
       employee('basicMonthly', 'Basic — monthly', 'basic'),
-      employee('basicAnnual', 'Basic — annually', 'basic.annual'),
+      employee('basicAnnual', 'Basic — annually', 'basicAnnual'),
       employee('hraMonthly', 'HRA — monthly', 'hra'),
-      employee('hraAnnual', 'HRA — annually', 'hra.annual'),
-      employee(
-        'conveyanceMonthly',
-        'Conveyance — monthly',
-        'conveyanceAllowance',
-      ),
-      employee(
-        'conveyanceAnnual',
-        'Conveyance — annually',
-        'conveyanceAllowance.annual',
-      ),
+      employee('hraAnnual', 'HRA — annually', 'hraAnnual'),
+      employee('conveyanceMonthly', 'Conveyance — monthly', 'conveyance'),
+      employee('conveyanceAnnual', 'Conveyance — annually', 'conveyanceAnnual'),
       employee(
         'siteAllowanceMonthly',
         'Site allowance — monthly',
@@ -420,7 +464,7 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       employee(
         'siteAllowanceAnnual',
         'Site allowance — annually',
-        'siteAllowance.annual',
+        'siteAllowanceAnnual',
       ),
       employee(
         'specialAllowanceMonthly',
@@ -430,56 +474,61 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       employee(
         'specialAllowanceAnnual',
         'Special allowance — annually',
-        'specialAllowance.annual',
+        'specialAllowanceAnnual',
       ),
       employee('grossMonthly', 'Gross — monthly', 'gross'),
-      employee('grossAnnual', 'Gross — annually', 'gross.annual'),
+      employee('grossAnnual', 'Gross — annually', 'grossAnnual'),
       employee('pfEmployerMonthly', 'Employer PF — monthly', 'pfEmployer'),
       employee(
         'pfEmployerAnnual',
         'Employer PF — annually',
-        'pfEmployer.annual',
+        'pfEmployerAnnual',
       ),
       employee('esicEmployerMonthly', 'Employer ESI — monthly', 'esicEmployer'),
       employee(
         'esicEmployerAnnual',
         'Employer ESI — annually',
-        'esicEmployer.annual',
+        'esicEmployerAnnual',
       ),
       employee('ctcMonthly', 'Total CTC — monthly', 'ctc'),
-      employee('ctcAnnual', 'Total CTC — annually', 'ctc.annual'),
+      employee('ctcAnnual', 'Total CTC — annually', 'ctcAnnual'),
       COMPANY_FIELD,
     ],
   },
 
-  // ───────────────────────────────────────────────────────── relieving ──────
+  // ──────────────────────────────────────────────────────── experience ──────
   {
-    kindKey: 'relieving',
-    name: 'Relieving letter',
+    kindKey: 'experience',
+    name: 'Experience letter',
+    // "Experience Letter (1).docx". The file is headed *Relieving Letter*, but this is the
+    // certifying text, and the client asked for it to be issued as the experience letter;
+    // the page heading is the kind's label. Their "Mr. … S/o-Mr. …" and "him" are tokens,
+    // and their "no objection to all him in any better position" is put into English.
     body: [
-      'This is to certify that {{employeeName}}, S/O {{fatherName}}, worked as ' +
-        '{{designation}} in our company from {{fromDate}} to {{toDate}}, posted at ' +
-        '{{postingLocation}}, to our entire satisfaction.',
-      '',
-      'During {{pronounPossessive}} working period we found {{pronounObject}} to be a ' +
-        'sincere, honest, hardworking and dedicated employee with a professional attitude ' +
-        'and very good job knowledge, and amiable in nature and character.',
+      'This is to certify that {{salutation}} {{employeeName}}, S/o {{fatherName}}, ' +
+        'worked as {{designation}} in our company from {{fromDate}} to {{toDate}}, ' +
+        'posted at {{postingLocation}}, with our entire satisfaction. During ' +
+        '{{pronounPossessive}} working period we found {{pronounObject}} to be a sincere, ' +
+        'honest, hardworking and dedicated employee with a professional attitude and very ' +
+        'good job knowledge, and amiable in nature and character as well.',
       '',
       'We have no objection to {{pronounPossessive}} taking up any better position, and ' +
-        'there are no liabilities outstanding against {{pronounPossessive}} name in our ' +
-        'company.',
+        'there are no liabilities outstanding against {{pronounObject}} in our company.',
       '',
       'We wish {{pronounObject}} good luck for future assignments.',
       '',
       'For {{companyName}}',
     ].join('\n'),
     fields: [
+      SALUTATION,
       employee('employeeName', 'Employee name', 'fullName'),
       employee('fatherName', 'Father’s name', 'fatherName', false),
-      employee('designation', 'Designation', 'designation.name'),
-      manual('fromDate', 'Employed from'),
-      manual('toDate', 'Employed to'),
-      manual('postingLocation', 'Place of posting'),
+      employee('designation', 'Designation', 'designation'),
+      employee('fromDate', 'Worked from', 'dateOfJoining'),
+      // The exit record's last working day. Required although the record may not hold it
+      // yet: the dates are what the next employer reads this letter for.
+      employee('toDate', 'Worked to', 'exit.lastWorkingDay'),
+      employee('postingLocation', 'Place of posting', 'placeOfPosting'),
       // Object and possessive only. The body never needs the subject form, and a field
       // declared but unused is a box somebody fills in whose answer goes nowhere.
       PRONOUN_OBJECT,
@@ -488,42 +537,47 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     ],
   },
 
-  // ──────────────────────────────────────────────────────── experience ──────
+  // ───────────────────────────────────────────────────────── relieving ──────
   {
-    kindKey: 'experience',
-    name: 'Experience certificate',
-    // **Not a transcription.** The file the client named "Experience Letter.docx" is
-    // headed *Relieving Letter* and they confirmed on 2026-10-11 that it is the relieving
-    // one. This is drafted in the same register for review: it certifies the engagement
-    // and the work, and deliberately carries no release of liability and no "no
-    // objection" clause, because those belong to the relieving letter and an experience
-    // certificate is often issued while somebody is still employed.
+    kindKey: 'relieving',
+    name: 'Relieving letter',
+    // "Reliving Letter.docx": the resignation accepted, the relieving date, and the
+    // experience letter held back until the full and final settlement — which is why the
+    // two are separate kinds and issued at different times.
     body: [
-      'TO WHOMSOEVER IT MAY CONCERN',
+      'Name: {{salutation}} {{employeeName}}',
+      'Project: {{projectName}}',
       '',
-      'This is to certify that {{employeeName}}, S/O {{fatherName}}, has been associated ' +
-        'with {{companyName}} as {{designation}} from {{fromDate}} to {{toDate}}, posted ' +
-        'at {{postingLocation}}.',
+      'Dear {{salutation}} {{employeeName}},',
       '',
-      'During this period {{pronounSubject}} was responsible for {{responsibilities}}. We ' +
-        'found {{pronounPossessive}} work sincere, diligent and of a consistently ' +
-        'professional standard, and {{pronounPossessive}} conduct throughout the ' +
-        'engagement to be good.',
+      'In reference to your resignation dated {{resignationDate}} stating your intention ' +
+        'to resign from the position of {{designation}} held at {{companyName}}, we would ' +
+        'like to inform you that your resignation from the services of the organisation ' +
+        'has been accepted.',
       '',
-      'This certificate is issued at the request of the employee.',
+      'You have been relieved from all your duties and responsibilities at the close of ' +
+        'office hours of {{relievingDate}}. You have submitted all the company documents, ' +
+        'technical equipment and all other company properties to your Project Manager / ' +
+        'Department Head.',
       '',
+      'Your experience letter shall be issued to you subject to the full and final ' +
+        'settlement of dues, if any.',
+      '',
+      'We thank you for your services in {{companyName}} and wish you success in your ' +
+        'future endeavours.',
+      '',
+      'With best regards,',
       'For {{companyName}}',
     ].join('\n'),
     fields: [
+      SALUTATION,
       employee('employeeName', 'Employee name', 'fullName'),
-      employee('fatherName', 'Father’s name', 'fatherName', false),
-      employee('designation', 'Designation', 'designation.name'),
-      manual('fromDate', 'Associated from'),
-      manual('toDate', 'Associated to'),
-      manual('postingLocation', 'Place of posting'),
-      manual('responsibilities', 'Responsibilities held'),
-      PRONOUN_SUBJECT,
-      PRONOUN_POSSESSIVE,
+      employee('projectName', 'Project', 'projectName', false),
+      employee('resignationDate', 'Resignation dated', 'resignation.date'),
+      employee('designation', 'Position held', 'designation'),
+      // The exit record's date. Where only the accepted resignation carries one, HR types
+      // it — this letter states when somebody stopped being responsible for a site.
+      employee('relievingDate', 'Relieved at close of', 'exit.lastWorkingDay'),
       COMPANY_FIELD,
     ],
   },
@@ -567,12 +621,368 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       employee('employeeCode', 'Employee code', 'employeeCode'),
       employee('email', 'Email', 'email', false),
       employee('mobile', 'Mobile', 'phone', false),
-      employee('designation', 'Designation', 'designation.name'),
-      manual('placeOfPosting', 'Place of posting'),
-      manual('effectiveDate', 'Effective from'),
-      manual('revisedCtcMonthly', 'Revised CTC (per month)'),
-      manual('revisedCtcWords', 'Revised CTC in words'),
+      employee('designation', 'Designation', 'designation'),
+      employee('placeOfPosting', 'Place of posting', 'placeOfPosting'),
+      // Off the employee's latest salary revision — the record of the increment this
+      // letter announces. An employee with no revision yet leaves these for HR to type.
+      employee('effectiveDate', 'Effective from', 'revision.effectiveFrom'),
+      employee('revisedCtcMonthly', 'Revised CTC (per month)', 'revision.ctc'),
+      employee(
+        'revisedCtcWords',
+        'Revised CTC in words',
+        'revision.ctcInWords',
+      ),
       COMPANY_FIELD,
+    ],
+  },
+
+  // ────────────────────────────────────────────────────────── transfer ──────
+  {
+    kindKey: 'transfer',
+    name: 'Transfer letter',
+    // "Transfer letter.docx". Its closing sentence names "Jaipur Ring Road" while the
+    // letter transfers the employee to a different project — a copy-paste leftover — so
+    // both mentions are the destination here.
+    //
+    // The acceptance lines come before the sign-off rather than after it, as they do in the
+    // source: the renderer draws the company's signature after the body, and an
+    // employee's "Signature: ___" printed under the director's reads as if it were his.
+    body: [
+      'To,',
+      '{{employeeName}}',
+      'S/O: {{fatherName}}',
+      '{{address}}',
+      'Contact No.: {{mobile}}',
+      'Email ID: {{email}}',
+      '',
+      'Dear {{employeeName}},',
+      '',
+      'We hope this letter finds you well. This is to inform you that, due to the ' +
+        'operational requirements of the company, you are being transferred to ' +
+        '{{toProject}}. You are required to report to the {{reportingSite}} site on ' +
+        '{{reportingDate}}. Your duties and responsibilities will remain consistent with ' +
+        'your current role as {{designation}}, and we are confident that your skills and ' +
+        'experience will greatly contribute to the {{toProject}} project during this ' +
+        'period.',
+      '',
+      'Should you need any further information, please feel free to contact the HR ' +
+        'department.',
+      '',
+      'Please confirm your acceptance by signing and returning this letter.',
+      '',
+      'Signature: ______________________      Date: ______________',
+      '',
+      'Regards,',
+      'For {{companyName}}',
+    ].join('\n'),
+    fields: [
+      employee('employeeName', 'Employee name', 'fullName'),
+      employee('fatherName', 'Father’s name', 'fatherName', false),
+      employee('address', 'Address', 'address', false),
+      employee('mobile', 'Contact no.', 'phone', false),
+      employee('email', 'Email', 'email', false),
+      // The latest location assignment is the transfer. Required: an assignment may not
+      // have been recorded yet, and then HR types where the person is going.
+      employee('toProject', 'Transferred to (project)', 'transfer.toProject'),
+      employee('reportingSite', 'Report at (site)', 'transfer.toSite'),
+      employee('reportingDate', 'Report on', 'transfer.effectiveFrom'),
+      employee('designation', 'Current role', 'designation'),
+      COMPANY_FIELD,
+    ],
+  },
+
+  // ─────────────────────────────────────────────────────── termination ──────
+  {
+    kindKey: 'termination',
+    name: 'Termination letter',
+    // "Terminataion letter.docx". The reasons are deliberately not stated — the client's
+    // letter says only that they are specific — and nothing here adds a field for them.
+    body: [
+      'To,',
+      '{{employeeName}}',
+      '{{designation}}',
+      'Project Name: {{projectName}}',
+      '',
+      'Sub: Termination of employment from the company',
+      '',
+      'This letter is to inform you that your employment with {{companyName}} as ' +
+        '{{designation}} is terminated, effective from {{effectiveDate}}. This decision ' +
+        'has been reached after careful consideration and is based on some specific ' +
+        'reasons.',
+      '',
+      'Your final settlement will include all pending salary, accrued leave and other ' +
+        'dues as per company policy.',
+      '',
+      'Please return all company property, company documents and all other documents on ' +
+        'or before your last working day.',
+      '',
+      'You are requested to complete a handover of site-related work to your reporting ' +
+        'authority, {{handoverTo}}.',
+      '',
+      'Regards,',
+      'For {{companyName}}',
+      'HR Department',
+    ].join('\n'),
+    fields: [
+      employee('employeeName', 'Employee name', 'fullName'),
+      employee('designation', 'Designation', 'designation'),
+      employee('projectName', 'Project name', 'projectName', false),
+      employee(
+        'effectiveDate',
+        'Terminated with effect from',
+        'exit.lastWorkingDay',
+      ),
+      // Typed: the person a site is handed to is decided on the day, and is not always
+      // the reporting manager on record.
+      manual('handoverTo', 'Hand over to (name and site)'),
+      COMPANY_FIELD,
+    ],
+  },
+
+  // ──────────────────────────────────────────────────── F&F settlement ──────
+  {
+    kindKey: 'fnf_settlement',
+    name: 'Full & final settlement sheet',
+    // "Full_and_Final_Settlement_Format.docx", sections A–H, as pipe tables. A sheet, not a
+    // letter: no signature from the renderer, and the sign-offs are the rows of section F
+    // and G, completed by hand.
+    //
+    // Figures come from the exit computation (`fnf.*`) where it has them. Everything the
+    // records do not hold — reference numbers, overtime, asset recoveries, who prepared and
+    // approved it — is a field HR may leave empty, because a blank cell on this sheet is
+    // what the client's own form has until somebody writes in it.
+    //
+    // Three deliberate departures from the Word file. Amounts carry "(Rs.)" in the
+    // heading rather than "₹" in the cell, and tick boxes are "[ ]" rather than "☐": the
+    // renderer's built-in font has neither glyph, and both printed as garbage. The "PAN /
+    // UAN" row asks for the UAN only — a letter never carries a PAN. The ref. no. and date
+    // in the form's header are the letter's own, printed by the renderer.
+    body: [
+      'HR & ADMINISTRATION DEPARTMENT – CONFIDENTIAL',
+      '',
+      '| Project / Site | {{placeOfPosting}} | Cost Centre | {{costCentre}} |',
+      '',
+      'A. EMPLOYEE & EXIT DETAILS',
+      '',
+      '| Employee Name | {{employeeName}} | Employee Code | {{employeeCode}} |',
+      '| Designation | {{designation}} | Department | {{department}} |',
+      '| Project / Site / Location | {{placeOfPosting}} | Reporting Manager | {{reportingManager}} |',
+      '| Date of Joining | {{dateOfJoining}} | Employment Type | {{employmentType}} |',
+      '| Resignation Date | {{resignationDate}} | Resignation Accepted On | {{resignationAcceptedOn}} |',
+      '| Notice Period Required | {{noticeRequiredDays}} days | Notice Period Served | {{noticeServedDays}} days |',
+      '| Last Working Day | {{lastWorkingDay}} | Exit Reason | {{exitReason}} |',
+      '| Monthly Gross Salary (Rs.) | {{monthlyGross}} | Payroll Month / Period | {{payrollPeriod}} |',
+      '| Bank Account (last 4 digits only) | {{bankLast4}} | UAN (if needed) | {{uan}} |',
+      '',
+      'B. EARNINGS / AMOUNTS PAYABLE',
+      '',
+      '| Sr. No. | Particulars | Basis / Period | Amount (Rs.) |',
+      '| --- | --- | --- | --- |',
+      '| 1 | Salary payable up to Last Working Day | Days: {{salaryDays}} | {{salaryPayable}} |',
+      '| 2 | Overtime / approved extra duty (if applicable) | Period: {{overtimePeriod}} | {{overtimeAmount}} |',
+      '| 3 | Leave encashment (if eligible) | Days: {{leaveEncashmentDays}} | {{leaveEncashment}} |',
+      '| 4 | Approved reimbursement / expenses | Claim Ref.: {{reimbursementRef}} | {{reimbursements}} |',
+      '| 5 | Incentive / bonus / variable pay (if payable) | Period: {{bonusPeriod}} | {{bonus}} |',
+      '| 6 | Gratuity (if eligible; separate verification) | As applicable | {{gratuity}} |',
+      '| 7 | Other payable amount (specify) | {{otherPayableDetail}} | {{otherPayable}} |',
+      '| | TOTAL GROSS AMOUNTS PAYABLE (A) | | {{totalPayable}} |',
+      '',
+      'C. DEDUCTIONS / RECOVERIES (ONLY WHERE LAWFUL AND VERIFIED)',
+      '',
+      '| Sr. No. | Particulars | Reference / Calculation | Amount (Rs.) |',
+      '| --- | --- | --- | --- |',
+      '| 1 | Applicable statutory deductions (e.g., TDS / employee contributions) | Payroll working: {{statutoryRef}} | {{statutoryDeductions}} |',
+      '| 2 | Salary advance / employee loan balance | Ledger Ref.: {{loanRef}} | {{loanRecovery}} |',
+      '| 3 | Notice-period adjustment (if contractually and legally permissible) | Days / basis: {{noticeBasis}} | {{noticeRecovery}} |',
+      '| 4 | Unreturned company asset / verified loss (only if legally recoverable) | Asset / approval: {{assetRef}} | {{assetRecovery}} |',
+      '| 5 | Other authorised and lawful deduction (specify) | Basis / approval: {{otherDeductionBasis}} | {{otherDeductions}} |',
+      '| | TOTAL DEDUCTIONS (B) | | {{totalDeductions}} |',
+      '',
+      'D. NET SETTLEMENT',
+      '',
+      '| Total Gross Amounts Payable (A), Rs. | {{totalPayable}} |',
+      '| Less: Total Deductions (B), Rs. | {{totalDeductions}} |',
+      '| NET AMOUNT PAYABLE TO EMPLOYEE (A - B), Rs. | {{netPayable}} |',
+      '| Amount in Words | {{netInWords}} |',
+      '',
+      'E. DEPARTMENTAL NO-DUES / HANDOVER CLEARANCE',
+      '',
+      '| Department / In-charge | Clearance Status | Remarks / Pending Items | Name, Signature & Date |',
+      '| --- | --- | --- | --- |',
+      '| Reporting Manager / Project Manager | [ ] Clear  [ ] Pending | | |',
+      '| Store / Materials / PPE | [ ] Clear  [ ] Pending  [ ] N/A | | |',
+      '| Plant & Machinery / Transport | [ ] Clear  [ ] Pending  [ ] N/A | | |',
+      '| Accounts / Cash Advance / Imprest | [ ] Clear  [ ] Pending  [ ] N/A | | |',
+      '| IT / Admin / ID Card / SIM | [ ] Clear  [ ] Pending  [ ] N/A | | |',
+      '| HR & Attendance / Leave | [ ] Clear  [ ] Pending | | |',
+      '',
+      'Note: A pending departmental clearance must be recorded with details and escalated ' +
+        'for review. It does not by itself authorise withholding statutory wages or making ' +
+        'an unverified deduction.',
+      '',
+      'F. PAYMENT & APPROVAL DETAILS',
+      '',
+      '| Payment Mode | [ ] Bank Transfer  [ ] Cheque | Payment / UTR Ref. | {{paymentRef}} |',
+      '| Payment Date | {{paymentDate}} | Payment Status | [ ] Paid  [ ] Part-paid  [ ] Pending |',
+      '| Prepared By (HR) | {{preparedBy}} | Checked / Approved By | {{approvedBy}} |',
+      '',
+      'G. EMPLOYEE ACKNOWLEDGEMENT',
+      '',
+      'I acknowledge receipt of the F&F statement and confirm that I have had an ' +
+        'opportunity to review the calculations. My signature confirms receipt/review of ' +
+        'this statement and does not waive any statutory right or prevent me from raising ' +
+        'a genuine discrepancy or claim permitted by law. Any amount shown as pending or ' +
+        'disputed is to be recorded separately.',
+      '',
+      '| Employee Name | {{employeeName}} | Signature | |',
+      '| Date | | HR Witness | |',
+      '',
+      'H. HR FILE CLOSURE CHECKLIST',
+      '',
+      '[ ] Resignation and acceptance filed',
+      '[ ] Handover / departmental clearance filed',
+      '[ ] Attendance and leave balance verified',
+      '[ ] F&F calculation and approval filed',
+      '[ ] Payment proof / UTR filed',
+      '[ ] Relieving / experience letter issued, where applicable',
+      '[ ] Statutory records / benefits updated, where applicable',
+    ].join('\n'),
+    fields: [
+      // A — who and when, off the employee and exit records.
+      employee('employeeName', 'Employee name', 'fullName'),
+      employee('employeeCode', 'Employee code', 'employeeCode'),
+      employee('designation', 'Designation', 'designation'),
+      employee('department', 'Department', 'department', false),
+      employee('placeOfPosting', 'Project / site', 'placeOfPosting', false),
+      manual('costCentre', 'Cost centre', false),
+      employee(
+        'reportingManager',
+        'Reporting manager',
+        'reportingManager',
+        false,
+      ),
+      employee('dateOfJoining', 'Date of joining', 'dateOfJoining', false),
+      employee(
+        'employmentType',
+        'Employment type',
+        'fnf.employmentType',
+        false,
+      ),
+      employee(
+        'resignationDate',
+        'Resignation date',
+        'resignation.date',
+        false,
+      ),
+      manual('resignationAcceptedOn', 'Resignation accepted on', false),
+      employee(
+        'noticeRequiredDays',
+        'Notice period required (days)',
+        'fnf.noticeRequiredDays',
+        false,
+      ),
+      employee(
+        'noticeServedDays',
+        'Notice period served (days)',
+        'fnf.noticeServedDays',
+        false,
+      ),
+      employee(
+        'lastWorkingDay',
+        'Last working day',
+        'exit.lastWorkingDay',
+        false,
+      ),
+      employee('exitReason', 'Exit reason', 'exit.reason', false),
+      employee('monthlyGross', 'Monthly gross salary', 'gross', false),
+      employee(
+        'payrollPeriod',
+        'Payroll month / period',
+        'fnf.payrollPeriod',
+        false,
+      ),
+      employee(
+        'bankLast4',
+        'Bank account (last 4 digits)',
+        'fnf.bankLast4',
+        false,
+      ),
+      employee('uan', 'UAN', 'fnf.uan', false),
+      // B — amounts payable.
+      employee('salaryDays', 'Salary days', 'fnf.salaryDays', false),
+      employee('salaryPayable', 'Salary payable', 'fnf.salaryPayable', false),
+      manual('overtimePeriod', 'Overtime period', false),
+      manual('overtimeAmount', 'Overtime amount', false),
+      employee(
+        'leaveEncashmentDays',
+        'Leave encashment days',
+        'fnf.leaveEncashmentDays',
+        false,
+      ),
+      employee(
+        'leaveEncashment',
+        'Leave encashment',
+        'fnf.leaveEncashment',
+        false,
+      ),
+      manual('reimbursementRef', 'Reimbursement claim ref.', false),
+      employee('reimbursements', 'Reimbursements', 'fnf.reimbursements', false),
+      manual('bonusPeriod', 'Incentive / bonus period', false),
+      employee('bonus', 'Incentive / bonus', 'fnf.bonus', false),
+      employee('gratuity', 'Gratuity', 'fnf.gratuity', false),
+      manual('otherPayableDetail', 'Other payable — details', false),
+      employee('otherPayable', 'Other payable', 'fnf.otherPayable', false),
+      employee(
+        'totalPayable',
+        'Total gross payable (A)',
+        'fnf.totalPayable',
+        false,
+      ),
+      // C — deductions, each with the reference that justifies it.
+      manual('statutoryRef', 'Statutory deductions — payroll working', false),
+      employee(
+        'statutoryDeductions',
+        'Statutory deductions',
+        'fnf.statutoryDeductions',
+        false,
+      ),
+      manual('loanRef', 'Loan / advance — ledger ref.', false),
+      employee(
+        'loanRecovery',
+        'Loan / advance recovery',
+        'fnf.loanRecovery',
+        false,
+      ),
+      manual('noticeBasis', 'Notice adjustment — days / basis', false),
+      employee(
+        'noticeRecovery',
+        'Notice-period adjustment',
+        'fnf.noticeRecovery',
+        false,
+      ),
+      manual('assetRef', 'Asset / loss — approval', false),
+      manual('assetRecovery', 'Asset / loss recovery', false),
+      manual('otherDeductionBasis', 'Other deduction — basis', false),
+      employee(
+        'otherDeductions',
+        'Other deductions',
+        'fnf.otherDeductions',
+        false,
+      ),
+      employee(
+        'totalDeductions',
+        'Total deductions (B)',
+        'fnf.totalDeductions',
+        false,
+      ),
+      // D — the net.
+      employee('netPayable', 'Net payable (A − B)', 'fnf.net', false),
+      employee('netInWords', 'Net payable in words', 'fnf.netInWords', false),
+      // F — payment and approval, completed when the money moves.
+      manual('paymentRef', 'Payment / UTR ref.', false),
+      manual('paymentDate', 'Payment date', false),
+      manual('preparedBy', 'Prepared by (HR)', false),
+      manual('approvedBy', 'Checked / approved by', false),
     ],
   },
 
@@ -643,4 +1053,11 @@ export function tokensIn(body: string): string[] {
   TOKEN_RE.lastIndex = 0;
   while ((match = TOKEN_RE.exec(body)) !== null) found.add(match[1]);
   return [...found];
+}
+
+/** The standard template for a shipped kind, or undefined when this product ships none. */
+export function standardTemplateFor(
+  kindKey: string,
+): StandardLetterTemplate | undefined {
+  return STANDARD_LETTER_TEMPLATES.find((t) => t.kindKey === kindKey);
 }

@@ -3399,6 +3399,8 @@ model Employee {
   firstName     String?
   lastName      String?
   title         String?
+  /// Printed as "S/O" on HR letters. Not regulated PII; captured at hiring.
+  fatherName    String?
   dob           DateTime?      @db.Date
   gender        Gender?
   maritalStatus MaritalStatus?
@@ -3520,9 +3522,46 @@ model Employee {
   /// 020 FR-011: which location this employee's punches validate against, and its history.
   locationAssignments EmployeeLocationAssignment[]
 
+  /// Pay revisions, oldest first. The increment letter reads the latest one.
+  salaryRevisions SalaryRevision[]
+
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([siteId])
+  @@schema("hr")
+}
+
+/// One pay revision: the heads before and after, and the day it took effect.
+///
+/// The employee's own salary columns stay the figures payroll pays; a revision is the dated
+/// record of why they changed, which is what an increment letter states. Recording one writes
+/// the new heads onto the employee in the same transaction, so the two cannot disagree.
+model SalaryRevision {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  effectiveFrom DateTime @db.Date
+
+  previousBasic            Decimal? @db.Decimal(12, 2)
+  previousHra              Decimal? @db.Decimal(12, 2)
+  previousConveyance       Decimal? @db.Decimal(12, 2)
+  previousSiteAllowance    Decimal? @db.Decimal(12, 2)
+  previousSpecialAllowance Decimal? @db.Decimal(12, 2)
+
+  basic            Decimal? @db.Decimal(12, 2)
+  hra              Decimal? @db.Decimal(12, 2)
+  conveyance       Decimal? @db.Decimal(12, 2)
+  siteAllowance    Decimal? @db.Decimal(12, 2)
+  specialAllowance Decimal? @db.Decimal(12, 2)
+
+  remarks         String?
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([employeeId, effectiveFrom])
   @@schema("hr")
 }
 
@@ -8394,6 +8433,10 @@ model Candidate {
   requisition   Requisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
 
   fullName             String
+  /// Printed as "S/O" on the offer letter, and carried to the employee at joining.
+  fatherName           String?
+  /// Postal address the offer letter is sent to, carried to the employee at joining.
+  address              String?
   phone                String
   email                String
   totalExperienceYears Decimal  @db.Decimal(4, 1)

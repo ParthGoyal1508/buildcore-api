@@ -43,6 +43,10 @@ import { ExitCustodyRegistry } from './offboarding/exit-custody.registry';
 import { LocationAssignmentsController } from './location-assignments/location-assignments.controller';
 import { LocationAssignmentsService } from './location-assignments/location-assignments.service';
 import { PunchRefusalsService } from './punch/punch-refusals.service';
+import { SalaryRevisionsController } from './salary-revisions/salary-revisions.controller';
+import { SalaryRevisionsService } from './salary-revisions/salary-revisions.service';
+import { LettersModule } from '../letters/letters.module';
+import { EmployeeLetterSource } from './employees/employee-letter-source';
 
 /**
  * The `hr` module: the employee-facing My Workspace surface.
@@ -73,6 +77,9 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     ApprovalsModule,
     forwardRef(() => ProjectsModule),
     forwardRef(() => PayrollModule),
+    // HR letters pre-fill from the employee record: `EmployeeLetterSource` registers it
+    // into `LetterRecordSources`, so `letters` never reads an `hr` table itself.
+    LettersModule,
   ],
   controllers: [
     LocationAssignmentsController,
@@ -91,8 +98,10 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     LeaveHrAdminController,
     ReEnrolmentRequestsAdminController,
     ReimbursementController,
+    SalaryRevisionsController,
   ],
   providers: [
+    EmployeeLetterSource,
     PunchRefusalsService,
     LocationAssignmentsService,
     ExitCustodyRegistry,
@@ -117,6 +126,7 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     AttendanceHistoryService,
     LeaveService,
     ReimbursementService,
+    SalaryRevisionsService,
     AuditLogService,
     { provide: BiometricsService, useClass: FaceApiBiometricsService },
   ],
@@ -147,6 +157,9 @@ import { PunchRefusalsService } from './punch/punch-refusals.service';
     // is outstanding (021 FR-014a). `payroll` asks this service rather than reading
     // `hr.ExitClearanceWaiver` or the asset register itself — Principle I.
     ExitClearanceService,
+    // Exported for the letters employee source, whose increment letter quotes the latest
+    // revision's effective date and before/after pay without reading `hr.SalaryRevision`.
+    SalaryRevisionsService,
   ],
 })
 export class HrModule {}

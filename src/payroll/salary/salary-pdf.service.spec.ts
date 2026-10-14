@@ -1,8 +1,7 @@
 import {
+  bankRows,
   deductionRows,
   earningRows,
-  employerContributionRows,
-  fullAndActualEarningRows,
   identityRows,
   periodLabel,
   SalaryPdfService,
@@ -73,60 +72,41 @@ const slip: SalarySlipView = {
 };
 
 describe('SalaryPdfService figure mapping', () => {
-  it('maps every earning to its own line, ending with the total', () => {
-    expect(earningRows(slip)).toEqual([
-      ['Basic', 18000],
-      ['HRA', 7200],
-      ['Conveyance', 1600],
-      ['Site Allowance', 2500],
-      ['Special Allowance', 1200],
-      ['Overtime', 1800],
-      ['Total Earnings', 32300],
-    ]);
-  });
-
-  it('maps every deduction to its own line, ending with the total', () => {
+  it('maps every deduction to its own line, in the client’s order, ending with the total', () => {
+    // `docs/HR_DOCS/Parth_Realcon_Payslip.docx`: PF, ESI, PT, (Welfare), Loan, Advance, (Mobile),
+    // (Other), TDS. The bracketed heads have no counterpart in this system and are not printed; the
+    // fuel recovery takes the "Other" slot under its own name (020 FR-007).
     expect(deductionRows(slip)).toEqual([
-      ['PF', 2160],
-      ['ESIC', 243],
+      ['Provident Fund', 2160],
+      ['ESI', 243],
       ['Professional Tax', 200],
-      ['TDS', 0],
-      ['Loan EMI', 1500],
-      ['Advance Recovery', 500],
+      ['Loan', 1500],
+      ['Advance', 500],
       ['Fuel Recovery', 750],
-      ['Total Deductions', 5353],
+      ['T.D.S.', 0],
+      ['Total Deduction', 5353],
     ]);
   });
 
   it('prints a zero deduction rather than omitting the line', () => {
     // A payslip that silently drops nil rows makes an employee wonder whether TDS
     // was deducted and not shown, or genuinely nil.
-    expect(deductionRows(slip).map(([label]) => label)).toContain('TDS');
+    expect(deductionRows(slip).map(([label]) => label)).toContain('T.D.S.');
   });
 
   it('keeps employer contributions out of the deduction lines', () => {
-    // They are informational; showing them among deductions would imply the
-    // employee paid them.
-    const deductionLabels = deductionRows(slip).map(([label]) => label);
-    const employerTotal = employerContributionRows(slip).reduce(
-      (sum, [, amount]) => sum + amount,
-      0,
-    );
-    expect(employerTotal).toBe(slip.employerContributions.total);
-    expect(deductionRows(slip).reduce((s, [, a]) => s + a, 0)).not.toBe(
-      employerTotal,
-    );
-    // Eight since 020 FR-007 added the fuel recovery. Asserted as a count on purpose: it is what
-    // catches an employer contribution leaking into this list, and it has to be updated deliberately
-    // when a real deduction is added — which is the check working, not noise.
-    expect(deductionLabels).toHaveLength(8);
+    // They are informational; showing them among deductions would imply the employee paid them.
+    // Asserted as a count on purpose: it has to be updated deliberately when a real deduction is
+    // added — which is the check working, not noise.
+    expect(deductionRows(slip)).toHaveLength(8);
+    expect(deductionRows(slip).at(-1)?.[1]).toBe(slip.deductions.total);
   });
 
   it('takes no figure from anywhere but the view it was given', () => {
     // Same object in, same lines out — the mapping has no hidden second source.
     const other = { ...slip, earnings: { ...slip.earnings, basic: 1 } };
-    expect(earningRows(other)[0]).toEqual(['Basic', 1]);
-    expect(earningRows(slip)[0]).toEqual(['Basic', 18000]);
+    expect(earningRows(other)[0]).toEqual(['Basic', 20000, 1]);
+    expect(earningRows(slip)[0]).toEqual(['Basic', 20000, 18000]);
   });
 
   it('renders a PDF document from the same view', async () => {
@@ -172,35 +152,29 @@ describe('rupeesInWords', () => {
 });
 
 /**
- * The client's payslip layout (021 FR-008f, tasks T104 and T105).
+ * The client's revised payslip (2026-10-13), `docs/HR_DOCS/Parth_Realcon_Payslip.docx`.
  *
- * `docs/NC0060_Payslip_Feb 2026.pdf` has **LOP zero in every row**, so Full and Actual are identical
- * all the way down it. That makes the sample no evidence at all that the two columns agree, and this
- * is where the proration is proven instead — against a slip with 2.5 LOP days, where they must not.
+ * Rate is the full-month figure and Amount what was paid. The fixture has 2.5 LOP days so the two
+ * must differ — a sample with LOP zero throughout would be no evidence that proration happened.
  */
-describe('Full and Actual earnings (T105)', () => {
-  it('prints both columns, and they differ when there was LOP', () => {
-    const rows = fullAndActualEarningRows(slip);
-    const basic = rows.find(([label]) => label === 'Basic');
-
-    expect(basic).toEqual(['Basic', 20000, 18000]);
-    // The assertion that matters: equal columns would mean the proration never happened, and the
-    // sample would not have caught it.
-    expect(basic?.[1]).not.toBe(basic?.[2]);
+describe('earnings, Rate and Amount', () => {
+  it('prints only the heads the system pays, in the docx’s order, ending with gross', () => {
+    // No Dearness Allowance, Medical/Conveyance Reimbursement or Food Allowance: the salary
+    // structure has none, and a printed head asserts an entitlement.
+    expect(earningRows(slip)).toEqual([
+      ['Basic', 20000, 18000],
+      ['House Rent Allowance', 8000, 7200],
+      ['Conveyance Allowance', 1778, 1600],
+      ['Site Allowance', 2778, 2500],
+      ['Special Allowance', 1333, 1200],
+      ['Overtime', null, 1800],
+      ['Gross Earnings', 35667, 32300],
+    ]);
   });
 
-  it('leaves overtime’s Full column empty rather than repeating the actual', () => {
-    const ot = fullAndActualEarningRows(slip).find(
-      ([label]) => label === 'Overtime',
-    );
-    // Overtime is hours worked, not an entitlement LOP can reduce. A repeat of the actual would
-    // assert a monthly overtime entitlement that does not exist.
-    expect(ot).toEqual(['Overtime', null, 1800]);
-  });
-
-  it('prints an em dash where a Full figure was never recorded', async () => {
-    // Every slip issued before 2026-10-02 is in this state. Printing the Actual figure instead would
-    // make "no LOP this month" and "we never recorded it" look identical to the reader.
+  it('prints an em dash where a Rate was never recorded', async () => {
+    // Every slip issued before 2026-10-02 is in this state. Printing the Amount instead would make
+    // "no LOP this month" and "we never recorded it" look identical.
     const legacy: SalarySlipView = {
       ...slip,
       fullEarnings: {
@@ -213,79 +187,142 @@ describe('Full and Actual earnings (T105)', () => {
         total: null,
       },
     };
-    const rows = fullAndActualEarningRows(legacy);
-    expect(rows.every(([, full]) => full === null)).toBe(true);
+    expect(earningRows(legacy).every(([, rate]) => rate === null)).toBe(true);
     // And it still renders — a legacy slip must not fail to print.
     const pdf = await new SalaryPdfService().render(legacy, 'Asha Pawar');
     expect(pdf.length).toBeGreaterThan(500);
   });
-
-  it('covers every earning the Actual column shows', () => {
-    // A component present in one column and absent from the other is a payslip that does not add up.
-    expect(fullAndActualEarningRows(slip).map(([label]) => label)).toEqual(
-      earningRows(slip)
-        .map(([label]) => label)
-        .filter((label) => label !== 'Total Earnings'),
-    );
-  });
 });
 
-describe('the identity block (T104)', () => {
+describe('the employee panel and bank block', () => {
   const identity = {
-    employeeName: 'Dixit Pabari',
-    companyName: 'Next Creation Software (India) Private Limited',
-    companyAddress: 'Madhapur, Hyderabad, Telangana, 500081',
-    joiningDate: new Date('2023-06-19T00:00:00.000Z'),
-    designation: 'Manager',
-    department: 'Human Resources & Administration',
-    location: 'Vadodara',
-    bankName: 'HDFC Bank',
-    bankAccountNumberMasked: '**********5513',
+    employeeName: 'Dinesh Sharma',
+    companyName: 'Parth Realcon Private Limited',
+    companyAddress: 'Deoli, Tonk, Rajasthan, 304804',
+    joiningDate: new Date('2024-04-01T00:00:00.000Z'),
+    designation: 'Billing Engineer',
+    department: 'Projects',
+    location: 'Tonk',
+    bankName: 'State Bank of India',
+    bankAccountNumberMasked: '*******4521',
     panNumber: 'BQHPP3499J',
     pfNumber: null,
     pfUan: '101849809716',
+    fatherName: 'Hans Raj',
+    esiNumber: '1234567890',
+    bankBranch: 'Deoli',
+    ifscCode: 'SBIN0001234',
+    bankAccountHolderName: 'DINESH SHARMA',
   };
 
   it('pairs the fields the way the client’s payslip does', () => {
     const rows = identityRows(slip, identity);
-    expect(rows[0]).toEqual([
-      ['Name', 'Dixit Pabari'],
-      ['Employee No', 'EMP0042'],
+    expect(rows.map(([left, right]) => [left[0], right[0]])).toEqual([
+      ['Employee Name', 'Working Days'],
+      ["Father's / Spouse's Name", 'Rest Days'],
+      ['Employee Code', 'Leave / PL'],
+      ['Designation', 'Total Days'],
+      ['P.F. No.', 'E.S.I. No.'],
+      ['O.T. Hours', 'Date of Joining'],
+      ['Paid Days', 'LOP Days'],
     ]);
-    expect(rows[2]).toEqual([
-      ['Designation', 'Manager'],
-      ['Bank Account No', '**********5513'],
-    ]);
+    expect(rows[1][0]).toEqual(["Father's / Spouse's Name", 'Hans Raj']);
+    expect(rows[4][1]).toEqual(['E.S.I. No.', '1234567890']);
   });
 
   it('keeps a label whose value is missing', () => {
-    // The sample's own `PF No` is empty and the label is still printed. A label that disappears with
-    // its value makes a payslip's shape depend on the employee, and two payslips that do not line up
-    // invite the question of what else differs.
-    const rows = identityRows(slip, identity);
-    expect(rows[4]).toEqual([
-      ['Location', 'Vadodara'],
-      ['PF No', '—'],
+    // A label that disappears with its value makes a payslip's shape depend on the employee.
+    expect(identityRows(slip, identity)[4][0]).toEqual(['P.F. No.', '—']);
+    // An identity built before the father's name existed still renders the row.
+    const older = { ...identity, fatherName: undefined };
+    expect(identityRows(slip, older)[1][0]).toEqual([
+      "Father's / Spouse's Name",
+      '—',
     ]);
   });
 
-  it('reports effective work days and LOP from the slip, not the identity', () => {
+  it('takes days and overtime from the slip, and does not invent the worked/rest/leave split', () => {
     const rows = identityRows(slip, identity);
-    expect(rows[5][0]).toEqual(['Effective Work Days', '28.5']);
-    expect(rows[6][0]).toEqual(['LOP', '2.5']);
+    expect(rows[3][1]).toEqual(['Total Days', '31']);
+    expect(rows[5][0]).toEqual(['O.T. Hours', '12']);
+    expect(rows[6]).toEqual([
+      ['Paid Days', '28.5'],
+      ['LOP Days', '2.5'],
+    ]);
+    // The slip stores paid days, not their breakdown into worked, weekly off and leave.
+    expect([rows[0][1][1], rows[1][1][1], rows[2][1][1]]).toEqual([
+      '—',
+      '—',
+      '—',
+    ]);
+  });
+
+  it('prints the bank block with the account masked and the bank’s own name for the holder', () => {
+    expect(bankRows(identity)).toEqual([
+      [
+        ['Bank Name', 'State Bank of India'],
+        ['Branch', 'Deoli'],
+      ],
+      [
+        ['Account Holder', 'DINESH SHARMA'],
+        ['Account No.', '*******4521'],
+      ],
+      [
+        ['IFSC Code', 'SBIN0001234'],
+        ['Payment Mode', 'Bank Transfer'],
+      ],
+    ]);
+    // Without an account on file, no payment mode is asserted and the HR name stands in.
+    const unbanked = bankRows({
+      ...identity,
+      bankAccountNumberMasked: null,
+      bankAccountHolderName: null,
+    });
+    expect(unbanked[1][0]).toEqual(['Account Holder', 'Dinesh Sharma']);
+    expect(unbanked[2][1]).toEqual(['Payment Mode', '—']);
   });
 
   it('renders the month as the sample words it', () => {
-    expect(periodLabel('2026-02')).toBe('February 2026');
+    expect(periodLabel('2026-09')).toBe('September 2026');
     // A malformed period prints itself rather than throwing: a payslip must still render.
     expect(periodLabel('nonsense')).toBe('nonsense');
   });
 
-  it('renders with the header block', async () => {
+  it('renders on plain paper with the company header', async () => {
     const pdf = await new SalaryPdfService().render(
       { ...slip, identity },
-      'Dixit Pabari',
+      'Dinesh Sharma',
     );
-    expect(pdf.length).toBeGreaterThan(500);
+    expect(pdf.subarray(0, 4).toString('ascii')).toBe('%PDF');
+    // One page: the payslip must fit on a single A4 sheet.
+    expect(pdf.toString('latin1').match(/\/Type \/Page\b/g)).toHaveLength(1);
+  });
+
+  it('renders on the letterhead, still on one page, and survives one it cannot decode', async () => {
+    // A 1×1 PNG stands in for the stationery.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const service = new SalaryPdfService();
+    const plain = await service.render({ ...slip, identity }, 'Dinesh Sharma');
+    const onStationery = await service.render(
+      { ...slip, identity },
+      'Dinesh Sharma',
+      png,
+    );
+    expect(onStationery.toString('latin1')).toContain('/Subtype /Image');
+    expect(plain.toString('latin1')).not.toContain('/Subtype /Image');
+    expect(
+      onStationery.toString('latin1').match(/\/Type \/Page\b/g),
+    ).toHaveLength(1);
+
+    // A corrupt letterhead must not cost the employee their payslip.
+    const garbage = await service.render(
+      { ...slip, identity },
+      'Dinesh Sharma',
+      Buffer.from('not an image'),
+    );
+    expect(garbage.subarray(0, 4).toString('ascii')).toBe('%PDF');
   });
 });

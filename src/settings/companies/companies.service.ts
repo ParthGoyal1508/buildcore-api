@@ -306,6 +306,29 @@ export class CompaniesService {
     };
   }
 
+  /**
+   * The letterhead's bytes for another module's document, or null (2026-10-13).
+   *
+   * For the payslip, which `payroll` prints on the company's stationery and which Principle I
+   * forbids it from reading `settings.Company` for. Unlike `getLetterhead` above — the settings
+   * screen's read, where an absent letterhead is a 404 worth showing — this never throws: a company
+   * with no letterhead, or one whose file no longer resolves, still pays its people, and their
+   * payslips print on plain paper.
+   */
+  async getLetterheadImage(companyId: string): Promise<Buffer | null> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: { letterheadRef: true },
+        }),
+    );
+    if (!company?.letterheadRef) return null;
+    return this.storage.get(company.letterheadRef).catch(() => null);
+  }
+
   async setPunchAccuracyMaxMetres(
     companyId: string,
     metres: number | null,
@@ -916,9 +939,9 @@ export class CompaniesService {
         });
 
         // The shipped letter bodies — offer, appointment, relieving, experience,
-        // increment and payment advice (2026-10-11). Starting values: `install` creates
-        // only what is missing, so a company that rewrites its offer letter keeps the
-        // rewrite. Same contract as the approval chains seeded above.
+        // increment, transfer, termination, F&F and payment advice (2026-10-11). Unlike the
+        // approval chains above these are not starting values: the standard wording is the
+        // same for every company and is re-applied on every start (2026-10-14).
         await this.standardTemplates.install(company.id, tx);
 
         await tx.employeeCodeSequence.create({

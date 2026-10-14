@@ -105,3 +105,30 @@ export function rupeesInWords(amount: number): string {
     ? `${rupeeWords} and ${twoDigitsInWords(paise)} Paise Only`
     : `${rupeeWords} Only`;
 }
+
+/**
+ * The same amount, worded the way a letter states it: "Rupees Forty Thousand Only".
+ *
+ * A second phrasing rather than a change to `rupeesInWords`, which the payslip, the bill
+ * package and the payment advice already print — and which reads "Forty Thousand Rupees
+ * Only", the order those documents were signed off in. The client's HR letters lead with
+ * the currency (the appointment letter's "CTC: Rupees … Only"), so they get the order they
+ * use rather than one form being bent into the other.
+ *
+ * Paise are kept rather than rounded away: an F&F net of ₹12,345.50 worded as a whole
+ * rupee would disagree with the figure printed beside it.
+ */
+export function rupeesFirstInWords(amount: number): string {
+  if (!Number.isFinite(amount)) {
+    return '';
+  }
+  const negative = amount < 0;
+  const absolute = Math.abs(amount);
+  const rupees = Math.floor(absolute);
+  const paise = Math.round((absolute - rupees) * 100);
+
+  const words = `${negative ? 'Minus ' : ''}Rupees ${integerInWords(rupees)}`;
+  return paise > 0
+    ? `${words} and ${twoDigitsInWords(paise)} Paise Only`
+    : `${words} Only`;
+}

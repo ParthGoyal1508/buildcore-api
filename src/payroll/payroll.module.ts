@@ -28,6 +28,7 @@ import { PayrollScheduleCron } from './runs/payroll-schedule.cron';
 import { PayrollScheduleService } from './runs/payroll-schedule.service';
 import { SalaryPdfService } from './salary/salary-pdf.service';
 import { SalaryController } from './salary/salary.controller';
+import { EmployeeSalaryController } from './salary/employee-salary.controller';
 import { SalaryService } from './salary/salary.service';
 
 /**
@@ -58,6 +59,7 @@ import { SalaryService } from './salary/salary.service';
   ],
   controllers: [
     SalaryController,
+    EmployeeSalaryController,
     PayrollRunsController,
     ChallansController,
     LoansController,
@@ -109,6 +111,9 @@ import { SalaryService } from './salary/salary.service';
     // check included. A second implementation of net pay is the last thing this product
     // needs.
     PayrollRegisterService,
+    // For the F&F settlement sheet, whose figures the HR letter source reads from the
+    // same computation the F&F screen shows.
+    FnfService,
   ],
 })
 export class PayrollModule {}
