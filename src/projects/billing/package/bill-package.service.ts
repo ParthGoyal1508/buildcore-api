@@ -2337,7 +2337,10 @@ export class BillPackageService {
         `${packageLabel(pkg.sequenceNo)}${
           counterparty ? ` · ${counterparty}` : ''
         } · ` +
-        `payable ₹${abstract.columns.thisBill.payable}`,
+        // Indian grouping, whole rupees — the queue printed `₹1453401` (2026-10-15).
+        `payable ₹${Math.round(
+          Number(abstract.columns.thisBill.payable),
+        ).toLocaleString('en-IN')}`,
       href: webRoutes.projectBillPackage(pkg.projectId, pkg.id),
       viewPermission: Permission.PROJECT_FINANCIALS,
     });

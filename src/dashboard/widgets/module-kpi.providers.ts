@@ -439,8 +439,38 @@ export class AlertsRemindersWidget implements WidgetProvider {
   isAvailable(): boolean {
     return true;
   }
+
+  /**
+   * One reminders read per dashboard load, shared by `compute` and `note`, which the
+   * registry runs side by side. Keyed by the request's context object, so it lives exactly as
+   * long as the request.
+   */
+  private readonly loads = new WeakMap<
+    DashboardContext,
+    ReturnType<RemindersService['list']>
+  >();
+  private load(ctx: DashboardContext) {
+    let pending = this.loads.get(ctx);
+    if (!pending) {
+      pending = this.reminders.list(ctx.user, {});
+      this.loads.set(ctx, pending);
+    }
+    return pending;
+  }
+
+  /**
+   * "Showing 6 of 9" when the card holds fewer than there are (2026-10-15) — the client
+   * asked that a capped card say so, rather than read as the whole list.
+   */
+  async note(ctx: DashboardContext): Promise<string | undefined> {
+    const { reminders } = await this.load(ctx);
+    return reminders.length > ALERTS_ON_DASHBOARD
+      ? `Showing ${ALERTS_ON_DASHBOARD} of ${reminders.length} — the most urgent first`
+      : undefined;
+  }
+
   async compute(ctx: DashboardContext): Promise<WidgetListItem[]> {
-    const { reminders } = await this.reminders.list(ctx.user, {});
+    const { reminders } = await this.load(ctx);
     return reminders.slice(0, ALERTS_ON_DASHBOARD).map((reminder) => ({
       label: reminder.subject,
       // "overdue by 6 days" rather than a bare date: the card is a prompt to act, and
