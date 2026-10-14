@@ -878,5 +878,24 @@ describe('Dashboard reminders (e2e)', () => {
 
       await http().get('/group/companies').set(auth()).expect(200);
     });
+
+    // 2026-10-15: the calendar is computed now, not a "module pending" placeholder, and
+    // it gates its payroll figures per scheme rather than at the route — so the engineer
+    // (DASHBOARD, no PAYROLL or CHALLANS) reaches it and is given no dates.
+    it('computes the statutory calendar, showing no payroll dates without payroll access', async () => {
+      const admin = await http()
+        .get('/group/statutory-calendar')
+        .set(auth())
+        .expect(200);
+      expect(admin.body.unavailable).toBeUndefined();
+      expect(Array.isArray(admin.body.value.items)).toBe(true);
+
+      const engineer = await http()
+        .get('/group/statutory-calendar')
+        .set(auth(engineerToken))
+        .expect(200);
+      expect(engineer.body.value.schemes).toEqual([]);
+      expect(engineer.body.value.items).toEqual([]);
+    });
   });
 });

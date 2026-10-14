@@ -172,6 +172,9 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     LetterKindsService,
     // 017 US4: the letters module applies signatures at issue and needs the row.
     SignatoriesService,
+    // For the Group Dashboard's "documents missing" figure (2026-10-15), which must
+    // count exactly what the Company Documents screen counts.
+    CompanyDocumentsService,
   ],
 })
 export class SettingsModule {}

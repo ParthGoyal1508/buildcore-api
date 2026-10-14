@@ -53,6 +53,7 @@ import {
   TotalEmployeesWidget,
 } from './widgets/company-kpi.providers';
 import { GroupCompanyCardProvider } from './widgets/group-company-card.provider';
+import { StatutoryCalendarProvider } from './widgets/statutory-calendar.provider';
 import { MusterStatWidget } from './widgets/muster-stat.provider';
 import { RecentLeavesTableWidget } from './widgets/recent-leaves-table.provider';
 import {
@@ -275,6 +276,7 @@ const reportRegistry: Provider = {
     CompanyDataService,
     DashboardService,
     GroupCompanyCardProvider,
+    StatutoryCalendarProvider,
     ActivityLogService,
     NotificationsService,
     ReportsService,

@@ -454,6 +454,27 @@ export class EmployeesService {
   }
 
   /**
+   * Active headcount for several companies in one statement (Group Dashboard,
+   * 2026-10-15) — `countActiveByCompany` once per card was one round trip per company
+   * to a database that is not on the same machine. A company with nobody active is
+   * absent from the map; callers read it as 0.
+   */
+  async countActiveByCompanies(
+    ctx: RlsContext,
+    companyIds: string[],
+  ): Promise<Map<string, number>> {
+    if (companyIds.length === 0) return new Map();
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.groupBy({
+        by: ['companyId'],
+        where: { companyId: { in: companyIds }, isActive: true },
+        _count: { _all: true },
+      }),
+    );
+    return new Map(rows.map((r) => [r.companyId, r._count._all]));
+  }
+
+  /**
    * Employee code and display name for a set of employee ids, keyed by id — the
    * Dashboard's Recent Leaves table resolves the names of the applicants it lists
    * (004 FR-006) without receiving any of the PII this service otherwise masks.

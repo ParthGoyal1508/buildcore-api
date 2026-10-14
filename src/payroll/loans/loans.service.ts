@@ -14,7 +14,7 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
-import { withRlsContext } from '../../common/prisma/rls-context';
+import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import type { CreateLoanDto, ListLoansQueryDto } from './dto/create-loan.dto';
 import { generateSchedule, nextPeriod, periodOf } from './loan-schedule';
@@ -239,6 +239,47 @@ export class LoansService {
     );
     if (!loan) throw new NotFoundException('Loan not found');
     return this.toView(loan);
+  }
+
+  /**
+   * What active loans still owe, per company (Group Dashboard, 2026-10-15).
+   *
+   * The same arithmetic `toView` gives the Loans screen — amount less the instalments
+   * marked paid, never below zero — summed per company, so the dashboard and the screen
+   * agree loan by loan. One statement for every company: only paid instalments are
+   * joined, and only their EMI is selected.
+   */
+  async outstandingByCompany(
+    rls: RlsContext,
+    companyIds: string[],
+  ): Promise<Map<string, { outstanding: number; count: number }>> {
+    const result = new Map<string, { outstanding: number; count: number }>();
+    if (companyIds.length === 0) return result;
+    const loans = await withRlsContext(this.prisma, rls, (tx) =>
+      tx.loan.findMany({
+        where: { companyId: { in: companyIds }, status: LoanStatus.active },
+        select: {
+          companyId: true,
+          amount: true,
+          schedule: {
+            where: { status: LoanScheduleStatus.paid },
+            select: { emiAmount: true },
+          },
+        },
+      }),
+    );
+    for (const loan of loans) {
+      const recovered = loan.schedule.reduce(
+        (a, e) => a + e.emiAmount.toNumber(),
+        0,
+      );
+      const owed = Math.max(loan.amount.toNumber() - r2(recovered), 0);
+      const entry = result.get(loan.companyId) ?? { outstanding: 0, count: 0 };
+      entry.outstanding = r2(entry.outstanding + owed);
+      entry.count += 1;
+      result.set(loan.companyId, entry);
+    }
+    return result;
   }
 
   /** Adds the recovered/outstanding totals the Loans screen shows per row. */

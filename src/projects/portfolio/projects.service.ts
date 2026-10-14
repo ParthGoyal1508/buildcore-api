@@ -840,6 +840,41 @@ export class ProjectsService {
     return true;
   }
 
+  /**
+   * Ongoing projects and their combined contract value, per company (Group Dashboard,
+   * 2026-10-15).
+   *
+   * `ongoing` only, the same reading of "active" the company dashboard's Active Projects
+   * card takes — a project in planning has nobody on site, and one on hold or completed
+   * is not work the company is carrying. One grouped statement for every company.
+   */
+  async ongoingTotalsByCompany(
+    ctx: RlsContext,
+    companyIds: string[],
+  ): Promise<Map<string, { count: number; contractValue: number }>> {
+    if (companyIds.length === 0) return new Map();
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.groupBy({
+        by: ['companyId'],
+        where: {
+          companyId: { in: companyIds },
+          status: ProjectStatus.ongoing,
+        },
+        _count: { _all: true },
+        _sum: { contractValue: true },
+      }),
+    );
+    return new Map(
+      rows.map((r) => [
+        r.companyId,
+        {
+          count: r._count._all,
+          contractValue: Number(r._sum.contractValue ?? 0),
+        },
+      ]),
+    );
+  }
+
   /** Projects with a contract value, for BOCW cess liability (007 FR-008). */
   async getProjectsWithContractValues(
     companyId: string,

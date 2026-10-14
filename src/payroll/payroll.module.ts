@@ -114,6 +114,12 @@ import { SalaryService } from './salary/salary.service';
     // For the F&F settlement sheet, whose figures the HR letter source reads from the
     // same computation the F&F screen shows.
     FnfService,
+    // For the Group Dashboard (2026-10-15): each company card's PF + ESIC figure and the
+    // Statutory Calendar's amounts are challan totals, and its Loans Outstanding is the
+    // Loans screen's own arithmetic. Read through the owning services rather than a
+    // second derivation in `dashboard`.
+    ChallansService,
+    LoansService,
   ],
 })
 export class PayrollModule {}

@@ -3,11 +3,16 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PayrollRunStatus, Prisma } from '@prisma/client';
+import {
+  Employee,
+  PayrollLineItem,
+  PayrollRunStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import * as ExcelJS from 'exceljs';
 
-import { withRlsContext } from '../../common/prisma/rls-context';
+import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 
 export type ChallanType = 'pf' | 'esic' | 'pt';
@@ -47,6 +52,123 @@ export interface ChallanView {
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+type ChallanLine = Pick<
+  PayrollLineItem,
+  | 'basic'
+  | 'hra'
+  | 'conveyanceAllowance'
+  | 'siteAllowance'
+  | 'specialAllowance'
+  | 'otWages'
+  | 'employeePf'
+  | 'employerPf'
+  | 'employerEps'
+  | 'employerEdli'
+  | 'adminCharges'
+  | 'employeeEsic'
+  | 'employerEsic'
+  | 'professionalTax'
+>;
+
+/** Earned wages for the month — the ESIC/PT base, and the register's gross. */
+function grossOf(line: ChallanLine): number {
+  const n = (d: Prisma.Decimal) => d.toNumber();
+  return r2(
+    n(line.basic) +
+      n(line.hra) +
+      n(line.conveyanceAllowance) +
+      n(line.siteAllowance) +
+      n(line.specialAllowance) +
+      n(line.otWages),
+  );
+}
+
+/**
+ * One employee's figures on one scheme's challan, or null when they are not on it.
+ *
+ * Pulled out of `get` on 2026-10-15 so the Group Dashboard's PF + ESIC figure and the
+ * Statutory Calendar's amounts come from **this** rule rather than a second copy of it.
+ * Who is on a challan is not obvious — ESIC drops an applicable employee who earned above
+ * the ceiling, PT drops a zero deduction — and a dashboard total that disagreed with the
+ * Challans screen by one such employee would be found by the person filing, not by us.
+ */
+function challanShare(
+  type: ChallanType,
+  line: ChallanLine,
+  employee: Pick<Employee, 'pfApplicable' | 'esicApplicable'>,
+): Omit<ChallanRow, 'employeeCode' | 'name' | 'statutoryNumber'> | null {
+  const n = (d: Prisma.Decimal) => d.toNumber();
+
+  if (type === 'pf') {
+    if (!employee.pfApplicable) return null;
+    const employer = n(line.employerPf);
+    const eps = n(line.employerEps);
+    const edli = n(line.employerEdli);
+    const admin = n(line.adminCharges);
+    return {
+      wages: n(line.basic),
+      employeeContribution: n(line.employeePf),
+      employerContribution: employer,
+      eps,
+      edli,
+      adminCharges: admin,
+      total: r2(n(line.employeePf) + employer + eps + edli + admin),
+    };
+  }
+
+  if (type === 'esic') {
+    if (!employee.esicApplicable) return null;
+    const employeeEsic = n(line.employeeEsic);
+    const employerEsic = n(line.employerEsic);
+    // An ESIC-applicable employee whose gross exceeded the ceiling contributes
+    // nothing this month; they are correctly absent from the challan rather
+    // than present with zeros, which a filing would reject.
+    if (employeeEsic === 0 && employerEsic === 0) return null;
+    return {
+      wages: grossOf(line),
+      employeeContribution: employeeEsic,
+      employerContribution: employerEsic,
+      total: r2(employeeEsic + employerEsic),
+    };
+  }
+
+  // Professional tax is an employee-side deduction with no employer share.
+  const pt = n(line.professionalTax);
+  if (pt === 0) return null;
+  return {
+    wages: grossOf(line),
+    employeeContribution: pt,
+    employerContribution: 0,
+    total: pt,
+  };
+}
+
+/**
+ * A processed run reduced to the figures the Group Dashboard shows (2026-10-15).
+ *
+ * `pf`, `esic` and `pt` are each scheme's challan **total** — employee plus employer
+ * shares, PF's EPS/EDLI/admin heads included — exactly what the Challans screen's total
+ * row reads for that period. `tds` is the income tax deducted on the run's slips.
+ */
+export interface RunStatutoryTotals {
+  companyId: string;
+  runId: string;
+  /** `YYYY-MM`. */
+  period: string;
+  employees: number;
+  gross: number;
+  pf: number;
+  esic: number;
+  pt: number;
+  tds: number;
+}
+
+/** A run counts once it is processed; `paid` is a processed run that has also been paid. */
+const SETTLED_RUN_STATUSES = [
+  PayrollRunStatus.processed,
+  PayrollRunStatus.paid,
+];
+
 /**
  * Statutory challans as a derived view (005 US6, research.md §5).
  *
@@ -59,6 +181,107 @@ const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 @Injectable()
 export class ChallansService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Each company's **latest** processed run, summarised (Group Dashboard, 2026-10-15).
+   *
+   * Two statements for any number of companies: `distinct` on `companyId`, ordered by
+   * period descending, picks one run per company in the database; the line items for
+   * all of them come back in the second. A company with no processed run is simply
+   * absent from the result — the card says "No run yet" rather than ₹0.
+   */
+  async latestRunTotals(
+    rls: RlsContext,
+    companyIds: string[],
+  ): Promise<RunStatutoryTotals[]> {
+    if (companyIds.length === 0) return [];
+    return withRlsContext(this.prisma, rls, async (tx) => {
+      const runs = await tx.payrollRun.findMany({
+        where: {
+          companyId: { in: companyIds },
+          isFnf: false,
+          status: { in: SETTLED_RUN_STATUSES },
+        },
+        distinct: ['companyId'],
+        orderBy: [{ companyId: 'asc' }, { period: 'desc' }],
+        select: { id: true, companyId: true, period: true },
+      });
+      return this.totalsFor(tx, runs);
+    });
+  }
+
+  /**
+   * The processed runs for the given periods across these companies, summarised — the
+   * Statutory Calendar's amounts. Unprocessed periods are absent, never zero.
+   */
+  async runTotalsForPeriods(
+    rls: RlsContext,
+    companyIds: string[],
+    periods: string[],
+  ): Promise<RunStatutoryTotals[]> {
+    if (companyIds.length === 0 || periods.length === 0) return [];
+    return withRlsContext(this.prisma, rls, async (tx) => {
+      const runs = await tx.payrollRun.findMany({
+        where: {
+          companyId: { in: companyIds },
+          period: { in: periods },
+          isFnf: false,
+          status: { in: SETTLED_RUN_STATUSES },
+        },
+        select: { id: true, companyId: true, period: true },
+      });
+      return this.totalsFor(tx, runs);
+    });
+  }
+
+  /** One read of every line in these runs, reduced through {@link challanShare}. */
+  private async totalsFor(
+    tx: Prisma.TransactionClient,
+    runs: { id: string; companyId: string; period: string }[],
+  ): Promise<RunStatutoryTotals[]> {
+    if (runs.length === 0) return [];
+    const lines = await tx.payrollLineItem.findMany({
+      where: { payrollRunId: { in: runs.map((r) => r.id) } },
+      include: {
+        employee: { select: { pfApplicable: true, esicApplicable: true } },
+      },
+    });
+
+    const totals = new Map<string, RunStatutoryTotals>(
+      runs.map((run) => [
+        run.id,
+        {
+          companyId: run.companyId,
+          runId: run.id,
+          period: run.period,
+          employees: 0,
+          gross: 0,
+          pf: 0,
+          esic: 0,
+          pt: 0,
+          tds: 0,
+        },
+      ]),
+    );
+    for (const line of lines) {
+      const t = totals.get(line.payrollRunId);
+      if (!t) continue;
+      t.employees += 1;
+      t.gross += grossOf(line);
+      t.pf += challanShare('pf', line, line.employee)?.total ?? 0;
+      t.esic += challanShare('esic', line, line.employee)?.total ?? 0;
+      t.pt += challanShare('pt', line, line.employee)?.total ?? 0;
+      t.tds += line.tds.toNumber();
+    }
+    return [...totals.values()].map((t) => ({
+      ...t,
+      gross: r2(t.gross),
+      pf: r2(t.pf),
+      esic: r2(t.esic),
+      pt: r2(t.pt),
+      tds: r2(t.tds),
+    }));
+  }
 
   async get(
     caller: Caller,
@@ -101,76 +324,21 @@ export class ChallansService {
       const e = byId.get(line.employeeId);
       if (!e) continue;
       const name = [e.firstName, e.lastName].filter(Boolean).join(' ').trim();
-      const n = (d: Prisma.Decimal) => d.toNumber();
+      const share = challanShare(type, line, e);
+      if (!share) continue;
 
-      if (type === 'pf') {
-        if (!e.pfApplicable) continue;
-        const employer = n(line.employerPf);
-        const eps = n(line.employerEps);
-        const edli = n(line.employerEdli);
-        const admin = n(line.adminCharges);
-        if (!e.uan) missing.push({ employeeCode: e.employeeCode, name });
-        rows.push({
-          employeeCode: e.employeeCode,
-          name,
-          statutoryNumber: e.uan,
-          wages: n(line.basic),
-          employeeContribution: n(line.employeePf),
-          employerContribution: employer,
-          eps,
-          edli,
-          adminCharges: admin,
-          total: r2(n(line.employeePf) + employer + eps + edli + admin),
-        });
-        continue;
+      if (type === 'pf' && !e.uan) {
+        missing.push({ employeeCode: e.employeeCode, name });
       }
-
-      if (type === 'esic') {
-        if (!e.esicApplicable) continue;
-        const employeeEsic = n(line.employeeEsic);
-        const employerEsic = n(line.employerEsic);
-        // An ESIC-applicable employee whose gross exceeded the ceiling contributes
-        // nothing this month; they are correctly absent from the challan rather
-        // than present with zeros, which a filing would reject.
-        if (employeeEsic === 0 && employerEsic === 0) continue;
-        if (!e.esicNumber) missing.push({ employeeCode: e.employeeCode, name });
-        rows.push({
-          employeeCode: e.employeeCode,
-          name,
-          statutoryNumber: e.esicNumber,
-          wages: r2(
-            n(line.basic) +
-              n(line.hra) +
-              n(line.conveyanceAllowance) +
-              n(line.siteAllowance) +
-              n(line.specialAllowance) +
-              n(line.otWages),
-          ),
-          employeeContribution: employeeEsic,
-          employerContribution: employerEsic,
-          total: r2(employeeEsic + employerEsic),
-        });
-        continue;
+      if (type === 'esic' && !e.esicNumber) {
+        missing.push({ employeeCode: e.employeeCode, name });
       }
-
-      // Professional tax is an employee-side deduction with no employer share.
-      const pt = n(line.professionalTax);
-      if (pt === 0) continue;
       rows.push({
         employeeCode: e.employeeCode,
         name,
-        statutoryNumber: null,
-        wages: r2(
-          n(line.basic) +
-            n(line.hra) +
-            n(line.conveyanceAllowance) +
-            n(line.siteAllowance) +
-            n(line.specialAllowance) +
-            n(line.otWages),
-        ),
-        employeeContribution: pt,
-        employerContribution: 0,
-        total: pt,
+        statutoryNumber:
+          type === 'pf' ? e.uan : type === 'esic' ? e.esicNumber : null,
+        ...share,
       });
     }
 

@@ -87,6 +87,21 @@ export interface CompanyDocumentCompleteness {
 /** The employee file's codes, for `scopeForCode`. Derived, never restated. */
 const DEFAULT_DOCUMENT_TYPE_CODES = DEFAULT_DOCUMENT_TYPES.map((d) => d.code);
 
+/**
+ * Each required company document kind, paired with the company's own `DocumentType` for
+ * it — matched on code case-insensitively, `undefined` where the company never defined
+ * one. Shared by the documents screen and the Group Dashboard's count (2026-10-15).
+ */
+function requiredKindsAgainst<T extends { code: string }>(
+  types: T[],
+): { kind: (typeof REQUIRED_COMPANY_DOCUMENT_KINDS)[number]; type?: T }[] {
+  const byCode = new Map(types.map((t) => [t.code.toUpperCase(), t]));
+  return REQUIRED_COMPANY_DOCUMENT_KINDS.map((kind) => ({
+    kind,
+    type: byCode.get(kind.code.toUpperCase()),
+  }));
+}
+
 @Injectable()
 export class CompanyDocumentsService {
   private readonly logger = new Logger(CompanyDocumentsService.name);
@@ -137,12 +152,10 @@ export class CompanyDocumentsService {
       }),
     );
 
-    const byCode = new Map(types.map((t) => [t.code.toUpperCase(), t]));
     const present: CompanyDocumentView[] = [];
     const missing: MissingKind[] = [];
 
-    for (const kind of REQUIRED_COMPANY_DOCUMENT_KINDS) {
-      const type = byCode.get(kind.code.toUpperCase());
+    for (const { kind, type } of requiredKindsAgainst(types)) {
       const doc = type?.companyDocuments[0];
       if (type && doc) {
         present.push(this.toView(doc, type));
@@ -202,6 +215,48 @@ export class CompanyDocumentsService {
     );
 
     return { present, missing, expiringSoon, supplementary, availableKinds };
+  }
+
+  /**
+   * How many required kinds each company lacks — the `missing` count of
+   * {@link completenessFor}, for many companies in one statement (Group Dashboard,
+   * 2026-10-15).
+   *
+   * The same pairing of required kinds against the company's types decides it
+   * (`requiredKindsAgainst`), so a company card and the Company Documents screen cannot
+   * disagree. Only whether a current document exists is fetched, not the documents.
+   */
+  async missingCountsByCompany(
+    ctx: RlsContext,
+    companyIds: string[],
+  ): Promise<{ required: number; missing: Map<string, number> }> {
+    const required = REQUIRED_COMPANY_DOCUMENT_KINDS.length;
+    if (companyIds.length === 0) return { required, missing: new Map() };
+    const types = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.documentType.findMany({
+        where: { companyId: { in: companyIds } },
+        select: {
+          companyId: true,
+          code: true,
+          companyDocuments: {
+            where: { isCurrent: true },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      }),
+    );
+    const missing = new Map<string, number>();
+    for (const companyId of companyIds) {
+      const own = types.filter((t) => t.companyId === companyId);
+      missing.set(
+        companyId,
+        requiredKindsAgainst(own).filter(
+          ({ type }) => !type?.companyDocuments[0],
+        ).length,
+      );
+    }
+    return { required, missing };
   }
 
   /**
