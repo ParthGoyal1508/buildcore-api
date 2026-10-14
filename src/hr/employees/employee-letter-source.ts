@@ -45,6 +45,7 @@ const SALARY_HEADS = [
   'pfEmployer',
   'esicEmployer',
   'ctc',
+  'netTakeHome',
 ] as const;
 
 const EXIT_REASON_LABEL: Record<ExitReason, string> = {
@@ -169,6 +170,7 @@ export class EmployeeLetterSource implements OnModuleInit {
     const record: Record<string, unknown> = {
       fullName: employeeNameOf(employee) ?? '',
       salutation: salutationOf(employee.title, employee.gender),
+      relation: relationOf(employee.gender),
       fatherName: employee.fatherName,
       employeeCode: employee.employeeCode,
       email: employee.email,
@@ -195,6 +197,7 @@ export class EmployeeLetterSource implements OnModuleInit {
       reportingManager: manager ? employeeNameOf(manager) ?? '' : '',
       reportingManagerMobile: manager?.mobile ?? '',
       ...pronounsOf(employee.gender),
+      employmentTypeBoxes: employmentTypeBoxes(employee.employmentType),
       ...salary,
     };
 
@@ -274,6 +277,7 @@ export class EmployeeLetterSource implements OnModuleInit {
 
     let pfEmployer = 0;
     let esicEmployer = 0;
+    let netTakeHome = gross;
     try {
       const rates = await this.companies.getPayrollRates(employee.companyId);
       const line = computePayrollLine(
@@ -307,6 +311,9 @@ export class EmployeeLetterSource implements OnModuleInit {
       // what the company pays on the employee's behalf.
       pfEmployer = round2(line.employerPf + line.employerEps);
       esicEmployer = line.employerEsic;
+      // What reaches the bank after the employee's own PF, ESI and professional tax — the
+      // annexure's "Net Take-Home" (2026-10-15), from the same computation payroll pays with.
+      netTakeHome = line.netPay;
     } catch (error) {
       this.logger.warn(
         `Employer PF/ESI for ${
@@ -328,6 +335,7 @@ export class EmployeeLetterSource implements OnModuleInit {
       pfEmployer,
       esicEmployer,
       ctc,
+      netTakeHome,
     };
     const out: Record<string, unknown> = {};
     for (const head of SALARY_HEADS) {
@@ -335,6 +343,24 @@ export class EmployeeLetterSource implements OnModuleInit {
       out[`${head}Annual`] = money(monthly[head] * 12);
     }
     out.ctcInWords = rupeesFirstInWords(ctc);
+    // The client's Annexure I (2026-10-15) has rows for a Dearness Allowance, a Medical
+    // Allowance and a Meal Voucher. The salary structure holds none of them, so payroll pays nil
+    // under each — and nil is what the annexure states, rather than a figure no payslip shows.
+    for (const head of [
+      'dearnessAllowance',
+      'medicalAllowance',
+      'mealVoucher',
+    ]) {
+      out[head] = money(0);
+      out[`${head}Annual`] = money(0);
+    }
+    // …and it has no Site Allowance row, which this system pays. The row is printed only for
+    // somebody who has one (`{{?…}}` in the body drops the line when this is blank), so the
+    // annexure is the client's own for everybody else and still adds up for those who do.
+    out.siteAllowanceIfAny = siteAllowance ? money(siteAllowance) : '';
+    out.siteAllowanceIfAnyAnnual = siteAllowance
+      ? money(siteAllowance * 12)
+      : '';
     out.ctcAnnualLakh = `${((ctc * 12) / 100_000).toFixed(2)} Lakh`;
     return out;
   }
@@ -478,6 +504,17 @@ export function salutationOf(
   return '';
 }
 
+/**
+ * "S/o" or "D/o", as the client's letters write the line naming a parent (2026-10-15). Both when
+ * the record does not say, rather than a guess; HR can overwrite it — with "W/o" where the name
+ * held is a spouse's.
+ */
+export function relationOf(gender: Gender | null): string {
+  if (gender === Gender.male) return 'S/o';
+  if (gender === Gender.female) return 'D/o';
+  return 'S/o / D/o';
+}
+
 /** Third-person pronouns from gender; they/them/their when the record does not say. */
 export function pronounsOf(gender: Gender | null): {
   pronounSubject: string;
@@ -503,6 +540,25 @@ export function pronounsOf(gender: Gender | null): {
     pronounObject: 'them',
     pronounPossessive: 'their',
   };
+}
+
+/**
+ * The F&F sheet's "☐ Permanent ☐ Fixed-term ☐ Other", with the employee's own ticked
+ * (2026-10-15). In "[ ]" boxes because the PDF font has no ☐. All three left open when the record
+ * does not say, which is the form as printed.
+ */
+export function employmentTypeBoxes(type: EmploymentType | null): string {
+  const ticked =
+    type === EmploymentType.full_time
+      ? 'Permanent'
+      : type === EmploymentType.contract
+      ? 'Fixed-term'
+      : type === EmploymentType.daily_wage
+      ? 'Other'
+      : null;
+  return ['Permanent', 'Fixed-term', 'Other']
+    .map((label) => `[${label === ticked ? 'X' : ' '}] ${label}`)
+    .join('  ');
 }
 
 /** "addr, city, state - PIN", skipping whatever is missing. */

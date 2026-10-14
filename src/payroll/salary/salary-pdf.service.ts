@@ -6,23 +6,30 @@ import { Injectable } from '@nestjs/common';
 // test and throws "_pdfkit is not a constructor" in the running server. This form emits
 // a bare require under both.
 import PDFDocument = require('pdfkit');
+import { rupeesFirstInWords } from '../../common/rupees-in-words';
 import type { SalarySlipView, SlipIdentity } from './salary.service';
 
 /**
- * The client's revised payslip (2026-10-13), `docs/HR_DOCS/Parth_Realcon_Payslip.docx`, printed on
- * the company's letterhead.
+ * The client's payslip, `docs/HR_DOCS/Parth_Realcon_Payslip.docx` (2026-10-13; followed strictly
+ * since 2026-10-15).
  *
- * ## Geometry
+ * ## The format
  *
- * The letterhead is whole-page artwork, drawn edge to edge exactly as `letter-pdf.renderer.ts` draws
- * it for letters, and everything here is laid inside the same clear band (`SAFE`). The numbers are
- * that renderer's, measured off both letterheads the client supplied; they are repeated rather than
- * imported because `letters` is a module payroll has no business depending on, and the two documents
- * must agree with the paper, not with each other.
+ * Not letterhead: the docx's header is the company's name, centred, with its logo at the right —
+ * then "Pay slip for the month of …", the employee panel, earnings beside deductions, the bank
+ * block with NET PAY and the amount in words in its last row, and the computer-generated note.
+ * Every row label the docx prints is printed here, in its order. The values in its yellow cells
+ * (the totals and the net pay) and every other value come from the slip.
  *
- * Without a letterhead the band's top is reclaimed by the company's name and address — the header
- * this payslip has always printed — so a company that never uploaded stationery still issues a
- * payslip that says whose it is.
+ * ## Heads the docx names that the system does not hold
+ *
+ * Dearness Allowance, Medical Reimbursement, Conveyance Reimbursement and Food Allowance among the
+ * earnings, Welfare and Mobile Bill among the deductions, and the employee panel's Working Days,
+ * Rest Days and Leave / PL. The salary structure and the slip hold none of them, so each prints an
+ * em dash — the docx's own mark for an empty cell — rather than a figure nobody computed. The
+ * system's own heads the docx has no row for (Site Allowance, Overtime) go in the blank rows the
+ * docx leaves under Food Allowance, and the fuel recovery is the docx's "Other Deduction", named
+ * as such (020 FR-007: it must appear as itself).
  *
  * ## The rupee sign
  *
@@ -33,22 +40,19 @@ import type { SalarySlipView, SlipIdentity } from './salary.service';
 
 /** A4 portrait, in points. */
 const PAGE = { width: 595.28, height: 841.89 };
-/** The letterhead's clear band — `letter-pdf.renderer.ts`'s `SAFE`, for the reason given above. */
-const SAFE = { top: 118, bottom: 168, left: 56, right: 56 };
-/** Where the content starts on plain paper, below the company block this service draws itself. */
-const PLAIN_TOP = 48;
-const CONTENT_WIDTH = PAGE.width - SAFE.left - SAFE.right;
+const MARGIN = { top: 40, left: 48, right: 48 };
+const CONTENT_WIDTH = PAGE.width - MARGIN.left - MARGIN.right;
 
-/** The docx's palette: navy section bars with white type, pale blue label cells. */
+/** The docx's palette: navy titles and heading rows, pale blue labels, yellow totals. */
 const NAVY = '#1F3755';
 const PALE = '#EAF0F6';
+const YELLOW = '#FFF59D';
 const RULE = '#9AA7B5';
 
-const ROW = 17;
+const ROW = 16;
 const PAD = 4;
-const TYPE = 9;
-const COLUMN_GAP = 10;
-const HALF = (CONTENT_WIDTH - COLUMN_GAP) / 2;
+const TYPE = 8.5;
+const COLUMN_GAP = 8;
 
 const DASH = '—';
 
@@ -69,6 +73,10 @@ const money = (value: number): string =>
     maximumFractionDigits: 2,
   });
 
+/** A figure, or the em dash for a head the system does not hold. */
+const figure = (value: number | null): string =>
+  value === null ? DASH : money(value);
+
 const or = (value: string | null | undefined): string => value?.trim() || DASH;
 
 const date = (value: Date | null | undefined): string =>
@@ -80,35 +88,35 @@ const date = (value: Date | null | undefined): string =>
       })
     : DASH;
 
-/** One deduction line: its label and the figure beside it. */
-export type SlipRow = [label: string, amount: number];
+/** One deduction line: its label and the figure beside it — null where the system holds none. */
+export type SlipRow = [label: string, amount: number | null];
 
 /**
  * One earning line: label, **Rate** (the full-month figure) and **Amount** (what was paid).
  *
  * `rate` is nullable and stays nullable all the way to the page. Rate equal to Amount is a real and
  * common statement — no LOP this month — so it must not also be what "never recorded" looks like;
- * null prints as an em dash.
+ * null prints as an em dash. `amount` is null only for a docx head the system does not pay.
  */
-export type EarningRow = [label: string, rate: number | null, amount: number];
+export type EarningRow = [
+  label: string,
+  rate: number | null,
+  amount: number | null,
+];
 
 /**
- * The earnings table, in the docx's order, holding only heads this system pays.
+ * The earnings table, the docx's rows in the docx's order, ending with gross.
  *
- * The docx lists Basic, Dearness Allowance, House Rent Allowance, Conveyance Allowance, Special
- * Allowance, Medical Reimbursement, Conveyance Reimbursement and Food Allowance. Of those, the
- * salary structure holds Basic, HRA, Conveyance and Special; it also holds **Site Allowance** and
- * **Overtime**, which the docx does not name. The rest are omitted rather than printed as dashes:
- * a payslip naming a Dearness Allowance asserts the employee is entitled to one, and the client has
- * not confirmed any head beyond the system's own (see the note atop
- * `src/letters/standard-letter-templates.ts`). Site Allowance sits with the other allowances and
- * Overtime last, because it is earned by the hour rather than fixed by the month.
- *
- * Every held head is printed, zero or not, so two employees' payslips have the same shape.
+ * Dearness Allowance, Medical Reimbursement, Conveyance Reimbursement and Food Allowance are rows
+ * of the client's format the salary structure has no head for: printed, with dashes. Site
+ * Allowance and Overtime are this system's heads the docx has no row for: they take the blank rows
+ * the docx leaves before Gross Earnings, Overtime last because it is earned by the hour rather
+ * than fixed by the month.
  */
 export function earningRows(slip: SalarySlipView): EarningRow[] {
   return [
     ['Basic', slip.fullEarnings.basic, slip.earnings.basic],
+    ['Dearness Allowance', null, null],
     ['House Rent Allowance', slip.fullEarnings.hra, slip.earnings.hra],
     [
       'Conveyance Allowance',
@@ -116,14 +124,17 @@ export function earningRows(slip: SalarySlipView): EarningRow[] {
       slip.earnings.conveyance,
     ],
     [
-      'Site Allowance',
-      slip.fullEarnings.siteAllowance,
-      slip.earnings.siteAllowance,
-    ],
-    [
       'Special Allowance',
       slip.fullEarnings.specialAllowance,
       slip.earnings.specialAllowance,
+    ],
+    ['Medical Reimbursement', null, null],
+    ['Conveyance Reimbursement', null, null],
+    ['Food Allowance', null, null],
+    [
+      'Site Allowance',
+      slip.fullEarnings.siteAllowance,
+      slip.earnings.siteAllowance,
     ],
     // No Rate, ever: overtime is hours worked, not an entitlement LOP can reduce.
     ['Overtime', slip.fullEarnings.ot, slip.earnings.ot],
@@ -132,24 +143,26 @@ export function earningRows(slip: SalarySlipView): EarningRow[] {
 }
 
 /**
- * The deductions table, in the docx's order, ending with the total.
+ * The deductions table, the docx's rows in its order, ending with the total.
  *
- * The docx's Welfare and Mobile Bill have no counterpart here and are omitted for the same reason
- * as the earnings above. Its "Other Deduction" slot carries the **fuel recovery**, under that name:
- * 020 FR-007 requires the recovery to appear on the payslip as itself, and a line called "Other"
- * leaves somebody unable to find out why their pay fell short.
+ * Welfare and Mobile Bill have no counterpart here and print dashes. "Other Deduction" carries the
+ * **fuel recovery** and says so: 020 FR-007 requires the recovery to appear on the payslip as
+ * itself, and a line called only "Other" leaves somebody unable to find out why their pay fell
+ * short.
  *
- * A nil deduction is still printed. A payslip that drops nil rows makes an employee wonder whether
- * TDS was deducted and not shown, or genuinely nil.
+ * A nil deduction the system does hold is still printed as 0.00. A payslip that drops nil rows
+ * makes an employee wonder whether TDS was deducted and not shown, or genuinely nil.
  */
 export function deductionRows(slip: SalarySlipView): SlipRow[] {
   return [
     ['Provident Fund', slip.deductions.pf],
     ['ESI', slip.deductions.esic],
     ['Professional Tax', slip.deductions.pt],
+    ['Welfare', null],
     ['Loan', slip.deductions.loanEmi],
     ['Advance', slip.deductions.advanceRecovery],
-    ['Fuel Recovery', slip.deductions.fuelRecovery],
+    ['Mobile Bill', null],
+    ['Other Deduction (Fuel Recovery)', slip.deductions.fuelRecovery],
     ['T.D.S.', slip.deductions.tds],
     ['Total Deduction', slip.deductions.total],
   ];
@@ -158,12 +171,12 @@ export function deductionRows(slip: SalarySlipView): SlipRow[] {
 type Pair = [label: string, value: string];
 
 /**
- * The employee panel, as label/value pairs in two columns, in the docx's own pairing.
+ * The employee panel, as label/value pairs in two columns, in the docx's own pairing — its six
+ * rows and no others.
  *
  * Working, rest and leave days are printed as em dashes: the slip stores **paid** days and LOP, not
- * the breakdown of the paid days into worked, weekly off and leave, and inventing that split would
- * put figures on a wage document nobody computed. The two figures it does store are printed on a
- * row of their own beneath the docx's, because they are what the Rate and Amount columns differ by.
+ * the breakdown of the month into worked days, weekly offs and leave, and inventing that split
+ * would put figures on a wage document nobody computed.
  *
  * Every label is printed even when its value is absent: a label that disappears with its value
  * makes a payslip's shape depend on the employee.
@@ -196,10 +209,6 @@ export function identityRows(
     [
       ['O.T. Hours', String(slip.otHours)],
       ['Date of Joining', date(identity.joiningDate)],
-    ],
-    [
-      ['Paid Days', String(slip.payableDays)],
-      ['LOP Days', String(slip.lopDays)],
     ],
   ];
 }
@@ -255,19 +264,15 @@ interface Cell {
 @Injectable()
 export class SalaryPdfService {
   /**
-   * @param letterhead the company's stationery, or null/absent for plain paper. A letterhead pdfkit
-   * cannot decode prints on plain paper rather than losing the payslip.
+   * @param logo the company's logo for the header, or null/absent to print the name alone. A logo
+   * pdfkit cannot decode is left out rather than losing the payslip.
    */
   async render(
     slip: SalarySlipView,
     employeeName: string,
-    letterhead?: Buffer | null,
+    logo?: Buffer | null,
   ): Promise<Buffer> {
-    const doc: Doc = new PDFDocument({
-      size: 'A4',
-      // Zero: the letterhead is drawn edge to edge and everything is positioned against SAFE.
-      margin: 0,
-    });
+    const doc: Doc = new PDFDocument({ size: 'A4', margin: 0 });
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     const finished = new Promise<Buffer>((resolve, reject) => {
@@ -292,23 +297,10 @@ export class SalaryPdfService {
       pfUan: null,
     };
 
-    let onStationery = false;
-    if (letterhead) {
-      try {
-        doc.image(letterhead, 0, 0, {
-          width: PAGE.width,
-          height: PAGE.height,
-        });
-        onStationery = true;
-      } catch {
-        onStationery = false;
-      }
-    }
+    const x = MARGIN.left;
+    let y = this.header(doc, identity, logo ?? null);
 
-    let y = onStationery ? SAFE.top : this.companyBlock(doc, identity);
-    const x = SAFE.left;
-
-    // Heading.
+    // "Pay slip for the month of September 2026" — navy, bold, centred.
     doc
       .font('Helvetica-Bold')
       .fontSize(12)
@@ -317,10 +309,10 @@ export class SalaryPdfService {
         width: CONTENT_WIDTH,
         align: 'center',
       });
-    y += 22;
+    y = doc.y + 12;
 
     // Employee panel: four columns, labels shaded.
-    const labelW = 124;
+    const labelW = 120;
     const valueW = CONTENT_WIDTH / 2 - labelW;
     for (const [left, right] of identityRows(slip, identity)) {
       y = this.row(doc, x, y, [
@@ -330,105 +322,115 @@ export class SalaryPdfService {
         { text: right[1], width: valueW },
       ]);
     }
-    y += 10;
+    y += 14;
 
-    // Earnings and deductions side by side, as the docx nests them.
-    const top = y;
+    // Earnings and deductions side by side, each under its navy title, as the docx nests them.
+    const half = (CONTENT_WIDTH - COLUMN_GAP) / 2;
     const earnings = earningRows(slip);
     const deductions = deductionRows(slip);
     // Both columns end on the same line: the shorter one is padded with empty rows, so the two
     // totals sit level and the block reads as one table.
     const bodyRows = Math.max(earnings.length, deductions.length) - 1;
-    const earningBody = earnings.slice(0, -1);
-    const deductionBody = deductions.slice(0, -1);
 
-    const rateW = 64;
-    const amountW = 68;
-    const eLabel = HALF - rateW - amountW;
-    let ey = this.bar(doc, x, top, HALF, 'EARNINGS / ALLOWANCES');
+    const rateW = 58;
+    const amountW = 64;
+    const eLabel = half - rateW - amountW;
+    let ey = this.title(doc, x, y, half, 'EARNINGS / ALLOWANCES');
     ey = this.row(doc, x, ey, [
-      { text: 'Particulars', width: eLabel, bold: true, fill: PALE },
+      {
+        text: 'Particulars',
+        width: eLabel,
+        bold: true,
+        fill: NAVY,
+        color: '#FFFFFF',
+      },
       {
         text: 'Rate (Rs.)',
         width: rateW,
         bold: true,
-        fill: PALE,
+        fill: NAVY,
+        color: '#FFFFFF',
         align: 'right',
       },
       {
         text: 'Amount (Rs.)',
         width: amountW,
         bold: true,
-        fill: PALE,
+        fill: NAVY,
+        color: '#FFFFFF',
         align: 'right',
       },
     ]);
     for (let i = 0; i < bodyRows; i++) {
-      const line = earningBody[i];
+      const line = earnings.slice(0, -1)[i];
       ey = this.row(doc, x, ey, [
         { text: line?.[0] ?? '', width: eLabel },
-        {
-          text: line ? (line[1] === null ? DASH : money(line[1])) : '',
-          width: rateW,
-          align: 'right',
-        },
-        { text: line ? money(line[2]) : '', width: amountW, align: 'right' },
+        { text: line ? figure(line[1]) : '', width: rateW, align: 'right' },
+        { text: line ? figure(line[2]) : '', width: amountW, align: 'right' },
       ]);
     }
     const [grossLabel, grossRate, grossAmount] = earnings[earnings.length - 1];
     ey = this.row(doc, x, ey, [
-      { text: grossLabel, width: eLabel, bold: true, fill: PALE },
+      { text: grossLabel, width: eLabel, bold: true, fill: YELLOW },
       {
-        text: grossRate === null ? DASH : money(grossRate),
+        text: figure(grossRate),
         width: rateW,
         bold: true,
-        fill: PALE,
+        fill: YELLOW,
         align: 'right',
       },
       {
-        text: money(grossAmount),
+        text: figure(grossAmount),
         width: amountW,
         bold: true,
-        fill: PALE,
+        fill: YELLOW,
         align: 'right',
       },
     ]);
 
-    const dx = x + HALF + COLUMN_GAP;
-    const dLabel = HALF - 80;
-    let dy = this.bar(doc, dx, top, HALF, 'DEDUCTIONS');
+    const dx = x + half + COLUMN_GAP;
+    const dAmountW = 70;
+    const dLabel = half - dAmountW;
+    let dy = this.title(doc, dx, y, half, 'DEDUCTIONS');
     dy = this.row(doc, dx, dy, [
-      { text: 'Particulars', width: dLabel, bold: true, fill: PALE },
+      {
+        text: 'Particulars',
+        width: dLabel,
+        bold: true,
+        fill: NAVY,
+        color: '#FFFFFF',
+      },
       {
         text: 'Amount (Rs.)',
-        width: 80,
+        width: dAmountW,
         bold: true,
-        fill: PALE,
+        fill: NAVY,
+        color: '#FFFFFF',
         align: 'right',
       },
     ]);
     for (let i = 0; i < bodyRows; i++) {
-      const line = deductionBody[i];
+      const line = deductions.slice(0, -1)[i];
       dy = this.row(doc, dx, dy, [
         { text: line?.[0] ?? '', width: dLabel },
-        { text: line ? money(line[1]) : '', width: 80, align: 'right' },
+        { text: line ? figure(line[1]) : '', width: dAmountW, align: 'right' },
       ]);
     }
     const [totalLabel, totalAmount] = deductions[deductions.length - 1];
     dy = this.row(doc, dx, dy, [
-      { text: totalLabel, width: dLabel, bold: true, fill: PALE },
+      { text: totalLabel, width: dLabel, bold: true, fill: YELLOW },
       {
-        text: money(totalAmount),
-        width: 80,
+        text: figure(totalAmount),
+        width: dAmountW,
         bold: true,
-        fill: PALE,
+        fill: YELLOW,
         align: 'right',
       },
     ]);
-    y = Math.max(ey, dy) + 10;
+    y = Math.max(ey, dy) + 14;
 
-    // Bank.
-    y = this.bar(doc, x, y, CONTENT_WIDTH, 'BANK ACCOUNT DETAILS');
+    // Bank, with NET PAY and the amount in words as its last row.
+    y = this.title(doc, x, y, CONTENT_WIDTH, 'BANK ACCOUNT DETAILS');
     for (const [left, right] of bankRows(identity)) {
       y = this.row(doc, x, y, [
         { text: left[0], width: labelW, fill: PALE, bold: true },
@@ -437,9 +439,8 @@ export class SalaryPdfService {
         { text: right[1], width: valueW },
       ]);
     }
-    y += 10;
-
-    // Net pay.
+    // "Rupees Twenty Thousand Only", as the docx words it — from the same net pay the row beside
+    // it prints, so the two cannot disagree.
     y = this.row(
       doc,
       x,
@@ -454,19 +455,31 @@ export class SalaryPdfService {
         },
         {
           text: `Rs. ${money(slip.netPay)}`,
-          width: CONTENT_WIDTH - labelW,
+          width: valueW,
           bold: true,
+          fill: YELLOW,
+          color: NAVY,
+        },
+        {
+          text: 'Amount in Words',
+          width: labelW,
+          bold: true,
+          fill: NAVY,
+          color: '#FFFFFF',
+        },
+        {
+          text: rupeesFirstInWords(slip.netPay),
+          width: valueW,
+          bold: true,
+          fill: YELLOW,
+          color: NAVY,
         },
       ],
-      20,
+      { wrap: true, minHeight: 24 },
     );
-    y = this.row(doc, x, y, [
-      { text: 'Amount in Words', width: labelW, bold: true, fill: PALE },
-      { text: slip.netPayInWords, width: CONTENT_WIDTH - labelW },
-    ]);
-    y += 8;
+    y += 10;
 
-    doc.font('Helvetica').fontSize(7.5).fillColor('#000000');
+    doc.font('Helvetica').fontSize(8).fillColor('#000000');
     if (slip.minimumWagesNote) {
       doc.text(slip.minimumWagesNote, x, y, { width: CONTENT_WIDTH });
       y = doc.y + 3;
@@ -474,6 +487,7 @@ export class SalaryPdfService {
     // The docx's closing line, verbatim. It stops somebody sending the payslip back for a signature.
     doc
       .font('Helvetica-Oblique')
+      .fontSize(9)
       .text(
         'Note: This is a computer-generated salary slip and does not require a signature.',
         x,
@@ -486,66 +500,82 @@ export class SalaryPdfService {
   }
 
   /**
-   * The plain-paper header: company name and address, centred, above a rule. Returns where the
-   * payslip itself begins. Skipped to a bare top margin when the company is unknown.
+   * The docx's header: the company's name centred in navy, its logo at the right. Returns where the
+   * payslip itself begins. A missing or unreadable logo leaves the name alone.
    */
-  private companyBlock(doc: Doc, identity: SlipIdentity): number {
-    let y = PLAIN_TOP;
-    if (!identity.companyName) return y;
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(14)
-      .fillColor(NAVY)
-      .text(identity.companyName, SAFE.left, y, {
-        width: CONTENT_WIDTH,
-        align: 'center',
-      });
-    y = doc.y + 2;
-    if (identity.companyAddress) {
+  private header(
+    doc: Doc,
+    identity: SlipIdentity,
+    logo: Buffer | null,
+  ): number {
+    const top = MARGIN.top;
+    let bottom = top;
+    if (logo) {
+      try {
+        const image = (
+          doc as unknown as {
+            openImage(b: Buffer): { width: number; height: number };
+          }
+        ).openImage(logo);
+        const scale = Math.min(110 / image.width, 44 / image.height);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        // The decoded image, not the bytes: pdfkit would decode and embed them a second time.
+        doc.image(image as never, MARGIN.left + CONTENT_WIDTH - width, top, {
+          width,
+          height,
+        });
+        bottom = top + height;
+      } catch {
+        // Not an image pdfkit can read; the name stands alone.
+      }
+    }
+    if (identity.companyName) {
       doc
-        .font('Helvetica')
-        .fontSize(8)
-        .fillColor('#000000')
-        .text(identity.companyAddress, SAFE.left, y, {
-          width: CONTENT_WIDTH,
+        .font('Helvetica-Bold')
+        .fontSize(15)
+        .fillColor(NAVY)
+        .text(identity.companyName, MARGIN.left + 120, top + 12, {
+          width: CONTENT_WIDTH - 240,
           align: 'center',
         });
-      y = doc.y;
+      bottom = Math.max(bottom, doc.y);
     }
-    y += 6;
-    doc
-      .moveTo(SAFE.left, y)
-      .lineTo(SAFE.left + CONTENT_WIDTH, y)
-      .lineWidth(0.8)
-      .strokeColor(NAVY)
-      .stroke();
-    return y + 12;
+    return Math.max(bottom, top + 30) + 16;
   }
 
-  /** A navy section bar with its title in white. Returns the y below it. */
-  private bar(
-    doc: Doc,
-    x: number,
-    y: number,
-    width: number,
-    title: string,
-  ): number {
-    return this.row(doc, x, y, [
-      { text: title, width, bold: true, fill: NAVY, color: '#FFFFFF' },
-    ]);
+  /** A section title in navy bold, as the docx sets "EARNINGS / ALLOWANCES". Returns the y below. */
+  private title(doc: Doc, x: number, y: number, width: number, text: string) {
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9.5)
+      .fillColor(NAVY)
+      .text(text, x, y, { width, lineBreak: false });
+    return y + 14;
   }
 
   /**
-   * One ruled row of cells. Text is clipped to a single line — every value on a payslip is short,
-   * and a row that grew to fit an overlong value would push the page into the letterhead's footer.
+   * One ruled row of cells. Text is a single line, clipped, unless `wrap` is set — the amount in
+   * words, which runs to two lines for most salaries — in which case the row grows to fit.
    */
   private row(
     doc: Doc,
     x: number,
     y: number,
     cells: Cell[],
-    height = ROW,
+    options: { wrap?: boolean; minHeight?: number } = {},
   ): number {
+    let height = options.minHeight ?? ROW;
+    if (options.wrap) {
+      for (const cell of cells) {
+        doc.font(cell.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(TYPE);
+        height = Math.max(
+          height,
+          doc.heightOfString(cell.text, { width: cell.width - 2 * PAD }) +
+            2 * PAD,
+        );
+      }
+    }
     let cx = x;
     for (const cell of cells) {
       if (cell.fill) {
@@ -556,17 +586,24 @@ export class SalaryPdfService {
         .lineWidth(0.5)
         .strokeColor(RULE)
         .stroke();
-      doc
-        .font(cell.bold ? 'Helvetica-Bold' : 'Helvetica')
-        .fontSize(TYPE)
-        .fillColor(cell.color ?? '#000000')
-        .text(cell.text, cx + PAD, y + (height - TYPE) / 2 + 0.5, {
-          width: cell.width - 2 * PAD,
-          align: cell.align ?? 'left',
-          lineBreak: false,
-          ellipsis: true,
-          height: TYPE + 2,
-        });
+      doc.font(cell.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(TYPE);
+      const textHeight = options.wrap
+        ? doc.heightOfString(cell.text, { width: cell.width - 2 * PAD })
+        : TYPE;
+      doc.fillColor(cell.color ?? '#000000').text(
+        cell.text,
+        cx + PAD,
+        y + (height - textHeight) / 2 + 0.5,
+        options.wrap
+          ? { width: cell.width - 2 * PAD, align: cell.align ?? 'left' }
+          : {
+              width: cell.width - 2 * PAD,
+              align: cell.align ?? 'left',
+              lineBreak: false,
+              ellipsis: true,
+              height: TYPE + 2,
+            },
+      );
       cx += cell.width;
     }
     return y + height;

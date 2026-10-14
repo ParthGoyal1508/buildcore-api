@@ -155,7 +155,8 @@ describe('standard letter templates', () => {
       // Header, A, B, C, D, E, F and G. H is a checklist of prose lines.
       expect(tables).toHaveLength(8);
       for (const section of 'ABCDEFGH') {
-        expect(fnf.body).toMatch(new RegExp(`(^|\\n)${section}\\. `));
+        // A heading line (`## A. …`) since 2026-10-15, bold as the form prints them.
+        expect(fnf.body).toMatch(new RegExp(`(^|\\n)(## )?${section}\\. `));
       }
     });
 
@@ -198,15 +199,43 @@ describe('standard letter templates', () => {
     });
   });
 
-  describe('the salary annexure uses the heads this system actually holds', () => {
-    it('reads Site Allowance and does not promise a Dearness or Medical Allowance', () => {
-      // Confirmed with the client on 2026-10-11. Their Word document shows DA and Medical
-      // rows; the employee record holds neither, so a letter promising them would name a
-      // figure no payslip ever shows.
+  describe('the salary annexure is the client’s Annexure I', () => {
+    it('prints their rows, and Site Allowance only for somebody paid one', () => {
+      // Changed deliberately on 2026-10-15. The annexure used to show only the heads the system
+      // holds; the client then asked for their formats to be followed strictly, and their
+      // Annexure I has Dearness and Medical Allowance and a Meal Voucher row. The record states
+      // those as nil (the structure pays none of them). Site Allowance, which the system pays and
+      // their document lacks, is an optional row so the figures still add up for those who get it.
       const appointment = byKey.get('appointment')!;
-      const used = tokensIn(appointment.body);
-      expect(used).toContain('siteAllowanceMonthly');
-      expect(used.filter((t) => /dearness|medical/i.test(t))).toEqual([]);
+      for (const row of [
+        'Basic Salary',
+        'House Rent Allowance (HRA)',
+        'Dearness Allowance',
+        'Conveyance Allowance',
+        'Medical Allowance',
+        'Special Allowance',
+        'Gross Salary',
+        'PF Employer',
+        'ESI Employer',
+        'Meal Voucher',
+        'Total CTC (A+B)',
+        'Net Take-Home',
+      ]) {
+        expect(appointment.body).toContain(`| ${row} |`);
+      }
+      expect(appointment.body).toContain('{{?siteAllowanceMonthly}}');
+    });
+
+    it('numbers the clauses straight through its three sections', () => {
+      // One list in the client's document — Probation, Notice Period and General Policies
+      // continue each other's numbering, 1 to 33.
+      const numbers = byKey
+        .get('appointment')!
+        .body.split('\n')
+        .map((line) => /^(\d+)\. /.exec(line)?.[1])
+        .filter(Boolean)
+        .map(Number);
+      expect(numbers).toEqual(Array.from({ length: 33 }, (_, i) => i + 1));
     });
   });
 

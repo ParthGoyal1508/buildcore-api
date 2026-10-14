@@ -54,11 +54,22 @@ import { LINE_ITEM_OUTPUTS } from './line-items';
  * Those stay required even when the record may lack them, so the gap is typed rather than
  * printed.
  *
- * The salary annexure uses **the heads this system actually holds** — Basic, HRA,
- * Conveyance, Site Allowance, Special Allowance — not the Dearness and Medical rows the
- * client's Word document shows. Confirmed with them on 2026-10-11: the annexure then
- * agrees with what payroll pays, and a letter that promises a Dearness Allowance no payslip
- * ever shows is worse than one that omits it.
+ * ## Strictly the client's formats (2026-10-15)
+ *
+ * The HR bodies were paraphrases of the Word files until 2026-10-15, when the client asked for
+ * their formats to be followed strictly: what is highlighted yellow is filled at issue, and
+ * everything else is fixed. So the wording here is theirs, word for word — their capitals, their
+ * slips of grammar and all — with these exceptions only: "Mr." / "he" / "his" are the salutation
+ * and pronoun tokens, "S/O" / "S/o" is the relation token, "₹" is "Rs." and "☐" is "[ ]" (the PDF
+ * font has neither glyph), and names in the fixed text that belonged to the sample (the company's
+ * own name and "PRPL", "Jaipur Ring Road", a signatory's name) are tokens. Where they put the
+ * heading, the reference line and the employee's acceptance is `LETTER_LAYOUTS`'s and the body's
+ * `[[title]]` / `[[signature]]` markers' business.
+ *
+ * The appointment letter's Annexure I has the client's rows — Dearness and Medical Allowance and
+ * a Meal Voucher among them, which the salary structure does not hold and the record states as
+ * nil. (This replaces the 2026-10-11 decision to show only the system's own heads.) Site
+ * Allowance, which the system pays and their annexure lacks, is a row only for those paid one.
  */
 
 export interface StandardField {
@@ -172,6 +183,28 @@ const SALUTATION = employee(
   false,
 );
 
+/**
+ * "S/o" / "D/o" before the parent's name, from the employee's gender (2026-10-15) — the client's
+ * letters print "S/O: Mr. …" and "S/o-Mr. …". Not required, for the reason the salutation is not.
+ */
+const RELATION = employee(
+  'relation',
+  'Relation — S/o, D/o or W/o',
+  'relation',
+  false,
+);
+
+/**
+ * A run of numbered clauses, "12. …", a blank line between each (2026-10-15). The appointment
+ * letter's clauses are one numbered list across its three sections, as in the client's document,
+ * so each section says where its numbers start.
+ */
+function numbered(from: number, clauses: string[]): string[] {
+  return clauses.flatMap((clause, i) =>
+    i === 0 ? [`${from}. ${clause}`] : ['', `${from + i}. ${clause}`],
+  );
+}
+
 /** The company block every letter closes with. */
 const COMPANY_FIELD = company('companyName', 'Company name', 'name');
 
@@ -201,87 +234,90 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   {
     kindKey: 'offer',
     name: 'Offer letter',
+    // "New offer letter format (1).docx", issued from Recruitment to a candidate. The heading,
+    // "REF No:" and "Date:" open it (`LETTER_LAYOUTS.offer`); "Employee Signature" faces the
+    // company's closing line. The probation, duty hours and notice are the format's own fixed
+    // words — only the highlighted runs vary.
     body: [
-      'To,',
+      'To',
       '{{candidateName}}',
-      'S/O: {{fatherName}}',
+      '{{relation}} : {{?fatherName}}',
       '{{address}}',
-      'Mobile: {{mobile}}',
+      'Mobile:- {{mobile}}',
       'Email: {{email}}',
       '',
-      'Subject: Offer letter for the post of {{postOffered}}',
-      '',
+      '## Subject: Offer Letter for The Post of {{postOffered}}',
       'Dear {{candidateName}},',
       '',
-      'With reference to your application and the subsequent interview held with us, we ' +
-        'are pleased to inform you that you have been selected for the post of ' +
-        '‘{{postOffered}}’ at {{placeOfPosting}} on the terms and conditions mutually ' +
-        'agreed during the interview. You are expected to join on or before ' +
-        '{{joiningDate}}. A detailed appointment letter shall be provided on joining the ' +
-        'company. You will report to {{reportingManager}} ({{reportingManagerMobile}}).',
+      'With reference to your application and subsequent interview held with us, we are ' +
+        'pleased to inform you that you have been selected for the post of ' +
+        '‘{{postOffered}}’ at {{placeOfPosting}} with the terms & conditions mutually ' +
+        'agreed during the Interview. You are expected to join on or before ' +
+        '{{joiningDate}}. Detailed appointment letter shall be provided on joining the ' +
+        'company. Where you will report to {{reportingManager}} Mo. No. ' +
+        '{{reportingManagerMobile}}.',
+      '## Remuneration',
+      'Your offered salary structure will be provided in your joining letter which will ' +
+        'include your annual CTC and other perquisites and allowances offered by the company ' +
+        'including statutory contribution on employee’s behalf.',
       '',
-      'Remuneration',
-      '',
-      'Your offered salary structure will be provided in your joining letter, which will ' +
-        'include your annual CTC and the other perquisites and allowances offered by the ' +
-        'company, including statutory contributions on the employee’s behalf.',
-      '',
-      'Duty timing: your working hours will be from {{dutyStart}} to {{dutyEnd}}.',
-      '',
-      'Probation and confirmation',
-      '',
-      'Your probation period will be {{probationMonths}} months. Based on your ' +
-        'performance your services will be confirmed, and the confirmation will be given ' +
-        'in writing.',
-      '',
-      'Exit and separation',
-      '',
-      'During the probation period either party may terminate the employment by giving ' +
-        '{{noticeDays}} days’ notice. The company reserves the right to terminate ' +
-        'employment without notice in the case of misconduct, unsatisfactory performance ' +
-        'or violation of company policies. Any absence for a continuous period of seven ' +
-        'days without the prior approval of your reporting authority shall bring the ' +
-        'employment to an end without further notice or intimation. An employee who ' +
-        'wishes to resign is required to serve {{noticeDays}} days’ notice; if the ' +
-        'notice period is not served, the company may recover an amount equivalent to ' +
-        'one month’s salary, subject to the terms of the employment agreement and ' +
-        'applicable law.',
-      '',
-      'General terms and conditions',
-      '',
-      'I. You shall not disclose organisational matters, whether confidential or not, to ' +
-        'anyone outside the company, during your employment or afterwards.',
-      'II. You shall perform all duties and functions assigned to you by the management. ' +
-        'Your duties, authority and functions may be modified from time to time by the ' +
-        'management at its sole discretion, keeping in view the overall interest of the ' +
+      'Duty Timing: Your working hours will be from 8:00 AM to 6:00 PM.',
+      '## Probation/Confirmation',
+      'Your probation period will be six months. Based on your performance your services ' +
+        'will be confirmed and will be given in the writing.',
+      '## Exit/Separation',
+      'During the probation period, either party may terminate the employment by giving 30 ' +
+        'days’ notice or may be on immediate effect upon the condition without giving Proper ' +
+        'Justification. The company reserves the right to terminate employment without notice ' +
+        'in case of misconduct, unsatisfactory performance, or violation of company policies. ' +
+        'Any absence for a continuous period of seven days without prior approval of your ' +
+        'reporting authority, the same shall automatically appear to an end without any ' +
+        'notice or intimation. Employees who wish to resign from the company are required to ' +
+        'serve a 30-day notice period. If the notice period is not served, the company may ' +
+        'recover an amount equivalent to one month’s salary, subject to the terms of the ' +
+        'employment agreement and applicable laws.',
+      '## General Terms & Conditions: -',
+      'I. You shall not disclose organizational matters, whether confidential or not with ' +
+        'anyone outside the company while in employment or afterwards.',
+      'II. You shall perform all your duties and functions as may be assigned to you by the ' +
+        'management. Your duties, authorities and functions can be modified from time to time ' +
+        'by the Management at its sole discretion keeping in view the overall interest of the ' +
         'company.',
-      'III. During your employment you shall not undertake any other business or work, ' +
-        'directly or indirectly, without the written permission of the management.',
-      'IV. You shall discharge your responsibilities with discipline and efficiency.',
-      'V. You must follow the rules and regulations of the company in force from time to ' +
-        'time. If, in the opinion of the company, you are found guilty of dishonesty, ' +
-        'misappropriation, disobedience, fraud, misbehaviour, negligence, indiscipline, ' +
-        'absence from duty without permission or any other misconduct, your services may ' +
-        'be terminated without notice or salary in lieu of notice.',
-      'VI. You shall be responsible for safeguarding all company property in your use or ' +
-        'under your charge.',
+      'III. During the Employment with the Company, you shall not undertake any business or ' +
+        'work, either directly or indirectly without the written permission of the Top ' +
+        'Management.',
+      'IV. You shall discharge your responsibilities with discipline and efficiency during ' +
+        'your tenure with the Company.',
+      'V. You must follow the rules and regulations of the Company as may be in force from ' +
+        'time to time. Any time, in the opinion of the Company which shall be final & ' +
+        'binding, you are found guilty of dishonesty, mis-appropriation, dis-obedience, any ' +
+        'fraud, mis-behavior, negligence, indiscipline; absence from duty without permission ' +
+        'or any other mis-conduct, your services may be terminated without giving any notice ' +
+        'or salary in lieu of the notice.',
+      'VI. You shall be responsible for safeguarding all the Company’s property which may be ' +
+        'in your use or under your charge.',
+      'You are requested to forward the following documents and certificates within two days ' +
+        'after accepting the offer.',
+      '1. Educational Certificates',
+      '2. Address Proof-Aadhar cards/Pan cards.',
+      '3. Update CV with 3 Passport size Photographs.',
+      '4. Bank Account Details.',
+      '5. Experience certificates',
+      '6. Resignation Letter Acceptance/Relieving Letter on Joining.',
+      '7. Police Verification',
+      'Please sign and return the duplicate copy of this letter as a token of acceptance of ' +
+        'this offer. We welcome you on board at {{companyShortCode}} and wish you to have long ' +
+        'and truthful association with us for your continuous professional growth.',
       '',
-      'You are requested to forward the following documents and certificates within two ' +
-        'days of accepting this offer:',
-      '',
-      '1. Educational certificates',
-      '2. Address proof — Aadhaar card and PAN card',
-      '3. Updated CV with three passport-size photographs',
-      '4. Bank account details',
-      '5. Experience certificate and relieving letter from your previous employer',
-      '',
-      'We look forward to welcoming you.',
-      '',
+      'Thanks & Regards.',
       'For {{companyName}}',
     ].join('\n'),
     fields: [
       candidate('candidateName', 'Candidate name', 'fullName'),
-      candidate('fatherName', 'Father’s name', 'fatherName', false),
+      // The candidate record holds no gender to derive it from, and "S/O" for a woman is wrong
+      // in a signed letter; typed, like the rest of the address block it belongs to.
+      manual('relation', 'Relation — S/O, D/O or W/O'),
+      candidate('fatherName', 'Father’s / spouse’s name', 'fatherName', false),
       candidate('address', 'Address', 'address', false),
       candidate('mobile', 'Mobile', 'phone', false),
       candidate('email', 'Email', 'email', false),
@@ -289,10 +325,10 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       // recorded them; HR still sees and can change each one before the letter is issued.
       candidate('postOffered', 'Post offered', 'offer.designation'),
       candidate('placeOfPosting', 'Place of posting', 'offer.placeOfPosting'),
-      candidate('joiningDate', 'Expected joining date', 'offer.joiningDate'),
+      candidate('joiningDate', 'Join on or before', 'offer.joiningDate'),
       candidate(
         'reportingManager',
-        'Reporting manager',
+        'Reports to (designation and name)',
         'offer.reportingManager',
       ),
       candidate(
@@ -301,14 +337,8 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         'offer.reportingManagerMobile',
         false,
       ),
-      manual('dutyStart', 'Duty start time'),
-      manual('dutyEnd', 'Duty end time'),
-      candidate(
-        'probationMonths',
-        'Probation period (months)',
-        'offer.probationMonths',
-      ),
-      candidate('noticeDays', 'Notice period (days)', 'offer.noticeDays'),
+      // The format's "PRPL" — the company's own short name, which is its reference prefix too.
+      company('companyShortCode', 'Company short name', 'shortCode'),
       COMPANY_FIELD,
     ],
   },
@@ -317,159 +347,265 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   {
     kindKey: 'appointment',
     name: 'Appointment letter',
+    // "APPOINTMENT OFFER_LETTER_OF_Mr_… PROJECT MANAGER.docx", every clause of it, issued from
+    // HR & Payroll to the employee (2026-10-15). The company signs after "Yours Faithfully"; the
+    // employee's acceptance follows the signature, and Annexure I starts a page of its own.
+    //
+    // The annexure's rows are the client's: Basic, HRA, Dearness, Conveyance, Medical and Special,
+    // then PF, ESI and Meal Voucher, Total CTC and Net Take-Home — figures off the employee's
+    // salary structure, nil where the structure holds no such head. A Site Allowance row, which
+    // their document does not have, appears only for somebody paid one.
     body: [
-      'To,',
-      '{{employeeName}}',
-      'S/O: {{fatherName}}',
-      '{{address}}',
-      'Contact No.: {{mobile}}',
+      'To',
+      '{{salutation}} {{employeeName}}',
+      '{{relation}}: {{?fatherName}},',
+      'Address – {{address}}',
+      'Contact. No.: {{mobile}}',
       'Email ID: {{email}}',
       '',
       'Dear {{employeeName}},',
       '',
-      'Based on our discussion, you had shown interest in working with us as a full-time ' +
-        '{{designation}} in our organisation. With this letter we offer you a contract to ' +
-        'provide your services exclusively to us on a full-time basis at ' +
-        '{{placeOfPosting}}. By signing and accepting this offer you confirm that the ' +
-        'information you have provided is correct.',
+      'Based on the Telephonic Discussion, you had shown interest in working with us as ' +
+        'full-time {{designation}} in our organisation. With this letter, we would like to ' +
+        'offer you a contract to provide your services exclusively to us on a full-time ' +
+        'basis, at {{placeOfPosting}}. By signing and accepting this offer, you are ' +
+        'confirming that:',
       '',
-      'Area of responsibility',
+      '• The information you have provided in submitted information are 100% correct.',
       '',
-      '{{responsibilities}}',
+      '## Area of responsibilities:',
+      '• {{responsibilities}}',
       '',
-      'Compensation',
+      '## Compensation:',
+      'Your compensation package will be calculated as shown below.',
       '',
-      'Your contract start date is {{contractStartDate}}. Your compensation will be a CTC ' +
-        'of {{ctcAnnual}} per annum. The management reserves the right to revise your ' +
-        'terms of employment, which inter alia includes salary bifurcation, merging or ' +
-        'change in allowances. Your detailed salary structure is attached as Annexure I ' +
-        'to this appointment letter.',
+      '• Contract start date: {{contractStartDate}}.',
+      '• Compensation will be CTC {{ctcAnnualLakh}} Annual {{extraBenefits}}',
+      '• In this regard, it is highlighted that the management reserves the right to revise ' +
+        'your terms of employment,',
+      '• which Inter alia includes salary bifurcation, merging or change in allowances, etc. ' +
+        'In this regard, please find your detailed Salary Structure, attached as Annexure - I ' +
+        'to this Appointment Letter.',
       '',
-      'The terms and conditions applicable to your employment, with effect from your date ' +
-        'of joining, are as follows.',
+      'The Terms & Conditions applicable to your employment starting with effect from your ' +
+        'date of joining Are as follows:',
       '',
-      'Probation and confirmation',
+      '## Probation & Confirmation',
+      ...numbered(1, [
+        'Your employment with us, beginning from the receipt of this is Appointment Letter is ' +
+          'on a probationary basis for a period of 6 Months from the date of your joining ' +
+          'duties.',
+        'After the successful completion of the aforesaid period of 6 Months, your employment ' +
+          'Will not be automatically confirmed, unless a Formal Confirmation Letter is not ' +
+          'issued by the Company either unless the probation period is extended, through a ' +
+          'written notice.',
+        'The management reserves the right to extend, at their sole discretion, the ' +
+          'probationary period, that is applicable to your employment.',
+        'During the probation period, if your job performance is sub-par or does not meet the ' +
+          'criteria required for the purpose Of Which you were selected, or if you have ' +
+          'breached these employment terms and conditions, engaged in any misconduct, or ' +
+          'breached any rules and regulations of the company your service is liable to be ' +
+          'terminated with immediate effect without assigning any reason. Further, the ' +
+          'decision of the management in this regard shall be final and binding.',
+        'During your term of employment with the company, you shall not serve any other ' +
+          'employer or engage yourself in any other business or occupation. If we found that ' +
+          'we have right to Hold your Salary & Terminate with Immediate Effect.',
+      ]),
       '',
-      'Your employment with us, beginning from the receipt of this appointment letter, is ' +
-        'on a probationary basis for a period of {{probationMonths}} months from the date ' +
-        'of your joining duties. After the successful completion of that period your ' +
-        'employment will not be automatically confirmed unless a formal confirmation ' +
-        'letter is issued by the company, or unless the probation period is extended by ' +
-        'written notice. The management reserves the right to extend, at its sole ' +
-        'discretion, the probationary period applicable to your employment.',
+      '## Notice Period',
+      ...numbered(6, [
+        'If you Wish to end your employment with the company, then you may do so, by issuing ' +
+          'to the company a minimum One-Month Written Letter, pursuant to which you shall be ' +
+          'required to be present and complete your employment with the company for a period ' +
+          'of 1 Month, which can be extended by the company, solely at their discretion. It is ' +
+          'hereby clarified that you are not entitled to resign during your probation period ' +
+          'and shall continue to dutifully discharge your obligations, Without demur.',
+        'In case of your failure in complying with aforementioned requirements pertaining to ' +
+          'the Notice Period, then the company reserves its right to forfeited any payment(s) ' +
+          'to you.',
+        'As such, you are also required to intimate the company about your intention to leave ' +
+          'the employment of the company, by giving a written One Month or forfeiting your ' +
+          'salary, in lieu of the Notice.',
+        'The company, therefore within their rights to withhold your payments, in lieu Of ' +
+          'Inter alia, your salary and any other due(s), unilaterally and without issuing a ' +
+          'formal or informal notice to you, for your noncompliance With the Terms & ' +
+          'Conditions applicable to your employment.',
+        'The Company reserves the right to terminate employment of any employee for just cause ' +
+          'at any time without notice and without payment in lieu of notice. The Company will ' +
+          'be entitled to terminate your employment for any reason other than for just cause, ' +
+          'upon providing to you such minimum notice as required by law.',
+        'Upon the Termination or Resignation of your employment, you will return all Papers, ' +
+          'Mobile, ID Card and other Company Related Documents or Things which has been ' +
+          'Provided by the company at your employment time and you will not retain any copies ' +
+          'of extracts therefore. If the Company has found any obligation in these then Company ' +
+          'has liable to take any Legal Action or Forfeited your Salary.',
+      ]),
       '',
-      'During the probation period, if your performance does not meet the criteria ' +
-        'required for the purpose for which you were selected, or if you breach these ' +
-        'terms, engage in misconduct or breach any rules of the company, your service is ' +
-        'liable to be terminated with immediate effect. During your employment you shall ' +
-        'not serve any other employer or engage in any other business or occupation.',
+      '## General Policies of the Company',
+      'That the following are the General Policies of the Company, which are also applicable ' +
+        'to you for the entire duration of your employment with the company:',
       '',
-      'Notice period',
+      ...numbered(12, [
+        'You will be responsible for executing your assigned duties with the utmost ' +
+          'professionalism, dedication and adherence to quality of standards. It is expected ' +
+          'that you will perform your job / tasks diligently to ensure the quality of the work ' +
+          'performed. Any structural work or work done related to you damages during the ' +
+          'working period of time caused by negligence or lack of adherence to quality ' +
+          'standards will be your sole responsibility.',
+        'In the event that work executed by you is found to be damaged in the future, ' +
+          'resulting in charges imposed by the government authorities, you will be held ' +
+          'accountable for such charges. It is imperative that you exercise caution and carry ' +
+          'out your tasks in accordance with established regulations and standards to avoid any ' +
+          'liability in this regard.',
+        'If you have done offensive/Criminal work during your tenure against Law then the ' +
+          'company can take legal action against you and all the work have you done that has ' +
+          'been your Responsibility. Company have not liable and involved in anything you have ' +
+          'done on the Project Site.',
+        'During the Service If you have Drink or Drive the Vehicle, Misbehave with Other Staff ' +
+          'and Breach of the Law and Order of the Gov. regulations as per Policy and Conduct any ' +
+          'Work against law and order then company cannot be responsible for anything and the ' +
+          'company can take the legal action against you at that time.',
+        'No bonus & other Benefits will be given on any occasion.',
+        'Absence for a continuing period of 10 (Ten) days including absence when leave though ' +
+          'applied for but not granted and when over- stayed for a period of 10 days would make ' +
+          'you to lose your lien on the service and the same shall automatically come to an end ' +
+          'without any notice or even intimation. In such an eventuality, the management Will ' +
+          'draw an irresistible presumption that by remaining absent continuously and ' +
+          'unauthorized by, you have abandoned your job you have not liable for any claim and ' +
+          'Outstanding Amount Pending from the Company. The Company will be forfeited all the ' +
+          'Pending Amount.',
+        'You will devote yourself entirely to the work of the company with honesty and ' +
+          'loyalty. You will Obey all orders and instructions of all persons in authority over ' +
+          'you.',
+        'Your appointment is made relying upon the information furnished and representation ' +
+          'made by you from time to time. The company and any of its employees/representatives ' +
+          'and/or officials shall be entitled to conduct reference and background check from ' +
+          'all the requisite sources including all your previous employer’s or reference given ' +
+          'by you and if not found suitable or any discrepancy is regards to you or any of the ' +
+          'statements, declarations or disclosures made by you the company shall have full ' +
+          'right and authority to terminate your services and take such further action as ' +
+          'deemed necessary in the interest of the company.',
+        'New adjusted compensation: will be decided depending on your performance and a new ' +
+          'increment from the date of joining after one year will be considered.',
+        'Leave benefits as per company policy of 2 Days as Paid Leaves monthly. Before ' +
+          'proceeding leave, you will have to apply for leave 09 days in advance to the ' +
+          'appropriate authority and seek the prior sanction of leave. Any additional leave ' +
+          'beyond this limit shall be subject to prior approval and may be treated as unpaid ' +
+          'leave, as per company policy.',
+        'You will be bound by rules and regulations enforced by the management, from time to ' +
+          'time in relation to conduct, discipline, leave, holidays or any matter relating to ' +
+          'service conditions which will be deemed as rules, regulations and orders in the part ' +
+          'of these terms of employment. The management reserves the right to modify, alter or ' +
+          'delete the existing service rules or to introduce fresh service rules which will be ' +
+          'binding upon you.',
+        'You Will undertake to do not divert any trade secret or any knowledge of ' +
+          'valued/confidential information gained by you during the course of employment with ' +
+          'us to any individual or institution while in your service.',
+        'Your increments/promotion and demotions will depend at the sole discretion of the ' +
+          'management depending upon your efficiency, intelligence, regular attendance, sense ' +
+          'of discipline, loyalty, and good behavior and also subject to the prosperity of the ' +
+          'organization.',
+        'In case, you are found guilty of insubordination, misconduct, drunkenness, theft, ' +
+          'dishonesty or at any Stage it is found that information pertaining to your ' +
+          'employment furnished to the company incorrect or if you commit breach of any of the ' +
+          'conditions or rules mentioned herein, it is expressly agreed that the appointment ' +
+          'shall at the option of the management be terminated forthwith without any notice or ' +
+          'payment in lieu thereof.',
+        'In case, the company provides you residential accommodation, you will be responsible ' +
+          'for its proper maintenance. If your employments with the company cease for any ' +
+          'reason whatsoever you will immediately, vacate the accommodation and handover all ' +
+          'furniture and fixtures belonging to the company, Without delay and Without question.',
+        'Your address indicated above, shall be deemed to be correct address for sending you ' +
+          'any communication and unless changed by written information, the communication sent ' +
+          'to you at the above address shall be deemed to have been correctly served.',
+        'You will automatically retire without any notice on your reaching the age of 60 ' +
+          'years.',
+        'You will be responsible for safe keeping and return in good condition and order of ' +
+          'the company’s all properties, equipment’s, tools, instruments, books and files which ' +
+          'may be given to you for your use, custody, care or charges. The company have the ' +
+          'right to deduct the value of all such things from your dues and take such action as ' +
+          'the company may deem fit in the event of your failure to account for such company’s ' +
+          'property, to its satisfaction.',
+        'The Company reserves the right to place you in any of its division’s/units / ' +
+          'branches/ offices / associate companies, either existing or to be opened in future ' +
+          'in the country, according to exigencies of work at the sole discretion of the ' +
+          'Management. Upon such transfer/placement, the rules and regulations of service ' +
+          'applicable to your category personnel at the place of transfer will become ' +
+          'applicable to you.',
+        'During the period of your employment with the Company or thereafter, you will not ' +
+          'divulge to any other person, orally or in writing or in any manner whatsoever, any ' +
+          'information, data, knowledge, skills, trade secrets relating to the affairs of the ' +
+          'organization or its allied / associated / subsidiary companies, which you have ' +
+          'acquired by reason of employment with the organization.',
+        'Besides above stated conditions, you Will be required to abide by the Service Rules & ' +
+          'Regulation(s) and any Standing Order(s), as and when issued by the Company in due ' +
+          'course, either specifically to you or to the entire organization.',
+        'The company also reserves the right to amend, update or replace any of the Terms & ' +
+          'Conditions, General Conditions, General Policy(ies) Of the Company or any Service ' +
+          'Rule or Regulations With a specific Standing Order(s), which shall be applicable to ' +
+          'you.',
+      ]),
       '',
-      'If you wish to end your employment with the company you may do so by giving the ' +
-        'company {{noticeMonths}} month(s) written notice, during which you shall be ' +
-        'required to be present and complete your handover.',
-      '',
-      'Absence',
-      '',
-      'Absence for a continuous period of ten days, including absence when leave has been ' +
-        'applied for but not granted, or when overstayed by ten days, will make you lose ' +
-        'your lien on the service and the employment shall come to an end without notice ' +
-        'or intimation.',
-      '',
-      'Leave',
-      '',
-      'Leave benefits are as per company policy, being {{paidLeavesPerMonth}} paid leave ' +
-        'days per month. Leave must be applied for in advance and sanctioned by the ' +
-        'appropriate authority. Any leave beyond this limit is subject to prior approval ' +
-        'and may be treated as unpaid.',
-      '',
-      'General conditions',
-      '',
-      'You will devote yourself entirely to the work of the company with honesty and ' +
-        'loyalty, and will obey the lawful instructions of those in authority over you.',
-      '',
-      'Your appointment is made relying upon the information furnished by you. The ' +
-        'company is entitled to conduct reference and background checks, and if any ' +
-        'discrepancy is found in the statements or disclosures made by you, the company ' +
-        'may terminate your services.',
-      '',
-      'You will not divulge any trade secret or confidential information gained during ' +
-        'the course of your employment, either during your service or afterwards.',
-      '',
-      'Your increments, promotions and demotions are at the sole discretion of the ' +
-        'management, depending on your efficiency, attendance, discipline, loyalty and ' +
-        'conduct, and subject to the prosperity of the organisation.',
-      '',
-      'You will be responsible for the safe keeping and return, in good condition, of all ' +
-        'company property, equipment, tools, instruments, books and files given to you ' +
-        'for your use or custody.',
-      '',
-      'The company reserves the right to place you at any of its divisions, units, ' +
-        'branches or offices, existing or opened in future, according to the exigencies ' +
-        'of work. Upon such transfer the rules applicable at the place of transfer will ' +
-        'apply to you.',
-      '',
-      'The address indicated above shall be deemed your correct address for all ' +
-        'communication. Unless changed by written intimation, any communication sent to ' +
-        'that address shall be deemed to have been served.',
-      '',
-      'You will retire without notice on reaching the age of {{retirementAge}} years.',
-      '',
-      'Besides the above, you will be required to abide by the service rules and ' +
-        'regulations and any standing orders issued by the company in due course. The ' +
-        'company reserves the right to amend, update or replace any of these terms, ' +
-        'general conditions or policies.',
-      '',
-      'We at {{companyName}} wish you a happy and prosperous future with our organisation ' +
-        'and heartily welcome you to excel with us.',
+      'We, at {{companyName}} wish you a happy and prosperous future with our organization and ' +
+        'heartily welcome you to excel with us.',
       '',
       'Thanking you,',
-      '',
-      'Yours faithfully,',
+      'Yours Faithfully',
       'For {{companyName}}',
+      '[[signature]]',
+      'I, {{salutation}} {{employeeName}} have read the abovementioned Terms & Conditions and ' +
+        'General Policies of the Company governing my employment With {{companyName}}.',
+      'I am agreeable to all of the abovementioned Terms and Conditions and hereby accept the ' +
+        'same.',
       '',
+      'Signature:',
       '',
-      'ANNEXURE I — Remuneration details',
+      'Date:',
       '',
-      '| Earning component | Monthly | Annually |',
+      'Note: Kindly sign every page of this Letter and another copy of this as a token of your ' +
+        'acceptance.',
+      '[[pagebreak]]',
+      '## ANNEXURE I',
+      '## Remuneration Details',
+      '## Earning Components (A)',
+      '| Heads | Monthly | Annually |',
       '| --- | --- | --- |',
-      '| Basic salary | {{basicMonthly}} | {{basicAnnual}} |',
-      '| House rent allowance (HRA) | {{hraMonthly}} | {{hraAnnual}} |',
-      '| Conveyance allowance | {{conveyanceMonthly}} | {{conveyanceAnnual}} |',
-      '| Site allowance | {{siteAllowanceMonthly}} | {{siteAllowanceAnnual}} |',
-      '| Special allowance | {{specialAllowanceMonthly}} | {{specialAllowanceAnnual}} |',
-      '| Gross salary | {{grossMonthly}} | {{grossAnnual}} |',
-      '',
-      '| Employer contribution | Monthly | Annually |',
+      '| Basic Salary | Rs. {{basicMonthly}} | Rs. {{basicAnnual}} |',
+      '| House Rent Allowance (HRA) | Rs. {{hraMonthly}} | Rs. {{hraAnnual}} |',
+      '| Dearness Allowance | Rs. {{daMonthly}} | Rs. {{daAnnual}} |',
+      '| Conveyance Allowance | Rs. {{conveyanceMonthly}} | Rs. {{conveyanceAnnual}} |',
+      '| Medical Allowance | Rs. {{medicalMonthly}} | Rs. {{medicalAnnual}} |',
+      '| Site Allowance | Rs. {{?siteAllowanceMonthly}} | Rs. {{siteAllowanceAnnual}} |',
+      '| Special Allowance | Rs. {{specialAllowanceMonthly}} | Rs. {{specialAllowanceAnnual}} |',
+      '| Gross Salary | Rs. {{grossMonthly}} | Rs. {{grossAnnual}} |',
+      '## Employer Contributions (B)',
+      '| Heads | Monthly | Annually |',
       '| --- | --- | --- |',
-      '| Provident fund | {{pfEmployerMonthly}} | {{pfEmployerAnnual}} |',
-      '| ESI | {{esicEmployerMonthly}} | {{esicEmployerAnnual}} |',
-      '| Total CTC | {{ctcMonthly}} | {{ctcAnnual}} |',
-      '',
-      'I, {{employeeName}}, have read the above terms and conditions and the general ' +
-        'policies of the company governing my employment with {{companyName}}. I agree ' +
-        'to all of them and hereby accept the same.',
-      '',
-      'Signature: ______________________      Date: ______________',
-      '',
-      'Note: kindly sign every page of this letter, and a second copy of it, as a token ' +
-        'of your acceptance.',
+      '| PF Employer | Rs. {{pfEmployerMonthly}} | Rs. {{pfEmployerAnnual}} |',
+      '| ESI Employer | Rs. {{esicEmployerMonthly}} | Rs. {{esicEmployerAnnual}} |',
+      '| Meal Voucher | Rs. {{mealVoucherMonthly}} | Rs. {{mealVoucherAnnual}} |',
+      '| Total CTC (A+B) | Rs. {{ctcMonthly}} | Rs. {{ctcAnnual}} |',
+      '| Net Take-Home | Rs. {{netTakeHomeMonthly}} | Rs. {{netTakeHomeAnnual}} |',
     ].join('\n'),
     fields: [
+      SALUTATION,
       employee('employeeName', 'Employee name', 'fullName'),
-      employee('fatherName', 'Father’s name', 'fatherName', false),
+      RELATION,
+      employee('fatherName', 'Father’s / spouse’s name', 'fatherName', false),
       employee('address', 'Address', 'address', false),
-      employee('mobile', 'Mobile', 'phone', false),
-      employee('email', 'Email', 'email', false),
+      employee('mobile', 'Contact no.', 'phone', false),
+      employee('email', 'Email ID', 'email', false),
       employee('designation', 'Designation', 'designation'),
       employee('placeOfPosting', 'Place of posting', 'placeOfPosting'),
-      manual('responsibilities', 'Area of responsibility'),
+      manual('responsibilities', 'Area of responsibilities'),
       employee('contractStartDate', 'Contract start date', 'dateOfJoining'),
-      manual('probationMonths', 'Probation period (months)'),
-      manual('noticeMonths', 'Notice period (months)'),
-      manual('paidLeavesPerMonth', 'Paid leave days per month'),
-      manual('retirementAge', 'Retirement age'),
+      // "6.00 Lakh", from the same CTC the annexure totals.
+      employee('ctcAnnualLakh', 'CTC (lakh per annum)', 'ctcAnnualLakh'),
+      manual(
+        'extraBenefits',
+        'Extra benefits — e.g. "and extra benefits food & accommodation provided by the company."',
+        false,
+      ),
       // The annexure, off the employee's own salary heads. Annual figures are the
       // monthly ones × 12, resolved by the employee record alongside them (`basicAnnual`
       // beside `basic`) rather than typed, which is why these are `employee` and not
@@ -478,17 +614,39 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       employee('basicAnnual', 'Basic — annually', 'basicAnnual'),
       employee('hraMonthly', 'HRA — monthly', 'hra'),
       employee('hraAnnual', 'HRA — annually', 'hraAnnual'),
+      employee(
+        'daMonthly',
+        'Dearness allowance — monthly',
+        'dearnessAllowance',
+      ),
+      employee(
+        'daAnnual',
+        'Dearness allowance — annually',
+        'dearnessAllowanceAnnual',
+      ),
       employee('conveyanceMonthly', 'Conveyance — monthly', 'conveyance'),
       employee('conveyanceAnnual', 'Conveyance — annually', 'conveyanceAnnual'),
       employee(
+        'medicalMonthly',
+        'Medical allowance — monthly',
+        'medicalAllowance',
+      ),
+      employee(
+        'medicalAnnual',
+        'Medical allowance — annually',
+        'medicalAllowanceAnnual',
+      ),
+      employee(
         'siteAllowanceMonthly',
-        'Site allowance — monthly',
-        'siteAllowance',
+        'Site allowance — monthly (row printed only when paid)',
+        'siteAllowanceIfAny',
+        false,
       ),
       employee(
         'siteAllowanceAnnual',
         'Site allowance — annually',
-        'siteAllowanceAnnual',
+        'siteAllowanceIfAnyAnnual',
+        false,
       ),
       employee(
         'specialAllowanceMonthly',
@@ -514,8 +672,20 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         'Employer ESI — annually',
         'esicEmployerAnnual',
       ),
+      employee('mealVoucherMonthly', 'Meal voucher — monthly', 'mealVoucher'),
+      employee(
+        'mealVoucherAnnual',
+        'Meal voucher — annually',
+        'mealVoucherAnnual',
+      ),
       employee('ctcMonthly', 'Total CTC — monthly', 'ctc'),
       employee('ctcAnnual', 'Total CTC — annually', 'ctcAnnual'),
+      employee('netTakeHomeMonthly', 'Net take-home — monthly', 'netTakeHome'),
+      employee(
+        'netTakeHomeAnnual',
+        'Net take-home — annually',
+        'netTakeHomeAnnual',
+      ),
       COMPANY_FIELD,
     ],
   },
@@ -524,20 +694,21 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   {
     kindKey: 'experience',
     name: 'Experience letter',
-    // "Experience Letter (1).docx". The file is headed *Relieving Letter*, but this is the
-    // certifying text, and the client asked for it to be issued as the experience letter;
-    // the page heading is the kind's label. Their "Mr. … S/o-Mr. …" and "him" are tokens,
-    // and their "no objection to all him in any better position" is put into English.
+    // "Experience Letter (1).docx", word for word but for three things: "Mr." is the salutation
+    // token and "S/o" the relation token; "him" / "his" are pronoun tokens; and "He is amiable"
+    // names the employee instead, because a pronoun token cannot start a sentence (it cannot be
+    // capitalised by substitution, and "they is" is not English).
     body: [
-      'This is to certify that {{salutation}} {{employeeName}}, S/o {{fatherName}}, ' +
-        'worked as {{designation}} in our company from {{fromDate}} to {{toDate}}, ' +
-        'posted at {{postingLocation}}, with our entire satisfaction. During ' +
-        '{{pronounPossessive}} working period we found {{pronounObject}} to be a sincere, ' +
-        'honest, hardworking and dedicated employee with a professional attitude and very ' +
-        'good job knowledge, and amiable in nature and character as well.',
+      'This is to certify that {{salutation}} {{employeeName}} {{relation}}-{{fatherName}} ' +
+        'worked as a post {{designation}} in our company from {{fromDate}} to {{toDate}} ' +
+        'posted at {{postingLocation}} with our entire satisfaction. During ' +
+        '{{pronounPossessive}} working period, we found {{pronounObject}} a sincere, honest, ' +
+        'hardworking, dedicated employee with a professional attitude and very good job ' +
+        'knowledge.',
       '',
-      'We have no objection to {{pronounPossessive}} taking up any better position, and ' +
-        'there are no liabilities outstanding against {{pronounObject}} in our company.',
+      '{{salutation}} {{employeeName}} is amiable in nature and character as well. We have no ' +
+        'objection to all {{pronounObject}} in any better position and have no liabilities in ' +
+        'our company.',
       '',
       'We wish {{pronounObject}} good luck for future assignments.',
       '',
@@ -546,13 +717,14 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     fields: [
       SALUTATION,
       employee('employeeName', 'Employee name', 'fullName'),
-      employee('fatherName', 'Father’s name', 'fatherName', false),
-      employee('designation', 'Designation', 'designation'),
+      RELATION,
+      employee('fatherName', 'Father’s / spouse’s name', 'fatherName', false),
+      employee('designation', 'Post', 'designation'),
       employee('fromDate', 'Worked from', 'dateOfJoining'),
       // The exit record's last working day. Required although the record may not hold it
       // yet: the dates are what the next employer reads this letter for.
       employee('toDate', 'Worked to', 'exit.lastWorkingDay'),
-      employee('postingLocation', 'Place of posting', 'placeOfPosting'),
+      employee('postingLocation', 'Posted at', 'placeOfPosting'),
       // Object and possessive only. The body never needs the subject form, and a field
       // declared but unused is a box somebody fills in whose answer goes nowhere.
       PRONOUN_OBJECT,
@@ -567,30 +739,33 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     name: 'Relieving letter',
     // "Reliving Letter.docx": the resignation accepted, the relieving date, and the
     // experience letter held back until the full and final settlement — which is why the
-    // two are separate kinds and issued at different times.
+    // two are separate kinds and issued at different times. Its "Company name" placeholders
+    // and the blank after "Name: -", "Project: -" and "Dear Mr…" are the fields; the heading
+    // sits under the name and project, where `[[title]]` puts it.
     body: [
-      'Name: {{salutation}} {{employeeName}}',
-      'Project: {{projectName}}',
+      'Name: - {{employeeName}}',
       '',
-      'Dear {{salutation}} {{employeeName}},',
+      'Project: - {{projectName}}',
+      '[[title]]',
+      'Dear {{salutation}} {{employeeName}}',
       '',
-      'In reference to your resignation dated {{resignationDate}} stating your intention ' +
-        'to resign from the position of {{designation}} held at {{companyName}}, we would ' +
-        'like to inform you that your resignation from the services of the organisation ' +
-        'has been accepted.',
+      'In reference to your resignation dated {{resignationDate}} stating your intention to ' +
+        'resign from Position of {{designation}} held at {{companyName}}, we would like to ' +
+        'inform you that your resignation from the services of the Organisation has been ' +
+        'accepted.',
       '',
-      'You have been relieved from all your duties and responsibilities at the close of ' +
-        'office hours of {{relievingDate}}. You have submitted all the company documents, ' +
-        'technical equipment and all other company properties to your Project Manager / ' +
+      'You have been relieved from all your duties and responsibilities at the Close of ' +
+        'Office Hours of {{relievingDate}}. You have Submitted all the Company Documents, ' +
+        'Technical Equipment’s and all Other Company Properties to your Project Manager/ ' +
         'Department Head.',
       '',
-      'Your experience letter shall be issued to you subject to the full and final ' +
-        'settlement of dues, if any.',
+      'Your Experience letter shall be issued to you subject to the Full and Final Settlement ' +
+        'of dues, if any.',
       '',
-      'We thank you for your services in {{companyName}} and wish you success in your ' +
-        'future endeavours.',
+      'We thank you for your Services in {{companyName}} and wish you success in your future ' +
+        'endeavours.',
       '',
-      'With best regards,',
+      'With Best Regards,',
       'For {{companyName}}',
     ].join('\n'),
     fields: [
@@ -610,41 +785,43 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   {
     kindKey: 'increment',
     name: 'Increment letter',
+    // "Increment Letter (1).docx". No heading — "Ref:" and "Date:" open it — and no "For …"
+    // line: the signatory signs under "With best wishes,".
     body: [
       '{{employeeName}}',
-      'Employee code: {{employeeCode}}',
-      'Email: {{email}}',
-      'Mobile: {{mobile}}',
+      'Employee Code: {{employeeCode}}',
+      'E-mail: {{email}}',
+      'Mobile No.: {{mobile}}',
       '',
-      'Subject: Revision of compensation cum increment letter',
+      'Subject: Revision of Compensation cum Increment Letter.',
       '',
-      'Dear {{employeeName}},',
+      'Dear {{salutation}} {{employeeName}},',
       '',
       'With reference to your appointment letter, we are pleased to inform you that your ' +
-        'salary has been revised with effect from {{effectiveDate}} for your services as ' +
+        'salary has been revised with effect from {{effectiveDate}} for your services as an ' +
         '{{designation}} at {{placeOfPosting}}.',
       '',
-      'Your revised Cost to Company (CTC) will be {{revisedCtcMonthly}} ' +
+      'Your revised Cost to Company (CTC) will be Rs.{{revisedCtcMonthly}}/- ' +
         '({{revisedCtcWords}}) per month.',
       '',
-      'All other terms and conditions of your employment, as specified in your ' +
-        'appointment letter and subsequent communications, shall remain unchanged and ' +
-        'continue in full force and effect.',
-      '',
-      'We appreciate your contribution to the organisation and look forward to your ' +
+      'All other terms and conditions of your employment, as specified in your appointment ' +
+        'letter and subsequent communications, shall remain unchanged and continue in full ' +
+        'force and effect.',
+      'We appreciate your contributions to the organization and look forward to your ' +
         'continued dedication and commitment.',
       '',
-      'Note: applicable taxes and statutory deductions shall be made in accordance with ' +
-        'the prevailing laws and regulations.',
+      'Notes:',
+      '• Applicable taxes and statutory deductions shall be made in accordance with the ' +
+        'prevailing laws and regulations.',
       '',
       'With best wishes,',
-      'For {{companyName}}',
     ].join('\n'),
     fields: [
+      SALUTATION,
       employee('employeeName', 'Employee name', 'fullName'),
       employee('employeeCode', 'Employee code', 'employeeCode'),
-      employee('email', 'Email', 'email', false),
-      employee('mobile', 'Mobile', 'phone', false),
+      employee('email', 'E-mail', 'email', false),
+      employee('mobile', 'Mobile no.', 'phone', false),
       employee('designation', 'Designation', 'designation'),
       employee('placeOfPosting', 'Place of posting', 'placeOfPosting'),
       // Off the employee's latest salary revision — the record of the increment this
@@ -656,7 +833,6 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         'Revised CTC in words',
         'revision.ctcInWords',
       ),
-      COMPANY_FIELD,
     ],
   },
 
@@ -666,42 +842,39 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     name: 'Transfer letter',
     // "Transfer letter.docx". Its closing sentence names "Jaipur Ring Road" while the
     // letter transfers the employee to a different project — a copy-paste leftover — so
-    // both mentions are the destination here.
-    //
-    // The acceptance lines come before the sign-off rather than after it, as they do in the
-    // source: the renderer draws the company's signature after the body, and an
-    // employee's "Signature: ___" printed under the director's reads as if it were his.
+    // both mentions are the destination here. The company signs after "Regards,"; the
+    // employee's acceptance follows the signature, as in the format.
     body: [
-      'To,',
+      'To',
       '{{employeeName}}',
-      'S/O: {{fatherName}}',
+      '{{relation}} {{?fatherName}}',
       '{{address}}',
-      'Contact No.: {{mobile}}',
-      'Email ID: {{email}}',
+      'Contact No.: -{{mobile}}',
+      'Email Id.: {{email}}',
       '',
       'Dear {{employeeName}},',
-      '',
-      'We hope this letter finds you well. This is to inform you that, due to the ' +
-        'operational requirements of the company, you are being transferred to ' +
-        '{{toProject}}. You are required to report to the {{reportingSite}} site on ' +
-        '{{reportingDate}}. Your duties and responsibilities will remain consistent with ' +
-        'your current role as {{designation}}, and we are confident that your skills and ' +
-        'experience will greatly contribute to the {{toProject}} project during this ' +
-        'period.',
+      'We hope this letter finds you well. This is to inform you that, due to the operational ' +
+        'requirements of the company, you are being transferred to {{toProject}} You are ' +
+        'required to report to the {{reportingSite}} site on {{reportingDate}}. Your duties ' +
+        'and responsibilities will remain consistent with your current role as ' +
+        '{{designation}}, and we are confident that your skills and experience will greatly ' +
+        'contribute to the {{toProject}} project during this period.',
       '',
       'Should you need any further information, please feel free to contact the HR ' +
         'department.',
       '',
-      'Please confirm your acceptance by signing and returning this letter.',
-      '',
-      'Signature: ______________________      Date: ______________',
-      '',
       'Regards,',
       'For {{companyName}}',
+      '[[signature]]',
+      'Please confirm your acceptance by signing and returning this letter',
+      '',
+      '',
+      'Signature: ______________________                    Date: ______________',
     ].join('\n'),
     fields: [
       employee('employeeName', 'Employee name', 'fullName'),
-      employee('fatherName', 'Father’s name', 'fatherName', false),
+      RELATION,
+      employee('fatherName', 'Father’s / spouse’s name', 'fatherName', false),
       employee('address', 'Address', 'address', false),
       employee('mobile', 'Contact no.', 'phone', false),
       employee('email', 'Email', 'email', false),
@@ -720,31 +893,30 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     kindKey: 'termination',
     name: 'Termination letter',
     // "Terminataion letter.docx". The reasons are deliberately not stated — the client's
-    // letter says only that they are specific — and nothing here adds a field for them.
+    // letter says only that they are specific — and nothing here adds a field for them. Its
+    // red "Company Name" placeholders are the company field; "HR Department" closes it under
+    // the signature.
     body: [
-      'To,',
+      'To',
       '{{employeeName}}',
       '{{designation}}',
       'Project Name: {{projectName}}',
       '',
-      'Sub: Termination of employment from the company',
+      '## Sub: - Termination of Employment from the company',
       '',
       'This letter is to inform you that your employment with {{companyName}} as ' +
-        '{{designation}} is terminated, effective from {{effectiveDate}}. This decision ' +
-        'has been reached after careful consideration and is based on some specific ' +
-        'reasons.',
-      '',
-      'Your final settlement will include all pending salary, accrued leave and other ' +
+        '{{designation}} is terminated, effective from {{effectiveDate}}. This decision has ' +
+        'been reached after careful consideration and is based on some specific reasons.',
+      'Your final settlement will be including all pending salary, accrued leave, and other ' +
         'dues as per company policy.',
-      '',
-      'Please return all company property, company documents and all other documents on ' +
-        'or before your last working day.',
-      '',
+      'Please return all company property, Company Documents and all other documents on ' +
+        'before your last working day.',
       'You are requested to complete a handover of site-related work to your reporting ' +
-        'authority, {{handoverTo}}.',
+        '{{handoverTo}}.',
       '',
-      'Regards,',
+      'Regards',
       'For {{companyName}}',
+      '[[signature]]',
       'HR Department',
     ].join('\n'),
     fields: [
@@ -767,27 +939,26 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
   {
     kindKey: 'fnf_settlement',
     name: 'Full & final settlement sheet',
-    // "Full_and_Final_Settlement_Format.docx", sections A–H, as pipe tables. A sheet, not a
-    // letter: no signature from the renderer, and the sign-offs are the rows of section F
-    // and G, completed by hand.
+    // "Full_and_Final_Settlement_Format.docx", sections A–H, as pipe tables, under the logo and
+    // company name the form's header carries. A sheet, not a letter: no signature from the
+    // renderer, and the sign-offs are the rows of section F and G, completed by hand. Its
+    // reference and date are the cells of its own first row (`LETTER_LAYOUTS.fnf_settlement`).
     //
     // Figures come from the exit computation (`fnf.*`) where it has them. Everything the
     // records do not hold — reference numbers, overtime, asset recoveries, who prepared and
     // approved it — is a field HR may leave empty, because a blank cell on this sheet is
     // what the client's own form has until somebody writes in it.
     //
-    // Three deliberate departures from the Word file. Amounts carry "(Rs.)" in the
-    // heading rather than "₹" in the cell, and tick boxes are "[ ]" rather than "☐": the
-    // renderer's built-in font has neither glyph, and both printed as garbage. The "PAN /
-    // UAN" row asks for the UAN only — a letter never carries a PAN. The ref. no. and date
-    // in the form's header are the letter's own, printed by the renderer.
+    // Three deliberate departures from the Word file. Amounts carry "Rs." rather than "₹",
+    // tick boxes are "[ ]" rather than "☐", and "A − B" has a hyphen: the renderer's built-in
+    // font has none of those glyphs, and they printed as garbage. The "PAN / UAN" row is
+    // filled with the UAN only — a letter never carries a PAN.
     body: [
-      'HR & ADMINISTRATION DEPARTMENT – CONFIDENTIAL',
+      'HR & ADMINISTRATION DEPARTMENT | CONFIDENTIAL',
       '',
-      '| Project / Site | {{placeOfPosting}} | Cost Centre | {{costCentre}} |',
+      '| F&F Ref. No.: {{referenceNo}} | Date: {{issueDate}} | Project / Site: {{placeOfPosting}} | Cost Centre: {{costCentre}} |',
       '',
-      'A. EMPLOYEE & EXIT DETAILS',
-      '',
+      '## A. EMPLOYEE & EXIT DETAILS',
       '| Employee Name | {{employeeName}} | Employee Code | {{employeeCode}} |',
       '| Designation | {{designation}} | Department | {{department}} |',
       '| Project / Site / Location | {{placeOfPosting}} | Reporting Manager | {{reportingManager}} |',
@@ -796,10 +967,9 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| Notice Period Required | {{noticeRequiredDays}} days | Notice Period Served | {{noticeServedDays}} days |',
       '| Last Working Day | {{lastWorkingDay}} | Exit Reason | {{exitReason}} |',
       '| Monthly Gross Salary (Rs.) | {{monthlyGross}} | Payroll Month / Period | {{payrollPeriod}} |',
-      '| Bank Account (last 4 digits only) | {{bankLast4}} | UAN (if needed) | {{uan}} |',
+      '| Bank Account (last 4 digits only) | {{bankLast4}} | PAN / UAN (if needed) | {{uan}} |',
       '',
-      'B. EARNINGS / AMOUNTS PAYABLE',
-      '',
+      '## B. EARNINGS / AMOUNTS PAYABLE',
       '| Sr. No. | Particulars | Basis / Period | Amount (Rs.) |',
       '| --- | --- | --- | --- |',
       '| 1 | Salary payable up to Last Working Day | Days: {{salaryDays}} | {{salaryPayable}} |',
@@ -809,10 +979,9 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| 5 | Incentive / bonus / variable pay (if payable) | Period: {{bonusPeriod}} | {{bonus}} |',
       '| 6 | Gratuity (if eligible; separate verification) | As applicable | {{gratuity}} |',
       '| 7 | Other payable amount (specify) | {{otherPayableDetail}} | {{otherPayable}} |',
-      '| | TOTAL GROSS AMOUNTS PAYABLE (A) | | {{totalPayable}} |',
+      '| | TOTAL GROSS AMOUNTS PAYABLE (A) | | Rs. {{totalPayable}} |',
       '',
-      'C. DEDUCTIONS / RECOVERIES (ONLY WHERE LAWFUL AND VERIFIED)',
-      '',
+      '## C. DEDUCTIONS / RECOVERIES (ONLY WHERE LAWFUL AND VERIFIED)',
       '| Sr. No. | Particulars | Reference / Calculation | Amount (Rs.) |',
       '| --- | --- | --- | --- |',
       '| 1 | Applicable statutory deductions (e.g., TDS / employee contributions) | Payroll working: {{statutoryRef}} | {{statutoryDeductions}} |',
@@ -820,17 +989,15 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| 3 | Notice-period adjustment (if contractually and legally permissible) | Days / basis: {{noticeBasis}} | {{noticeRecovery}} |',
       '| 4 | Unreturned company asset / verified loss (only if legally recoverable) | Asset / approval: {{assetRef}} | {{assetRecovery}} |',
       '| 5 | Other authorised and lawful deduction (specify) | Basis / approval: {{otherDeductionBasis}} | {{otherDeductions}} |',
-      '| | TOTAL DEDUCTIONS (B) | | {{totalDeductions}} |',
+      '| | TOTAL DEDUCTIONS (B) | | Rs. {{totalDeductions}} |',
       '',
-      'D. NET SETTLEMENT',
-      '',
-      '| Total Gross Amounts Payable (A), Rs. | {{totalPayable}} |',
-      '| Less: Total Deductions (B), Rs. | {{totalDeductions}} |',
-      '| NET AMOUNT PAYABLE TO EMPLOYEE (A - B), Rs. | {{netPayable}} |',
+      '## D. NET SETTLEMENT',
+      '| Total Gross Amounts Payable (A) | Rs. {{totalPayable}} |',
+      '| Less: Total Deductions (B) | Rs. {{totalDeductions}} |',
+      '| NET AMOUNT PAYABLE TO EMPLOYEE (A - B) | Rs. {{netPayable}} |',
       '| Amount in Words | {{netInWords}} |',
       '',
-      'E. DEPARTMENTAL NO-DUES / HANDOVER CLEARANCE',
-      '',
+      '## E. DEPARTMENTAL NO-DUES / HANDOVER CLEARANCE',
       '| Department / In-charge | Clearance Status | Remarks / Pending Items | Name, Signature & Date |',
       '| --- | --- | --- | --- |',
       '| Reporting Manager / Project Manager | [ ] Clear  [ ] Pending | | |',
@@ -844,14 +1011,12 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         'for review. It does not by itself authorise withholding statutory wages or making ' +
         'an unverified deduction.',
       '',
-      'F. PAYMENT & APPROVAL DETAILS',
-      '',
+      '## F. PAYMENT & APPROVAL DETAILS',
       '| Payment Mode | [ ] Bank Transfer  [ ] Cheque | Payment / UTR Ref. | {{paymentRef}} |',
       '| Payment Date | {{paymentDate}} | Payment Status | [ ] Paid  [ ] Part-paid  [ ] Pending |',
       '| Prepared By (HR) | {{preparedBy}} | Checked / Approved By | {{approvedBy}} |',
       '',
-      'G. EMPLOYEE ACKNOWLEDGEMENT',
-      '',
+      '## G. EMPLOYEE ACKNOWLEDGEMENT',
       'I acknowledge receipt of the F&F statement and confirm that I have had an ' +
         'opportunity to review the calculations. My signature confirms receipt/review of ' +
         'this statement and does not waive any statutory right or prevent me from raising ' +
@@ -861,15 +1026,12 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| Employee Name | {{employeeName}} | Signature | |',
       '| Date | | HR Witness | |',
       '',
-      'H. HR FILE CLOSURE CHECKLIST',
-      '',
-      '[ ] Resignation and acceptance filed',
-      '[ ] Handover / departmental clearance filed',
-      '[ ] Attendance and leave balance verified',
-      '[ ] F&F calculation and approval filed',
-      '[ ] Payment proof / UTR filed',
-      '[ ] Relieving / experience letter issued, where applicable',
-      '[ ] Statutory records / benefits updated, where applicable',
+      '## H. HR FILE CLOSURE CHECKLIST',
+      '[ ] Resignation and acceptance filed     [ ] Handover / departmental clearance filed     ' +
+        '[ ] Attendance and leave balance verified',
+      '[ ] F&F calculation and approval filed     [ ] Payment proof / UTR filed     ' +
+        '[ ] Relieving / experience letter issued, where applicable     ' +
+        '[ ] Statutory records / benefits updated, where applicable',
     ].join('\n'),
     fields: [
       // A — who and when, off the employee and exit records.
@@ -886,10 +1048,11 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         false,
       ),
       employee('dateOfJoining', 'Date of joining', 'dateOfJoining', false),
+      // The form's three tick boxes, with the one that applies ticked.
       employee(
         'employmentType',
         'Employment type',
-        'fnf.employmentType',
+        'employmentTypeBoxes',
         false,
       ),
       employee(
@@ -1009,7 +1172,6 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       manual('approvedBy', 'Checked / approved by', false),
     ],
   },
-
   // ───────────────────────────────────────────────────── payment advice ─────
   {
     kindKey: 'payment_advice',

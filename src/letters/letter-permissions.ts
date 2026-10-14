@@ -16,7 +16,10 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   // HR and recruitment letters — the five migrated from the old enum, plus the two
   // employment-lifecycle additions.
   offer: Permission.RECRUITMENT,
-  appointment: Permission.RECRUITMENT,
+  // Issued from HR & Payroll since 2026-10-15, as every employee letter is: Recruitment issues
+  // the offer and nothing else. The appointment letter is addressed to the employee record —
+  // its code, joining date and salary annexure — and is HR's to put in writing.
+  appointment: Permission.EMPLOYEES,
   confirmation: Permission.EMPLOYEES,
   relieving: Permission.EMPLOYEES,
   experience: Permission.EMPLOYEES,

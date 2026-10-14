@@ -63,8 +63,8 @@ export class EmployeeSalaryController {
     const caller = callerFrom(user, request);
     const { slip, employeeName, companyId } =
       await this.salary.getSlipForEmployee(caller, employeeId, period);
-    const letterhead = await this.salary.letterheadForCompany(companyId);
-    const pdf = await this.pdf.render(slip, employeeName, letterhead);
+    const logo = await this.salary.logoForCompany(companyId);
+    const pdf = await this.pdf.render(slip, employeeName, logo);
 
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(

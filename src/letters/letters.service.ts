@@ -1070,11 +1070,16 @@ export class LettersService {
         : undefined,
       pageFooter: layout?.pageFooter?.(variables),
       referenceLabel: layout?.referenceLabel,
-      referenceNo: draft ? null : letter.referenceNo ?? null,
+      titleFirst: layout?.titleFirst,
+      acceptanceLabel: layout?.acceptanceLabel,
+      // A format that prints its reference and date in its own table (the F&F sheet) gets them
+      // through the body's `{{referenceNo}}` and `{{issueDate}}` above, and not a second time here.
+      referenceNo:
+        draft || layout?.referenceInBody ? null : letter.referenceNo ?? null,
       // The date the letter bears is the day it is issued. Taken from the clock rather
       // than from `variables`, so the printed date and `issuedAt` can never disagree —
       // which, on a document that starts a notice period, is a dispute.
-      issueDate,
+      issueDate: layout?.referenceInBody ? null : issueDate,
       signature,
       draft,
     });

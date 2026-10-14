@@ -116,6 +116,18 @@ export interface RenderLetterInput {
   pageFooter?: { left: string; right: string };
   /** What the reference is called on this document — "LOI No.", "WO No.". "Ref. No." if unset. */
   referenceLabel?: string;
+  /**
+   * The title above the reference line instead of below it (2026-10-15) — the offer, appointment
+   * and transfer letters open with their heading. A body's `[[title]]` overrides both positions.
+   * An empty `title` prints no heading at all, as the increment and termination letters have none.
+   */
+  titleFirst?: boolean;
+  /**
+   * Printed opposite the last line of the closing — "Employee Signature" across from "For Parth
+   * Realcon Private Limited" on the offer letter (2026-10-15), where the candidate signs the copy
+   * they return.
+   */
+  acceptanceLabel?: string;
 }
 
 export interface BrandHeader {
@@ -136,11 +148,14 @@ export interface BrandHeader {
  * - `[[signature]]` — where the signature goes, when it is not at the end. The LOI and the
  *   purchase order are signed by the company and *then* carry the vendor's acceptance; at the
  *   end, the company's signature would sit under the vendor's acceptance block.
+ * - `[[title]]` — where the document's heading goes, when not at the top (2026-10-15). The
+ *   relieving letter prints it under the employee's name and project lines.
  */
 type Block =
   | { kind: 'heading'; text: string }
   | { kind: 'break' }
   | { kind: 'signature' }
+  | { kind: 'title' }
   | { kind: 'text'; lines: string[] }
   | {
       kind: 'table';
@@ -185,11 +200,20 @@ export function parseBlocks(body: string): Block[] {
 
   for (const line of body.split('\n')) {
     const trimmed = line.trim();
-    if (trimmed === '[[pagebreak]]' || trimmed === '[[signature]]') {
+    if (
+      trimmed === '[[pagebreak]]' ||
+      trimmed === '[[signature]]' ||
+      trimmed === '[[title]]'
+    ) {
       flushText();
       flushTable();
       blocks.push({
-        kind: trimmed === '[[pagebreak]]' ? 'break' : 'signature',
+        kind:
+          trimmed === '[[pagebreak]]'
+            ? 'break'
+            : trimmed === '[[title]]'
+            ? 'title'
+            : 'signature',
       });
       continue;
     }
@@ -312,8 +336,10 @@ function drawTable(
         // should not have to declare it.
         // A date ("31.12.2026") is made of the same characters and is not a figure: right-
         // aligned it read as an amount in the middle of a work order's terms (2026-10-14).
+        // "Rs. 20,000" is a figure too (2026-10-15): the appointment letter's annexure states its
+        // amounts with the currency, as the client's own does.
         align:
-          /^[₹\s]*[\d,.\-()]+$/.test(cell ?? '') &&
+          /^(Rs\.?)?[₹\s]*[\d,.\-()]+(\/-)?$/.test(cell ?? '') &&
           !/^\d{1,2}[./-]\d{1,2}[./-]\d{2,4}$/.test((cell ?? '').trim())
             ? 'right'
             : 'left',
@@ -477,6 +503,46 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       doc.y = ruleAt + 12;
     }
 
+    // The signature block's real height, for the page-break checks below (2026-10-15). The
+    // graphic is capped at `SIGNATURE_MAX_HEIGHT`, but a wide, short scan is half that, and
+    // reserving the cap pushed the offer letter's closing onto a third page of its own.
+    let signatureBlock = SIGNATURE_BLOCK;
+    if (input.signature) {
+      let graphicHeight = 36; // the preview's "[Signature applied on issue]" line
+      if (input.signature.image) {
+        try {
+          const graphic = doc.openImage(input.signature.image);
+          graphicHeight =
+            graphic.height *
+              Math.min(
+                SIGNATURE_WIDTH / graphic.width,
+                SIGNATURE_MAX_HEIGHT / graphic.height,
+              ) +
+            6;
+        } catch {
+          graphicHeight = 16;
+        }
+      }
+      signatureBlock = 18 + graphicHeight + 26;
+    }
+
+    const blocks = parseBlocks(input.body);
+    const titleInBody = blocks.some((b) => b.kind === 'title');
+    const drawTitle = () => {
+      if (!input.title.trim()) return;
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(13)
+        .text(input.title, SAFE.left, doc.y, {
+          width: CONTENT_WIDTH,
+          align: 'center',
+          underline: true,
+        });
+      doc.font('Helvetica').fontSize(BODY_SIZE);
+      doc.y += 14;
+    };
+    if (input.titleFirst && !titleInBody) drawTitle();
+
     // Reference and date on one line, as every document the client sent carries them.
     // Skipped entirely when neither is known, rather than printing an empty rule.
     if (input.referenceNo || input.issueDate) {
@@ -507,18 +573,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       doc.y = top + BODY_SIZE + 10;
     }
 
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(13)
-      .text(input.title, SAFE.left, doc.y, {
-        width: CONTENT_WIDTH,
-        align: 'center',
-        underline: true,
-      });
-    doc.font('Helvetica').fontSize(BODY_SIZE);
-    doc.y += 14;
-
-    const blocks = parseBlocks(input.body);
+    if (!input.titleFirst && !titleInBody) drawTitle();
     // Where the signature goes: at a `[[signature]]` marker, else after everything.
     let signatureAt = blocks.findIndex((b) => b.kind === 'signature');
     if (signatureAt < 0) signatureAt = blocks.length;
@@ -546,6 +601,12 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         return;
       }
       if (block.kind === 'signature') return;
+      if (block.kind === 'title') {
+        if (bottomLimit - doc.y < BODY_SIZE * 6) newPage();
+        doc.y += 4;
+        drawTitle();
+        return;
+      }
       if (block.kind === 'heading') {
         // A heading never ends a page: it moves over with at least two lines of what it heads.
         if (bottomLimit - doc.y < BODY_SIZE * 4) newPage();
@@ -575,16 +636,22 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
           continue;
         }
         const before = doc.y;
-        doc.text(remaining, SAFE.left, before, {
+        // Measured first, then exactly that much drawn (2026-10-15). It used to draw the whole
+        // remainder clipped to `height` and measure afterwards — but pdfkit's clipping and
+        // `heightOfString` disagree by a line at the edge, so the last line on a page was printed
+        // there *and* again at the top of the next: the appointment letter's clause 33 appeared
+        // twice. What is drawn is now what was measured.
+        const consumed = measureConsumed(doc, remaining, before, available);
+        const piece = remaining.slice(0, consumed);
+        // A page's last piece loses its trailing break; a block's own trailing blank lines are
+        // its spacing and stay.
+        const drawn =
+          consumed < remaining.length ? piece.replace(/\s+$/, '') : piece;
+        doc.text(drawn, SAFE.left, before, {
           width: CONTENT_WIDTH,
           align: 'left',
           lineGap: LINE_GAP,
-          height: available,
-          ellipsis: false,
         });
-        // pdfkit reports how much it consumed through the cursor; anything it could not
-        // fit is re-measured and carried to the next page.
-        const consumed = measureConsumed(doc, remaining, before, available);
         if (consumed >= remaining.length) break;
         remaining = remaining.slice(consumed).replace(/^\s+/, '');
         newPage();
@@ -599,21 +666,39 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         lineGap: LINE_GAP,
       });
       // The blank line that separated it from the paragraph above, which the split took away.
-      const gap = doc.currentLineHeight(true) + LINE_GAP;
-      if (bottomLimit - doc.y < gap + height + SIGNATURE_BLOCK) {
+      let gap = doc.currentLineHeight(true) + LINE_GAP;
+      // Half the gap rather than a page holding nothing but the closing and the signature
+      // (2026-10-15): the blank line is spacing, and a few points of it are not worth a page.
+      if (bottomLimit - doc.y < gap + height + signatureBlock) gap /= 2;
+      if (bottomLimit - doc.y < gap + height + signatureBlock) {
         newPage();
       } else {
         doc.y += gap;
       }
-      doc.text(closing, SAFE.left, doc.y, {
+      const closingTop = doc.y;
+      doc.text(closing, SAFE.left, closingTop, {
         width: CONTENT_WIDTH,
         align: 'left',
         lineGap: LINE_GAP,
       });
+      if (input.acceptanceLabel) {
+        // Level with the closing's last line — the "For <company>" the company signs under.
+        const after = doc.y;
+        doc
+          .font('Helvetica-Bold')
+          .text(
+            input.acceptanceLabel,
+            SAFE.left,
+            after - doc.currentLineHeight(true) - LINE_GAP,
+            { width: CONTENT_WIDTH, align: 'right' },
+          );
+        doc.font('Helvetica');
+        doc.y = after;
+      }
     }
 
     if (input.signature) {
-      if (bottomLimit - doc.y < SIGNATURE_BLOCK) newPage();
+      if (bottomLimit - doc.y < signatureBlock) newPage();
       doc.y += 18;
       const top = doc.y;
       const image = input.signature.image;
