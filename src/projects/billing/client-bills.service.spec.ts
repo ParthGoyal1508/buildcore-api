@@ -727,6 +727,8 @@ describe('the breakdown behind a packaged bill’s net', () => {
       retentionAmount: dc('2033.49'),
       performanceSecurity: dc('0'),
       theftWithheld: dc('0'),
+      customRecoveries: dc('0'),
+      customDeductions: dc('0'),
       tdsAmount: dc('1016.74'),
     },
   });

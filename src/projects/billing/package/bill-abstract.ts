@@ -104,6 +104,12 @@ export interface EnteredAmounts {
   mobilizationAdvance: Prisma.Decimal;
   performanceSecurity: Prisma.Decimal;
   theftWithheld: Prisma.Decimal;
+  /**
+   * The sums of the free-form lines a user adds to a subcontractor bill (2026-10-13): recoveries
+   * into block B, deductions into block C. Optional so a caller with none need not say so.
+   */
+  customRecoveries?: Prisma.Decimal;
+  customDeductions?: Prisma.Decimal;
 }
 
 /**
@@ -154,6 +160,12 @@ export interface AbstractColumn {
   igstAmount: Prisma.Decimal;
   /** Block A. */
   workTotal: Prisma.Decimal;
+  /**
+   * Taxable amount plus tax — block A without the release of an earlier withholding. A client's
+   * payment abstract prints this as *Invoice Value* and shows the release as its own row beneath
+   * the recoveries, so the two must be separable.
+   */
+  invoiceValue: Prisma.Decimal;
 
   /** A client's two statutory recoveries. Zero on a bill to a subcontractor. */
   labourCessAmount: Prisma.Decimal;
@@ -162,6 +174,8 @@ export interface AbstractColumn {
   debitAgainstCivil: Prisma.Decimal;
   otherRecoveries: Prisma.Decimal;
   mechanicalDebit: Prisma.Decimal;
+  /** The user's own recovery lines, summed. */
+  customRecoveries: Prisma.Decimal;
   /** Block B. */
   recoveriesTotal: Prisma.Decimal;
 
@@ -169,6 +183,8 @@ export interface AbstractColumn {
   retentionAmount: Prisma.Decimal;
   performanceSecurity: Prisma.Decimal;
   theftWithheld: Prisma.Decimal;
+  /** The user's own deduction lines, summed. */
+  customDeductions: Prisma.Decimal;
   /** Block C. */
   deductionsTotal: Prisma.Decimal;
 
@@ -250,17 +266,20 @@ export function zeroColumn(): AbstractColumn {
     sgstAmount: ZERO,
     igstAmount: ZERO,
     workTotal: ZERO,
+    invoiceValue: ZERO,
     labourCessAmount: ZERO,
     gstTdsAmount: ZERO,
     recoveryDiesel: ZERO,
     debitAgainstCivil: ZERO,
     otherRecoveries: ZERO,
     mechanicalDebit: ZERO,
+    customRecoveries: ZERO,
     recoveriesTotal: ZERO,
     mobilizationAdvance: ZERO,
     retentionAmount: ZERO,
     performanceSecurity: ZERO,
     theftWithheld: ZERO,
+    customDeductions: ZERO,
     deductionsTotal: ZERO,
     tdsAmount: ZERO,
     taxDeductionsTotal: ZERO,
@@ -353,6 +372,8 @@ export function billAbstract(input: AbstractInput): BillAbstract {
     retentionAmount,
     performanceSecurity,
     theftWithheld: entered.theftWithheld,
+    customRecoveries: entered.customRecoveries ?? ZERO,
+    customDeductions: entered.customDeductions ?? ZERO,
     tdsAmount,
   });
 
@@ -390,6 +411,12 @@ export function billAbstract(input: AbstractInput): BillAbstract {
       thisBill.performanceSecurity,
     ),
     theftWithheld: uptoPrevious.theftWithheld.plus(thisBill.theftWithheld),
+    customRecoveries: uptoPrevious.customRecoveries.plus(
+      thisBill.customRecoveries,
+    ),
+    customDeductions: uptoPrevious.customDeductions.plus(
+      thisBill.customDeductions,
+    ),
     tdsAmount: uptoPrevious.tdsAmount.plus(thisBill.tdsAmount),
   });
 
@@ -450,6 +477,7 @@ export function balanceColumn(
     AbstractColumn,
     | 'taxableAmount'
     | 'workTotal'
+    | 'invoiceValue'
     | 'recoveriesTotal'
     | 'deductionsTotal'
     | 'taxDeductionsTotal'
@@ -473,12 +501,14 @@ export function balanceColumn(
     rows.debitAgainstCivil,
     rows.otherRecoveries,
     rows.mechanicalDebit,
+    rows.customRecoveries,
   );
   const deductionsTotal = sum(
     rows.mobilizationAdvance,
     rows.retentionAmount,
     rows.performanceSecurity,
     rows.theftWithheld,
+    rows.customDeductions,
   );
   const taxDeductionsTotal = rows.tdsAmount;
   const totalWithheld = sum(
@@ -491,17 +521,20 @@ export function balanceColumn(
     ...rows,
     taxableAmount: rows.workDone.minus(rows.workDeduction),
     workTotal,
+    invoiceValue: workTotal.minus(rows.releaseWithheld),
     recoveriesTotal,
     deductionsTotal,
     taxDeductionsTotal,
     totalWithheld,
-    // Everything withheld, less the four rows a client's abstract names. The subtraction on that
+    // Everything withheld, less the five rows a client's abstract names (four statutory recoveries
+    // and *Amount Withheld*). The subtraction on that
     // document has to reach its own payable whatever the package carries.
     unlistedWithheld: totalWithheld
       .minus(rows.labourCessAmount)
       .minus(rows.tdsAmount)
       .minus(rows.gstTdsAmount)
-      .minus(rows.retentionAmount),
+      .minus(rows.retentionAmount)
+      .minus(rows.theftWithheld),
     // FR-021, and FR-022: never clamped at zero. A bill whose debits exceed its work is a real
     // outcome the client's own format expresses, and clamping would hide money the company is owed
     // back behind a payable of nothing.

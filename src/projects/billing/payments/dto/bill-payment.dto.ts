@@ -2,6 +2,8 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentInstrument, SignedCopySubject } from '@prisma/client';
 import {
   IsDateString,
+  IsIn,
+  Matches,
   IsEnum,
   IsNotEmpty,
   IsNumberString,
@@ -9,6 +11,10 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+
+/** The modes a payment advice names. Each maps onto an `instrument` for the ledger. */
+export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque', 'Cash'] as const;
+export type PaymentMode = (typeof PAYMENT_MODES)[number];
 
 export class RecordPaymentDto {
   @ApiProperty({
@@ -46,6 +52,82 @@ export class RecordPaymentDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  @ApiPropertyOptional({
+    example: 'R52025101874160134',
+    description:
+      'The bank’s own transaction number, distinct from the reference (UTR). Both print on the ' +
+      'payment advice.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  transactionNo?: string;
+
+  @ApiPropertyOptional({
+    example: '0.00',
+    description:
+      'Tax deducted at source on this payment, printed on the payment advice. Not subtracted ' +
+      'from `amount`, which is what was actually paid.',
+  })
+  @IsOptional()
+  @IsNumberString()
+  tdsAmount?: string;
+
+  @ApiPropertyOptional({
+    enum: PAYMENT_MODES,
+    example: 'NEFT',
+    description: 'How the money moved. Printed on the payment advice as *Bank Transaction Mode*.',
+  })
+  @IsOptional()
+  @IsIn(PAYMENT_MODES)
+  mode?: PaymentMode;
+
+  @ApiPropertyOptional({
+    example: '10/2026-27',
+    description:
+      'The advice’s *Particulars* — usually the payment voucher number. The bill number prints ' +
+      'when this is left out.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  particulars?: string;
+}
+
+/** A payee's bank details, filled in from the bill when the vendor record lacks them. */
+export class SetPayeeBankDto {
+  @ApiPropertyOptional({ example: 'Bank of Baroda' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  bankName?: string;
+
+  @ApiPropertyOptional({ example: 'Deoli' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  bankBranch?: string;
+
+  @ApiPropertyOptional({ example: '09310400000526' })
+  @IsOptional()
+  @Matches(/^[0-9A-Za-z]{6,34}$/, {
+    message: 'bankAccountNumber must be 6 to 34 letters or digits',
+  })
+  bankAccountNumber?: string;
+
+  @ApiPropertyOptional({ example: 'Tirupati Enterprises' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  bankAccountHolderName?: string;
+
+  @ApiPropertyOptional({ example: 'BARB0DEOLIX' })
+  @IsOptional()
+  @Matches(/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/, {
+    message: 'ifscCode must look like BARB0DEOLIX — four letters, a zero, six characters',
+  })
+  ifscCode?: string;
 }
 
 export class UploadSignedCopyDto {

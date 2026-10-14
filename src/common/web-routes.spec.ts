@@ -13,14 +13,14 @@ import { webRoutes } from './web-routes';
 describe('webRoutes', () => {
   it('puts every route under /dashboard, which is where every page in that app lives', () => {
     for (const [name, build] of Object.entries(webRoutes)) {
-      const href = build('x');
+      const href = (build as (...ids: string[]) => string)('x', 'y');
       expect([name, href.startsWith('/dashboard/')]).toEqual([name, true]);
     }
   });
 
   it('builds no route containing an unsubstituted template or a double slash', () => {
     for (const [name, build] of Object.entries(webRoutes)) {
-      const href = build('x');
+      const href = (build as (...ids: string[]) => string)('x', 'y');
       // `${` surviving into the string means a template literal was quoted by mistake; `//` means
       // an id came through empty and the path silently became its parent.
       expect([name, href.includes('${'), href.includes('//')]).toEqual([

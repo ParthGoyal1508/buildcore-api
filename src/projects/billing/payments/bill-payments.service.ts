@@ -20,6 +20,10 @@ export interface PaymentView {
   instrument: PaymentInstrument;
   reference: string | null;
   remarks: string | null;
+  transactionNo: string | null;
+  tdsAmount: string;
+  mode: string | null;
+  particulars: string | null;
   recordedAt: string;
 }
 
@@ -125,9 +129,13 @@ export class BillPaymentsService {
       instrument: PaymentInstrument;
       reference?: string | null;
       remarks?: string | null;
+      transactionNo?: string | null;
+      tdsAmount?: string | null;
+      mode?: string | null;
+      particulars?: string | null;
     },
     actor: { userId: string | null },
-  ): Promise<BillOutstandingView> {
+  ): Promise<BillOutstandingView & { recordedPaymentId: string }> {
     const amount = new Prisma.Decimal(input.amount);
     if (amount.lessThanOrEqualTo(ZERO)) {
       throw new BadRequestException(
@@ -135,62 +143,81 @@ export class BillPaymentsService {
       );
     }
 
-    await withRlsContext(this.prisma, ctx, async (tx) => {
-      const bill = await tx.rABill.findFirst({
-        where: { id: raBillId },
-        select: { id: true, billNumber: true, status: true, netPayable: true },
-      });
-      // 404 and not 403: a 403 would confirm the bill exists in somebody else's company.
-      if (!bill) throw new NotFoundException('RA bill not found');
-
-      if (bill.status !== RaBillStatus.approved) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: BILLING_ERRORS.paymentBillNotCertified,
-          message:
-            `${bill.billNumber} has not been certified, so there is no agreed figure to pay ` +
-            'against and its quantities can still change. Money paid before certification is an ' +
-            'advance — record it as an advance recovery on the bill package instead.',
+    const recordedPaymentId = await withRlsContext(
+      this.prisma,
+      ctx,
+      async (tx) => {
+        const bill = await tx.rABill.findFirst({
+          where: { id: raBillId },
+          select: {
+            id: true,
+            billNumber: true,
+            status: true,
+            netPayable: true,
+          },
         });
-      }
+        // 404 and not 403: a 403 would confirm the bill exists in somebody else's company.
+        if (!bill) throw new NotFoundException('RA bill not found');
 
-      const paid = await tx.rABillPayment.aggregate({
-        where: { raBillId },
-        _sum: { amount: true },
-      });
-      const alreadyPaid = paid._sum.amount ?? ZERO;
-      if (alreadyPaid.plus(amount).greaterThan(bill.netPayable)) {
-        throw new ConflictException({
-          statusCode: 409,
-          code: BILLING_ERRORS.paymentExceedsCertified,
-          message:
-            `${bill.billNumber} was certified at ${bill.netPayable.toFixed(
-              2,
-            )} and ${alreadyPaid.toFixed(2)} has already been paid. ` +
-            `Paying ${amount.toFixed(
-              2,
-            )} would take the total past it — which is either this ` +
-            'payment entered twice or a digit typed wrong.',
+        if (bill.status !== RaBillStatus.approved) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: BILLING_ERRORS.paymentBillNotCertified,
+            message:
+              `${bill.billNumber} has not been certified, so there is no agreed figure to pay ` +
+              'against and its quantities can still change. Money paid before certification is an ' +
+              'advance — record it as an advance recovery on the bill package instead.',
+          });
+        }
+
+        const paid = await tx.rABillPayment.aggregate({
+          where: { raBillId },
+          _sum: { amount: true },
         });
-      }
+        const alreadyPaid = paid._sum.amount ?? ZERO;
+        if (alreadyPaid.plus(amount).greaterThan(bill.netPayable)) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: BILLING_ERRORS.paymentExceedsCertified,
+            message:
+              `${bill.billNumber} was certified at ${bill.netPayable.toFixed(
+                2,
+              )} and ${alreadyPaid.toFixed(2)} has already been paid. ` +
+              `Paying ${amount.toFixed(
+                2,
+              )} would take the total past it — which is either this ` +
+              'payment entered twice or a digit typed wrong.',
+          });
+        }
 
-      await tx.rABillPayment.create({
-        data: {
-          companyId,
-          raBillId,
-          // Date-only, to match the column: a payment made on the 28th must not read as the 27th
-          // for anybody west of here.
-          paidOn: new Date(`${input.paidOn.slice(0, 10)}T00:00:00.000Z`),
-          amount,
-          instrument: input.instrument,
-          reference: input.reference ?? null,
-          remarks: input.remarks ?? null,
-          recordedByUserId: actor.userId,
-        },
-      });
-    });
+        const created = await tx.rABillPayment.create({
+          select: { id: true },
+          data: {
+            companyId,
+            raBillId,
+            // Date-only, to match the column: a payment made on the 28th must not read as the 27th
+            // for anybody west of here.
+            paidOn: new Date(`${input.paidOn.slice(0, 10)}T00:00:00.000Z`),
+            amount,
+            instrument: input.instrument,
+            reference: input.reference ?? null,
+            remarks: input.remarks ?? null,
+            transactionNo: input.transactionNo ?? null,
+            tdsAmount: new Prisma.Decimal(input.tdsAmount || '0'),
+            mode: input.mode ?? null,
+            particulars: input.particulars?.trim() || null,
+            recordedByUserId: actor.userId,
+          },
+        });
+        return created.id;
+      },
+    );
 
-    return this.outstandingForBill(ctx, raBillId);
+    // Returned so the caller can produce this payment's advice straight away.
+    return {
+      ...(await this.outstandingForBill(ctx, raBillId)),
+      recordedPaymentId,
+    };
   }
 
   /** Removes a payment recorded in error. The only correction route — a payment is never edited. */
@@ -357,6 +384,10 @@ type BillEntity = {
     instrument: PaymentInstrument;
     reference: string | null;
     remarks: string | null;
+    transactionNo: string | null;
+    tdsAmount: Prisma.Decimal;
+    mode: string | null;
+    particulars: string | null;
     recordedAt: Date;
   }[];
 };
@@ -388,6 +419,10 @@ function toBillView(bill: BillEntity): BillOutstandingView {
       instrument: payment.instrument,
       reference: payment.reference,
       remarks: payment.remarks,
+      transactionNo: payment.transactionNo,
+      tdsAmount: payment.tdsAmount.toFixed(2),
+      mode: payment.mode,
+      particulars: payment.particulars,
       recordedAt: payment.recordedAt.toISOString(),
     })),
   };

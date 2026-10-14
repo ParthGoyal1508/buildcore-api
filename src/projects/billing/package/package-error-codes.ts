@@ -13,6 +13,12 @@
 export const PACKAGE_ERRORS = {
   /** `periodTo` precedes `periodFrom`. */
   periodInverted: 'BILL_PERIOD_INVERTED',
+  /** Issue was asked of a bill the approval chain has not passed (2026-10-13). */
+  notApproved: 'BILL_NOT_APPROVED',
+  /** An action was asked of a bill in a status it does not apply to. */
+  wrongStatus: 'BILL_WRONG_STATUS',
+  /** A deduction line was malformed, or sent for a bill whose abstract has no place for it. */
+  deductionLineInvalid: 'BILL_DEDUCTION_LINE_INVALID',
   /**
    * The period overlaps one already billed **on this schedule to this counterparty** (FR-002).
    *

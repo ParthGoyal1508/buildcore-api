@@ -50,6 +50,10 @@ function harness(bills: BillFixture[]) {
       instrument: 'bank_transfer' as const,
       reference: null,
       remarks: null,
+      transactionNo: null,
+      tdsAmount: new Prisma.Decimal(0),
+      mode: null,
+      particulars: null,
       recordedAt: new Date('2026-10-01T00:00:00.000Z'),
     })),
   });

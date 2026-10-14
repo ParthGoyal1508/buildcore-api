@@ -20,6 +20,8 @@ interface PkgFixture {
   periodTo: string;
   /** boqNo → what the bill claimed. */
   claims: Record<string, string>;
+  /** boqNo → what was proposed for it; a claim above its proposal is an over-claim. */
+  proposed?: Record<string, string>;
   /** Over-claimed lines, as the query returns them. */
   overClaimed?: {
     boqNo: string;
@@ -34,6 +36,7 @@ function build(opts: {
   packages?: PkgFixture[];
   /** boqNo → the measurement approved in that period **as it now stands**. */
   approvedNow?: Record<string, Record<string, string>>;
+  counterpartyName?: string;
 }) {
   const packages = opts.packages ?? [];
 
@@ -74,6 +77,13 @@ function build(opts: {
                   }))
                 : Object.entries(pkg.claims).map(([boqNo, qty]) => ({
                     claimedQty: d(qty),
+                    proposedQty:
+                      pkg.proposed?.[boqNo] === undefined
+                        ? null
+                        : d(pkg.proposed[boqNo]),
+                    overClaimed:
+                      pkg.proposed?.[boqNo] !== undefined &&
+                      d(qty).greaterThan(d(pkg.proposed[boqNo])),
                     clientBillLine: {
                       boqTaskItemId: boqNo,
                       boqTaskItem: { boqNo },
@@ -114,7 +124,19 @@ function build(opts: {
     },
   };
 
-  return new PackageReportsService(prisma as never, periodFigures as never);
+  const namer = {
+    counterpartyNames: async (
+      _ctx: unknown,
+      _company: string,
+      rows: unknown[],
+    ) => rows.map(() => opts.counterpartyName ?? null),
+  };
+
+  return new PackageReportsService(
+    prisma as never,
+    periodFigures as never,
+    namer,
+  );
 }
 
 describe('the understatement report', () => {
@@ -357,5 +379,120 @@ describe('the over-claim report', () => {
 
     expect(report.totalOverClaimed).toBe(0);
     expect(report.totalLines).toBe(312);
+  });
+});
+
+describe('the understatement report, netted against what later bills claimed back', () => {
+  it('drops a shortfall that a later bill made good as an over-claim', async () => {
+    // The report's own remedy is an over-claim on a later bill. Before netting, the shortfall stayed
+    // on the report after it had been recovered — a report that is always red is not read.
+    const service = build({
+      packages: [
+        {
+          id: 'pkg-11',
+          sequenceNo: 11,
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+          claims: { '30.10': '1.000' },
+        },
+        {
+          id: 'pkg-12',
+          sequenceNo: 12,
+          periodFrom: '2025-12-21',
+          periodTo: '2026-01-20',
+          claims: { '30.10': '2.300' },
+          proposed: { '30.10': '2.000' },
+        },
+      ],
+      approvedNow: {
+        '2025-11-21..2025-12-20': { '30.10': '1.300' },
+        '2025-12-21..2026-01-20': { '30.10': '2.300' },
+      },
+    });
+
+    const report = await service.understatement({ isSuperAdmin: true }, 'p-1');
+    expect(report.rows).toEqual([]);
+  });
+
+  it('keeps what is still short, and says how much was recovered', async () => {
+    const service = build({
+      packages: [
+        {
+          id: 'pkg-11',
+          sequenceNo: 11,
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+          claims: { '30.10': '1.000' },
+        },
+        {
+          id: 'pkg-12',
+          sequenceNo: 12,
+          periodFrom: '2025-12-21',
+          periodTo: '2026-01-20',
+          claims: { '30.10': '2.100' },
+          proposed: { '30.10': '2.000' },
+        },
+      ],
+      approvedNow: {
+        '2025-11-21..2025-12-20': { '30.10': '1.300' },
+        '2025-12-21..2026-01-20': { '30.10': '2.100' },
+      },
+    });
+
+    const report = await service.understatement({ isSuperAdmin: true }, 'p-1');
+    expect(report.rows[0].lines[0]).toMatchObject({
+      understatedBy: '0.200',
+      recoveredLater: '0.100',
+    });
+  });
+
+  it('names who the bill was to, because RA-03 repeats once per counterparty', async () => {
+    const service = build({
+      counterpartyName: 'PWD Zone Ajmer',
+      packages: [
+        {
+          id: 'pkg-3',
+          sequenceNo: 3,
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+          claims: { '30.10': '1.000' },
+        },
+      ],
+      approvedNow: { '2025-11-21..2025-12-20': { '30.10': '1.300' } },
+    });
+
+    const report = await service.understatement(
+      { isSuperAdmin: true },
+      'p-1',
+      'co-1',
+    );
+    expect(report.rows[0].label).toBe('RA-03 · PWD Zone Ajmer');
+  });
+});
+
+describe('claimed more than was measured — a reversal after issue', () => {
+  it('reports a bill whose period’s measurement was reduced after it went out', async () => {
+    // FR-048. Nobody over-claimed when the bill was written; the measurement moved underneath it.
+    // Before this, the reversal appeared on neither report.
+    const service = build({
+      packages: [
+        {
+          id: 'pkg-11',
+          sequenceNo: 11,
+          periodFrom: '2025-11-21',
+          periodTo: '2025-12-20',
+          claims: { '30.10': '1.000' },
+        },
+      ],
+      approvedNow: { '2025-11-21..2025-12-20': { '30.10': '0.400' } },
+    });
+
+    const report = await service.overClaims({ isSuperAdmin: true }, 'p-1');
+    expect(report.reversedAfterIssue).toHaveLength(1);
+    expect(report.reversedAfterIssue[0].lines[0]).toMatchObject({
+      claimed: '1.000',
+      approvedNow: '0.400',
+      overBy: '0.600',
+    });
   });
 });

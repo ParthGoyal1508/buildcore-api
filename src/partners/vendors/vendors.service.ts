@@ -169,6 +169,11 @@ export class VendorsService {
             city: dto.city ?? null,
             state: dto.state ?? null,
             pinCode: dto.pinCode ?? null,
+            bankName: dto.bankName ?? null,
+            bankBranch: dto.bankBranch ?? null,
+            bankAccountNumber: dto.bankAccountNumber ?? null,
+            bankAccountHolderName: dto.bankAccountHolderName ?? null,
+            ifscCode: dto.ifscCode?.toUpperCase() ?? null,
             vendorCurrency: dto.vendorCurrency ?? 'INR',
             exchangeRate: dto.exchangeRate ?? 1,
             contacts: dto.contacts?.length
@@ -381,6 +386,21 @@ export class VendorsService {
               : {}),
             ...(dto.vendorCurrency !== undefined
               ? { vendorCurrency: dto.vendorCurrency }
+              : {}),
+            ...(dto.bankName !== undefined
+              ? { bankName: dto.bankName || null }
+              : {}),
+            ...(dto.bankBranch !== undefined
+              ? { bankBranch: dto.bankBranch || null }
+              : {}),
+            ...(dto.bankAccountNumber !== undefined
+              ? { bankAccountNumber: dto.bankAccountNumber || null }
+              : {}),
+            ...(dto.bankAccountHolderName !== undefined
+              ? { bankAccountHolderName: dto.bankAccountHolderName || null }
+              : {}),
+            ...(dto.ifscCode !== undefined
+              ? { ifscCode: dto.ifscCode?.toUpperCase() || null }
               : {}),
             ...(dto.exchangeRate !== undefined
               ? { exchangeRate: dto.exchangeRate }

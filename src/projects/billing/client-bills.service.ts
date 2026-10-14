@@ -293,6 +293,14 @@ type SettlementColumns = Omit<
   releaseWithheld: Prisma.Decimal;
 };
 
+/** Whether a package's figures are frozen — issued, or certified after issue. */
+function isFrozen(status: BillPackageStatus): boolean {
+  return (
+    status === BillPackageStatus.issued ||
+    status === BillPackageStatus.certified
+  );
+}
+
 /**
  * The abstract column behind a bill's payable, in paise.
  *
@@ -304,7 +312,7 @@ type SettlementColumns = Omit<
 function settlementOf(
   columns: SettlementColumns | null | undefined,
 ): BillSettlementView | null {
-  if (!columns || columns.status === BillPackageStatus.draft) return null;
+  if (!columns || !isFrozen(columns.status)) return null;
   const column = balanceColumn(columns);
   return {
     workDone: column.workDone.toNumber(),
@@ -893,6 +901,8 @@ export class ClientBillsService {
               retentionAmount: true,
               performanceSecurity: true,
               theftWithheld: true,
+              customRecoveries: true,
+              customDeductions: true,
               tdsAmount: true,
             },
           },
@@ -973,7 +983,7 @@ export class ClientBillsService {
         retentionAmount: bill.retentionAmount.toNumber(),
         // No net until the package that decides the recoveries, deductions and tax is issued.
         netAmount:
-          bill.package?.status === BillPackageStatus.draft
+          bill.package && !isFrozen(bill.package.status)
             ? null
             : bill.netAmount.toNumber(),
         settlement: settlementOf(bill.package),

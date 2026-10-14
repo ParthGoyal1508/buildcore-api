@@ -9,6 +9,7 @@ import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
+import { headerPairs } from './header-pairs';
 
 /**
  * The bill package as a PDF (025 FR-042).
@@ -97,7 +98,11 @@ interface Column {
 
 @Injectable()
 export class BillPdfRenderer {
-  async render(view: BillWorkbookView): Promise<Buffer> {
+  /** `abstractOnly`: the abstract page alone — a client's *Payment Abstract* as its own document. */
+  async render(
+    view: BillWorkbookView,
+    options: { abstractOnly?: boolean } = {},
+  ): Promise<Buffer> {
     const doc = new PDFDocument({
       size: 'A4',
       margin: MARGIN,
@@ -120,6 +125,10 @@ export class BillPdfRenderer {
     });
 
     this.abstractPage(doc, view);
+    if (options.abstractOnly) {
+      doc.end();
+      return finished;
+    }
     this.schedulePage(doc, view);
     // **One per schedule line, including lines with nothing claimed this period** (FR-030). The
     // count is the assertion that matters: a PDF missing a sheet opens perfectly, and the item that
@@ -265,8 +274,13 @@ export class BillPdfRenderer {
 
   private abstractPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'portrait');
-    this.title(doc, view.header.issuer.name, 'ABSTRACT SHEET', A4_WIDTH);
-    this.headerBlock(doc, ...billHeaderPairs(view), A4_WIDTH);
+    this.title(
+      doc,
+      view.header.issuer.name,
+      view.abstract.title ?? 'ABSTRACT SHEET',
+      A4_WIDTH,
+    );
+    this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
     const figure = (width - 40 - 40) / 3;
@@ -304,16 +318,27 @@ export class BillPdfRenderer {
       view.abstract.payable.uptoPrevious,
       view.abstract.payable.thisMonth,
     ]);
-    rows.push([
-      '',
-      view.abstract.netPayable.label,
-      'Rs.',
-      view.abstract.netPayable.uptoDate,
-      view.abstract.netPayable.uptoPrevious,
-      view.abstract.netPayable.thisMonth,
-    ]);
+    if (view.abstract.netPayable) {
+      rows.push([
+        '',
+        view.abstract.netPayable.label,
+        'Rs.',
+        view.abstract.netPayable.uptoDate,
+        view.abstract.netPayable.uptoPrevious,
+        view.abstract.netPayable.thisMonth,
+      ]);
+    }
 
     this.table(doc, columns, rows);
+
+    if (view.abstract.amountInWords) {
+      doc
+        .moveDown(0.6)
+        .font('Helvetica-Bold')
+        .fontSize(SIZE.body)
+        .text(`Amount in words: ${view.abstract.amountInWords}`, { width })
+        .font('Helvetica');
+    }
 
     // Printed so a reviewer can check the tax decision rather than take it (FR-016a).
     doc
@@ -328,7 +353,7 @@ export class BillPdfRenderer {
   private schedulePage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'landscape');
     this.title(doc, view.header.issuer.name, 'BOQ ANNEXURE-I', A4_HEIGHT);
-    this.headerBlock(doc, ...billHeaderPairs(view), A4_HEIGHT);
+    this.headerBlock(doc, ...headerPairs(view.header), A4_HEIGHT);
 
     const width = A4_HEIGHT - MARGIN * 2;
     const figure = 62;
@@ -460,7 +485,7 @@ export class BillPdfRenderer {
   ): void {
     this.page(doc, 'landscape');
     this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(doc, ...billHeaderPairs(view), A4_HEIGHT);
+    this.headerBlock(doc, ...headerPairs(view.header), A4_HEIGHT);
 
     const width = A4_HEIGHT - MARGIN * 2;
     const columns: Column[] = [
@@ -681,32 +706,4 @@ export class BillPdfRenderer {
       writeRow(footer, true);
     }
   }
-}
-
-/**
- * The statutory pairs the bill package's sheets repeat on every page.
- *
- * Lifted out of `headerBlock` when the standalone debit note needed the same block with different
- * pairs. The values and their order are unchanged — this is where they moved to, not a rewrite.
- */
-function billHeaderPairs(
-  view: BillWorkbookView,
-): [[string, string | null][], [string, string | null][]] {
-  const h = view.header;
-  return [
-    [
-      ['Name of Sub-Contractor', h.receiver.name],
-      ['Nature of Work', h.natureOfWork],
-      ['Work Order No.', h.externalWorkOrderNo],
-      ['Bill No.', h.externalBillNo],
-      ['Bill Period', `${h.periodFrom} to ${h.periodTo}`],
-    ],
-    [
-      ['Location', h.location],
-      ['Vendor Code', h.receiver.code],
-      ['Vendor GSTIN', h.receiver.gstin],
-      ['Vendor PAN', h.receiver.pan],
-      ['Bill Date', h.billDate],
-    ],
-  ];
 }

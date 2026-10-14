@@ -611,6 +611,61 @@ export class CompaniesService {
   }
 
   /**
+   * What a company-issued document prints at its head: name, full address and logo (2026-10-13).
+   *
+   * For the payment advice, which carries each company's own mark and registered address. The logo
+   * comes back as bytes, or null where none is uploaded — a missing logo prints the name alone
+   * rather than refusing the document.
+   */
+  async getDocumentIdentity(companyId: string): Promise<{
+    name: string;
+    address: string | null;
+    gstin: string | null;
+    pan: string | null;
+    logo: Buffer | null;
+  }> {
+    const company = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.company.findUnique({
+          where: { id: companyId },
+          select: {
+            name: true,
+            address: true,
+            city: true,
+            state: true,
+            pinCode: true,
+            gstin: true,
+            pan: true,
+            logoRef: true,
+          },
+        }),
+    );
+    if (!company) throw new NotFoundException('Company not found');
+    const place = [company.city, company.state].filter(Boolean).join(', ');
+    const address =
+      [
+        company.address,
+        place && company.pinCode
+          ? `${place} - ${company.pinCode}`
+          : place || company.pinCode,
+      ]
+        .filter(Boolean)
+        .join(', ') || null;
+    const logo = company.logoRef
+      ? await this.storage.get(company.logoRef).catch(() => null)
+      : null;
+    return {
+      name: company.name,
+      address,
+      gstin: company.gstin,
+      pan: company.pan,
+      logo,
+    };
+  }
+
+  /**
    * The per-company payroll rates the engine applies (005 FR-014/FR-014a).
    *
    * Exported for `payroll` for the same reason `getPayrollLockDay` is exported for

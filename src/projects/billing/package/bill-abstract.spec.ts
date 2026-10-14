@@ -485,3 +485,104 @@ describe('the client’s own payment abstract, reproduced', () => {
     );
   });
 });
+
+describe('a subcontractor bill’s own recovery and deduction lines (2026-10-13)', () => {
+  it('puts recoveries in block B and deductions in block C, and takes both off the payable', () => {
+    const plain = billAbstract(input());
+    const withLines = billAbstract(
+      input({
+        entered: {
+          ...NOTHING_ENTERED,
+          customRecoveries: d('25000'),
+          customDeductions: d('10000'),
+        },
+      }),
+    );
+
+    expect(withLines.thisBill.recoveriesTotal.toFixed(2)).toBe('25000.00');
+    expect(
+      withLines.thisBill.deductionsTotal
+        .minus(plain.thisBill.deductionsTotal)
+        .toFixed(2),
+    ).toBe('10000.00');
+    expect(
+      plain.thisBill.payable.minus(withLines.thisBill.payable).toFixed(2),
+    ).toBe('35000.00');
+    // Not taxed: a recovery is taken after the tax is computed on the work.
+    expect(
+      withLines.thisBill.cgstAmount.equals(plain.thisBill.cgstAmount),
+    ).toBe(true);
+  });
+
+  it('carries each line’s cumulative into the up-to-date column', () => {
+    const previous = {
+      ...zeroColumn(),
+      customRecoveries: d('5000'),
+      customDeductions: d('2000'),
+    };
+    const abstract = billAbstract(
+      input({
+        previous,
+        entered: {
+          ...NOTHING_ENTERED,
+          customRecoveries: d('1000'),
+          customDeductions: d('500'),
+        },
+      }),
+    );
+    expect(abstract.uptoDate.customRecoveries.toFixed(2)).toBe('6000.00');
+    expect(abstract.uptoDate.customDeductions.toFixed(2)).toBe('2500.00');
+  });
+});
+
+describe('a government client’s payment abstract — withheld and released (2026-10-13)', () => {
+  // The Ring Road RA-02 sheet: a withholding from an earlier bill released on this one is printed
+  // beneath the recoveries and added back to the payable, and *Invoice Value* excludes it.
+  const CLIENT_RATES = {
+    ...RATES,
+    labourCessFraction: d('0.010000'),
+    gstTdsFraction: d('0.020000'),
+  };
+
+  it('keeps the release out of the invoice value and adds it to the payable', () => {
+    const abstract = billAbstract(
+      input({
+        workDone: d('2688541'),
+        rates: CLIENT_RATES,
+        entered: { ...NOTHING_ENTERED, releaseWithheld: d('383407.77') },
+      }),
+    );
+    const bill = abstract.thisBill;
+
+    expect(bill.invoiceValue.toFixed(2)).toBe(
+      bill.taxableAmount.plus(bill.cgstAmount).plus(bill.sgstAmount).toFixed(2),
+    );
+    expect(displayRupees(bill.invoiceValue)).toBe('3172478');
+    expect(displayRupees(bill.totalWithheld)).toBe('268854');
+    expect(bill.payable.toFixed(2)).toBe(
+      bill.invoiceValue
+        .plus(d('383407.77'))
+        .minus(bill.totalWithheld)
+        .toFixed(2),
+    );
+  });
+
+  it('names Amount Withheld as its own row, so “other recoveries” holds only what is unnamed', () => {
+    const abstract = billAbstract(
+      input({
+        rates: CLIENT_RATES,
+        entered: { ...NOTHING_ENTERED, theftWithheld: d('383407.77') },
+      }),
+    );
+    expect(abstract.thisBill.unlistedWithheld.toFixed(2)).toBe('0.00');
+    expect(
+      abstract.thisBill.totalWithheld.minus(d('383407.77')).toFixed(2),
+    ).toBe(
+      abstract.thisBill.labourCessAmount
+        .plus(abstract.thisBill.tdsAmount)
+        .plus(abstract.thisBill.gstTdsAmount)
+        .plus(abstract.thisBill.retentionAmount)
+        .toFixed(2),
+    );
+  });
+});

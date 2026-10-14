@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -13,6 +14,8 @@ import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 import type { Response } from 'express';
 
+import { ApprovalService } from '../../../approvals/approvals.service';
+import { ENTITY_BILL_PACKAGE } from '../../../approvals/default-chains';
 import { AuthenticatedUser } from '../../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../../common/decorators/permissions.decorator';
@@ -25,11 +28,24 @@ import { BillPackageService } from './bill-package.service';
 import { BillPackageViewBuilder } from './bill-package-view.builder';
 import { DebitNoteService } from './debit-note.service';
 import { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
+import {
+  CertifyBillPackageDto,
+  MarkBillSharedDto,
+  ReviseBillPackageDto,
+  SetBillDeductionLinesDto,
+  WithdrawBillPackageDto,
+} from './dto/bill-lifecycle.dto';
 import { SetBillLineClaimDto } from './dto/bill-line.dto';
 import { ComposeBillPackageDto } from './dto/compose-bill.dto';
 import { RecordDebitDto } from './dto/debit-note.dto';
 import { MeasurementSheetService } from './measurement-sheet.service';
 import { PackageReportsService } from './package-reports.service';
+
+const CONTENT_TYPES = {
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  pdf: 'application/pdf',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+} as const;
 
 /**
  * The running-account bill package (023 US1 to US7).
@@ -70,6 +86,7 @@ export class BillPackageController {
     private readonly debits: DebitNoteService,
     private readonly reports: PackageReportsService,
     private readonly views: BillPackageViewBuilder,
+    private readonly approvals: ApprovalService,
   ) {}
 
   // ── Composition ──────────────────────────────────────────────────────────
@@ -156,6 +173,27 @@ export class BillPackageController {
     return this.packages.setAdjustments(rlsContextFor(caller), packageId, dto);
   }
 
+  @Patch('projects/bill-packages/:packageId/deduction-lines')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Replace a subcontractor bill’s own recovery and deduction lines',
+    description:
+      'The whole list, every time. Recoveries go in block B, deductions in block C. Each line’s ' +
+      'running total is carried to the next bill by its description. Draft only, and refused on a ' +
+      'bill to the client, whose payment abstract has no row for a line somebody made up.',
+  })
+  async setDeductionLines(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: SetBillDeductionLinesDto,
+  ) {
+    return this.packages.setDeductionLines(
+      rlsContextFor(caller),
+      packageId,
+      dto.lines,
+    );
+  }
+
   @Post('projects/bill-packages/:packageId/abandon')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
@@ -180,8 +218,25 @@ export class BillPackageController {
   async findOne(
     @UserEntity() caller: AuthenticatedUser,
     @Param('packageId') packageId: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.packages.view(rlsContextFor(caller), packageId);
+    const view = await this.packages.view(rlsContextFor(caller), packageId);
+    const [counterpartyName] = await this.packages.counterpartyNames(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      [view],
+    );
+    return {
+      ...view,
+      counterpartyName,
+      // The caller's own position in the chain — `canActNow` is what puts the Approve / Reject
+      // buttons on the bill itself, for the person whose turn it is.
+      approval: await this.approvals.stateOf(
+        ENTITY_BILL_PACKAGE,
+        packageId,
+        caller,
+      ),
+    };
   }
 
   @Get('projects/:projectId/bill-packages')
@@ -189,8 +244,25 @@ export class BillPackageController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.packages.list(rlsContextFor(caller), projectId);
+    const rows = await this.packages.list(rlsContextFor(caller), projectId);
+    const names = await this.packages.counterpartyNames(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      rows.map((row) => ({ ...row, projectId })),
+    );
+    const approvals = await this.approvals.statesOf(
+      ENTITY_BILL_PACKAGE,
+      rows.map((row) => row.id),
+      caller,
+    );
+    return rows.map((row, index) => ({
+      ...row,
+      counterpartyName: names[index],
+      // Whether the caller is the one this bill is waiting on, so the list can say so.
+      awaitingMe: approvals.get(row.id)?.canActNow ?? false,
+    }));
   }
 
   @Get('projects/bill-packages/:packageId/abstract')
@@ -308,6 +380,38 @@ export class BillPackageController {
     res.send(bytes);
   }
 
+  @Get('projects/bill-packages/:packageId/document.:format')
+  @ApiOperation({
+    summary: 'The bill as xlsx, pdf or docx — or its abstract alone',
+    description:
+      '`format` is `xlsx`, `pdf` or `docx`. `?part=abstract` gives the abstract alone — on a bill ' +
+      'to the client, the *Payment Abstract* as its own document. All three formats render from ' +
+      'one view, so they cannot disagree.',
+  })
+  async document(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Param('format') format: string,
+    @Res() res: Response,
+    @Query('part') part?: string,
+  ): Promise<void> {
+    if (format !== 'xlsx' && format !== 'pdf' && format !== 'docx') {
+      throw new NotFoundException(`No ${format} rendering of a bill.`);
+    }
+    const { bytes, filename, missingFields } = await this.views.documentFor(
+      rlsContextFor(caller),
+      packageId,
+      format,
+      { abstractOnly: part === 'abstract' },
+    );
+    res.setHeader('Content-Type', CONTENT_TYPES[format]);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    if (missingFields.length > 0) {
+      res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
+    }
+    res.send(bytes);
+  }
+
   @Get('projects/bill-packages/:packageId/workbook.xlsx')
   @ApiOperation({
     summary: 'The package as a spreadsheet',
@@ -407,35 +511,98 @@ export class BillPackageController {
   async revise(
     @UserEntity() caller: AuthenticatedUser,
     @Param('packageId') packageId: string,
-    @Body() body: { reason: string },
+    @Body() dto: ReviseBillPackageDto,
   ) {
     return this.packages.revise(
       rlsContextFor(caller),
       caller.id,
       packageId,
-      body.reason,
+      dto.reason,
+    );
+  }
+
+  @Post('projects/bill-packages/:packageId/submit')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Send a draft bill for approval',
+    description:
+      'Enters the `client_bill` chain for a bill to the client and the `ra_bill` chain for a ' +
+      'subcontractor’s, both configured in Settings → Approvals. Refuses what issue would refuse, ' +
+      'so an approver never signs a bill that cannot then go out. Locked against edits until the ' +
+      'chain finishes or the author withdraws it.',
+  })
+  async submit(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.packages.submitForApproval(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      caller.id,
+      packageId,
+    );
+  }
+
+  @Post('projects/bill-packages/:packageId/withdraw')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Take a bill back to draft from approval',
+    description:
+      'Pending or approved but not yet issued. Closes the pending approval; sending it again ' +
+      'raises a fresh one, so nobody approves a version that has since changed.',
+  })
+  async withdraw(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: WithdrawBillPackageDto,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.packages.withdraw(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      packageId,
+      dto.reason ?? null,
+    );
+  }
+
+  @Post('projects/bill-packages/:packageId/share')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary:
+      'Record that the issued bill was sent to the client or subcontractor',
+  })
+  async share(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+    @Body() dto: MarkBillSharedDto,
+  ) {
+    return this.packages.markShared(
+      rlsContextFor(caller),
+      caller.id,
+      packageId,
+      dto.sharedTo ?? null,
     );
   }
 
   @Post('projects/bill-packages/:packageId/certify')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
-    summary: 'Record what the counterparty certified',
+    summary: 'Certify an issued bill',
     description:
-      'Kept **beside** the billed figure and never instead of it. The variance between the two is ' +
-      'what a project manager chases, and overwriting the billed amount erases the fact that ' +
-      'there was a shortfall at all.',
+      'On a bill to the client, what the client certified. On a subcontractor’s, the company ' +
+      'certifying it — which releases it for payment and for a payment advice. Kept **beside** ' +
+      'the billed figure and never instead of it.',
   })
   async certify(
     @UserEntity() caller: AuthenticatedUser,
     @Param('packageId') packageId: string,
-    @Body() body: { certifiedAmount: string },
+    @Body() dto: CertifyBillPackageDto,
   ) {
-    return this.packages.certify(
-      rlsContextFor(caller),
-      packageId,
-      body.certifiedAmount,
-    );
+    return this.packages.certify(rlsContextFor(caller), caller.id, packageId, {
+      certifiedAmount: dto.certifiedAmount,
+      remarks: dto.remarks ?? null,
+    });
   }
 
   // ── The two reports the decisions oblige ─────────────────────────────────
@@ -452,8 +619,13 @@ export class BillPackageController {
   async understatement(
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.reports.understatement(rlsContextFor(caller), projectId);
+    return this.reports.understatement(
+      rlsContextFor(caller),
+      projectId,
+      resolveCompanyId(caller, companyId),
+    );
   }
 
   @Get('projects/:projectId/bill-packages/reports/over-claims')
@@ -467,7 +639,12 @@ export class BillPackageController {
   async overClaims(
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
+    @Query('companyId') companyId?: string,
   ) {
-    return this.reports.overClaims(rlsContextFor(caller), projectId);
+    return this.reports.overClaims(
+      rlsContextFor(caller),
+      projectId,
+      resolveCompanyId(caller, companyId),
+    );
   }
 }

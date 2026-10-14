@@ -74,7 +74,13 @@ async function bootstrap() {
     // HttpOnly refresh-token cookie cross-origin (frontend and backend are
     // separate origins in both local dev and production) — without it the
     // Set-Cookie response header is silently ignored by the browser.
-    app.enableCors({ origin: corsConfig.origin, credentials: true });
+    app.enableCors({
+      origin: corsConfig.origin,
+      credentials: true,
+      // Readable cross-origin only when listed. Without these a download from the web app could not
+      // see the file name the server chose, nor the header fields a bill printed blank.
+      exposedHeaders: ['Content-Disposition', 'X-Bill-Package-Missing-Fields'],
+    });
   }
 
   await app.listen(process.env.PORT || nestConfig.port || 3000);

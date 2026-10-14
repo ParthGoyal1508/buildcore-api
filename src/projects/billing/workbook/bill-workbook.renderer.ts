@@ -52,7 +52,14 @@ export class BillWorkbookRenderer {
    * measurement sheets, the debit register. A reviewer finds each figure by where it sits, and a
    * workbook carrying all five in a different order is one they have to search.
    */
-  async render(view: BillWorkbookView): Promise<Buffer> {
+  /**
+   * `abstractOnly` produces the abstract alone — the client's *Payment Abstract* as its own
+   * document, without the schedule and measurement sheets behind it.
+   */
+  async render(
+    view: BillWorkbookView,
+    options: { abstractOnly?: boolean } = {},
+  ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     workbook.creator = view.header.issuer.name ?? 'BuildCore';
 
@@ -70,6 +77,9 @@ export class BillWorkbookRenderer {
       workbook.addWorksheet(assertSheetName(FIXED_SHEET_NAMES.abstract, used)),
       view,
     );
+    if (options.abstractOnly) {
+      return Buffer.from(await workbook.xlsx.writeBuffer());
+    }
     writeScheduleSheet(
       workbook.addWorksheet(assertSheetName(FIXED_SHEET_NAMES.schedule, used)),
       view,

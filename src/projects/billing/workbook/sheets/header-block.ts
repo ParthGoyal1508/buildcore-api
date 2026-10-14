@@ -1,6 +1,7 @@
 import type * as ExcelJS from 'exceljs';
 
 import type { WorkbookHeader } from '../bill-workbook.types';
+import { headerPairs } from '../header-pairs';
 
 /**
  * The statutory header block every sheet in the client's package repeats (023 FR-025, FR-026).
@@ -21,35 +22,16 @@ export function writeHeaderBlock(
   header: WorkbookHeader,
   title: string,
 ): number {
-  const rows: [string, string | null, string, string | null][] = [
-    [
-      'Company Name',
-      header.issuer.name,
-      'SAP WO No.',
-      header.externalWorkOrderNo,
-    ],
-    [
-      'Name of Sub-Contractor',
-      header.receiver.name,
-      'SAP Bill No.',
-      header.externalBillNo,
-    ],
-    [
-      'Nature of Work',
-      header.natureOfWork,
-      'Bill Period',
-      `${header.periodFrom} to ${header.periodTo}`,
-    ],
-    ['Location', header.location, 'Bill Date', header.billDate],
-    ['Vendor Code', header.receiver.code, 'Bill No.', header.billLabel],
-    [
-      'Vendor GSTN No.',
-      header.receiver.gstin,
-      'Company GSTN No.',
-      header.issuer.gstin,
-    ],
-    ['Vendor PAN No.', header.receiver.pan, 'State', header.receiver.state],
-  ];
+  const [left, right] = headerPairs(header);
+  const rows: [string, string | null, string, string | null][] = [];
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    rows.push([
+      left[i]?.[0] ?? '',
+      left[i]?.[1] ?? null,
+      right[i]?.[0] ?? '',
+      right[i]?.[1] ?? null,
+    ]);
+  }
 
   const titleRow = sheet.addRow([title]);
   titleRow.font = { bold: true, size: 14 };

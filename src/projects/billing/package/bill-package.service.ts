@@ -4,9 +4,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import {
+  BillDeductionSection,
   BillDirection,
   BillPackageStatus,
+  Permission,
   BillTaxBasis,
   ClaimProposalSource,
   ClientBillStatus,
@@ -17,6 +20,20 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  APPROVAL_REJECTED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+  type ApprovalRejectedEvent,
+} from '../../../approvals/approvals.service';
+import {
+  ACTION_CLIENT_BILL,
+  ACTION_RA_BILL,
+  ENTITY_BILL_PACKAGE,
+} from '../../../approvals/default-chains';
+import { webRoutes } from '../../../common/web-routes';
+
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
 import { CompaniesService } from '../../../settings/companies/companies.service';
@@ -24,7 +41,7 @@ import { DwrPeriodFiguresService } from '../../dwr/dwr-period-figures.service';
 import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
 import { lineTotals, money } from '../bill-totals';
 import type { AbstractColumn } from './bill-abstract';
-import { billAbstract, displayRupees } from './bill-abstract';
+import { balanceColumn, billAbstract, displayRupees } from './bill-abstract';
 import { decideTaxBasis } from './bill-tax';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { BILLING_ERRORS } from '../billing-error-codes';
@@ -176,6 +193,30 @@ export interface BillPackageView {
    * has ever been approved on this project.
    */
   latestApprovedWork: { workDate: string; dprNumber: string } | null;
+  /** Lifecycle stamps (2026-10-13). ISO timestamps, null where the step has not happened. */
+  submittedAt: string | null;
+  approvedAt: string | null;
+  issuedAt: string | null;
+  sharedAt: string | null;
+  sharedTo: string | null;
+  certifiedAmount: string | null;
+  certifiedAt: string | null;
+  certifiedRemarks: string | null;
+  /** Revisions recorded after issue, with the latest reason. */
+  revisionCount: number;
+  lastRevisionReason: string | null;
+  /** The editable recovery / deduction lines, as entered. Subcontractor bills only. */
+  deductionLines: {
+    section: BillDeductionSection;
+    label: string;
+    amount: string;
+  }[];
+  /** The RA bill under a subcontractor package, which payments are recorded against. */
+  raBillId: string | null;
+  clientBillId: string | null;
+  workOrderId: string | null;
+  /** The client's id, or the work order's — what the running number is counted per. */
+  counterpartyKey: string;
 }
 
 /** The only rendering of a package's number (`RA-12`), so two documents cannot disagree. */
@@ -206,11 +247,15 @@ const ADJUSTABLE = [
 /**
  * Which of those each direction's abstract actually has a row for (2026-10-13).
  *
- * A government client's payment abstract carries row 1B and nothing else enterable: its four
- * recoveries are statutory percentages this computes, not judgements anybody types. A
+ * A government client's payment abstract carries row 1B, *Amount Withheld* and *Released Amount*:
+ * its four recoveries are statutory percentages this computes, not judgements anybody types. A
  * subcontractor's carries the judgements and has no 1B.
  */
-const CLIENT_ADJUSTABLE = ['workDeduction'] as const;
+const CLIENT_ADJUSTABLE = [
+  'workDeduction',
+  'theftWithheld',
+  'releaseWithheld',
+] as const;
 const SUBCONTRACTOR_ADJUSTABLE = ADJUSTABLE.filter(
   (key) => key !== 'workDeduction',
 );
@@ -267,6 +312,7 @@ export class BillPackageService {
      * itself instead, exactly as `plant` registers the equipment logbook for 022.
      */
     private readonly sources: ProjectSourcesRegistry,
+    private readonly approvals: ApprovalService,
   ) {}
 
   /**
@@ -1037,11 +1083,18 @@ export class BillPackageService {
         },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
-      if (pkg.status !== BillPackageStatus.draft) {
+      if (pkg.status !== BillPackageStatus.approved) {
         throw new ConflictException({
           statusCode: 409,
-          code: PACKAGE_ERRORS.packageIssued,
-          message: `${packageLabel(pkg.sequenceNo)} has already been issued.`,
+          code: PACKAGE_ERRORS.notApproved,
+          message:
+            pkg.status === BillPackageStatus.draft ||
+            pkg.status === BillPackageStatus.pending_approval
+              ? `${packageLabel(
+                  pkg.sequenceNo,
+                )} has not been approved yet. Send it for ` +
+                'approval first — nothing is issued to a client or subcontractor unapproved.'
+              : `${packageLabel(pkg.sequenceNo)} has already been issued.`,
         });
       }
 
@@ -1079,6 +1132,7 @@ export class BillPackageService {
 
       const header = await this.freezeHeader(ctx, tx, companyId, pkg);
       const abstract = await this.abstractColumns(tx, pkg);
+      await this.freezeDeductionLines(tx, pkg);
 
       await tx.billPackage.update({
         where: { id: pkg.id },
@@ -1285,6 +1339,8 @@ export class BillPackageService {
       mobilizationAdvance: Prisma.Decimal;
       performanceSecurity: Prisma.Decimal;
       theftWithheld: Prisma.Decimal;
+      customRecoveries: Prisma.Decimal;
+      customDeductions: Prisma.Decimal;
       mobilizationAdvanceTotal: Prisma.Decimal | null;
       performanceSecurityTotal: Prisma.Decimal | null;
       clientBill: { grossAmount: Prisma.Decimal } | null;
@@ -1307,6 +1363,8 @@ export class BillPackageService {
         mobilizationAdvance: pkg.mobilizationAdvance,
         performanceSecurity: pkg.performanceSecurity,
         theftWithheld: pkg.theftWithheld,
+        customRecoveries: pkg.customRecoveries,
+        customDeductions: pkg.customDeductions,
       },
       rates: {
         retentionFraction: pkg.retentionFraction,
@@ -1358,6 +1416,8 @@ export class BillPackageService {
       retentionAmountUptoDate: uptoDate.retentionAmount,
       performanceSecurityUptoDate: uptoDate.performanceSecurity,
       theftWithheldUptoDate: uptoDate.theftWithheld,
+      customRecoveriesUptoDate: uptoDate.customRecoveries,
+      customDeductionsUptoDate: uptoDate.customDeductions,
       tdsAmountUptoDate: uptoDate.tdsAmount,
       payableUptoDate: uptoDate.payable,
     };
@@ -1493,51 +1553,612 @@ export class BillPackageService {
   }
 
   /**
-   * Records what the counterparty certified (FR-047).
+   * Records the certified figure (FR-047), for either direction (2026-10-13).
+   *
+   * **To the client** it is what the client's engineer certified. **To a subcontractor** it is the
+   * company certifying the bill it was sent, and it is what releases the bill for payment: the
+   * payment screen reads the RA bill's `approved`, which only the old sheet's chain ever set — so
+   * until this, a subcontractor bill raised as a package could never be paid.
    *
    * Kept **beside** the billed figure and never instead of it — 018's existing reasoning, kept. The
    * variance between the two is what a project manager chases, and overwriting the billed amount
-   * erases the fact that there was a shortfall at all.
+   * erases the fact that there was a shortfall at all. A certified bill may be certified again to
+   * correct the figure; the latest stands.
    */
   async certify(
     ctx: RlsContext,
+    userId: string | null,
     packageId: string,
-    certifiedAmount: string,
+    input: { certifiedAmount: string; remarks?: string | null },
   ): Promise<BillPackageView> {
     await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
         where: { id: packageId },
-        select: { id: true, status: true, clientBillId: true },
+        select: {
+          id: true,
+          status: true,
+          sequenceNo: true,
+          clientBillId: true,
+          raBillId: true,
+        },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
-      if (pkg.status === BillPackageStatus.draft) {
+      if (
+        pkg.status !== BillPackageStatus.issued &&
+        pkg.status !== BillPackageStatus.certified
+      ) {
         throw new ConflictException({
           statusCode: 409,
-          code: PACKAGE_ERRORS.packageIssued,
-          message: 'A draft cannot be certified — issue it first.',
+          code: PACKAGE_ERRORS.wrongStatus,
+          message: `${packageLabel(
+            pkg.sequenceNo,
+          )} has not been issued, so there is nothing to certify yet. Approve and issue it first.`,
         });
       }
 
+      const now = new Date();
       await tx.billPackage.update({
         where: { id: pkg.id },
-        data: { status: BillPackageStatus.certified },
+        data: {
+          status: BillPackageStatus.certified,
+          certifiedAmount: dec(input.certifiedAmount),
+          certifiedAt: now,
+          certifiedByUserId: userId,
+          certifiedRemarks: input.remarks?.trim() || null,
+        },
       });
-      // The certified figure lives on the bill 018 already owns, beside its gross and net — and
-      // the bill's own status moves with the package's, for the reason `issue` does the same: a
-      // package and the bill under it describing different stages of the same claim is how the
-      // Client bills tab came to show a draft beside a bill that had been issued and emailed.
+      // The certified figure also lives on the bill 018 owns, and the bill's own status moves with
+      // the package's — a package and the bill under it describing different stages of the same
+      // claim is how the Client bills tab came to show a draft beside a bill that had been issued.
       if (pkg.clientBillId) {
         await tx.clientBill.update({
           where: { id: pkg.clientBillId },
           data: {
             status: ClientBillStatus.certified,
-            certifiedAmount,
-            certifiedAt: new Date(),
+            certifiedAmount: dec(input.certifiedAmount),
+            certifiedAt: now,
+          },
+        });
+      } else if (pkg.raBillId) {
+        await tx.rABill.update({
+          where: { id: pkg.raBillId },
+          data: {
+            status: RaBillStatus.approved,
+            approvedAt: now,
+            approvedByUserId: userId,
           },
         });
       }
     });
     return this.view(ctx, packageId);
+  }
+
+  /**
+   * Sends a draft into its approval chain (2026-10-13): `client_bill` for a bill to the client,
+   * `ra_bill` for a subcontractor's — the chain that has always decided subcontractor bills.
+   *
+   * Everything issue would refuse is refused **here**, so an approver never signs a bill that cannot
+   * then go out. The spine is asked first and the status written after, the order `RaBillsService`
+   * documents: a bill marked pending with no instance behind it waits on nobody.
+   */
+  async submitForApproval(
+    ctx: RlsContext,
+    companyId: string,
+    userId: string,
+    packageId: string,
+  ): Promise<BillPackageView> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          id: true,
+          projectId: true,
+          status: true,
+          direction: true,
+          sequenceNo: true,
+          counterpartyKey: true,
+          claims: {
+            select: {
+              claimedQty: true,
+              clientBillLine: {
+                select: {
+                  rate: true,
+                  boqTaskItem: { select: { boqNo: true } },
+                },
+              },
+              raBillLine: { select: { rate: true } },
+            },
+          },
+        },
+      }),
+    );
+    if (!pkg) throw new NotFoundException('Bill package not found');
+    if (pkg.status !== BillPackageStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.wrongStatus,
+        message: `${packageLabel(pkg.sequenceNo)} is ${pkg.status.replace(
+          '_',
+          ' ',
+        )}. Only a draft is sent for approval.`,
+      });
+    }
+    // A bill claiming nothing is still a bill — a month of recoveries against a subcontractor with
+    // no work done is a real document with a negative payable (FR-022), so it is not refused.
+    const claimed = pkg.claims.filter((claim) => !claim.claimedQty.isZero());
+    const unpriced = claimed.filter((claim) =>
+      (claim.clientBillLine?.rate ?? claim.raBillLine?.rate ?? dec(0)).isZero(),
+    );
+    if (unpriced.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: PACKAGE_ERRORS.unpricedLineClaimed,
+        message:
+          'These lines carry a claim and no rate, so the bill would bill the work at zero: ' +
+          unpriced
+            .map(
+              (claim) =>
+                claim.clientBillLine?.boqTaskItem.boqNo ?? '(award line)',
+            )
+            .join(', ') +
+          '. Price them before sending the bill for approval.',
+      });
+    }
+
+    const [counterparty] = await this.counterpartyNames(ctx, companyId, [pkg]);
+    const abstract = await this.abstractFor(ctx, packageId);
+    await this.approvals.submit({
+      companyId,
+      actionType:
+        pkg.direction === BillDirection.to_client
+          ? ACTION_CLIENT_BILL
+          : ACTION_RA_BILL,
+      entityType: ENTITY_BILL_PACKAGE,
+      entityId: pkg.id,
+      originatorUserId: userId,
+      subject:
+        `${
+          pkg.direction === BillDirection.to_client
+            ? 'Client bill'
+            : 'Subcontractor bill'
+        } ` +
+        `${packageLabel(pkg.sequenceNo)}${
+          counterparty ? ` · ${counterparty}` : ''
+        } · ` +
+        `payable ₹${abstract.columns.thisBill.payable}`,
+      href: webRoutes.projectBillPackage(pkg.projectId, pkg.id),
+      viewPermission: Permission.PROJECT_FINANCIALS,
+    });
+
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.update({
+        where: { id: pkg.id },
+        data: {
+          status: BillPackageStatus.pending_approval,
+          submittedAt: new Date(),
+          approvedAt: null,
+          approvedByUserId: null,
+        },
+      }),
+    );
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Takes a bill back out of its chain to change it (2026-10-13). Pending or approved but not yet
+   * issued — once issued it is a document that was sent, and changing it is a revision.
+   */
+  async withdraw(
+    ctx: RlsContext,
+    companyId: string,
+    packageId: string,
+    reason: string | null,
+  ): Promise<BillPackageView> {
+    const pkg = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true, status: true, sequenceNo: true },
+      }),
+    );
+    if (!pkg) throw new NotFoundException('Bill package not found');
+    if (
+      pkg.status !== BillPackageStatus.pending_approval &&
+      pkg.status !== BillPackageStatus.approved
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.wrongStatus,
+        message: `${packageLabel(
+          pkg.sequenceNo,
+        )} is not waiting on approval or issue, so there is nothing to withdraw.`,
+      });
+    }
+    // Closes a pending instance so nobody is left deciding a version that is about to change. A
+    // completed one is history and the spine leaves it alone; re-submitting raises a fresh one.
+    await this.approvals.abandon(
+      ENTITY_BILL_PACKAGE,
+      pkg.id,
+      companyId,
+      reason?.trim() || 'Withdrawn by the author to edit.',
+    );
+    await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.update({
+        where: { id: pkg.id },
+        data: {
+          status: BillPackageStatus.draft,
+          approvedAt: null,
+          approvedByUserId: null,
+        },
+      }),
+    );
+    return this.view(ctx, packageId);
+  }
+
+  /** The chain finished: the bill may now be issued. Guarded on still being pending. */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ENTITY_BILL_PACKAGE) return;
+    const state = await this.approvals.stateOfSystem(
+      ENTITY_BILL_PACKAGE,
+      event.entityId,
+      event.companyId,
+    );
+    await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId: event.companyId },
+      (tx) =>
+        tx.billPackage.updateMany({
+          where: {
+            id: event.entityId,
+            status: BillPackageStatus.pending_approval,
+          },
+          data: {
+            status: BillPackageStatus.approved,
+            approvedAt: new Date(),
+            approvedByUserId: state?.latestDecision?.actorUserId ?? null,
+          },
+        }),
+    );
+  }
+
+  /** Rejected: back to draft, so the author can correct it and send it again. */
+  @OnEvent(APPROVAL_REJECTED_EVENT)
+  async onApprovalRejected(event: ApprovalRejectedEvent): Promise<void> {
+    if (event.entityType !== ENTITY_BILL_PACKAGE) return;
+    await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId: event.companyId },
+      (tx) =>
+        tx.billPackage.updateMany({
+          where: {
+            id: event.entityId,
+            status: BillPackageStatus.pending_approval,
+          },
+          data: { status: BillPackageStatus.draft },
+        }),
+    );
+  }
+
+  /**
+   * Records that the issued bill was sent to the counterparty (2026-10-13).
+   *
+   * By hand, on purpose: the bill goes out by email, WhatsApp or on paper at the site office, and
+   * the product records *that* it went and to whom rather than pretending to have sent it.
+   */
+  async markShared(
+    ctx: RlsContext,
+    userId: string | null,
+    packageId: string,
+    sharedTo: string | null,
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const moved = await tx.billPackage.updateMany({
+        where: {
+          id: packageId,
+          status: {
+            in: [BillPackageStatus.issued, BillPackageStatus.certified],
+          },
+        },
+        data: {
+          sharedAt: new Date(),
+          sharedByUserId: userId,
+          sharedTo: sharedTo?.trim() || null,
+        },
+      });
+      if (moved.count === 1) return;
+      const existing = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: { id: true },
+      });
+      if (!existing) throw new NotFoundException('Bill package not found');
+      throw new ConflictException({
+        statusCode: 409,
+        code: PACKAGE_ERRORS.wrongStatus,
+        message:
+          'Only an issued bill can be marked as shared — issue it first, so the copy that was ' +
+          'sent is the one whose figures are frozen.',
+      });
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Replaces a subcontractor bill's free-form recovery and deduction lines (2026-10-13).
+   *
+   * **The whole set, every time** — the editor holds the list, and a list that is sent whole cannot
+   * half-apply. Draft only, and a subcontractor's only: a client's payment abstract has no row for
+   * a line somebody made up, so a figure entered there would come off the payable without
+   * appearing on the document the client is sent.
+   */
+  async setDeductionLines(
+    ctx: RlsContext,
+    packageId: string,
+    lines: { section: BillDeductionSection; label: string; amount: string }[],
+  ): Promise<BillPackageView> {
+    await withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          id: true,
+          companyId: true,
+          status: true,
+          sequenceNo: true,
+          direction: true,
+        },
+      });
+      if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.status !== BillPackageStatus.draft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.packageIssued,
+          message:
+            `${packageLabel(pkg.sequenceNo)} is ${pkg.status.replace(
+              '_',
+              ' ',
+            )}, so its ` +
+            'deductions cannot change. Withdraw it to a draft first.',
+        });
+      }
+      if (pkg.direction !== BillDirection.to_subcontractor) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: PACKAGE_ERRORS.deductionLineInvalid,
+          message:
+            'A bill to the client carries only its statutory recoveries, the amount withheld ' +
+            'and the amount released. Other deduction lines belong on subcontractor bills.',
+        });
+      }
+
+      const seen = new Set<string>();
+      for (const line of lines) {
+        const key = `${line.section}:${line.label.trim().toLowerCase()}`;
+        if (!line.label.trim()) {
+          throw new BadRequestException({
+            statusCode: 400,
+            code: PACKAGE_ERRORS.deductionLineInvalid,
+            message: 'Every deduction line needs a description.',
+          });
+        }
+        if (seen.has(key)) {
+          throw new BadRequestException({
+            statusCode: 400,
+            code: PACKAGE_ERRORS.deductionLineInvalid,
+            message:
+              `“${line.label.trim()}” appears twice. Its running total is carried bill to bill ` +
+              'by its description, so each must be unique — combine the two amounts.',
+          });
+        }
+        seen.add(key);
+      }
+
+      const sumOf = (section: BillDeductionSection) =>
+        lines
+          .filter((line) => line.section === section)
+          .reduce((total, line) => total.plus(dec(line.amount)), dec(0));
+
+      await tx.billPackageDeduction.deleteMany({ where: { packageId } });
+      if (lines.length > 0) {
+        await tx.billPackageDeduction.createMany({
+          data: lines.map((line, index) => ({
+            companyId: pkg.companyId,
+            packageId,
+            section: line.section,
+            label: line.label.trim(),
+            amount: dec(line.amount),
+            sortOrder: index,
+          })),
+        });
+      }
+      await tx.billPackage.update({
+        where: { id: packageId },
+        data: {
+          customRecoveries: sumOf(BillDeductionSection.recovery),
+          customDeductions: sumOf(BillDeductionSection.deduction),
+        },
+      });
+    });
+    return this.view(ctx, packageId);
+  }
+
+  /**
+   * Each deduction line's cumulative position, as the abstract prints it: this bill, the previous
+   * issued bill's figure for a line of the same description, and their sum. Frozen lines are read as
+   * stored; a draft's are computed now and are provisional, like the rest of its up-to-date column.
+   *
+   * A line on the previous bill with no counterpart on this one is still printed, at zero this bill,
+   * so its running total does not vanish from the document the month nothing is recovered under it.
+   */
+  async deductionLinesFor(
+    tx: Prisma.TransactionClient,
+    pkg: {
+      id: string;
+      projectId: string;
+      direction: BillDirection;
+      counterpartyKey: string;
+      sequenceNo: number;
+      status: BillPackageStatus;
+    },
+  ): Promise<
+    {
+      section: BillDeductionSection;
+      label: string;
+      thisBill: Prisma.Decimal;
+      uptoPrevious: Prisma.Decimal;
+      uptoDate: Prisma.Decimal;
+    }[]
+  > {
+    const own = await tx.billPackageDeduction.findMany({
+      where: { packageId: pkg.id },
+      orderBy: { sortOrder: 'asc' },
+    });
+    const frozen =
+      pkg.status === BillPackageStatus.issued ||
+      pkg.status === BillPackageStatus.certified;
+    if (frozen && own.every((line) => line.uptoDate !== null)) {
+      return own.map((line) => ({
+        section: line.section,
+        label: line.label,
+        thisBill: line.amount,
+        uptoPrevious: line.uptoPrevious ?? dec(0),
+        uptoDate: line.uptoDate ?? line.amount,
+      }));
+    }
+
+    const previous = await tx.billPackage.findFirst({
+      where: {
+        projectId: pkg.projectId,
+        direction: pkg.direction,
+        counterpartyKey: pkg.counterpartyKey,
+        sequenceNo: { lt: pkg.sequenceNo },
+        status: { in: [BillPackageStatus.issued, BillPackageStatus.certified] },
+      },
+      orderBy: { sequenceNo: 'desc' },
+      select: {
+        deductionLines: { orderBy: { sortOrder: 'asc' } },
+      },
+    });
+    const keyOf = (line: { section: BillDeductionSection; label: string }) =>
+      `${line.section}:${line.label.trim().toLowerCase()}`;
+    const before = new Map(
+      (previous?.deductionLines ?? []).map((line) => [
+        keyOf(line),
+        { line, uptoDate: line.uptoDate ?? line.amount },
+      ]),
+    );
+
+    const out = own.map((line) => {
+      const prior = before.get(keyOf(line))?.uptoDate ?? dec(0);
+      before.delete(keyOf(line));
+      return {
+        section: line.section,
+        label: line.label,
+        thisBill: line.amount,
+        uptoPrevious: prior,
+        uptoDate: prior.plus(line.amount),
+      };
+    });
+    for (const { line, uptoDate } of before.values()) {
+      out.push({
+        section: line.section,
+        label: line.label,
+        thisBill: dec(0),
+        uptoPrevious: uptoDate,
+        uptoDate,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Freezes each deduction line's cumulative figures at issue, and carries forward — as a zero line
+   * — any line the previous bill had and this one does not, so the next bill finds it too.
+   */
+  private async freezeDeductionLines(
+    tx: Prisma.TransactionClient,
+    pkg: {
+      id: string;
+      companyId: string;
+      projectId: string;
+      direction: BillDirection;
+      counterpartyKey: string;
+      sequenceNo: number;
+      status: BillPackageStatus;
+    },
+  ): Promise<void> {
+    const lines = await this.deductionLinesFor(tx, pkg);
+    if (lines.length === 0) return;
+    await tx.billPackageDeduction.deleteMany({ where: { packageId: pkg.id } });
+    await tx.billPackageDeduction.createMany({
+      data: lines.map((line, index) => ({
+        companyId: pkg.companyId,
+        packageId: pkg.id,
+        section: line.section,
+        label: line.label,
+        amount: line.thisBill,
+        sortOrder: index,
+        uptoPrevious: line.uptoPrevious,
+        uptoDate: line.uptoDate,
+      })),
+    });
+  }
+
+  /**
+   * Who each package is to, by name: the project's client, or the subcontractor on the work order.
+   * Resolved through the vendor source rather than across the schema boundary (Principle I).
+   */
+  async counterpartyNames(
+    ctx: RlsContext,
+    companyId: string,
+    packages: {
+      projectId: string;
+      direction: BillDirection;
+      counterpartyKey: string;
+    }[],
+  ): Promise<(string | null)[]> {
+    const clientIds = [
+      ...new Set(
+        packages
+          .filter((pkg) => pkg.direction === BillDirection.to_client)
+          .map((pkg) => pkg.counterpartyKey),
+      ),
+    ];
+    const workOrderIds = [
+      ...new Set(
+        packages
+          .filter((pkg) => pkg.direction === BillDirection.to_subcontractor)
+          .map((pkg) => pkg.counterpartyKey),
+      ),
+    ];
+    const [clients, workOrders] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.client.findMany({
+          where: { id: { in: clientIds } },
+          select: { id: true, name: true },
+        }),
+        tx.workOrder.findMany({
+          where: { id: { in: workOrderIds } },
+          select: { id: true, partnerId: true, code: true },
+        }),
+      ]),
+    );
+    const clientName = new Map(clients.map((c) => [c.id, c.name]));
+    const source = this.sources.vendorIdentitySource();
+    const vendorName = new Map<string, string>();
+    for (const workOrder of workOrders) {
+      const identity =
+        workOrder.partnerId && source
+          ? await source.getBillingIdentity(workOrder.partnerId, companyId)
+          : null;
+      vendorName.set(
+        workOrder.id,
+        identity?.name ?? workOrder.code ?? 'Unassigned subcontractor',
+      );
+    }
+    return packages.map((pkg) =>
+      pkg.direction === BillDirection.to_client
+        ? clientName.get(pkg.counterpartyKey) ?? null
+        : vendorName.get(pkg.counterpartyKey) ?? null,
+    );
   }
 
   /**
@@ -1617,6 +2238,14 @@ export class BillPackageService {
       uptoPrevious: Record<string, string>;
       uptoDate: Record<string, string>;
     };
+    /** The user's own recovery / deduction lines, each in three columns, to the rupee. */
+    deductionLines: {
+      section: BillDeductionSection;
+      label: string;
+      thisBill: string;
+      uptoPrevious: string;
+      uptoDate: string;
+    }[];
   }> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
@@ -1629,6 +2258,7 @@ export class BillPackageService {
       if (!pkg) throw new NotFoundException('Bill package not found');
 
       const previous = await this.previousIssuedColumn(tx, pkg);
+      const deductionLines = await this.deductionLinesFor(tx, pkg);
 
       const abstract = billAbstract({
         workDone:
@@ -1643,6 +2273,8 @@ export class BillPackageService {
           mobilizationAdvance: pkg.mobilizationAdvance,
           performanceSecurity: pkg.performanceSecurity,
           theftWithheld: pkg.theftWithheld,
+          customRecoveries: pkg.customRecoveries,
+          customDeductions: pkg.customDeductions,
         },
         rates: {
           retentionFraction: pkg.retentionFraction,
@@ -1689,6 +2321,13 @@ export class BillPackageService {
           uptoPrevious: renderColumn(abstract.uptoPrevious),
           uptoDate: renderColumn(abstract.uptoDate),
         },
+        deductionLines: deductionLines.map((line) => ({
+          section: line.section,
+          label: line.label,
+          thisBill: displayRupees(line.thisBill),
+          uptoPrevious: displayRupees(line.uptoPrevious),
+          uptoDate: displayRupees(line.uptoDate),
+        })),
       };
     });
   }
@@ -1755,63 +2394,33 @@ export class BillPackageService {
     });
     if (!previous) return null;
 
-    // **Read from the stored columns, not recomputed** (FR-014). `payableUptoDate` in particular is
-    // the figure the previous bill was issued at, and re-deriving it would make a drift between the
-    // stored total and its own components invisible — which is the one thing this column exists to
-    // make visible.
-    const recoveriesTotal = previous.labourCessAmountUptoDate
-      .plus(previous.gstTdsAmountUptoDate)
-      .plus(previous.recoveryDieselUptoDate)
-      .plus(previous.debitAgainstCivilUptoDate)
-      .plus(previous.otherRecoveriesUptoDate)
-      .plus(previous.mechanicalDebitUptoDate);
-    const deductionsTotal = previous.mobilizationAdvanceUptoDate
-      .plus(previous.retentionAmountUptoDate)
-      .plus(previous.performanceSecurityUptoDate)
-      .plus(previous.theftWithheldUptoDate);
-
-    return {
+    // **Read from the stored columns, not recomputed** (FR-014). The block totals are formed by
+    // `balanceColumn`, the only place a total is formed, and `payable` is then taken from the stored
+    // `payableUptoDate` — the figure the previous bill was issued at. Re-deriving it would make a
+    // drift between the stored total and its own components invisible, which is the one thing this
+    // column exists to make visible.
+    const column = balanceColumn({
       workDone: previous.workDoneUptoDate,
       workDeduction: previous.workDeductionUptoDate,
       releaseWithheld: previous.releaseWithheldUptoDate,
       cgstAmount: previous.cgstAmountUptoDate,
       sgstAmount: previous.sgstAmountUptoDate,
       igstAmount: previous.igstAmountUptoDate,
-      taxableAmount: previous.workDoneUptoDate.minus(
-        previous.workDeductionUptoDate,
-      ),
-      workTotal: previous.workDoneUptoDate
-        .minus(previous.workDeductionUptoDate)
-        .plus(previous.releaseWithheldUptoDate)
-        .plus(previous.cgstAmountUptoDate)
-        .plus(previous.sgstAmountUptoDate)
-        .plus(previous.igstAmountUptoDate),
       labourCessAmount: previous.labourCessAmountUptoDate,
       gstTdsAmount: previous.gstTdsAmountUptoDate,
       recoveryDiesel: previous.recoveryDieselUptoDate,
       debitAgainstCivil: previous.debitAgainstCivilUptoDate,
       otherRecoveries: previous.otherRecoveriesUptoDate,
       mechanicalDebit: previous.mechanicalDebitUptoDate,
-      recoveriesTotal,
+      customRecoveries: previous.customRecoveriesUptoDate,
       mobilizationAdvance: previous.mobilizationAdvanceUptoDate,
       retentionAmount: previous.retentionAmountUptoDate,
       performanceSecurity: previous.performanceSecurityUptoDate,
       theftWithheld: previous.theftWithheldUptoDate,
-      deductionsTotal,
+      customDeductions: previous.customDeductionsUptoDate,
       tdsAmount: previous.tdsAmountUptoDate,
-      taxDeductionsTotal: previous.tdsAmountUptoDate,
-      totalWithheld: recoveriesTotal
-        .plus(deductionsTotal)
-        .plus(previous.tdsAmountUptoDate),
-      unlistedWithheld: recoveriesTotal
-        .plus(deductionsTotal)
-        .plus(previous.tdsAmountUptoDate)
-        .minus(previous.labourCessAmountUptoDate)
-        .minus(previous.tdsAmountUptoDate)
-        .minus(previous.gstTdsAmountUptoDate)
-        .minus(previous.retentionAmountUptoDate),
-      payable: previous.payableUptoDate,
-    };
+    });
+    return { ...column, payable: previous.payableUptoDate };
   }
 
   /** Every package on a project, newest first. */
@@ -1882,6 +2491,8 @@ export class BillPackageService {
       const pkg = await tx.billPackage.findFirst({
         where: { id: packageId },
         include: {
+          deductionLines: { orderBy: { sortOrder: 'asc' } },
+          raBill: { select: { workOrderId: true } },
           claims: {
             include: {
               clientBillLine: {
@@ -2015,6 +2626,25 @@ export class BillPackageService {
               dprNumber: latestApproved.dprNumber,
             }
           : null,
+        submittedAt: pkg.submittedAt?.toISOString() ?? null,
+        approvedAt: pkg.approvedAt?.toISOString() ?? null,
+        issuedAt: pkg.issuedAt?.toISOString() ?? null,
+        sharedAt: pkg.sharedAt?.toISOString() ?? null,
+        sharedTo: pkg.sharedTo,
+        certifiedAmount: pkg.certifiedAmount?.toFixed(2) ?? null,
+        certifiedAt: pkg.certifiedAt?.toISOString() ?? null,
+        certifiedRemarks: pkg.certifiedRemarks,
+        revisionCount: pkg.revisionCount,
+        lastRevisionReason: pkg.lastRevisionReason,
+        deductionLines: pkg.deductionLines.map((line) => ({
+          section: line.section,
+          label: line.label,
+          amount: line.amount.toFixed(2),
+        })),
+        raBillId: pkg.raBillId,
+        clientBillId: pkg.clientBillId,
+        workOrderId: pkg.raBill?.workOrderId ?? null,
+        counterpartyKey: pkg.counterpartyKey,
       };
     });
   }

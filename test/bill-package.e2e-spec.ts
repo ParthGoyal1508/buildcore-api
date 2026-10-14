@@ -12,7 +12,12 @@ import { PACKAGE_ERRORS } from '../src/projects/billing/package/package-error-co
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-project-documents';
 import { pdfDigits } from './pdf-text';
-import { ACTION_DWR } from '../src/approvals/default-chains';
+import {
+  ACTION_CLIENT_BILL,
+  ACTION_DWR,
+  ENTITY_BILL_PACKAGE,
+} from '../src/approvals/default-chains';
+import { BillPackageService } from '../src/projects/billing/package/bill-package.service';
 import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 
 /**
@@ -149,7 +154,30 @@ describe('The running-account bill package (e2e)', () => {
     // The `dwr` chain: as of 2026-10-10 a daily report is submitted to the approval spine, and
     // three blocks below record and approve one to give a package something to propose from.
     await ensureApprovalChain(sys, companyId, ACTION_DWR);
+    // 2026-10-13: a bill is approved before it is issued.
+    await ensureApprovalChain(sys, companyId, ACTION_CLIENT_BILL);
   });
+
+  /**
+   * Sends a draft through approval the way the product does — the real submit endpoint, then the
+   * spine's completion event — so the issue tests below issue an approved bill. Deciding as a
+   * slot-holder is `ra-bills.e2e-spec.ts`'s subject; here only the hand-off matters.
+   */
+  const approve = async (id: string) => {
+    const submitted = await http()
+      .post(`/projects/bill-packages/${id}/submit`)
+      .set(auth())
+      .expect(201);
+    expect(submitted.body.status).toBe('pending_approval');
+    await app.get(BillPackageService).onApprovalCompleted({
+      entityType: ENTITY_BILL_PACKAGE,
+      entityId: id,
+      companyId,
+      instanceId: '',
+    });
+    approvedIds.push(id);
+  };
+  const approvedIds: string[] = [];
 
   afterAll(async () => {
     if (prisma) {
@@ -165,6 +193,20 @@ describe('The running-account bill package (e2e)', () => {
       // It cascades from `BillPackage`, which the next line already deletes by project, so the
       // statement was never needed for the cleanup to be complete — only for it to be
       // destructive.
+      await sys.approvalDecision.deleteMany({
+        where: {
+          approvalInstance: {
+            entityType: ENTITY_BILL_PACKAGE,
+            entityId: { in: approvedIds },
+          },
+        },
+      });
+      await sys.approvalInstance.deleteMany({
+        where: {
+          entityType: ENTITY_BILL_PACKAGE,
+          entityId: { in: approvedIds },
+        },
+      });
       await sys.billPackageDebit.deleteMany({ where: { projectId } });
       await sys.billPackage.deleteMany({ where: { projectId } });
       await sys.clientBillLine.deleteMany({
@@ -516,7 +558,15 @@ describe('The running-account bill package (e2e)', () => {
       .expect(200);
   });
 
+  it('refuses to issue a bill nobody has approved', async () => {
+    await http()
+      .post(`/projects/bill-packages/${packageId}/issue`)
+      .set(auth())
+      .expect(409);
+  });
+
   it('issues the bill, reporting the header gaps rather than refusing', async () => {
+    await approve(packageId);
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
       .set(auth())
@@ -853,6 +903,7 @@ describe('The running-account bill package (e2e)', () => {
       })
       .expect(201);
 
+    await approve(second.body.id);
     const issued = await http()
       .post(`/projects/bill-packages/${second.body.id}/issue`)
       .set(auth())
@@ -869,6 +920,40 @@ describe('The running-account bill package (e2e)', () => {
     });
     expect(frozen.issuerState).toBe('08');
     expect(frozen.issuerPan).toBe('AABCP1234F');
+  });
+
+  it('produces the bill as Word, and the client’s Payment Abstract alone', async () => {
+    const binary = (
+      res: request.Response,
+      cb: (e: Error | null, b: Buffer) => void,
+    ) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c: Buffer) => chunks.push(c));
+      res.on('end', () => cb(null, Buffer.concat(chunks)));
+    };
+    const docx = await http()
+      .get(`/projects/bill-packages/${packageId}/document.docx`)
+      .set(auth())
+      .buffer(true)
+      .parse(binary)
+      .expect(200);
+    expect(docx.headers['content-type']).toContain('wordprocessingml');
+    expect((docx.body as Buffer).subarray(0, 2).toString()).toBe('PK');
+
+    const abstract = await http()
+      .get(`/projects/bill-packages/${packageId}/document.pdf?part=abstract`)
+      .set(auth())
+      .buffer(true)
+      .parse(binary)
+      .expect(200);
+    expect(abstract.headers['content-disposition']).toContain(
+      'Payment Abstract',
+    );
+
+    await http()
+      .get(`/projects/bill-packages/${packageId}/document.exe`)
+      .set(auth())
+      .expect(404);
   });
 
   it('produces the same bill as a PDF, from the same figures', async () => {
@@ -1281,6 +1366,7 @@ describe('The running-account bill package (e2e)', () => {
       // there is no payable. Gross-as-net was the old answer and the document never agreed.
       expect((await listed()).netAmount).toBeNull();
 
+      await approve(secondPackageId);
       await http()
         .post(`/projects/bill-packages/${secondPackageId}/issue`)
         .set(auth())
