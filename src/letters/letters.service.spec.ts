@@ -1,3 +1,4 @@
+import { permissionForKind } from './letter-permissions';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { Permission } from '@prisma/client';
 
@@ -201,7 +202,7 @@ const callerWith = (...permissions: Permission[]) =>
   } as any);
 
 const financeCaller = callerWith(Permission.PROJECT_FINANCIALS);
-const hrCaller = callerWith(Permission.EMPLOYEES);
+const hrCaller = callerWith(Permission.HR_LETTERS);
 
 const composeWorkOrder = {
   letterKindKey: 'letter_work_order',
@@ -209,6 +210,23 @@ const composeWorkOrder = {
   subjectId: 'v-1',
   variables: { vendorName: 'Shree', amount: '4,50,000' },
 };
+
+describe('who issues an HR letter (2026-10-15)', () => {
+  it('is HR_LETTERS alone — EMPLOYEES and PAYROLL do not carry it', () => {
+    for (const kind of [
+      'appointment',
+      'experience',
+      'relieving',
+      'increment',
+      'termination',
+      'transfer',
+      'fnf_settlement',
+    ]) {
+      expect(permissionForKind(kind)).toBe(Permission.HR_LETTERS);
+    }
+    expect(permissionForKind('offer')).toBe(Permission.RECRUITMENT);
+  });
+});
 
 describe('LettersService — the 016 gate (T041, T045, FR-015a)', () => {
   it('raises the chain for a gated kind and stops, without rendering', async () => {

@@ -16,26 +16,22 @@ export const LETTER_KIND_PERMISSIONS: Record<string, Permission> = {
   // HR and recruitment letters — the five migrated from the old enum, plus the two
   // employment-lifecycle additions.
   offer: Permission.RECRUITMENT,
-  // Issued from HR & Payroll since 2026-10-15, as every employee letter is: Recruitment issues
-  // the offer and nothing else. The appointment letter is addressed to the employee record —
-  // its code, joining date and salary annexure — and is HR's to put in writing.
-  appointment: Permission.EMPLOYEES,
-  confirmation: Permission.EMPLOYEES,
-  relieving: Permission.EMPLOYEES,
-  experience: Permission.EMPLOYEES,
-  transfer: Permission.EMPLOYEES,
-  suspension: Permission.EMPLOYEES,
+  // Every letter to an employee is HR's, and HR's alone (2026-10-15). They were spread over
+  // `EMPLOYEES` and `PAYROLL`, which site admins, project managers and accountants hold to do
+  // their own work — and which therefore let them issue a termination or an increment letter.
+  // The client's rule is that HR issues these; `HR_LETTERS` is that rule as a permission, held
+  // by HO User and Super Admin and grantable to any other role in Settings → Roles.
+  appointment: Permission.HR_LETTERS,
+  confirmation: Permission.HR_LETTERS,
+  relieving: Permission.HR_LETTERS,
+  experience: Permission.HR_LETTERS,
+  transfer: Permission.HR_LETTERS,
+  suspension: Permission.HR_LETTERS,
+  termination: Permission.HR_LETTERS,
+  increment: Permission.HR_LETTERS,
+  fnf_settlement: Permission.HR_LETTERS,
+  // The payslip is produced by the payroll run, not composed by anyone, so it stays payroll's.
   salary_slip: Permission.PAYROLL,
-  // A pay revision, so `PAYROLL` rather than `EMPLOYEES` (2026-10-11): the increment
-  // letter states a figure the payroll run has to match, and whoever may change pay is
-  // the person who may put it in writing.
-  increment: Permission.PAYROLL,
-  // Ending somebody's employment is an employment decision, so it sits with relieving
-  // and experience rather than with payroll (2026-10-13).
-  termination: Permission.EMPLOYEES,
-  // The F&F sheet states what the company will pay a leaver, line by line — the same
-  // figures the F&F payroll run settles, so it belongs to whoever runs payroll.
-  fnf_settlement: Permission.PAYROLL,
 
   // The two that commit a project's money. `PROJECT_FINANCIALS` rather than `PROJECTS`:
   // issuing a work order is a spending decision, and 009 and 013 both established that
