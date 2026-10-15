@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -7,11 +8,14 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -29,6 +33,9 @@ import {
   ListMaintenanceDto,
   UpdateMaintenanceJobDto,
 } from './dto/maintenance.dto';
+import { formFormatOf, sendForm } from '../../common/form-document';
+import { JobCardDto } from './dto/job-card.dto';
+import { JobCardService } from './job-card.service';
 import { MaintenanceService } from './maintenance.service';
 
 /**
@@ -48,7 +55,59 @@ export class MaintenanceController {
   constructor(
     private readonly maintenance: MaintenanceService,
     private readonly spareParts: SparePartsService,
+    private readonly jobCards: JobCardService,
   ) {}
+
+  @Get('job-card/prefill')
+  @ApiOperation({
+    summary: "A new job card's equipment details, filled from the machine",
+    description:
+      'Name, asset code, registration, make/model, meter reading, operator and location — ' +
+      'for the form to show as soon as a machine is chosen.',
+  })
+  async jobCardPrefill(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('equipmentId') equipmentId: string,
+  ) {
+    if (!equipmentId) throw new BadRequestException('equipmentId is required');
+    return this.jobCards.prefill(caller, equipmentId);
+  }
+
+  @Get(':id/job-card.:format')
+  @ApiOperation({ summary: 'The job card as PDF, Excel or Word' })
+  async jobCardDocument(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('format') format: string,
+    @Res() res: Response,
+  ) {
+    const kind = formFormatOf(format, ['pdf', 'xlsx', 'docx']);
+    if (!kind)
+      throw new BadRequestException('Format must be pdf, xlsx or docx');
+    sendForm(res, await this.jobCards.document(caller, id, kind));
+  }
+
+  @Get(':id/job-card')
+  @ApiOperation({ summary: "The job's maintenance job card" })
+  async jobCard(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.jobCards.get(caller, id);
+  }
+
+  @Put(':id/job-card')
+  @ApiOperation({
+    summary: 'Save the job card',
+    description: 'Numbered from the job card series (JC-0001) the first time.',
+  })
+  async saveJobCard(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() card: JobCardDto,
+  ) {
+    return this.jobCards.save(caller, id, card);
+  }
 
   @Get()
   @ApiOperation({
@@ -99,7 +158,10 @@ export class MaintenanceController {
     @Body() dto: CreateMaintenanceJobDto,
     @Ip() ipAddress: string,
   ) {
-    return this.maintenance.create(caller, dto, ipAddress);
+    const job = await this.maintenance.create(caller, dto, ipAddress);
+    // Opened from the job card form (2026-10-15): the card is saved, and numbered, with it.
+    if (dto.card) await this.jobCards.save(caller, job.id, dto.card);
+    return job;
   }
 
   @Post(':id/parts')

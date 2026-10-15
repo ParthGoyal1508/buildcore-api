@@ -30,6 +30,7 @@ import { LogbookController } from './logbook/logbook.controller';
 import { LogbookSheetService } from './logbook/logbook-sheet.service';
 import { LogbookService } from './logbook/logbook.service';
 import { MaintenanceController } from './maintenance/maintenance.controller';
+import { JobCardService } from './maintenance/job-card.service';
 import { MaintenanceService } from './maintenance/maintenance.service';
 import { PlantRefsService } from './plant-refs.service';
 import { PlantService } from './plant.service';
@@ -111,6 +112,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     FuelRecoveryService,
     ServiceScheduleService,
     MaintenanceService,
+    JobCardService,
     HireBillsService,
     HireOrdersService,
     SparePartsService,
