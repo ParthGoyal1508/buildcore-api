@@ -5731,6 +5731,7 @@ Enum CodeSeriesType {
   ASSET_REQUEST
   WORK_ORDER
   DEBIT_NOTE
+  NOC
 }
 
 Enum VendorType {

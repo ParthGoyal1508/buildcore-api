@@ -5010,6 +5010,10 @@ enum CodeSeriesType {
   /// debit was which (research §6).
   DEBIT_NOTE
 
+
+  /// Added 2026-10-15. No Objection Certificate numbers — `2026001`, `2026002`. Set up ahead of
+  /// the NOC document itself; nothing allocates from it yet.
+  NOC
   @@schema("settings")
 }
 

@@ -46,6 +46,8 @@ export const CODE_SERIES_FORMATS: Partial<
   [CodeSeriesType.VENDORS]: { prefix: '2022', base: 0, step: 1, width: 3 },
   /** Work orders: `1500001`, `1500002`. The 150 is fixed. */
   [CodeSeriesType.WORK_ORDER]: { prefix: '150', base: 0, step: 1, width: 4 },
+  /** NOCs: `2026001`, `2026002`. The 2026 is fixed, not a year that advances. */
+  [CodeSeriesType.NOC]: { prefix: '2026', base: 0, step: 1, width: 3 },
 };
 
 /** Renders the `n`th allocation of a series. */
@@ -57,7 +59,12 @@ export function formatCode(format: CodeSeriesFormat, n: number): string {
 }
 
 /** The series a company configures in Settings → Numbering (2026-10-15). */
-export const COUNTED_SERIES = ['PROJECTS', 'VENDORS', 'WORK_ORDER'] as const;
+export const COUNTED_SERIES = [
+  'PROJECTS',
+  'VENDORS',
+  'WORK_ORDER',
+  'NOC',
+] as const;
 export const NAMED_SERIES = ['EQUIPMENT', 'ASSETS'] as const;
 export type CountedSeries = (typeof COUNTED_SERIES)[number];
 export type NamedSeries = (typeof NAMED_SERIES)[number];

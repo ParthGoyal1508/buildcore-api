@@ -37,6 +37,14 @@ describe('code series business formats', () => {
     ]);
   });
 
+  it('numbers NOCs 2026001 upward, the 2026 fixed', () => {
+    expect(firstFew(CodeSeriesType.NOC)).toEqual([
+      '2026001',
+      '2026002',
+      '2026003',
+    ]);
+  });
+
   it('keeps the padding past the first nine', () => {
     // 2022010, not 20220010 — the width is on the sequence, not on the whole code.
     const vendors = CODE_SERIES_FORMATS[CodeSeriesType.VENDORS]!;

@@ -47,6 +47,7 @@ const LABELS: Record<NumberingSeries, string> = {
   PROJECTS: 'Project code',
   VENDORS: 'Vendor code',
   WORK_ORDER: 'Work order number',
+  NOC: 'NOC number',
   EQUIPMENT: 'Plant & machinery code',
   ASSETS: 'Asset code',
 };
@@ -235,6 +236,8 @@ export class NumberingService {
     series: CountedSeries,
     code: string,
   ): Promise<boolean> {
+    // No NOC is stored anywhere yet, so none of its numbers is taken.
+    if (series === 'NOC') return false;
     const where = { companyId, code };
     const found =
       series === 'PROJECTS'
