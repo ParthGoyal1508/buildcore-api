@@ -10,6 +10,7 @@ import {
 } from '../partners/partners.service';
 import { CompaniesService } from '../settings/companies/companies.service';
 import type { FormCompany } from '../common/form-document';
+import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
 import {
   EquipmentCategoriesService,
@@ -40,15 +41,62 @@ export class PlantRefsService {
     private readonly partners: PartnersService,
     private readonly employees: EmployeesService,
     private readonly companies: CompaniesService,
+    private readonly projects: ProjectsService,
   ) {}
 
+  /** A project of this company, for a hire order or a job card heading (2026-10-15). */
+  async requireProject(
+    caller: AuthenticatedUser,
+    projectId: string,
+    companyId: string,
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    location: string | null;
+  }> {
+    const project = await this.projects.getProjectIdentityById(
+      projectId,
+      rlsContextFor(caller),
+    );
+    if (!project || project.companyId !== companyId) {
+      throw new BadRequestException(
+        `Project ${projectId} does not exist in this company`,
+      );
+    }
+    return project;
+  }
+
+  /** The project a site belongs to, if any — where a deployed machine is working. */
+  async projectOfSite(
+    caller: AuthenticatedUser,
+    siteId: string,
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    location: string | null;
+  } | null> {
+    const site = await this.sites
+      .getSiteById(rlsContextFor(caller), siteId)
+      .catch(() => null);
+    if (!site?.projectId) return null;
+    return this.projects.getProjectIdentityById(
+      site.projectId,
+      rlsContextFor(caller),
+    );
+  }
+
   /** The company as a printed plant document heads it: name, address, logo (2026-10-15). */
-  async documentCompany(companyId: string): Promise<FormCompany> {
+  async documentCompany(
+    companyId: string,
+  ): Promise<FormCompany & { place: string | null }> {
     const identity = await this.companies.getDocumentIdentity(companyId);
     return {
       name: identity.name,
       address: identity.address,
       logo: identity.logo,
+      place: identity.place,
     };
   }
 

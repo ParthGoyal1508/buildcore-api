@@ -23,6 +23,8 @@ import { FuelRecoveryController } from './fuel-recovery/fuel-recovery.controller
 import { FuelRecoveryService } from './fuel-recovery/fuel-recovery.service';
 import { FuelService } from './fuel/fuel.service';
 import { HireBillsController } from './hire-bills/hire-bills.controller';
+import { HireOrdersController } from './hire-orders/hire-orders.controller';
+import { HireOrdersService } from './hire-orders/hire-orders.service';
 import { HireBillsService } from './hire-bills/hire-bills.service';
 import { LogbookController } from './logbook/logbook.controller';
 import { LogbookSheetService } from './logbook/logbook-sheet.service';
@@ -91,6 +93,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     ServiceScheduleController,
     MaintenanceController,
     HireBillsController,
+    HireOrdersController,
     SparePartsController,
     ServiceBillsController,
   ],
@@ -109,6 +112,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     ServiceScheduleService,
     MaintenanceService,
     HireBillsService,
+    HireOrdersService,
     SparePartsService,
     ServiceBillsService,
     EquipmentCategoriesService,

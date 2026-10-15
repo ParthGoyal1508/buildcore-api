@@ -987,11 +987,19 @@ export class ProjectsService {
     code: string;
     name: string;
     companyId: string;
+    /** For the heading of a plant document — "Chitradurga–Davangere Project, Karnataka". */
+    location: string | null;
   } | null> {
     return withRlsContext(this.prisma, ctx, (tx) =>
       tx.project.findFirst({
         where: { id: projectId },
-        select: { id: true, code: true, name: true, companyId: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          companyId: true,
+          location: true,
+        },
       }),
     );
   }

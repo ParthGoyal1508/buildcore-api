@@ -447,6 +447,7 @@ class FormPdf {
       });
       this.y += h;
     }
+    this.y += 4;
   }
 
   private options(field: FormField, x: number, y: number, w: number) {
@@ -695,7 +696,8 @@ class FormPdf {
     items: { caption: string; sub?: string; lines?: string[] }[],
     boxed?: boolean,
   ) {
-    const w = this.width / items.length;
+    // A lone signature takes half the page, as a signature line does on paper.
+    const w = this.width / Math.max(items.length, 2);
     if (boxed) {
       const titleH = 16;
       const bodyH = Math.max(
