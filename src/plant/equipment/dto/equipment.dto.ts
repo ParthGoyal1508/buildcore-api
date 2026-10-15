@@ -25,17 +25,6 @@ import {
 } from '../../constants/plant.constants';
 
 export class CreateEquipmentDto {
-  @ApiPropertyOptional({
-    description:
-      "The yard's own plate or asset number. Omit to have one built as " +
-      '`{prefix}{NN}/{manufacturingYear}` — `JCB01/2027` — where the prefix comes ' +
-      'from the name and the serial counts within that prefix.',
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  code?: string;
-
   @ApiProperty({ example: 'JCB 3DX Backhoe Loader' })
   @IsString()
   @IsNotEmpty()

@@ -27,7 +27,12 @@ import {
   SERVICE_DUE_SOON_MARGIN,
 } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
-import { equipmentCode, equipmentPrefixFor, serialOf } from './equipment-code';
+import { CodeSeriesService } from '../../settings/code-series/code-series.service';
+import {
+  namedCode,
+  namedPrefixFor,
+  namedSerialOf,
+} from '../../settings/code-series/code-series.formats';
 import {
   CreateEquipmentDto,
   ListEquipmentDto,
@@ -123,6 +128,7 @@ export class EquipmentService {
     private readonly auditLog: AuditLogService,
     private readonly refs: PlantRefsService,
     private readonly storage: StorageService,
+    private readonly codeSeries: CodeSeriesService,
   ) {}
 
   // ── Reads ─────────────────────────────────────────────────────────────────
@@ -377,7 +383,13 @@ export class EquipmentService {
     name: string,
     year: number,
   ): Promise<string> {
-    const prefix = equipmentPrefixFor(name);
+    // The serial width and separator the company set in Settings → Numbering (2026-10-15).
+    const format = await this.codeSeries.namedFormat(
+      tx,
+      companyId,
+      'EQUIPMENT',
+    );
+    const prefix = namedPrefixFor(name);
     // `startsWith` narrows in the database; `serialOf` is what decides, because the
     // prefix alone would let `TMX-44` — a plate number somebody typed — move TM's
     // series, and would count `TM01/2024` towards `T`.
@@ -386,10 +398,31 @@ export class EquipmentService {
       select: { code: true },
     });
     const highest = existing.reduce(
-      (max, row) => Math.max(max, serialOf(row.code, prefix) ?? 0),
+      (max, row) => Math.max(max, namedSerialOf(format, row.code, prefix) ?? 0),
       0,
     );
-    return equipmentCode(prefix, highest + 1, year);
+    return namedCode(format, prefix, highest + 1, year);
+  }
+
+  /**
+   * The code a machine would be given, for the registration form to show before saving
+   * (2026-10-15) — a preview, drawn again on save.
+   */
+  async nextCode(
+    caller: AuthenticatedUser,
+    name: string,
+    year: number | null,
+    requestedCompanyId?: string,
+  ): Promise<{ code: string }> {
+    const companyId = this.refs.targetCompanyOf(caller, requestedCompanyId);
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => ({
+      code: await this.nextEquipmentCode(
+        tx,
+        companyId,
+        name,
+        year ?? new Date().getFullYear(),
+      ),
+    }));
   }
 
   async create(
@@ -425,14 +458,13 @@ export class EquipmentService {
             ? this.refs.parseDate(dto.purchaseDate).getFullYear()
             : new Date().getFullYear());
 
-        const code =
-          dto.code?.trim() ||
-          (await this.nextEquipmentCode(
-            tx,
-            companyId,
-            dto.name,
-            manufacturingYear,
-          ));
+        // Always built, never typed (2026-10-15): the client's "aise rahenga automatically".
+        const code = await this.nextEquipmentCode(
+          tx,
+          companyId,
+          dto.name,
+          manufacturingYear,
+        );
 
         const clash = await tx.equipment.findFirst({
           where: { companyId, code },

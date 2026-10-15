@@ -24,7 +24,11 @@ function build() {
       version: VERSION,
     }),
   };
-  const controller = new CompaniesController(companies as never, {} as never);
+  const controller = new CompaniesController(
+    companies as never,
+    {} as never,
+    {} as never,
+  );
   return { controller };
 }
 

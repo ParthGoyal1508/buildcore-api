@@ -362,11 +362,18 @@ export class WorkOrdersService {
       // Allocated inside this transaction so a later failure rolls the number back rather than
       // burning it — a gap in the series reads as a deleted work order to anyone auditing it.
       // The same rule project and vendor codes follow.
+      // A code already held is stepped over (2026-10-15), so a series restarted in Settings →
+      // Numbering cannot collide with older work orders.
       const code = await this.codeSeries.next(
         tx,
         companyId,
         CodeSeriesType.WORK_ORDER,
         WORK_ORDER_CODE_INFIX,
+        async (candidate) =>
+          !!(await tx.workOrder.findFirst({
+            where: { companyId, code: candidate },
+            select: { id: true },
+          })),
       );
 
       return tx.workOrder.create({

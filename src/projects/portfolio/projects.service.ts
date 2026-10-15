@@ -24,10 +24,6 @@ import {
   withRlsContext,
 } from '../../common/prisma/rls-context';
 import { EmployeesService } from '../../hr/employees/employees.service';
-import {
-  CODE_SERIES_FORMATS,
-  formatCode,
-} from '../../settings/code-series/code-series.formats';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { BillPaymentsService } from '../billing/payments/bill-payments.service';
@@ -333,20 +329,17 @@ export class ProjectsService {
         // Always from the series (2026-10-15). A number already held — a project created
         // with a typed code before the series was enforced — is stepped over rather than
         // refused, so the first project after the switch is not blocked by an old one.
-        let code = '';
-        for (let attempt = 0; attempt < 1000; attempt += 1) {
-          code = await this.codeSeries.next(
-            tx,
-            targetCompanyId,
-            CodeSeriesType.PROJECTS,
-            PROJECT_CODE_INFIX,
-          );
-          const taken = await tx.project.findFirst({
-            where: { companyId: targetCompanyId, code },
-            select: { id: true },
-          });
-          if (!taken) break;
-        }
+        const code = await this.codeSeries.next(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.PROJECTS,
+          PROJECT_CODE_INFIX,
+          async (candidate) =>
+            !!(await tx.project.findFirst({
+              where: { companyId: targetCompanyId, code: candidate },
+              select: { id: true },
+            })),
+        );
 
         const project = await tx.project.create({
           data: {
@@ -437,28 +430,19 @@ export class ProjectsService {
     companyId?: string,
   ): Promise<{ code: string }> {
     const targetCompanyId = this.targetCompanyOf(caller, companyId);
-    const format = CODE_SERIES_FORMATS[CodeSeriesType.PROJECTS];
-    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
-      const sequence = await tx.codeSequence.findUnique({
-        where: {
-          companyId_seriesType: {
-            companyId: targetCompanyId,
-            seriesType: CodeSeriesType.PROJECTS,
-          },
-        },
-        select: { lastNumber: true },
-      });
-      let n = (sequence?.lastNumber ?? 0) + 1;
-      for (;;) {
-        const code = format ? formatCode(format, n) : String(n);
-        const taken = await tx.project.findFirst({
-          where: { companyId: targetCompanyId, code },
-          select: { id: true },
-        });
-        if (!taken) return { code };
-        n += 1;
-      }
-    });
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => ({
+      code:
+        (await this.codeSeries.peek(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.PROJECTS,
+          async (candidate) =>
+            !!(await tx.project.findFirst({
+              where: { companyId: targetCompanyId, code: candidate },
+              select: { id: true },
+            })),
+        )) ?? '',
+    }));
   }
 
   async findAll(

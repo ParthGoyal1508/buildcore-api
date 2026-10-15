@@ -353,6 +353,7 @@ payment-sheet builder while concealing nothing anybody wanted concealed.']
   reimbursementCategories ReimbursementCategory [not null]
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
+  codeFormats CodeFormat [not null]
   itemCategories ItemCategory [not null]
   items Item [not null]
   equipmentCategories EquipmentCategory [not null]
@@ -2998,6 +2999,31 @@ of the first, and two sets of lines for one run would make "unmatched" a number 
 interpret.'
 }
 
+Table CodeFormat {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  series String [not null]
+  prefix String [not null, default: '']
+  base Int [not null, default: 0]
+  step Int [not null, default: 1]
+  width Int [not null, default: 0]
+  separator String [not null, default: '/']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, series) [unique]
+  }
+
+  Note: 'How one company numbers one series (2026-10-15) — Settings → Numbering. A series with no row
+keeps the built-in format (`CODE_SERIES_DEFAULTS`), which is Parth Realcon\'s.
+
+`PROJECTS`, `VENDORS`, `WORK_ORDER` are counted: `prefix` + (`base` + n × `step`), padded to
+`width`. `EQUIPMENT` and `ASSETS` are named: letters from the item\'s name, a serial per prefix
+padded to `width`, `separator`, the manufacturing year.'
+}
+
 Table CodeSequence {
   id String [pk]
   companyId String [not null]
@@ -4651,6 +4677,8 @@ treats NULLs as distinct, so every bulk asset can leave it empty.']
 on-hand + allocated + in-transit. Serialised assets carry 1 and reject any
 other value (spec FR-004).']
   unitOfMeasure String
+  manufacturingYear Int [note: 'The year it was built — the last part of its code, `DR01/2024` (2026-10-15). Falls back to
+the purchase year, then the current one, as a machine\'s does.']
   purchaseDate DateTime
   purchaseCost Decimal [not null, default: 0]
   capitalisationDate DateTime [not null, note: 'Depreciation starts here, never before (spec FR-019). Must be ≥ `purchaseDate`.']
@@ -6264,6 +6292,8 @@ Ref: Loan.employeeId > Employee.id [delete: Cascade]
 Ref: LoanScheduleEntry.loanId > Loan.id [delete: Cascade]
 
 Ref: SalarySlip.employeeId > Employee.id [delete: Cascade]
+
+Ref: CodeFormat.companyId > Company.id [delete: Cascade]
 
 Ref: CodeSequence.companyId > Company.id
 

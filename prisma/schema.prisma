@@ -608,6 +608,7 @@ model Company {
   reimbursementCategories ReimbursementCategory[]
   vendorCategories        VendorCategory[]
   codeSequences           CodeSequence[]
+  codeFormats             CodeFormat[]
 
   // Feature 004's reminders engine. Company-scoped so a deleted company takes its
   // reminder state with it rather than leaving orphan rows the engine would keep
@@ -5012,6 +5013,30 @@ enum CodeSeriesType {
   @@schema("settings")
 }
 
+/// How one company numbers one series (2026-10-15) — Settings → Numbering. A series with no row
+/// keeps the built-in format (`CODE_SERIES_DEFAULTS`), which is Parth Realcon's.
+///
+/// `PROJECTS`, `VENDORS`, `WORK_ORDER` are counted: `prefix` + (`base` + n × `step`), padded to
+/// `width`. `EQUIPMENT` and `ASSETS` are named: letters from the item's name, a serial per prefix
+/// padded to `width`, `separator`, the manufacturing year.
+model CodeFormat {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  series    String
+  prefix    String  @default("")
+  base      Int     @default(0)
+  step      Int     @default(1)
+  width     Int     @default(0)
+  separator String  @default("/")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, series])
+  @@schema("settings")
+}
+
 model CodeSequence {
   id String @id @default(cuid())
 
@@ -7991,6 +8016,9 @@ model Asset {
   quantity      Decimal @default(1) @db.Decimal(18, 3)
   unitOfMeasure String?
 
+  /// The year it was built — the last part of its code, `DR01/2024` (2026-10-15). Falls back to
+  /// the purchase year, then the current one, as a machine's does.
+  manufacturingYear Int?
   purchaseDate DateTime? @db.Date
   purchaseCost Decimal   @default(0) @db.Decimal(18, 2)
 

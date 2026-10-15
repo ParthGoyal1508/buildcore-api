@@ -16,15 +16,6 @@ import {
 } from 'class-validator';
 
 export class CreateAssetDto {
-  @ApiPropertyOptional({
-    description:
-      'Leave empty to allocate the next code from the company ASSETS series',
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  assetCode?: string;
-
   @ApiProperty({ example: 'Hilti TE 60 rotary hammer' })
   @IsString()
   @IsNotEmpty()
@@ -79,6 +70,19 @@ export class CreateAssetDto {
   @IsOptional()
   @IsISO8601()
   purchaseDate?: string;
+
+  @ApiPropertyOptional({
+    example: 2024,
+    description:
+      'The year it was built — the last part of its code (`DR01/2024`). Omitted, the purchase ' +
+      'year is used, then the current year.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1950)
+  @Max(2100)
+  manufacturingYear?: number;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()

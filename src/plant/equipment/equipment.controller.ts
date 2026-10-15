@@ -61,6 +61,24 @@ export class EquipmentController {
     return this.equipment.findAll(caller, query);
   }
 
+  @Get('next-code')
+  @ApiOperation({
+    summary: 'The code a machine with this name and year would be given',
+  })
+  async nextCode(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('name') name = '',
+    @Query('year') year?: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.equipment.nextCode(
+      caller,
+      name,
+      year && /^\d{4}$/.test(year) ? Number(year) : null,
+      companyId,
+    );
+  }
+
   @Get(':id')
   @ApiOperation({
     summary: 'One machine, with its documents and service schedules',
@@ -89,8 +107,9 @@ export class EquipmentController {
   @ApiOperation({
     summary: 'Register a machine',
     description:
-      'Omit `code` to have one allocated from the company EQUIPMENT series. ' +
-      'A hired machine must name its vendor.',
+      'The code is built automatically — letters from the name, a serial, the ' +
+      'manufacturing year (`JCB01/2027`), as set in Settings → Numbering. A hired machine ' +
+      'must name its vendor.',
   })
   async create(
     @UserEntity() caller: AuthenticatedUser,
