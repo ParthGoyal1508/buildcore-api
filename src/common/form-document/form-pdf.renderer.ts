@@ -8,6 +8,7 @@ import {
   type FormDocument,
   type FormField,
   type FormRun,
+  bodyRows,
   placeRows,
 } from './form-document.types';
 
@@ -483,12 +484,7 @@ class FormPdf {
     const spanW = (col: number, span: number) =>
       widths.slice(col, col + span).reduce((a, b) => a + b, 0);
 
-    const body = [...block.rows];
-    if (block.minRows && body.length < block.minRows) {
-      for (let n = body.length + 1; n <= block.minRows; n++) {
-        body.push([String(n), ...block.columns.slice(1).map(() => '')]);
-      }
-    }
+    const body = bodyRows(block);
 
     const headH = Math.max(
       16,

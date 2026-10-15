@@ -169,7 +169,12 @@ export class JobCardService {
     return renderFormFile(
       buildJobCardForm(view, company),
       format,
-      fileSafe(`Job Card ${view.jobCardNo ?? view.card.assetNo ?? jobId}`),
+      fileSafe(
+        `Job Card ${
+          view.jobCardNo ??
+          `${view.card.assetNo ?? 'Machine'} ${view.card.date ?? ''}`.trim()
+        }`,
+      ),
     );
   }
 
@@ -395,7 +400,7 @@ export function buildJobCardForm(
           { label: 'Finish Time', width: 8, align: 'center' },
         ],
         rows: inspections,
-        minRows: 2,
+        emptyText: 'No inspection recorded yet.',
       },
       { kind: 'bar', text: '4. SPARE PARTS / CONSUMABLES USED' },
       {
@@ -410,7 +415,7 @@ export function buildJobCardForm(
           { label: 'Total Amount', width: 11, align: 'right' },
         ],
         rows: parts,
-        minRows: 2,
+        emptyText: 'No spare parts or consumables used.',
         foot: partsTotal
           ? [[{ text: 'Total', span: 6 }, inr(partsTotal)]]
           : undefined,

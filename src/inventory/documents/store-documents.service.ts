@@ -154,7 +154,6 @@ export class StoreDocumentsService {
               { label: 'Qty. Approved', width: 9, align: 'right' },
             ],
             rows,
-            minRows: 6,
           },
           remarks('Remarks:', found.decisionReason),
           ...signOff([
@@ -213,7 +212,6 @@ export class StoreDocumentsService {
             rows: [
               ['1', t.itemLabel, t.unit, qty(t.quantity), t.row.remarks ?? ''],
             ],
-            minRows: 6,
           },
           remarks(
             'Total packages / quantity:',
@@ -228,7 +226,7 @@ export class StoreDocumentsService {
         ],
       },
       format,
-      `Delivery Challan ${t.row.challanNo ?? t.row.id}`,
+      `Delivery Challan ${t.row.challanNo ?? t.fallbackName}`,
     );
   }
 
@@ -286,7 +284,6 @@ export class StoreDocumentsService {
                 received === null ? '' : qty(received - t.quantity),
               ],
             ],
-            minRows: 6,
           },
           remarks('Reason for Transfer:', t.row.reason),
           remarks('Shortage / Damage / Other Remarks:', t.row.remarks),
@@ -298,7 +295,7 @@ export class StoreDocumentsService {
         ],
       },
       format,
-      `Transfer Slip ${t.row.transferNo ?? t.row.id}`,
+      `Transfer Slip ${t.row.transferNo ?? t.fallbackName}`,
     );
   }
 
@@ -397,7 +394,6 @@ export class StoreDocumentsService {
                 n(grn?.rejectedQuantity),
               ],
             ],
-            minRows: 5,
           },
           {
             kind: 'fields',
@@ -426,7 +422,10 @@ export class StoreDocumentsService {
         ],
       },
       format,
-      `GRN ${grn?.grnNumber ?? found.id}`,
+      // A purchase recorded before GRNs were numbered is named by what and when, not by its id.
+      `GRN ${
+        grn?.grnNumber ?? `${item?.name ?? 'Material'} ${dashDate(found.date)}`
+      }`,
     );
   }
 
@@ -518,7 +517,6 @@ export class StoreDocumentsService {
                   : '',
               ],
             ],
-            minRows: 6,
           },
           remarks('Purpose / Remarks:', issue.remarks),
           ...signOff([
@@ -529,7 +527,9 @@ export class StoreDocumentsService {
         ],
       },
       format,
-      `Issue Slip ${issue.slipNo ?? issue.id}`,
+      `Issue Slip ${
+        issue.slipNo ?? `${item?.name ?? 'Material'} ${dashDate(issue.date)}`
+      }`,
     );
   }
 
@@ -652,7 +652,7 @@ export class StoreDocumentsService {
               { label: 'REMARKS', width: 10 },
             ],
             rows: body,
-            minRows: 15,
+            emptyText: 'No material was issued from this store in this period.',
           },
           ...signOff([
             ['ISSUED BY', ''],
@@ -698,6 +698,8 @@ export class StoreDocumentsService {
       toProject,
       toLabel: [toProject, toName].filter(Boolean).join(' / '),
       itemLabel: item ? `${item.name} (${item.code})` : 'Unknown item',
+      /** For a transfer recorded before slips were numbered: what and when, not its id. */
+      fallbackName: `${item?.name ?? 'Material'} ${dashDate(row.date)}`,
       unit: item?.unit ?? '',
       quantity: toNumber(row.quantity),
     };

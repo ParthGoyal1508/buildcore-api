@@ -28,6 +28,7 @@ import {
   type FormDocument,
   type FormField,
   type FormRun,
+  bodyRows,
   placeRows,
 } from './form-document.types';
 
@@ -657,12 +658,7 @@ function dataTable(
     }),
   );
 
-  const body = [...block.rows];
-  if (block.minRows && body.length < block.minRows) {
-    for (let n = body.length + 1; n <= block.minRows; n++) {
-      body.push([String(n), ...block.columns.slice(1).map(() => '')]);
-    }
-  }
+  const body = bodyRows(block);
 
   // Word merges rows with a "continue" cell in each covered row, so the covered columns are
   // filled back in here from the placement.

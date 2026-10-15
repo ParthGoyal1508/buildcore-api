@@ -6,6 +6,7 @@ import {
   type FormBlock,
   type FormDocument,
   type FormField,
+  bodyRows,
   placeRows,
 } from './form-document.types';
 
@@ -505,12 +506,7 @@ class FormSheet {
     this.ws.pageSetup.printTitlesRow = `${this.row}:${this.row}`;
     this.row += 1;
 
-    const body = [...block.rows];
-    if (block.minRows && body.length < block.minRows) {
-      for (let n = body.length + 1; n <= block.minRows; n++) {
-        body.push([String(n), ...block.columns.slice(1).map(() => '')]);
-      }
-    }
+    const body = bodyRows(block);
     const write = (rows: ReturnType<typeof placeRows>, isFoot: boolean) => {
       for (const placed of rows) {
         let lines = 1;

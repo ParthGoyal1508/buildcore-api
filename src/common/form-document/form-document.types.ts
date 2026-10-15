@@ -111,8 +111,8 @@ export type FormBlock =
       rows: FormRow[];
       /** Bold rows under the body — totals. */
       foot?: FormRow[];
-      /** Pads the body with numbered empty rows up to this count, as a printed blank form has. */
-      minRows?: number;
+      /** What an empty table says in its one row; defaults to "No entries". */
+      emptyText?: string;
       /** A heading row spanning the table, above the column labels — "PART-A". */
       caption?: string;
       fontSize?: number;
@@ -182,4 +182,24 @@ export function placeRows(
     }
     return placed;
   });
+}
+
+/**
+ * A table's body rows, or one row saying it is empty (2026-10-15). A document prints a record,
+ * so it lists the record's own lines — padding with blank numbered rows, as a paper form has,
+ * made a one-line indent look like six with five left unfilled.
+ */
+export function bodyRows(
+  block: Extract<FormBlock, { kind: 'table' }>,
+): FormRow[] {
+  if (block.rows.length > 0) return block.rows;
+  return [
+    [
+      {
+        text: block.emptyText ?? 'No entries',
+        span: block.columns.length,
+        align: 'center',
+      },
+    ],
+  ];
 }
