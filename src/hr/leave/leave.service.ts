@@ -308,7 +308,16 @@ export class LeaveService {
   ): Promise<LeaveApplication[]> {
     return withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.leaveApplication.findMany({
-        where: { status },
+        where: {
+          status,
+          // The company is also stated, not left to row-level security alone (2026-10-15): the
+          // queue now feeds the Approvals page and its badge, and a database role that bypasses
+          // RLS — a superuser, as local development runs — listed every company's leave under
+          // the one selected.
+          ...(caller.rls.companyId
+            ? { employee: { companyId: caller.rls.companyId } }
+            : {}),
+        },
         orderBy: { fromDate: 'asc' },
       }),
     );

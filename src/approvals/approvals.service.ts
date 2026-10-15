@@ -45,6 +45,7 @@ import {
   ApprovalInstanceView,
   ApprovalQueueEntry,
   ApprovalQueuePage,
+  ApprovalUpcomingEntry,
   DecideApprovalInput,
   InertReason,
   isLive,
@@ -1158,6 +1159,103 @@ export class ApprovalService {
           decisions: { none: { actorUserId: caller.id } },
         },
       });
+    });
+  }
+
+  /**
+   * What will reach this user next (2026-10-15): pending items still at an earlier step of a
+   * chain the caller's roles sit further along. The client: "in the approval tab we are not
+   * seeing the payroll approvals" — a payroll run waits on the site admin first, so the director
+   * at the end of its chain saw nothing until two people had acted, and could not tell there was
+   * anything coming. Read-only by construction: the queue above is what may be decided.
+   */
+  async upcomingFor(
+    caller: AuthenticatedUser,
+  ): Promise<ApprovalUpcomingEntry[]> {
+    const companyId = effectiveCompanyId(caller);
+    if (!companyId) return [];
+    const ctx: RlsContext = { isSuperAdmin: false, companyId };
+
+    const found = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const mappings = await tx.roleSlotMapping.findMany({
+        where: { companyId, roleId: { in: caller.roleIds } },
+        select: { slotKey: true },
+      });
+      const slotKeys = mappings.map((m) => m.slotKey);
+      if (slotKeys.length === 0) return { rows: [], mine: [] };
+      const mine = await tx.approvalLevel.findMany({
+        where: {
+          companyId,
+          slotKey: { in: slotKeys },
+          chain: { isActive: true },
+        },
+        select: { chainId: true, position: true },
+      });
+      if (mine.length === 0) return { rows: [], mine };
+      const rows = await tx.approvalInstance.findMany({
+        where: {
+          companyId,
+          state: 'pending',
+          OR: mine.map((l) => ({
+            chainId: l.chainId,
+            currentPosition: { lt: l.position },
+          })),
+        },
+        include: { chain: { include: { levels: true } } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: 100,
+      });
+      return { rows, mine };
+    });
+
+    const names = await this.namesFor(
+      found.rows
+        .map((r) => r.originatorUserId)
+        .filter((id): id is string => !!id),
+    );
+    const now = Date.now();
+    return found.rows.map((instance): ApprovalUpcomingEntry => {
+      const level = instance.chain.levels.find(
+        (l) => l.position === instance.currentPosition,
+      );
+      // The caller's nearest step after the current one, on this chain.
+      const yourPosition = Math.min(
+        ...found.mine
+          .filter(
+            (l) =>
+              l.chainId === instance.chainId &&
+              l.position > instance.currentPosition,
+          )
+          .map((l) => l.position),
+      );
+      const yours = instance.chain.levels.find(
+        (l) => l.position === yourPosition,
+      );
+      const module = moduleOf(instance.chain.actionType);
+      return {
+        instanceId: instance.id,
+        actionType: instance.chain.actionType,
+        module: module.key,
+        moduleLabel: module.label,
+        entityType: instance.entityType,
+        entityId: instance.entityId,
+        subject: instance.subject,
+        href: repairStoredApprovalHref(instance.href),
+        requestedById: instance.originatorUserId,
+        requestedByName: instance.originatorUserId
+          ? names.get(instance.originatorUserId) ?? 'Unknown user'
+          : 'The system',
+        requestedAt: instance.createdAt,
+        ageHours: Math.floor((now - instance.createdAt.getTime()) / 3_600_000),
+        currentPosition: instance.currentPosition,
+        levelLabel: level
+          ? labelForSlot(level.slotKey, level.label)
+          : `Level ${instance.currentPosition}`,
+        yourPosition,
+        yourLevelLabel: yours
+          ? labelForSlot(yours.slotKey, yours.label)
+          : `Level ${yourPosition}`,
+      };
     });
   }
 

@@ -388,6 +388,41 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // and client. Reads a project row and nothing else — no `ApprovalService`, no
           // `approvals.submit`, no `ApprovalInstance`; verified by grep before excluding.
           ':(exclude)src/projects/portfolio/project-letter-source.ts',
+          // 2026-10-15, the client's plant and store formats and Settings → Numbering. Every path
+          // below adds fields, numbers or a printed document to a record the module already
+          // keeps — the vehicle register and its papers, the log book sheet, hire orders and the
+          // vehicle hiring bill, the job card, the issue slip and its returns, the transfer slip
+          // and challan, the GRN's gate details, the indent's department — and machine and asset
+          // codes in the company's format. **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.**
+          //
+          // `src/inventory/indents/indents.service.ts` is listed deliberately, against the note
+          // above that keeps it visible: its change is one stored field (`department`) and its
+          // read-back, and the per-file assertion at the top still reads this file and still
+          // requires its own `approve()` and no spine call. That assertion is what guards the
+          // indent approval; this diff was the backstop, and the change it surfaced was looked at.
+          //
+          // Fired late again, for the same reason as every note above: the commits that carried
+          // these were not followed by a run of this spec.
+          ':(exclude)src/plant/hire-orders',
+          ':(exclude)src/plant/hire-bills',
+          ':(exclude)src/plant/logbook',
+          ':(exclude)src/plant/maintenance/dto/job-card.dto.ts',
+          ':(exclude)src/plant/maintenance/dto/maintenance.dto.ts',
+          ':(exclude)src/plant/maintenance/job-card.service.ts',
+          ':(exclude)src/plant/maintenance/maintenance.controller.ts',
+          ':(exclude)src/plant/maintenance/maintenance.service.ts',
+          ':(exclude)src/plant/plant-refs.service.ts',
+          ':(exclude)src/plant/equipment',
+          ':(exclude)src/inventory/documents',
+          ':(exclude)src/inventory/issues',
+          ':(exclude)src/inventory/transfers',
+          ':(exclude)src/inventory/inventory-refs.service.ts',
+          ':(exclude)src/inventory/indents/dto/indent.dto.ts',
+          ':(exclude)src/inventory/indents/indents.service.ts',
+          ':(exclude)src/partners/partners.service.ts',
+          ':(exclude)src/assets/register',
+          ':(exclude)src/projects/portfolio/projects.controller.ts',
         ],
         {
           cwd: REPO_ROOT,

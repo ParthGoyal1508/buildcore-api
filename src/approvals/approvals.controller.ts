@@ -104,6 +104,19 @@ export class ApprovalsController {
     });
   }
 
+  @Get('queue/upcoming')
+  @SelfService()
+  @ApiOperation({
+    summary:
+      'Items that will reach the caller next — still at an earlier step of their chain',
+    description:
+      "Read-only. Each item names the step it waits on and the caller's own step, so a " +
+      'director at the end of a chain can see the payroll run still with the site admin.',
+  })
+  async upcoming(@UserEntity() caller: AuthenticatedUser) {
+    return { items: await this.approvals.upcomingFor(caller) };
+  }
+
   @Get('queue/count')
   @SelfService()
   @ApiOperation({
