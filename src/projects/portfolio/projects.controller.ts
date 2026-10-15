@@ -56,8 +56,8 @@ export class ProjectsController {
   @ApiOperation({
     summary: 'Create a project',
     description:
-      'Omit `code` to allocate the next one in the company PROJECTS series. A ' +
-      'cross-company caller may name the company with `?companyId=`.',
+      'The code is always allocated from the company PROJECTS series — `1010`, `1020`, … — ' +
+      'and cannot be supplied. A cross-company caller may name the company with `?companyId=`.',
   })
   async create(
     @UserEntity() caller: AuthenticatedUser,
@@ -66,6 +66,19 @@ export class ProjectsController {
     @Query('companyId') companyId?: string,
   ) {
     return this.projects.create(caller, dto, ipAddress, companyId);
+  }
+
+  @Get('next-code')
+  @ApiOperation({
+    summary: 'The code the next project will be given',
+    description:
+      'A preview for the creation form, not a reservation — the number is drawn on save.',
+  })
+  async nextCode(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.projects.nextCode(caller, companyId);
   }
 
   @Get(':id')

@@ -24,6 +24,10 @@ import {
   withRlsContext,
 } from '../../common/prisma/rls-context';
 import { EmployeesService } from '../../hr/employees/employees.service';
+import {
+  CODE_SERIES_FORMATS,
+  formatCode,
+} from '../../settings/code-series/code-series.formats';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { BillPaymentsService } from '../billing/payments/bill-payments.service';
@@ -325,14 +329,24 @@ export class ProjectsService {
         // Allocated inside this transaction so a later failure rolls the number back
         // rather than burning it — a gap in a project code series reads as a deleted
         // project to anyone auditing it later. Same rule vendor codes follow.
-        const code =
-          dto.code?.trim() ||
-          (await this.codeSeries.next(
+        //
+        // Always from the series (2026-10-15). A number already held — a project created
+        // with a typed code before the series was enforced — is stepped over rather than
+        // refused, so the first project after the switch is not blocked by an old one.
+        let code = '';
+        for (let attempt = 0; attempt < 1000; attempt += 1) {
+          code = await this.codeSeries.next(
             tx,
             targetCompanyId,
             CodeSeriesType.PROJECTS,
             PROJECT_CODE_INFIX,
-          ));
+          );
+          const taken = await tx.project.findFirst({
+            where: { companyId: targetCompanyId, code },
+            select: { id: true },
+          });
+          if (!taken) break;
+        }
 
         const project = await tx.project.create({
           data: {
@@ -411,6 +425,40 @@ export class ProjectsService {
       ipAddress,
     });
     return created;
+  }
+
+  /**
+   * The code the next project will be given — what the creation form shows in place of a code
+   * field (2026-10-15). A preview, not a reservation: the number is drawn when the project is
+   * saved, so two people creating at once see the same one and the second gets the next.
+   */
+  async nextCode(
+    caller: AuthenticatedUser,
+    companyId?: string,
+  ): Promise<{ code: string }> {
+    const targetCompanyId = this.targetCompanyOf(caller, companyId);
+    const format = CODE_SERIES_FORMATS[CodeSeriesType.PROJECTS];
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const sequence = await tx.codeSequence.findUnique({
+        where: {
+          companyId_seriesType: {
+            companyId: targetCompanyId,
+            seriesType: CodeSeriesType.PROJECTS,
+          },
+        },
+        select: { lastNumber: true },
+      });
+      let n = (sequence?.lastNumber ?? 0) + 1;
+      for (;;) {
+        const code = format ? formatCode(format, n) : String(n);
+        const taken = await tx.project.findFirst({
+          where: { companyId: targetCompanyId, code },
+          select: { id: true },
+        });
+        if (!taken) return { code };
+        n += 1;
+      }
+    });
   }
 
   async findAll(
@@ -673,7 +721,6 @@ export class ProjectsService {
           data: {
             // Applied field by field so a PATCH cannot blank a column it never
             // mentioned — see ClientsService.update() for the same reasoning.
-            ...(dto.code !== undefined ? { code: dto.code.trim() } : {}),
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
             ...(dto.clientId !== undefined ? { clientId: dto.clientId } : {}),
             ...(dto.location !== undefined
