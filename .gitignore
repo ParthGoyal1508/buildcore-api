@@ -49,3 +49,6 @@ lerna-debug.log*
 # Tracking it meant `nest start --watch` rewrote it continuously and blocked every
 # `git pull` with a phantom local change. It is build output — regenerate, don't commit.
 src/metadata.ts
+
+# Client source documents (formats, BOQs, salary sheets) — reference material kept locally, not in git.
+docs/

@@ -3,7 +3,9 @@ import { Prisma } from '@prisma/client';
 import { LetterRecordSources } from '../../letters/letter-record-sources';
 import {
   EmployeeLetterSource,
+  genderOf,
   joinAddress,
+  relationOf,
   pronounsOf,
   salutationOf,
 } from './employee-letter-source';
@@ -344,6 +346,19 @@ describe('employee letter helpers', () => {
     expect(salutationOf('Dr', 'male')).toBe('Dr.');
     expect(salutationOf(null, 'female')).toBe('Ms.');
     expect(salutationOf(null, null)).toBe('');
+  });
+
+  it('takes the gender from the title when none is recorded', () => {
+    // "Mr." on the record and "S/o / D/o", "them", "their" on the form was the record
+    // contradicting itself (2026-10-15).
+    expect(genderOf('Mr', null)).toBe('male');
+    expect(genderOf('Mrs.', null)).toBe('female');
+    expect(genderOf('Ms.', null)).toBe('female');
+    expect(genderOf('Dr', null)).toBeNull();
+    expect(genderOf('Mr', 'female')).toBe('female');
+    expect(relationOf(genderOf('Mr.', null))).toBe('S/o');
+    expect(pronounsOf(genderOf('Ms', null)).pronounPossessive).toBe('her');
+    expect(relationOf(genderOf(null, null))).toBe('S/o / D/o');
   });
 
   it('pronouns default to they/them/their', () => {

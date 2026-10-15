@@ -34,7 +34,22 @@ export interface LetterLayout {
    * Cost Centre"; printed twice as well, the sheet would carry two dates.
    */
   referenceInBody?: boolean;
+  /**
+   * What prints under the company's signature, in place of the signatory's name and title
+   * (2026-10-15) — and, set, the format always has a signing block: the closing, space to sign,
+   * and these lines, with the signatory's graphic in that space when the letter carries one.
+   * The client's formats close with "Authorized Signatory" (appointment, experience, relieving,
+   * increment), "HR Department" (termination), or the signatory's own designation (the offer
+   * letter's "Office Accountant"). Unset, the signatory's name and title print, as the
+   * commercial documents have them.
+   */
+  signatureLines?: (
+    signatory: { name: string; title: string } | null,
+  ) => string[];
 }
+
+/** The caption most of the client's HR formats print under the signature. */
+const AUTHORIZED = () => ['Authorized Signatory'];
 
 export const LETTER_LAYOUTS: Record<string, LetterLayout> = {
   letter_loi: {
@@ -66,12 +81,18 @@ export const LETTER_LAYOUTS: Record<string, LetterLayout> = {
     brandHeader: false,
     titleFirst: true,
     acceptanceLabel: 'Employee Signature',
+    // "Office Accountant" in the format: the designation of whoever signs, from Settings →
+    // Signatories, rather than one fixed title.
+    signatureLines: (signatory) => [
+      signatory?.title.trim() || 'Authorized Signatory',
+    ],
   },
   appointment: {
     title: 'APPOINTMENT LETTER',
     referenceLabel: 'Ref No.',
     brandHeader: false,
     titleFirst: true,
+    signatureLines: AUTHORIZED,
   },
   // "Experience Letter (1).docx" is headed *Relieving Letter* — the heading of the file it was
   // copied from. It is issued as the experience letter, and is titled as one.
@@ -79,21 +100,38 @@ export const LETTER_LAYOUTS: Record<string, LetterLayout> = {
     title: 'Experience Letter',
     referenceLabel: 'Ref. No.',
     brandHeader: false,
+    signatureLines: AUTHORIZED,
   },
   // Placed by the body's `[[title]]`, under the name and project lines, as the format has it.
   relieving: {
     title: 'Relieving Letter',
     referenceLabel: 'Ref. No.',
     brandHeader: false,
+    signatureLines: AUTHORIZED,
   },
   // Neither format has a heading: the subject line says what the letter is.
-  increment: { title: '', referenceLabel: 'Ref', brandHeader: false },
-  termination: { title: '', referenceLabel: 'Ref No.', brandHeader: false },
+  increment: {
+    title: '',
+    referenceLabel: 'Ref',
+    brandHeader: false,
+    signatureLines: AUTHORIZED,
+  },
+  termination: {
+    title: '',
+    referenceLabel: 'Ref No.',
+    brandHeader: false,
+    signatureLines: () => ['HR Department'],
+  },
   transfer: {
     title: 'TRANSFER LETTER',
     referenceLabel: 'Ref No.',
     brandHeader: false,
     titleFirst: true,
+    // "Authorized Signatory / Name: …" in the format.
+    signatureLines: (signatory) =>
+      signatory?.name.trim()
+        ? ['Authorized Signatory', `Name: ${signatory.name.trim()}`]
+        : ['Authorized Signatory'],
   },
   fnf_settlement: {
     title: 'FULL & FINAL (F&F) SETTLEMENT SHEET',
