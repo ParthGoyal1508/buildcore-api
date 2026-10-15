@@ -205,6 +205,10 @@ END $$;
 
 -- The register's road-tax "Doc" column reads uploads of a ROAD TAX document type, which the
 -- built-in list lacked. Added for every company that does not have one already.
+-- EquipmentDocType FORCEs row-level security and production migrates as a NOSUPERUSER role, so
+-- the cross-company insert needs the super-admin escape hatch (transaction-local), as in
+-- 20260904081331_plant_permissions_and_masters.
+SELECT set_config('app.is_super_admin', 'true', true);
 INSERT INTO "settings"."EquipmentDocType" ("id", "companyId", "name", "alertDays", "active", "createdAt", "updatedAt")
 SELECT 'edt_rt_' || c."id", c."id", 'ROAD TAX', 30, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 FROM "settings"."Company" c
