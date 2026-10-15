@@ -48,6 +48,10 @@ const LABELS: Record<NumberingSeries, string> = {
   VENDORS: 'Vendor code',
   WORK_ORDER: 'Work order number',
   NOC: 'NOC number',
+  JOB_CARD: 'Maintenance job card number',
+  ISSUE_SLIP: 'Material issue slip number',
+  DELIVERY_CHALLAN: 'Delivery challan number',
+  STOCK_TRANSFER: 'Stock transfer slip number',
   EQUIPMENT: 'Plant & machinery code',
   ASSETS: 'Asset code',
 };
@@ -230,21 +234,75 @@ export class NumberingService {
     };
   }
 
-  private async isTaken(
+  /**
+   * Whether `code` is already used by a record of `series` — what a restarted series steps over.
+   *
+   * Public (2026-10-15) because two modules allocate from `WORK_ORDER` — subcontract work orders
+   * and vehicle hire orders — and each must step over the other's numbers, not just its own.
+   */
+  async isTaken(
     tx: Prisma.TransactionClient,
     companyId: string,
     series: CountedSeries,
     code: string,
   ): Promise<boolean> {
-    // No NOC is stored anywhere yet, so none of its numbers is taken.
-    if (series === 'NOC') return false;
-    const where = { companyId, code };
-    const found =
-      series === 'PROJECTS'
-        ? await tx.project.findFirst({ where, select: { id: true } })
-        : series === 'VENDORS'
-        ? await tx.vendor.findFirst({ where, select: { id: true } })
-        : await tx.workOrder.findFirst({ where, select: { id: true } });
-    return !!found;
+    const hit = (row: { id: string } | null) => !!row;
+    const select = { id: true } as const;
+    switch (series) {
+      // No NOC is stored anywhere yet, so none of its numbers is taken.
+      case 'NOC':
+        return false;
+      case 'PROJECTS':
+        return hit(
+          await tx.project.findFirst({ where: { companyId, code }, select }),
+        );
+      case 'VENDORS':
+        return hit(
+          await tx.vendor.findFirst({ where: { companyId, code }, select }),
+        );
+      case 'WORK_ORDER':
+        return (
+          hit(
+            await tx.workOrder.findFirst({
+              where: { companyId, code },
+              select,
+            }),
+          ) ||
+          hit(
+            await tx.hireOrder.findFirst({
+              where: { companyId, code },
+              select,
+            }),
+          )
+        );
+      case 'JOB_CARD':
+        return hit(
+          await tx.maintenanceJob.findFirst({
+            where: { companyId, jobCardNo: code },
+            select,
+          }),
+        );
+      case 'ISSUE_SLIP':
+        return hit(
+          await tx.issue.findFirst({
+            where: { companyId, slipNo: code },
+            select,
+          }),
+        );
+      case 'DELIVERY_CHALLAN':
+        return hit(
+          await tx.stockTransfer.findFirst({
+            where: { companyId, challanNo: code },
+            select,
+          }),
+        );
+      case 'STOCK_TRANSFER':
+        return hit(
+          await tx.stockTransfer.findFirst({
+            where: { companyId, transferNo: code },
+            select,
+          }),
+        );
+    }
   }
 }

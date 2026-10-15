@@ -14,6 +14,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { EquipmentCategoriesController } from './categories/equipment-categories.controller';
 import { EquipmentDocTypesController } from './doc-types/equipment-doc-types.controller';
 import { EquipmentController } from './equipment/equipment.controller';
+import { EquipmentRegisterService } from './equipment/equipment-register.service';
 import { EquipmentService } from './equipment/equipment.service';
 import { FuelController } from './fuel/fuel.controller';
 import { FuelExceptionsController } from './fuel-exceptions/fuel-exceptions.controller';
@@ -24,6 +25,7 @@ import { FuelService } from './fuel/fuel.service';
 import { HireBillsController } from './hire-bills/hire-bills.controller';
 import { HireBillsService } from './hire-bills/hire-bills.service';
 import { LogbookController } from './logbook/logbook.controller';
+import { LogbookSheetService } from './logbook/logbook-sheet.service';
 import { LogbookService } from './logbook/logbook.service';
 import { MaintenanceController } from './maintenance/maintenance.controller';
 import { MaintenanceService } from './maintenance/maintenance.service';
@@ -98,7 +100,9 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     PlantService,
     PlantRefsService,
     EquipmentService,
+    EquipmentRegisterService,
     LogbookService,
+    LogbookSheetService,
     FuelService,
     FuelExceptionsService,
     FuelRecoveryService,

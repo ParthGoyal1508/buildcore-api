@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,16 +11,21 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { formFormatOf, sendForm } from '../../common/form-document';
+import { SaveLogbookSheetDto } from './dto/logbook-sheet.dto';
+import { LogbookSheetService } from './logbook-sheet.service';
 import {
   CreateLogbookEntryDto,
   ListLogbookDto,
@@ -34,7 +40,60 @@ import { LogbookService } from './logbook.service';
 @RequirePermissions(Permission.LOGBOOK)
 @Controller('plant/logbook')
 export class LogbookController {
-  constructor(private readonly logbook: LogbookService) {}
+  constructor(
+    private readonly logbook: LogbookService,
+    private readonly sheet: LogbookSheetService,
+  ) {}
+
+  @Get('sheet')
+  @ApiOperation({
+    summary:
+      'The Vehicle Log Book and Diesel Report Sheet for one machine and month',
+    description:
+      'Every day of the month with its card no., diesel advance and litres, starting and ' +
+      "closing reading and total, the totals, and the month's average (km/l or l/hr).",
+  })
+  async sheetMonth(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('equipmentId') equipmentId: string,
+    @Query('month') month: string,
+  ) {
+    if (!equipmentId) throw new BadRequestException('equipmentId is required');
+    return this.sheet.month(caller, equipmentId, month ?? '');
+  }
+
+  @Post('sheet')
+  @ApiOperation({
+    summary: 'Enter days on the log book and diesel sheet',
+    description:
+      "Each row with readings becomes that day's logbook entry; each row with diesel becomes " +
+      'a fuel entry. A day that already has readings is refused (409).',
+  })
+  async saveSheet(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: SaveLogbookSheetDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.sheet.save(caller, dto, ipAddress);
+  }
+
+  @Get('sheet.:format')
+  @ApiOperation({ summary: 'The log book and diesel sheet as PDF or Excel' })
+  async sheetDocument(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('format') format: string,
+    @Query('equipmentId') equipmentId: string,
+    @Query('month') month: string,
+    @Res() res: Response,
+  ) {
+    const kind = formFormatOf(format);
+    if (!kind) throw new BadRequestException('Format must be pdf or xlsx');
+    if (!equipmentId) throw new BadRequestException('equipmentId is required');
+    sendForm(
+      res,
+      await this.sheet.document(caller, equipmentId, month ?? '', kind),
+    );
+  }
 
   @Get()
   @ApiOperation({ summary: 'Paginated logbook entries' })

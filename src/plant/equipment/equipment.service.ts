@@ -11,6 +11,8 @@ import {
   EquipmentStatus,
   MeterType,
   Prisma,
+  RegistrationKind,
+  RegistrationStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -24,6 +26,7 @@ import {
   DEFAULT_TARGET_HOURS_PER_MONTH,
   MAX_DOCUMENT_BYTES,
   MAX_PAGE_SIZE,
+  REGISTRATION_PAPERS,
   SERVICE_DUE_SOON_MARGIN,
 } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
@@ -54,11 +57,51 @@ export interface EquipmentDocumentView {
   uploadedAt: Date;
 }
 
+/** One registration paper as the register prints it (2026-10-15). */
+export interface RegistrationPaperView {
+  kind: RegistrationKind;
+  status: RegistrationStatus;
+  expiresAt: Date | null;
+  number: string | null;
+  /** Whether a document of the matching type has been uploaded — the register's "Doc" column. */
+  hasDocument: boolean;
+}
+
+/**
+ * Which registration paper a document type is, by its name — "INSURANCE" is insurance,
+ * "POLLUTION CERTIFICATE" or "PUC" is pollution. Whole words, so "RC" never matches inside
+ * another word.
+ */
+export function paperOfDocType(name: string): RegistrationKind | null {
+  const upper = name.toUpperCase();
+  const words = upper.split(/[^A-Z]+/).filter(Boolean);
+  for (const paper of REGISTRATION_PAPERS) {
+    const hit = paper.docWords.some((word) =>
+      word.includes(' ') ? upper.includes(word) : words.includes(word),
+    );
+    if (hit) return paper.kind as RegistrationKind;
+  }
+  return null;
+}
+
 export interface EquipmentRow {
   id: string;
   companyId: string;
   code: string;
   name: string;
+  manufacturingYear: number | null;
+  make: string | null;
+  model: string | null;
+  registrationNo: string | null;
+  engineNo: string | null;
+  chassisNo: string | null;
+  supplierName: string | null;
+  registeredOwner: string | null;
+  operatorName: string | null;
+  remarks: string | null;
+  lastServiceDate: Date | null;
+  /** The six papers of the vehicle register, in its column order; a kind never recorded is absent. */
+  registration: RegistrationPaperView[];
   categoryId: string;
   categoryName: string;
   ownership: EquipmentOwnership;
@@ -96,8 +139,10 @@ export interface EquipmentDetail extends EquipmentRow {
 }
 
 type EquipmentWithDocs = Prisma.EquipmentGetPayload<{
-  include: { documents: true };
+  include: { documents: true; registration: true };
 }>;
+
+const WITH_DOCS = { documents: true, registration: true } as const;
 
 /** Midnight today, in the server's own zone — the reference point every expiry
  * comparison uses. */
@@ -159,6 +204,12 @@ export class EquipmentService {
             OR: [
               { name: { contains: query.search, mode: 'insensitive' } },
               { code: { contains: query.search, mode: 'insensitive' } },
+              {
+                registrationNo: {
+                  contains: query.search,
+                  mode: 'insensitive',
+                },
+              },
             ],
           }
         : {}),
@@ -174,7 +225,7 @@ export class EquipmentService {
             orderBy: { code: 'asc' },
             skip: (page - 1) * pageSize,
             take: pageSize,
-            include: { documents: true },
+            include: WITH_DOCS,
           }),
           tx.equipment.count({ where }),
         ]);
@@ -184,6 +235,33 @@ export class EquipmentService {
 
     const items = await this.decorate(caller, rows);
     return { items, total, page, pageSize };
+  }
+
+  /**
+   * Every machine matching the filters, unpaged — for the vehicle register download (2026-10-15),
+   * which prints the whole fleet on one sheet. Same filters and order as the paged list.
+   */
+  async findEvery(
+    caller: AuthenticatedUser,
+    query: Omit<ListEquipmentDto, 'page' | 'pageSize'>,
+  ): Promise<EquipmentRow[]> {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.equipment.findMany({
+          where: {
+            ...companyScope(caller, query.companyId),
+            ...(query.categoryId ? { categoryId: query.categoryId } : {}),
+            ...(query.siteId ? { deployedSiteId: query.siteId } : {}),
+            ...(query.status ? { status: query.status } : {}),
+            ...(query.ownership ? { ownership: query.ownership } : {}),
+          },
+          orderBy: { code: 'asc' },
+          include: WITH_DOCS,
+        }),
+    );
+    return this.decorate(caller, rows);
   }
 
   async findOne(
@@ -196,7 +274,7 @@ export class EquipmentService {
       async (tx) => {
         const equipment = await tx.equipment.findUnique({
           where: { id: equipmentId },
-          include: { documents: true },
+          include: WITH_DOCS,
         });
         if (!equipment) throw new NotFoundException('Equipment not found');
         assertInScope(caller, equipment, 'Equipment');
@@ -322,6 +400,18 @@ export class EquipmentService {
         companyId: row.companyId,
         code: row.code,
         name: row.name,
+        manufacturingYear: row.manufacturingYear,
+        make: row.make,
+        model: row.model,
+        registrationNo: row.registrationNo,
+        engineNo: row.engineNo,
+        chassisNo: row.chassisNo,
+        supplierName: row.supplierName,
+        registeredOwner: row.registeredOwner,
+        operatorName: row.operatorName,
+        remarks: row.remarks,
+        lastServiceDate: row.lastServiceDate,
+        registration: this.papersOf(row, docTypes),
         categoryId: row.categoryId,
         categoryName:
           categories.get(row.categoryId)?.name ?? 'Unknown category',
@@ -356,6 +446,91 @@ export class EquipmentService {
         createdAt: row.createdAt,
       };
     });
+  }
+
+  /** The register's six papers for a machine, with the "Doc" column read off its uploads. */
+  private papersOf(
+    row: EquipmentWithDocs,
+    docTypes: Map<string, { name: string }>,
+  ): RegistrationPaperView[] {
+    const uploaded = new Set(
+      row.documents.flatMap((document) => {
+        const kind = paperOfDocType(
+          docTypes.get(document.docTypeId)?.name ?? '',
+        );
+        return kind ? [kind] : [];
+      }),
+    );
+    const byKind = new Map(row.registration.map((item) => [item.kind, item]));
+    return REGISTRATION_PAPERS.flatMap((paper) => {
+      const kind = paper.kind as RegistrationKind;
+      const item = byKind.get(kind);
+      if (!item && !uploaded.has(kind)) return [];
+      return [
+        {
+          kind,
+          status: item?.status ?? RegistrationStatus.held,
+          expiresAt: item?.expiresAt ?? null,
+          number: item?.number ?? null,
+          hasDocument: uploaded.has(kind),
+        },
+      ];
+    });
+  }
+
+  /** The registration details of a create or update, as columns. Undefined keys are left alone. */
+  private detailsOf(dto: UpdateEquipmentDto) {
+    const text = (value: string | undefined) =>
+      value === undefined ? undefined : value.trim() || null;
+    const data = {
+      make: text(dto.make),
+      model: text(dto.model),
+      registrationNo:
+        dto.registrationNo === undefined
+          ? undefined
+          : dto.registrationNo.trim().toUpperCase() || null,
+      engineNo: text(dto.engineNo),
+      chassisNo: text(dto.chassisNo),
+      supplierName: text(dto.supplierName),
+      registeredOwner: text(dto.registeredOwner),
+      operatorName: text(dto.operatorName),
+      remarks: text(dto.remarks),
+      lastServiceDate:
+        dto.lastServiceDate === undefined
+          ? undefined
+          : dto.lastServiceDate
+          ? this.refs.parseDate(dto.lastServiceDate)
+          : null,
+    };
+    return Object.fromEntries(
+      Object.entries(data).filter(([, value]) => value !== undefined),
+    );
+  }
+
+  /** Writes the papers given, one row per kind; kinds not given are left as they are. */
+  private async writeRegistration(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    equipmentId: string,
+    items: UpdateEquipmentDto['registration'],
+  ): Promise<void> {
+    for (const item of items ?? []) {
+      // Not applicable and life-time papers have no expiry to remember.
+      const expiresAt =
+        item.status === RegistrationStatus.held && item.expiresAt
+          ? this.refs.parseDate(item.expiresAt)
+          : null;
+      const data = {
+        status: item.status,
+        expiresAt,
+        number: item.number?.trim() || null,
+      };
+      await tx.equipmentRegistrationItem.upsert({
+        where: { equipmentId_kind: { equipmentId, kind: item.kind } },
+        create: { companyId, equipmentId, kind: item.kind, ...data },
+        update: data,
+      });
+    }
   }
 
   // ── Writes ────────────────────────────────────────────────────────────────
@@ -475,7 +650,7 @@ export class EquipmentService {
           );
         }
 
-        return tx.equipment.create({
+        const machine = await tx.equipment.create({
           data: {
             companyId,
             code,
@@ -496,8 +671,34 @@ export class EquipmentService {
             meterType: category.meterType,
             currentReading: dto.currentReading ?? 0,
             deployedSiteId: dto.deployedSiteId ?? null,
+            ...this.detailsOf(dto),
           },
-          include: { documents: true },
+        });
+        await this.writeRegistration(
+          tx,
+          companyId,
+          machine.id,
+          dto.registration,
+        );
+        // The master list's "Service Schedule": a periodic service from today's reading.
+        if (dto.serviceInterval) {
+          const reading = dto.currentReading ?? 0;
+          await tx.serviceSchedule.create({
+            data: {
+              companyId,
+              equipmentId: machine.id,
+              serviceType: 'Periodic service',
+              ...(category.meterType === MeterType.km
+                ? { intervalKm: dto.serviceInterval }
+                : { intervalHours: dto.serviceInterval }),
+              lastDoneReading: reading,
+              nextDueReading: reading + dto.serviceInterval,
+            },
+          });
+        }
+        return tx.equipment.findUniqueOrThrow({
+          where: { id: machine.id },
+          include: WITH_DOCS,
         });
       },
     );
@@ -569,8 +770,14 @@ export class EquipmentService {
     const updated = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.equipment.update({
+      async (tx) => {
+        await this.writeRegistration(
+          tx,
+          existing.companyId,
+          equipmentId,
+          dto.registration,
+        );
+        return tx.equipment.update({
           where: { id: equipmentId },
           data: {
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
@@ -597,9 +804,14 @@ export class EquipmentService {
               ? { deployedSiteId: dto.deployedSiteId }
               : {}),
             ...(dto.status !== undefined ? { status: dto.status } : {}),
+            ...(dto.manufacturingYear !== undefined
+              ? { manufacturingYear: dto.manufacturingYear }
+              : {}),
+            ...this.detailsOf(dto),
           },
-          include: { documents: true },
-        }),
+          include: WITH_DOCS,
+        });
+      },
     );
 
     await this.auditLog.record({
@@ -609,7 +821,8 @@ export class EquipmentService {
       accountId: caller.id,
       companyId: existing.companyId,
       ipAddress,
-      changes: { ...dto },
+      // A plain copy: the nested registration rows are class instances, not JSON.
+      changes: JSON.parse(JSON.stringify(dto)) as Prisma.InputJsonObject,
     });
 
     const [row] = await this.decorate(caller, [updated]);

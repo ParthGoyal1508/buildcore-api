@@ -48,6 +48,25 @@ export const CODE_SERIES_FORMATS: Partial<
   [CodeSeriesType.WORK_ORDER]: { prefix: '150', base: 0, step: 1, width: 4 },
   /** NOCs: `2026001`, `2026002`. The 2026 is fixed, not a year that advances. */
   [CodeSeriesType.NOC]: { prefix: '2026', base: 0, step: 1, width: 3 },
+  /**
+   * The plant and store documents (2026-10-15), numbered as the client's forms print them:
+   * `JC-0001` (maintenance job card), `MIS-0001` (material issue slip), `DC-0001` (delivery
+   * challan), `STS-0001` (stock transfer slip).
+   */
+  [CodeSeriesType.JOB_CARD]: { prefix: 'JC-', base: 0, step: 1, width: 4 },
+  [CodeSeriesType.ISSUE_SLIP]: { prefix: 'MIS-', base: 0, step: 1, width: 4 },
+  [CodeSeriesType.DELIVERY_CHALLAN]: {
+    prefix: 'DC-',
+    base: 0,
+    step: 1,
+    width: 4,
+  },
+  [CodeSeriesType.STOCK_TRANSFER]: {
+    prefix: 'STS-',
+    base: 0,
+    step: 1,
+    width: 4,
+  },
 };
 
 /** Renders the `n`th allocation of a series. */
@@ -64,6 +83,10 @@ export const COUNTED_SERIES = [
   'VENDORS',
   'WORK_ORDER',
   'NOC',
+  'JOB_CARD',
+  'ISSUE_SLIP',
+  'DELIVERY_CHALLAN',
+  'STOCK_TRANSFER',
 ] as const;
 export const NAMED_SERIES = ['EQUIPMENT', 'ASSETS'] as const;
 export type CountedSeries = (typeof COUNTED_SERIES)[number];

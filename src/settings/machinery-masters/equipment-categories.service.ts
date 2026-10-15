@@ -25,6 +25,8 @@ export interface EquipmentCategoryView {
   id: string;
   companyId: string;
   name: string;
+  /** The family it is listed under — "Vehicle Fleet" (2026-10-15). */
+  group: string | null;
   meterType: MeterType;
   fuelBenchmark: number | null;
   fuelVarianceThresholdPercent: number;
@@ -78,6 +80,66 @@ export class EquipmentCategoriesService {
     });
   }
 
+  /**
+   * Adds the catalogue of the client's Equipment Master List (2026-10-15): one category per
+   * listed machine, under its family. A name already present is kept as it is — its meter type
+   * and benchmarks may have been tuned — and only given the family if it had none, so the import
+   * can be run twice, or after categories were added by hand, without disturbing anything.
+   *
+   * Returns every listed name's category id, for the equipment rows of the same sheet.
+   */
+  async importCatalogue(
+    caller: AuthenticatedUser,
+    companyId: string,
+    entries: { group: string | null; name: string; meterType: MeterType }[],
+  ): Promise<{ ids: Map<string, string>; created: number; existing: number }> {
+    const wanted = new Map<
+      string,
+      { group: string | null; meterType: MeterType }
+    >();
+    for (const entry of entries) {
+      const name = this.normalise(entry.name).slice(0, 80);
+      if (name && !wanted.has(name)) {
+        wanted.set(name, {
+          group: entry.group?.trim().slice(0, 80) || null,
+          meterType: entry.meterType,
+        });
+      }
+    }
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const present = await tx.equipmentCategory.findMany({
+        where: { companyId, name: { in: [...wanted.keys()] } },
+        select: { id: true, name: true, group: true },
+      });
+      const ids = new Map(present.map((row) => [row.name, row.id]));
+      for (const row of present) {
+        const group = wanted.get(row.name)?.group;
+        if (!row.group && group) {
+          await tx.equipmentCategory.update({
+            where: { id: row.id },
+            data: { group },
+          });
+        }
+      }
+      let created = 0;
+      for (const [name, entry] of wanted) {
+        if (ids.has(name)) continue;
+        const row = await tx.equipmentCategory.create({
+          data: {
+            companyId,
+            name,
+            group: entry.group,
+            meterType: entry.meterType,
+          },
+          select: { id: true },
+        });
+        ids.set(name, row.id);
+        created += 1;
+      }
+      return { ids, created, existing: present.length };
+    });
+  }
+
   /** Uppercase and trimmed — the normalisation the unique index depends on. */
   private normalise(name: string): string {
     return name.trim().toUpperCase();
@@ -92,6 +154,7 @@ export class EquipmentCategoriesService {
       id: row.id,
       companyId: row.companyId,
       name: row.name,
+      group: row.group,
       meterType: row.meterType,
       fuelBenchmark:
         row.fuelBenchmark === null ? null : Number(row.fuelBenchmark),
@@ -199,6 +262,7 @@ export class EquipmentCategoriesService {
           data: {
             companyId,
             name,
+            group: dto.group?.trim() || null,
             meterType: dto.meterType,
             fuelBenchmark: dto.fuelBenchmark ?? null,
             ...(dto.fuelVarianceThresholdPercent !== undefined
@@ -260,6 +324,9 @@ export class EquipmentCategoriesService {
           where: { id: categoryId },
           data: {
             ...(name ? { name } : {}),
+            ...(dto.group !== undefined
+              ? { group: dto.group.trim() || null }
+              : {}),
             ...(dto.meterType !== undefined
               ? { meterType: dto.meterType }
               : {}),

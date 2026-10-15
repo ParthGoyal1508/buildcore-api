@@ -369,8 +369,13 @@ export class WorkOrdersService {
         companyId,
         CodeSeriesType.WORK_ORDER,
         WORK_ORDER_CODE_INFIX,
+        // Vehicle hire orders draw on the same series (2026-10-15), so their numbers are held too.
         async (candidate) =>
           !!(await tx.workOrder.findFirst({
+            where: { companyId, code: candidate },
+            select: { id: true },
+          })) ||
+          !!(await tx.hireOrder.findFirst({
             where: { companyId, code: candidate },
             select: { id: true },
           })),

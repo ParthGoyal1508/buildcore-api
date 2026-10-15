@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -24,12 +25,16 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { formFormatOf, sendForm } from '../../common/form-document';
 import {
   CreateEquipmentDto,
+  EquipmentRegisterQueryDto,
+  ImportEquipmentDto,
   ListEquipmentDto,
   UpdateEquipmentDto,
   UploadEquipmentDocumentDto,
 } from './dto/equipment.dto';
+import { EquipmentRegisterService } from './equipment-register.service';
 import { EquipmentService } from './equipment.service';
 
 /**
@@ -45,7 +50,10 @@ import { EquipmentService } from './equipment.service';
 @RequirePermissions(Permission.MACHINERY)
 @Controller('plant/equipment')
 export class EquipmentController {
-  constructor(private readonly equipment: EquipmentService) {}
+  constructor(
+    private readonly equipment: EquipmentService,
+    private readonly register: EquipmentRegisterService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -75,6 +83,48 @@ export class EquipmentController {
       caller,
       name,
       year && /^\d{4}$/.test(year) ? Number(year) : null,
+      companyId,
+    );
+  }
+
+  @Get('register.:format')
+  @ApiOperation({
+    summary:
+      'The vehicle register — "Vehicle Details (As on …)" — as PDF or Excel',
+    description:
+      'Every machine with its make/model, year and registration number, then RC, insurance, ' +
+      'fitness, road tax, permit and pollution — each expiry (amber within 30 days, red once ' +
+      'lapsed) and whether its document is on file — then the firm and the remark.',
+  })
+  async registerDocument(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('format') format: string,
+    @Query() query: EquipmentRegisterQueryDto,
+    @Res() res: Response,
+  ) {
+    const kind = formFormatOf(format);
+    if (!kind) throw new BadRequestException('Format must be pdf or xlsx');
+    sendForm(res, await this.register.register(caller, query, kind));
+  }
+
+  @Post('import')
+  @ApiOperation({
+    summary: 'Import the Equipment Master List (.xlsx)',
+    description:
+      'Every listed machine type becomes an equipment category under its family; a row that ' +
+      'also describes an actual machine (make, registration number, operator…) registers it. ' +
+      'Safe to run twice: existing categories are kept.',
+  })
+  async importMasterList(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: ImportEquipmentDto,
+    @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.register.importMasterList(
+      caller,
+      dto.file,
+      ipAddress,
       companyId,
     );
   }

@@ -43,6 +43,7 @@ const equipmentRow = (
     id: `doc-${index}`,
     ...doc,
   })),
+  registration: [],
 });
 
 /**

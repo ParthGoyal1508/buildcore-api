@@ -261,6 +261,23 @@ export class FuelService {
   ): Promise<FuelRow> {
     const date = this.refs.parseDate(dto.date);
     if (dto.vendorId) await this.refs.requireVendorName(caller, dto.vendorId);
+    // The amount paid, when given, is the record (2026-10-15): the log book is kept in rupees
+    // advanced and litres drawn, and a rate rounded to the paisa would not multiply back to it.
+    if (dto.amount === undefined && dto.rate === undefined) {
+      throw new BadRequestException(
+        'Give the rate per litre or the amount paid.',
+      );
+    }
+    if (
+      dto.amount !== undefined &&
+      dto.rate === undefined &&
+      dto.quantity <= 0
+    ) {
+      throw new BadRequestException('Litres must be more than zero.');
+    }
+    const amount =
+      dto.amount ?? Math.round(dto.quantity * (dto.rate ?? 0) * 100) / 100;
+    const rate = dto.rate ?? Math.round((amount / dto.quantity) * 100) / 100;
 
     const { created, variance, threshold } = await withRlsContext(
       this.prisma,
@@ -330,8 +347,9 @@ export class FuelService {
             equipmentId: dto.equipmentId,
             date,
             quantity: dto.quantity,
-            rate: dto.rate,
-            amount: Math.round(dto.quantity * dto.rate * 100) / 100,
+            rate,
+            amount,
+            cardNo: dto.cardNo?.trim() || null,
             vendorId: dto.vendorId ?? null,
             siteId,
             variancePercent: variance.variancePercent,

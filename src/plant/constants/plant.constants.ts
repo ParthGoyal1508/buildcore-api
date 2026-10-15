@@ -92,6 +92,22 @@ export const DEFAULT_EQUIPMENT_DOC_TYPES = [
   { name: 'POLLUTION CERTIFICATE', alertDays: 15 },
   { name: 'PERMIT', alertDays: 30 },
   { name: 'OPERATOR LICENCE', alertDays: 30 },
+  // The vehicle register's "Tax Doc" column (2026-10-15).
+  { name: 'ROAD TAX', alertDays: 30 },
+] as const;
+
+/**
+ * The six papers of the vehicle register (2026-10-15), in its column order, with the words that
+ * find each one's uploaded document among the company's document types — "REGISTRATION
+ * CERTIFICATE" answers RC, "POLLUTION CERTIFICATE" or a "PUC" answers pollution.
+ */
+export const REGISTRATION_PAPERS = [
+  { kind: 'rc', label: 'RC', docWords: ['REGISTRATION', 'RC'] },
+  { kind: 'insurance', label: 'Insurance', docWords: ['INSURANCE'] },
+  { kind: 'fitness', label: 'Fitness', docWords: ['FITNESS'] },
+  { kind: 'road_tax', label: 'Road Tax', docWords: ['ROAD TAX', 'TAX'] },
+  { kind: 'permit', label: 'Permit', docWords: ['PERMIT'] },
+  { kind: 'pollution', label: 'Pollution', docWords: ['POLLUTION', 'PUC'] },
 ] as const;
 
 /** Largest document this module accepts, in bytes. Matches 007's contractor

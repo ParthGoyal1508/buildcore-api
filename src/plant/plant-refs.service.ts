@@ -4,7 +4,12 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { parseDateOnly } from '../hr/leave/leave-days';
 import { EmployeesService } from '../hr/employees/employees.service';
-import { PartnersService } from '../partners/partners.service';
+import {
+  PartnersService,
+  VendorParticulars,
+} from '../partners/partners.service';
+import { CompaniesService } from '../settings/companies/companies.service';
+import type { FormCompany } from '../common/form-document';
 import { SitesService } from '../projects/sites/sites.service';
 import {
   EquipmentCategoriesService,
@@ -34,7 +39,34 @@ export class PlantRefsService {
     private readonly sites: SitesService,
     private readonly partners: PartnersService,
     private readonly employees: EmployeesService,
+    private readonly companies: CompaniesService,
   ) {}
+
+  /** The company as a printed plant document heads it: name, address, logo (2026-10-15). */
+  async documentCompany(companyId: string): Promise<FormCompany> {
+    const identity = await this.companies.getDocumentIdentity(companyId);
+    return {
+      name: identity.name,
+      address: identity.address,
+      logo: identity.logo,
+    };
+  }
+
+  /** A vendor's address, PAN, contact and bank, for the hire order and the hiring bill. */
+  async vendorParticulars(
+    caller: AuthenticatedUser,
+    vendorId: string,
+  ): Promise<VendorParticulars | null> {
+    return this.partners.getVendorParticulars(vendorId, rlsContextFor(caller));
+  }
+
+  /** The company's sites, for matching a location written on an imported sheet. */
+  async companySites(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    return this.sites.listForCompany(rlsContextFor(caller), companyId);
+  }
 
   /**
    * The company a write belongs to: the caller's own, or the one a cross-company

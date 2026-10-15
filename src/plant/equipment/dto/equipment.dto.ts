@@ -3,9 +3,13 @@ import {
   EquipmentOwnership,
   EquipmentStatus,
   PowerSource,
+  RegistrationKind,
+  RegistrationStatus,
 } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBase64,
   IsEnum,
   IsInt,
@@ -17,12 +21,38 @@ import {
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 
 import {
   EQUIPMENT_YEAR_MAX,
   EQUIPMENT_YEAR_MIN,
 } from '../../constants/plant.constants';
+
+/**
+ * One registration paper of the vehicle register (2026-10-15): RC, insurance, fitness, road tax,
+ * permit or pollution — held with its expiry, not applicable, or valid for life.
+ */
+export class RegistrationItemDto {
+  @ApiProperty({ enum: RegistrationKind })
+  @IsEnum(RegistrationKind)
+  kind!: RegistrationKind;
+
+  @ApiProperty({ enum: RegistrationStatus })
+  @IsEnum(RegistrationStatus)
+  status!: RegistrationStatus;
+
+  @ApiPropertyOptional({ example: '2027-06-30' })
+  @IsOptional()
+  @IsISO8601()
+  expiresAt?: string;
+
+  @ApiPropertyOptional({ description: 'Policy, permit or certificate number' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  number?: string;
+}
 
 export class CreateEquipmentDto {
   @ApiProperty({ example: 'JCB 3DX Backhoe Loader' })
@@ -102,6 +132,96 @@ export class CreateEquipmentDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   currentReading?: number;
+
+  // ── Registration details (2026-10-15), from the Equipment Master List ──
+
+  @ApiPropertyOptional({ example: 'JCB', description: 'Brand name' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  make?: string;
+
+  @ApiPropertyOptional({ example: 'JCB3DX' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  model?: string;
+
+  @ApiPropertyOptional({
+    example: 'RJ26-SD-6986',
+    description:
+      'Vehicle number, or a serial number for a machine off the road',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  registrationNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  engineNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  chassisNo?: string;
+
+  @ApiPropertyOptional({ description: 'Who the machine was bought from' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  supplierName?: string;
+
+  @ApiPropertyOptional({
+    description: 'The "Firm" the RC stands in, when not the company itself',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  registeredOwner?: string;
+
+  @ApiPropertyOptional({ description: 'Operator / in-charge' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  operatorName?: string;
+
+  @ApiPropertyOptional({ description: 'Where it is, or who has it' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  remarks?: string;
+
+  @ApiPropertyOptional({ example: '2026-09-01' })
+  @IsOptional()
+  @IsISO8601()
+  lastServiceDate?: string;
+
+  @ApiPropertyOptional({
+    type: [RegistrationItemDto],
+    description:
+      'The registration papers. Each kind given replaces that kind; kinds left out are kept.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(6)
+  @ValidateNested({ each: true })
+  @Type(() => RegistrationItemDto)
+  registration?: RegistrationItemDto[];
+
+  @ApiPropertyOptional({
+    description:
+      'Service schedule: a periodic service every this many hours (or km, on a km meter). ' +
+      'On registration only — afterwards, schedules are kept under Services.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 0 })
+  @Min(1)
+  serviceInterval?: number;
 }
 
 /**
@@ -211,4 +331,45 @@ export class UploadEquipmentDocumentDto {
   @IsOptional()
   @IsISO8601()
   expiresAt?: string;
+}
+
+/** The client's Equipment Master List, as a base64 `.xlsx` (2026-10-15). */
+export class ImportEquipmentDto {
+  @ApiProperty({ description: 'Base64-encoded .xlsx workbook' })
+  @IsBase64()
+  file!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  fileName?: string;
+}
+
+/** The vehicle register's filters — the register list's own, unpaged. */
+export class EquipmentRegisterQueryDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  siteId?: string;
+
+  @ApiPropertyOptional({ enum: EquipmentStatus })
+  @IsOptional()
+  @IsEnum(EquipmentStatus)
+  status?: EquipmentStatus;
+
+  @ApiPropertyOptional({ enum: EquipmentOwnership })
+  @IsOptional()
+  @IsEnum(EquipmentOwnership)
+  ownership?: EquipmentOwnership;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  companyId?: string;
 }

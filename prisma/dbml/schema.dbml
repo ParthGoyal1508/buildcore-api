@@ -3726,6 +3726,15 @@ Table GoodsReceiptNote {
   purchase Purchase [not null]
   grnNumber String [not null, note: '`{shortCode}-GRN-0001`, allocated from the purchase\'s own sequence at creation.']
   siteId String [not null]
+  challanNo String [note: 'What the GRN form records at the gate (2026-10-15). The quantities are as counted; the
+purchase\'s own quantity is what was billed and is what stock moves by.']
+  vehicleNo String
+  receivedQuantity Decimal
+  acceptedQuantity Decimal
+  rejectedQuantity Decimal
+  condition String [note: 'good, damaged, short, under_inspection.']
+  batchDetails String
+  discrepancy String
   createdAt DateTime [default: `now()`, not null]
 
   indexes {
@@ -3769,6 +3778,14 @@ requiring one would make material un-issuable at a project whose BOQ has not
 been loaded yet. Validated against `ProjectsService` when supplied.']
   boqItemId String
   remarks String
+  slipNo String [note: 'The daily issue register and issue slip (2026-10-15). `slipNo` from the `ISSUE_SLIP`
+series; the machine the material went to, if any; and the return — how much came back
+to the store, when, and who received it. A return puts stock back exactly as reversing
+that much of the issue would.']
+  equipmentId String
+  returnedQuantity Decimal
+  returnedOn DateTime
+  receivedBy String
   indentLineId String [note: 'The indent line this issue fulfils, if it came from one (FR-023).']
   indentLine MaterialIndentLine
   deleted Boolean [not null, default: false]
@@ -3786,6 +3803,15 @@ Table StockTransfer {
   date DateTime [not null]
   quantity Decimal [not null]
   remarks String
+  transferNo String [note: 'The stock transfer slip and the delivery challan that travels with it (2026-10-15).']
+  challanNo String
+  vehicleNo String
+  transporter String
+  dispatchReference String
+  requestNo String
+  expectedArrival DateTime
+  receivedQuantity Decimal [note: 'Counted at the receiving store; the slip prints the difference from what was sent.']
+  reason String
   status TransferStatus [not null, default: 'pending', note: 'Physical-movement tracking only. Both balances move at creation regardless of
 this value: the material has left the source store the moment the transfer is
 recorded, and holding the decrement until "received" would let the same units
@@ -3850,6 +3876,7 @@ asking ProjectsService per row. Nullable: a site need not belong to a project.']
   indentNumber String [not null, note: '`{shortCode}-IND-0001`.']
   requiredByDate DateTime [not null]
   justification String [not null]
+  department String [note: 'The indent form\'s "Department" (2026-10-15).']
   status IndentStatus [not null, default: 'submitted']
   requestedByUserId String [not null]
   approvedByUserId String
@@ -3899,6 +3926,10 @@ Table EquipmentCategory {
   company Company [not null]
   name String [not null, note: 'Stored uppercase, like `ItemCategory.name`, so "Excavator" and "EXCAVATOR"
 cannot coexist as two categories meaning the same thing.']
+  group String [note: 'The broad family the category sits in — "Road Construction & Highway Machinery",
+"Vehicle Fleet" — from the client\'s Equipment Master List (2026-10-15). Free text,
+nullable: the ten built-in categories predate it, and a group is a heading for the
+picker rather than anything a figure depends on.']
   meterType MeterType [not null]
   fuelBenchmark Decimal [note: 'Expected consumption per meter unit (litres/hour or litres/km). Nullable
 because an electric or manual category has none, and 0 would read as a
@@ -3971,6 +4002,19 @@ reads. Nullable because every machine registered before this column existed has
 none, and because a hired machine\'s build year is often simply not known —
 code generation falls back to the purchase year, then to the current year.']
   categoryId String [not null, note: '→ `settings.EquipmentCategory`. Resolved via `EquipmentCategoriesService`.']
+  make String [note: 'Registration details (2026-10-15), from the client\'s Equipment Master List and vehicle
+register: what is painted or stamped on the machine, and who it is registered to. All
+optional — a plate compactor has no registration number, and a hired machine\'s engine
+number is often not known.']
+  model String
+  registrationNo String [note: 'The vehicle number for anything on the road (RJ26-SD-6986); a serial for anything not.']
+  engineNo String
+  chassisNo String
+  supplierName String [note: 'Who the machine was bought from, as text: a supplier is often not a vendor in the system.']
+  registeredOwner String [note: 'The "Firm" on the register — whose name the RC is in, which is not always the company\'s.']
+  operatorName String [note: 'The operator or in-charge as the yard names them; the logbook records the operator per day.']
+  remarks String [note: 'The register\'s "Remark" column: where the machine is, or who has it ("ITUNDA ROAD").']
+  lastServiceDate DateTime
   ownership EquipmentOwnership [not null]
   vendorId String [note: '→ `partners.Vendor`, for hired equipment. Resolved via `PartnersService`.']
   powerSource PowerSource [not null]
@@ -3994,6 +4038,8 @@ register listing 500 machines does not run 500 aggregates.']
   serviceSchedules ServiceSchedule [not null]
   maintenanceJobs MaintenanceJob [not null]
   hireBills HireBill [not null]
+  registration EquipmentRegistrationItem [not null]
+  hireOrderLines HireOrderLine [not null]
 
   indexes {
     (companyId, code) [unique]
@@ -4013,6 +4059,76 @@ at read time, the same treatment contractor and employee documents get.']
   expiresAt DateTime
   uploadedByUserId String [not null]
   uploadedAt DateTime [default: `now()`, not null]
+}
+
+Table EquipmentRegistrationItem {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  kind RegistrationKind [not null]
+  status RegistrationStatus [not null, default: 'held']
+  expiresAt DateTime
+  number String [note: 'The policy or permit number, where the paper has one.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (equipmentId, kind) [unique]
+  }
+
+  Note: 'One machine\'s standing on one registration paper (2026-10-15) — a cell pair of the client\'s
+"Vehicle Details" register: RC, insurance, fitness, road tax, permit and pollution, each with
+its expiry date. The "Doc" column beside each is not stored here: it reads whether a document
+of the matching type has been uploaded to the machine, so a scanned copy is recorded once.'
+}
+
+Table HireOrder {
+  id String [pk]
+  companyId String [not null]
+  code String [not null, note: 'From the `WORK_ORDER` series (250001 at Tirupati).']
+  referenceNo String [note: 'The "Ref No." at the head; free text, as the company\'s own reference.']
+  date DateTime [not null]
+  vendorId String [not null, note: '→ `partners.Vendor`, the supplier.']
+  projectId String [note: '→ `projects.Project`.']
+  pointOfDelivery String
+  remarks String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  lines HireOrderLine [not null]
+  bills HireBill [not null]
+
+  indexes {
+    (companyId, code) [unique]
+  }
+
+  Note: 'A work/hire order for a vehicle or machine (2026-10-15) — the client\'s "WORK/HIRE ORDER":
+the supplier, the project and point of delivery, the PART-A schedule, and the fixed general
+terms. Numbered from the company\'s work-order series, so a hire order and a subcontract
+work order never share a number.'
+}
+
+Table HireOrderLine {
+  id String [pk]
+  companyId String [not null]
+  hireOrderId String [not null]
+  hireOrder HireOrder [not null]
+  position Int [not null]
+  equipmentId String [note: 'The machine this line hires, when it is registered — optional, as an order is often
+raised before the machine arrives.']
+  equipment Equipment
+  title String [not null]
+  description String [not null]
+  sacCode String
+  taxRate Decimal [not null, default: 0]
+  quantity Decimal [not null]
+  uom String [not null]
+  rate Decimal [not null]
+  amount Decimal [not null]
+
+  Note: 'One item of PART-A: a heading ("Hiring of Bolero Camper ZX for Toll plaza") over its service
+line ("LMV hire services-Months", SAC 9966, 3 MON at 2,40,000).'
 }
 
 Table LogbookEntry {
@@ -4047,6 +4163,7 @@ Table FuelEntry {
   quantity Decimal [not null]
   rate Decimal [not null]
   amount Decimal [not null]
+  cardNo String [note: 'The fuel card the diesel was drawn on (2026-10-15) — the log book\'s "Card no." column.']
   vendorId String [note: '→ `partners.Vendor` (the filling station or diesel supplier).']
   siteId String [note: 'Where the fuel was drawn. → `projects.Site`, a plain column with no relation, for
 the reason `Purchase.vendorId` is one: Principle I routes a cross-module read
@@ -4199,6 +4316,11 @@ by a client.']
   linkedServiceScheduleId String
   linkedServiceSchedule ServiceSchedule
   status MaintenanceStatus [not null, default: 'open']
+  jobCardNo String [note: 'The maintenance job card (2026-10-15): `JC-…` from the `JOB_CARD` series, and the card\'s
+many printed fields — priority, job type, the complaint, the inspection and outside-parts
+rows, the handover checks, the sign-off names — as one validated document. Kept as JSON
+because none of it is summed, filtered or joined on: it is what the card prints.']
+  card Json
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   partMovements SparePartMovement [not null]
@@ -4227,6 +4349,26 @@ logbook entry is corrected afterwards.']
   tdsAmount Decimal [not null, default: 0]
   netPayable Decimal [not null]
   status HireBillStatus [not null, default: 'pending_verification']
+  basis HireBillBasis [not null, default: 'hours', note: 'The vehicle hiring bill (2026-10-15): the client\'s monthly format. `basis` says how the
+gross was reached — hours × rate (the original hire bill), or a monthly rent pro-rated
+over the days billed. Everything below is optional so a bill raised before it reads as
+it always did.']
+  hireOrderId String
+  hireOrder HireOrder
+  billDate DateTime
+  invoiceNo String [note: '"Reference Invoice No." — the supplier\'s own running number.']
+  taxInvoiceRef String
+  taxInvoiceDate DateTime
+  description String
+  periodDays Int
+  monthlyRate Decimal
+  agreedAverage Decimal [note: 'The agreed average — litres per hour, or km per litre for a vehicle on a km meter.']
+  startReading Decimal
+  endReading Decimal
+  dieselGiven Decimal [note: 'Litres the company supplied in the period, from the fuel register.']
+  actualDiesel Decimal [note: 'Litres the work should have used at the agreed average.']
+  deductionAmount Decimal [not null, default: 0, note: '"Deduction Amount" — the diesel the company supplied, or any other deduction agreed.']
+  holdAmount Decimal [not null, default: 0, note: '"Debit / Hold Amount".']
   verifiedByUserId String
   verifiedAt DateTime
   paymentDate DateTime
@@ -5732,6 +5874,10 @@ Enum CodeSeriesType {
   WORK_ORDER
   DEBIT_NOTE
   NOC
+  JOB_CARD
+  ISSUE_SLIP
+  DELIVERY_CHALLAN
+  STOCK_TRANSFER
 }
 
 Enum VendorType {
@@ -5853,6 +5999,7 @@ Enum MeterType {
 Enum EquipmentOwnership {
   owned
   hired
+  leased
 }
 
 Enum PowerSource {
@@ -5878,6 +6025,11 @@ Enum MaintenanceStatus {
   closed
 }
 
+Enum HireBillBasis {
+  hours
+  monthly
+}
+
 Enum HireBillStatus {
   pending_verification
   verified
@@ -5899,6 +6051,21 @@ Enum ServiceBillPaymentStatus {
   unpaid
   partially_paid
   paid
+}
+
+Enum RegistrationKind {
+  rc
+  insurance
+  fitness
+  road_tax
+  permit
+  pollution
+}
+
+Enum RegistrationStatus {
+  held
+  not_applicable
+  lifetime
 }
 
 Enum FuelExceptionStatus {
@@ -6380,6 +6547,12 @@ Ref: HireRate.categoryId > EquipmentCategory.id [delete: Cascade]
 
 Ref: EquipmentDocument.equipmentId > Equipment.id [delete: Cascade]
 
+Ref: EquipmentRegistrationItem.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: HireOrderLine.hireOrderId > HireOrder.id [delete: Cascade]
+
+Ref: HireOrderLine.equipmentId > Equipment.id [delete: Set Null]
+
 Ref: LogbookEntry.equipmentId > Equipment.id [delete: Cascade]
 
 Ref: FuelEntry.equipmentId > Equipment.id [delete: Cascade]
@@ -6399,6 +6572,8 @@ Ref: MaintenanceJob.equipmentId > Equipment.id [delete: Cascade]
 Ref: MaintenanceJob.linkedServiceScheduleId > ServiceSchedule.id
 
 Ref: HireBill.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: HireBill.hireOrderId > HireOrder.id [delete: Set Null]
 
 Ref: SparePartMovement.sparePartId > SparePart.id [delete: Cascade]
 
