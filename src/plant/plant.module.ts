@@ -37,6 +37,7 @@ import { PlantService } from './plant.service';
 import { HireRatesController } from './rates/hire-rates.controller';
 import {
   EquipmentDocumentExpiryRule,
+  EquipmentRegistrationExpiryRule,
   EquipmentServiceDueRule,
 } from './reminders/plant-reminder.rules';
 import { ServiceBillsController } from './service-bills/service-bills.controller';
@@ -123,6 +124,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     CodeSeriesService,
     AuditLogService,
     EquipmentDocumentExpiryRule,
+    EquipmentRegistrationExpiryRule,
     EquipmentServiceDueRule,
   ],
   // Exported for 008's Project P&L, which sums machinery and fuel cost from this

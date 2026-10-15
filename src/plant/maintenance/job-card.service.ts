@@ -127,6 +127,12 @@ export class JobCardService {
     card: JobCardDto,
   ): Promise<JobCardView> {
     const job = await this.job(caller, jobId);
+    // The machine's details as they stand when the card is first saved are written into it, so
+    // the card keeps the odometer it was opened at rather than following the machine forward.
+    const machine = job.card
+      ? null
+      : await this.machine(caller, job.equipmentId);
+    const stored = { ...(machine?.defaults ?? {}), ...withoutBlanks(card) };
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const jobCardNo =
         job.jobCardNo ??
@@ -145,7 +151,7 @@ export class JobCardService {
         where: { id: jobId },
         data: {
           jobCardNo,
-          card: JSON.parse(JSON.stringify(card)) as Prisma.InputJsonObject,
+          card: JSON.parse(JSON.stringify(stored)) as Prisma.InputJsonObject,
         },
       });
     });

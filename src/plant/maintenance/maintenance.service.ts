@@ -45,6 +45,8 @@ export interface MaintenanceJobRow {
   /** Parts + labour + verified service bills (US11 scenario 6). */
   totalCost: number;
   linkedServiceScheduleId: string | null;
+  /** The job card's number, once a card has been saved (2026-10-15). */
+  jobCardNo: string | null;
   status: MaintenanceStatus;
   createdAt: Date;
 }
@@ -104,6 +106,7 @@ export class MaintenanceService {
       // never lag a part consumed or a bill verified after the job was last saved.
       totalCost: partsCost + (labourCost ?? 0) + serviceBillCost,
       linkedServiceScheduleId: row.linkedServiceScheduleId,
+      jobCardNo: row.jobCardNo,
       status: row.status,
       createdAt: row.createdAt,
     };

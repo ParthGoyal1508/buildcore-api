@@ -144,6 +144,9 @@ type EquipmentWithDocs = Prisma.EquipmentGetPayload<{
 
 const WITH_DOCS = { documents: true, registration: true } as const;
 
+/** How far ahead a registration paper's expiry alerts — the register's amber window. */
+const PAPER_ALERT_DAYS = 30;
+
 /** Midnight today, in the server's own zone — the reference point every expiry
  * comparison uses. */
 function startOfToday(): Date {
@@ -388,6 +391,16 @@ export class EquipmentService {
     const today = startOfToday();
 
     return rows.map((row) => {
+      const lapsingPapers = row.registration.flatMap((item) =>
+        item.status === RegistrationStatus.held &&
+        item.expiresAt &&
+        this.isExpiring(item.expiresAt, PAPER_ALERT_DAYS, today)
+          ? [
+              REGISTRATION_PAPERS.find((paper) => paper.kind === item.kind)
+                ?.label ?? item.kind,
+            ]
+          : [],
+      );
       const alerting = row.documents.filter((document) =>
         this.isExpiring(
           document.expiresAt,
@@ -434,14 +447,17 @@ export class EquipmentService {
           row.purchaseCost === null ? null : Number(row.purchaseCost),
         depreciationRate:
           row.depreciationRate === null ? null : Number(row.depreciationRate),
-        expiryAlert: alerting.length > 0,
+        // A registration paper lapsing within 30 days, or lapsed, alerts as an expiring
+        // document does (2026-10-15) — the register shades the same dates.
+        expiryAlert: alerting.length > 0 || lapsingPapers.length > 0,
         alertDocumentTypes: [
-          ...new Set(
-            alerting.map(
+          ...new Set([
+            ...alerting.map(
               (document) =>
                 docTypes.get(document.docTypeId)?.name ?? 'Unknown type',
             ),
-          ),
+            ...lapsingPapers,
+          ]),
         ],
         createdAt: row.createdAt,
       };
