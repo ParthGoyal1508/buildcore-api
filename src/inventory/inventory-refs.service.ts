@@ -5,6 +5,7 @@ import { rlsContextFor } from '../common/prisma/rls-context';
 import { parseDateOnly } from '../hr/leave/leave-days';
 import { MAX_PAGE_SIZE } from './constants/inventory.constants';
 import { PartnersService } from '../partners/partners.service';
+import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
 import { ItemView, ItemsService } from '../settings/item-masters/items.service';
 import { companyScope } from '../settings/company-scope';
@@ -24,6 +25,7 @@ export class InventoryRefsService {
     private readonly items: ItemsService,
     private readonly sites: SitesService,
     private readonly partners: PartnersService,
+    private readonly projects: ProjectsService,
   ) {}
 
   /**
@@ -83,6 +85,45 @@ export class InventoryRefsService {
   ): Promise<string | null> {
     const site = await this.sites.getSiteById(rlsContextFor(caller), siteId);
     return site.projectId ?? null;
+  }
+
+  /** A project in the target company, for an issue naming what it was for (2026-10-15). */
+  async requireProject(
+    caller: AuthenticatedUser,
+    projectId: string,
+    companyId: string,
+  ): Promise<{ id: string; code: string; name: string }> {
+    const project = await this.projects.getProjectIdentityById(
+      projectId,
+      rlsContextFor(caller),
+    );
+    if (!project || project.companyId !== companyId) {
+      throw new BadRequestException(
+        `Project ${projectId} does not exist in this company`,
+      );
+    }
+    return project;
+  }
+
+  /** "CODE · Name" for a list of project ids, tolerating a missing one. */
+  async projectNames(
+    caller: AuthenticatedUser,
+    projectIds: string[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(projectIds)];
+    const ctx = rlsContextFor(caller);
+    const entries = await Promise.all(
+      unique.map(async (projectId) => {
+        const project = await this.projects
+          .getProjectIdentityById(projectId, ctx)
+          .catch(() => null);
+        return [
+          projectId,
+          project ? `${project.code} · ${project.name}` : 'Unknown project',
+        ] as const;
+      }),
+    );
+    return new Map(entries);
   }
 
   async requireVendorName(

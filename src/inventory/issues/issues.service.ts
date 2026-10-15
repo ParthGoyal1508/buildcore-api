@@ -39,6 +39,10 @@ export interface IssueView {
   date: Date;
   quantity: number;
   issuedTo: string;
+  projectId: string | null;
+  projectName: string | null;
+  vendorId: string | null;
+  vendorName: string | null;
   activityId: string | null;
   activityName: string | null;
   boqItemId: string | null;
@@ -119,11 +123,33 @@ export class IssuesService {
   ): Promise<IssueView> {
     const targetCompanyId = this.refs.targetCompanyOf(caller, companyId);
 
-    const [item, siteName, workRefs] = await Promise.all([
-      this.refs.requireItem(caller, dto.itemId, targetCompanyId),
-      this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
-      this.resolveWorkRefs(caller, dto),
-    ]);
+    const [item, siteName, workRefs, siteProjectId, vendorName] =
+      await Promise.all([
+        this.refs.requireItem(caller, dto.itemId, targetCompanyId),
+        this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
+        this.resolveWorkRefs(caller, dto),
+        dto.projectId
+          ? Promise.resolve(null)
+          : this.refs.projectOfSite(caller, dto.siteId),
+        dto.vendorId
+          ? this.refs.requireVendorName(caller, dto.vendorId)
+          : Promise.resolve(null),
+      ]);
+
+    // The project named, else the store's own (2026-10-15) — a site store belongs to the
+    // project it serves, so most issues need no choice at all.
+    const projectId = dto.projectId ?? siteProjectId;
+    const project = projectId
+      ? await this.refs.requireProject(caller, projectId, targetCompanyId)
+      : null;
+
+    // A person, or failing that the vendor or subcontractor: an issue always says who took it.
+    const issuedTo = dto.issuedTo?.trim() || vendorName;
+    if (!issuedTo) {
+      throw new BadRequestException(
+        'Say who took the material: a person, or a vendor or subcontractor.',
+      );
+    }
 
     const date = this.refs.parseDate(dto.date);
 
@@ -148,7 +174,9 @@ export class IssuesService {
             itemId: dto.itemId,
             date,
             quantity: dto.quantity,
-            issuedTo: dto.issuedTo.trim(),
+            issuedTo,
+            projectId: project?.id ?? null,
+            vendorId: dto.vendorId ?? null,
             activityId: dto.activityId ?? null,
             boqItemId: dto.boqItemId ?? null,
             indentLineId: dto.indentLineId ?? null,
@@ -187,7 +215,13 @@ export class IssuesService {
       entityType: AuditEntityType.ISSUE,
       action: AuditAction.CREATE,
       entityId: created.id,
-      changes: { after: { quantity: dto.quantity, issuedTo: dto.issuedTo } },
+      changes: {
+        after: {
+          quantity: dto.quantity,
+          issuedTo,
+          ...(project ? { project: project.name } : {}),
+        },
+      },
       accountId: caller.id,
       companyId: targetCompanyId,
       ipAddress,
@@ -205,6 +239,10 @@ export class IssuesService {
       date,
       quantity: dto.quantity,
       issuedTo: created.issuedTo,
+      projectId: created.projectId,
+      projectName: project ? `${project.code} · ${project.name}` : null,
+      vendorId: created.vendorId,
+      vendorName,
       activityId: created.activityId,
       activityName: workRefs.activityName,
       boqItemId: created.boqItemId,
@@ -261,7 +299,7 @@ export class IssuesService {
       },
     );
 
-    const [items, siteNames] = await Promise.all([
+    const [items, siteNames, projectNames, vendorNames] = await Promise.all([
       this.refs.itemsByIds(
         caller,
         rows.map((row) => row.itemId),
@@ -269,6 +307,14 @@ export class IssuesService {
       this.refs.siteNames(
         caller,
         rows.map((row) => row.siteId),
+      ),
+      this.refs.projectNames(
+        caller,
+        rows.flatMap((row) => (row.projectId ? [row.projectId] : [])),
+      ),
+      this.refs.vendorNames(
+        caller,
+        rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
       ),
     ]);
 
@@ -287,6 +333,14 @@ export class IssuesService {
           date: row.date,
           quantity: toNumber(row.quantity),
           issuedTo: row.issuedTo,
+          projectId: row.projectId,
+          projectName: row.projectId
+            ? projectNames.get(row.projectId) ?? 'Unknown project'
+            : null,
+          vendorId: row.vendorId,
+          vendorName: row.vendorId
+            ? vendorNames.get(row.vendorId) ?? 'Unknown vendor'
+            : null,
           activityId: row.activityId,
           // Names are resolved on the detail path only. Resolving them per row
           // would be one cross-module call per issue, and the list shows the

@@ -33,11 +33,30 @@ export class CreateIssueDto {
   @IsPositive()
   quantity!: number;
 
-  @ApiProperty({ description: 'Who took the material' })
+  @ApiPropertyOptional({
+    description:
+      'Who took the material. Optional when a vendor or subcontractor is named — ' +
+      'their name is recorded instead.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(120)
-  issuedTo!: string;
+  issuedTo?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "The project the material is issued for. Defaults to the store's own project.",
+  })
+  @IsOptional()
+  @IsString()
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description: 'The vendor or subcontractor who took the material',
+  })
+  @IsOptional()
+  @IsString()
+  vendorId?: string;
 
   @ApiPropertyOptional({
     description:

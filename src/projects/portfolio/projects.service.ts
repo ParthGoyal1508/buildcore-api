@@ -951,11 +951,16 @@ export class ProjectsService {
   async getProjectIdentityById(
     projectId: string,
     ctx: RlsContext = { isSuperAdmin: true },
-  ): Promise<{ id: string; code: string; name: string } | null> {
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    companyId: string;
+  } | null> {
     return withRlsContext(this.prisma, ctx, (tx) =>
       tx.project.findFirst({
         where: { id: projectId },
-        select: { id: true, code: true, name: true },
+        select: { id: true, code: true, name: true, companyId: true },
       }),
     );
   }

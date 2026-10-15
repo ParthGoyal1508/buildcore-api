@@ -6197,6 +6197,12 @@ model Issue {
   quantity Decimal  @db.Decimal(18, 3)
   issuedTo String
 
+  /// The project the material was issued for, and the vendor or subcontractor (a
+  /// `partners.Vendor`) who took it (2026-10-15). Optional, validated on write. The
+  /// project defaults to the store's own when the store belongs to one.
+  projectId String?
+  vendorId  String?
+
   /// What the material was consumed for (FR-019). Both optional: the link is
   /// recorded when the site's project has BOQ or activity data to point at, and
   /// requiring one would make material un-issuable at a project whose BOQ has not
@@ -6220,6 +6226,8 @@ model Issue {
   @@index([companyId, siteId])
   @@index([companyId, itemId, siteId])
   @@index([indentLineId])
+  @@index([companyId, projectId])
+  @@index([companyId, vendorId])
   @@schema("inventory")
 }
 

@@ -3687,6 +3687,10 @@ Table Issue {
   date DateTime [not null]
   quantity Decimal [not null]
   issuedTo String [not null]
+  projectId String [note: 'The project the material was issued for, and the vendor or subcontractor (a
+`partners.Vendor`) who took it (2026-10-15). Optional, validated on write. The
+project defaults to the store\'s own when the store belongs to one.']
+  vendorId String
   activityId String [note: 'What the material was consumed for (FR-019). Both optional: the link is
 recorded when the site\'s project has BOQ or activity data to point at, and
 requiring one would make material un-issuable at a project whose BOQ has not
