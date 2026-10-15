@@ -15,7 +15,10 @@ import type {
 } from '../workbook/bill-workbook.types';
 import type { FrozenRates } from './bill-package.service';
 import { BillPackageService, packageLabel } from './bill-package.service';
-import { DebitNoteService } from './debit-note.service';
+import {
+  DebitNoteService,
+  type RaiseDebitNoteInput,
+} from './debit-note.service';
 import { MeasurementSheetService } from './measurement-sheet.service';
 
 /**
@@ -106,6 +109,18 @@ export class BillPackageViewBuilder {
         ? await this.docx.renderDebitNote(view)
         : await this.renderer.renderDebitNote(view);
     return { bytes, filename: `${sanitise(stem)}.${format}` };
+  }
+
+  /** A debit note as it would print before it is raised — the raise form's Preview (PDF). */
+  async debitNotePreview(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    input: RaiseDebitNoteInput,
+  ): Promise<Buffer> {
+    return this.pdf.renderDebitNote(
+      await this.debits.previewView(ctx, companyId, projectId, input),
+    );
   }
 
   /** The workbook (FR-024). Kept for its callers; `documentFor` is the general form. */

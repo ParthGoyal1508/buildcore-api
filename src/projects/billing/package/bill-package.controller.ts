@@ -407,6 +407,34 @@ export class BillPackageController {
     );
   }
 
+  @Post('projects/:projectId/debit-notes/preview.pdf')
+  @ApiOperation({
+    summary: 'A debit note as it would print, before it is raised',
+    description:
+      'The same body as raising one. Nothing is saved and no number is drawn — the number prints ' +
+      'as "Draft". Computed by the same code as the raise, so the preview and the note agree.',
+  })
+  async previewDebitNote(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('projectId') projectId: string,
+    @Body() dto: RaiseDebitNoteDto,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ): Promise<void> {
+    const bytes = await this.views.debitNotePreview(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      dto,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      'inline; filename="Debit Note (draft).pdf"',
+    );
+    res.send(bytes);
+  }
+
   @Post('projects/debit-notes/:noteId/apply/:packageId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({

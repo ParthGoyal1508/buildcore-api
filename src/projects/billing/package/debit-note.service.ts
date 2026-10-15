@@ -149,6 +149,33 @@ export function noteTaxes(
   };
 }
 
+/**
+ * A note's figures from what the form sent: each line's amount (quantity × rate, to the paisa), the
+ * work-done total, the tax, and the net rounded to the rupee. One function for the raise and the
+ * preview, so the two cannot print different numbers.
+ */
+function computeNote(input: RaiseDebitNoteInput) {
+  if (input.lines.length === 0) {
+    throw new BadRequestException('A debit note needs at least one item.');
+  }
+  const gstPercent = new Prisma.Decimal(input.gstPercent);
+  const lines = input.lines.map((line) => {
+    const quantity = new Prisma.Decimal(line.quantity);
+    const rate = new Prisma.Decimal(line.rate);
+    const amount = round2(quantity.mul(rate));
+    return { ...line, quantity, rate, amount };
+  });
+  const amount = lines.reduce((sum, line) => sum.plus(line.amount), ZERO);
+  const taxes = noteTaxes(amount, gstPercent, input.taxBasis);
+  const net = amount
+    .plus(taxes.total)
+    .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+  const noteDate = input.noteDate
+    ? new Date(`${input.noteDate.slice(0, 10)}T00:00:00.000Z`)
+    : new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+  return { gstPercent, lines, amount, taxes, net, noteDate };
+}
+
 /** Where the running number starts each April, and how wide it prints: `2026-27/001`. */
 const NUMBER_WIDTH = 3;
 
@@ -192,24 +219,8 @@ export class DebitNoteService {
     projectId: string,
     input: RaiseDebitNoteInput,
   ): Promise<DebitNoteRow> {
-    if (input.lines.length === 0) {
-      throw new BadRequestException('A debit note needs at least one item.');
-    }
-    const gstPercent = new Prisma.Decimal(input.gstPercent);
-    const lines = input.lines.map((line) => {
-      const quantity = new Prisma.Decimal(line.quantity);
-      const rate = new Prisma.Decimal(line.rate);
-      const amount = round2(quantity.mul(rate));
-      return { ...line, quantity, rate, amount };
-    });
-    const amount = lines.reduce((sum, line) => sum.plus(line.amount), ZERO);
-    const taxes = noteTaxes(amount, gstPercent, input.taxBasis);
-    const net = amount
-      .plus(taxes.total)
-      .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
-    const noteDate = input.noteDate
-      ? new Date(`${input.noteDate.slice(0, 10)}T00:00:00.000Z`)
-      : new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+    const { gstPercent, lines, amount, taxes, net, noteDate } =
+      computeNote(input);
     const prefix = `${financialYear(noteDate)}/`;
 
     // The number is the highest under this year's prefix plus one, so the series restarts each
@@ -293,6 +304,78 @@ export class DebitNoteService {
         if (!duplicate || attempt >= 2) throw err;
       }
     }
+  }
+
+  /**
+   * The note as it would print, before it is raised (2026-10-15) — the "Preview" on the raise
+   * form. Computed by the same `computeNote` the raise uses, so the preview and the saved note
+   * cannot disagree; nothing is written and no number is drawn, so the number prints as "Draft".
+   */
+  async previewView(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    input: RaiseDebitNoteInput,
+  ): Promise<DebitNoteView> {
+    const { lines, amount, taxes, net, noteDate } = computeNote(input);
+    const { project, workOrder } = await withRlsContext(
+      this.prisma,
+      ctx,
+      async (tx) => ({
+        project: await tx.project.findFirst({
+          where: { id: projectId },
+          select: { name: true, code: true, location: true },
+        }),
+        workOrder: await tx.workOrder.findFirst({
+          where: { id: input.workOrderId, projectId },
+          select: { code: true, workDetail: true, partnerId: true },
+        }),
+      }),
+    );
+    if (!project) throw new NotFoundException('Project not found');
+    if (!workOrder) {
+      throw new BadRequestException('That work order is not on this project.');
+    }
+    const company = await this.companies.getDocumentIdentity(companyId);
+    const source = this.sources.vendorIdentitySource();
+    const vendor =
+      workOrder.partnerId && source
+        ? await source.getBillingIdentity(workOrder.partnerId, companyId)
+        : null;
+    return {
+      company: {
+        name: company.name,
+        address: company.address,
+        logo: company.logo,
+      },
+      projectName: project.name,
+      projectCode: project.code,
+      location: project.location,
+      noteNumber: 'Draft',
+      noteDate: noteDate.toISOString().slice(0, 10),
+      party: {
+        name: vendor?.name ?? null,
+        gstin: vendor?.gstin ?? null,
+        code: vendor?.code ?? null,
+      },
+      workOrderNo: workOrder.code,
+      natureOfWork: input.natureOfWork?.trim() || workOrder.workDetail || null,
+      lines: lines.map((line, index) => ({
+        srNo: index + 1,
+        description: line.description.trim(),
+        specification: line.specification?.trim() || null,
+        unit: line.unit?.trim() || null,
+        quantity: line.quantity.toFixed(2),
+        rate: line.rate.toFixed(2),
+        amount: line.amount.toFixed(2),
+      })),
+      amount: amount.toFixed(2),
+      taxes: taxes.lines.map((tax) => ({
+        label: tax.label,
+        amount: tax.amount.toFixed(2),
+      })),
+      netAmount: net.toFixed(0),
+    };
   }
 
   /**
