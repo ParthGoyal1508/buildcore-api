@@ -28,6 +28,7 @@ import {
 } from './position-export.service';
 import { PnlDrillDownService } from './pnl-drill-down.service';
 import { ProjectPnlService } from './project-pnl.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * The project P&L and the group view (018 US3) — `bugs.md` item 11's "P&L and Budget Summary".
@@ -143,7 +144,7 @@ export class ProjectPnlController {
     res.setHeader('Content-Type', document.contentType);
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${document.filename}"`,
+      contentDispositionFor(document.filename),
     );
     res.status(200).send(document.buffer);
   }

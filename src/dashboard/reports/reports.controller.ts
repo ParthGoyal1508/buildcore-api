@@ -25,6 +25,7 @@ import type { ReportData } from './report.types';
 import { ReportsService } from './reports.service';
 import { AccessLevel } from '@prisma/client';
 import { RequireLevel } from '../../common/decorators/access-level.decorator';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * Reports & export (feature 004, US7). Report runs and metadata sit behind the
@@ -122,7 +123,7 @@ export class ReportsController {
     res.setHeader('Content-Type', outcome.contentType);
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${outcome.filename}"`,
+      contentDispositionFor(outcome.filename),
     );
     res.status(200).send(outcome.buffer);
   }
@@ -142,10 +143,7 @@ export class ReportsController {
   ): Promise<void> {
     const file = await this.exports.download(user, id);
     res.setHeader('Content-Type', file.contentType);
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${file.filename}"`,
-    );
+    res.setHeader('Content-Disposition', contentDispositionFor(file.filename));
     res.status(200).send(file.buffer);
   }
 }

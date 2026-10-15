@@ -54,6 +54,7 @@ import {
   readCertifiedCopy,
   unreadableCopy,
 } from './certified-copy.reader';
+import { contentDispositionFor } from '../../../common/storage/file-type';
 
 const CONTENT_TYPES = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -492,7 +493,7 @@ export class BillPackageController {
       format,
     );
     res.setHeader('Content-Type', CONTENT_TYPES[format]);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     res.send(bytes);
   }
 
@@ -523,7 +524,7 @@ export class BillPackageController {
       { abstractOnly: part === 'abstract' },
     );
     res.setHeader('Content-Type', CONTENT_TYPES[format]);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     if (missingFields.length > 0) {
       res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
     }
@@ -553,7 +554,7 @@ export class BillPackageController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     // FR-027a. A workbook is a file download, so a list of gaps recorded on the row and absent
     // from the response is a gap nobody is told about.
     if (missingFields.length > 0) {
@@ -585,7 +586,7 @@ export class BillPackageController {
     );
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     if (missingFields.length > 0) {
       res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
     }

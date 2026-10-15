@@ -14,6 +14,7 @@ import { callerFrom } from '../../hr/caller-context';
 import { SalaryPdfService } from './salary-pdf.service';
 import { SalaryService } from './salary.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * The employee's own payslips (US5).
@@ -93,7 +94,7 @@ export class SalaryController {
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="payslip-${slip.employeeCode}-${period}.pdf"`,
+      contentDispositionFor(`payslip-${slip.employeeCode}-${period}.pdf`),
     );
     response.send(pdf);
   }

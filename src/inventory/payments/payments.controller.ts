@@ -28,6 +28,7 @@ import {
   ListPaymentsDto,
 } from './dto/payment.dto';
 import { PaymentsService } from './payments.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 @ApiTags('Inventory')
 @ApiBearerAuth()
@@ -130,7 +131,7 @@ export class PaymentsController {
     res.setHeader('Content-Type', contentType);
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="payment-proof-${id}"`,
+      contentDispositionFor(`payment-proof-${id}`),
     );
     res.send(data);
   }

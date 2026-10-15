@@ -36,6 +36,7 @@ import {
 } from './dto/equipment.dto';
 import { EquipmentRegisterService } from './equipment-register.service';
 import { EquipmentService } from './equipment.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * The asset register (006 US2), gated by `MACHINERY`.
@@ -215,7 +216,7 @@ export class EquipmentController {
     response.setHeader('Content-Type', file.contentType);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.fileName.replace(/"/g, '')}"`,
+      contentDispositionFor(file.fileName),
     );
     return new StreamableFile(file.buffer);
   }

@@ -32,6 +32,7 @@ import {
   UploadAssetDocumentDto,
 } from './dto/asset.dto';
 import { AssetService } from './asset.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /** The asset register (spec US2), gated by `ASSETS`. */
 @ApiTags('Assets')
@@ -87,7 +88,7 @@ export class AssetController {
     );
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.filename}"`,
+      contentDispositionFor(file.filename),
     );
     return new StreamableFile(file.buffer);
   }
@@ -188,7 +189,7 @@ export class AssetController {
     response.setHeader('Content-Type', file.contentType);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.fileName.replace(/"/g, '')}"`,
+      contentDispositionFor(file.fileName),
     );
     return new StreamableFile(file.buffer);
   }

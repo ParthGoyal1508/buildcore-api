@@ -35,6 +35,7 @@ import {
 } from './dto/bill-payment.dto';
 import { PaymentAdviceService } from './payment-advice.service';
 import { SignedCopiesService } from './signed-copies.service';
+import { contentDispositionFor } from '../../../common/storage/file-type';
 
 /**
  * What was paid, and what came back signed (028 FR-020, FR-021).
@@ -162,7 +163,7 @@ export class BillPaymentsController {
         ? 'application/pdf'
         : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     res.send(bytes);
   }
 

@@ -16,6 +16,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { SalaryPdfService } from './salary-pdf.service';
 import { SalaryService } from './salary.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * An employee's payslips, as HR sees them (2026-10-14).
@@ -69,7 +70,7 @@ export class EmployeeSalaryController {
     response.setHeader('Content-Type', 'application/pdf');
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="payslip-${slip.employeeCode}-${period}.pdf"`,
+      contentDispositionFor(`payslip-${slip.employeeCode}-${period}.pdf`),
     );
     response.send(pdf);
   }

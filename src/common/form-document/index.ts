@@ -1,3 +1,4 @@
+import { contentDispositionFor } from '../storage/file-type';
 import { renderFormDocx } from './form-docx.renderer';
 import type { FormDocument } from './form-document.types';
 import { renderFormPdf } from './form-pdf.renderer';
@@ -60,16 +61,11 @@ export function sendForm(
   rendered: RenderedForm,
 ): void {
   res.setHeader('Content-Type', rendered.contentType);
-  // A header carries ASCII only, and names here are not — "Whitefield Tech Park — Phase II". The
-  // plain `filename` gets an ASCII stand-in and `filename*` the real name (RFC 5987), which the
-  // web reads first.
-  const name = rendered.filename.replace(/"/g, '');
-  const ascii = name.replace(/[^\x20-\x7e]+/g, '-');
+  // Names here are not ASCII — "Whitefield Tech Park — Phase II" — and a raw one in the header
+  // is a 500; the shared builder sends an ASCII stand-in and the real name as `filename*`.
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(
-      name,
-    )}`,
+    contentDispositionFor(rendered.filename),
   );
   res.send(rendered.bytes);
 }

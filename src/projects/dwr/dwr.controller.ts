@@ -39,6 +39,7 @@ import {
 } from './dto/dwr-lifecycle.dto';
 import { DwrPeriodDto, ListDwrDto } from './dto/dwr-query.dto';
 import { UpdateDwrDto } from './dto/update-dwr.dto';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * Daily work reports (022 — 008 User Story 5, built two months late).
@@ -178,7 +179,7 @@ export class DwrController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
     res.send(bytes);
   }
