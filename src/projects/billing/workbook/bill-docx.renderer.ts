@@ -16,10 +16,13 @@ import {
   WidthType,
 } from 'docx';
 
-import type { BillWorkbookView } from './bill-workbook.types';
+import type {
+  BillWorkbookView,
+  WorkbookMeasurementSheet,
+} from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
 import { indianFigure, taxBasisLine } from './print-format';
-import { subcontractorSignatures } from './signature-block';
+import { billSignatures } from './signature-block';
 
 const BORDER = { style: BorderStyle.SINGLE, size: 4, color: '999999' };
 const BORDERS = {
@@ -84,28 +87,167 @@ export class BillDocxRenderer {
             ...this.signatures(view),
           ],
         },
-        ...(options.abstractOnly ? [] : [this.annexures(view)]),
+        ...(options.abstractOnly ? [] : this.annexures(view)),
       ],
     });
     return Packer.toBuffer(doc);
   }
 
+  /**
+   * Everything after the abstract, in the order the PDF and the workbook print it (2026-10-15) —
+   * the client: "keep all the Abstract Sheet, BOQ Annexure, Measurement Sheet and Debit Note in
+   * all the three format". The Word copy used to carry no measurement sheets, and dropped the
+   * debit note when the project had no debits; both are now here, the debit note saying so.
+   */
   private annexures(view: BillWorkbookView) {
-    return {
-      properties: {
-        page: {
-          size: { orientation: PageOrientation.LANDSCAPE },
-          margin: { top: 720, bottom: 720, left: 720, right: 720 },
-        },
-      },
-      children: [
-        ...this.title(view, 'BOQ ANNEXURE-I'),
-        this.schedule(view),
-        ...(view.debitRegister.groups.length > 0
-          ? [...this.title(view, 'DEBIT NOTE REGISTER'), this.debits(view)]
-          : []),
-      ],
+    const margin = { top: 720, bottom: 720, left: 720, right: 720 };
+    const landscape = {
+      page: { size: { orientation: PageOrientation.LANDSCAPE }, margin },
     };
+    return [
+      {
+        properties: landscape,
+        children: [
+          ...this.title(view, 'BOQ ANNEXURE-I'),
+          this.header(view, LANDSCAPE),
+          spacer(),
+          this.schedule(view),
+        ],
+      },
+      ...view.measurementSheets.map((sheet) => ({
+        properties: { page: { margin } },
+        children: this.measurement(view, sheet),
+      })),
+      {
+        properties: landscape,
+        children: [
+          ...this.title(view, 'DEBIT NOTE'),
+          this.header(view, LANDSCAPE),
+          spacer(),
+          this.debits(view),
+        ],
+      },
+    ];
+  }
+
+  /** One schedule line's measurement sheet: the history behind its quantity, and its totals. */
+  private measurement(
+    view: BillWorkbookView,
+    sheet: WorkbookMeasurementSheet,
+  ): (Paragraph | Table)[] {
+    const history: TableRow[] = [
+      new TableRow({
+        tableHeader: true,
+        children: (
+          [
+            ['S.No', false],
+            ['Month', false],
+            ['Period', false],
+            ['Qty', true],
+            ['Remarks', false],
+            ['RA Bill', false],
+          ] as [string, boolean][]
+        ).map(([text, right]) => cell(text, { bold: true, right, head: true })),
+      }),
+      ...sheet.history.map(
+        (row, index) =>
+          new TableRow({
+            children: [
+              cell(String(index + 1), {}),
+              cell(row.month, {}),
+              cell(row.period, {}),
+              cell(row.quantity, { right: true }),
+              cell(row.remarks ?? '', {}),
+              cell(row.billLabel, {}),
+            ],
+          }),
+      ),
+    ];
+    const parts: (Paragraph | Table)[] = [
+      ...this.title(view, 'MEASUREMENT SHEET'),
+      new Paragraph({
+        spacing: { after: 60 },
+        children: [
+          new TextRun({
+            text: `${sheet.boqNo} — ${sheet.description}`,
+            bold: true,
+          }),
+        ],
+      }),
+      new Paragraph({
+        spacing: { after: 120 },
+        children: [
+          new TextRun({ text: `Quantities in ${sheet.unit}`, size: 16 }),
+        ],
+      }),
+      table(history, [8, 16, 28, 14, 22, 12], PORTRAIT),
+      new Paragraph({
+        alignment: AlignmentType.RIGHT,
+        spacing: { before: 120 },
+        children: [
+          new TextRun({
+            bold: true,
+            text: [
+              `This Bill Qty: ${indianFigure(sheet.footer.thisBillQty)}`,
+              `Upto Previous: ${indianFigure(sheet.footer.uptoPreviousQty)}`,
+              `Upto Date: ${indianFigure(sheet.footer.uptoDateQty)} ${
+                sheet.unit
+              }`,
+            ].join('     '),
+          }),
+        ],
+      }),
+    ];
+    if (sheet.dailyRecord.length > 0) {
+      parts.push(
+        new Paragraph({
+          spacing: { before: 240, after: 80 },
+          children: [new TextRun({ text: 'Daily record', bold: true })],
+        }),
+        table(
+          [
+            new TableRow({
+              tableHeader: true,
+              children: (
+                [
+                  ['Sr', false],
+                  ['Date', false],
+                  ['Start', true],
+                  ['End', true],
+                  ['Total Run', true],
+                  ['Remarks', false],
+                ] as [string, boolean][]
+              ).map(([text, right]) =>
+                cell(text, { bold: true, right, head: true }),
+              ),
+            }),
+            ...sheet.dailyRecord.map(
+              (day, index) =>
+                new TableRow({
+                  children: [
+                    cell(String(index + 1), {}),
+                    cell(day.date, {}),
+                    // "no record", never zeroes (FR-034), as the PDF prints it.
+                    cell(day.missing ? 'no record' : day.openingReading ?? '', {
+                      right: true,
+                    }),
+                    cell(day.missing ? '' : day.closingReading ?? '', {
+                      right: true,
+                    }),
+                    cell(day.missing ? '' : day.totalRun ?? '', {
+                      right: true,
+                    }),
+                    cell(day.remarks ?? '', {}),
+                  ],
+                }),
+            ),
+          ],
+          [8, 18, 14, 14, 14, 32],
+          PORTRAIT,
+        ),
+      );
+    }
+    return parts;
   }
 
   private title(view: BillWorkbookView, title: string): Paragraph[] {
@@ -129,7 +271,7 @@ export class BillDocxRenderer {
     ];
   }
 
-  private header(view: BillWorkbookView): Table {
+  private header(view: BillWorkbookView, pageWidth = PORTRAIT): Table {
     const [left, right] = headerPairs(view.header);
     const rows: TableRow[] = [];
     for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
@@ -144,7 +286,7 @@ export class BillDocxRenderer {
         }),
       );
     }
-    return table(rows, [20, 30, 20, 30], PORTRAIT);
+    return table(rows, [20, 30, 20, 30], pageWidth);
   }
 
   private abstract(view: BillWorkbookView): Table {
@@ -325,6 +467,28 @@ export class BillDocxRenderer {
         );
       }
     }
+    if (rows.length === 1) {
+      rows.push(
+        new TableRow({
+          children: [
+            cell('', {}),
+            cell('No debits on this project.', {}),
+            ...Array.from({ length: 6 }, () => cell('', {})),
+          ],
+        }),
+      );
+    }
+    rows.push(
+      new TableRow({
+        children: [
+          cell('', {}),
+          cell('Total', { bold: true }),
+          ...Array.from({ length: 4 }, () => cell('', {})),
+          cell(view.debitRegister.total, { bold: true, right: true }),
+          cell('', {}),
+        ],
+      }),
+    );
     return table(rows, [5, 33, 14, 8, 7, 10, 12, 11], LANDSCAPE);
   }
 
@@ -333,57 +497,41 @@ export class BillDocxRenderer {
    *
    * A subcontractor's bill prints the client's own block (2026-10-14): each caption, a space to
    * sign in, and the designation under it — with the subcontractor's name under "Accepted by",
-   * since accepting the bill is theirs to do (`subcontractorSignatures`). A bill to the client
-   * keeps the two bare caption lines it always printed; its output is deliberately unchanged.
+   * since accepting the bill is theirs to do (`billSignatures`). A bill to the client gets the
+   * same captions with no designations.
    */
   private signatures(view: BillWorkbookView): Paragraph[] {
-    const rows = subcontractorSignatures(view.header);
-    if (rows) {
-      const pair = (
-        left: string,
-        right: string,
-        options: { bold: boolean; before: number; last?: boolean },
-      ) =>
-        new Paragraph({
-          spacing: { before: options.before },
-          tabStops: [{ type: 'left', position: 6000 }],
-          // Kept with the paragraph that follows, so Word never breaks the block between a
-          // caption and the name signing under it. Not the last line, which would otherwise drag the
-          // whole block onto the annexures' page.
-          keepNext: !options.last,
-          keepLines: true,
-          children: [
-            new TextRun({ text: left, bold: options.bold }),
-            new TextRun({ text: `\t${right}`, bold: options.bold }),
-          ],
-        });
-      return rows.flatMap((row, index) => [
-        pair(row.left.caption, row.right.caption, {
-          bold: true,
-          before: index === 0 ? 480 : 360,
-        }),
-        // The space a pen needs sits in the spacing above the designation.
-        pair(row.left.signatory, row.right.signatory, {
-          bold: false,
-          before: 720,
-          last: index === rows.length - 1,
-        }),
-      ]);
-    }
-
-    const line = (left: string, right: string) =>
+    const rows = billSignatures(view.header);
+    const pair = (
+      left: string,
+      right: string,
+      options: { bold: boolean; before: number; last?: boolean },
+    ) =>
       new Paragraph({
-        spacing: { before: 480 },
+        spacing: { before: options.before },
         tabStops: [{ type: 'left', position: 6000 }],
+        // Kept with the paragraph that follows, so Word never breaks the block between a
+        // caption and the name signing under it. Not the last line, which would otherwise drag the
+        // whole block onto the annexures' page.
+        keepNext: !options.last,
+        keepLines: true,
         children: [
-          new TextRun({ text: left, bold: true }),
-          new TextRun({ text: `\t${right}`, bold: true }),
+          new TextRun({ text: left, bold: options.bold }),
+          new TextRun({ text: `\t${right}`, bold: options.bold }),
         ],
       });
-    return [
-      line('Prepared by', 'Checked by'),
-      line('Accepted by', 'Approved by'),
-    ];
+    return rows.flatMap((row, index) => [
+      pair(row.left.caption, row.right.caption, {
+        bold: true,
+        before: index === 0 ? 480 : 360,
+      }),
+      // The space a pen needs sits in the spacing above the designation.
+      pair(row.left.signatory, row.right.signatory, {
+        bold: false,
+        before: 720,
+        last: index === rows.length - 1,
+      }),
+    ]);
   }
 }
 

@@ -204,10 +204,13 @@ describe('the subcontractor’s sign-off under the abstract (2026-10-14)', () =>
     expect(text).toContain('Sub-Contractor');
   });
 
-  it('prints nothing of the kind on a bill to the client', async () => {
+  // Since 2026-10-15 the client's bill carries the four captions too, without designations.
+  it('prints the captions alone on a bill to the client', async () => {
     const text = await abstractText({ direction: 'to_client' });
-    expect(text).not.toContain('Prepared by');
+    expect(text).toContain('Prepared by');
+    expect(text).toContain('Approved by');
     expect(text).not.toContain('Project head');
+    expect(text).not.toContain('Site Engineer');
   });
 
   it('moves the whole block to a new page rather than splitting it', async () => {

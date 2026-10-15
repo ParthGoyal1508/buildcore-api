@@ -11,7 +11,7 @@ import type {
 } from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
 import { indianFigure, taxBasisLine } from './print-format';
-import { subcontractorSignatures } from './signature-block';
+import { billSignatures } from './signature-block';
 
 /**
  * The bill package as a PDF (025 FR-042).
@@ -367,8 +367,8 @@ export class BillPdfRenderer {
   }
 
   /**
-   * The subcontractor's sign-off under the abstract (2026-10-14) — see `subcontractorSignatures`
-   * for who signs where and why a bill to the client prints none.
+   * The subcontractor's sign-off under the abstract (2026-10-14) — see `billSignatures`
+   * for who signs where (a bill to the client: the captions alone).
    *
    * **Kept whole on one page.** The block is measured before it is drawn and, if it would cross the
    * bottom margin, starts a fresh page of its own: a "Prepared by" at the foot of one page and its
@@ -379,8 +379,7 @@ export class BillPdfRenderer {
     doc: PDFKit.PDFDocument,
     view: BillWorkbookView,
   ): void {
-    const rows = subcontractorSignatures(view.header);
-    if (!rows) return;
+    const rows = billSignatures(view.header);
 
     const width = doc.page.width - MARGIN * 2;
     const half = width / 2;

@@ -1,7 +1,7 @@
 import type * as ExcelJS from 'exceljs';
 
 import type { BillWorkbookView } from '../bill-workbook.types';
-import { subcontractorSignatures } from '../signature-block';
+import { billSignatures } from '../signature-block';
 import { taxBasisLine } from '../print-format';
 import { writeHeaderBlock } from './header-block';
 
@@ -92,25 +92,23 @@ export function writeAbstractSheet(
   sheet.addRow(['', taxBasisLine(view.abstract)]);
 
   // The subcontractor's sign-off, in the client's own layout (2026-10-14): caption, two empty rows
-  // to sign in, designation — left pair in Particulars, right pair under the money columns. None
-  // on a bill to the client, whose sheet is deliberately unchanged (`subcontractorSignatures`).
-  const signatures = subcontractorSignatures(view.header);
-  if (signatures) {
+  // to sign in, designation — left pair in Particulars, right pair under the money columns. A bill
+  // to the client gets the same captions with no designations (`billSignatures`, 2026-10-15).
+  const signatures = billSignatures(view.header);
+  sheet.addRow([]);
+  for (const row of signatures) {
     sheet.addRow([]);
-    for (const row of signatures) {
-      sheet.addRow([]);
-      const captions = sheet.addRow([
-        '',
-        row.left.caption,
-        '',
-        '',
-        row.right.caption,
-      ]);
-      captions.font = { bold: true };
-      sheet.addRow([]);
-      sheet.addRow([]);
-      sheet.addRow(['', row.left.signatory, '', '', row.right.signatory]);
-    }
+    const captions = sheet.addRow([
+      '',
+      row.left.caption,
+      '',
+      '',
+      row.right.caption,
+    ]);
+    captions.font = { bold: true };
+    sheet.addRow([]);
+    sheet.addRow([]);
+    sheet.addRow(['', row.left.signatory, '', '', row.right.signatory]);
   }
 
   sheet.getColumn(1).width = 6;
