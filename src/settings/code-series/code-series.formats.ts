@@ -46,8 +46,6 @@ export const CODE_SERIES_FORMATS: Partial<
   [CodeSeriesType.VENDORS]: { prefix: '2022', base: 0, step: 1, width: 3 },
   /** Work orders: `1500001`, `1500002`. The 150 is fixed. */
   [CodeSeriesType.WORK_ORDER]: { prefix: '150', base: 0, step: 1, width: 4 },
-  /** NOCs: `2026001`, `2026002`. The 2026 is fixed, not a year that advances. */
-  [CodeSeriesType.NOC]: { prefix: '2026', base: 0, step: 1, width: 3 },
   /**
    * The plant and store documents (2026-10-15), numbered as the client's forms print them:
    * `JC-0001` (maintenance job card), `MIS-0001` (material issue slip), `DC-0001` (delivery
@@ -82,7 +80,8 @@ export const COUNTED_SERIES = [
   'PROJECTS',
   'VENDORS',
   'WORK_ORDER',
-  'NOC',
+  // No 'NOC' (removed 2026-10-15): NOCs are uploaded, not generated here, so nothing numbers
+  // them. The enum value stays in the database, unused, rather than a migration to drop it.
   'JOB_CARD',
   'ISSUE_SLIP',
   'DELIVERY_CHALLAN',

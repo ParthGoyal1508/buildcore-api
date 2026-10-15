@@ -47,7 +47,6 @@ const LABELS: Record<NumberingSeries, string> = {
   PROJECTS: 'Project code',
   VENDORS: 'Vendor code',
   WORK_ORDER: 'Work order number',
-  NOC: 'NOC number',
   JOB_CARD: 'Maintenance job card number',
   ISSUE_SLIP: 'Material issue slip number',
   DELIVERY_CHALLAN: 'Delivery challan number',
@@ -249,9 +248,6 @@ export class NumberingService {
     const hit = (row: { id: string } | null) => !!row;
     const select = { id: true } as const;
     switch (series) {
-      // No NOC is stored anywhere yet, so none of its numbers is taken.
-      case 'NOC':
-        return false;
       case 'PROJECTS':
         return hit(
           await tx.project.findFirst({ where: { companyId, code }, select }),

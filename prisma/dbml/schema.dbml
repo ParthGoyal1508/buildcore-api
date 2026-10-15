@@ -5267,6 +5267,42 @@ Table OnboardingItem {
 task (011 FR-015 to FR-019).'
 }
 
+Table NocDocument {
+  id String [pk]
+  companyId String [not null]
+  subjectType String [not null, note: 'work_order, hire_order, labour_worker, vendor, employee, purchase_order.']
+  subjectId String [not null]
+  stage String [note: 'For a work order: `loi` or `work_order`. Null where a subject has one stage.']
+  fileRef String [not null]
+  fileName String
+  mimeType String
+  issuedBy String [note: 'Who issued the certificate, its reference and date, as written on it.']
+  referenceNo String
+  issuedOn DateTime
+  remarks String
+  uploadedByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
+prior version; both remain downloadable.
+A letter, composed and then issued (017 §2 — was `recruitment.GeneratedLetter`).
+
+**Moved to `shared` and renamed.** A work order addressed to a vendor is not a
+recruitment record, and leaving the table in `recruitment` would have forced the
+recruitment module to learn about `partners`, `projects` and `inventory` — which
+Principle I forbids outright. In `shared` it belongs to no business module and can
+address anything.
+A No Objection Certificate, uploaded (2026-10-15). The client: "we just need to give an option
+of uploading No Objection Certificate" — after a work order or an LOI is generated, on a vehicle
+hire order, and for a labour worker, a vendor or a member of staff. The application does not
+generate NOCs, so they carry no number of their own; the reference is whatever the issuer wrote.
+
+One table for every place, keyed by what it is about — `subjectType` + `subjectId` — the way
+`IssuedLetter` is. A plain id, never a relation: the subjects live in five other schemas, and
+this table resolves none of them (Principle I). `stage` says which step of a subject\'s life it
+belongs to where that matters: a work order\'s NOC after the LOI, or after the work order.'
+}
+
 Table IssuedLetter {
   id String [pk]
   companyId String [not null]
@@ -5324,16 +5360,6 @@ idiom `countersignedAt` uses two fields up.']
   indexes {
     (companyId, referenceNo) [unique]
   }
-
-  Note: 'A generated, versioned, immutable letter (011 US7). Regeneration supersedes the
-prior version; both remain downloadable.
-A letter, composed and then issued (017 §2 — was `recruitment.GeneratedLetter`).
-
-**Moved to `shared` and renamed.** A work order addressed to a vendor is not a
-recruitment record, and leaving the table in `recruitment` would have forced the
-recruitment module to learn about `partners`, `projects` and `inventory` — which
-Principle I forbids outright. In `shared` it belongs to no business module and can
-address anything.'
 }
 
 Table Resignation {
