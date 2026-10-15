@@ -86,6 +86,28 @@ export class BillPackageViewBuilder {
     };
   }
 
+  /**
+   * One debit note in one of the three formats (2026-10-15), drawn from the same view as the "Debit
+   * Note" section of the bill it is recovered on.
+   */
+  async debitNoteDocument(
+    ctx: RlsContext,
+    noteId: string,
+    format: 'xlsx' | 'pdf' | 'docx',
+  ): Promise<{ bytes: Buffer; filename: string }> {
+    const [view, stem] = await Promise.all([
+      this.debits.viewFor(ctx, noteId),
+      this.debits.fileStem(ctx, noteId),
+    ]);
+    const bytes =
+      format === 'pdf'
+        ? await this.pdf.renderDebitNote(view)
+        : format === 'docx'
+        ? await this.docx.renderDebitNote(view)
+        : await this.renderer.renderDebitNote(view);
+    return { bytes, filename: `${sanitise(stem)}.${format}` };
+  }
+
   /** The workbook (FR-024). Kept for its callers; `documentFor` is the general form. */
   async workbookFor(ctx: RlsContext, packageId: string) {
     return this.documentFor(ctx, packageId, 'xlsx');
@@ -131,10 +153,11 @@ export class BillPackageViewBuilder {
     // A bill not yet issued has no frozen header (it is copied at issue), so its documents take
     // the parties as they stand today (2026-10-15) rather than printing them blank.
     const frozen = pkg.issuerName !== null || pkg.receiverName !== null;
-    const [packageView, abstract, register, live] = await Promise.all([
+    const [packageView, abstract, debitNotes, live] = await Promise.all([
       this.packages.view(ctx, packageId),
       this.packages.abstractFor(ctx, packageId),
-      this.debits.registerFor(ctx, packageId),
+      // The notes this bill recovers, each as its own document (2026-10-15).
+      this.debits.viewsRecoveredOn(ctx, packageId),
       frozen
         ? Promise.resolve(null)
         : this.packages.previewHeader(ctx, packageId),
@@ -308,26 +331,7 @@ export class BillPackageViewBuilder {
         },
       },
       measurementSheets,
-      debitRegister: {
-        groups: register.groups.map((group) => ({
-          heading: group.heading,
-          rows: group.rows.map((debit, index) => ({
-            srNo: index + 1,
-            description: debit.description,
-            location: debit.location,
-            nos: debit.nos,
-            length: debit.length,
-            width: debit.width,
-            quantity: debit.quantity,
-            rate: debit.rate,
-            unit: debit.unit,
-            amount: debit.amount,
-            amountWithTax: debit.amountWithTax,
-            remark: debit.recoveredOn,
-          })),
-        })),
-        total: register.total,
-      },
+      debitNotes,
     };
   }
 

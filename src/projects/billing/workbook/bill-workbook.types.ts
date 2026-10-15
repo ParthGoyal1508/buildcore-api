@@ -1,3 +1,5 @@
+import type { DebitNoteView } from './debit-note-document';
+
 /**
  * **The only thing the renderer can see** (023 FR-028, research §6).
  *
@@ -139,28 +141,6 @@ export interface WorkbookMeasurementSheet {
   };
 }
 
-export interface WorkbookDebitRegister {
-  groups: {
-    heading: string | null;
-    rows: {
-      srNo: number;
-      description: string;
-      location: string | null;
-      nos: string | null;
-      length: string | null;
-      width: string | null;
-      quantity: string | null;
-      rate: string;
-      unit: string | null;
-      amount: string;
-      amountWithTax: string;
-      /** Which bill it was debited in — "RA-02", "RA-07" (FR-039). */
-      remark: string | null;
-    }[];
-  }[];
-  total: string;
-}
-
 /** The whole package, as the renderer receives it. */
 export interface BillWorkbookView {
   header: WorkbookHeader;
@@ -168,5 +148,9 @@ export interface BillWorkbookView {
   schedule: WorkbookSchedule;
   /** **One per schedule line, including lines with nothing claimed** (FR-030, FR-030a). */
   measurementSheets: WorkbookMeasurementSheet[];
-  debitRegister: WorkbookDebitRegister;
+  /**
+   * The debit notes this bill recovers, each printed as its own document in the client's format
+   * (2026-10-15). Empty when the bill recovers none — the section then says so.
+   */
+  debitNotes: DebitNoteView[];
 }

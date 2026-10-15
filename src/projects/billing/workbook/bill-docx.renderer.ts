@@ -20,6 +20,7 @@ import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
+import { type DebitNoteView, debitNoteDocx } from './debit-note-document';
 import { headerPairs } from './header-pairs';
 import { indianFigure, taxBasisLine } from './print-format';
 import { billSignatures } from './signature-block';
@@ -118,16 +119,49 @@ export class BillDocxRenderer {
         properties: { page: { margin } },
         children: this.measurement(view, sheet),
       })),
-      {
-        properties: landscape,
-        children: [
-          ...this.title(view, 'DEBIT NOTE'),
-          this.header(view, LANDSCAPE),
-          spacer(),
-          this.debits(view),
-        ],
-      },
+      // Each note recovered on this bill in the client's own format (2026-10-15); a bill that
+      // recovers none says so, so the section is always there.
+      ...(view.debitNotes.length > 0
+        ? view.debitNotes.map((note) => ({
+            properties: { page: { margin } },
+            children: debitNoteDocx(note),
+          }))
+        : [
+            {
+              properties: { page: { margin } },
+              children: [
+                ...this.title(view, 'DEBIT NOTE'),
+                this.header(view),
+                spacer(),
+                new Paragraph({
+                  children: [
+                    new TextRun('No debit note is recovered on this bill.'),
+                  ],
+                }),
+              ],
+            },
+          ]),
     ];
+  }
+
+  /** One debit note on its own, in the client's format (2026-10-15). */
+  async renderDebitNote(view: DebitNoteView): Promise<Buffer> {
+    const doc = new Document({
+      styles: {
+        default: { document: { run: { font: 'Arial', size: 18 } } },
+      },
+      sections: [
+        {
+          properties: {
+            page: {
+              margin: { top: 720, bottom: 720, left: 720, right: 720 },
+            },
+          },
+          children: debitNoteDocx(view),
+        },
+      ],
+    });
+    return Packer.toBuffer(doc);
   }
 
   /** One schedule line's measurement sheet: the history behind its quantity, and its totals. */
@@ -416,80 +450,6 @@ export class BillDocxRenderer {
       head.map(([, width]) => width),
       LANDSCAPE,
     );
-  }
-
-  private debits(view: BillWorkbookView): Table {
-    const rows: TableRow[] = [
-      new TableRow({
-        tableHeader: true,
-        children: (
-          [
-            ['Sr.', 5, false],
-            ['Description', 33, false],
-            ['Location', 14, false],
-            ['Qty', 8, true],
-            ['Unit', 7, false],
-            ['Rate', 10, true],
-            ['Amount (incl. tax)', 12, true],
-            ['Remark', 11, false],
-          ] as [string, number, boolean][]
-        ).map(([text, width, right]) =>
-          cell(text, { bold: true, width, right, head: true }),
-        ),
-      }),
-    ];
-    for (const group of view.debitRegister.groups) {
-      if (group.heading) {
-        rows.push(
-          new TableRow({
-            children: [
-              cell('', {}),
-              cell(group.heading, { bold: true }),
-              ...Array.from({ length: 6 }, () => cell('', {})),
-            ],
-          }),
-        );
-      }
-      for (const debit of group.rows) {
-        rows.push(
-          new TableRow({
-            children: [
-              cell(String(debit.srNo), {}),
-              cell(debit.description, {}),
-              cell(debit.location ?? '', {}),
-              cell(debit.quantity ?? '', { right: true }),
-              cell(debit.unit ?? '', {}),
-              cell(debit.rate, { right: true }),
-              cell(debit.amountWithTax, { right: true }),
-              cell(debit.remark ?? '', {}),
-            ],
-          }),
-        );
-      }
-    }
-    if (rows.length === 1) {
-      rows.push(
-        new TableRow({
-          children: [
-            cell('', {}),
-            cell('No debits on this project.', {}),
-            ...Array.from({ length: 6 }, () => cell('', {})),
-          ],
-        }),
-      );
-    }
-    rows.push(
-      new TableRow({
-        children: [
-          cell('', {}),
-          cell('Total', { bold: true }),
-          ...Array.from({ length: 4 }, () => cell('', {})),
-          cell(view.debitRegister.total, { bold: true, right: true }),
-          cell('', {}),
-        ],
-      }),
-    );
-    return table(rows, [5, 33, 14, 8, 7, 10, 12, 11], LANDSCAPE);
   }
 
   /**

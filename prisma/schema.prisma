@@ -1846,6 +1846,7 @@ model Project {
   workOrders        WorkOrder[]
   billPackages      BillPackage[]
   billPackageDebits BillPackageDebit[]
+  debitNotes        BillPackageDebitNote[]
   budgets           ProjectBudget[]
   documents         ProjectDocument[]
 
@@ -2371,6 +2372,7 @@ model WorkOrder {
   awardLines        WorkOrderBOQItem[]
   raBills           RABill[]
   retentionReleases RetentionRelease[]
+  debitNotes        BillPackageDebitNote[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2770,6 +2772,7 @@ model BillPackage {
 
   claims          BillPackageLineClaim[]
   recoveredDebits BillPackageDebit[]
+  recoveredDebitNotes BillPackageDebitNote[]
   deductionLines  BillPackageDeduction[]
 
   createdAt DateTime @default(now())
@@ -2981,7 +2984,64 @@ model BillPackageDebit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// The note this line is an item of (2026-10-15). Null only between the column's addition and
+  /// the migration that gave every existing debit a note of its own.
+  noteId String?
+  note   BillPackageDebitNote? @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
   @@index([companyId, projectId])
+  @@index([recoveredOnPackageId])
+  @@index([noteId])
+  @@schema("projects")
+}
+
+/// A debit note, as the document the client sends a subcontractor (2026-10-15) — the header of the
+/// "Parth Realcon DV-04, debit note" format, with its items as `BillPackageDebit` lines.
+///
+/// **For subcontractors only.** It is raised against a work order — which is what names the party,
+/// its GSTIN and its vendor code — and recovered on a bill to that subcontractor under the same
+/// work order. A client's debits on us arrive as the client's own documents; nothing here issues one.
+///
+/// The figures are computed at raise and stored, never re-derived: `amount` is the lines' total,
+/// `taxAmount` the GST on it at `gstPercent`, `netAmount` their sum rounded to the rupee as the
+/// format prints it. `taxBasis` decides whether the tax prints as CGST + SGST or as IGST; null on a
+/// note migrated from a debit recorded before this, whose tax was never split, and printed as GST.
+model BillPackageDebitNote {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  /// `2026-27/001` — the financial year and a running number that restarts each April.
+  noteNumber   String?
+  noteDate     DateTime      @db.Date
+  natureOfWork String?
+  taxBasis     BillTaxBasis?
+  gstPercent   Decimal       @default(0) @db.Decimal(5, 2)
+
+  amount    Decimal @db.Decimal(18, 2)
+  taxAmount Decimal @db.Decimal(18, 2)
+  netAmount Decimal @db.Decimal(18, 2)
+
+  /// The one bill the note is recovered on — a bill to the same subcontractor (FR-037).
+  recoveredOnPackageId String?
+  recoveredOnPackage   BillPackage? @relation(fields: [recoveredOnPackageId], references: [id], onDelete: SetNull)
+
+  recordedByUserId String?
+  recordedAt       DateTime @default(now())
+
+  lines BillPackageDebit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, noteNumber])
+  @@index([companyId, projectId])
+  @@index([workOrderId])
   @@index([recoveredOnPackageId])
   @@schema("projects")
 }

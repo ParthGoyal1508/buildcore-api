@@ -1,86 +1,96 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { BillTaxBasis } from '@prisma/client';
+import { Type } from 'class-transformer';
 import {
+  ArrayMinSize,
+  IsEnum,
+  IsISO8601,
   IsNumberString,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
-/**
- * Recording one debit against a project (023 FR-036).
- *
- * The dimensions are each optional because the real register uses different ones per line — a
- * missing cable has a length, a missing camera has a count, and a reinstatement has an area. Forcing
- * all four would make somebody enter a 1 to get past the form, and a 1 that means "not applicable"
- * is indistinguishable from a 1 that means one.
- */
-export class RecordDebitDto {
+/** One item on a debit note. Its amount is quantity × rate, computed on the server. */
+export class DebitNoteLineDto {
+  @ApiProperty({ example: 'Solar Panel (335 W)' })
+  @IsString()
+  @MinLength(1)
+  @MaxLength(500)
+  description: string;
+
   @ApiPropertyOptional({
-    example: 'Debit against the ATMS Equipment Missing at site',
-    description:
-      'The heading this debit is grouped under (FR-040). The register is read by heading, not as a ' +
-      'flat list, because the heading is what tells a subcontractor which dispute a line belongs to.',
+    example: '7 Nos. Water pump location & 4 Nos. Deck Light location',
+    description: 'The line printed under the item name.',
   })
   @IsOptional()
   @IsString()
-  @MaxLength(300)
-  groupHeading?: string;
+  @MaxLength(500)
+  specification?: string;
 
-  @ApiProperty()
-  @IsString()
-  @MinLength(1)
-  @MaxLength(1000)
-  description: string;
-
-  @ApiPropertyOptional({ example: 'KM.226 LHS' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  location?: string;
-
-  @ApiPropertyOptional({ description: 'Count, where the debit has one.' })
-  @IsOptional()
-  @IsNumberString()
-  nos?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumberString()
-  length?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumberString()
-  width?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsNumberString()
-  quantity?: string;
-
-  @ApiPropertyOptional({ example: 'Mtr' })
+  @ApiPropertyOptional({ example: 'Nos.' })
   @IsOptional()
   @IsString()
   @MaxLength(20)
   unit?: string;
 
-  @ApiProperty({ example: '1250.00' })
+  @ApiProperty({ example: '11' })
+  @IsNumberString()
+  quantity: string;
+
+  @ApiProperty({ example: '13550.00' })
   @IsNumberString()
   rate: string;
+}
 
-  @ApiProperty({ example: '125000.00' })
-  @IsNumberString()
-  amount: string;
+/**
+ * A debit note on a subcontractor (2026-10-15), per the client's "Parth Realcon DV-04, debit
+ * note" format. The party, its GSTIN and its vendor code come from the work order; the number is
+ * allocated on the server (`2026-27/001`); every amount is computed, none is sent.
+ */
+export class RaiseDebitNoteDto {
+  @ApiProperty({
+    description: 'The subcontractor’s work order on this project.',
+  })
+  @IsString()
+  workOrderId: string;
+
+  @ApiPropertyOptional({
+    example: '2026-06-29',
+    description: 'Defaults to today.',
+  })
+  @IsOptional()
+  @IsISO8601()
+  noteDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'O&M of Highway',
+    description: 'Defaults to the work order’s description of the work.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  natureOfWork?: string;
 
   @ApiProperty({
-    example: '147500.00',
-    description:
-      'The amount including tax, **entered rather than derived** (FR-036). The real register shows ' +
-      'both, and the tax on a debit is not always the bill’s own rate — a stolen item is charged ' +
-      'at the rate it was bought at. Deriving it would quietly re-rate every historical debit the ' +
-      'first time a statute changed.',
+    example: '18',
+    description: 'GST on the work-done amount, in percent.',
   })
   @IsNumberString()
-  amountWithTax: string;
+  gstPercent: string;
+
+  @ApiProperty({
+    enum: BillTaxBasis,
+    description: '`intra_state` prints CGST + SGST; `inter_state` prints IGST.',
+  })
+  @IsEnum(BillTaxBasis)
+  taxBasis: BillTaxBasis;
+
+  @ApiProperty({ type: [DebitNoteLineDto] })
+  @ValidateNested({ each: true })
+  @Type(() => DebitNoteLineDto)
+  @ArrayMinSize(1)
+  lines: DebitNoteLineDto[];
 }

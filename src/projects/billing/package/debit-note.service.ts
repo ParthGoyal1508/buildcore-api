@@ -1,193 +1,331 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { BillPackageStatus, CodeSeriesType, Prisma } from '@prisma/client';
+import {
+  BillDirection,
+  BillPackageStatus,
+  BillTaxBasis,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { financialYear } from '../../../letters/letter-reference';
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
-import { CodeSeriesService } from '../../../settings/code-series/code-series.service';
-import type { DebitNoteDocumentView } from '../workbook/bill-pdf.renderer';
-import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
+import { CompaniesService } from '../../../settings/companies/companies.service';
+import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
+import type { DebitNoteView } from '../workbook/debit-note-document';
 import { packageLabel } from './bill-package.service';
 import { PACKAGE_ERRORS } from './package-error-codes';
 
-export interface RecordDebitInput {
-  projectId: string;
-  /** "Debit against the ATMS Equipment Missing at site" (FR-040). */
-  groupHeading?: string | null;
+/** One item of a note, as the form sends it. The amount is computed, never sent. */
+export interface DebitNoteLineInput {
   description: string;
-  location?: string | null;
-  nos?: string | null;
-  length?: string | null;
-  width?: string | null;
-  quantity?: string | null;
+  specification?: string | null;
   unit?: string | null;
+  quantity: string;
   rate: string;
-  amount: string;
-  /**
-   * Carried rather than computed (FR-036).
-   *
-   * The real register shows both, and the tax on a debit is not always the bill's own rate — a
-   * stolen item is charged at the rate it was bought at. Deriving it here would quietly re-rate
-   * every historical debit the first time a statute changed.
-   */
-  amountWithTax: string;
 }
 
-export interface DebitRow {
+export interface RaiseDebitNoteInput {
+  /** The subcontractor's work order — what names the party, its GSTIN and its vendor code. */
+  workOrderId: string;
+  /** ISO date. Defaults to today. */
+  noteDate?: string;
+  /** "O&M of Highway". Defaults to the work order's own description of the work. */
+  natureOfWork?: string | null;
+  /** 18 for 18% GST. */
+  gstPercent: string;
+  /** CGST + SGST (`intra_state`) or IGST (`inter_state`). */
+  taxBasis: BillTaxBasis;
+  lines: DebitNoteLineInput[];
+}
+
+export interface DebitNoteLineRow {
   id: string;
-  /**
-   * `{shortCode}-DN-0001`, or null on a debit recorded before 028 (FR-019).
-   *
-   * Null is shown as blank rather than as a placeholder: those debits were never issued under a
-   * number, and printing one would name a document nobody sent.
-   */
-  noteNumber: string | null;
-  groupHeading: string | null;
   description: string;
-  location: string | null;
-  nos: string | null;
-  length: string | null;
-  width: string | null;
-  quantity: string | null;
+  specification: string | null;
   unit: string | null;
+  quantity: string | null;
   rate: string;
   amount: string;
-  amountWithTax: string;
-  /** The package it was recovered on, where it has been — "RA-07" (FR-039). */
+}
+
+export interface DebitNoteRow {
+  id: string;
+  /** `2026-27/001`; null on a debit recorded before numbering existed. */
+  noteNumber: string | null;
+  noteDate: string;
+  natureOfWork: string | null;
+  workOrderId: string | null;
+  workOrderNo: string | null;
+  partyName: string | null;
+  taxBasis: BillTaxBasis | null;
+  gstPercent: string;
+  amount: string;
+  taxAmount: string;
+  netAmount: string;
+  /** "RA-07", where it has been recovered. */
   recoveredOn: string | null;
   recoveredOnPackageId: string | null;
   recordedAt: string;
+  lines: DebitNoteLineRow[];
 }
 
-/** The register, grouped under its headings (FR-040). */
+/** The notes as one bill shows them. */
 export interface DebitRegister {
   packageId: string;
-  /**
-   * **`true` where the package has been issued**, in which case this register is the register *as
-   * at issue* (FR-039a) rather than the project's current one.
-   */
+  /** False on a bill to the client: debit notes are raised on subcontractors only. */
+  applicable: boolean;
+  /** **True where the package has been issued** — the register *as at issue* (FR-039a). */
   asAtIssue: boolean;
-  groups: { heading: string | null; rows: DebitRow[] }[];
-  /** What this package itself recovers — the figure block B's mechanical debit carries (FR-038). */
+  notes: DebitNoteRow[];
+  /** What this bill recovers — the figure block B's mechanical debit carries (FR-038). */
   recoveredOnThisPackage: string;
-  /** Every debit on the project, recovered or not. The running total is the point of a register. */
+  /** Every note listed, recovered or not. */
   total: string;
 }
 
 const ZERO = new Prisma.Decimal(0);
+const round2 = (value: Prisma.Decimal) =>
+  value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+
+/** `9.00` → `9`, `2.50` → `2.5` — how a rate reads in "CGST 9%". */
+function percentLabel(value: Prisma.Decimal): string {
+  return value.toDecimalPlaces(2).toString();
+}
 
 /**
- * The debit-note register (023 US5, FR-036 to FR-040a).
+ * The tax on a note's work-done amount, and how it prints (2026-10-15).
+ *
+ * Intra-state splits evenly into CGST and SGST, each rounded on its own — the format's 3,17,809.23
+ * twice on 35,31,213.64 at 9% — so the printed lines always add up to the tax. Inter-state is one
+ * IGST line. A note whose basis was never recorded (one migrated from a debit entered as a with-tax
+ * figure) prints its tax as a single "GST" line.
+ */
+export function noteTaxes(
+  amount: Prisma.Decimal,
+  gstPercent: Prisma.Decimal,
+  taxBasis: BillTaxBasis | null,
+  storedTax?: Prisma.Decimal,
+): {
+  lines: { label: string; amount: Prisma.Decimal }[];
+  total: Prisma.Decimal;
+} {
+  if (taxBasis === BillTaxBasis.intra_state) {
+    const half = gstPercent.div(2);
+    const each = round2(amount.mul(half).div(100));
+    return {
+      lines: [
+        { label: `CGST ${percentLabel(half)}%`, amount: each },
+        { label: `SGST ${percentLabel(half)}%`, amount: each },
+      ],
+      total: each.mul(2),
+    };
+  }
+  if (taxBasis === BillTaxBasis.inter_state) {
+    const igst = round2(amount.mul(gstPercent).div(100));
+    return {
+      lines: [{ label: `IGST ${percentLabel(gstPercent)}%`, amount: igst }],
+      total: igst,
+    };
+  }
+  const tax = storedTax ?? round2(amount.mul(gstPercent).div(100));
+  return {
+    lines: tax.isZero()
+      ? []
+      : [
+          {
+            label: gstPercent.isZero()
+              ? 'GST'
+              : `GST ${percentLabel(gstPercent)}%`,
+            amount: tax,
+          },
+        ],
+    total: tax,
+  };
+}
+
+/** Where the running number starts each April, and how wide it prints: `2026-27/001`. */
+const NUMBER_WIDTH = 3;
+
+/**
+ * Debit notes (023 US5, reshaped 2026-10-15).
+ *
+ * ## Who a debit note is for
+ *
+ * **Subcontractors only.** A note is raised against a subcontractor's work order — which is what
+ * names the party, its GSTIN and its vendor code on the document — and recovered on a bill to that
+ * subcontractor under the same work order. A bill to the client neither lists nor recovers one:
+ * the debits a client raises on us arrive as the client's own documents.
  *
  * ## The two rules that are about money rather than bookkeeping
  *
- * **A debit is recovered on exactly one bill** (FR-037), and the rule is enforced by a conditional
- * update whose row count is checked — not by reading the row and then writing it. Two callers
- * applying one debit at the same moment both pass a read-then-write check, and the second write
- * silently replaces the first: the debit is then recovered on two bills, which is money taken
- * twice. FR-037a exists because the sequential statement of the rule ("refuse a second
- * application") reads as though that case were covered, and it is not.
- *
- * **An issued package's register is frozen at issue** (FR-039a). FR-039 wants every debit on the
- * project visible from any bill, because the running total is the point; FR-028 wants a bill
- * produced twice to be identical. Those two cannot both hold for an issued bill while the register
- * is live — a debit recorded between two productions of a signed document would change it. So the
- * register is live for a draft and `recordedAt <= issuedAt` for an issued one. The checklist found
- * this contradiction (CHK025) and quickstart Pass 6 had been asserting the behaviour that caused it.
+ * **A note is recovered on exactly one bill** (FR-037), enforced by a conditional update whose row
+ * count is checked — not by reading the row and then writing it, which two simultaneous callers
+ * would both pass. **An issued bill's register is frozen at issue** (FR-039a): a note recorded
+ * after a bill was issued cannot change that signed document.
  */
 @Injectable()
 export class DebitNoteService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly codeSeries: CodeSeriesService,
-    private readonly pdf: BillPdfRenderer,
+    private readonly companies: CompaniesService,
+    private readonly sources: ProjectSourcesRegistry,
   ) {}
 
   /**
-   * Records a debit against a project, under its own note number. Not yet recovered on anything.
+   * Raises a note against a subcontractor's work order, under the next number of the financial
+   * year it is dated in.
    *
-   * **The number is allocated here, at raise** (028 FR-019, research §6) — not when a PDF is
-   * produced. A number taken from the series at print time is a *different* number on every
-   * production of the same document, so the register would say DN-0004 and the note in the
-   * subcontractor's hand would say DN-0009, and neither reader could tell which debit the other
-   * meant. Allocating at raise also means the number exists before anybody asks for the document,
-   * which is what makes the register answerable.
-   *
-   * Inside the same transaction as the row that carries it, as `CodeSeriesService` requires: a
-   * number allocated in its own transaction is burned by any later rollback, leaving a gap in the
-   * sequence that readers take for a deleted debit.
+   * Every figure is computed here and stored: each line's amount, the work-done total, the tax at
+   * `gstPercent`, and the net rounded to the rupee as the format prints it. A note whose total was
+   * whatever somebody typed is a claim nobody can check.
    */
-  async record(
+  async raise(
     ctx: RlsContext,
     companyId: string,
     userId: string | null,
-    input: RecordDebitInput,
-  ): Promise<DebitRow> {
-    const created = await withRlsContext(this.prisma, ctx, async (tx) => {
-      const project = await tx.project.findFirst({
-        where: { id: input.projectId },
-        select: { id: true },
-      });
-      // 404 and not 403 (FR-053).
-      if (!project) throw new NotFoundException('Project not found');
-
-      const noteNumber = await this.codeSeries.next(
-        tx,
-        companyId,
-        CodeSeriesType.DEBIT_NOTE,
-        'DN',
-      );
-
-      return tx.billPackageDebit.create({
-        data: {
-          companyId,
-          noteNumber,
-          projectId: input.projectId,
-          groupHeading: input.groupHeading ?? null,
-          description: input.description,
-          location: input.location ?? null,
-          nos: input.nos ?? null,
-          length: input.length ?? null,
-          width: input.width ?? null,
-          quantity: input.quantity ?? null,
-          unit: input.unit ?? null,
-          rate: input.rate,
-          amount: input.amount,
-          amountWithTax: input.amountWithTax,
-          recordedByUserId: userId,
-        },
-      });
+    projectId: string,
+    input: RaiseDebitNoteInput,
+  ): Promise<DebitNoteRow> {
+    if (input.lines.length === 0) {
+      throw new BadRequestException('A debit note needs at least one item.');
+    }
+    const gstPercent = new Prisma.Decimal(input.gstPercent);
+    const lines = input.lines.map((line) => {
+      const quantity = new Prisma.Decimal(line.quantity);
+      const rate = new Prisma.Decimal(line.rate);
+      const amount = round2(quantity.mul(rate));
+      return { ...line, quantity, rate, amount };
     });
-    return toRow(created);
+    const amount = lines.reduce((sum, line) => sum.plus(line.amount), ZERO);
+    const taxes = noteTaxes(amount, gstPercent, input.taxBasis);
+    const net = amount
+      .plus(taxes.total)
+      .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+    const noteDate = input.noteDate
+      ? new Date(`${input.noteDate.slice(0, 10)}T00:00:00.000Z`)
+      : new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
+    const prefix = `${financialYear(noteDate)}/`;
+
+    // The number is the highest under this year's prefix plus one, so the series restarts each
+    // April with no counter to roll over. Two notes raised in the same instant can draw the same
+    // number; the unique index refuses the second and it is retried once with the next.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const created = await withRlsContext(this.prisma, ctx, async (tx) => {
+          const project = await tx.project.findFirst({
+            where: { id: projectId },
+            select: { id: true },
+          });
+          if (!project) throw new NotFoundException('Project not found');
+          const workOrder = await tx.workOrder.findFirst({
+            where: { id: input.workOrderId, projectId },
+            select: { id: true, workDetail: true, partnerId: true },
+          });
+          if (!workOrder) {
+            throw new BadRequestException(
+              'That work order is not on this project.',
+            );
+          }
+
+          const existing = await tx.billPackageDebitNote.findMany({
+            where: { companyId, noteNumber: { startsWith: prefix } },
+            select: { noteNumber: true },
+          });
+          const highest = existing.reduce((max, row) => {
+            if (!row.noteNumber?.startsWith(prefix)) return max;
+            const tail = row.noteNumber.slice(prefix.length);
+            return /^\d+$/.test(tail) ? Math.max(max, Number(tail)) : max;
+          }, 0);
+          const noteNumber = `${prefix}${String(highest + 1).padStart(
+            NUMBER_WIDTH,
+            '0',
+          )}`;
+
+          return tx.billPackageDebitNote.create({
+            data: {
+              companyId,
+              projectId,
+              workOrderId: workOrder.id,
+              noteNumber,
+              noteDate,
+              natureOfWork:
+                input.natureOfWork?.trim() || workOrder.workDetail || null,
+              taxBasis: input.taxBasis,
+              gstPercent,
+              amount,
+              taxAmount: taxes.total,
+              netAmount: net,
+              recordedByUserId: userId,
+              lines: {
+                create: lines.map((line) => ({
+                  companyId,
+                  projectId,
+                  description: line.description.trim(),
+                  location: line.specification?.trim() || null,
+                  quantity: line.quantity,
+                  unit: line.unit?.trim() || null,
+                  rate: line.rate,
+                  amount: line.amount,
+                  // Each line with its share of the tax, so the register's running total — which
+                  // sums lines — carries what the note charges.
+                  amountWithTax: line.amount.plus(
+                    round2(line.amount.mul(gstPercent).div(100)),
+                  ),
+                  noteNumber,
+                  recordedByUserId: userId,
+                })),
+              },
+            },
+            include: NOTE_INCLUDE,
+          });
+        });
+        return toNoteRow(created, await this.partyNames([created]));
+      } catch (err) {
+        const duplicate =
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002';
+        if (!duplicate || attempt >= 2) throw err;
+      }
+    }
   }
 
   /**
-   * Applies a debit to one package (FR-037, FR-037a, FR-037b, FR-038).
+   * Recovers a note on one bill (FR-037, FR-037a, FR-037b, FR-038) — a draft bill to the
+   * subcontractor whose work order the note was raised against.
    *
    * **One statement decides it.** `WHERE "recoveredOnPackageId" IS NULL` means the database
-   * arbitrates, so of two simultaneous applications exactly one updates a row and the other updates
-   * none — and the one that updated none is the one refused. A read followed by a write would let
-   * both through.
+   * arbitrates, so of two simultaneous applications exactly one updates a row.
    */
   async apply(
     ctx: RlsContext,
-    debitId: string,
+    noteId: string,
     packageId: string,
-  ): Promise<DebitRow> {
-    return withRlsContext(this.prisma, ctx, async (tx) => {
+  ): Promise<DebitNoteRow> {
+    const row = await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
         where: { id: packageId },
-        select: { id: true, status: true, sequenceNo: true },
+        select: {
+          id: true,
+          status: true,
+          sequenceNo: true,
+          direction: true,
+          raBill: { select: { workOrderId: true } },
+        },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
+      if (pkg.direction !== BillDirection.to_subcontractor) {
+        throw new BadRequestException(
+          'Debit notes are recovered on bills to a subcontractor, not on a bill to the client.',
+        );
+      }
 
-      // FR-037b. Applying to an issued bill would either move a figure FR-044 froze or record a
-      // recovery the bill never made — and both of those are wrong in a way nobody would notice
-      // until a subcontractor asked why their payment was short.
+      // FR-037b. Applying to an issued bill would move a figure that has been frozen.
       if (pkg.status !== BillPackageStatus.draft) {
         throw new ConflictException({
           statusCode: 409,
@@ -195,58 +333,81 @@ export class DebitNoteService {
           message:
             `${packageLabel(
               pkg.sequenceNo,
-            )} has been issued, so a debit cannot be applied to it. ` +
-            'Apply it to the next bill instead — a recovery added after issue is either a change ' +
-            'to a signed document or a figure the bill never actually recovered.',
+            )} has been issued, so a debit note cannot be recovered on it. ` +
+            'Recover it on the next bill instead.',
         });
       }
 
-      const claimed = await tx.billPackageDebit.updateMany({
-        where: { id: debitId, recoveredOnPackageId: null },
+      const note = await tx.billPackageDebitNote.findFirst({
+        where: { id: noteId },
+        select: { id: true, workOrderId: true },
+      });
+      if (!note) throw new NotFoundException('Debit note not found');
+      if (
+        note.workOrderId &&
+        pkg.raBill?.workOrderId &&
+        note.workOrderId !== pkg.raBill.workOrderId
+      ) {
+        throw new BadRequestException(
+          'This debit note was raised on a different work order, so it is recovered on that ' +
+            'subcontractor’s bill, not this one.',
+        );
+      }
+
+      const claimed = await tx.billPackageDebitNote.updateMany({
+        where: { id: noteId, recoveredOnPackageId: null },
         data: { recoveredOnPackageId: packageId },
       });
 
       if (claimed.count === 0) {
-        const existing = await tx.billPackageDebit.findFirst({
-          where: { id: debitId },
+        const existing = await tx.billPackageDebitNote.findFirst({
+          where: { id: noteId },
           select: {
             recoveredOnPackageId: true,
             recoveredOnPackage: { select: { sequenceNo: true } },
           },
         });
-        if (!existing) throw new NotFoundException('Debit not found');
         throw new ConflictException({
           statusCode: 409,
           code: PACKAGE_ERRORS.debitAlreadyRecovered,
           message:
-            'This debit has already been recovered on ' +
+            'This debit note has already been recovered on ' +
             `${
-              existing.recoveredOnPackage
+              existing?.recoveredOnPackage
                 ? packageLabel(existing.recoveredOnPackage.sequenceNo)
                 : 'another bill'
             }. A debit recovered twice is money taken twice.`,
-          recoveredOnPackageId: existing.recoveredOnPackageId,
+          recoveredOnPackageId: existing?.recoveredOnPackageId ?? null,
         });
       }
 
-      const row = await tx.billPackageDebit.findFirstOrThrow({
-        where: { id: debitId },
+      // The lines follow their note, so everything that reads lines (the abstract's hint, older
+      // reports) sees the same recovery.
+      await tx.billPackageDebit.updateMany({
+        where: { noteId },
+        data: { recoveredOnPackageId: packageId },
       });
-      return toRow(row);
+
+      return tx.billPackageDebitNote.findFirstOrThrow({
+        where: { id: noteId },
+        include: NOTE_INCLUDE,
+      });
     });
+    return toNoteRow(row, await this.partyNames([row]));
   }
 
   /**
-   * The register as one package shows it (FR-039, FR-039a, FR-040).
+   * The notes as one bill shows them (FR-039, FR-039a).
    *
-   * Live for a draft; as at issue for an issued package. See this class's docblock for why those
-   * are different registers and why a single live one cannot be right.
+   * On a bill to a subcontractor: every note raised against that bill's work order, plus any
+   * migrated note that never named one. Live for a draft; as at issue for an issued bill. On a bill
+   * to the client: none — the register does not apply.
    */
   async registerFor(
     ctx: RlsContext,
     packageId: string,
   ): Promise<DebitRegister> {
-    return withRlsContext(this.prisma, ctx, async (tx) => {
+    const register = await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
         where: { id: packageId },
         select: {
@@ -254,6 +415,8 @@ export class DebitNoteService {
           projectId: true,
           status: true,
           issuedAt: true,
+          direction: true,
+          raBill: { select: { workOrderId: true } },
         },
       });
       if (!pkg) throw new NotFoundException('Bill package not found');
@@ -261,173 +424,232 @@ export class DebitNoteService {
       const asAtIssue =
         pkg.status !== BillPackageStatus.draft && !!pkg.issuedAt;
 
-      const debits = await tx.billPackageDebit.findMany({
-        where: {
-          projectId: pkg.projectId,
-          ...(asAtIssue ? { recordedAt: { lte: pkg.issuedAt as Date } } : {}),
-        },
-        include: { recoveredOnPackage: { select: { sequenceNo: true } } },
-        orderBy: [{ groupHeading: 'asc' }, { recordedAt: 'asc' }],
-      });
-
-      const groups: { heading: string | null; rows: DebitRow[] }[] = [];
-      for (const debit of debits) {
-        const row = toRow(debit);
-        const last = groups[groups.length - 1];
-        if (last && last.heading === debit.groupHeading) {
-          last.rows.push(row);
-        } else {
-          groups.push({ heading: debit.groupHeading, rows: [row] });
-        }
+      if (pkg.direction !== BillDirection.to_subcontractor) {
+        return {
+          packageId: pkg.id,
+          applicable: false,
+          asAtIssue,
+          notes: [] as NoteEntity[],
+          recoveredOnThisPackage: '0.00',
+          total: '0.00',
+        };
       }
 
-      const recovered = debits
-        .filter((debit) => debit.recoveredOnPackageId === packageId)
-        .reduce((total, debit) => total.plus(debit.amountWithTax), ZERO);
-      const total = debits.reduce(
-        (sum, debit) => sum.plus(debit.amountWithTax),
-        ZERO,
-      );
+      const workOrderId = pkg.raBill?.workOrderId ?? null;
+      const notes = await tx.billPackageDebitNote.findMany({
+        where: {
+          projectId: pkg.projectId,
+          ...(workOrderId
+            ? { OR: [{ workOrderId }, { workOrderId: null }] }
+            : {}),
+          ...(asAtIssue ? { recordedAt: { lte: pkg.issuedAt as Date } } : {}),
+        },
+        include: NOTE_INCLUDE,
+        orderBy: [{ noteDate: 'asc' }, { recordedAt: 'asc' }],
+      });
+
+      const recovered = notes
+        .filter((note) => note.recoveredOnPackageId === packageId)
+        .reduce((sum, note) => sum.plus(note.netAmount), ZERO);
+      const total = notes.reduce((sum, note) => sum.plus(note.netAmount), ZERO);
 
       return {
         packageId: pkg.id,
+        applicable: true,
         asAtIssue,
-        groups,
+        notes,
         recoveredOnThisPackage: recovered.toFixed(2),
         total: total.toFixed(2),
       };
     });
+    const parties = await this.partyNames(register.notes);
+    return {
+      ...register,
+      notes: register.notes.map((note) => toNoteRow(note, parties)),
+    };
+  }
+
+  /** The notes recovered on one bill, as documents — the bill package's "Debit Note" section. */
+  async viewsRecoveredOn(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<DebitNoteView[]> {
+    const ids = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackageDebitNote.findMany({
+        where: { recoveredOnPackageId: packageId },
+        select: { id: true },
+        orderBy: [{ noteDate: 'asc' }, { recordedAt: 'asc' }],
+      }),
+    );
+    const views: DebitNoteView[] = [];
+    for (const { id } of ids) views.push(await this.viewFor(ctx, id));
+    return views;
   }
 
   /**
-   * One debit as the document a subcontractor signs (028 FR-018).
+   * One note as its document.
    *
-   * ## Where the parties come from
-   *
-   * The issuer is the company. The **subcontractor is only named where the debit has been
-   * recovered on one of their bills**, and then it is taken from that package's own frozen
-   * `receiverName`/`receiverCode` columns rather than resolved afresh — the package is what fixed
-   * those values at composition, and a note that re-resolved them would disagree with the bill it
-   * was recovered on the first time a vendor record was corrected.
-   *
-   * A debit raised and not yet recovered is a debit against the **project**, not against a party.
-   * Its note prints those fields blank, which is the honest reading: naming the likeliest
-   * subcontractor would put a party's name on a document making a claim against them that nobody
-   * has yet decided to make.
-   *
-   * No second renderer: `BillPdfRenderer.renderDebitNote` is a method on the renderer the package
-   * PDF already uses, so the note carries the same letterhead and the same column treatment as the
-   * register it came from.
+   * The party is the work order's subcontractor. Where the note has been recovered on an issued
+   * bill, that bill's frozen receiver is used instead — the bill is what fixed those values, and a
+   * note that re-resolved them would disagree with it the first time a vendor record was corrected.
    */
-  async noteDocumentFor(
-    ctx: RlsContext,
-    companyId: string,
-    debitId: string,
-  ): Promise<{ bytes: Buffer; filename: string }> {
-    const debit = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.billPackageDebit.findFirst({
-        where: { id: debitId },
+  async viewFor(ctx: RlsContext, noteId: string): Promise<DebitNoteView> {
+    const note = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackageDebitNote.findFirst({
+        where: { id: noteId },
         include: {
-          project: { select: { name: true, code: true } },
+          lines: { orderBy: { recordedAt: 'asc' } },
+          project: { select: { name: true, code: true, location: true } },
+          workOrder: { select: { code: true, partnerId: true } },
           recoveredOnPackage: {
             select: {
-              sequenceNo: true,
-              issuerName: true,
               receiverName: true,
-              receiverCode: true,
               receiverGstin: true,
-              receiverPan: true,
+              receiverCode: true,
             },
           },
         },
       }),
     );
-    if (!debit) throw new NotFoundException('Debit not found');
+    if (!note) throw new NotFoundException('Debit note not found');
 
-    const company = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.company.findFirst({
-        where: { id: companyId },
-        select: { name: true },
-      }),
+    const company = await this.companies.getDocumentIdentity(note.companyId);
+    const frozen = note.recoveredOnPackage?.receiverName
+      ? note.recoveredOnPackage
+      : null;
+    const source = this.sources.vendorIdentitySource();
+    const vendor =
+      !frozen && note.workOrder?.partnerId && source
+        ? await source.getBillingIdentity(
+            note.workOrder.partnerId,
+            note.companyId,
+          )
+        : null;
+
+    const taxes = noteTaxes(
+      note.amount,
+      note.gstPercent,
+      note.taxBasis,
+      note.taxAmount,
     );
 
-    const pkg = debit.recoveredOnPackage;
-    const view: DebitNoteDocumentView = {
-      issuerName: pkg?.issuerName ?? company?.name ?? null,
-      noteNumber: debit.noteNumber,
-      raisedOn: debit.recordedAt.toISOString().slice(0, 10),
-      projectName: debit.project.name,
-      projectCode: debit.project.code,
-      receiver: {
-        name: pkg?.receiverName ?? null,
-        code: pkg?.receiverCode ?? null,
-        gstin: pkg?.receiverGstin ?? null,
-        pan: pkg?.receiverPan ?? null,
-      },
-      recoveredOn: pkg ? packageLabel(pkg.sequenceNo) : null,
-      groupHeading: debit.groupHeading,
-      line: {
-        description: debit.description,
-        location: debit.location,
-        nos: debit.nos?.toFixed(3) ?? null,
-        length: debit.length?.toFixed(3) ?? null,
-        width: debit.width?.toFixed(3) ?? null,
-        quantity: debit.quantity?.toFixed(3) ?? null,
-        unit: debit.unit,
-        rate: debit.rate.toFixed(2),
-        amount: debit.amount.toFixed(2),
-        amountWithTax: debit.amountWithTax.toFixed(2),
-      },
-    };
-
     return {
-      bytes: await this.pdf.renderDebitNote(view),
-      // Named from the note number so a folder of these sorts and nothing overwrites anything. A
-      // debit with no number falls back to the project code — never to the cuid, which is the
-      // defect 017 fixed for every other download here.
-      filename: `Debit Note ${debit.noteNumber ?? debit.project.code}.pdf`,
+      company: {
+        name: company.name,
+        address: company.address,
+        logo: company.logo,
+      },
+      projectName: note.project.name,
+      projectCode: note.project.code,
+      location: note.project.location,
+      noteNumber: note.noteNumber,
+      noteDate: note.noteDate.toISOString().slice(0, 10),
+      party: {
+        name: frozen?.receiverName ?? vendor?.name ?? null,
+        gstin: frozen?.receiverGstin ?? vendor?.gstin ?? null,
+        code: frozen?.receiverCode ?? vendor?.code ?? null,
+      },
+      workOrderNo: note.workOrder?.code ?? null,
+      natureOfWork: note.natureOfWork,
+      lines: note.lines.map((line, index) => ({
+        srNo: index + 1,
+        description: line.description,
+        specification: line.location,
+        unit: line.unit,
+        quantity: line.quantity?.toFixed(2) ?? null,
+        rate: line.rate.toFixed(2),
+        amount: line.amount.toFixed(2),
+      })),
+      amount: note.amount.toFixed(2),
+      taxes: taxes.lines.map((tax) => ({
+        label: tax.label,
+        amount: tax.amount.toFixed(2),
+      })),
+      netAmount: note.netAmount.toFixed(0),
     };
+  }
+
+  /** The subcontractors' names behind a set of notes, by vendor id. */
+  private async partyNames(notes: NoteEntity[]): Promise<Map<string, string>> {
+    const source = this.sources.vendorIdentitySource();
+    const names = new Map<string, string>();
+    if (!source) return names;
+    const pairs = new Map<string, string>();
+    for (const note of notes) {
+      if (note.workOrder?.partnerId) {
+        pairs.set(note.workOrder.partnerId, note.companyId);
+      }
+    }
+    await Promise.all(
+      [...pairs].map(async ([vendorId, companyId]) => {
+        const vendor = await source
+          .getBillingIdentity(vendorId, companyId)
+          .catch(() => null);
+        if (vendor) names.set(vendorId, vendor.name);
+      }),
+    );
+    return names;
+  }
+
+  /** Who a note's file is named after: its number, else the project's code. */
+  async fileStem(ctx: RlsContext, noteId: string): Promise<string> {
+    const note = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackageDebitNote.findFirst({
+        where: { id: noteId },
+        select: { noteNumber: true, project: { select: { code: true } } },
+      }),
+    );
+    if (!note) throw new NotFoundException('Debit note not found');
+    // "2026-27/001" cannot be a file name; the slash becomes a dash.
+    return `Debit Note ${(note.noteNumber ?? note.project.code).replace(
+      /\//g,
+      '-',
+    )}`;
   }
 }
 
-type DebitEntity = {
-  id: string;
-  noteNumber: string | null;
-  groupHeading: string | null;
-  description: string;
-  location: string | null;
-  nos: Prisma.Decimal | null;
-  length: Prisma.Decimal | null;
-  width: Prisma.Decimal | null;
-  quantity: Prisma.Decimal | null;
-  unit: string | null;
-  rate: Prisma.Decimal;
-  amount: Prisma.Decimal;
-  amountWithTax: Prisma.Decimal;
-  recoveredOnPackageId: string | null;
-  recoveredOnPackage?: { sequenceNo: number } | null;
-  recordedAt: Date;
-};
+const NOTE_INCLUDE = {
+  lines: { orderBy: { recordedAt: 'asc' as const } },
+  workOrder: { select: { code: true, partnerId: true } },
+  recoveredOnPackage: { select: { sequenceNo: true } },
+} satisfies Prisma.BillPackageDebitNoteInclude;
 
-function toRow(debit: DebitEntity): DebitRow {
+type NoteEntity = Prisma.BillPackageDebitNoteGetPayload<{
+  include: typeof NOTE_INCLUDE;
+}>;
+
+function toNoteRow(
+  note: NoteEntity,
+  parties: Map<string, string> = new Map(),
+): DebitNoteRow {
   return {
-    id: debit.id,
-    noteNumber: debit.noteNumber,
-    groupHeading: debit.groupHeading,
-    description: debit.description,
-    location: debit.location,
-    nos: debit.nos?.toFixed(3) ?? null,
-    length: debit.length?.toFixed(3) ?? null,
-    width: debit.width?.toFixed(3) ?? null,
-    quantity: debit.quantity?.toFixed(3) ?? null,
-    unit: debit.unit,
-    rate: debit.rate.toFixed(2),
-    amount: debit.amount.toFixed(2),
-    amountWithTax: debit.amountWithTax.toFixed(2),
-    recoveredOn: debit.recoveredOnPackage
-      ? packageLabel(debit.recoveredOnPackage.sequenceNo)
+    id: note.id,
+    noteNumber: note.noteNumber,
+    noteDate: note.noteDate.toISOString().slice(0, 10),
+    natureOfWork: note.natureOfWork,
+    workOrderId: note.workOrderId,
+    workOrderNo: note.workOrder?.code ?? null,
+    partyName: note.workOrder?.partnerId
+      ? parties.get(note.workOrder.partnerId) ?? null
       : null,
-    recoveredOnPackageId: debit.recoveredOnPackageId,
-    recordedAt: debit.recordedAt.toISOString(),
+    taxBasis: note.taxBasis,
+    gstPercent: note.gstPercent.toFixed(2),
+    amount: note.amount.toFixed(2),
+    taxAmount: note.taxAmount.toFixed(2),
+    netAmount: note.netAmount.toFixed(2),
+    recoveredOn: note.recoveredOnPackage
+      ? packageLabel(note.recoveredOnPackage.sequenceNo)
+      : null,
+    recoveredOnPackageId: note.recoveredOnPackageId,
+    recordedAt: note.recordedAt.toISOString(),
+    lines: note.lines.map((line) => ({
+      id: line.id,
+      description: line.description,
+      specification: line.location,
+      unit: line.unit,
+      quantity: line.quantity?.toFixed(3) ?? null,
+      rate: line.rate.toFixed(2),
+      amount: line.amount.toFixed(2),
+    })),
   };
 }

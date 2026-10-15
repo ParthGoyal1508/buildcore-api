@@ -9,6 +9,7 @@ import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
+import { type DebitNoteView, drawDebitNotePdf } from './debit-note-document';
 import { headerPairs } from './header-pairs';
 import { indianFigure, taxBasisLine } from './print-format';
 import { billSignatures } from './signature-block';
@@ -50,47 +51,6 @@ const MARGIN = 28;
 const SIZE = { title: 12, heading: 9, body: 7.5, small: 6.5 } as const;
 
 type Align = 'left' | 'right' | 'center';
-
-/**
- * One debit, as the document a subcontractor signs for it (028 FR-018).
- *
- * Strings throughout, already rounded, for the reason `BillWorkbookView` is: a renderer that
- * formatted its own figures could print a different number from the register the figure came from.
- */
-export interface DebitNoteDocumentView {
-  issuerName: string | null;
-  /** `{shortCode}-DN-0001`, or null on a debit raised before 028 — printed blank, never invented. */
-  noteNumber: string | null;
-  raisedOn: string;
-  projectName: string;
-  projectCode: string | null;
-  /**
-   * The subcontractor, where the debit has been recovered on one of their bills and is therefore
-   * known. A debit raised and not yet recovered belongs to the project, not to a party — so this
-   * prints blank rather than naming whoever seems likeliest.
-   */
-  receiver: {
-    name: string | null;
-    code: string | null;
-    gstin: string | null;
-    pan: string | null;
-  };
-  /** "RA-07", where it has been recovered. */
-  recoveredOn: string | null;
-  groupHeading: string | null;
-  line: {
-    description: string;
-    location: string | null;
-    nos: string | null;
-    length: string | null;
-    width: string | null;
-    quantity: string | null;
-    unit: string | null;
-    rate: string;
-    amount: string;
-    amountWithTax: string;
-  };
-}
 
 /** A table row: its cells, or its cells with emphasis — a block heading, a total. */
 type Row = string[] | { cells: string[]; bold?: boolean; rule?: boolean };
@@ -141,25 +101,17 @@ export class BillPdfRenderer {
     for (const sheet of view.measurementSheets) {
       this.measurementPage(doc, view, sheet);
     }
-    this.debitRegisterPage(doc, view);
+    this.debitNotePages(doc, view);
 
     doc.end();
     return finished;
   }
 
   /**
-   * One debit as a document in its own right (028 FR-018).
-   *
-   * **Not a second renderer.** It is a method on this one, using the same `page`, `title`,
-   * `headerBlock` and `table` the bill package's five sheets use, so the note carries the same
-   * letterhead, the same margins and the same column treatment as the register it came from. A
-   * separate `debit-note.renderer.ts` would have been a second house style to keep in step, and
-   * the one thing certain about two house styles is that only one of them gets updated.
-   *
-   * The register already prints *inside* the package PDF; what did not exist was the single-debit
-   * document a subcontractor signs to acknowledge the recovery. Same figures, one page.
+   * One debit note on its own, in the client's format (2026-10-15) — the same drawing the bill
+   * package's "Debit Note" section uses for each note it recovers.
    */
-  async renderDebitNote(view: DebitNoteDocumentView): Promise<Buffer> {
+  async renderDebitNote(view: DebitNoteView): Promise<Buffer> {
     const doc = new PDFDocument({
       size: 'A4',
       margin: MARGIN,
@@ -168,114 +120,23 @@ export class BillPdfRenderer {
         Title: `Debit Note ${view.noteNumber ?? ''} — ${
           view.projectName
         }`.trim(),
-        Author: view.issuerName ?? 'BuildCore',
-        // Pinned to the date the debit was raised, never to the clock — the rule `render` follows
-        // (FR-028): a document produced twice must be identical down to the bytes nobody reads.
-        CreationDate: new Date(`${view.raisedOn}T00:00:00.000Z`),
+        Author: view.company.name,
+        // Pinned to the note's own date, never to the clock (FR-028).
+        CreationDate: new Date(`${view.noteDate}T00:00:00.000Z`),
       },
     });
-
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     const finished = new Promise<Buffer>((resolve, reject) => {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
     });
-
-    this.debitNotePage(doc, view);
-
+    drawDebitNotePdf(doc, view);
     doc.end();
     return finished;
   }
 
   // ── Pages ────────────────────────────────────────────────────────────────
-
-  private debitNotePage(
-    doc: PDFKit.PDFDocument,
-    view: DebitNoteDocumentView,
-  ): void {
-    this.page(doc, 'landscape');
-    this.title(doc, view.issuerName, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(
-      doc,
-      [
-        ['Debit Note No.', view.noteNumber],
-        ['Date', view.raisedOn],
-        ['Project', view.projectName],
-        ['Project Code', view.projectCode],
-      ],
-      [
-        ['Name of Sub-Contractor', view.receiver.name],
-        ['Vendor Code', view.receiver.code],
-        ['Vendor GSTIN', view.receiver.gstin],
-        // Blank where the debit has not been recovered yet, which is a fact about the debit and
-        // not a gap in the document.
-        ['Recovered On', view.recoveredOn],
-      ],
-      A4_HEIGHT,
-    );
-
-    const width = A4_HEIGHT - MARGIN * 2;
-    const columns: Column[] = [
-      { header: 'Sr', width: 24, align: 'center' },
-      { header: 'Description', width: width - 24 - 90 - 40 * 5 - 70 * 2 },
-      { header: 'Location', width: 90 },
-      { header: 'Nos', width: 40, align: 'right' },
-      { header: 'Length', width: 40, align: 'right' },
-      { header: 'Width', width: 40, align: 'right' },
-      { header: 'Qty', width: 40, align: 'right' },
-      { header: 'UOM', width: 40, align: 'center' },
-      { header: 'Rate', width: 70, align: 'right' },
-      { header: 'Amt with GST', width: 70, align: 'right' },
-    ];
-
-    const rows: string[][] = [];
-    // The heading is how the register is read (023 FR-040), so the note keeps it where it has one.
-    if (view.groupHeading) {
-      rows.push(['', view.groupHeading, '', '', '', '', '', '', '', '']);
-    }
-    const line = view.line;
-    rows.push([
-      '1',
-      line.description,
-      line.location ?? '',
-      line.nos ?? '',
-      line.length ?? '',
-      line.width ?? '',
-      line.quantity ?? '',
-      line.unit ?? '',
-      line.rate,
-      line.amountWithTax,
-    ]);
-
-    this.table(doc, columns, rows, [
-      '',
-      'Total',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      line.amountWithTax,
-    ]);
-
-    // Two signatures, because a debit note exists to be acknowledged — a note nobody signed is a
-    // claim, not a recovery.
-    doc.moveDown(3).fontSize(SIZE.body);
-    const half = width / 2;
-    const y = doc.y;
-    ['For ' + (view.issuerName ?? ''), 'Sub-Contractor'].forEach(
-      (label, index) => {
-        doc
-          .moveTo(MARGIN + index * half, y)
-          .lineTo(MARGIN + index * half + half - 20, y)
-          .stroke();
-        doc.text(label, MARGIN + index * half, y + 4, { width: half });
-      },
-    );
-  }
 
   private abstractPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'portrait');
@@ -561,77 +422,28 @@ export class BillPdfRenderer {
     }
   }
 
-  private debitRegisterPage(
+  /**
+   * The bill's "Debit Note" section (2026-10-15): every note recovered on it, each in the client's
+   * format on a page of its own. A bill recovering none still carries the section, saying so, so
+   * the four sections are always there to be checked.
+   */
+  private debitNotePages(
     doc: PDFKit.PDFDocument,
     view: BillWorkbookView,
   ): void {
-    this.page(doc, 'landscape');
-    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(doc, ...headerPairs(view.header), A4_HEIGHT);
-
-    const width = A4_HEIGHT - MARGIN * 2;
-    const columns: Column[] = [
-      { header: 'Sr', width: 24, align: 'center' },
-      { header: 'Description', width: width - 24 - 90 - 40 * 4 - 70 * 2 - 80 },
-      { header: 'Location', width: 90 },
-      { header: 'Nos', width: 40, align: 'right' },
-      { header: 'Qty', width: 40, align: 'right' },
-      { header: 'UOM', width: 40, align: 'center' },
-      { header: 'Rate', width: 40, align: 'right' },
-      { header: 'Amount', width: 70, align: 'right' },
-      { header: 'Amt with GST', width: 70, align: 'right' },
-      { header: 'Remark', width: 80 },
-    ];
-
-    const rows: string[][] = [];
-    for (const group of view.debitRegister.groups) {
-      if (group.heading) {
-        rows.push(['', group.heading, '', '', '', '', '', '', '', '']);
-      }
-      for (const row of group.rows) {
-        rows.push([
-          String(row.srNo),
-          row.description,
-          row.location ?? '',
-          row.nos ?? '',
-          row.quantity ?? '',
-          row.unit ?? '',
-          row.rate,
-          row.amount,
-          row.amountWithTax,
-          // Which bill it was debited in — the register spans bills, and without this column a
-          // reader cannot tell a debit recovered three bills ago from one recovered here.
-          row.remark ?? '',
-        ]);
-      }
+    if (view.debitNotes.length > 0) {
+      for (const note of view.debitNotes) drawDebitNotePdf(doc, note);
+      return;
     }
-    if (rows.length === 0) {
-      rows.push([
-        '',
-        'No debits on this project.',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-      ]);
-    }
-
-    this.table(doc, columns, rows, [
-      '',
-      'Total',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      view.debitRegister.total,
-      '',
-    ]);
+    this.page(doc, 'portrait');
+    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_WIDTH);
+    this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
+    doc
+      .moveDown(1)
+      .fontSize(SIZE.body)
+      .text('No debit note is recovered on this bill.', MARGIN, doc.y, {
+        width: A4_WIDTH - MARGIN * 2,
+      });
   }
 
   // ── The pieces every page shares ─────────────────────────────────────────

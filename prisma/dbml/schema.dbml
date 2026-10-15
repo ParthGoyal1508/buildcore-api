@@ -957,6 +957,7 @@ the project *is* the contract. A bill to a subcontractor still reads
   workOrders WorkOrder [not null]
   billPackages BillPackage [not null]
   billPackageDebits BillPackageDebit [not null]
+  debitNotes BillPackageDebitNote [not null]
   budgets ProjectBudget [not null]
   documents ProjectDocument [not null]
   createdAt DateTime [default: `now()`, not null]
@@ -1346,6 +1347,7 @@ nobody in particular.']
   awardLines WorkOrderBOQItem [not null]
   raBills RABill [not null]
   retentionReleases RetentionRelease [not null]
+  debitNotes BillPackageDebitNote [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -1608,6 +1610,7 @@ reconstructed from the audit trail.']
   lastRevisionReason String
   claims BillPackageLineClaim [not null]
   recoveredDebits BillPackageDebit [not null]
+  recoveredDebitNotes BillPackageDebitNote [not null]
   deductionLines BillPackageDeduction [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -1720,11 +1723,54 @@ workbook contradict each other and a debit recorded between two productions of a
 changes it.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+  noteId String [note: 'The note this line is an item of (2026-10-15). Null only between the column\'s addition and
+the migration that gave every existing debit a note of its own.']
+  note BillPackageDebitNote
 
   Note: 'The debit-note register (023 FR-036 to FR-040a).
 
 Recorded once against a project and recovered on **one** bill. The register spans bills rather
 than belonging to one, because the running total is the point of it.'
+}
+
+Table BillPackageDebitNote {
+  id String [pk]
+  companyId String [not null]
+  projectId String [not null]
+  project Project [not null]
+  workOrderId String
+  workOrder WorkOrder
+  noteNumber String [note: '`2026-27/001` — the financial year and a running number that restarts each April.']
+  noteDate DateTime [not null]
+  natureOfWork String
+  taxBasis BillTaxBasis
+  gstPercent Decimal [not null, default: 0]
+  amount Decimal [not null]
+  taxAmount Decimal [not null]
+  netAmount Decimal [not null]
+  recoveredOnPackageId String [note: 'The one bill the note is recovered on — a bill to the same subcontractor (FR-037).']
+  recoveredOnPackage BillPackage
+  recordedByUserId String
+  recordedAt DateTime [default: `now()`, not null]
+  lines BillPackageDebit [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, noteNumber) [unique]
+  }
+
+  Note: 'A debit note, as the document the client sends a subcontractor (2026-10-15) — the header of the
+"Parth Realcon DV-04, debit note" format, with its items as `BillPackageDebit` lines.
+
+**For subcontractors only.** It is raised against a work order — which is what names the party,
+its GSTIN and its vendor code — and recovered on a bill to that subcontractor under the same
+work order. A client\'s debits on us arrive as the client\'s own documents; nothing here issues one.
+
+The figures are computed at raise and stored, never re-derived: `amount` is the lines\' total,
+`taxAmount` the GST on it at `gstPercent`, `netAmount` their sum rounded to the rupee as the
+format prints it. `taxBasis` decides whether the tax prints as CGST + SGST or as IGST; null on a
+note migrated from a debit recorded before this, whose tax was never split, and printed as GST.'
 }
 
 Table RABillPayment {
@@ -6144,6 +6190,14 @@ Ref: BillPackageLineClaim.raBillLineId - RABillLine.id [delete: Cascade]
 Ref: BillPackageDebit.projectId > Project.id [delete: Cascade]
 
 Ref: BillPackageDebit.recoveredOnPackageId > BillPackage.id [delete: Set Null]
+
+Ref: BillPackageDebit.noteId > BillPackageDebitNote.id [delete: Cascade]
+
+Ref: BillPackageDebitNote.projectId > Project.id [delete: Cascade]
+
+Ref: BillPackageDebitNote.workOrderId > WorkOrder.id [delete: Set Null]
+
+Ref: BillPackageDebitNote.recoveredOnPackageId > BillPackage.id [delete: Set Null]
 
 Ref: RABillPayment.raBillId > RABill.id [delete: Restrict]
 
