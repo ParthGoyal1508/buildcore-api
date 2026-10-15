@@ -52,6 +52,9 @@ function harness(over: { offer?: any; resignation?: any } = {}) {
       firstName: 'Sunil',
       lastName: 'Agarwal',
       mobile: '9000000001',
+      designationId: 'd-se',
+      title: null,
+      gender: 'male',
     })),
   };
   const sites: any = {
@@ -94,7 +97,9 @@ describe('RecruitmentLetterSource', () => {
         ctcInWords: 'Rupees Four Lakh Eighty Thousand Only',
         probationMonths: 6,
         noticeDays: 30,
-        reportingManager: 'Sunil Agarwal',
+        // "report to Manager Mr. Sidhhu Ram", as the format has it: designation, salutation
+        // and name, off the manager's employee record (2026-10-15).
+        reportingManager: 'Site Engineer Mr. Sunil Agarwal',
         reportingManagerMobile: '9000000001',
         // No project on the requisition, so the site names the place.
         placeOfPosting: 'Washim Camp',

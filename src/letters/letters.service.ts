@@ -46,6 +46,7 @@ import {
   renderLetterPdf,
 } from './letter-pdf.renderer';
 import { LETTER_LAYOUTS } from './letter-layouts';
+import { composeAddress, presentLetterValues } from './letter-values';
 import { expandLineItems, LineItemsError } from './line-items';
 import { nextReference, referencePrefix } from './letter-reference';
 import { assertNoRestrictedTypes, renderTemplate } from './template-resolver';
@@ -886,10 +887,6 @@ export class LettersService {
     if (candidate) records.candidate = candidate;
     if (project) records.project = project;
     if (company) {
-      const place = [company.address, company.city, company.state]
-        .map((part) => part?.trim())
-        .filter(Boolean)
-        .join(', ');
       records.company = {
         terms: company.terms,
         name: company.name,
@@ -898,9 +895,7 @@ export class LettersService {
         pan: company.pan,
         phone: company.phone,
         email: company.email,
-        address: company.pinCode
-          ? `${place}${place ? ' - ' : ''}${company.pinCode}`
-          : place,
+        address: composeAddress(company),
       };
     }
     return records;
@@ -1013,7 +1008,9 @@ export class LettersService {
     }
     await this.assertTemplateIsRenderable(companyId, template.bodyTemplate);
 
-    let signature: { image: Buffer; name: string; title: string } | undefined;
+    let signature:
+      | { image: Buffer | null; name: string; title: string }
+      | undefined;
     let appliedSignatureRef: string | null = null;
     if (letter.letterKind.requiresSignature && letter.signatoryId) {
       const signatory = await this.signatories.requireById(
@@ -1053,10 +1050,13 @@ export class LettersService {
     // "Issued on" and the printed date cannot disagree. A body could reference `issueDate` and
     // nothing ever supplied it, which printed "Issued on ." on every work order. The reference
     // likewise: a purchase order quotes its own number in its body.
+    // As the page prints them: amounts on the Indian grouping, the article before a designation,
+    // tick boxes for a chosen payment mode — see `letter-values.ts`. The stored composition keeps
+    // what was typed; this is only how it is written.
     const body = renderTemplate(template.bodyTemplate, {
       issueDate,
       referenceNo: draft ? '(assigned on issue)' : letter.referenceNo ?? '',
-      ...variables,
+      ...presentLetterValues(letter.letterKind.key, variables),
       ...derived,
     });
     const pdf = await renderLetterPdf({
@@ -1072,6 +1072,7 @@ export class LettersService {
       referenceLabel: layout?.referenceLabel,
       titleFirst: layout?.titleFirst,
       acceptanceLabel: layout?.acceptanceLabel,
+      signatureLines: layout?.signatureLines?.(signature ?? null),
       // A format that prints its reference and date in its own table (the F&F sheet) gets them
       // through the body's `{{referenceNo}}` and `{{issueDate}}` above, and not a second time here.
       referenceNo:
@@ -1146,11 +1147,9 @@ export class LettersService {
     } | null,
   ): Promise<BrandHeader> {
     if (!company) return { logo: null, name: '', lines: [] };
-    const place = [company.address, company.city, company.state]
-      .map((part) => part?.trim())
-      .filter(Boolean)
-      .join(', ');
-    const office = company.pinCode ? `${place} - ${company.pinCode}` : place;
+    // Each part once (2026-10-15): an address typed in full already names its city, state and
+    // PIN code, and joined to them again the F&F sheet's header said them twice.
+    const office = composeAddress(company);
     const contact = [
       company.phone ? `Ph: ${company.phone}` : null,
       company.email ? `Email: ${company.email}` : null,

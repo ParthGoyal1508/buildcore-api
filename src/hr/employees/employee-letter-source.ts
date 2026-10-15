@@ -170,7 +170,9 @@ export class EmployeeLetterSource implements OnModuleInit {
     const record: Record<string, unknown> = {
       fullName: employeeNameOf(employee) ?? '',
       salutation: salutationOf(employee.title, employee.gender),
-      relation: relationOf(employee.gender),
+      // The title says it where the gender was never recorded (2026-10-15): "Mr." on file and
+      // "S/o / D/o", "them", "their" on the letter was the record contradicting itself.
+      relation: relationOf(genderOf(employee.title, employee.gender)),
       fatherName: employee.fatherName,
       employeeCode: employee.employeeCode,
       email: employee.email,
@@ -196,7 +198,7 @@ export class EmployeeLetterSource implements OnModuleInit {
       dateOfJoining: employee.dateOfJoining,
       reportingManager: manager ? employeeNameOf(manager) ?? '' : '',
       reportingManagerMobile: manager?.mobile ?? '',
-      ...pronounsOf(employee.gender),
+      ...pronounsOf(genderOf(employee.title, employee.gender)),
       employmentTypeBoxes: employmentTypeBoxes(employee.employmentType),
       ...salary,
     };
@@ -502,6 +504,21 @@ export function salutationOf(
   if (gender === Gender.male) return 'Mr.';
   if (gender === Gender.female) return 'Ms.';
   return '';
+}
+
+/**
+ * The gender as recorded, else as the title implies — "Mr." male, "Ms." / "Mrs." / "Miss" female
+ * — else null, which every form derived from it treats as unknown.
+ */
+export function genderOf(
+  title: string | null,
+  gender: Gender | null,
+): Gender | null {
+  if (gender) return gender;
+  const t = (title ?? '').trim().toLowerCase().replace(/\.$/, '');
+  if (t === 'mr' || t === 'shri' || t === 'sri') return Gender.male;
+  if (['ms', 'mrs', 'miss', 'smt', 'kumari'].includes(t)) return Gender.female;
+  return null;
 }
 
 /**

@@ -1,11 +1,20 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { OfferStatus, Prisma, ResignationStatus } from '@prisma/client';
+import {
+  Employee,
+  OfferStatus,
+  Prisma,
+  ResignationStatus,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { rupeesFirstInWords } from '../../common/rupees-in-words';
 import { employeeNameOf } from '../../hr/employee-name';
+import {
+  genderOf,
+  salutationOf,
+} from '../../hr/employees/employee-letter-source';
 import { LetterRecordSources } from '../../letters/letter-record-sources';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { SitesService } from '../../projects/sites/sites.service';
@@ -114,11 +123,36 @@ export class RecruitmentLetterSource implements OnModuleInit {
       ctcInWords: rupeesFirstInWords(round2(annual)),
       probationMonths: offer.probationMonths,
       noticeDays: offer.noticePeriodDays,
-      reportingManager: manager ? employeeNameOf(manager) ?? '' : '',
-      reportingManagerMobile: manager?.mobile ?? '',
+      reportingManager: await this.managerLine(caller, manager),
+      reportingManagerMobile: manager?.mobile?.trim() ?? '',
       placeOfPosting,
     };
     return record;
+  }
+
+  /**
+   * The offer letter's "report to Manager Mr. Sidhhu Ram" (2026-10-15): the manager's designation,
+   * their salutation and their name — "Project Manager Mr. Sidhhu Ram". It used to be the name
+   * alone, which left HR to type the rest. Parts the employee record does not hold are left out.
+   */
+  private async managerLine(
+    caller: AuthenticatedUser,
+    manager: Employee | null,
+  ): Promise<string> {
+    if (!manager) return '';
+    const designation = manager.designationId
+      ? await this.refs
+          .designationName(caller, manager.designationId)
+          .catch(() => '')
+      : '';
+    return [
+      designation,
+      salutationOf(manager.title, genderOf(manager.title, manager.gender)),
+      employeeNameOf(manager) ?? '',
+    ]
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join(' ');
   }
 
   /**

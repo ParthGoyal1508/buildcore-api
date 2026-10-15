@@ -1,4 +1,5 @@
 import { LetterFieldSource } from '@prisma/client';
+import { join } from 'path';
 
 import { FORBIDDEN_FIELD_PATH_FRAGMENTS } from '../settings/letter-kinds/letter-kind-fields.service';
 import { parseBlocks } from './letter-pdf.renderer';
@@ -8,6 +9,12 @@ import {
   tokensIn,
 } from './standard-letter-templates';
 import { LINE_ITEM_INPUTS } from './line-items';
+
+// eslint-disable-next-line @typescript-eslint/no-var-requires -- fontkit ships no types.
+const fontkit = require('fontkit');
+const LETTER_FACE = fontkit.openSync(
+  join(__dirname, 'fonts', 'Inter-Regular.woff'),
+);
 
 /**
  * The shipped letter bodies (2026-10-11; transfer, termination and F&F added 2026-10-13).
@@ -112,11 +119,12 @@ describe('standard letter templates', () => {
     });
 
     it('uses only characters the PDF font can print', () => {
-      // The renderer sets the body in Helvetica, a built-in font with the WinAnsi
-      // character set. "₹", "☐" and "−" are outside it and print as "¹", "&" and a stray
-      // quote — measured, not supposed. Curly quotes and dashes are inside it.
-      const outside = [...template.body].filter(
-        (c) => !/[\n\x20-\x7E\u00A0-\u00FF‘’“”–—…•]/.test(c),
+      // Measured against the face the renderer embeds (2026-10-15), not a list of what it is
+      // believed to hold: built-in Helvetica printed "₹" as "¹" and "☐" as "&". Inter has the
+      // rupee sign; it still has no "☐", which is why the boxes are "[ ]".
+      const outside = [...new Set(template.body)].filter(
+        (c) =>
+          c !== '\n' && !LETTER_FACE.hasGlyphForCodePoint(c.codePointAt(0)!),
       );
       expect(outside).toEqual([]);
     });
@@ -246,6 +254,24 @@ describe('standard letter templates', () => {
       const transfer = byKey.get('transfer')!.body;
       expect(transfer).not.toContain('Jaipur');
       expect(transfer.match(/\{\{toProject\}\}/g)).toHaveLength(2);
+    });
+  });
+
+  describe('the increment letter', () => {
+    it('works out the article before the designation instead of fixing "an"', () => {
+      // "as an Project Manager" went out in production: the format's "as an Electrician".
+      const increment = byKey.get('increment')!.body;
+      expect(increment).not.toMatch(/\b(a|an) \{\{designation\}\}/);
+      expect(increment).toContain('as {{designationArticle}} {{designation}}');
+    });
+  });
+
+  describe('the HR formats’ amounts', () => {
+    it('print with the rupee sign, as the client’s formats do', () => {
+      for (const key of ['appointment', 'increment', 'fnf_settlement']) {
+        expect(byKey.get(key)!.body).toContain('₹');
+        expect(byKey.get(key)!.body).not.toMatch(/Rs\./);
+      }
     });
   });
 

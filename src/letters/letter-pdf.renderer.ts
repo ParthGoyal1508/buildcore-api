@@ -4,6 +4,9 @@
 // namespace form therefore passes every test and throws in the running server.
 import PDFDocument = require('pdfkit');
 
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
 /**
  * Rendering a letter onto the company's own stationery (2026-10-11).
  *
@@ -27,6 +30,41 @@ import PDFDocument = require('pdfkit');
  * whose second page is blank white is visibly a photocopy of a letter.
  */
 
+/**
+ * The letter face (2026-10-15): Inter, embedded, because the client's formats print amounts with
+ * "₹" and pdfkit's built-in Helvetica has no such glyph — it printed "¹", so the templates said
+ * "Rs." instead. Inter (SIL Open Font License, `fonts/OFL.txt`) has it, and the "–", "’" and "•"
+ * the formats use besides.
+ *
+ * Read from `fonts/` beside this file, which `nest-cli.json` copies into `dist/` with the build.
+ * Should the files be missing — a build that lost its assets — the letter still renders, in
+ * Helvetica with "₹" written "Rs.": a letter in the fallback face beats no letter.
+ */
+interface Faces {
+  regular: string;
+  bold: string;
+}
+const FALLBACK: Faces = { regular: 'Helvetica', bold: 'Helvetica-Bold' };
+let fontFiles: { regular: Buffer; bold: Buffer } | null | undefined;
+function letterFontFiles(): { regular: Buffer; bold: Buffer } | null {
+  if (fontFiles === undefined) {
+    try {
+      fontFiles = {
+        regular: readFileSync(join(__dirname, 'fonts', 'Inter-Regular.woff')),
+        bold: readFileSync(join(__dirname, 'fonts', 'Inter-SemiBold.woff')),
+      };
+    } catch {
+      fontFiles = null;
+    }
+  }
+  return fontFiles;
+}
+
+/** Whether the embedded face is available — false only on a build that lost its fonts. */
+export function hasRupeeGlyph(): boolean {
+  return letterFontFiles() !== null;
+}
+
 /** A4 portrait, in points — pdfkit's unit. */
 const PAGE = { width: 595.28, height: 841.89 };
 
@@ -45,9 +83,13 @@ const SAFE = { top: 118, bottom: 168, left: 56, right: 56 };
 
 const CONTENT_WIDTH = PAGE.width - SAFE.left - SAFE.right;
 
-/** Body type. Small enough that a five-page appointment letter stays five pages. */
-const BODY_SIZE = 10.5;
-const TABLE_SIZE = 9.5;
+/**
+ * Body type. Small enough that a five-page appointment letter stays five pages. 10pt since the
+ * face became Inter (2026-10-15), which sets larger than Helvetica at the same size: at 10.5 the
+ * two-page offer letter ran its closing onto a third page.
+ */
+const BODY_SIZE = 10;
+const TABLE_SIZE = 9;
 const LINE_GAP = 2.5;
 
 /** Cell padding inside a table, and the rule weight around it. */
@@ -65,6 +107,8 @@ const RULE = 0.6;
 const SIGNATURE_WIDTH = 130;
 const SIGNATURE_MAX_HEIGHT = 52;
 const SIGNATURE_BLOCK = 18 + SIGNATURE_MAX_HEIGHT + 6 + 26;
+/** The blank left to sign by hand in, when a format's signing block has no signatory's graphic. */
+const UNSIGNED_SPACE = 40;
 
 export interface LetterSignature {
   /**
@@ -128,6 +172,12 @@ export interface RenderLetterInput {
    * they return.
    */
   acceptanceLabel?: string;
+  /**
+   * Printed under the signature in place of the signatory's name and title — "Authorized
+   * Signatory" (2026-10-15). Set, the letter always closes with a signing block: when no
+   * signatory signs it, the space is left blank, to be signed by hand.
+   */
+  signatureLines?: string[];
 }
 
 export interface BrandHeader {
@@ -255,7 +305,7 @@ export function parseBlocks(body: string): Block[] {
  * and the other two hold five-digit amounts, and equal thirds wrap the labels onto three
  * lines each while leaving the figures swimming in white space.
  */
-function columnWidths(rows: string[][], measure: (s: string) => number) {
+export function columnWidths(rows: string[][], measure: (s: string) => number) {
   const count = Math.max(...rows.map((r) => r.length));
   const natural = Array.from({ length: count }, (_, i) =>
     Math.max(
@@ -270,6 +320,21 @@ function columnWidths(rows: string[][], measure: (s: string) => number) {
   if (total <= usable) {
     return natural.map((w) => (w / total) * usable + 2 * CELL_PAD);
   }
+  // How narrow each column may be made (2026-10-15): never narrower than its longest word, so a
+  // reference or a code is not broken across lines — the F&F sheet printed "PRPL/" over
+  // "HR/2026-27/0009" — and never narrower than an equal share when its content fits in one,
+  // so a short column does not wrap to make room for a long one that wraps happily anyway.
+  const floors = Array.from({ length: count }, (_, i) =>
+    Math.min(
+      natural[i],
+      Math.max(
+        usable / count,
+        ...rows.flatMap((r) =>
+          (r[i] ?? '').split(/\s+/).map((word) => measure(word)),
+        ),
+      ),
+    ),
+  );
   // Too wide for the page: the widest columns give up the space, not every column in
   // proportion (2026-10-14). Shrunk proportionally, a work order's seven columns wrapped its
   // rates mid-figure — "4,850." over "00" — to make room for a description that would have
@@ -277,18 +342,29 @@ function columnWidths(rows: string[][], measure: (s: string) => number) {
   const widths = [...natural];
   let excess = total - usable;
   while (excess > 0.5) {
-    const widest = Math.max(...widths);
-    const atWidest = widths.filter((w) => w >= widest - 0.01).length;
-    const next = Math.max(0, ...widths.filter((w) => w < widest - 0.01));
-    // Bring the widest down towards the next widest, or by the whole excess if that is less.
-    const cut = Math.min((widest - next) * atWidest, excess);
-    const each = cut / atWidest;
-    for (let i = 0; i < widths.length; i++) {
-      if (widths[i] >= widest - 0.01) widths[i] -= each;
-    }
+    const open = widths
+      .map((w, i) => i)
+      .filter((i) => widths[i] - floors[i] > 0.01);
+    if (open.length === 0) break;
+    const widest = Math.max(...open.map((i) => widths[i]));
+    const top = open.filter((i) => widths[i] >= widest - 0.01);
+    const next = Math.max(
+      0,
+      ...open.filter((i) => !top.includes(i)).map((i) => widths[i]),
+    );
+    // Bring the widest down towards the next widest or their own floor, whichever is nearer,
+    // or by the whole excess if that is less.
+    const step = Math.min(
+      ...top.map((i) => widest - Math.max(next, floors[i])),
+    );
+    const cut = Math.min(step * top.length, excess);
+    for (const i of top) widths[i] -= cut / top.length;
     excess -= cut;
   }
-  return widths.map((w) => w + 2 * CELL_PAD);
+  // The floors themselves do not fit: every column gives up its share after all.
+  const sum = widths.reduce((a, b) => a + b, 0);
+  const scale = sum > usable ? usable / sum : 1;
+  return widths.map((w) => w * scale + 2 * CELL_PAD);
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- pdfkit ships no types for the
@@ -302,6 +378,7 @@ function drawTable(
   headed: boolean,
   newPage: () => void,
   bottomLimit: number,
+  faces: Faces,
 ): void {
   doc.fontSize(TABLE_SIZE);
   // Measured in the body face, with a margin for the bold heading row — measured exactly, a
@@ -310,7 +387,7 @@ function drawTable(
 
   rows.forEach((row, rowIndex) => {
     const isHeading = headed && rowIndex === 0;
-    doc.font(isHeading ? 'Helvetica-Bold' : 'Helvetica');
+    doc.font(isHeading ? faces.bold : faces.regular);
 
     const heights = row.map((cell, i) =>
       doc.heightOfString(cell ?? '', { width: widths[i] - 2 * CELL_PAD }),
@@ -348,7 +425,7 @@ function drawTable(
     });
     doc.y = top + rowHeight;
   });
-  doc.font('Helvetica').fontSize(BODY_SIZE);
+  doc.font(faces.regular).fontSize(BODY_SIZE);
 }
 
 /**
@@ -371,6 +448,25 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     doc.on('data', (c: Buffer) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
+
+    const files = letterFontFiles();
+    let faces = FALLBACK;
+    if (files) {
+      doc.registerFont('Letter', files.regular);
+      doc.registerFont('Letter-Bold', files.bold);
+      faces = { regular: 'Letter', bold: 'Letter-Bold' };
+    } else {
+    }
+    // The fallback face has no "₹": said in letters rather than printed as "¹".
+    // A tick box is glued to its label (2026-10-15): "[ ] Pending  [ ] N/A" broke as "[ ]" at the
+    // end of one line and "N/A" at the start of the next. No-break spaces inside the box and after
+    // it keep "[ ] N/A" in one piece; the two spaces between boxes are where a line may break.
+    const boxed = input.body.replace(
+      /\[([ Xx])\] /g,
+      (_, mark: string) => `[${mark === ' ' ? '\u00A0' : mark}]\u00A0`,
+    );
+    const bodyText = files ? boxed : boxed.replace(/₹\s?/g, 'Rs. ');
+    doc.font(faces.regular);
 
     // Decoded **once** and drawn by reference on each page. Passing the buffer to
     // `doc.image()` per page makes pdfkit embed a fresh copy every time: a five-page
@@ -413,13 +509,13 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       if (!input.pageFooter) return;
       const top = PAGE.height - geometry.bottom + 22;
       const half = CONTENT_WIDTH / 2;
-      doc.font('Helvetica-Bold').fontSize(9).fillColor('#000000');
+      doc.font(faces.bold).fontSize(9).fillColor('#000000');
       doc.text(input.pageFooter.left, SAFE.left, top, { width: half - 10 });
       doc.text(input.pageFooter.right, SAFE.left + half, top, {
         width: half,
         align: 'right',
       });
-      doc.font('Helvetica').fontSize(9);
+      doc.font(faces.regular).fontSize(9);
       doc.text('Authorized Signatory', SAFE.left, top + 40, {
         width: half - 10,
       });
@@ -435,7 +531,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       doc
         .save()
         .rotate(-35, { origin: [PAGE.width / 2, PAGE.height / 2] })
-        .font('Helvetica-Bold')
+        .font(faces.bold)
         .fontSize(64)
         .fillColor('#d1d5db')
         .fillOpacity(0.55)
@@ -448,7 +544,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       // Restored to the body's settings, not merely un-rotated: `save`/`restore` keep the
       // transform but not the font size, and a page started mid-paragraph carried on in 64pt.
       doc
-        .font('Helvetica')
+        .font(faces.regular)
         .fontSize(BODY_SIZE)
         .fillOpacity(1)
         .fillColor('#000000');
@@ -482,13 +578,13 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
       }
       const textWidth = SAFE.left + CONTENT_WIDTH - textLeft;
       doc
-        .font('Helvetica-Bold')
+        .font(faces.bold)
         .fontSize(15)
         .fillColor('#000000')
         .text((brand.name ?? '').toUpperCase(), textLeft, top, {
           width: textWidth,
         });
-      doc.font('Helvetica').fontSize(8.5);
+      doc.font(faces.regular).fontSize(8.5);
       for (const line of brand.lines) {
         doc.text(line, textLeft, doc.y + 1, { width: textWidth });
       }
@@ -499,15 +595,22 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         .moveTo(SAFE.left, ruleAt)
         .lineTo(SAFE.left + CONTENT_WIDTH, ruleAt)
         .stroke();
-      doc.font('Helvetica').fontSize(BODY_SIZE).fillColor('#000000');
+      doc.font(faces.regular).fontSize(BODY_SIZE).fillColor('#000000');
       doc.y = ruleAt + 12;
     }
 
     // The signature block's real height, for the page-break checks below (2026-10-15). The
     // graphic is capped at `SIGNATURE_MAX_HEIGHT`, but a wide, short scan is half that, and
     // reserving the cap pushed the offer letter's closing onto a third page of its own.
+    // A signing block is drawn when somebody signs, or when the format always has one.
+    const signed = Boolean(input.signature || input.signatureLines);
+    const captionHeight = input.signatureLines
+      ? input.signatureLines.length * (BODY_SIZE + 4)
+      : 26;
     let signatureBlock = SIGNATURE_BLOCK;
-    if (input.signature) {
+    if (!input.signature && input.signatureLines) {
+      signatureBlock = 18 + UNSIGNED_SPACE + captionHeight;
+    } else if (input.signature) {
       let graphicHeight = 36; // the preview's "[Signature applied on issue]" line
       if (input.signature.image) {
         try {
@@ -523,22 +626,19 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
           graphicHeight = 16;
         }
       }
-      signatureBlock = 18 + graphicHeight + 26;
+      signatureBlock = 18 + graphicHeight + captionHeight;
     }
 
-    const blocks = parseBlocks(input.body);
+    const blocks = parseBlocks(bodyText);
     const titleInBody = blocks.some((b) => b.kind === 'title');
     const drawTitle = () => {
       if (!input.title.trim()) return;
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(13)
-        .text(input.title, SAFE.left, doc.y, {
-          width: CONTENT_WIDTH,
-          align: 'center',
-          underline: true,
-        });
-      doc.font('Helvetica').fontSize(BODY_SIZE);
+      doc.font(faces.bold).fontSize(13).text(input.title, SAFE.left, doc.y, {
+        width: CONTENT_WIDTH,
+        align: 'center',
+        underline: true,
+      });
+      doc.font(faces.regular).fontSize(BODY_SIZE);
       doc.y += 14;
     };
     if (input.titleFirst && !titleInBody) drawTitle();
@@ -584,7 +684,7 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
     // split off and moved over together with the signature when the two do not fit.
     let closing: string | null = null;
     const last = blocks[signatureAt - 1];
-    if (input.signature && last?.kind === 'text') {
+    if (signed && last?.kind === 'text') {
       const lines = [...last.lines];
       while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
       const breakAt = lines.map((l) => l.trim()).lastIndexOf('');
@@ -612,16 +712,16 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         if (bottomLimit - doc.y < BODY_SIZE * 4) newPage();
         doc.y += 4;
         doc
-          .font('Helvetica-Bold')
+          .font(faces.bold)
           .fontSize(BODY_SIZE)
           .text(block.text, SAFE.left, doc.y, { width: CONTENT_WIDTH });
-        doc.font('Helvetica');
+        doc.font(faces.regular);
         doc.y += 3;
         return;
       }
       if (block.kind === 'table') {
         doc.y += 4;
-        drawTable(doc, block.rows, block.headed, newPage, bottomLimit);
+        drawTable(doc, block.rows, block.headed, newPage, bottomLimit, faces);
         doc.y += 8;
         return;
       }
@@ -685,24 +785,27 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
         // Level with the closing's last line — the "For <company>" the company signs under.
         const after = doc.y;
         doc
-          .font('Helvetica-Bold')
+          .font(faces.bold)
           .text(
             input.acceptanceLabel,
             SAFE.left,
             after - doc.currentLineHeight(true) - LINE_GAP,
             { width: CONTENT_WIDTH, align: 'right' },
           );
-        doc.font('Helvetica');
+        doc.font(faces.regular);
         doc.y = after;
       }
     }
 
-    if (input.signature) {
+    if (signed) {
       if (bottomLimit - doc.y < signatureBlock) newPage();
       doc.y += 18;
       const top = doc.y;
-      const image = input.signature.image;
-      if (!image) {
+      const image = input.signature?.image ?? null;
+      if (!input.signature) {
+        // Nobody signs it here: the space is left for a hand signature.
+        doc.y = top + UNSIGNED_SPACE;
+      } else if (!image) {
         // A preview: where the graphic will go, said rather than drawn.
         doc
           .fontSize(9)
@@ -735,16 +838,29 @@ export function renderLetterPdf(input: RenderLetterInput): Promise<Buffer> {
           doc.y = top + 16;
         }
       }
-      doc
-        .fontSize(BODY_SIZE)
-        .font('Helvetica-Bold')
-        .text(input.signature.name, SAFE.left, doc.y, { width: CONTENT_WIDTH });
-      doc
-        .font('Helvetica')
-        .fontSize(9)
-        .text(input.signature.title, SAFE.left, doc.y, {
-          width: CONTENT_WIDTH,
+      if (input.signatureLines) {
+        // The format's own caption — "Authorized Signatory" — in place of name and title.
+        input.signatureLines.forEach((line, i) => {
+          doc
+            .fontSize(BODY_SIZE)
+            .font(i === 0 ? faces.bold : faces.regular)
+            .text(line, SAFE.left, doc.y, { width: CONTENT_WIDTH });
         });
+        doc.font(faces.regular);
+      } else if (input.signature) {
+        doc
+          .fontSize(BODY_SIZE)
+          .font(faces.bold)
+          .text(input.signature.name, SAFE.left, doc.y, {
+            width: CONTENT_WIDTH,
+          });
+        doc
+          .font(faces.regular)
+          .fontSize(9)
+          .text(input.signature.title, SAFE.left, doc.y, {
+            width: CONTENT_WIDTH,
+          });
+      }
       doc.fontSize(BODY_SIZE);
       doc.y += 10;
     }

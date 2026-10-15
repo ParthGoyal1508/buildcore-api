@@ -60,11 +60,15 @@ import { LINE_ITEM_OUTPUTS } from './line-items';
  * their formats to be followed strictly: what is highlighted yellow is filled at issue, and
  * everything else is fixed. So the wording here is theirs, word for word — their capitals, their
  * slips of grammar and all — with these exceptions only: "Mr." / "he" / "his" are the salutation
- * and pronoun tokens, "S/O" / "S/o" is the relation token, "₹" is "Rs." and "☐" is "[ ]" (the PDF
- * font has neither glyph), and names in the fixed text that belonged to the sample (the company's
+ * and pronoun tokens, "S/O" / "S/o" is the relation token, "☐" is "[ ]" (the PDF font has no
+ * such glyph), and names in the fixed text that belonged to the sample (the company's
  * own name and "PRPL", "Jaipur Ring Road", a signatory's name) are tokens. Where they put the
  * heading, the reference line and the employee's acceptance is `LETTER_LAYOUTS`'s and the body's
- * `[[title]]` / `[[signature]]` markers' business.
+ * `[[title]]` / `[[signature]]` markers' business; the caption under the signature ("Authorized
+ * Signatory", "HR Department") is the layout's `signatureLines`.
+ *
+ * Amounts print with "₹" since 2026-10-15, as the formats do — the renderer embeds a font that has
+ * the glyph — and on the Indian grouping whatever was typed (`MONEY_TOKENS`, `letter-values.ts`).
  *
  * The appointment letter's Annexure I has the client's rows — Dearness and Medical Allowance and
  * a Meal Voucher among them, which the salary structure does not hold and the record states as
@@ -251,7 +255,7 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '',
       'With reference to your application and subsequent interview held with us, we are ' +
         'pleased to inform you that you have been selected for the post of ' +
-        '‘{{postOffered}}’ at {{placeOfPosting}} with the terms & conditions mutually ' +
+        '‘{{postOffered}}’{{grade}} at {{placeOfPosting}} with the terms & conditions mutually ' +
         'agreed during the Interview. You are expected to join on or before ' +
         '{{joiningDate}}. Detailed appointment letter shall be provided on joining the ' +
         'company. Where you will report to {{reportingManager}} Mo. No. ' +
@@ -324,6 +328,9 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       // The terms come off the candidate's latest offer, which is where Recruitment
       // recorded them; HR still sees and can change each one before the letter is issued.
       candidate('postOffered', 'Post offered', 'offer.designation'),
+      // Optional: printed " (S3 Grade)" after the post when filled, nothing when blank
+      // (`presentLetterValues`).
+      manual('grade', 'Grade — e.g. S3 (optional)', false),
       candidate('placeOfPosting', 'Place of posting', 'offer.placeOfPosting'),
       candidate('joiningDate', 'Join on or before', 'offer.joiningDate'),
       candidate(
@@ -570,22 +577,22 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '## Earning Components (A)',
       '| Heads | Monthly | Annually |',
       '| --- | --- | --- |',
-      '| Basic Salary | Rs. {{basicMonthly}} | Rs. {{basicAnnual}} |',
-      '| House Rent Allowance (HRA) | Rs. {{hraMonthly}} | Rs. {{hraAnnual}} |',
-      '| Dearness Allowance | Rs. {{daMonthly}} | Rs. {{daAnnual}} |',
-      '| Conveyance Allowance | Rs. {{conveyanceMonthly}} | Rs. {{conveyanceAnnual}} |',
-      '| Medical Allowance | Rs. {{medicalMonthly}} | Rs. {{medicalAnnual}} |',
-      '| Site Allowance | Rs. {{?siteAllowanceMonthly}} | Rs. {{siteAllowanceAnnual}} |',
-      '| Special Allowance | Rs. {{specialAllowanceMonthly}} | Rs. {{specialAllowanceAnnual}} |',
-      '| Gross Salary | Rs. {{grossMonthly}} | Rs. {{grossAnnual}} |',
+      '| Basic Salary | ₹ {{basicMonthly}} | ₹ {{basicAnnual}} |',
+      '| House Rent Allowance (HRA) | ₹ {{hraMonthly}} | ₹ {{hraAnnual}} |',
+      '| Dearness Allowance | ₹ {{daMonthly}} | ₹ {{daAnnual}} |',
+      '| Conveyance Allowance | ₹ {{conveyanceMonthly}} | ₹ {{conveyanceAnnual}} |',
+      '| Medical Allowance | ₹ {{medicalMonthly}} | ₹ {{medicalAnnual}} |',
+      '| Site Allowance | ₹ {{?siteAllowanceMonthly}} | ₹ {{siteAllowanceAnnual}} |',
+      '| Special Allowance | ₹ {{specialAllowanceMonthly}} | ₹ {{specialAllowanceAnnual}} |',
+      '| Gross Salary | ₹ {{grossMonthly}} | ₹ {{grossAnnual}} |',
       '## Employer Contributions (B)',
       '| Heads | Monthly | Annually |',
       '| --- | --- | --- |',
-      '| PF Employer | Rs. {{pfEmployerMonthly}} | Rs. {{pfEmployerAnnual}} |',
-      '| ESI Employer | Rs. {{esicEmployerMonthly}} | Rs. {{esicEmployerAnnual}} |',
-      '| Meal Voucher | Rs. {{mealVoucherMonthly}} | Rs. {{mealVoucherAnnual}} |',
-      '| Total CTC (A+B) | Rs. {{ctcMonthly}} | Rs. {{ctcAnnual}} |',
-      '| Net Take-Home | Rs. {{netTakeHomeMonthly}} | Rs. {{netTakeHomeAnnual}} |',
+      '| PF Employer | ₹ {{pfEmployerMonthly}} | ₹ {{pfEmployerAnnual}} |',
+      '| ESI Employer | ₹ {{esicEmployerMonthly}} | ₹ {{esicEmployerAnnual}} |',
+      '| Meal Voucher | ₹ {{mealVoucherMonthly}} | ₹ {{mealVoucherAnnual}} |',
+      '| Total CTC (A+B) | ₹ {{ctcMonthly}} | ₹ {{ctcAnnual}} |',
+      '| Net Take-Home | ₹ {{netTakeHomeMonthly}} | ₹ {{netTakeHomeAnnual}} |',
     ].join('\n'),
     fields: [
       SALUTATION,
@@ -786,7 +793,9 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     kindKey: 'increment',
     name: 'Increment letter',
     // "Increment Letter (1).docx". No heading — "Ref:" and "Date:" open it — and no "For …"
-    // line: the signatory signs under "With best wishes,".
+    // line: the signatory signs under "With best wishes,", over "Authorized Signatory". "as an
+    // Electrician" in the format; the article is worked out from the designation, so a Project
+    // Manager is not "an Project Manager".
     body: [
       '{{employeeName}}',
       'Employee Code: {{employeeCode}}',
@@ -798,10 +807,10 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       'Dear {{salutation}} {{employeeName}},',
       '',
       'With reference to your appointment letter, we are pleased to inform you that your ' +
-        'salary has been revised with effect from {{effectiveDate}} for your services as an ' +
-        '{{designation}} at {{placeOfPosting}}.',
+        'salary has been revised with effect from {{effectiveDate}} for your services as ' +
+        '{{designationArticle}} {{designation}} at {{placeOfPosting}}.',
       '',
-      'Your revised Cost to Company (CTC) will be Rs.{{revisedCtcMonthly}}/- ' +
+      'Your revised Cost to Company (CTC) will be ₹{{revisedCtcMonthly}}/- ' +
         '({{revisedCtcWords}}) per month.',
       '',
       'All other terms and conditions of your employment, as specified in your appointment ' +
@@ -895,7 +904,7 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     // "Terminataion letter.docx". The reasons are deliberately not stated — the client's
     // letter says only that they are specific — and nothing here adds a field for them. Its
     // red "Company Name" placeholders are the company field; "HR Department" closes it under
-    // the signature.
+    // the signature, as the layout's signature caption.
     body: [
       'To',
       '{{employeeName}}',
@@ -916,8 +925,6 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '',
       'Regards',
       'For {{companyName}}',
-      '[[signature]]',
-      'HR Department',
     ].join('\n'),
     fields: [
       employee('employeeName', 'Employee name', 'fullName'),
@@ -949,14 +956,16 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
     // approved it — is a field HR may leave empty, because a blank cell on this sheet is
     // what the client's own form has until somebody writes in it.
     //
-    // Three deliberate departures from the Word file. Amounts carry "Rs." rather than "₹",
-    // tick boxes are "[ ]" rather than "☐", and "A − B" has a hyphen: the renderer's built-in
-    // font has none of those glyphs, and they printed as garbage. The "PAN / UAN" row is
+    // Two deliberate departures from the Word file. Tick boxes are "[ ]" rather than "☐", which
+    // the letter font has no glyph for, and "A − B" has a hyphen. The "PAN / UAN" row is
     // filled with the UAN only — a letter never carries a PAN.
     body: [
       'HR & ADMINISTRATION DEPARTMENT | CONFIDENTIAL',
       '',
-      '| F&F Ref. No.: {{referenceNo}} | Date: {{issueDate}} | Project / Site: {{placeOfPosting}} | Cost Centre: {{costCentre}} |',
+      // Two rows of two rather than one of four (2026-10-15): squeezed beside a project name, the
+      // reference broke as "PRPL/" over "HR/2026-27/0009" and the cost centre after its hyphen.
+      '| F&F Ref. No.: {{referenceNo}} | Date: {{issueDate}} |',
+      '| Project / Site: {{placeOfPosting}} | Cost Centre: {{costCentre}} |',
       '',
       '## A. EMPLOYEE & EXIT DETAILS',
       '| Employee Name | {{employeeName}} | Employee Code | {{employeeCode}} |',
@@ -966,11 +975,11 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| Resignation Date | {{resignationDate}} | Resignation Accepted On | {{resignationAcceptedOn}} |',
       '| Notice Period Required | {{noticeRequiredDays}} days | Notice Period Served | {{noticeServedDays}} days |',
       '| Last Working Day | {{lastWorkingDay}} | Exit Reason | {{exitReason}} |',
-      '| Monthly Gross Salary (Rs.) | {{monthlyGross}} | Payroll Month / Period | {{payrollPeriod}} |',
+      '| Monthly Gross Salary (₹) | {{monthlyGross}} | Payroll Month / Period | {{payrollPeriod}} |',
       '| Bank Account (last 4 digits only) | {{bankLast4}} | PAN / UAN (if needed) | {{uan}} |',
       '',
       '## B. EARNINGS / AMOUNTS PAYABLE',
-      '| Sr. No. | Particulars | Basis / Period | Amount (Rs.) |',
+      '| Sr. No. | Particulars | Basis / Period | Amount (₹) |',
       '| --- | --- | --- | --- |',
       '| 1 | Salary payable up to Last Working Day | Days: {{salaryDays}} | {{salaryPayable}} |',
       '| 2 | Overtime / approved extra duty (if applicable) | Period: {{overtimePeriod}} | {{overtimeAmount}} |',
@@ -979,22 +988,22 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       '| 5 | Incentive / bonus / variable pay (if payable) | Period: {{bonusPeriod}} | {{bonus}} |',
       '| 6 | Gratuity (if eligible; separate verification) | As applicable | {{gratuity}} |',
       '| 7 | Other payable amount (specify) | {{otherPayableDetail}} | {{otherPayable}} |',
-      '| | TOTAL GROSS AMOUNTS PAYABLE (A) | | Rs. {{totalPayable}} |',
+      '| | TOTAL GROSS AMOUNTS PAYABLE (A) | | ₹ {{totalPayable}} |',
       '',
       '## C. DEDUCTIONS / RECOVERIES (ONLY WHERE LAWFUL AND VERIFIED)',
-      '| Sr. No. | Particulars | Reference / Calculation | Amount (Rs.) |',
+      '| Sr. No. | Particulars | Reference / Calculation | Amount (₹) |',
       '| --- | --- | --- | --- |',
       '| 1 | Applicable statutory deductions (e.g., TDS / employee contributions) | Payroll working: {{statutoryRef}} | {{statutoryDeductions}} |',
       '| 2 | Salary advance / employee loan balance | Ledger Ref.: {{loanRef}} | {{loanRecovery}} |',
       '| 3 | Notice-period adjustment (if contractually and legally permissible) | Days / basis: {{noticeBasis}} | {{noticeRecovery}} |',
       '| 4 | Unreturned company asset / verified loss (only if legally recoverable) | Asset / approval: {{assetRef}} | {{assetRecovery}} |',
       '| 5 | Other authorised and lawful deduction (specify) | Basis / approval: {{otherDeductionBasis}} | {{otherDeductions}} |',
-      '| | TOTAL DEDUCTIONS (B) | | Rs. {{totalDeductions}} |',
+      '| | TOTAL DEDUCTIONS (B) | | ₹ {{totalDeductions}} |',
       '',
       '## D. NET SETTLEMENT',
-      '| Total Gross Amounts Payable (A) | Rs. {{totalPayable}} |',
-      '| Less: Total Deductions (B) | Rs. {{totalDeductions}} |',
-      '| NET AMOUNT PAYABLE TO EMPLOYEE (A - B) | Rs. {{netPayable}} |',
+      '| Total Gross Amounts Payable (A) | ₹ {{totalPayable}} |',
+      '| Less: Total Deductions (B) | ₹ {{totalDeductions}} |',
+      '| NET AMOUNT PAYABLE TO EMPLOYEE (A - B) | ₹ {{netPayable}} |',
       '| Amount in Words | {{netInWords}} |',
       '',
       '## E. DEPARTMENTAL NO-DUES / HANDOVER CLEARANCE',
@@ -1012,8 +1021,8 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
         'an unverified deduction.',
       '',
       '## F. PAYMENT & APPROVAL DETAILS',
-      '| Payment Mode | [ ] Bank Transfer  [ ] Cheque | Payment / UTR Ref. | {{paymentRef}} |',
-      '| Payment Date | {{paymentDate}} | Payment Status | [ ] Paid  [ ] Part-paid  [ ] Pending |',
+      '| Payment Mode | {{paymentMode}} | Payment / UTR Ref. | {{paymentRef}} |',
+      '| Payment Date | {{paymentDate}} | Payment Status | {{paymentStatus}} |',
       '| Prepared By (HR) | {{preparedBy}} | Checked / Approved By | {{approvedBy}} |',
       '',
       '## G. EMPLOYEE ACKNOWLEDGEMENT',
@@ -1166,6 +1175,18 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
       employee('netPayable', 'Net payable (A − B)', 'fnf.net', false),
       employee('netInWords', 'Net payable in words', 'fnf.netInWords', false),
       // F — payment and approval, completed when the money moves.
+      // Typed as a word — "NEFT", "Cheque", "Cash"; "Paid", "Pending" — and printed as the form's
+      // boxes with that one ticked (`presentLetterValues`). Blank prints every box open.
+      manual(
+        'paymentMode',
+        'Payment mode — Bank Transfer (NEFT / RTGS), Cheque or Cash',
+        false,
+      ),
+      manual(
+        'paymentStatus',
+        'Payment status — Paid, Part-paid or Pending',
+        false,
+      ),
       manual('paymentRef', 'Payment / UTR ref.', false),
       manual('paymentDate', 'Payment date', false),
       manual('preparedBy', 'Prepared by (HR)', false),
@@ -1722,6 +1743,8 @@ export const STANDARD_LETTER_TEMPLATES: StandardLetterTemplate[] = [
 export const SUPPLIED_TOKENS: ReadonlySet<string> = new Set([
   'issueDate',
   'referenceNo',
+  // "a" / "an" for the designation, worked out from it (`presentLetterValues`).
+  'designationArticle',
   ...LINE_ITEM_OUTPUTS,
 ]);
 

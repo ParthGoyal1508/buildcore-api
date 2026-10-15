@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 import {
+  columnWidths,
   formatLetterDate,
   parseBlocks,
   renderLetterPdf,
@@ -249,6 +250,59 @@ describe('letter PDF renderer', () => {
       // 16/09/2026, not 09/16/2026. Their appointment letter carries the first form, and
       // a locale-formatted date reads as a different month on a machine set to en-US.
       expect(formatLetterDate(new Date(2026, 8, 16))).toBe('16/09/2026');
+    });
+  });
+
+  describe('signing blocks and narrow columns (2026-10-15)', () => {
+    it('closes with a signing block when the format has one and nobody signs it here', async () => {
+      // The appointment, experience and relieving letters went out with no signing block at
+      // all: their kinds were unsigned, and the renderer drew a block only for a signatory.
+      const body = 'We wish you well.\n\nFor Dummy Test Firm';
+      const bare = await renderLetterPdf({
+        title: 'X',
+        body,
+        letterhead: null,
+      });
+      const withBlock = await renderLetterPdf({
+        title: 'X',
+        body,
+        letterhead: null,
+        signatureLines: ['Authorized Signatory'],
+      });
+      expect(withBlock.length).toBeGreaterThan(bare.length);
+    });
+
+    it('embeds a face with the rupee sign rather than falling back to Helvetica', async () => {
+      const pdf = await renderLetterPdf({
+        title: 'X',
+        body: 'Your CTC will be ₹55,000/-.',
+        letterhead: null,
+      });
+      expect(pdf.toString('latin1')).toMatch(
+        /\/FontFile2|\/FontFile3|\/FontFile /,
+      );
+      expect(pdf.toString('latin1')).not.toContain('/BaseFont /Helvetica');
+    });
+
+    it('does not narrow a column below its longest word to make room for a long one', () => {
+      // The F&F header broke its reference as "PRPL/" over "HR/2026-27/0009".
+      const measure = (text: string) => text.length * 5;
+      const rows = [
+        [
+          'F&F Ref. No.: PRPL/HR/2026-27/0009',
+          'Date: 15/10/2026',
+          'Project / Site: ' + 'Construction of New School Building '.repeat(4),
+          'Cost Centre: CC-PRJ-DABLA',
+        ],
+      ];
+      const widths = columnWidths(rows, measure);
+      expect(widths[0] - 10).toBeGreaterThanOrEqual(
+        measure('PRPL/HR/2026-27/0009'),
+      );
+      expect(widths[3] - 10).toBeGreaterThanOrEqual(measure('CC-PRJ-DABLA'));
+      expect(widths.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(
+        595.28 - 112 + 0.01,
+      );
     });
   });
 });
