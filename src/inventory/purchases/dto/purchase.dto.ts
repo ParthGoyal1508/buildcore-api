@@ -10,9 +10,76 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  IsIn,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+
+/** The GRN form's tick boxes, in its order. */
+export const GRN_CONDITIONS = [
+  'Good',
+  'Damaged',
+  'Short',
+  'Under Inspection',
+] as const;
+
+/**
+ * The GRN form's own fields (2026-10-15): the supplier's challan and the vehicle it came on, the
+ * quantities counted, accepted and rejected, the condition, and any batch or discrepancy note.
+ * Recorded, not enforced — stock moves by the purchase quantity, which is what was billed.
+ */
+export class GrnDetailsDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  challanNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  vehicleNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  receivedQuantity?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  acceptedQuantity?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  rejectedQuantity?: number;
+
+  @ApiPropertyOptional({ enum: GRN_CONDITIONS })
+  @IsOptional()
+  @IsIn(GRN_CONDITIONS)
+  condition?: string;
+
+  @ApiPropertyOptional({ description: 'Batch / make / specification' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  batchDetails?: string;
+
+  @ApiPropertyOptional({ description: 'Remarks / discrepancy details' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  discrepancy?: string;
+}
 
 export class CreatePurchaseDto {
   @ApiProperty({ description: 'The project store receiving the material' })
@@ -96,6 +163,15 @@ export class CreatePurchaseDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  @ApiPropertyOptional({
+    type: GrnDetailsDto,
+    description: 'What the goods receipt note records at the gate (2026-10-15)',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => GrnDetailsDto)
+  grn?: GrnDetailsDto;
 }
 
 /**

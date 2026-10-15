@@ -56,6 +56,14 @@ export class CreateIndentDto {
   @MaxLength(1000)
   justification!: string;
 
+  @ApiPropertyOptional({
+    description: 'The indent form\'s "Department" (2026-10-15)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  department?: string;
+
   @ApiProperty({ type: [CreateIndentLineDto] })
   @IsArray()
   @ArrayMinSize(1)

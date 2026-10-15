@@ -232,6 +232,7 @@ export class IndentsService {
             indentNumber,
             requiredByDate,
             justification: dto.justification.trim(),
+            department: dto.department?.trim() || null,
             requestedByUserId: caller.id,
             lines: {
               create: dto.lines.map((line) => ({

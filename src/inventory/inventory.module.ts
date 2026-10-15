@@ -6,6 +6,8 @@ import { ProjectsModule } from '../projects/projects.module';
 import { ItemCategoriesService } from '../settings/item-masters/item-categories.service';
 import { ItemsService } from '../settings/item-masters/items.service';
 import { SettingsModule } from '../settings/settings.module';
+import { StoreDocumentsController } from './documents/store-documents.controller';
+import { StoreDocumentsService } from './documents/store-documents.service';
 import { CategoriesController } from './categories/categories.controller';
 import { IndentFulfilmentService } from './indents/indent-fulfilment.service';
 import { IndentsController } from './indents/indents.controller';
@@ -54,6 +56,7 @@ import { TransfersService } from './transfers/transfers.service';
     TransfersController,
     PaymentsController,
     IndentsController,
+    StoreDocumentsController,
   ],
   providers: [
     StockService,
@@ -65,6 +68,7 @@ import { TransfersService } from './transfers/transfers.service';
     PaymentsService,
     IndentsService,
     IndentFulfilmentService,
+    StoreDocumentsService,
     InventoryItemsService,
     InventoryRefsService,
     InventoryService,

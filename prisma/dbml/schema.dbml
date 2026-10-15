@@ -3781,8 +3781,11 @@ been loaded yet. Validated against `ProjectsService` when supplied.']
   slipNo String [note: 'The daily issue register and issue slip (2026-10-15). `slipNo` from the `ISSUE_SLIP`
 series; the machine the material went to, if any; and the return — how much came back
 to the store, when, and who received it. A return puts stock back exactly as reversing
-that much of the issue would.']
-  equipmentId String
+that much of the issue would.
+
+`equipmentNo` is the machine\'s number as text (`JCB01/2027`), not a plant id: inventory
+may not read `plant`\'s tables, and the slip prints the number, which is what it needs.']
+  equipmentNo String
   returnedQuantity Decimal
   returnedOn DateTime
   receivedBy String

@@ -60,9 +60,16 @@ export function sendForm(
   rendered: RenderedForm,
 ): void {
   res.setHeader('Content-Type', rendered.contentType);
+  // A header carries ASCII only, and names here are not — "Whitefield Tech Park — Phase II". The
+  // plain `filename` gets an ASCII stand-in and `filename*` the real name (RFC 5987), which the
+  // web reads first.
+  const name = rendered.filename.replace(/"/g, '');
+  const ascii = name.replace(/[^\x20-\x7e]+/g, '-');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${rendered.filename.replace(/"/g, '')}"`,
+    `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(
+      name,
+    )}`,
   );
   res.send(rendered.bytes);
 }

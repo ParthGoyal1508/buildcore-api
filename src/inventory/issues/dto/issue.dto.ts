@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsInt,
+  IsISO8601,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -67,6 +68,16 @@ export class CreateIssueDto {
   @IsString()
   activityId?: string;
 
+  @ApiPropertyOptional({
+    example: 'JCB01/2027',
+    description:
+      'The machine the material went to — the issue slip\'s "Equipment No."',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  equipmentNo?: string;
+
   @ApiPropertyOptional({ description: 'The BOQ task item, if known' })
   @IsOptional()
   @IsString()
@@ -123,4 +134,27 @@ export class ListIssuesDto {
   @IsOptional()
   @IsString()
   companyId?: string;
+}
+
+/**
+ * Material coming back to the store (2026-10-15) — the daily issue register's "Received Qty",
+ * "Returned On" and "Received By". `returnedQuantity` is the total returned against the issue so
+ * far, so a second return is entered as the new total.
+ */
+export class ReturnIssueDto {
+  @ApiProperty({ description: 'Total returned against this issue so far' })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  returnedQuantity!: number;
+
+  @ApiProperty({ example: '2026-10-15' })
+  @IsISO8601()
+  returnedOn!: string;
+
+  @ApiProperty({ description: 'Who received it at the store' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(80)
+  receivedBy!: string;
 }
