@@ -145,6 +145,16 @@ export class RecruitmentRefsService {
     return this.employees.getById(rlsContextFor(caller), employeeId);
   }
 
+  /** Code and name for a set of employees, for a list naming who each row is about (2026-10-15). */
+  async employeeNames(
+    caller: AuthenticatedUser,
+    employeeIds: string[],
+  ): Promise<Map<string, { employeeCode: string; name: string }>> {
+    return this.employees.namesByIds(rlsContextFor(caller), [
+      ...new Set(employeeIds),
+    ]);
+  }
+
   /** The company's first configured shift id — the joining fallback when the
    * request supplies none (011 joining decision). Throws when none exists. */
   async defaultShiftId(caller: AuthenticatedUser): Promise<string> {
