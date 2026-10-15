@@ -1,4 +1,5 @@
 import type { WorkbookHeader } from './bill-workbook.types';
+import { printDate } from './print-format';
 
 type Pair = [string, string | null];
 
@@ -12,7 +13,10 @@ type Pair = [string, string | null];
  * the bidder.
  */
 export function headerPairs(header: WorkbookHeader): [Pair[], Pair[]] {
-  const period = `${header.periodFrom} to ${header.periodTo}`;
+  const period = `${printDate(header.periodFrom)} to ${printDate(
+    header.periodTo,
+  )}`;
+  const billDate = printDate(header.billDate);
   if (header.direction === 'to_client') {
     return [
       [
@@ -24,7 +28,7 @@ export function headerPairs(header: WorkbookHeader): [Pair[], Pair[]] {
       ],
       [
         ['RA Bill', header.billLabel],
-        ['Bill Date', header.billDate],
+        ['Bill Date', billDate],
         ['Client GSTIN', header.issuer.gstin],
         ['Contractor GSTIN', header.receiver.gstin],
         ['Contractor PAN', header.receiver.pan],
@@ -43,7 +47,7 @@ export function headerPairs(header: WorkbookHeader): [Pair[], Pair[]] {
     [
       ['Work Order No.', header.externalWorkOrderNo],
       ['Bill No.', header.externalBillNo ?? header.billLabel],
-      ['Bill Date', header.billDate],
+      ['Bill Date', billDate],
       ['Vendor GSTIN', header.receiver.gstin],
       ['Vendor PAN', header.receiver.pan],
       ['Company GSTIN', header.issuer.gstin],

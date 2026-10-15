@@ -2,6 +2,7 @@ import type * as ExcelJS from 'exceljs';
 
 import type { BillWorkbookView } from '../bill-workbook.types';
 import { subcontractorSignatures } from '../signature-block';
+import { taxBasisLine } from '../print-format';
 import { writeHeaderBlock } from './header-block';
 
 /**
@@ -88,10 +89,7 @@ export function writeAbstractSheet(
   // record carries no state today, so the fallback is the ordinary path on a bill to a client — and
   // a tax decision nobody can see is a tax decision nobody made.
   sheet.addRow([]);
-  sheet.addRow([
-    '',
-    `Tax basis: ${view.abstract.taxBasis} (${view.abstract.taxBasisSource})`,
-  ]);
+  sheet.addRow(['', taxBasisLine(view.abstract)]);
 
   // The subcontractor's sign-off, in the client's own layout (2026-10-14): caption, two empty rows
   // to sign in, designation — left pair in Particulars, right pair under the money columns. None

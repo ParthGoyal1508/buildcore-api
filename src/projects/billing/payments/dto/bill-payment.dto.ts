@@ -13,7 +13,14 @@ import {
 } from 'class-validator';
 
 /** The modes a payment advice names. Each maps onto an `instrument` for the ledger. */
-export const PAYMENT_MODES = ['NEFT', 'RTGS', 'IMPS', 'UPI', 'Cheque', 'Cash'] as const;
+export const PAYMENT_MODES = [
+  'NEFT',
+  'RTGS',
+  'IMPS',
+  'UPI',
+  'Cheque',
+  'Cash',
+] as const;
 export type PaymentMode = (typeof PAYMENT_MODES)[number];
 
 export class RecordPaymentDto {
@@ -77,7 +84,8 @@ export class RecordPaymentDto {
   @ApiPropertyOptional({
     enum: PAYMENT_MODES,
     example: 'NEFT',
-    description: 'How the money moved. Printed on the payment advice as *Bank Transaction Mode*.',
+    description:
+      'How the money moved. Printed on the payment advice as *Bank Transaction Mode*.',
   })
   @IsOptional()
   @IsIn(PAYMENT_MODES)
@@ -125,7 +133,8 @@ export class SetPayeeBankDto {
   @ApiPropertyOptional({ example: 'BARB0DEOLIX' })
   @IsOptional()
   @Matches(/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/, {
-    message: 'ifscCode must look like BARB0DEOLIX — four letters, a zero, six characters',
+    message:
+      'ifscCode must look like BARB0DEOLIX — four letters, a zero, six characters',
   })
   ifscCode?: string;
 }

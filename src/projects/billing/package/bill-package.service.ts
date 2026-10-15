@@ -1642,6 +1642,32 @@ export class BillPackageService {
   }
 
   /**
+   * The header a bill **would** freeze if it were issued now — for the documents of a bill not yet
+   * issued (2026-10-15). A draft's frozen columns are all null until issue, so its download printed
+   * "Company Name:" and "Name of Sub-Contractor:" blank. Read-only: nothing is written, and the
+   * issued bill still freezes its own copy at issue.
+   */
+  async previewHeader(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<Record<string, string | null> | null> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          companyId: true,
+          direction: true,
+          project: { select: { name: true, clientId: true } },
+          raBill: { select: { workOrderId: true } },
+        },
+      });
+      if (!pkg) return null;
+      const { columns } = await this.freezeHeader(ctx, tx, pkg.companyId, pkg);
+      return columns;
+    });
+  }
+
+  /**
    * The statutory header, copied **once** and never re-read (FR-026, FR-028).
    *
    * Each party comes through the service that owns its table — Principle I forbids reading

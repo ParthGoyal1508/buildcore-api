@@ -10,6 +10,7 @@ import type {
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
+import { indianFigure, taxBasisLine } from './print-format';
 import { subcontractorSignatures } from './signature-block';
 
 /**
@@ -90,6 +91,9 @@ export interface DebitNoteDocumentView {
     amountWithTax: string;
   };
 }
+
+/** A table row: its cells, or its cells with emphasis — a block heading, a total. */
+type Row = string[] | { cells: string[]; bold?: boolean; rule?: boolean };
 
 interface Column {
   header: string;
@@ -284,21 +288,28 @@ export class BillPdfRenderer {
     this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
-    const figure = (width - 40 - 40) / 3;
+    // The particulars get the room (2026-10-15). The figure columns were sized as if the other
+    // three columns were 80pt in all, which left "Particulars" 40pt wide — one word a line, and
+    // "B. RECOVE / RIES" broken mid-word.
+    const PARTICULARS = 215;
+    const figure = (width - 22 - PARTICULARS - 24) / 3;
     const columns: Column[] = [
-      { header: '', width: 20, align: 'center' },
-      { header: 'Particulars', width: width - 20 - 20 - figure * 3 },
-      { header: '', width: 20, align: 'center' },
+      { header: 'Sr', width: 22, align: 'center' },
+      { header: 'Particulars', width: PARTICULARS },
+      { header: '', width: 24, align: 'center' },
       { header: 'Upto Date', width: figure, align: 'right' },
       { header: 'Upto Previous', width: figure, align: 'right' },
       { header: 'This Month', width: figure, align: 'right' },
     ];
 
-    const rows: string[][] = [];
+    const rows: Row[] = [];
     for (const block of view.abstract.blocks) {
-      rows.push(['', block.title.toUpperCase(), '', '', '', '']);
+      rows.push({
+        cells: ['', block.title.toUpperCase(), '', '', '', ''],
+        bold: true,
+      });
       block.rows.forEach((row, index) => {
-        rows.push([
+        const cells = [
           row.isTotal ? '' : String(index + 1),
           row.label,
           'Rs.',
@@ -308,47 +319,49 @@ export class BillPdfRenderer {
           // a zero (FR-020a): "nothing was recovered this month" and "there is nothing left to
           // recover" are different facts that would otherwise print the same character.
           row.fullyRecovered ? '' : row.thisMonth,
-        ]);
+        ];
+        rows.push(row.isTotal ? { cells, bold: true } : cells);
       });
     }
-    rows.push([
-      '',
-      view.abstract.payable.label,
-      'Rs.',
-      view.abstract.payable.uptoDate,
-      view.abstract.payable.uptoPrevious,
-      view.abstract.payable.thisMonth,
-    ]);
-    if (view.abstract.netPayable) {
-      rows.push([
-        '',
-        view.abstract.netPayable.label,
-        'Rs.',
-        view.abstract.netPayable.uptoDate,
-        view.abstract.netPayable.uptoPrevious,
-        view.abstract.netPayable.thisMonth,
-      ]);
+    for (const total of [view.abstract.payable, view.abstract.netPayable]) {
+      if (!total) continue;
+      rows.push({
+        cells: [
+          '',
+          total.label,
+          'Rs.',
+          total.uptoDate,
+          total.uptoPrevious,
+          total.thisMonth,
+        ],
+        bold: true,
+        rule: true,
+      });
     }
 
     this.table(doc, columns, rows);
 
+    // From the left margin, explicitly: after the table the cursor's x is the last column's, and
+    // the line ran off the right edge of the page from there.
     if (view.abstract.amountInWords) {
       doc
         .moveDown(0.6)
         .font('Helvetica-Bold')
         .fontSize(SIZE.body)
-        .text(`Amount in words: ${view.abstract.amountInWords}`, { width })
+        .text(
+          `Amount in words: ${view.abstract.amountInWords}`,
+          MARGIN,
+          doc.y,
+          { width },
+        )
         .font('Helvetica');
     }
 
     // Printed so a reviewer can check the tax decision rather than take it (FR-016a).
     doc
-      .moveDown(0.8)
+      .moveDown(0.5)
       .fontSize(SIZE.small)
-      .text(
-        `Tax basis: ${view.abstract.taxBasis} (${view.abstract.taxBasisSource})`,
-        { width },
-      );
+      .text(taxBasisLine(view.abstract), MARGIN, doc.y, { width });
 
     this.signatureBlock(doc, view);
   }
@@ -500,15 +513,26 @@ export class BillPdfRenderer {
         row.remarks ?? '',
         row.billLabel,
       ]),
-      [
-        '',
-        'This Bill Qty',
-        sheet.footer.thisBillQty,
-        'Upto Previous',
-        sheet.footer.uptoPreviousQty,
-        `Upto Date ${sheet.footer.uptoDateQty}`,
-      ],
     );
+
+    // The three totals as a line of their own (2026-10-15). As a table footer they were squeezed
+    // into the S.No/Month/Period/Qty columns — "Upto Previous" right-aligned under Qty, "Upto Date"
+    // wrapping in the RA Bill column — and printed ungrouped.
+    doc
+      .moveDown(0.3)
+      .font('Helvetica-Bold')
+      .fontSize(SIZE.body)
+      .text(
+        [
+          `This Bill Qty: ${indianFigure(sheet.footer.thisBillQty)}`,
+          `Upto Previous: ${indianFigure(sheet.footer.uptoPreviousQty)}`,
+          `Upto Date: ${indianFigure(sheet.footer.uptoDateQty)} ${sheet.unit}`,
+        ].join('      '),
+        MARGIN,
+        doc.y,
+        { width, align: 'right' },
+      )
+      .font('Helvetica');
 
     if (sheet.dailyRecord.length > 0) {
       doc.moveDown(0.8).fontSize(SIZE.heading).text('Daily record', { width });
@@ -692,7 +716,7 @@ export class BillPdfRenderer {
   private table(
     doc: PDFKit.PDFDocument,
     columns: Column[],
-    rows: string[][],
+    rows: Row[],
     footer?: string[],
   ): void {
     const bottomLimit = doc.page.height - MARGIN;
@@ -700,7 +724,7 @@ export class BillPdfRenderer {
     const writeHeader = () => {
       const y = doc.y;
       let x = MARGIN;
-      doc.fontSize(SIZE.small);
+      doc.font('Helvetica-Bold').fontSize(SIZE.small);
       for (const column of columns) {
         doc.text(column.header, x + 2, y + 2, {
           width: column.width - 4,
@@ -714,12 +738,27 @@ export class BillPdfRenderer {
         .lineTo(x, y + height)
         .stroke();
       doc.y = y + height + 2;
+      doc.font('Helvetica');
     };
 
     writeHeader();
 
-    const writeRow = (cells: string[], bold: boolean) => {
-      doc.fontSize(bold ? SIZE.body : SIZE.small);
+    const tableWidth = columns.reduce(
+      (total, column) => total + column.width,
+      0,
+    );
+    // A figure column prints with Indian grouping (2026-10-15): 3,11,581, as the client's own
+    // bills do. `indianFigure` leaves anything that is not a bare number alone.
+    const shown = (cells: string[]) =>
+      cells.map((cell, index) =>
+        columns[index]?.align === 'right' ? indianFigure(cell ?? '') : cell,
+      );
+
+    const writeRow = (raw: string[], bold: boolean) => {
+      const cells = shown(raw);
+      doc
+        .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(bold ? SIZE.body : SIZE.small);
       // Measured before anything is drawn, so the row can be moved to the next page whole rather
       // than split across the break with its first line orphaned.
       const height =
@@ -750,16 +789,28 @@ export class BillPdfRenderer {
         x += column.width;
       }
       doc.y = y + height;
+      doc.font('Helvetica');
     };
 
-    for (const row of rows) writeRow(row, false);
+    for (const row of rows) {
+      if (Array.isArray(row)) {
+        writeRow(row, false);
+        continue;
+      }
+      if (row.rule) {
+        doc
+          .moveTo(MARGIN, doc.y)
+          .lineTo(MARGIN + tableWidth, doc.y)
+          .lineWidth(0.5)
+          .stroke();
+        doc.y += 2;
+      }
+      writeRow(row.cells, row.bold ?? false);
+    }
     if (footer) {
       doc
         .moveTo(MARGIN, doc.y)
-        .lineTo(
-          MARGIN + columns.reduce((total, column) => total + column.width, 0),
-          doc.y,
-        )
+        .lineTo(MARGIN + tableWidth, doc.y)
         .stroke();
       doc.y += 2;
       writeRow(footer, true);

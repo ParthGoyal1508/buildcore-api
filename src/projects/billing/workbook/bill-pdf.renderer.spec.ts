@@ -295,7 +295,8 @@ describe('the standalone debit note (028 FR-018, FR-019)', () => {
     // rendered PDF for the same reason the 028 abstract test is.
     expect(text).toContain('PRPL-DN-0004');
     // The figure the subcontractor is being asked to accept, with the tax the register carried.
-    expect(text).toContain('147500.00');
+    // Printed with Indian grouping since 2026-10-15.
+    expect(text).toContain('1,47,500.00');
     expect(text).toContain('PTZ camera missing at KM.226 LHS');
   });
 

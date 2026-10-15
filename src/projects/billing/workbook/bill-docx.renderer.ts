@@ -7,8 +7,10 @@ import {
   Packer,
   PageOrientation,
   Paragraph,
+  ShadingType,
   Table,
   TableCell,
+  TableLayoutType,
   TableRow,
   TextRun,
   WidthType,
@@ -16,6 +18,7 @@ import {
 
 import type { BillWorkbookView } from './bill-workbook.types';
 import { headerPairs } from './header-pairs';
+import { indianFigure, taxBasisLine } from './print-format';
 import { subcontractorSignatures } from './signature-block';
 
 const BORDER = { style: BorderStyle.SINGLE, size: 4, color: '999999' };
@@ -73,7 +76,7 @@ export class BillDocxRenderer {
               spacing: { before: 120 },
               children: [
                 new TextRun({
-                  text: `Tax basis: ${view.abstract.taxBasis} (${view.abstract.taxBasisSource})`,
+                  text: taxBasisLine(view.abstract),
                   size: 14,
                 }),
               ],
@@ -141,7 +144,7 @@ export class BillDocxRenderer {
         }),
       );
     }
-    return table(rows);
+    return table(rows, [20, 30, 20, 30], PORTRAIT);
   }
 
   private abstract(view: BillWorkbookView): Table {
@@ -149,11 +152,16 @@ export class BillDocxRenderer {
       new TableRow({
         tableHeader: true,
         children: [
-          cell('Sr.', { bold: true, width: 6 }),
-          cell('Particulars', { bold: true, width: 46 }),
-          cell('Upto Date', { bold: true, width: 16, right: true }),
-          cell('Upto Previous', { bold: true, width: 16, right: true }),
-          cell('This Bill', { bold: true, width: 16, right: true }),
+          cell('Sr.', { bold: true, width: 6, head: true }),
+          cell('Particulars', { bold: true, width: 46, head: true }),
+          cell('Upto Date', { bold: true, width: 16, right: true, head: true }),
+          cell('Upto Previous', {
+            bold: true,
+            width: 16,
+            right: true,
+            head: true,
+          }),
+          cell('This Bill', { bold: true, width: 16, right: true, head: true }),
         ],
       }),
     ];
@@ -201,26 +209,28 @@ export class BillDocxRenderer {
         }),
       );
     }
-    return table(rows);
+    return table(rows, [6, 46, 16, 16, 16], PORTRAIT);
   }
 
   private schedule(view: BillWorkbookView): Table {
-    const head = [
-      'Sr.',
-      'BOQ No.',
-      'Description',
-      'Unit',
-      'Rate',
-      'Qty Upto Date',
-      'Qty Upto Prev.',
-      'Qty This Bill',
-      'Amount This Bill',
+    // Widths in percent (2026-10-15): unset, Word gave every column the same share and the
+    // description — the one column with sentences in it — wrapped a word to a line.
+    const head: [string, number][] = [
+      ['Sr.', 4],
+      ['BOQ No.', 7],
+      ['Description', 35],
+      ['Unit', 6],
+      ['Rate', 9],
+      ['Qty Upto Date', 9.75],
+      ['Qty Upto Prev.', 9.75],
+      ['Qty This Bill', 9.75],
+      ['Amount This Bill', 9.75],
     ];
     const rows: TableRow[] = [
       new TableRow({
         tableHeader: true,
-        children: head.map((text, index) =>
-          cell(text, { bold: true, right: index >= 4 }),
+        children: head.map(([text, width], index) =>
+          cell(text, { bold: true, right: index >= 4, width, head: true }),
         ),
       }),
     ];
@@ -259,23 +269,31 @@ export class BillDocxRenderer {
         ],
       }),
     );
-    return table(rows);
+    return table(
+      rows,
+      head.map(([, width]) => width),
+      LANDSCAPE,
+    );
   }
 
   private debits(view: BillWorkbookView): Table {
     const rows: TableRow[] = [
       new TableRow({
         tableHeader: true,
-        children: [
-          'Sr.',
-          'Description',
-          'Location',
-          'Qty',
-          'Unit',
-          'Rate',
-          'Amount (incl. tax)',
-          'Remark',
-        ].map((text) => cell(text, { bold: true })),
+        children: (
+          [
+            ['Sr.', 5, false],
+            ['Description', 33, false],
+            ['Location', 14, false],
+            ['Qty', 8, true],
+            ['Unit', 7, false],
+            ['Rate', 10, true],
+            ['Amount (incl. tax)', 12, true],
+            ['Remark', 11, false],
+          ] as [string, number, boolean][]
+        ).map(([text, width, right]) =>
+          cell(text, { bold: true, width, right, head: true }),
+        ),
       }),
     ];
     for (const group of view.debitRegister.groups) {
@@ -307,7 +325,7 @@ export class BillDocxRenderer {
         );
       }
     }
-    return table(rows);
+    return table(rows, [5, 33, 14, 8, 7, 10, 12, 11], LANDSCAPE);
   }
 
   /**
@@ -373,19 +391,42 @@ function spacer(): Paragraph {
   return new Paragraph({ text: '' });
 }
 
-function table(rows: TableRow[]): Table {
-  return new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows });
+/** The text width of an A4 page with half-inch margins, in twentieths of a point. */
+const PORTRAIT = 11906 - 1440;
+const LANDSCAPE = 16838 - 1440;
+
+/**
+ * A table with fixed column widths, given as percentages of the page's text width (2026-10-15).
+ *
+ * Absolute widths and a fixed layout, not percentages: Word honours percentage widths, but
+ * Pages, Google Docs and the macOS preview do not, and there every column collapsed to one
+ * character wide — the header printed "C / o / m / p / a / n / y" down the page.
+ */
+function table(rows: TableRow[], percents: number[], pageWidth: number): Table {
+  const columnWidths = percents.map((pct) =>
+    Math.round((pct / 100) * pageWidth),
+  );
+  return new Table({
+    width: { size: pageWidth, type: WidthType.DXA },
+    columnWidths,
+    layout: TableLayoutType.FIXED,
+    rows,
+  });
 }
 
 function cell(
   text: string,
-  options: { bold?: boolean; right?: boolean; width?: number },
+  options: { bold?: boolean; right?: boolean; width?: number; head?: boolean },
 ): TableCell {
+  // A figure column prints with Indian grouping (2026-10-15), as the PDF does; a column header is
+  // shaded so the table reads as one at a glance.
+  if (options.right) text = indianFigure(text);
   return new TableCell({
     borders: BORDERS,
-    width: options.width
-      ? { size: options.width, type: WidthType.PERCENTAGE }
+    shading: options.head
+      ? { type: ShadingType.CLEAR, color: 'auto', fill: 'E7ECF2' }
       : undefined,
+    margins: { top: 40, bottom: 40, left: 80, right: 80 },
     children: [
       new Paragraph({
         alignment: options.right ? AlignmentType.RIGHT : AlignmentType.LEFT,

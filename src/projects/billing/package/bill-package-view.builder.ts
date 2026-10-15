@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { printDate } from '../workbook/print-format';
 import { BillDirection, BillPackageStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -107,19 +108,40 @@ export class BillPackageViewBuilder {
       tx.billPackage.findFirst({
         where: { id: packageId },
         include: {
-          project: { select: { name: true } },
+          project: {
+            select: {
+              name: true,
+              location: true,
+              orderNumber: true,
+              description: true,
+            },
+          },
           clientBill: { select: { billingDate: true } },
-          raBill: { select: { billingDate: true } },
+          raBill: {
+            select: {
+              billingDate: true,
+              workOrder: { select: { code: true, workDetail: true } },
+            },
+          },
         },
       }),
     );
     if (!pkg) throw new NotFoundException('Bill package not found');
 
-    const [packageView, abstract, register] = await Promise.all([
+    // A bill not yet issued has no frozen header (it is copied at issue), so its documents take
+    // the parties as they stand today (2026-10-15) rather than printing them blank.
+    const frozen = pkg.issuerName !== null || pkg.receiverName !== null;
+    const [packageView, abstract, register, live] = await Promise.all([
       this.packages.view(ctx, packageId),
       this.packages.abstractFor(ctx, packageId),
       this.debits.registerFor(ctx, packageId),
+      frozen
+        ? Promise.resolve(null)
+        : this.packages.previewHeader(ctx, packageId),
     ]);
+    const party = (key: string, stored: string | null) =>
+      stored ?? live?.[key] ?? null;
+    const workOrder = pkg.raBill?.workOrder ?? null;
 
     // **One per line claimed on this bill, in schedule order** (FR-030, amended 2026-10-05).
     //
@@ -150,7 +172,9 @@ export class BillPackageViewBuilder {
         unit: sheet.unit,
         history: sheet.history.map((row) => ({
           month: row.month,
-          period: `From ${row.periodFrom} to ${row.periodTo}`,
+          period: `From ${printDate(row.periodFrom)} to ${printDate(
+            row.periodTo,
+          )}`,
           quantity: row.quantity,
           remarks: row.reason,
           billLabel: row.billLabel,
@@ -177,25 +201,36 @@ export class BillPackageViewBuilder {
       // builders see it, the direction has already decided who is in which slot — which is what
       // makes it one renderer with two bindings rather than two renderers.
       issuer: {
-        name: pkg.issuerName,
-        gstin: pkg.issuerGstin,
-        pan: pkg.issuerPan,
-        state: pkg.issuerState,
-        address: pkg.issuerAddress,
+        name: party('issuerName', pkg.issuerName),
+        gstin: party('issuerGstin', pkg.issuerGstin),
+        pan: party('issuerPan', pkg.issuerPan),
+        state: party('issuerState', pkg.issuerState),
+        address: party('issuerAddress', pkg.issuerAddress),
         code: null,
       },
       receiver: {
-        name: pkg.receiverName,
-        gstin: pkg.receiverGstin,
-        pan: pkg.receiverPan,
-        state: pkg.receiverState,
-        address: pkg.receiverAddress,
-        code: pkg.receiverCode,
+        name: party('receiverName', pkg.receiverName),
+        gstin: party('receiverGstin', pkg.receiverGstin),
+        pan: party('receiverPan', pkg.receiverPan),
+        state: party('receiverState', pkg.receiverState),
+        address: party('receiverAddress', pkg.receiverAddress),
+        code: party('receiverCode', pkg.receiverCode),
       },
       projectName: pkg.project.name,
-      natureOfWork: pkg.natureOfWork,
-      location: pkg.location,
-      externalWorkOrderNo: pkg.externalWorkOrderNo,
+      // Nothing records these three on the package itself, so every bill printed them blank
+      // (2026-10-15). They come from what does record them: the work order on a subcontractor's
+      // bill, the project on the client's.
+      natureOfWork:
+        pkg.natureOfWork ??
+        workOrder?.workDetail ??
+        pkg.project.description ??
+        pkg.project.name,
+      location: pkg.location ?? pkg.project.location,
+      externalWorkOrderNo:
+        pkg.externalWorkOrderNo ??
+        (pkg.direction === BillDirection.to_client
+          ? pkg.project.orderNumber
+          : workOrder?.code ?? null),
       externalBillNo: pkg.externalBillNo,
       billLabel: packageLabel(pkg.sequenceNo),
       periodFrom: iso(pkg.periodFrom),
@@ -240,7 +275,12 @@ export class BillPackageViewBuilder {
         // Keyed by schedule line, never by position. The sheets are now a subset of the claims, and
         // `measurementSheets[index]` would have silently handed each line a different line's
         // cumulative figures — a wrong number on a money document that reads as a right one.
-        lines: packageView.claims.map((claim, index) => ({
+        //
+        // **Only the lines this bill claims** (2026-10-15) — the client: "only show those items
+        // whose value are non zero in the downloaded bill, instead of all the BOQ items". The same
+        // set the measurement sheets already use; the totals are the abstract's, so they do not
+        // move.
+        lines: claimed.map((claim, index) => ({
           srNo: index + 1,
           boqNo: claim.boqNo,
           description: claim.description,
