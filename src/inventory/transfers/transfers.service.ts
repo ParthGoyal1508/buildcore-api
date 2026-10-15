@@ -7,6 +7,7 @@ import {
 import {
   AuditAction,
   AuditEntityType,
+  CodeSeriesType,
   Prisma,
   StockLedgerType,
   TransferStatus,
@@ -21,6 +22,7 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
 } from '../constants/inventory.constants';
+import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { InventoryRefsService } from '../inventory-refs.service';
 import { StockService } from '../stock/stock.service';
 import { toNumber } from '../stock/stock.types';
@@ -46,6 +48,42 @@ export interface TransferView {
   status: TransferStatus;
   remarks: string | null;
   createdAt: Date;
+  /** `STS-0001` and `DC-0001` (2026-10-15); null on a transfer recorded before them. */
+  transferNo: string | null;
+  challanNo: string | null;
+  vehicleNo: string | null;
+  transporter: string | null;
+  dispatchReference: string | null;
+  requestNo: string | null;
+  expectedArrival: Date | null;
+  receivedQuantity: number | null;
+  reason: string | null;
+}
+
+/** The slip and challan fields of a transfer row, as the view carries them. */
+function slipFields(row: {
+  transferNo: string | null;
+  challanNo: string | null;
+  vehicleNo: string | null;
+  transporter: string | null;
+  dispatchReference: string | null;
+  requestNo: string | null;
+  expectedArrival: Date | null;
+  receivedQuantity: Prisma.Decimal | null;
+  reason: string | null;
+}) {
+  return {
+    transferNo: row.transferNo,
+    challanNo: row.challanNo,
+    vehicleNo: row.vehicleNo,
+    transporter: row.transporter,
+    dispatchReference: row.dispatchReference,
+    requestNo: row.requestNo,
+    expectedArrival: row.expectedArrival,
+    receivedQuantity:
+      row.receivedQuantity === null ? null : toNumber(row.receivedQuantity),
+    reason: row.reason,
+  };
 }
 
 export interface PaginatedTransfers {
@@ -81,6 +119,7 @@ export class TransfersService {
     private readonly auditLog: AuditLogService,
     private readonly stock: StockService,
     private readonly refs: InventoryRefsService,
+    private readonly codeSeries: CodeSeriesService,
   ) {}
 
   async create(
@@ -117,9 +156,42 @@ export class TransfersService {
           label: fromSiteName,
         });
 
+        // The transfer slip and the challan that travels with it are numbered here
+        // (2026-10-15), inside the transaction, so a refused transfer burns neither.
+        const taken =
+          (field: 'transferNo' | 'challanNo') => async (candidate: string) =>
+            !!(await tx.stockTransfer.findFirst({
+              where: { companyId: targetCompanyId, [field]: candidate },
+              select: { id: true },
+            }));
+        const transferNo = await this.codeSeries.next(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.STOCK_TRANSFER,
+          'STS',
+          taken('transferNo'),
+        );
+        const challanNo = await this.codeSeries.next(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.DELIVERY_CHALLAN,
+          'DC',
+          taken('challanNo'),
+        );
+
         const transfer = await tx.stockTransfer.create({
           data: {
             companyId: targetCompanyId,
+            transferNo,
+            challanNo,
+            vehicleNo: dto.vehicleNo?.trim().toUpperCase() || null,
+            transporter: dto.transporter?.trim() || null,
+            dispatchReference: dto.dispatchReference?.trim() || null,
+            requestNo: dto.requestNo?.trim() || null,
+            expectedArrival: dto.expectedArrival
+              ? this.refs.parseDate(dto.expectedArrival)
+              : null,
+            reason: dto.reason?.trim() || null,
             fromSiteId: dto.fromSiteId,
             toSiteId: dto.toSiteId,
             itemId: dto.itemId,
@@ -201,6 +273,7 @@ export class TransfersService {
       quantity: dto.quantity,
       status: created.status,
       remarks: created.remarks,
+      ...slipFields(created),
       createdAt: created.createdAt,
     };
   }
@@ -282,6 +355,7 @@ export class TransfersService {
           quantity: toNumber(row.quantity),
           status: row.status,
           remarks: row.remarks,
+          ...slipFields(row),
           createdAt: row.createdAt,
         };
       }),
@@ -313,9 +387,22 @@ export class TransfersService {
           );
         }
 
+        if (
+          dto.receivedQuantity !== undefined &&
+          dto.status !== TransferStatus.received
+        ) {
+          throw new BadRequestException(
+            'The received quantity is recorded when the transfer is marked received.',
+          );
+        }
         return tx.stockTransfer.update({
           where: { id },
-          data: { status: dto.status },
+          data: {
+            status: dto.status,
+            ...(dto.receivedQuantity !== undefined
+              ? { receivedQuantity: dto.receivedQuantity }
+              : {}),
+          },
         });
       },
     );

@@ -13,6 +13,7 @@ import { AccountCreationModule } from './account-creation/account-creation.modul
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalsModule } from './approvals/approvals.module';
 import { LettersModule } from './letters/letters.module';
+import { NocsModule } from './nocs/nocs.module';
 import { SearchModule } from './search/search.module';
 import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
@@ -89,6 +90,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // rather than at the first module migration.
     ApprovalsModule,
     LettersModule,
+    NocsModule,
     // 021 US1's cross-register search (`bugs.md` item 4). Listed **before** nothing in
     // particular and after everything on purpose: it is `@Global`, and each register
     // registers itself with its registry on init, so the import order of the four owning

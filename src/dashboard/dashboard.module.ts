@@ -20,7 +20,10 @@ import { ExportReadyProvider } from './notifications/export-ready.provider';
 import { LeavePendingProvider } from './notifications/leave-pending.provider';
 import { PayrollPendingProvider } from './notifications/payroll-pending.provider';
 import { ReenrolmentPendingProvider } from './notifications/reenrolment-pending.provider';
+import { ApprovalsModule } from '../approvals/approvals.module';
+import { ApprovalsPendingProvider } from './notifications/approvals-pending.provider';
 import { NOTIFICATION_PROVIDERS } from './notifications/notification.types';
+import { RemindersDueProvider } from './notifications/reminders-due.provider';
 import { ReminderEvaluationCron } from './reminders/cron/reminder-evaluation.cron';
 import { ReminderRuleRegistry } from './reminders/reminder-rule.registry';
 import { RemindersController } from './reminders/reminders.controller';
@@ -129,6 +132,9 @@ const WIDGET_CLASSES = [
 ] as const;
 
 const NOTIFICATION_CLASSES = [
+  // Approvals and due reminders first (2026-10-15): what most needs the caller's hand.
+  ApprovalsPendingProvider,
+  RemindersDueProvider,
   LeavePendingProvider,
   ReenrolmentPendingProvider,
   PayrollPendingProvider,
@@ -244,6 +250,8 @@ const reportRegistry: Provider = {
 @Module({
   imports: [
     DiscoveryModule,
+    // The approvals queue, for the bell (2026-10-15).
+    ApprovalsModule,
     HrModule,
     // For `InventoryService` — the Materials Cost card (2026-10-12).
     InventoryModule,

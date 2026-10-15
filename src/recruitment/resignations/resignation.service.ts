@@ -58,7 +58,16 @@ export class ResignationService {
           orderBy: { createdAt: 'desc' },
         }),
     );
-    return rows.map((r) => this.toView(r));
+    // Each row names its employee (2026-10-15): the list showed a cuid under "Employee".
+    const names = await this.refs.employeeNames(
+      caller,
+      rows.map((r) => r.employeeId),
+    );
+    return rows.map((r) => ({
+      ...this.toView(r),
+      employeeCode: names.get(r.employeeId)?.employeeCode ?? null,
+      employeeName: names.get(r.employeeId)?.name ?? null,
+    }));
   }
 
   async create(

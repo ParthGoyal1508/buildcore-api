@@ -25,6 +25,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { ChallansService, type ChallanType } from './challans.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 const TYPES: ChallanType[] = ['pf', 'esic', 'pt'];
 
@@ -106,10 +107,7 @@ export class ChallansController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename}"`,
-    );
+    response.setHeader('Content-Disposition', contentDispositionFor(filename));
     response.send(buffer);
   }
 }

@@ -608,6 +608,7 @@ model Company {
   reimbursementCategories ReimbursementCategory[]
   vendorCategories        VendorCategory[]
   codeSequences           CodeSequence[]
+  codeFormats             CodeFormat[]
 
   // Feature 004's reminders engine. Company-scoped so a deleted company takes its
   // reminder state with it rather than leaving orphan rows the engine would keep
@@ -1846,6 +1847,7 @@ model Project {
   workOrders        WorkOrder[]
   billPackages      BillPackage[]
   billPackageDebits BillPackageDebit[]
+  debitNotes        BillPackageDebitNote[]
   budgets           ProjectBudget[]
   documents         ProjectDocument[]
 
@@ -2371,6 +2373,7 @@ model WorkOrder {
   awardLines        WorkOrderBOQItem[]
   raBills           RABill[]
   retentionReleases RetentionRelease[]
+  debitNotes        BillPackageDebitNote[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2768,9 +2771,10 @@ model BillPackage {
   lastRevisedByUserId String?
   lastRevisionReason  String?
 
-  claims          BillPackageLineClaim[]
-  recoveredDebits BillPackageDebit[]
-  deductionLines  BillPackageDeduction[]
+  claims              BillPackageLineClaim[]
+  recoveredDebits     BillPackageDebit[]
+  recoveredDebitNotes BillPackageDebitNote[]
+  deductionLines      BillPackageDeduction[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2981,7 +2985,64 @@ model BillPackageDebit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  /// The note this line is an item of (2026-10-15). Null only between the column's addition and
+  /// the migration that gave every existing debit a note of its own.
+  noteId String?
+  note   BillPackageDebitNote? @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
   @@index([companyId, projectId])
+  @@index([recoveredOnPackageId])
+  @@index([noteId])
+  @@schema("projects")
+}
+
+/// A debit note, as the document the client sends a subcontractor (2026-10-15) — the header of the
+/// "Parth Realcon DV-04, debit note" format, with its items as `BillPackageDebit` lines.
+///
+/// **For subcontractors only.** It is raised against a work order — which is what names the party,
+/// its GSTIN and its vendor code — and recovered on a bill to that subcontractor under the same
+/// work order. A client's debits on us arrive as the client's own documents; nothing here issues one.
+///
+/// The figures are computed at raise and stored, never re-derived: `amount` is the lines' total,
+/// `taxAmount` the GST on it at `gstPercent`, `netAmount` their sum rounded to the rupee as the
+/// format prints it. `taxBasis` decides whether the tax prints as CGST + SGST or as IGST; null on a
+/// note migrated from a debit recorded before this, whose tax was never split, and printed as GST.
+model BillPackageDebitNote {
+  id        String @id @default(cuid())
+  companyId String
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  workOrderId String?
+  workOrder   WorkOrder? @relation(fields: [workOrderId], references: [id], onDelete: SetNull)
+
+  /// `2026-27/001` — the financial year and a running number that restarts each April.
+  noteNumber   String?
+  noteDate     DateTime      @db.Date
+  natureOfWork String?
+  taxBasis     BillTaxBasis?
+  gstPercent   Decimal       @default(0) @db.Decimal(5, 2)
+
+  amount    Decimal @db.Decimal(18, 2)
+  taxAmount Decimal @db.Decimal(18, 2)
+  netAmount Decimal @db.Decimal(18, 2)
+
+  /// The one bill the note is recovered on — a bill to the same subcontractor (FR-037).
+  recoveredOnPackageId String?
+  recoveredOnPackage   BillPackage? @relation(fields: [recoveredOnPackageId], references: [id], onDelete: SetNull)
+
+  recordedByUserId String?
+  recordedAt       DateTime @default(now())
+
+  lines BillPackageDebit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, noteNumber])
+  @@index([companyId, projectId])
+  @@index([workOrderId])
   @@index([recoveredOnPackageId])
   @@schema("projects")
 }
@@ -4949,6 +5010,41 @@ enum CodeSeriesType {
   /// debit was which (research §6).
   DEBIT_NOTE
 
+  /// Added 2026-10-15. No Objection Certificate numbers — `2026001`, `2026002`. Set up ahead of
+  /// the NOC document itself; nothing allocates from it yet.
+  NOC
+  /// Plant and store documents (2026-10-15): the maintenance job card (`JC-…`), the material
+  /// issue slip (`MIS-…`), the delivery challan (`DC-…`) and the stock transfer slip (`STS-…`).
+  /// Counted series, configurable in Settings → Numbering like the rest.
+  JOB_CARD
+  ISSUE_SLIP
+  DELIVERY_CHALLAN
+  STOCK_TRANSFER
+
+  @@schema("settings")
+}
+
+/// How one company numbers one series (2026-10-15) — Settings → Numbering. A series with no row
+/// keeps the built-in format (`CODE_SERIES_DEFAULTS`), which is Parth Realcon's.
+///
+/// `PROJECTS`, `VENDORS`, `WORK_ORDER` are counted: `prefix` + (`base` + n × `step`), padded to
+/// `width`. `EQUIPMENT` and `ASSETS` are named: letters from the item's name, a serial per prefix
+/// padded to `width`, `separator`, the manufacturing year.
+model CodeFormat {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  series    String
+  prefix    String  @default("")
+  base      Int     @default(0)
+  step      Int     @default(1)
+  width     Int     @default(0)
+  separator String  @default("/")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([companyId, series])
   @@schema("settings")
 }
 
@@ -6148,6 +6244,18 @@ model GoodsReceiptNote {
   grnNumber String
   siteId    String
 
+  /// What the GRN form records at the gate (2026-10-15). The quantities are as counted; the
+  /// purchase's own quantity is what was billed and is what stock moves by.
+  challanNo        String?
+  vehicleNo        String?
+  receivedQuantity Decimal? @db.Decimal(18, 3)
+  acceptedQuantity Decimal? @db.Decimal(18, 3)
+  rejectedQuantity Decimal? @db.Decimal(18, 3)
+  /// good, damaged, short, under_inspection.
+  condition        String?
+  batchDetails     String?
+  discrepancy      String?
+
   createdAt DateTime @default(now())
 
   @@unique([companyId, grnNumber])
@@ -6197,6 +6305,12 @@ model Issue {
   quantity Decimal  @db.Decimal(18, 3)
   issuedTo String
 
+  /// The project the material was issued for, and the vendor or subcontractor (a
+  /// `partners.Vendor`) who took it (2026-10-15). Optional, validated on write. The
+  /// project defaults to the store's own when the store belongs to one.
+  projectId String?
+  vendorId  String?
+
   /// What the material was consumed for (FR-019). Both optional: the link is
   /// recorded when the site's project has BOQ or activity data to point at, and
   /// requiring one would make material un-issuable at a project whose BOQ has not
@@ -6205,6 +6319,19 @@ model Issue {
   boqItemId  String?
 
   remarks String?
+
+  /// The daily issue register and issue slip (2026-10-15). `slipNo` from the `ISSUE_SLIP`
+  /// series; the machine the material went to, if any; and the return — how much came back
+  /// to the store, when, and who received it. A return puts stock back exactly as reversing
+  /// that much of the issue would.
+  ///
+  /// `equipmentNo` is the machine's number as text (`JCB01/2027`), not a plant id: inventory
+  /// may not read `plant`'s tables, and the slip prints the number, which is what it needs.
+  slipNo           String?
+  equipmentNo      String?
+  returnedQuantity Decimal?  @db.Decimal(18, 3)
+  returnedOn       DateTime? @db.Date
+  receivedBy       String?
 
   /// The indent line this issue fulfils, if it came from one (FR-023).
   indentLineId String?
@@ -6220,6 +6347,8 @@ model Issue {
   @@index([companyId, siteId])
   @@index([companyId, itemId, siteId])
   @@index([indentLineId])
+  @@index([companyId, projectId])
+  @@index([companyId, vendorId])
   @@schema("inventory")
 }
 
@@ -6234,6 +6363,18 @@ model StockTransfer {
   date     DateTime @db.Date
   quantity Decimal  @db.Decimal(18, 3)
   remarks  String?
+
+  /// The stock transfer slip and the delivery challan that travels with it (2026-10-15).
+  transferNo        String?
+  challanNo         String?
+  vehicleNo         String?
+  transporter       String?
+  dispatchReference String?
+  requestNo         String?
+  expectedArrival   DateTime? @db.Date
+  /// Counted at the receiving store; the slip prints the difference from what was sent.
+  receivedQuantity  Decimal?  @db.Decimal(18, 3)
+  reason            String?
 
   /// Physical-movement tracking only. Both balances move at creation regardless of
   /// this value: the material has left the source store the moment the transfer is
@@ -6338,6 +6479,8 @@ model MaterialIndent {
 
   requiredByDate DateTime @db.Date
   justification  String
+  /// The indent form's "Department" (2026-10-15).
+  department     String?
 
   status IndentStatus @default(submitted)
 
@@ -6429,6 +6572,12 @@ model EquipmentCategory {
   /// Stored uppercase, like `ItemCategory.name`, so "Excavator" and "EXCAVATOR"
   /// cannot coexist as two categories meaning the same thing.
   name String
+
+  /// The broad family the category sits in — "Road Construction & Highway Machinery",
+  /// "Vehicle Fleet" — from the client's Equipment Master List (2026-10-15). Free text,
+  /// nullable: the ten built-in categories predate it, and a group is a heading for the
+  /// picker rather than anything a figure depends on.
+  group String?
 
   meterType MeterType
 
@@ -6524,6 +6673,9 @@ model HireRate {
 enum EquipmentOwnership {
   owned
   hired
+  /// On a lease (2026-10-15) — the master list's third ownership. Paid like a hire, so a
+  /// leased machine names its lessor as its vendor exactly as a hired one does.
+  leased
 
   @@schema("plant")
 }
@@ -6558,6 +6710,13 @@ enum MaintenanceType {
 enum MaintenanceStatus {
   open
   closed
+
+  @@schema("plant")
+}
+
+enum HireBillBasis {
+  hours
+  monthly
 
   @@schema("plant")
 }
@@ -6620,6 +6779,26 @@ model Equipment {
   /// → `settings.EquipmentCategory`. Resolved via `EquipmentCategoriesService`.
   categoryId String
 
+  /// Registration details (2026-10-15), from the client's Equipment Master List and vehicle
+  /// register: what is painted or stamped on the machine, and who it is registered to. All
+  /// optional — a plate compactor has no registration number, and a hired machine's engine
+  /// number is often not known.
+  make            String?
+  model           String?
+  /// The vehicle number for anything on the road (RJ26-SD-6986); a serial for anything not.
+  registrationNo  String?
+  engineNo        String?
+  chassisNo       String?
+  /// Who the machine was bought from, as text: a supplier is often not a vendor in the system.
+  supplierName    String?
+  /// The "Firm" on the register — whose name the RC is in, which is not always the company's.
+  registeredOwner String?
+  /// The operator or in-charge as the yard names them; the logbook records the operator per day.
+  operatorName    String?
+  /// The register's "Remark" column: where the machine is, or who has it ("ITUNDA ROAD").
+  remarks         String?
+  lastServiceDate DateTime? @db.Date
+
   ownership EquipmentOwnership
   /// → `partners.Vendor`, for hired equipment. Resolved via `PartnersService`.
   vendorId  String?
@@ -6656,6 +6835,8 @@ model Equipment {
   serviceSchedules ServiceSchedule[]
   maintenanceJobs  MaintenanceJob[]
   hireBills        HireBill[]
+  registration     EquipmentRegistrationItem[]
+  hireOrderLines   HireOrderLine[]
 
   @@unique([companyId, code])
   @@index([companyId])
@@ -6689,6 +6870,121 @@ model EquipmentDocument {
 
   @@index([companyId])
   @@index([equipmentId])
+  @@schema("plant")
+}
+
+/// The six registration papers the vehicle register tracks (2026-10-15).
+enum RegistrationKind {
+  rc
+  insurance
+  fitness
+  road_tax
+  permit
+  pollution
+
+  @@schema("plant")
+}
+
+/// Where a machine stands on one paper: held (with an expiry, or none known), not applicable
+/// to it (a bike needs no fitness certificate), or valid for life (life-time road tax).
+enum RegistrationStatus {
+  held
+  not_applicable
+  lifetime
+
+  @@schema("plant")
+}
+
+/// One machine's standing on one registration paper (2026-10-15) — a cell pair of the client's
+/// "Vehicle Details" register: RC, insurance, fitness, road tax, permit and pollution, each with
+/// its expiry date. The "Doc" column beside each is not stored here: it reads whether a document
+/// of the matching type has been uploaded to the machine, so a scanned copy is recorded once.
+model EquipmentRegistrationItem {
+  id String @id @default(cuid())
+
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  kind      RegistrationKind
+  status    RegistrationStatus @default(held)
+  expiresAt DateTime?          @db.Date
+  /// The policy or permit number, where the paper has one.
+  number    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([equipmentId, kind])
+  @@index([companyId])
+  @@index([companyId, expiresAt])
+  @@schema("plant")
+}
+
+/// A work/hire order for a vehicle or machine (2026-10-15) — the client's "WORK/HIRE ORDER":
+/// the supplier, the project and point of delivery, the PART-A schedule, and the fixed general
+/// terms. Numbered from the company's work-order series, so a hire order and a subcontract
+/// work order never share a number.
+model HireOrder {
+  id String @id @default(cuid())
+
+  companyId String
+
+  /// From the `WORK_ORDER` series (250001 at Tirupati).
+  code        String
+  /// The "Ref No." at the head; free text, as the company's own reference.
+  referenceNo String?
+  date        DateTime @db.Date
+
+  /// → `partners.Vendor`, the supplier.
+  vendorId        String
+  /// → `projects.Project`.
+  projectId       String?
+  pointOfDelivery String?
+  remarks         String?
+
+  createdByUserId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines HireOrderLine[]
+  bills HireBill[]
+
+  @@unique([companyId, code])
+  @@index([companyId])
+  @@index([companyId, vendorId])
+  @@schema("plant")
+}
+
+/// One item of PART-A: a heading ("Hiring of Bolero Camper ZX for Toll plaza") over its service
+/// line ("LMV hire services-Months", SAC 9966, 3 MON at 2,40,000).
+model HireOrderLine {
+  id String @id @default(cuid())
+
+  companyId String
+
+  hireOrderId String
+  hireOrder   HireOrder @relation(fields: [hireOrderId], references: [id], onDelete: Cascade)
+
+  position    Int
+  /// The machine this line hires, when it is registered — optional, as an order is often
+  /// raised before the machine arrives.
+  equipmentId String?
+  equipment   Equipment? @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String
+  sacCode     String?
+  taxRate     Decimal @default(0) @db.Decimal(6, 2)
+  quantity    Decimal @db.Decimal(18, 3)
+  uom         String
+  rate        Decimal @db.Decimal(18, 2)
+  amount      Decimal @db.Decimal(18, 2)
+
+  @@index([hireOrderId])
+  @@index([companyId])
   @@schema("plant")
 }
 
@@ -6741,6 +7037,9 @@ model FuelEntry {
   quantity Decimal @db.Decimal(18, 3)
   rate     Decimal @db.Decimal(18, 2)
   amount   Decimal @db.Decimal(18, 2)
+
+  /// The fuel card the diesel was drawn on (2026-10-15) — the log book's "Card no." column.
+  cardNo String?
 
   /// → `partners.Vendor` (the filling station or diesel supplier).
   vendorId String?
@@ -7022,6 +7321,13 @@ model MaintenanceJob {
 
   status MaintenanceStatus @default(open)
 
+  /// The maintenance job card (2026-10-15): `JC-…` from the `JOB_CARD` series, and the card's
+  /// many printed fields — priority, job type, the complaint, the inspection and outside-parts
+  /// rows, the handover checks, the sign-off names — as one validated document. Kept as JSON
+  /// because none of it is summed, filtered or joined on: it is what the card prints.
+  jobCardNo String?
+  card      Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -7067,6 +7373,34 @@ model HireBill {
   netPayable Decimal  @db.Decimal(18, 2)
 
   status HireBillStatus @default(pending_verification)
+
+  /// The vehicle hiring bill (2026-10-15): the client's monthly format. `basis` says how the
+  /// gross was reached — hours × rate (the original hire bill), or a monthly rent pro-rated
+  /// over the days billed. Everything below is optional so a bill raised before it reads as
+  /// it always did.
+  basis           HireBillBasis @default(hours)
+  hireOrderId     String?
+  hireOrder       HireOrder?    @relation(fields: [hireOrderId], references: [id], onDelete: SetNull)
+  billDate        DateTime?     @db.Date
+  /// "Reference Invoice No." — the supplier's own running number.
+  invoiceNo       String?
+  taxInvoiceRef   String?
+  taxInvoiceDate  DateTime?     @db.Date
+  description     String?
+  periodDays      Int?
+  monthlyRate     Decimal?      @db.Decimal(18, 2)
+  /// The agreed average — litres per hour, or km per litre for a vehicle on a km meter.
+  agreedAverage   Decimal?      @db.Decimal(10, 3)
+  startReading    Decimal?      @db.Decimal(18, 3)
+  endReading      Decimal?      @db.Decimal(18, 3)
+  /// Litres the company supplied in the period, from the fuel register.
+  dieselGiven     Decimal?      @db.Decimal(18, 3)
+  /// Litres the work should have used at the agreed average.
+  actualDiesel    Decimal?      @db.Decimal(18, 3)
+  /// "Deduction Amount" — the diesel the company supplied, or any other deduction agreed.
+  deductionAmount Decimal       @default(0) @db.Decimal(18, 2)
+  /// "Debit / Hold Amount".
+  holdAmount      Decimal       @default(0) @db.Decimal(18, 2)
 
   verifiedByUserId String?
   verifiedAt       DateTime?
@@ -7923,8 +8257,11 @@ model Asset {
   quantity      Decimal @default(1) @db.Decimal(18, 3)
   unitOfMeasure String?
 
-  purchaseDate DateTime? @db.Date
-  purchaseCost Decimal   @default(0) @db.Decimal(18, 2)
+  /// The year it was built — the last part of its code, `DR01/2024` (2026-10-15). Falls back to
+  /// the purchase year, then the current one, as a machine's does.
+  manufacturingYear Int?
+  purchaseDate      DateTime? @db.Date
+  purchaseCost      Decimal   @default(0) @db.Decimal(18, 2)
 
   /// Depreciation starts here, never before (spec FR-019). Must be ≥ `purchaseDate`.
   capitalisationDate      DateTime @db.Date
@@ -8683,6 +9020,42 @@ model OnboardingItem {
 /// recruitment module to learn about `partners`, `projects` and `inventory` — which
 /// Principle I forbids outright. In `shared` it belongs to no business module and can
 /// address anything.
+/// A No Objection Certificate, uploaded (2026-10-15). The client: "we just need to give an option
+/// of uploading No Objection Certificate" — after a work order or an LOI is generated, on a vehicle
+/// hire order, and for a labour worker, a vendor or a member of staff. The application does not
+/// generate NOCs, so they carry no number of their own; the reference is whatever the issuer wrote.
+///
+/// One table for every place, keyed by what it is about — `subjectType` + `subjectId` — the way
+/// `IssuedLetter` is. A plain id, never a relation: the subjects live in five other schemas, and
+/// this table resolves none of them (Principle I). `stage` says which step of a subject's life it
+/// belongs to where that matters: a work order's NOC after the LOI, or after the work order.
+model NocDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// work_order, hire_order, labour_worker, vendor, employee, purchase_order.
+  subjectType String
+  subjectId   String
+  /// For a work order: `loi` or `work_order`. Null where a subject has one stage.
+  stage       String?
+
+  fileRef  String
+  fileName String?
+  mimeType String?
+
+  /// Who issued the certificate, its reference and date, as written on it.
+  issuedBy    String?
+  referenceNo String?
+  issuedOn    DateTime? @db.Date
+  remarks     String?
+
+  uploadedByUserId String
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, subjectType, subjectId])
+  @@schema("shared")
+}
+
 model IssuedLetter {
   id        String  @id @default(cuid())
   companyId String
@@ -8710,8 +9083,8 @@ model IssuedLetter {
   /// FR-013 requires a previously issued letter to render as it was issued, and a
   /// signatory's graphic can be replaced. An implementation storing only `signatoryId`
   /// silently rewrites history the first time somebody uploads a new signature.
-  signatoryId         String?
-  signatory           Signatory? @relation(fields: [signatoryId], references: [id], onDelete: SetNull)
+  signatoryId String?
+  signatory   Signatory? @relation(fields: [signatoryId], references: [id], onDelete: SetNull)
 
   /// What was typed when the letter was composed (2026-10-14), kept for its issue.
   ///

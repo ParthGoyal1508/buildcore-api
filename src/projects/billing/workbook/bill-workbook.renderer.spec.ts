@@ -215,10 +215,13 @@ describe('the subcontractor’s sign-off under the abstract (2026-10-14)', () =>
     expect(find('Project head') - find('Accepted by')).toBe(3);
   });
 
-  it('prints nothing of the kind on a bill to the client', async () => {
+  // Since 2026-10-15 the client's bill carries the four captions too, without designations.
+  it('prints the captions alone on a bill to the client', async () => {
     const rows = (await abstractCells({ direction: 'to_client' })).flat();
-    expect(rows).not.toContain('Prepared by');
+    expect(rows).toContain('Prepared by');
+    expect(rows).toContain('Approved by');
     expect(rows).not.toContain('Project head');
+    expect(rows).not.toContain('Site Engineer');
   });
 });
 

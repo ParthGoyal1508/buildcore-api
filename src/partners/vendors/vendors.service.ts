@@ -148,11 +148,18 @@ export class VendorsService {
         // Allocated inside this transaction so a later failure rolls the number back
         // rather than burning it — a gap in a vendor code series reads as a deleted
         // supplier to anyone auditing it later.
+        // A code already held is stepped over (2026-10-15) — the format can be changed in
+        // Settings → Numbering, and a restarted series must not collide with older codes.
         const code = await this.codeSeries.next(
           tx,
           targetCompanyId,
           CodeSeriesType.VENDORS,
           'VEN',
+          async (candidate) =>
+            !!(await tx.vendor.findFirst({
+              where: { companyId: targetCompanyId, code: candidate },
+              select: { id: true },
+            })),
         );
         return tx.vendor.create({
           data: {

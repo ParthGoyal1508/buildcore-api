@@ -18,6 +18,26 @@ export interface VendorTds {
   tdsRate: number | null;
 }
 
+/** A vendor as a document addressed to them prints it. */
+export interface VendorParticulars {
+  id: string;
+  code: string;
+  name: string;
+  gstin: string | null;
+  pan: string | null;
+  address: string | null;
+  state: string | null;
+  phone: string | null;
+  email: string | null;
+  bank: {
+    name: string | null;
+    branch: string | null;
+    accountNumber: string;
+    holder: string | null;
+    ifsc: string | null;
+  } | null;
+}
+
 /**
  * The `partners` module's outward contract (007 FR-002, FR-009).
  *
@@ -48,6 +68,73 @@ export class PartnersService {
       }),
     );
     return vendor ?? null;
+  }
+
+  /**
+   * What a document addressed to a vendor prints about them (2026-10-15): the vehicle hiring
+   * bill's "Sub Contractor Details" and bank block, and the hire order's "To" block. Null for an
+   * unknown id, like the rest of this service.
+   */
+  async getVendorParticulars(
+    vendorId: string,
+    ctx: RlsContext = { isSuperAdmin: true },
+  ): Promise<VendorParticulars | null> {
+    const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.vendor.findUnique({
+        where: { id: vendorId },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          gstin: true,
+          pan: true,
+          address: true,
+          city: true,
+          state: true,
+          pinCode: true,
+          bankName: true,
+          bankBranch: true,
+          bankAccountNumber: true,
+          bankAccountHolderName: true,
+          ifscCode: true,
+          contacts: {
+            select: { name: true, phone: true, email: true },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+      }),
+    );
+    if (!vendor) return null;
+    const place = [vendor.city, vendor.state].filter(Boolean).join(', ');
+    const address =
+      [
+        vendor.address,
+        place && vendor.pinCode ? `${place} - ${vendor.pinCode}` : place,
+      ]
+        .filter(Boolean)
+        .join(', ') || null;
+    const phone = vendor.contacts.find((c) => c.phone)?.phone ?? null;
+    const email = vendor.contacts.find((c) => c.email)?.email ?? null;
+    return {
+      id: vendor.id,
+      code: vendor.code,
+      name: vendor.name,
+      gstin: vendor.gstin,
+      pan: vendor.pan,
+      address,
+      state: vendor.state,
+      phone,
+      email,
+      bank: vendor.bankAccountNumber
+        ? {
+            name: vendor.bankName,
+            branch: vendor.bankBranch,
+            accountNumber: vendor.bankAccountNumber,
+            holder: vendor.bankAccountHolderName,
+            ifsc: vendor.ifscCode,
+          }
+        : null,
+    };
   }
 
   async getVendorTds(

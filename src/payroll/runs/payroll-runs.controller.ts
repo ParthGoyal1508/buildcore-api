@@ -37,6 +37,7 @@ import {
   GeneratePayrollDto,
   SetRunStatusDto,
 } from './dto/generate-payroll.dto';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /** Payroll run lifecycle and exports (005 US5). */
 @ApiTags('HR — Payroll')
@@ -244,10 +245,7 @@ export class PayrollRunsController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename}"`,
-    );
+    response.setHeader('Content-Disposition', contentDispositionFor(filename));
     response.send(buffer);
   }
 }

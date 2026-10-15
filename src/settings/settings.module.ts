@@ -4,6 +4,7 @@ import { PasswordConfirmationService } from '../auth/password-confirmation.servi
 import { ApprovalsModule } from '../approvals/approvals.module';
 import { UsersModule } from '../users/users.module';
 import { CodeSeriesService } from './code-series/code-series.service';
+import { NumberingService } from './code-series/numbering.service';
 import { CompaniesController } from './companies/companies.controller';
 import { CompanyDocumentsController } from './company-documents/company-documents.controller';
 import { CompanyDocumentsService } from './company-documents/company-documents.service';
@@ -92,6 +93,7 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     EmployeeCodeService,
     ReimbursementCategoriesService,
     CodeSeriesService,
+    NumberingService,
     VendorCategoriesService,
     ItemCategoriesService,
     ItemsService,

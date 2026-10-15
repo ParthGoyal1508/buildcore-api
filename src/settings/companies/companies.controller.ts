@@ -4,6 +4,7 @@ import {
   Get,
   Ip,
   Param,
+  Delete,
   Patch,
   Post,
   Res,
@@ -34,6 +35,8 @@ import { CompaniesService } from './companies.service';
 import { CompanyResponseDto } from './dto/company-response.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
+import { NumberingService } from '../code-series/numbering.service';
+import { SetNumberingDto } from '../code-series/dto/numbering.dto';
 import { SetBillingRatesDto } from './dto/set-billing-rates.dto';
 import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
 import { SetLetterheadDto } from './dto/set-letterhead.dto';
@@ -51,6 +54,7 @@ export class CompaniesController {
   constructor(
     private readonly companiesService: CompaniesService,
     private readonly employeeCodeService: EmployeeCodeService,
+    private readonly numbering: NumberingService,
   ) {}
 
   @Get()
@@ -248,6 +252,42 @@ export class CompaniesController {
       id,
       dto.punchAccuracyMaxMetres ?? null,
     );
+  }
+
+  @Get(':id/numbering')
+  @ApiOperation({
+    summary:
+      'How the company numbers projects, vendors, work orders, machines and assets',
+    description:
+      'Settings → Numbering (2026-10-15). Each series with its format, examples, and — for the ' +
+      'counted ones — the code the next record will get.',
+  })
+  async getNumbering(@Param('id') id: string) {
+    return this.numbering.list(id);
+  }
+
+  @Put(':id/numbering/:series')
+  @ApiOperation({
+    summary: 'Set one series’ format',
+    description:
+      'Saving a counted series restarts it, so the next code is the new start plus one gap; codes ' +
+      'already in use are stepped over. Existing records keep their codes.',
+  })
+  async setNumbering(
+    @Param('id') id: string,
+    @Param('series') series: string,
+    @Body() dto: SetNumberingDto,
+  ) {
+    return this.numbering.update(id, series, dto);
+  }
+
+  @Delete(':id/numbering/:series')
+  @ApiOperation({ summary: 'Put one series back to the built-in format' })
+  async resetNumbering(
+    @Param('id') id: string,
+    @Param('series') series: string,
+  ) {
+    return this.numbering.reset(id, series);
   }
 
   @Get(':id/billing-rates')

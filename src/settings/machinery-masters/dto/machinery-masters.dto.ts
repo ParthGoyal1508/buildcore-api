@@ -24,6 +24,15 @@ export class CreateEquipmentCategoryDto {
   @MaxLength(80)
   name!: string;
 
+  @ApiPropertyOptional({
+    example: 'Road Construction & Highway Machinery',
+    description: 'The family the category is listed under (2026-10-15).',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  group?: string;
+
   @ApiProperty({
     enum: MeterType,
     description: 'What machines in this category meter: running hours, or km',

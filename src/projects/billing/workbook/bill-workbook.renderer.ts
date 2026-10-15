@@ -3,6 +3,10 @@ import * as ExcelJS from 'exceljs';
 
 import type { BillWorkbookView } from './bill-workbook.types';
 import {
+  type DebitNoteView,
+  writeDebitNoteSheet as writeOneNote,
+} from './debit-note-document';
+import {
   FIXED_SHEET_NAMES,
   assertSheetName,
   measurementSheetName,
@@ -99,6 +103,7 @@ export class BillWorkbookRenderer {
     });
 
     writeDebitNoteSheet(
+      workbook,
       workbook.addWorksheet(
         assertSheetName(FIXED_SHEET_NAMES.debitRegister, used),
       ),
@@ -107,6 +112,17 @@ export class BillWorkbookRenderer {
 
     const bytes = await workbook.xlsx.writeBuffer();
     return Buffer.from(bytes);
+  }
+
+  /** One debit note on its own, as a one-sheet workbook in the client's format (2026-10-15). */
+  async renderDebitNote(view: DebitNoteView): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = view.company.name;
+    const stamp = new Date(`${view.noteDate}T00:00:00.000Z`);
+    workbook.created = stamp;
+    workbook.modified = stamp;
+    writeOneNote(workbook, workbook.addWorksheet('Debit Note'), view);
+    return Buffer.from(await workbook.xlsx.writeBuffer());
   }
 
   /**

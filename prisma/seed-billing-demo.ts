@@ -101,6 +101,7 @@ async function reset(companyId: string): Promise<void> {
     where: { companyId, subjectId: { in: packages.map((p) => p.id) } },
   });
   await prisma.billPackageDebit.deleteMany({ where: { projectId } });
+  await prisma.billPackageDebitNote.deleteMany({ where: { projectId } });
   await prisma.billPackage.deleteMany({ where: { projectId } });
   await prisma.rABill.deleteMany({ where: { projectId } });
   await prisma.clientBill.deleteMany({ where: { projectId } });

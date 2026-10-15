@@ -45,6 +45,43 @@ export class CreateTransferDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  // ── The stock transfer slip and delivery challan (2026-10-15) ──
+
+  @ApiPropertyOptional({ example: 'RJ26-GA-1234' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  vehicleNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  transporter?: string;
+
+  @ApiPropertyOptional({ description: 'Indent / PO / dispatch reference' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  dispatchReference?: string;
+
+  @ApiPropertyOptional({ description: 'Transfer request number' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  requestNo?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-17' })
+  @IsOptional()
+  @IsDateString()
+  expectedArrival?: string;
+
+  @ApiPropertyOptional({ description: 'Reason for transfer' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class UpdateTransferDto {
@@ -54,6 +91,16 @@ export class UpdateTransferDto {
   })
   @IsEnum(TransferStatus)
   status!: TransferStatus;
+
+  @ApiPropertyOptional({
+    description:
+      'Counted at the receiving store, when marking it received — the slip prints the difference',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  receivedQuantity?: number;
 }
 
 export class ListTransfersDto {

@@ -185,6 +185,16 @@ export interface ApprovalQueueEntry {
   levelLabel: string;
 }
 
+/**
+ * An item still at an earlier step of a chain the caller sits further along (2026-10-15) — "coming
+ * up". Read-only: it is not the caller's to decide yet; `levelLabel` names who it waits on.
+ */
+export interface ApprovalUpcomingEntry extends ApprovalQueueEntry {
+  /** The caller's own step in the chain, and its label. */
+  yourPosition: number;
+  yourLevelLabel: string;
+}
+
 /** A page of queue entries. */
 export interface ApprovalQueuePage {
   items: ApprovalQueueEntry[];

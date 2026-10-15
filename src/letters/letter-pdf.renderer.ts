@@ -46,7 +46,7 @@ interface Faces {
 }
 const FALLBACK: Faces = { regular: 'Helvetica', bold: 'Helvetica-Bold' };
 let fontFiles: { regular: Buffer; bold: Buffer } | null | undefined;
-function letterFontFiles(): { regular: Buffer; bold: Buffer } | null {
+export function letterFontFiles(): { regular: Buffer; bold: Buffer } | null {
   if (fontFiles === undefined) {
     try {
       fontFiles = {

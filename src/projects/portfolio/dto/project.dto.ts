@@ -24,10 +24,11 @@ import {
 /**
  * A new project (spec US3).
  *
- * `code` is optional: omit it and one is allocated from the company's PROJECTS
- * series. Supplying it is allowed because migrated projects arrive with codes their
- * paperwork already refers to, and forcing those to be renumbered would break every
- * external reference to them.
+ * There is no `code` (2026-10-15). Every project is numbered from the company's
+ * PROJECTS series — `1010`, `1020`, `1030` — and the client asked for that to be
+ * enforced: a code cannot be typed on creation, nor changed afterwards, so the series
+ * is the only source of one. A request that still sends `code` is refused (the global
+ * pipe forbids undeclared fields) rather than having it quietly ignored.
  */
 export class CreateProjectDto {
   /**
@@ -53,17 +54,6 @@ export class CreateProjectDto {
   @ArrayMaxSize(50)
   @IsString({ each: true })
   stagedDocumentIds?: string[];
-
-  @ApiPropertyOptional({
-    description:
-      'Omit to allocate the next code in the company PROJECTS series — `1010`, `1020`, ' +
-      '… counting from 1000 in tens.',
-    maxLength: 50,
-  })
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  code?: string;
 
   @ApiProperty({ maxLength: 200 })
   @IsString()

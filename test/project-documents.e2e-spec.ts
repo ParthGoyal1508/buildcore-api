@@ -95,7 +95,6 @@ describe('Project documents (e2e)', () => {
       .post('/projects')
       .set(auth(adminToken))
       .send({
-        code: unique('P').slice(0, 30),
         name: `${PREFIX} ${name}`,
         clientId,
         contractValue: 1000000,
@@ -344,7 +343,6 @@ describe('Project documents (e2e)', () => {
       .post('/projects')
       .set(auth(adminToken))
       .send({
-        code: unique('PX').slice(0, 30),
         name: `${PREFIX} Expiry carried`,
         clientId,
         contractValue: 1000000,

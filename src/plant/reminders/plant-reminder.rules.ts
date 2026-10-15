@@ -9,7 +9,10 @@ import {
   ReminderRuleProvider,
   ReminderSeverityLadder,
 } from '../../dashboard/reminders/reminder-rule.types';
-import { SERVICE_DUE_SOON_MARGIN } from '../constants/plant.constants';
+import {
+  REGISTRATION_PAPERS,
+  SERVICE_DUE_SOON_MARGIN,
+} from '../constants/plant.constants';
 
 /** How far back the service-due rule looks to estimate a machine's daily usage. */
 const USAGE_WINDOW_DAYS = 30;
@@ -93,6 +96,62 @@ export class EquipmentDocumentExpiryRule implements ReminderRuleProvider {
             actionLink: `/dashboard/plant/equipment/${document.equipmentId}`,
           },
         ];
+      });
+    });
+  }
+}
+
+/**
+ * Registration papers lapsing (2026-10-15) — the vehicle register's insurance, fitness, road tax,
+ * permit and pollution dates, recorded on the machine whether or not a scan has been uploaded.
+ *
+ * A paper with an uploaded document carrying the same expiry is also reminded about by the rule
+ * above, under its document; the two read differently ("Insurance paper" vs the document type's
+ * name), and a register kept without scans is the common case this rule exists for. Thirty days,
+ * as the register shades them.
+ */
+@ReminderRule()
+@Injectable()
+export class EquipmentRegistrationExpiryRule implements ReminderRuleProvider {
+  readonly ruleKey = 'machinery-registration-expiry';
+  readonly sourceModule = 'machinery';
+  readonly requires = [Permission.MACHINERY, Permission.MAINTENANCE];
+  readonly type = 'document_expiry';
+  readonly entityType = 'EQUIPMENT_REGISTRATION';
+  readonly leadDays = 30;
+  readonly severityLadder: ReminderSeverityLadder = { warnWithinDays: 14 };
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  isAvailable(): boolean {
+    return true;
+  }
+
+  async evaluate(ctx: RlsContext): Promise<ReminderCandidate[]> {
+    const horizon = new Date(Date.now() + this.leadDays * MS_PER_DAY);
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const papers = await tx.equipmentRegistrationItem.findMany({
+        where: { status: 'held', expiresAt: { not: null, lte: horizon } },
+        include: {
+          equipment: {
+            select: { code: true, name: true, registrationNo: true },
+          },
+        },
+      });
+      return papers.map((paper) => {
+        const label =
+          REGISTRATION_PAPERS.find((p) => p.kind === paper.kind)?.label ??
+          paper.kind;
+        const machine = paper.equipment;
+        return {
+          companyId: paper.companyId,
+          entityId: paper.id,
+          subject: `${label} paper — ${
+            machine.registrationNo ?? machine.code
+          } ${machine.name}`,
+          dueDate: paper.expiresAt as Date,
+          actionLink: `/dashboard/plant/equipment/${paper.equipmentId}`,
+        };
       });
     });
   }

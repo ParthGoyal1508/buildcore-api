@@ -4,7 +4,13 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { parseDateOnly } from '../hr/leave/leave-days';
 import { EmployeesService } from '../hr/employees/employees.service';
-import { PartnersService } from '../partners/partners.service';
+import {
+  PartnersService,
+  VendorParticulars,
+} from '../partners/partners.service';
+import { CompaniesService } from '../settings/companies/companies.service';
+import type { FormCompany } from '../common/form-document';
+import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
 import {
   EquipmentCategoriesService,
@@ -34,7 +40,81 @@ export class PlantRefsService {
     private readonly sites: SitesService,
     private readonly partners: PartnersService,
     private readonly employees: EmployeesService,
+    private readonly companies: CompaniesService,
+    private readonly projects: ProjectsService,
   ) {}
+
+  /** A project of this company, for a hire order or a job card heading (2026-10-15). */
+  async requireProject(
+    caller: AuthenticatedUser,
+    projectId: string,
+    companyId: string,
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    location: string | null;
+  }> {
+    const project = await this.projects.getProjectIdentityById(
+      projectId,
+      rlsContextFor(caller),
+    );
+    if (!project || project.companyId !== companyId) {
+      throw new BadRequestException(
+        `Project ${projectId} does not exist in this company`,
+      );
+    }
+    return project;
+  }
+
+  /** The project a site belongs to, if any — where a deployed machine is working. */
+  async projectOfSite(
+    caller: AuthenticatedUser,
+    siteId: string,
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    location: string | null;
+  } | null> {
+    const site = await this.sites
+      .getSiteById(rlsContextFor(caller), siteId)
+      .catch(() => null);
+    if (!site?.projectId) return null;
+    return this.projects.getProjectIdentityById(
+      site.projectId,
+      rlsContextFor(caller),
+    );
+  }
+
+  /** The company as a printed plant document heads it: name, address, logo (2026-10-15). */
+  async documentCompany(
+    companyId: string,
+  ): Promise<FormCompany & { place: string | null }> {
+    const identity = await this.companies.getDocumentIdentity(companyId);
+    return {
+      name: identity.name,
+      address: identity.address,
+      logo: identity.logo,
+      place: identity.place,
+    };
+  }
+
+  /** A vendor's address, PAN, contact and bank, for the hire order and the hiring bill. */
+  async vendorParticulars(
+    caller: AuthenticatedUser,
+    vendorId: string,
+  ): Promise<VendorParticulars | null> {
+    return this.partners.getVendorParticulars(vendorId, rlsContextFor(caller));
+  }
+
+  /** The company's sites, for matching a location written on an imported sheet. */
+  async companySites(
+    caller: AuthenticatedUser,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    return this.sites.listForCompany(rlsContextFor(caller), companyId);
+  }
 
   /**
    * The company a write belongs to: the caller's own, or the one a cross-company

@@ -32,6 +32,7 @@ import {
   UploadAssetDocumentDto,
 } from './dto/asset.dto';
 import { AssetService } from './asset.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /** The asset register (spec US2), gated by `ASSETS`. */
 @ApiTags('Assets')
@@ -87,9 +88,27 @@ export class AssetController {
     );
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.filename}"`,
+      contentDispositionFor(file.filename),
     );
     return new StreamableFile(file.buffer);
+  }
+
+  @Get('next-code')
+  @ApiOperation({
+    summary: 'The code an asset with this name and year would be given',
+  })
+  async nextCode(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('name') name = '',
+    @Query('year') year?: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.assets.nextCode(
+      caller,
+      name,
+      year && /^\d{4}$/.test(year) ? Number(year) : null,
+      companyId,
+    );
   }
 
   @Get(':id')
@@ -105,7 +124,8 @@ export class AssetController {
   @ApiOperation({
     summary: 'Register an asset',
     description:
-      'Allocates the next ASSETS code when none is supplied, copies the ' +
+      'Builds its code — letters from the name, a serial, the manufacturing year, as set in ' +
+      'Settings → Numbering — copies the ' +
       'category’s tracking mode and depreciation policy onto the row, and opens ' +
       'its stock balance at the home site.',
   })
@@ -169,7 +189,7 @@ export class AssetController {
     response.setHeader('Content-Type', file.contentType);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.fileName.replace(/"/g, '')}"`,
+      contentDispositionFor(file.fileName),
     );
     return new StreamableFile(file.buffer);
   }

@@ -60,6 +60,8 @@ export interface IndentView {
   projectId: string | null;
   requiredByDate: Date;
   justification: string;
+  /** The indent form's "Department" (2026-10-15). */
+  department: string | null;
   status: IndentStatus;
   requestedByUserId: string;
   approvedByUserId: string | null;
@@ -232,6 +234,7 @@ export class IndentsService {
             indentNumber,
             requiredByDate,
             justification: dto.justification.trim(),
+            department: dto.department?.trim() || null,
             requestedByUserId: caller.id,
             lines: {
               create: dto.lines.map((line) => ({
@@ -280,6 +283,7 @@ export class IndentsService {
       projectId: string | null;
       requiredByDate: Date;
       justification: string;
+      department: string | null;
       status: IndentStatus;
       requestedByUserId: string;
       approvedByUserId: string | null;
@@ -298,6 +302,7 @@ export class IndentsService {
       projectId: indent.projectId,
       requiredByDate: indent.requiredByDate,
       justification: indent.justification,
+      department: indent.department,
       status: indent.status,
       requestedByUserId: indent.requestedByUserId,
       approvedByUserId: indent.approvedByUserId,

@@ -1,8 +1,13 @@
 import { inflateSync } from 'zlib';
 
-import type { DebitNoteDocumentView } from './bill-pdf.renderer';
 import { BillPdfRenderer } from './bill-pdf.renderer';
-import { measurement, party, subcontractor, view } from './bill-view.fixture';
+import {
+  debitNoteFixture,
+  measurement,
+  party,
+  subcontractor,
+  view,
+} from './bill-view.fixture';
 
 /**
  * The bill as a PDF (025 FR-042).
@@ -137,7 +142,7 @@ describe('what reaches the page', () => {
     expect(text).toContain('ABSTRACT');
     expect(text).toContain('BOQ ANNEXURE-I');
     expect(text).toContain('MEASUREMENT SHEET');
-    expect(text).toContain('DEBIT NOTE');
+    expect(text).toContain('Debit Note No');
   });
 
   it('prints a missing party identifier blank rather than refusing the document', async () => {
@@ -204,10 +209,13 @@ describe('the subcontractor’s sign-off under the abstract (2026-10-14)', () =>
     expect(text).toContain('Sub-Contractor');
   });
 
-  it('prints nothing of the kind on a bill to the client', async () => {
+  // Since 2026-10-15 the client's bill carries the four captions too, without designations.
+  it('prints the captions alone on a bill to the client', async () => {
     const text = await abstractText({ direction: 'to_client' });
-    expect(text).not.toContain('Prepared by');
+    expect(text).toContain('Prepared by');
+    expect(text).toContain('Approved by');
     expect(text).not.toContain('Project head');
+    expect(text).not.toContain('Site Engineer');
   });
 
   it('moves the whole block to a new page rather than splitting it', async () => {
@@ -255,74 +263,42 @@ describe('what the renderer can reach', () => {
   });
 });
 
-describe('the standalone debit note (028 FR-018, FR-019)', () => {
-  function note(
-    overrides: Partial<DebitNoteDocumentView> = {},
-  ): DebitNoteDocumentView {
-    return {
-      issuerName: 'Parth Realcon Private Limited',
-      noteNumber: 'PRPL-DN-0004',
-      raisedOn: '2026-09-18',
-      projectName: 'Medshi to Washim',
-      projectCode: 'PRPL-PRJ-0004',
-      receiver: { name: null, code: null, gstin: null, pan: null },
-      recoveredOn: null,
-      groupHeading: 'Debit against the ATMS Equipment Missing at site',
-      line: {
-        description: 'PTZ camera missing at KM.226 LHS',
-        location: 'KM.226 LHS',
-        nos: '1.000',
-        length: null,
-        width: null,
-        quantity: '1.000',
-        unit: 'Nos',
-        rate: '125000.00',
-        amount: '125000.00',
-        amountWithTax: '147500.00',
-      },
-      ...overrides,
-    };
-  }
+describe('the standalone debit note, in the client’s format (2026-10-15)', () => {
+  const note = debitNoteFixture;
 
-  it('prints the number allocated at raise on the document itself', async () => {
-    const bytes = await new BillPdfRenderer().renderDebitNote(note());
-    const text = textOf(bytes);
+  it('prints the number, the party and the figures of the format', async () => {
+    const text = textOf(await new BillPdfRenderer().renderDebitNote(note()));
 
-    // **Vacuity note**: asserting `noteNumber` was written to the row, or that this call returned
-    // bytes, proves the allocation and the response — neither proves the subcontractor is holding
-    // a numbered document. FR-019 exists so the register and the note cannot disagree about which
-    // debit is which, and that is only true if the number reaches the page. Read back out of the
-    // rendered PDF for the same reason the 028 abstract test is.
-    expect(text).toContain('PRPL-DN-0004');
-    // The figure the subcontractor is being asked to accept, with the tax the register carried.
-    expect(text).toContain('147500.00');
-    expect(text).toContain('PTZ camera missing at KM.226 LHS');
+    // Read back out of the rendered PDF: the register and the note must not disagree about which
+    // debit is which, and that is only true if the number reaches the page.
+    expect(text).toContain('2026-27/001');
+    expect(text).toContain('29-Jun-2026');
+    expect(text).toContain('M/s Dummy Earthworks');
+    expect(text).toContain('16010503');
+    expect(text).toContain('1504373');
+    expect(text).toContain('Debit Note of O&M of Highway');
+    expect(text).toContain('Solar Panel (335 W)');
+    expect(text).toContain('20,30,950.00');
+    expect(text).toContain('CGST 9%');
+    expect(text).toContain('23,96,521');
+    for (const caption of [
+      'Prepared By',
+      'Accepted By',
+      'Checked By',
+      'Approved By',
+    ]) {
+      expect(text).toContain(caption);
+    }
   });
 
-  it('names the subcontractor only once the debit has been recovered on their bill', async () => {
-    const unrecovered = textOf(
-      await new BillPdfRenderer().renderDebitNote(note()),
-    );
-    const recovered = textOf(
+  it('prints IGST alone on an inter-state note', async () => {
+    const text = textOf(
       await new BillPdfRenderer().renderDebitNote(
-        note({
-          receiver: {
-            name: 'Shree Construction',
-            code: 'PRPL-VEN-0021',
-            gstin: '27AABCU9603R1ZP',
-            pan: 'AABCU9603R',
-          },
-          recoveredOn: 'RA-07',
-        }),
+        note({ taxes: [{ label: 'IGST 18%', amount: '365571.00' }] }),
       ),
     );
-
-    // Both halves, because only the pair says anything. The first alone would pass for a renderer
-    // that never prints a party at all; the second alone for one that prints whoever it is handed,
-    // including on a debit nobody has yet decided to recover from anybody.
-    expect(unrecovered).not.toContain('Shree Construction');
-    expect(recovered).toContain('Shree Construction');
-    expect(recovered).toContain('RA-07');
+    expect(text).toContain('IGST 18%');
+    expect(text).not.toContain('CGST');
   });
 
   it('is one page, because a debit note is one document', async () => {

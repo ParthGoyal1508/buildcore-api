@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -27,11 +28,31 @@ export class CreateFuelEntryDto {
   @Min(0)
   quantity!: number;
 
-  @ApiProperty({ description: 'Rupees per litre' })
+  @ApiPropertyOptional({
+    description: 'Rupees per litre. Give this or `amount`.',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
-  rate!: number;
+  rate?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'The rupees paid — the log book\'s "Diesel Advance" (2026-10-15). When given it is ' +
+      'stored as paid, and the rate is derived from it.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  amount?: number;
+
+  @ApiPropertyOptional({ description: 'The fuel card it was drawn on' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  cardNo?: string;
 
   @ApiPropertyOptional({
     description: 'The filling station or diesel supplier',

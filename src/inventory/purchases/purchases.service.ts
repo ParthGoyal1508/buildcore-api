@@ -254,6 +254,14 @@ export class PurchasesService {
             purchaseId: purchase.id,
             grnNumber,
             siteId: dto.siteId,
+            challanNo: dto.grn?.challanNo?.trim() || null,
+            vehicleNo: dto.grn?.vehicleNo?.trim().toUpperCase() || null,
+            receivedQuantity: dto.grn?.receivedQuantity ?? null,
+            acceptedQuantity: dto.grn?.acceptedQuantity ?? null,
+            rejectedQuantity: dto.grn?.rejectedQuantity ?? null,
+            condition: dto.grn?.condition ?? null,
+            batchDetails: dto.grn?.batchDetails?.trim() || null,
+            discrepancy: dto.grn?.discrepancy?.trim() || null,
           },
         });
 

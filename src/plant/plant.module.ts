@@ -14,6 +14,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { EquipmentCategoriesController } from './categories/equipment-categories.controller';
 import { EquipmentDocTypesController } from './doc-types/equipment-doc-types.controller';
 import { EquipmentController } from './equipment/equipment.controller';
+import { EquipmentRegisterService } from './equipment/equipment-register.service';
 import { EquipmentService } from './equipment/equipment.service';
 import { FuelController } from './fuel/fuel.controller';
 import { FuelExceptionsController } from './fuel-exceptions/fuel-exceptions.controller';
@@ -22,16 +23,21 @@ import { FuelRecoveryController } from './fuel-recovery/fuel-recovery.controller
 import { FuelRecoveryService } from './fuel-recovery/fuel-recovery.service';
 import { FuelService } from './fuel/fuel.service';
 import { HireBillsController } from './hire-bills/hire-bills.controller';
+import { HireOrdersController } from './hire-orders/hire-orders.controller';
+import { HireOrdersService } from './hire-orders/hire-orders.service';
 import { HireBillsService } from './hire-bills/hire-bills.service';
 import { LogbookController } from './logbook/logbook.controller';
+import { LogbookSheetService } from './logbook/logbook-sheet.service';
 import { LogbookService } from './logbook/logbook.service';
 import { MaintenanceController } from './maintenance/maintenance.controller';
+import { JobCardService } from './maintenance/job-card.service';
 import { MaintenanceService } from './maintenance/maintenance.service';
 import { PlantRefsService } from './plant-refs.service';
 import { PlantService } from './plant.service';
 import { HireRatesController } from './rates/hire-rates.controller';
 import {
   EquipmentDocumentExpiryRule,
+  EquipmentRegistrationExpiryRule,
   EquipmentServiceDueRule,
 } from './reminders/plant-reminder.rules';
 import { ServiceBillsController } from './service-bills/service-bills.controller';
@@ -89,6 +95,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     ServiceScheduleController,
     MaintenanceController,
     HireBillsController,
+    HireOrdersController,
     SparePartsController,
     ServiceBillsController,
   ],
@@ -98,13 +105,17 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     PlantService,
     PlantRefsService,
     EquipmentService,
+    EquipmentRegisterService,
     LogbookService,
+    LogbookSheetService,
     FuelService,
     FuelExceptionsService,
     FuelRecoveryService,
     ServiceScheduleService,
     MaintenanceService,
+    JobCardService,
     HireBillsService,
+    HireOrdersService,
     SparePartsService,
     ServiceBillsService,
     EquipmentCategoriesService,
@@ -113,6 +124,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     CodeSeriesService,
     AuditLogService,
     EquipmentDocumentExpiryRule,
+    EquipmentRegistrationExpiryRule,
     EquipmentServiceDueRule,
   ],
   // Exported for 008's Project P&L, which sums machinery and fuel cost from this

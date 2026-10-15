@@ -45,7 +45,7 @@ import {
   UpdateNonBoqItemDto,
 } from './dto/bill-line.dto';
 import { ComposeBillPackageDto } from './dto/compose-bill.dto';
-import { RecordDebitDto } from './dto/debit-note.dto';
+import { RaiseDebitNoteDto } from './dto/debit-note.dto';
 import { MeasurementSheetService } from './measurement-sheet.service';
 import { PackageReportsService } from './package-reports.service';
 import { BoqWorkbookReader } from '../../boq/boq-workbook.reader';
@@ -54,6 +54,7 @@ import {
   readCertifiedCopy,
   unreadableCopy,
 } from './certified-copy.reader';
+import { contentDispositionFor } from '../../../common/storage/file-type';
 
 const CONTENT_TYPES = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -381,48 +382,82 @@ export class BillPackageController {
     );
   }
 
-  // ── Debits ───────────────────────────────────────────────────────────────
+  // ── Debit notes ──────────────────────────────────────────────────────────
 
-  @Post('projects/:projectId/bill-package-debits')
+  @Post('projects/:projectId/debit-notes')
   @UseGuards(ProjectLockGuard)
-  @ApiOperation({ summary: 'Record a debit against a project' })
-  async recordDebit(
+  @ApiOperation({
+    summary: 'Raise a debit note on a subcontractor',
+    description:
+      'Against one of the project’s work orders, which names the party, its GSTIN and vendor ' +
+      'code. Numbered `2026-27/001` by financial year; every amount — each line, the work-done ' +
+      'total, CGST + SGST or IGST, and the net rounded to the rupee — is computed here.',
+  })
+  async raiseDebitNote(
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
-    @Body() dto: RecordDebitDto,
+    @Body() dto: RaiseDebitNoteDto,
     @Query('companyId') companyId?: string,
   ) {
-    return this.debits.record(
+    return this.debits.raise(
       rlsContextFor(caller),
       resolveCompanyId(caller, companyId),
       caller.id,
-      { projectId, ...dto },
+      projectId,
+      dto,
     );
   }
 
-  @Post('projects/bill-package-debits/:debitId/apply/:packageId')
+  @Post('projects/:projectId/debit-notes/preview.pdf')
+  @ApiOperation({
+    summary: 'A debit note as it would print, before it is raised',
+    description:
+      'The same body as raising one. Nothing is saved and no number is drawn — the number prints ' +
+      'as "Draft". Computed by the same code as the raise, so the preview and the note agree.',
+  })
+  async previewDebitNote(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('projectId') projectId: string,
+    @Body() dto: RaiseDebitNoteDto,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ): Promise<void> {
+    const bytes = await this.views.debitNotePreview(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      dto,
+    );
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      'inline; filename="Debit Note (draft).pdf"',
+    );
+    res.send(bytes);
+  }
+
+  @Post('projects/debit-notes/:noteId/apply/:packageId')
   @UseGuards(ProjectLockGuard)
   @ApiOperation({
-    summary: 'Recover a debit on one bill',
+    summary: 'Recover a debit note on one bill',
     description:
-      'A debit is recovered on exactly one bill, and the rule holds under two simultaneous ' +
-      'applications — a debit recovered twice is money taken twice. Only a draft accepts one.',
+      'A draft bill to the subcontractor whose work order the note was raised against. A note is ' +
+      'recovered on exactly one bill, and the rule holds under two simultaneous applications.',
   })
-  async applyDebit(
+  async applyDebitNote(
     @UserEntity() caller: AuthenticatedUser,
-    @Param('debitId') debitId: string,
+    @Param('noteId') noteId: string,
     @Param('packageId') packageId: string,
   ) {
-    return this.debits.apply(rlsContextFor(caller), debitId, packageId);
+    return this.debits.apply(rlsContextFor(caller), noteId, packageId);
   }
 
   @Get('projects/bill-packages/:packageId/debits')
   @ApiOperation({
-    summary: 'The debit register as this bill shows it',
+    summary: 'The debit notes as this bill shows them',
     description:
-      'Live for a draft — every debit on the project, because the running total is the point. ' +
-      'For an **issued** bill it is the register *as at issue*, so a debit recorded afterwards ' +
-      'cannot change a document that has been signed.',
+      'On a bill to a subcontractor, the notes raised against its work order — live for a draft, ' +
+      '*as at issue* for an issued bill. On a bill to the client, none: `applicable` is false.',
   })
   async register(
     @UserEntity() caller: AuthenticatedUser,
@@ -431,35 +466,38 @@ export class BillPackageController {
     return this.debits.registerFor(rlsContextFor(caller), packageId);
   }
 
-  // ── The workbook ─────────────────────────────────────────────────────────
-
-  @Get('projects/bill-package-debits/:debitId/note.pdf')
+  @Get('projects/debit-notes/:noteId/document.:format')
   @ApiOperation({
-    summary: 'One debit as a standalone note',
+    summary: 'One debit note as pdf, docx or xlsx',
     description:
-      'The document a subcontractor signs to acknowledge a recovery (028 FR-018). The register ' +
-      'already prints inside the package PDF; this is the single-debit note, carrying the number ' +
-      'allocated when the debit was raised so the register and the document cannot disagree.\n\n' +
-      'Rendered by the **same** renderer as the package PDF, so the letterhead and the columns ' +
-      'match the register the figures came from. The subcontractor is named only where the debit ' +
-      'has been recovered on one of their bills; until then it is a debit against the project.',
+      'In the client’s debit note format: logo and party, the company with its project and ' +
+      'location, number and date, work order, GSTIN, vendor code, nature of work, the items, Work ' +
+      'Done / tax / Net Amount, and the four sign-off boxes.',
   })
-  @ApiResponse({ status: 404, description: 'No such debit in this company.' })
-  async debitNote(
+  @ApiResponse({
+    status: 404,
+    description: 'No such debit note in this company.',
+  })
+  async debitNoteDocument(
     @UserEntity() caller: AuthenticatedUser,
-    @Param('debitId') debitId: string,
+    @Param('noteId') noteId: string,
+    @Param('format') format: string,
     @Res() res: Response,
   ): Promise<void> {
-    const { bytes, filename } = await this.debits.noteDocumentFor(
+    if (format !== 'xlsx' && format !== 'pdf' && format !== 'docx') {
+      throw new NotFoundException(`No ${format} rendering of a debit note.`);
+    }
+    const { bytes, filename } = await this.views.debitNoteDocument(
       rlsContextFor(caller),
-      caller.companyId,
-      debitId,
+      noteId,
+      format,
     );
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', CONTENT_TYPES[format]);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     res.send(bytes);
   }
+
+  // ── The workbook ─────────────────────────────────────────────────────────
 
   @Get('projects/bill-packages/:packageId/document.:format')
   @ApiOperation({
@@ -486,7 +524,7 @@ export class BillPackageController {
       { abstractOnly: part === 'abstract' },
     );
     res.setHeader('Content-Type', CONTENT_TYPES[format]);
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     if (missingFields.length > 0) {
       res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
     }
@@ -516,7 +554,7 @@ export class BillPackageController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     // FR-027a. A workbook is a file download, so a list of gaps recorded on the row and absent
     // from the response is a gap nobody is told about.
     if (missingFields.length > 0) {
@@ -548,7 +586,7 @@ export class BillPackageController {
     );
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     if (missingFields.length > 0) {
       res.setHeader('X-Bill-Package-Missing-Fields', missingFields.join(','));
     }

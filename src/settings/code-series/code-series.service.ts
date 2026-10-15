@@ -2,7 +2,14 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { CodeSeriesType } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 
-import { CODE_SERIES_FORMATS, formatCode } from './code-series.formats';
+import {
+  CODE_SERIES_FORMATS,
+  type CodeSeriesFormat,
+  NAMED_SERIES_DEFAULT,
+  type NamedSeries,
+  type NamedSeriesFormat,
+  formatCode,
+} from './code-series.formats';
 
 /**
  * Per-company numbering series, allocated atomically.
@@ -21,6 +28,89 @@ import { CODE_SERIES_FORMATS, formatCode } from './code-series.formats';
 @Injectable()
 export class CodeSeriesService {
   /**
+   * The format a company has set for a counted series in Settings → Numbering, else the built-in
+   * one (2026-10-15). Null for a series nobody formats, which keeps `{shortCode}-{infix}-0001`.
+   */
+  async countedFormat(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    seriesType: CodeSeriesType,
+  ): Promise<CodeSeriesFormat | null> {
+    const row = await tx.codeFormat.findUnique({
+      where: { companyId_series: { companyId, series: seriesType } },
+    });
+    if (row) {
+      return {
+        prefix: row.prefix,
+        base: row.base,
+        step: row.step,
+        width: row.width,
+      };
+    }
+    return CODE_SERIES_FORMATS[seriesType] ?? null;
+  }
+
+  /** The format a company has set for machines or assets, else `JCB01/2027`'s. */
+  async namedFormat(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    series: NamedSeries,
+  ): Promise<NamedSeriesFormat> {
+    const row = await tx.codeFormat.findUnique({
+      where: { companyId_series: { companyId, series } },
+    });
+    return row
+      ? { width: row.width, separator: row.separator }
+      : NAMED_SERIES_DEFAULT;
+  }
+
+  /**
+   * The code the next allocation would give, without allocating it — what a creation form shows.
+   * Steps over any code `isTaken` reports, as `next` does.
+   */
+  async peek(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    seriesType: CodeSeriesType,
+    isTaken?: (code: string) => Promise<boolean>,
+  ): Promise<string | null> {
+    const format = await this.countedFormat(tx, companyId, seriesType);
+    if (!format) return null;
+    const sequence = await tx.codeSequence.findUnique({
+      where: { companyId_seriesType: { companyId, seriesType } },
+      select: { lastNumber: true },
+    });
+    let n = (sequence?.lastNumber ?? 0) + 1;
+    for (let guard = 0; guard < 10_000; guard += 1, n += 1) {
+      const code = formatCode(format, n);
+      if (!isTaken || !(await isTaken(code))) return code;
+    }
+    return null;
+  }
+
+  /**
+   * Allocates the next code. `isTaken`, where given, steps over a code already held — a record
+   * created with a typed code before the series was enforced, or one numbered under an earlier
+   * format — rather than failing on the unique index (2026-10-15).
+   */
+  async next(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    seriesType: CodeSeriesType,
+    /** Ignored by a series with a format, which has no infix. */
+    infix: string,
+    isTaken?: (code: string) => Promise<boolean>,
+  ): Promise<string> {
+    for (let guard = 0; guard < 10_000; guard += 1) {
+      const code = await this.allocate(tx, companyId, seriesType, infix);
+      if (!isTaken || !(await isTaken(code))) return code;
+    }
+    throw new NotFoundException(
+      `No free ${seriesType} code could be allocated for company ${companyId}`,
+    );
+  }
+
+  /**
    * Advances a company's series and returns the formatted code.
    *
    * The increment and the read are one `UPDATE ... RETURNING`, which Postgres
@@ -31,11 +121,10 @@ export class CodeSeriesService {
    * changes only the prefix of subsequent codes and leaves the sequence unbroken —
    * the same rule employee codes follow.
    */
-  async next(
+  private async allocate(
     tx: Prisma.TransactionClient,
     companyId: string,
     seriesType: CodeSeriesType,
-    /** Ignored by a series listed in `CODE_SERIES_FORMATS`, which has no infix. */
     infix: string,
   ): Promise<string> {
     // Created on first use rather than seeded per company: a series that no feature
@@ -64,7 +153,7 @@ export class CodeSeriesService {
     // absent from those three: `@@unique([companyId, code])` is what keeps two
     // companies apart, not the prefix, and the people quoting a vendor code down the
     // phone do not want four more characters in front of it.
-    const format = CODE_SERIES_FORMATS[seriesType];
+    const format = await this.countedFormat(tx, companyId, seriesType);
     if (format) return formatCode(format, rows[0].lastNumber);
 
     const company = await tx.company.findUnique({

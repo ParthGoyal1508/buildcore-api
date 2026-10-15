@@ -9,6 +9,7 @@ import {
   AuditEntityType,
   FuelAttribution,
   FuelExceptionStatus,
+  HireBillBasis,
   HireBillStatus,
   OperatorRecoveryStatus,
   Permission,
@@ -355,6 +356,12 @@ export class FuelRecoveryService {
       rate: Number(bill.rate),
       tdsRate: bill.tdsRate === null ? null : Number(bill.tdsRate),
       deductions: bill.fuelDeductions.map((row) => Number(row.amount)),
+      // A monthly bill's gross is its pro-rated rent, and its own deduction and hold stand
+      // (2026-10-15).
+      ...(bill.basis === HireBillBasis.monthly
+        ? { grossAmount: Number(bill.grossAmount) }
+        : {}),
+      otherDeductions: [Number(bill.deductionAmount), Number(bill.holdAmount)],
     });
 
     await tx.hireBill.update({

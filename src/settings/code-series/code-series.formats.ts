@@ -46,6 +46,25 @@ export const CODE_SERIES_FORMATS: Partial<
   [CodeSeriesType.VENDORS]: { prefix: '2022', base: 0, step: 1, width: 3 },
   /** Work orders: `1500001`, `1500002`. The 150 is fixed. */
   [CodeSeriesType.WORK_ORDER]: { prefix: '150', base: 0, step: 1, width: 4 },
+  /**
+   * The plant and store documents (2026-10-15), numbered as the client's forms print them:
+   * `JC-0001` (maintenance job card), `MIS-0001` (material issue slip), `DC-0001` (delivery
+   * challan), `STS-0001` (stock transfer slip).
+   */
+  [CodeSeriesType.JOB_CARD]: { prefix: 'JC-', base: 0, step: 1, width: 4 },
+  [CodeSeriesType.ISSUE_SLIP]: { prefix: 'MIS-', base: 0, step: 1, width: 4 },
+  [CodeSeriesType.DELIVERY_CHALLAN]: {
+    prefix: 'DC-',
+    base: 0,
+    step: 1,
+    width: 4,
+  },
+  [CodeSeriesType.STOCK_TRANSFER]: {
+    prefix: 'STS-',
+    base: 0,
+    step: 1,
+    width: 4,
+  },
 };
 
 /** Renders the `n`th allocation of a series. */
@@ -54,4 +73,86 @@ export function formatCode(format: CodeSeriesFormat, n: number): string {
     format.prefix +
     String(format.base + n * format.step).padStart(format.width, '0')
   );
+}
+
+/** The series a company configures in Settings → Numbering (2026-10-15). */
+export const COUNTED_SERIES = [
+  'PROJECTS',
+  'VENDORS',
+  'WORK_ORDER',
+  // No 'NOC' (removed 2026-10-15): NOCs are uploaded, not generated here, so nothing numbers
+  // them. The enum value stays in the database, unused, rather than a migration to drop it.
+  'JOB_CARD',
+  'ISSUE_SLIP',
+  'DELIVERY_CHALLAN',
+  'STOCK_TRANSFER',
+] as const;
+export const NAMED_SERIES = ['EQUIPMENT', 'ASSETS'] as const;
+export type CountedSeries = (typeof COUNTED_SERIES)[number];
+export type NamedSeries = (typeof NAMED_SERIES)[number];
+export type NumberingSeries = CountedSeries | NamedSeries;
+
+/**
+ * A named series — machines and assets: letters taken from the item's name, a serial that counts
+ * within those letters, a separator, and the manufacturing year. `JCB01/2027`, `TM01/2024`.
+ */
+export interface NamedSeriesFormat {
+  /** Digits in the serial. `2` → `01`. */
+  width: number;
+  /** Between the serial and the year. */
+  separator: string;
+}
+
+/** Parth Realcon's: two-digit serial, a slash, the year. */
+export const NAMED_SERIES_DEFAULT: NamedSeriesFormat = {
+  width: 2,
+  separator: '/',
+};
+
+/** `JCB` + 1 + 2027 → `JCB01/2027`. */
+export function namedCode(
+  format: NamedSeriesFormat,
+  prefix: string,
+  serial: number,
+  year: number,
+): string {
+  return `${prefix}${String(serial).padStart(format.width, '0')}${
+    format.separator
+  }${year}`;
+}
+
+/**
+ * The serial `code` already uses under `prefix`, or null if it is not one of this format's codes —
+ * so a plate number somebody typed (`TMX-44`) never moves a series, and `TM01/2024` does not count
+ * towards `T`.
+ */
+export function namedSerialOf(
+  format: NamedSeriesFormat,
+  code: string,
+  prefix: string,
+): number | null {
+  const escape = (value: string) =>
+    value.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+  const match = new RegExp(
+    `^${escape(prefix)}(\\d+)${escape(format.separator)}\\d{4}$`,
+  ).exec(code);
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * The letters a code starts with, from the item's name: a short make or type leading the name is
+ * kept whole ("JCB 3DX Backhoe" → `JCB`), otherwise the initials ("Transit Mixer" → `TM`), at most
+ * three; a single long word gives its first two letters ("Tipper" → `TI`).
+ */
+export function namedPrefixFor(name: string): string {
+  const words = name
+    .toUpperCase()
+    .split(/[^A-Z]+/)
+    .filter(Boolean);
+  if (words.length === 0) return 'EQ';
+  const [first] = words;
+  if (first.length >= 2 && first.length <= 3) return first;
+  const initials = words.map((word) => word[0]).join('');
+  if (initials.length >= 2) return initials.slice(0, 3);
+  return first.slice(0, 2);
 }

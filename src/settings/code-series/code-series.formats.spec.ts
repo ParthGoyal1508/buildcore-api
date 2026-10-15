@@ -1,6 +1,10 @@
 import { CodeSeriesType } from '@prisma/client';
 
-import { CODE_SERIES_FORMATS, formatCode } from './code-series.formats';
+import {
+  CODE_SERIES_FORMATS,
+  COUNTED_SERIES,
+  formatCode,
+} from './code-series.formats';
 
 /** The format of a series, applied to its first few allocations. */
 const firstFew = (type: CodeSeriesType, count = 3) => {
@@ -35,6 +39,11 @@ describe('code series business formats', () => {
       '1500002',
       '1500003',
     ]);
+  });
+
+  it('numbers no NOCs — they are uploaded, not generated (2026-10-15)', () => {
+    expect(CODE_SERIES_FORMATS[CodeSeriesType.NOC]).toBeUndefined();
+    expect(COUNTED_SERIES).not.toContain('NOC');
   });
 
   it('keeps the padding past the first nine', () => {

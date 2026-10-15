@@ -11,7 +11,10 @@ import {
   IsString,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
+
+import { JobCardDto } from './job-card.dto';
 
 export class CreateMaintenanceJobDto {
   @ApiProperty()
@@ -36,6 +39,15 @@ export class CreateMaintenanceJobDto {
   @IsOptional()
   @IsString()
   linkedServiceScheduleId?: string;
+
+  @ApiPropertyOptional({
+    type: JobCardDto,
+    description: 'The job card, when the job is opened from the job card form',
+  })
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => JobCardDto)
+  card?: JobCardDto;
 }
 
 /**

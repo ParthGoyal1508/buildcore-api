@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,20 +8,24 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { formFormatOf, sendForm } from '../../common/form-document';
 import {
   CreateHireBillDto,
   ListHireBillsDto,
   PayHireBillDto,
+  UpdateHireBillDto,
 } from './dto/hire-bill.dto';
 import { HireBillsService } from './hire-bills.service';
 
@@ -65,6 +70,37 @@ export class HireBillsController {
     @Ip() ipAddress: string,
   ) {
     return this.hireBills.create(caller, dto, ipAddress);
+  }
+
+  @Get(':id/document.:format')
+  @ApiOperation({
+    summary:
+      "The bill in the client's VEHICLE HIRING BILL format — PDF, Excel or Word",
+  })
+  async document(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('format') format: string,
+    @Res() res: Response,
+  ) {
+    const kind = formFormatOf(format, ['pdf', 'xlsx', 'docx']);
+    if (!kind)
+      throw new BadRequestException('Format must be pdf, xlsx or docx');
+    sendForm(res, await this.hireBills.document(caller, id, kind));
+  }
+
+  @Patch(':id')
+  @ApiOperation({
+    summary:
+      'Correct an unverified bill — references, average, deduction, hold',
+  })
+  async update(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateHireBillDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.hireBills.update(caller, id, dto, ipAddress);
   }
 
   @Patch(':id/verify')

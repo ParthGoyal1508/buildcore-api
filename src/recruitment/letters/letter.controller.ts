@@ -29,6 +29,7 @@ import {
   GenerateLetterDto,
   UpdateLetterTemplateDto,
 } from './dto/letter.dto';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 @ApiTags('Recruitment')
 @ApiBearerAuth()
@@ -191,7 +192,7 @@ export class LetterController {
   ) {
     const { buffer, filename } = await this.letters.download(caller, id, ip);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
     res.send(buffer);
   }
 }

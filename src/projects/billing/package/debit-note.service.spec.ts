@@ -1,298 +1,224 @@
-import { Prisma } from '@prisma/client';
+import { BillTaxBasis, Prisma } from '@prisma/client';
 
-import { BillPdfRenderer } from '../workbook/bill-pdf.renderer';
-import { DebitNoteService } from './debit-note.service';
+import { DebitNoteService, noteTaxes } from './debit-note.service';
 
 /**
- * The debit register (023 US5, tasks T062, T063).
+ * Debit notes (023 US5, reshaped 2026-10-15 to the client's DV-04 format).
  *
- * Two of these are about money rather than bookkeeping. A debit recovered twice is money taken
- * twice (T062), and an issued bill whose register keeps growing is a signed document that changes
- * after it was signed (T063).
+ * Two of these are about money rather than bookkeeping: a note recovered twice is money taken
+ * twice, and a note recovered from the wrong party — or from the client — is a claim against
+ * somebody who owes nothing.
  */
 
 const d = (value: string | number) => new Prisma.Decimal(value);
 
-interface DebitFixture {
-  id: string;
-  groupHeading: string | null;
-  description: string;
-  /** Carried separately from `amountWithTax`, because the service must not derive one from the
-   * other and a fake that collapsed them would pass whether it did or not. */
-  amount?: string;
-  amountWithTax: string;
-  recoveredOnPackageId?: string | null;
-  recoveredOnSequenceNo?: number | null;
-  recordedAt: string;
-}
-
-function build(opts: {
-  packageStatus?: string;
-  issuedAt?: string | null;
-  debits?: DebitFixture[];
-  /** How many rows the conditional update claims. 0 means somebody else got there first. */
-  claimCount?: number;
-}) {
-  const debits = opts.debits ?? [];
-  const updates: Record<string, unknown>[] = [];
-
-  const hydrate = (debit: DebitFixture) => ({
-    id: debit.id,
-    groupHeading: debit.groupHeading,
-    description: debit.description,
-    location: null,
-    nos: null,
-    length: null,
-    width: null,
-    quantity: null,
-    unit: null,
-    rate: d(100),
-    amount: d(debit.amount ?? debit.amountWithTax),
-    amountWithTax: d(debit.amountWithTax),
-    recoveredOnPackageId: debit.recoveredOnPackageId ?? null,
-    recoveredOnPackage: debit.recoveredOnSequenceNo
-      ? { sequenceNo: debit.recoveredOnSequenceNo }
-      : null,
-    recordedAt: new Date(debit.recordedAt),
+describe('the tax a note prints', () => {
+  it('splits intra-state GST evenly, each half rounded, as the format does', () => {
+    // The format's own figures: 35,31,213.64 at 18% → 3,17,809.23 twice.
+    const taxes = noteTaxes(d('3531213.64'), d(18), BillTaxBasis.intra_state);
+    expect(taxes.lines.map((line) => line.label)).toEqual([
+      'CGST 9%',
+      'SGST 9%',
+    ]);
+    expect(taxes.lines.map((line) => line.amount.toFixed(2))).toEqual([
+      '317809.23',
+      '317809.23',
+    ]);
+    expect(taxes.total.toFixed(2)).toBe('635618.46');
   });
 
+  it('prints one IGST line inter-state', () => {
+    const taxes = noteTaxes(d('1000'), d(18), BillTaxBasis.inter_state);
+    expect(taxes.lines).toHaveLength(1);
+    expect(taxes.lines[0].label).toBe('IGST 18%');
+    expect(taxes.total.toFixed(2)).toBe('180.00');
+  });
+
+  it('prints a migrated note’s stored tax as one GST line', () => {
+    const taxes = noteTaxes(d('125000'), d(18), null, d('22500'));
+    expect(taxes.lines).toEqual([{ label: 'GST 18%', amount: d('22500') }]);
+  });
+});
+
+function build(opts: {
+  direction?: 'to_subcontractor' | 'to_client';
+  status?: string;
+  packageWorkOrderId?: string | null;
+  noteWorkOrderId?: string | null;
+  claimCount?: number;
+  existingNumbers?: string[];
+}) {
+  const created: Record<string, unknown>[] = [];
+  const noteRow = (data: Record<string, unknown> = {}) => ({
+    id: 'note-1',
+    companyId: 'c-1',
+    noteNumber: '2026-27/001',
+    noteDate: new Date('2026-06-29'),
+    natureOfWork: 'O&M of Highway',
+    workOrderId: 'wo-1',
+    workOrder: { code: '16010503', partnerId: null },
+    taxBasis: BillTaxBasis.intra_state,
+    gstPercent: d(18),
+    amount: d(0),
+    taxAmount: d(0),
+    netAmount: d(0),
+    recoveredOnPackageId: null,
+    recoveredOnPackage: null,
+    recordedAt: new Date('2026-06-29'),
+    lines: [],
+    ...data,
+  });
   const tx = {
     $executeRaw: async () => 0,
     project: { findFirst: async () => ({ id: 'p-1' }) },
+    workOrder: {
+      findFirst: async () => ({
+        id: 'wo-1',
+        workDetail: 'O&M of Highway',
+        partnerId: null,
+      }),
+    },
     billPackage: {
       findFirst: async () => ({
         id: 'pkg-1',
         projectId: 'p-1',
-        status: opts.packageStatus ?? 'draft',
-        sequenceNo: 12,
-        issuedAt: opts.issuedAt ? new Date(opts.issuedAt) : null,
+        status: opts.status ?? 'draft',
+        sequenceNo: 7,
+        issuedAt: null,
+        direction: opts.direction ?? 'to_subcontractor',
+        raBill:
+          opts.packageWorkOrderId === null
+            ? null
+            : { workOrderId: opts.packageWorkOrderId ?? 'wo-1' },
       }),
     },
-    billPackageDebit: {
-      create: async (args: { data: Record<string, unknown> }) =>
-        hydrate({
-          id: 'debit-new',
-          groupHeading: (args.data.groupHeading as string) ?? null,
-          description: args.data.description as string,
-          amount: String(args.data.amount),
-          amountWithTax: String(args.data.amountWithTax),
-          recordedAt: '2026-01-15',
-        }),
-      updateMany: async (args: {
-        where: Record<string, unknown>;
-        data: Record<string, unknown>;
-      }) => {
-        updates.push(args.data);
-        if (opts.claimCount !== undefined) return { count: opts.claimCount };
-        // Honour the `recoveredOnPackageId: null` predicate the service relies on — a fake that
-        // ignored it would let the test pass against a read-then-write implementation, which is the
-        // implementation this suite exists to rule out.
-        const target = debits.find((debit) => debit.id === args.where.id);
-        const free = target && !target.recoveredOnPackageId;
-        return { count: free ? 1 : 0 };
-      },
-      findFirst: async (args: { where: Record<string, unknown> }) => {
-        const found = debits.find((debit) => debit.id === args.where.id);
-        return found ? hydrate(found) : null;
-      },
-      findFirstOrThrow: async (args: { where: Record<string, unknown> }) => {
-        const found = debits.find((debit) => debit.id === args.where.id);
-        if (!found) throw new Error('not found');
-        return hydrate(found);
-      },
-      findMany: async (args: { where: Record<string, unknown> }) => {
-        const cutoff = (args.where.recordedAt as { lte?: Date } | undefined)
-          ?.lte;
-        return debits
-          .filter((debit) =>
-            cutoff ? new Date(debit.recordedAt) <= cutoff : true,
-          )
-          .sort(
-            (a, b) =>
-              (a.groupHeading ?? '').localeCompare(b.groupHeading ?? '') ||
-              a.recordedAt.localeCompare(b.recordedAt),
-          )
-          .map(hydrate);
+    billPackageDebitNote: {
+      findMany: async (args: { where: Record<string, unknown> }) =>
+        'noteNumber' in args.where
+          ? (opts.existingNumbers ?? []).map((noteNumber) => ({ noteNumber }))
+          : [],
+      findFirst: async () => ({
+        id: 'note-1',
+        workOrderId:
+          opts.noteWorkOrderId === undefined ? 'wo-1' : opts.noteWorkOrderId,
+        recoveredOnPackageId: 'pkg-earlier',
+        recoveredOnPackage: { sequenceNo: 3 },
+      }),
+      findFirstOrThrow: async () => noteRow({ recoveredOnPackageId: 'pkg-1' }),
+      updateMany: async () => ({ count: opts.claimCount ?? 1 }),
+      create: async (args: { data: Record<string, unknown> }) => {
+        created.push(args.data);
+        return noteRow({ ...args.data, lines: [] });
       },
     },
+    billPackageDebit: { updateMany: async () => ({ count: 1 }) },
   };
-
   const prisma = {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
-
+  const sources = { vendorIdentitySource: () => null };
   return {
-    // A stub allocator, not the real `CodeSeriesService`: these tests are about the register and
-    // the one-recovery rule, and a per-company sequence table is not part of either.
     service: new DebitNoteService(
       prisma as never,
-      {
-        next: async () => 'PRPL-DN-0001',
-      } as never,
-      new BillPdfRenderer(),
+      {} as never,
+      sources as never,
     ),
-    updates,
+    created,
   };
 }
 
-const THREE: DebitFixture[] = [
-  {
-    id: 'debit-1',
-    groupHeading: 'Debit against the ATMS Equipment Missing at site',
-    description: 'PTZ camera missing',
-    amountWithTax: '147500.00',
-    recordedAt: '2026-01-10',
-  },
-  {
-    id: 'debit-2',
-    groupHeading: 'Debit against the ATMS Equipment Missing at site',
-    description: 'VSDS cable theft KM 215',
-    amountWithTax: '59000.00',
-    recoveredOnPackageId: 'pkg-1',
-    recoveredOnSequenceNo: 12,
-    recordedAt: '2026-01-11',
-  },
-  {
-    id: 'debit-3',
-    groupHeading: 'Debit against Civil',
-    description: 'Shoulder reinstatement not done',
-    amountWithTax: '23600.00',
-    recoveredOnPackageId: 'pkg-earlier',
-    recoveredOnSequenceNo: 9,
-    recordedAt: '2026-01-12',
-  },
-];
+const ctx = { isSuperAdmin: true } as never;
 
-describe('applying a debit', () => {
-  it('refuses a second application, naming the bill that already recovered it', async () => {
-    // T062, FR-037. A debit recovered twice is money taken twice, and the refusal names the first
-    // bill because the person who hit this needs to go and look at it rather than at this one.
-    const { service } = build({ debits: THREE });
-
-    await expect(
-      service.apply({ isSuperAdmin: true }, 'debit-3', 'pkg-1'),
-    ).rejects.toMatchObject({
-      response: { code: 'DEBIT_ALREADY_RECOVERED' },
+describe('raising a note', () => {
+  it('computes every figure and numbers it within the financial year', async () => {
+    const { service, created } = build({
+      existingNumbers: ['2026-27/001', '2026-27/004', 'PRPL-DN-0009'],
     });
+    await service.raise(ctx, 'c-1', 'u-1', 'p-1', {
+      workOrderId: 'wo-1',
+      noteDate: '2026-06-29',
+      gstPercent: '18',
+      taxBasis: BillTaxBasis.intra_state,
+      lines: [
+        {
+          description: 'Solar Panel (335 W)',
+          unit: 'Nos.',
+          quantity: '11',
+          rate: '13550',
+        },
+        {
+          description: 'Chute drain',
+          unit: 'RMT',
+          quantity: '697',
+          rate: '2700',
+        },
+      ],
+    });
+    const data = created[0];
+    // The highest under this year's prefix plus one; the old-style number does not count.
+    expect(data.noteNumber).toBe('2026-27/005');
+    expect((data.amount as Prisma.Decimal).toFixed(2)).toBe('2030950.00');
+    expect((data.taxAmount as Prisma.Decimal).toFixed(2)).toBe('365571.00');
+    // Rounded to the rupee, as the format prints the net.
+    expect((data.netAmount as Prisma.Decimal).toFixed(2)).toBe('2396521.00');
+    // The nature of work defaults to the work order's own description.
+    expect(data.natureOfWork).toBe('O&M of Highway');
   });
 
-  it('decides the race in the database, so one of two simultaneous applications loses', async () => {
-    // FR-037a, and the reason the rule is not a read followed by a write. Two callers applying one
-    // debit at the same moment both pass a read-then-write check and the second silently replaces
-    // the first — after which the debit is recovered on two bills. Here the conditional update
-    // claims no row, and claiming no row *is* the refusal.
-    const { service } = build({ debits: THREE, claimCount: 0 });
-
-    await expect(
-      service.apply({ isSuperAdmin: true }, 'debit-1', 'pkg-1'),
-    ).rejects.toMatchObject({
-      response: { code: 'DEBIT_ALREADY_RECOVERED' },
+  it('starts the series again in April', async () => {
+    const { service, created } = build({ existingNumbers: ['2025-26/031'] });
+    await service.raise(ctx, 'c-1', null, 'p-1', {
+      workOrderId: 'wo-1',
+      noteDate: '2026-04-01',
+      gstPercent: '18',
+      taxBasis: BillTaxBasis.inter_state,
+      lines: [{ description: 'Deck Light 80W', quantity: '1', rate: '3500' }],
     });
+    expect(created[0].noteNumber).toBe('2026-27/001');
+  });
+});
+
+describe('recovering a note', () => {
+  it('recovers on a draft bill to the same subcontractor', async () => {
+    const { service } = build({});
+    const row = await service.apply(ctx, 'note-1', 'pkg-1');
+    expect(row.recoveredOnPackageId).toBe('pkg-1');
   });
 
-  it('applies a free debit', async () => {
-    const { service, updates } = build({ debits: THREE });
-
-    await service.apply({ isSuperAdmin: true }, 'debit-1', 'pkg-1');
-
-    expect(updates[0]).toEqual({ recoveredOnPackageId: 'pkg-1' });
+  it('refuses a bill to the client', async () => {
+    const { service } = build({ direction: 'to_client' });
+    await expect(service.apply(ctx, 'note-1', 'pkg-1')).rejects.toThrow(
+      /subcontractor/,
+    );
   });
 
-  it('refuses to apply to a package that has been issued', async () => {
-    // FR-037b. Applying afterwards either moves a figure FR-044 froze or records a recovery the
-    // bill never made, and a subcontractor would find out when their payment came up short.
-    const { service } = build({
-      debits: THREE,
-      packageStatus: 'issued',
-      issuedAt: '2026-01-20',
-    });
+  it('refuses a bill under a different work order', async () => {
+    const { service } = build({ noteWorkOrderId: 'wo-2' });
+    await expect(service.apply(ctx, 'note-1', 'pkg-1')).rejects.toThrow(
+      /different work order/,
+    );
+  });
 
-    await expect(
-      service.apply({ isSuperAdmin: true }, 'debit-1', 'pkg-1'),
-    ).rejects.toMatchObject({ response: { code: 'BILL_PACKAGE_ISSUED' } });
+  it('refuses an issued bill', async () => {
+    const { service } = build({ status: 'issued' });
+    await expect(service.apply(ctx, 'note-1', 'pkg-1')).rejects.toThrow(
+      /has been issued/,
+    );
+  });
+
+  it('refuses a second recovery, naming the bill that already took it', async () => {
+    const { service } = build({ claimCount: 0 });
+    await expect(service.apply(ctx, 'note-1', 'pkg-1')).rejects.toThrow(
+      /RA-03/,
+    );
   });
 });
 
 describe('the register', () => {
-  it('shows every debit on the project from a draft, grouped under its heading', async () => {
-    // FR-039, FR-040. The running total is the point of a register, so a debit recovered on an
-    // earlier bill still appears — and the grouping is how a subcontractor finds which dispute a
-    // line belongs to.
-    const { service } = build({ debits: THREE });
-
-    const register = await service.registerFor({ isSuperAdmin: true }, 'pkg-1');
-
-    expect(register.asAtIssue).toBe(false);
-    expect(register.groups.map((group) => group.heading)).toEqual([
-      'Debit against Civil',
-      'Debit against the ATMS Equipment Missing at site',
-    ]);
-    expect(register.total).toBe('230100.00');
-    // What block B's mechanical-debit row carries: only what *this* package recovers.
-    expect(register.recoveredOnThisPackage).toBe('59000.00');
-  });
-
-  it('names the earlier bill a debit was recovered on', async () => {
-    const { service } = build({ debits: THREE });
-
-    const register = await service.registerFor({ isSuperAdmin: true }, 'pkg-1');
-    const civil = register.groups.find(
-      (group) => group.heading === 'Debit against Civil',
-    );
-
-    expect(civil?.rows[0].recoveredOn).toBe('RA-09');
-  });
-
-  it('does not grow after the package is issued', async () => {
-    // T063, FR-039a, and the resolution of the contradiction `checklists/silent-failure.md` CHK025
-    // found. FR-039 wants the register live; FR-028 wants a bill produced twice to be identical.
-    // Both hold only if an issued bill's register is the register as at issue.
-    const { service } = build({
-      packageStatus: 'issued',
-      issuedAt: '2026-01-11',
-      debits: [
-        ...THREE,
-        {
-          id: 'debit-4',
-          groupHeading: 'Debit against Civil',
-          description: 'Recorded after the bill went out',
-          amountWithTax: '1000000.00',
-          recordedAt: '2026-02-01',
-        },
-      ],
-    });
-
-    const register = await service.registerFor({ isSuperAdmin: true }, 'pkg-1');
-    const descriptions = register.groups.flatMap((group) =>
-      group.rows.map((row) => row.description),
-    );
-
-    expect(register.asAtIssue).toBe(true);
-    expect(descriptions).not.toContain('Recorded after the bill went out');
-    // Two rows, not four: the one recorded on 12 January is also after this bill's issue.
-    expect(descriptions).toHaveLength(2);
-  });
-});
-
-describe('recording a debit', () => {
-  it('carries the tax-inclusive amount as entered rather than deriving it', async () => {
-    // FR-036. The real register shows both, and the tax on a debit is not always the bill's own
-    // rate — a stolen item is charged at the rate it was bought at. Deriving it would quietly
-    // re-rate every historical debit the first time a statute changed.
-    const { service } = build({});
-
-    const row = await service.record({ isSuperAdmin: true }, 'c-1', 'u-1', {
-      projectId: 'p-1',
-      description: 'PTZ camera missing',
-      rate: '125000.00',
-      amount: '125000.00',
-      amountWithTax: '147500.00',
-    });
-
-    // The two must differ, and by the amount of tax the entry stated — not by a rate this code
-    // applied. An earlier version of this fake hydrated both fields from `amountWithTax`, which
-    // made the assertion pass whether or not the service derived it.
-    expect(row.amount).toBe('125000.00');
-    expect(row.amountWithTax).toBe('147500.00');
+  it('does not apply to a bill to the client', async () => {
+    const { service } = build({ direction: 'to_client' });
+    const register = await service.registerFor(ctx, 'pkg-1');
+    expect(register.applicable).toBe(false);
+    expect(register.notes).toEqual([]);
   });
 });

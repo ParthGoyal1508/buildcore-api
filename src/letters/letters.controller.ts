@@ -21,6 +21,7 @@ import {
   ReissueLetterDto,
 } from './dto/letter.dto';
 import { LettersService } from './letters.service';
+import { contentDispositionFor } from '../common/storage/file-type';
 
 /**
  * Letters (017 US3, US4, US6).
@@ -170,7 +171,7 @@ export class LettersController {
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="${view.letterKindKey}-v${view.version}.pdf"`,
+      contentDispositionFor(`${view.letterKindKey}-v${view.version}.pdf`),
     );
     res.send(data);
   }

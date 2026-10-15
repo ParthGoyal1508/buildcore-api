@@ -648,6 +648,8 @@ export class CompaniesService {
     gstin: string | null;
     pan: string | null;
     logo: Buffer | null;
+    /** "Deoli, Rajasthan" — where a work order's disputes are heard (2026-10-15). */
+    place: string | null;
   }> {
     const company = await withRlsContext(
       this.prisma,
@@ -687,6 +689,7 @@ export class CompaniesService {
       gstin: company.gstin,
       pan: company.pan,
       logo,
+      place: place || null,
     };
   }
 

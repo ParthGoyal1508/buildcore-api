@@ -7,6 +7,7 @@ import {
 import {
   AuditAction,
   AuditEntityType,
+  CodeSeriesType,
   Prisma,
   StockLedgerType,
 } from '@prisma/client';
@@ -25,7 +26,8 @@ import { IndentFulfilmentService } from '../indents/indent-fulfilment.service';
 import { InventoryRefsService } from '../inventory-refs.service';
 import { StockService } from '../stock/stock.service';
 import { toNumber } from '../stock/stock.types';
-import { CreateIssueDto, ListIssuesDto } from './dto/issue.dto';
+import { CodeSeriesService } from '../../settings/code-series/code-series.service';
+import { CreateIssueDto, ListIssuesDto, ReturnIssueDto } from './dto/issue.dto';
 
 export interface IssueView {
   id: string;
@@ -39,6 +41,10 @@ export interface IssueView {
   date: Date;
   quantity: number;
   issuedTo: string;
+  projectId: string | null;
+  projectName: string | null;
+  vendorId: string | null;
+  vendorName: string | null;
   activityId: string | null;
   activityName: string | null;
   boqItemId: string | null;
@@ -46,7 +52,16 @@ export interface IssueView {
   indentLineId: string | null;
   remarks: string | null;
   createdAt: Date;
+  /** The issue slip number, `MIS-0001` (2026-10-15); null on an issue recorded before slips. */
+  slipNo: string | null;
+  equipmentNo: string | null;
+  returnedQuantity: number | null;
+  returnedOn: Date | null;
+  receivedBy: string | null;
 }
+
+/** Issue slips number from their own series, under the store's short infix. */
+const ISSUE_SLIP_INFIX = 'MIS';
 
 export interface PaginatedIssues {
   issues: IssueView[];
@@ -75,6 +90,7 @@ export class IssuesService {
     private readonly refs: InventoryRefsService,
     private readonly projects: ProjectsService,
     private readonly indentFulfilment: IndentFulfilmentService,
+    private readonly codeSeries: CodeSeriesService,
   ) {}
 
   /**
@@ -119,11 +135,33 @@ export class IssuesService {
   ): Promise<IssueView> {
     const targetCompanyId = this.refs.targetCompanyOf(caller, companyId);
 
-    const [item, siteName, workRefs] = await Promise.all([
-      this.refs.requireItem(caller, dto.itemId, targetCompanyId),
-      this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
-      this.resolveWorkRefs(caller, dto),
-    ]);
+    const [item, siteName, workRefs, siteProjectId, vendorName] =
+      await Promise.all([
+        this.refs.requireItem(caller, dto.itemId, targetCompanyId),
+        this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
+        this.resolveWorkRefs(caller, dto),
+        dto.projectId
+          ? Promise.resolve(null)
+          : this.refs.projectOfSite(caller, dto.siteId),
+        dto.vendorId
+          ? this.refs.requireVendorName(caller, dto.vendorId)
+          : Promise.resolve(null),
+      ]);
+
+    // The project named, else the store's own (2026-10-15) — a site store belongs to the
+    // project it serves, so most issues need no choice at all.
+    const projectId = dto.projectId ?? siteProjectId;
+    const project = projectId
+      ? await this.refs.requireProject(caller, projectId, targetCompanyId)
+      : null;
+
+    // A person, or failing that the vendor or subcontractor: an issue always says who took it.
+    const issuedTo = dto.issuedTo?.trim() || vendorName;
+    if (!issuedTo) {
+      throw new BadRequestException(
+        'Say who took the material: a person, or a vendor or subcontractor.',
+      );
+    }
 
     const date = this.refs.parseDate(dto.date);
 
@@ -141,14 +179,32 @@ export class IssuesService {
           label: siteName,
         });
 
+        // The issue slip's number (2026-10-15), allocated inside the transaction so a refused
+        // issue does not burn one.
+        const slipNo = await this.codeSeries.next(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.ISSUE_SLIP,
+          ISSUE_SLIP_INFIX,
+          async (candidate) =>
+            !!(await tx.issue.findFirst({
+              where: { companyId: targetCompanyId, slipNo: candidate },
+              select: { id: true },
+            })),
+        );
+
         const issue = await tx.issue.create({
           data: {
             companyId: targetCompanyId,
+            slipNo,
+            equipmentNo: dto.equipmentNo?.trim() || null,
             siteId: dto.siteId,
             itemId: dto.itemId,
             date,
             quantity: dto.quantity,
-            issuedTo: dto.issuedTo.trim(),
+            issuedTo,
+            projectId: project?.id ?? null,
+            vendorId: dto.vendorId ?? null,
             activityId: dto.activityId ?? null,
             boqItemId: dto.boqItemId ?? null,
             indentLineId: dto.indentLineId ?? null,
@@ -187,7 +243,13 @@ export class IssuesService {
       entityType: AuditEntityType.ISSUE,
       action: AuditAction.CREATE,
       entityId: created.id,
-      changes: { after: { quantity: dto.quantity, issuedTo: dto.issuedTo } },
+      changes: {
+        after: {
+          quantity: dto.quantity,
+          issuedTo,
+          ...(project ? { project: project.name } : {}),
+        },
+      },
       accountId: caller.id,
       companyId: targetCompanyId,
       ipAddress,
@@ -205,6 +267,10 @@ export class IssuesService {
       date,
       quantity: dto.quantity,
       issuedTo: created.issuedTo,
+      projectId: created.projectId,
+      projectName: project ? `${project.code} · ${project.name}` : null,
+      vendorId: created.vendorId,
+      vendorName,
       activityId: created.activityId,
       activityName: workRefs.activityName,
       boqItemId: created.boqItemId,
@@ -212,6 +278,11 @@ export class IssuesService {
       indentLineId: created.indentLineId,
       remarks: created.remarks,
       createdAt: created.createdAt,
+      slipNo: created.slipNo,
+      equipmentNo: created.equipmentNo,
+      returnedQuantity: null,
+      returnedOn: null,
+      receivedBy: null,
     };
   }
 
@@ -261,7 +332,7 @@ export class IssuesService {
       },
     );
 
-    const [items, siteNames] = await Promise.all([
+    const [items, siteNames, projectNames, vendorNames] = await Promise.all([
       this.refs.itemsByIds(
         caller,
         rows.map((row) => row.itemId),
@@ -269,6 +340,14 @@ export class IssuesService {
       this.refs.siteNames(
         caller,
         rows.map((row) => row.siteId),
+      ),
+      this.refs.projectNames(
+        caller,
+        rows.flatMap((row) => (row.projectId ? [row.projectId] : [])),
+      ),
+      this.refs.vendorNames(
+        caller,
+        rows.flatMap((row) => (row.vendorId ? [row.vendorId] : [])),
       ),
     ]);
 
@@ -287,6 +366,14 @@ export class IssuesService {
           date: row.date,
           quantity: toNumber(row.quantity),
           issuedTo: row.issuedTo,
+          projectId: row.projectId,
+          projectName: row.projectId
+            ? projectNames.get(row.projectId) ?? 'Unknown project'
+            : null,
+          vendorId: row.vendorId,
+          vendorName: row.vendorId
+            ? vendorNames.get(row.vendorId) ?? 'Unknown vendor'
+            : null,
           activityId: row.activityId,
           // Names are resolved on the detail path only. Resolving them per row
           // would be one cross-module call per issue, and the list shows the
@@ -297,12 +384,99 @@ export class IssuesService {
           indentLineId: row.indentLineId,
           remarks: row.remarks,
           createdAt: row.createdAt,
+          slipNo: row.slipNo,
+          equipmentNo: row.equipmentNo,
+          returnedQuantity:
+            row.returnedQuantity === null
+              ? null
+              : toNumber(row.returnedQuantity),
+          returnedOn: row.returnedOn,
+          receivedBy: row.receivedBy,
         };
       }),
       total,
       page,
       pageSize,
     };
+  }
+
+  /**
+   * Records material coming back to the store against an issue (2026-10-15) — the daily issue
+   * register's return columns. The stock goes back exactly as reversing that much of the issue
+   * would: an `issue_reversal` ledger row and the store's issued total reduced. The total
+   * returned only ever grows, and never past what was issued.
+   */
+  async returnMaterial(
+    caller: AuthenticatedUser,
+    id: string,
+    dto: ReturnIssueDto,
+    ipAddress: string,
+  ): Promise<void> {
+    const updated = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const existing = await tx.issue.findUnique({ where: { id } });
+        if (!existing || existing.deleted) {
+          throw new NotFoundException(`Issue ${id} not found`);
+        }
+        assertInScope(caller, existing, `Issue ${id}`);
+        const issued = toNumber(existing.quantity);
+        const before =
+          existing.returnedQuantity === null
+            ? 0
+            : toNumber(existing.returnedQuantity);
+        if (dto.returnedQuantity > issued) {
+          throw new BadRequestException(
+            `Only ${issued} was issued; more cannot come back.`,
+          );
+        }
+        if (dto.returnedQuantity < before) {
+          throw new BadRequestException(
+            `${before} has already been returned. Enter the total returned so far.`,
+          );
+        }
+        const delta = Math.round((dto.returnedQuantity - before) * 1000) / 1000;
+        const returnedOn = this.refs.parseDate(dto.returnedOn);
+        if (delta > 0) {
+          await this.stock.appendLedgerEntry(tx, {
+            companyId: existing.companyId,
+            itemId: existing.itemId,
+            siteId: existing.siteId,
+            type: StockLedgerType.issue_reversal,
+            quantity: delta,
+            referenceId: existing.id,
+            date: returnedOn,
+          });
+          await tx.stockBalance.updateMany({
+            where: { itemId: existing.itemId, siteId: existing.siteId },
+            data: { issued: { decrement: delta } },
+          });
+        }
+        return tx.issue.update({
+          where: { id },
+          data: {
+            returnedQuantity: dto.returnedQuantity,
+            returnedOn,
+            receivedBy: dto.receivedBy.trim(),
+          },
+        });
+      },
+    );
+    await this.auditLog.record({
+      entityType: AuditEntityType.ISSUE,
+      action: AuditAction.UPDATE,
+      entityId: id,
+      changes: {
+        after: {
+          returnedQuantity: dto.returnedQuantity,
+          receivedBy: dto.receivedBy,
+        },
+      },
+      accountId: caller.id,
+      companyId: updated.companyId,
+      ipAddress,
+    });
   }
 
   /**
@@ -336,7 +510,12 @@ export class IssuesService {
             },
           },
         });
-        const quantity = toNumber(existing.quantity);
+        // What came back has already been put back (2026-10-15); only the rest is still out.
+        const quantity =
+          toNumber(existing.quantity) -
+          (existing.returnedQuantity === null
+            ? 0
+            : toNumber(existing.returnedQuantity));
         if (!balance || toNumber(balance.issued) - quantity < 0) {
           throw new UnprocessableEntityException(
             'Reversing this issue would take the issued total below zero. The ledger and the balance disagree; this needs investigation rather than a delete.',

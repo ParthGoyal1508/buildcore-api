@@ -167,10 +167,17 @@ export class SignedCopiesService {
             where: { id: subjectId },
             select: { id: true },
           })
-        : tx.billPackageDebit.findFirst({
-            where: { id: subjectId },
-            select: { id: true },
-          }),
+        : // A debit note (2026-10-15), or one of its lines as before.
+          tx.billPackageDebitNote
+            .findFirst({ where: { id: subjectId }, select: { id: true } })
+            .then(
+              (note) =>
+                note ??
+                tx.billPackageDebit.findFirst({
+                  where: { id: subjectId },
+                  select: { id: true },
+                }),
+            ),
     );
     if (!found) {
       throw new NotFoundException(

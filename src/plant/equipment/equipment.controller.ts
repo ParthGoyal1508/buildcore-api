@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -24,13 +25,18 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { formFormatOf, sendForm } from '../../common/form-document';
 import {
   CreateEquipmentDto,
+  EquipmentRegisterQueryDto,
+  ImportEquipmentDto,
   ListEquipmentDto,
   UpdateEquipmentDto,
   UploadEquipmentDocumentDto,
 } from './dto/equipment.dto';
+import { EquipmentRegisterService } from './equipment-register.service';
 import { EquipmentService } from './equipment.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * The asset register (006 US2), gated by `MACHINERY`.
@@ -45,7 +51,10 @@ import { EquipmentService } from './equipment.service';
 @RequirePermissions(Permission.MACHINERY)
 @Controller('plant/equipment')
 export class EquipmentController {
-  constructor(private readonly equipment: EquipmentService) {}
+  constructor(
+    private readonly equipment: EquipmentService,
+    private readonly register: EquipmentRegisterService,
+  ) {}
 
   @Get()
   @ApiOperation({
@@ -59,6 +68,66 @@ export class EquipmentController {
     @Query() query: ListEquipmentDto,
   ) {
     return this.equipment.findAll(caller, query);
+  }
+
+  @Get('next-code')
+  @ApiOperation({
+    summary: 'The code a machine with this name and year would be given',
+  })
+  async nextCode(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('name') name = '',
+    @Query('year') year?: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.equipment.nextCode(
+      caller,
+      name,
+      year && /^\d{4}$/.test(year) ? Number(year) : null,
+      companyId,
+    );
+  }
+
+  @Get('register.:format')
+  @ApiOperation({
+    summary:
+      'The vehicle register — "Vehicle Details (As on …)" — as PDF or Excel',
+    description:
+      'Every machine with its make/model, year and registration number, then RC, insurance, ' +
+      'fitness, road tax, permit and pollution — each expiry (amber within 30 days, red once ' +
+      'lapsed) and whether its document is on file — then the firm and the remark.',
+  })
+  async registerDocument(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('format') format: string,
+    @Query() query: EquipmentRegisterQueryDto,
+    @Res() res: Response,
+  ) {
+    const kind = formFormatOf(format);
+    if (!kind) throw new BadRequestException('Format must be pdf or xlsx');
+    sendForm(res, await this.register.register(caller, query, kind));
+  }
+
+  @Post('import')
+  @ApiOperation({
+    summary: 'Import the Equipment Master List (.xlsx)',
+    description:
+      'Every listed machine type becomes an equipment category under its family; a row that ' +
+      'also describes an actual machine (make, registration number, operator…) registers it. ' +
+      'Safe to run twice: existing categories are kept.',
+  })
+  async importMasterList(
+    @UserEntity() caller: AuthenticatedUser,
+    @Body() dto: ImportEquipmentDto,
+    @Ip() ipAddress: string,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.register.importMasterList(
+      caller,
+      dto.file,
+      ipAddress,
+      companyId,
+    );
   }
 
   @Get(':id')
@@ -89,8 +158,9 @@ export class EquipmentController {
   @ApiOperation({
     summary: 'Register a machine',
     description:
-      'Omit `code` to have one allocated from the company EQUIPMENT series. ' +
-      'A hired machine must name its vendor.',
+      'The code is built automatically — letters from the name, a serial, the ' +
+      'manufacturing year (`JCB01/2027`), as set in Settings → Numbering. A hired machine ' +
+      'must name its vendor.',
   })
   async create(
     @UserEntity() caller: AuthenticatedUser,
@@ -146,7 +216,7 @@ export class EquipmentController {
     response.setHeader('Content-Type', file.contentType);
     response.setHeader(
       'Content-Disposition',
-      `attachment; filename="${file.fileName.replace(/"/g, '')}"`,
+      contentDispositionFor(file.fileName),
     );
     return new StreamableFile(file.buffer);
   }

@@ -28,18 +28,29 @@ export interface SignatureRow {
  * blank: a blank under a signature line reads as "anyone", and the one person this line is for is
  * known by role even when their record is incomplete.
  *
- * **Null on a bill to the client.** The client's Payment Abstract is signed on the authority's own
- * form, and its output is deliberately left as it was. An absent direction reads as a
- * subcontractor's, the rule `WorkbookHeader.direction` already states, so a view built before the
- * field existed still gets its sign-off.
+ * A bill to the client gets the same four captions with no designations under them (2026-10-15).
+ * An absent direction reads as a subcontractor's, the rule `WorkbookHeader.direction` already
+ * states, so a view built before the field existed still gets its sign-off.
  *
  * One function, read by the PDF, the Word copy and the workbook, so the three cannot disagree on
  * who signs where — the same reason they share `headerPairs`.
  */
-export function subcontractorSignatures(
-  header: WorkbookHeader,
-): SignatureRow[] | null {
-  if (header.direction === 'to_client') return null;
+export function billSignatures(header: WorkbookHeader): SignatureRow[] {
+  // The client's bill carries the same four captions (2026-10-15) — the client: "We need to give
+  // these as well in the PDF". The Word copy always printed them; the PDF and the workbook printed
+  // none. No designations under them: on the authority's bill the signatories are theirs to write.
+  if (header.direction === 'to_client') {
+    return [
+      {
+        left: { caption: 'Prepared by', signatory: '' },
+        right: { caption: 'Checked by', signatory: '' },
+      },
+      {
+        left: { caption: 'Accepted by', signatory: '' },
+        right: { caption: 'Approved by', signatory: '' },
+      },
+    ];
+  }
   const subcontractor = header.receiver.name?.trim() || 'Sub-Contractor';
   return [
     {

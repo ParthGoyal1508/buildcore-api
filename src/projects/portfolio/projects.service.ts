@@ -325,14 +325,21 @@ export class ProjectsService {
         // Allocated inside this transaction so a later failure rolls the number back
         // rather than burning it — a gap in a project code series reads as a deleted
         // project to anyone auditing it later. Same rule vendor codes follow.
-        const code =
-          dto.code?.trim() ||
-          (await this.codeSeries.next(
-            tx,
-            targetCompanyId,
-            CodeSeriesType.PROJECTS,
-            PROJECT_CODE_INFIX,
-          ));
+        //
+        // Always from the series (2026-10-15). A number already held — a project created
+        // with a typed code before the series was enforced — is stepped over rather than
+        // refused, so the first project after the switch is not blocked by an old one.
+        const code = await this.codeSeries.next(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.PROJECTS,
+          PROJECT_CODE_INFIX,
+          async (candidate) =>
+            !!(await tx.project.findFirst({
+              where: { companyId: targetCompanyId, code: candidate },
+              select: { id: true },
+            })),
+        );
 
         const project = await tx.project.create({
           data: {
@@ -411,6 +418,31 @@ export class ProjectsService {
       ipAddress,
     });
     return created;
+  }
+
+  /**
+   * The code the next project will be given — what the creation form shows in place of a code
+   * field (2026-10-15). A preview, not a reservation: the number is drawn when the project is
+   * saved, so two people creating at once see the same one and the second gets the next.
+   */
+  async nextCode(
+    caller: AuthenticatedUser,
+    companyId?: string,
+  ): Promise<{ code: string }> {
+    const targetCompanyId = this.targetCompanyOf(caller, companyId);
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => ({
+      code:
+        (await this.codeSeries.peek(
+          tx,
+          targetCompanyId,
+          CodeSeriesType.PROJECTS,
+          async (candidate) =>
+            !!(await tx.project.findFirst({
+              where: { companyId: targetCompanyId, code: candidate },
+              select: { id: true },
+            })),
+        )) ?? '',
+    }));
   }
 
   async findAll(
@@ -673,7 +705,6 @@ export class ProjectsService {
           data: {
             // Applied field by field so a PATCH cannot blank a column it never
             // mentioned — see ClientsService.update() for the same reasoning.
-            ...(dto.code !== undefined ? { code: dto.code.trim() } : {}),
             ...(dto.name !== undefined ? { name: dto.name.trim() } : {}),
             ...(dto.clientId !== undefined ? { clientId: dto.clientId } : {}),
             ...(dto.location !== undefined
@@ -951,11 +982,24 @@ export class ProjectsService {
   async getProjectIdentityById(
     projectId: string,
     ctx: RlsContext = { isSuperAdmin: true },
-  ): Promise<{ id: string; code: string; name: string } | null> {
+  ): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    companyId: string;
+    /** For the heading of a plant document — "Chitradurga–Davangere Project, Karnataka". */
+    location: string | null;
+  } | null> {
     return withRlsContext(this.prisma, ctx, (tx) =>
       tx.project.findFirst({
         where: { id: projectId },
-        select: { id: true, code: true, name: true },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          companyId: true,
+          location: true,
+        },
       }),
     );
   }

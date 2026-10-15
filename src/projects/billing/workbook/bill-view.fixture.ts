@@ -1,3 +1,4 @@
+import type { DebitNoteView } from './debit-note-document';
 import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
@@ -182,30 +183,60 @@ export function view(over: Partial<BillWorkbookView> = {}): BillWorkbookView {
       },
     },
     measurementSheets: [measurement(1)],
-    debitRegister: {
-      groups: [
-        {
-          heading: 'Debit against the ATMS Equipment Missing at site',
-          rows: [
-            {
-              srNo: 1,
-              description: 'PTZ camera missing',
-              location: 'KM.226 LHS',
-              nos: '1.000',
-              length: null,
-              width: null,
-              quantity: '1.000',
-              rate: '125000.00',
-              unit: 'Nos',
-              amount: '125000.00',
-              amountWithTax: '147500.00',
-              remark: 'RA-12',
-            },
-          ],
-        },
-      ],
-      total: '147500.00',
+    debitNotes: [debitNoteFixture()],
+    ...over,
+  };
+}
+
+/** One debit note, as the client's DV-04 format prints it (2026-10-15). */
+export function debitNoteFixture(
+  over: Partial<DebitNoteView> = {},
+): DebitNoteView {
+  return {
+    company: {
+      name: 'Parth Realcon Private Limited',
+      address: null,
+      logo: null,
     },
+    projectName: 'Delhi-Vadodara PKG 04',
+    projectCode: '1719',
+    location: 'Alwar (Rajasthan)',
+    noteNumber: '2026-27/001',
+    noteDate: '2026-06-29',
+    party: {
+      name: 'Dummy Earthworks Test Firm',
+      gstin: '08AAMCP8659H1ZO',
+      code: '1504373',
+    },
+    workOrderNo: '16010503',
+    natureOfWork: 'O&M of Highway',
+    lines: [
+      {
+        srNo: 1,
+        description: 'Solar Panel (335 W)',
+        specification:
+          '7 Nos. Water pump location & 4 Nos. Deck Light location',
+        unit: 'Nos.',
+        quantity: '11.00',
+        rate: '13550.00',
+        amount: '149050.00',
+      },
+      {
+        srNo: 2,
+        description: 'Chute drain',
+        specification: null,
+        unit: 'RMT',
+        quantity: '697.00',
+        rate: '2700.00',
+        amount: '1881900.00',
+      },
+    ],
+    amount: '2030950.00',
+    taxes: [
+      { label: 'CGST 9%', amount: '182785.50' },
+      { label: 'SGST 9%', amount: '182785.50' },
+    ],
+    netAmount: '2396521',
     ...over,
   };
 }

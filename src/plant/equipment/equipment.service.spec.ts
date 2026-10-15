@@ -43,6 +43,7 @@ const equipmentRow = (
     id: `doc-${index}`,
     ...doc,
   })),
+  registration: [],
 });
 
 /**
@@ -81,9 +82,9 @@ const build = (documents: { docTypeId: string; expiresAt: Date | null }[]) => {
       vendorNames: async () => new Map(),
       docTypesByIds: async () => docTypes,
     } as never,
-    // `CodeSeriesService` is gone from this constructor (2026-10-11): a machine's code
-    // is built by `equipment-code.ts`, whose serial counts per prefix rather than per
-    // company. Only the storage service remains after the refs.
+    // Storage, then `CodeSeriesService` — back since 2026-10-15 only to read the serial width
+    // and separator a company sets in Settings → Numbering; neither is exercised here.
+    {} as never,
     {} as never,
   );
   return { service, prisma };

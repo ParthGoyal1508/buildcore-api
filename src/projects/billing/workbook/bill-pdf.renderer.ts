@@ -9,8 +9,10 @@ import type {
   BillWorkbookView,
   WorkbookMeasurementSheet,
 } from './bill-workbook.types';
+import { type DebitNoteView, drawDebitNotePdf } from './debit-note-document';
 import { headerPairs } from './header-pairs';
-import { subcontractorSignatures } from './signature-block';
+import { indianFigure, taxBasisLine } from './print-format';
+import { billSignatures } from './signature-block';
 
 /**
  * The bill package as a PDF (025 FR-042).
@@ -50,46 +52,8 @@ const SIZE = { title: 12, heading: 9, body: 7.5, small: 6.5 } as const;
 
 type Align = 'left' | 'right' | 'center';
 
-/**
- * One debit, as the document a subcontractor signs for it (028 FR-018).
- *
- * Strings throughout, already rounded, for the reason `BillWorkbookView` is: a renderer that
- * formatted its own figures could print a different number from the register the figure came from.
- */
-export interface DebitNoteDocumentView {
-  issuerName: string | null;
-  /** `{shortCode}-DN-0001`, or null on a debit raised before 028 — printed blank, never invented. */
-  noteNumber: string | null;
-  raisedOn: string;
-  projectName: string;
-  projectCode: string | null;
-  /**
-   * The subcontractor, where the debit has been recovered on one of their bills and is therefore
-   * known. A debit raised and not yet recovered belongs to the project, not to a party — so this
-   * prints blank rather than naming whoever seems likeliest.
-   */
-  receiver: {
-    name: string | null;
-    code: string | null;
-    gstin: string | null;
-    pan: string | null;
-  };
-  /** "RA-07", where it has been recovered. */
-  recoveredOn: string | null;
-  groupHeading: string | null;
-  line: {
-    description: string;
-    location: string | null;
-    nos: string | null;
-    length: string | null;
-    width: string | null;
-    quantity: string | null;
-    unit: string | null;
-    rate: string;
-    amount: string;
-    amountWithTax: string;
-  };
-}
+/** A table row: its cells, or its cells with emphasis — a block heading, a total. */
+type Row = string[] | { cells: string[]; bold?: boolean; rule?: boolean };
 
 interface Column {
   header: string;
@@ -137,25 +101,17 @@ export class BillPdfRenderer {
     for (const sheet of view.measurementSheets) {
       this.measurementPage(doc, view, sheet);
     }
-    this.debitRegisterPage(doc, view);
+    this.debitNotePages(doc, view);
 
     doc.end();
     return finished;
   }
 
   /**
-   * One debit as a document in its own right (028 FR-018).
-   *
-   * **Not a second renderer.** It is a method on this one, using the same `page`, `title`,
-   * `headerBlock` and `table` the bill package's five sheets use, so the note carries the same
-   * letterhead, the same margins and the same column treatment as the register it came from. A
-   * separate `debit-note.renderer.ts` would have been a second house style to keep in step, and
-   * the one thing certain about two house styles is that only one of them gets updated.
-   *
-   * The register already prints *inside* the package PDF; what did not exist was the single-debit
-   * document a subcontractor signs to acknowledge the recovery. Same figures, one page.
+   * One debit note on its own, in the client's format (2026-10-15) — the same drawing the bill
+   * package's "Debit Note" section uses for each note it recovers.
    */
-  async renderDebitNote(view: DebitNoteDocumentView): Promise<Buffer> {
+  async renderDebitNote(view: DebitNoteView): Promise<Buffer> {
     const doc = new PDFDocument({
       size: 'A4',
       margin: MARGIN,
@@ -164,114 +120,23 @@ export class BillPdfRenderer {
         Title: `Debit Note ${view.noteNumber ?? ''} — ${
           view.projectName
         }`.trim(),
-        Author: view.issuerName ?? 'BuildCore',
-        // Pinned to the date the debit was raised, never to the clock — the rule `render` follows
-        // (FR-028): a document produced twice must be identical down to the bytes nobody reads.
-        CreationDate: new Date(`${view.raisedOn}T00:00:00.000Z`),
+        Author: view.company.name,
+        // Pinned to the note's own date, never to the clock (FR-028).
+        CreationDate: new Date(`${view.noteDate}T00:00:00.000Z`),
       },
     });
-
     const chunks: Buffer[] = [];
     doc.on('data', (chunk: Buffer) => chunks.push(chunk));
     const finished = new Promise<Buffer>((resolve, reject) => {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
       doc.on('error', reject);
     });
-
-    this.debitNotePage(doc, view);
-
+    drawDebitNotePdf(doc, view);
     doc.end();
     return finished;
   }
 
   // ── Pages ────────────────────────────────────────────────────────────────
-
-  private debitNotePage(
-    doc: PDFKit.PDFDocument,
-    view: DebitNoteDocumentView,
-  ): void {
-    this.page(doc, 'landscape');
-    this.title(doc, view.issuerName, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(
-      doc,
-      [
-        ['Debit Note No.', view.noteNumber],
-        ['Date', view.raisedOn],
-        ['Project', view.projectName],
-        ['Project Code', view.projectCode],
-      ],
-      [
-        ['Name of Sub-Contractor', view.receiver.name],
-        ['Vendor Code', view.receiver.code],
-        ['Vendor GSTIN', view.receiver.gstin],
-        // Blank where the debit has not been recovered yet, which is a fact about the debit and
-        // not a gap in the document.
-        ['Recovered On', view.recoveredOn],
-      ],
-      A4_HEIGHT,
-    );
-
-    const width = A4_HEIGHT - MARGIN * 2;
-    const columns: Column[] = [
-      { header: 'Sr', width: 24, align: 'center' },
-      { header: 'Description', width: width - 24 - 90 - 40 * 5 - 70 * 2 },
-      { header: 'Location', width: 90 },
-      { header: 'Nos', width: 40, align: 'right' },
-      { header: 'Length', width: 40, align: 'right' },
-      { header: 'Width', width: 40, align: 'right' },
-      { header: 'Qty', width: 40, align: 'right' },
-      { header: 'UOM', width: 40, align: 'center' },
-      { header: 'Rate', width: 70, align: 'right' },
-      { header: 'Amt with GST', width: 70, align: 'right' },
-    ];
-
-    const rows: string[][] = [];
-    // The heading is how the register is read (023 FR-040), so the note keeps it where it has one.
-    if (view.groupHeading) {
-      rows.push(['', view.groupHeading, '', '', '', '', '', '', '', '']);
-    }
-    const line = view.line;
-    rows.push([
-      '1',
-      line.description,
-      line.location ?? '',
-      line.nos ?? '',
-      line.length ?? '',
-      line.width ?? '',
-      line.quantity ?? '',
-      line.unit ?? '',
-      line.rate,
-      line.amountWithTax,
-    ]);
-
-    this.table(doc, columns, rows, [
-      '',
-      'Total',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      line.amountWithTax,
-    ]);
-
-    // Two signatures, because a debit note exists to be acknowledged — a note nobody signed is a
-    // claim, not a recovery.
-    doc.moveDown(3).fontSize(SIZE.body);
-    const half = width / 2;
-    const y = doc.y;
-    ['For ' + (view.issuerName ?? ''), 'Sub-Contractor'].forEach(
-      (label, index) => {
-        doc
-          .moveTo(MARGIN + index * half, y)
-          .lineTo(MARGIN + index * half + half - 20, y)
-          .stroke();
-        doc.text(label, MARGIN + index * half, y + 4, { width: half });
-      },
-    );
-  }
 
   private abstractPage(doc: PDFKit.PDFDocument, view: BillWorkbookView): void {
     this.page(doc, 'portrait');
@@ -284,21 +149,28 @@ export class BillPdfRenderer {
     this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
 
     const width = A4_WIDTH - MARGIN * 2;
-    const figure = (width - 40 - 40) / 3;
+    // The particulars get the room (2026-10-15). The figure columns were sized as if the other
+    // three columns were 80pt in all, which left "Particulars" 40pt wide — one word a line, and
+    // "B. RECOVE / RIES" broken mid-word.
+    const PARTICULARS = 215;
+    const figure = (width - 22 - PARTICULARS - 24) / 3;
     const columns: Column[] = [
-      { header: '', width: 20, align: 'center' },
-      { header: 'Particulars', width: width - 20 - 20 - figure * 3 },
-      { header: '', width: 20, align: 'center' },
+      { header: 'Sr', width: 22, align: 'center' },
+      { header: 'Particulars', width: PARTICULARS },
+      { header: '', width: 24, align: 'center' },
       { header: 'Upto Date', width: figure, align: 'right' },
       { header: 'Upto Previous', width: figure, align: 'right' },
       { header: 'This Month', width: figure, align: 'right' },
     ];
 
-    const rows: string[][] = [];
+    const rows: Row[] = [];
     for (const block of view.abstract.blocks) {
-      rows.push(['', block.title.toUpperCase(), '', '', '', '']);
+      rows.push({
+        cells: ['', block.title.toUpperCase(), '', '', '', ''],
+        bold: true,
+      });
       block.rows.forEach((row, index) => {
-        rows.push([
+        const cells = [
           row.isTotal ? '' : String(index + 1),
           row.label,
           'Rs.',
@@ -308,54 +180,56 @@ export class BillPdfRenderer {
           // a zero (FR-020a): "nothing was recovered this month" and "there is nothing left to
           // recover" are different facts that would otherwise print the same character.
           row.fullyRecovered ? '' : row.thisMonth,
-        ]);
+        ];
+        rows.push(row.isTotal ? { cells, bold: true } : cells);
       });
     }
-    rows.push([
-      '',
-      view.abstract.payable.label,
-      'Rs.',
-      view.abstract.payable.uptoDate,
-      view.abstract.payable.uptoPrevious,
-      view.abstract.payable.thisMonth,
-    ]);
-    if (view.abstract.netPayable) {
-      rows.push([
-        '',
-        view.abstract.netPayable.label,
-        'Rs.',
-        view.abstract.netPayable.uptoDate,
-        view.abstract.netPayable.uptoPrevious,
-        view.abstract.netPayable.thisMonth,
-      ]);
+    for (const total of [view.abstract.payable, view.abstract.netPayable]) {
+      if (!total) continue;
+      rows.push({
+        cells: [
+          '',
+          total.label,
+          'Rs.',
+          total.uptoDate,
+          total.uptoPrevious,
+          total.thisMonth,
+        ],
+        bold: true,
+        rule: true,
+      });
     }
 
     this.table(doc, columns, rows);
 
+    // From the left margin, explicitly: after the table the cursor's x is the last column's, and
+    // the line ran off the right edge of the page from there.
     if (view.abstract.amountInWords) {
       doc
         .moveDown(0.6)
         .font('Helvetica-Bold')
         .fontSize(SIZE.body)
-        .text(`Amount in words: ${view.abstract.amountInWords}`, { width })
+        .text(
+          `Amount in words: ${view.abstract.amountInWords}`,
+          MARGIN,
+          doc.y,
+          { width },
+        )
         .font('Helvetica');
     }
 
     // Printed so a reviewer can check the tax decision rather than take it (FR-016a).
     doc
-      .moveDown(0.8)
+      .moveDown(0.5)
       .fontSize(SIZE.small)
-      .text(
-        `Tax basis: ${view.abstract.taxBasis} (${view.abstract.taxBasisSource})`,
-        { width },
-      );
+      .text(taxBasisLine(view.abstract), MARGIN, doc.y, { width });
 
     this.signatureBlock(doc, view);
   }
 
   /**
-   * The subcontractor's sign-off under the abstract (2026-10-14) — see `subcontractorSignatures`
-   * for who signs where and why a bill to the client prints none.
+   * The subcontractor's sign-off under the abstract (2026-10-14) — see `billSignatures`
+   * for who signs where (a bill to the client: the captions alone).
    *
    * **Kept whole on one page.** The block is measured before it is drawn and, if it would cross the
    * bottom margin, starts a fresh page of its own: a "Prepared by" at the foot of one page and its
@@ -366,8 +240,7 @@ export class BillPdfRenderer {
     doc: PDFKit.PDFDocument,
     view: BillWorkbookView,
   ): void {
-    const rows = subcontractorSignatures(view.header);
-    if (!rows) return;
+    const rows = billSignatures(view.header);
 
     const width = doc.page.width - MARGIN * 2;
     const half = width / 2;
@@ -500,15 +373,26 @@ export class BillPdfRenderer {
         row.remarks ?? '',
         row.billLabel,
       ]),
-      [
-        '',
-        'This Bill Qty',
-        sheet.footer.thisBillQty,
-        'Upto Previous',
-        sheet.footer.uptoPreviousQty,
-        `Upto Date ${sheet.footer.uptoDateQty}`,
-      ],
     );
+
+    // The three totals as a line of their own (2026-10-15). As a table footer they were squeezed
+    // into the S.No/Month/Period/Qty columns — "Upto Previous" right-aligned under Qty, "Upto Date"
+    // wrapping in the RA Bill column — and printed ungrouped.
+    doc
+      .moveDown(0.3)
+      .font('Helvetica-Bold')
+      .fontSize(SIZE.body)
+      .text(
+        [
+          `This Bill Qty: ${indianFigure(sheet.footer.thisBillQty)}`,
+          `Upto Previous: ${indianFigure(sheet.footer.uptoPreviousQty)}`,
+          `Upto Date: ${indianFigure(sheet.footer.uptoDateQty)} ${sheet.unit}`,
+        ].join('      '),
+        MARGIN,
+        doc.y,
+        { width, align: 'right' },
+      )
+      .font('Helvetica');
 
     if (sheet.dailyRecord.length > 0) {
       doc.moveDown(0.8).fontSize(SIZE.heading).text('Daily record', { width });
@@ -538,77 +422,28 @@ export class BillPdfRenderer {
     }
   }
 
-  private debitRegisterPage(
+  /**
+   * The bill's "Debit Note" section (2026-10-15): every note recovered on it, each in the client's
+   * format on a page of its own. A bill recovering none still carries the section, saying so, so
+   * the four sections are always there to be checked.
+   */
+  private debitNotePages(
     doc: PDFKit.PDFDocument,
     view: BillWorkbookView,
   ): void {
-    this.page(doc, 'landscape');
-    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_HEIGHT);
-    this.headerBlock(doc, ...headerPairs(view.header), A4_HEIGHT);
-
-    const width = A4_HEIGHT - MARGIN * 2;
-    const columns: Column[] = [
-      { header: 'Sr', width: 24, align: 'center' },
-      { header: 'Description', width: width - 24 - 90 - 40 * 4 - 70 * 2 - 80 },
-      { header: 'Location', width: 90 },
-      { header: 'Nos', width: 40, align: 'right' },
-      { header: 'Qty', width: 40, align: 'right' },
-      { header: 'UOM', width: 40, align: 'center' },
-      { header: 'Rate', width: 40, align: 'right' },
-      { header: 'Amount', width: 70, align: 'right' },
-      { header: 'Amt with GST', width: 70, align: 'right' },
-      { header: 'Remark', width: 80 },
-    ];
-
-    const rows: string[][] = [];
-    for (const group of view.debitRegister.groups) {
-      if (group.heading) {
-        rows.push(['', group.heading, '', '', '', '', '', '', '', '']);
-      }
-      for (const row of group.rows) {
-        rows.push([
-          String(row.srNo),
-          row.description,
-          row.location ?? '',
-          row.nos ?? '',
-          row.quantity ?? '',
-          row.unit ?? '',
-          row.rate,
-          row.amount,
-          row.amountWithTax,
-          // Which bill it was debited in — the register spans bills, and without this column a
-          // reader cannot tell a debit recovered three bills ago from one recovered here.
-          row.remark ?? '',
-        ]);
-      }
+    if (view.debitNotes.length > 0) {
+      for (const note of view.debitNotes) drawDebitNotePdf(doc, note);
+      return;
     }
-    if (rows.length === 0) {
-      rows.push([
-        '',
-        'No debits on this project.',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-      ]);
-    }
-
-    this.table(doc, columns, rows, [
-      '',
-      'Total',
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      view.debitRegister.total,
-      '',
-    ]);
+    this.page(doc, 'portrait');
+    this.title(doc, view.header.issuer.name, 'DEBIT NOTE', A4_WIDTH);
+    this.headerBlock(doc, ...headerPairs(view.header), A4_WIDTH);
+    doc
+      .moveDown(1)
+      .fontSize(SIZE.body)
+      .text('No debit note is recovered on this bill.', MARGIN, doc.y, {
+        width: A4_WIDTH - MARGIN * 2,
+      });
   }
 
   // ── The pieces every page shares ─────────────────────────────────────────
@@ -692,7 +527,7 @@ export class BillPdfRenderer {
   private table(
     doc: PDFKit.PDFDocument,
     columns: Column[],
-    rows: string[][],
+    rows: Row[],
     footer?: string[],
   ): void {
     const bottomLimit = doc.page.height - MARGIN;
@@ -700,7 +535,7 @@ export class BillPdfRenderer {
     const writeHeader = () => {
       const y = doc.y;
       let x = MARGIN;
-      doc.fontSize(SIZE.small);
+      doc.font('Helvetica-Bold').fontSize(SIZE.small);
       for (const column of columns) {
         doc.text(column.header, x + 2, y + 2, {
           width: column.width - 4,
@@ -714,12 +549,27 @@ export class BillPdfRenderer {
         .lineTo(x, y + height)
         .stroke();
       doc.y = y + height + 2;
+      doc.font('Helvetica');
     };
 
     writeHeader();
 
-    const writeRow = (cells: string[], bold: boolean) => {
-      doc.fontSize(bold ? SIZE.body : SIZE.small);
+    const tableWidth = columns.reduce(
+      (total, column) => total + column.width,
+      0,
+    );
+    // A figure column prints with Indian grouping (2026-10-15): 3,11,581, as the client's own
+    // bills do. `indianFigure` leaves anything that is not a bare number alone.
+    const shown = (cells: string[]) =>
+      cells.map((cell, index) =>
+        columns[index]?.align === 'right' ? indianFigure(cell ?? '') : cell,
+      );
+
+    const writeRow = (raw: string[], bold: boolean) => {
+      const cells = shown(raw);
+      doc
+        .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(bold ? SIZE.body : SIZE.small);
       // Measured before anything is drawn, so the row can be moved to the next page whole rather
       // than split across the break with its first line orphaned.
       const height =
@@ -750,16 +600,28 @@ export class BillPdfRenderer {
         x += column.width;
       }
       doc.y = y + height;
+      doc.font('Helvetica');
     };
 
-    for (const row of rows) writeRow(row, false);
+    for (const row of rows) {
+      if (Array.isArray(row)) {
+        writeRow(row, false);
+        continue;
+      }
+      if (row.rule) {
+        doc
+          .moveTo(MARGIN, doc.y)
+          .lineTo(MARGIN + tableWidth, doc.y)
+          .lineWidth(0.5)
+          .stroke();
+        doc.y += 2;
+      }
+      writeRow(row.cells, row.bold ?? false);
+    }
     if (footer) {
       doc
         .moveTo(MARGIN, doc.y)
-        .lineTo(
-          MARGIN + columns.reduce((total, column) => total + column.width, 0),
-          doc.y,
-        )
+        .lineTo(MARGIN + tableWidth, doc.y)
         .stroke();
       doc.y += 2;
       writeRow(footer, true);

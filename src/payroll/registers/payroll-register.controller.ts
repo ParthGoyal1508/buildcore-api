@@ -23,6 +23,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { PayrollRegisterService } from './payroll-register.service';
+import { contentDispositionFor } from '../../common/storage/file-type';
 
 /**
  * The salary register and deduction report (005 amendment US16).
@@ -97,10 +98,7 @@ export class PayrollRegisterController {
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    response.setHeader(
-      'Content-Disposition',
-      `attachment; filename="${filename}"`,
-    );
+    response.setHeader('Content-Disposition', contentDispositionFor(filename));
     response.send(buffer);
   }
 }

@@ -9,7 +9,6 @@ import {
   AssetTrackingMode,
   AuditAction,
   AuditEntityType,
-  CodeSeriesType,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -18,13 +17,17 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  namedCode,
+  namedPrefixFor,
+  namedSerialOf,
+} from '../../settings/code-series/code-series.formats';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { assertTransition } from '../asset-status';
 import { AssetsRefsService } from '../assets-refs.service';
 import { todayUtc } from '../dates';
 import {
-  ASSET_CODE_INFIX,
   ASSET_DOCUMENT_PREFIX,
   DEFAULT_PAGE_SIZE,
   MAX_DOCUMENT_BYTES,
@@ -68,6 +71,7 @@ export interface AssetRow {
   quantity: number;
   unitOfMeasure: string | null;
   purchaseDate: Date | null;
+  manufacturingYear: number | null;
   purchaseCost: number;
   capitalisationDate: Date;
   depreciationRatePercent: number;
@@ -149,6 +153,49 @@ export class AssetService {
     private readonly auditLog: AuditLogService,
     private readonly storage: StorageService,
   ) {}
+
+  /** The next code for an asset named `name`, built in `year` — see `nextAssetCode`. */
+  async nextCode(
+    caller: AuthenticatedUser,
+    name: string,
+    year: number | null,
+    requestedCompanyId?: string,
+  ): Promise<{ code: string }> {
+    const companyId = this.refs.targetCompanyOf(caller, requestedCompanyId);
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => ({
+      code: await this.nextAssetCode(
+        tx,
+        companyId,
+        name,
+        year ?? new Date().getFullYear(),
+      ),
+    }));
+  }
+
+  /**
+   * `{letters}{NN}{separator}{year}` — the highest serial already used under these letters, plus
+   * one. Counts within the letters, so `DR01` and `HM01` coexist, and ignores any code not in this
+   * shape (an older `PRPL-AST-0001`).
+   */
+  private async nextAssetCode(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    name: string,
+    year: number,
+  ): Promise<string> {
+    const format = await this.codeSeries.namedFormat(tx, companyId, 'ASSETS');
+    const prefix = namedPrefixFor(name);
+    const existing = await tx.asset.findMany({
+      where: { companyId, assetCode: { startsWith: prefix } },
+      select: { assetCode: true },
+    });
+    const highest = existing.reduce(
+      (max, row) =>
+        Math.max(max, namedSerialOf(format, row.assetCode, prefix) ?? 0),
+      0,
+    );
+    return namedCode(format, prefix, highest + 1, year);
+  }
 
   // ── Reads ─────────────────────────────────────────────────────────────────
 
@@ -250,6 +297,7 @@ export class AssetService {
         quantity: Number(row.quantity),
         unitOfMeasure: row.unitOfMeasure,
         purchaseDate: row.purchaseDate,
+        manufacturingYear: row.manufacturingYear,
         purchaseCost: Number(row.purchaseCost),
         capitalisationDate: row.capitalisationDate,
         depreciationRatePercent: Number(row.depreciationRatePercent),
@@ -679,14 +727,18 @@ export class AssetService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const assetCode =
-          dto.assetCode?.trim() ||
-          (await this.codeSeries.next(
-            tx,
-            companyId,
-            CodeSeriesType.ASSETS,
-            ASSET_CODE_INFIX,
-          ));
+        // Built like a machine's code (2026-10-15): letters from the asset's name, a serial
+        // within those letters, the manufacturing year — `DR01/2024` — in the company's own
+        // format from Settings → Numbering. Never typed.
+        const manufacturingYear =
+          dto.manufacturingYear ??
+          (purchaseDate ?? capitalisationDate).getFullYear();
+        const assetCode = await this.nextAssetCode(
+          tx,
+          companyId,
+          dto.name,
+          manufacturingYear,
+        );
 
         const clash = await tx.asset.findFirst({
           where: { companyId, assetCode },
@@ -713,6 +765,7 @@ export class AssetService {
           data: {
             companyId,
             assetCode,
+            manufacturingYear: dto.manufacturingYear ?? null,
             name: dto.name.trim(),
             categoryId: dto.categoryId,
             // Copied, never joined at read time — see the class comment.
@@ -885,6 +938,10 @@ export class AssetService {
               ? { unitOfMeasure: dto.unitOfMeasure }
               : {}),
             ...(dto.purchaseDate !== undefined ? { purchaseDate } : {}),
+            // Recorded, not re-coded: the code was built when the asset was registered.
+            ...(dto.manufacturingYear !== undefined
+              ? { manufacturingYear: dto.manufacturingYear }
+              : {}),
             ...(dto.purchaseCost !== undefined
               ? { purchaseCost: dto.purchaseCost }
               : {}),
