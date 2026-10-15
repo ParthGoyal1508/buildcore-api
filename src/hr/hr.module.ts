@@ -25,6 +25,10 @@ import { ExitService } from './offboarding/exit.service';
 import { ReEnrolmentRequestsAdminController } from './re-enrolment-requests/re-enrolment-requests-admin.controller';
 import { EmployeesService } from './employees/employees.service';
 import { HolidaysService } from './holidays/holidays.service';
+import {
+  MyEmployeeController,
+  MyHolidaysController,
+} from './holidays/my-holidays.controller';
 import { PiiCipherService } from './employees/pii-cipher.service';
 import { PiiMaskingInterceptor } from './employees/pii-masking.interceptor';
 import { LeaveAdminController } from './leave/leave-admin.controller';
@@ -88,6 +92,8 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     AttendanceAdminController,
     AttendanceImportController,
     HolidaysController,
+    MyHolidaysController,
+    MyEmployeeController,
     EmployeeDocumentsController,
     FaceEnrolmentController,
     ReEnrolmentAdminController,
