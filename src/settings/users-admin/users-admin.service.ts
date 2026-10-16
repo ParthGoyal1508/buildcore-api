@@ -14,6 +14,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { UserSummary } from '../../users/user-summary';
 import { UsersService } from '../../users/users.service';
+import { AccountDeactivationService } from '../../users/account-deactivation.service';
 import { UpdateUserAccountDto } from './dto/update-user.dto';
 
 /**
@@ -37,6 +38,7 @@ export class UsersAdminService {
   constructor(
     private readonly usersService: UsersService,
     private readonly auditLog: AuditLogService,
+    private readonly deactivation: AccountDeactivationService,
   ) {}
 
   /** Accounts in the caller's company, or all of them for a cross-company caller
@@ -63,11 +65,22 @@ export class UsersAdminService {
       await this.assertNotLastSuperAdmin(id);
     }
 
+    // Read first, so only a real transition to deactivated revokes sessions and emails — saving
+    // an already-deactivated account again must not send the notice twice (029 FR-030).
+    const before =
+      dto.status === UserStatus.deactivated
+        ? await this.usersService.accountStatus(id, rlsContextFor(caller))
+        : null;
+
     const updated = await this.usersService.updateRoleOrStatus(
       id,
       { roleId: dto.roleId, status: dto.status },
       rlsContextFor(caller),
     );
+
+    if (before && before.status !== UserStatus.deactivated) {
+      await this.deactivation.afterDeactivation({ id, email: before.email });
+    }
 
     await this.auditLog.record({
       // Shared with feature 010 so both features' writes to an account appear under

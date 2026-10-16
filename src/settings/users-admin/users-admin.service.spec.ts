@@ -34,14 +34,20 @@ function build(users: Record<string, jest.Mock> = {}) {
     deleteAccount: jest.fn().mockResolvedValue(undefined),
     holdsProtectedRole: jest.fn().mockResolvedValue(false),
     countActiveSuperAdmins: jest.fn().mockResolvedValue(5),
+    accountStatus: jest.fn().mockResolvedValue({
+      status: UserStatus.active,
+      email: 'u@example.test',
+    }),
     ...users,
   };
   const auditLog = { record: jest.fn() };
+  const deactivation = { afterDeactivation: jest.fn() };
   const service = new UsersAdminService(
     usersService as never,
     auditLog as never,
+    deactivation as never,
   );
-  return { service, usersService, auditLog };
+  return { service, usersService, auditLog, deactivation };
 }
 
 describe('UsersAdminService', () => {
@@ -191,5 +197,49 @@ describe('UsersAdminService', () => {
     expect(auditLog.record).toHaveBeenCalledWith(
       expect.objectContaining({ entityType: 'USER_ACCOUNT', action: 'DELETE' }),
     );
+  });
+
+  describe('deactivation follow-up (029 FR-030)', () => {
+    it('revokes sessions and notifies the holder when an active account is deactivated', async () => {
+      const { service, deactivation } = build();
+      await service.update(
+        superAdmin,
+        'user-1',
+        { status: UserStatus.deactivated },
+        '127.0.0.1',
+      );
+      expect(deactivation.afterDeactivation).toHaveBeenCalledWith({
+        id: 'user-1',
+        email: 'u@example.test',
+      });
+    });
+
+    it('does nothing more when the account was already deactivated', async () => {
+      const { service, deactivation } = build({
+        accountStatus: jest.fn().mockResolvedValue({
+          status: UserStatus.deactivated,
+          email: 'u@example.test',
+        }),
+      });
+      await service.update(
+        superAdmin,
+        'user-1',
+        { status: UserStatus.deactivated },
+        '127.0.0.1',
+      );
+      expect(deactivation.afterDeactivation).not.toHaveBeenCalled();
+    });
+
+    it('does nothing more on a role-only change', async () => {
+      const { service, deactivation, usersService } = build();
+      await service.update(
+        superAdmin,
+        'user-1',
+        { roleId: 'role-x' },
+        '127.0.0.1',
+      );
+      expect(usersService.accountStatus).not.toHaveBeenCalled();
+      expect(deactivation.afterDeactivation).not.toHaveBeenCalled();
+    });
   });
 });

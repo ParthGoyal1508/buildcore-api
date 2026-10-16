@@ -302,6 +302,72 @@ describe('RolesService', () => {
         service.remove(callerFor('company-1'), 'nope', '127.0.0.1'),
       ).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('refuses to delete the default role for new accounts (029 FR-001)', async () => {
+      const del = jest.fn();
+      const { service, usersService } = build({
+        findUnique: jest.fn().mockResolvedValue({
+          ...customRole,
+          name: 'General User',
+          isDefault: true,
+        }),
+        delete: del,
+      });
+      await expect(
+        service.remove(callerFor('company-1'), 'role-x', '127.0.0.1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(del).not.toHaveBeenCalled();
+      expect(usersService.clearRoleAssignment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('home page (029 FR-020)', () => {
+    it('lets the protected role change its home page and nothing else', async () => {
+      const update = jest
+        .fn()
+        .mockResolvedValue({ ...protectedRole, homeModule: 'dashboard' });
+      const { service } = build({
+        findUnique: jest.fn().mockResolvedValue(protectedRole),
+        update,
+      });
+      await service.update(
+        callerFor('company-1'),
+        'role-sa',
+        { homeModule: 'dashboard' },
+        '127.0.0.1',
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'role-sa' },
+        data: { homeModule: 'dashboard' },
+      });
+
+      await expect(
+        service.update(
+          callerFor('company-1'),
+          'role-sa',
+          { homeModule: 'dashboard', name: 'Root' },
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('clears the home page when sent null', async () => {
+      const update = jest.fn().mockResolvedValue(customRole);
+      const { service } = build({
+        findUnique: jest.fn().mockResolvedValue(customRole),
+        update,
+      });
+      await service.update(
+        callerFor('company-1'),
+        'role-x',
+        { homeModule: null },
+        '127.0.0.1',
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'role-x' },
+        data: { homeModule: null },
+      });
+    });
   });
 });
 
@@ -327,6 +393,25 @@ describe('CreateRoleDto validation (FR-007)', () => {
     await expect(
       errorsFor([Permission.DASHBOARD, Permission.DASHBOARD]),
     ).resolves.toContain('permissions');
+  });
+
+  it('accepts a known home module, null, or none — and nothing else (029 FR-020)', async () => {
+    const errorsWith = async (homeModule: unknown) =>
+      (
+        await validate(
+          plainToInstance(CreateRoleDto, {
+            name: 'Custom',
+            permissions: [],
+            homeModule,
+          }),
+        )
+      ).map((e) => e.property);
+    await expect(errorsWith('my-workspace')).resolves.toEqual([]);
+    await expect(errorsWith(null)).resolves.toEqual([]);
+    await expect(errorsWith(undefined)).resolves.toEqual([]);
+    await expect(errorsWith('https://evil.example')).resolves.toContain(
+      'homeModule',
+    );
   });
 
   it('does not let role editing grant CROSS_COMPANY_ACCESS', async () => {

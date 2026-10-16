@@ -1,5 +1,6 @@
 import {
   Controller,
+  Header,
   HttpCode,
   Post,
   Body,
@@ -22,7 +23,19 @@ import { PasswordChangeExempt } from '../common/decorators/password-change-exemp
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { TokenDto } from './dto/token.dto';
-import { AdminResetPasswordDto } from './dto/admin-reset-password.dto';
+import {
+  AdminResetPasswordDto,
+  AdminResetPasswordResultDto,
+} from './dto/admin-reset-password.dto';
+import {
+  ForgotPasswordDto,
+  ResetPasswordDto,
+  ResetTokenDto,
+} from './dto/password-reset.dto';
+import {
+  PasswordResetService,
+  ResetLinkValidation,
+} from './password-reset.service';
 import {
   ConfirmPasswordDto,
   ConfirmPasswordResultDto,
@@ -39,6 +52,16 @@ import { SESSION_COOKIE_MISSING } from './session-error-codes';
 import config from '../common/configs/config';
 
 const REFRESH_COOKIE_NAME = 'refreshToken';
+
+/**
+ * Forgot Password's own per-address allowance (029 FR-011): lower than sign-in's, because each
+ * accepted request can send an email to somebody, and well above what one person retrying needs.
+ * The per-account limits in `PasswordResetService` are the other half.
+ */
+const RESET_REQUEST_THROTTLE = { limit: 5, ttl: 60_000 };
+
+/** Every answer from this controller carries a credential or says something about one. */
+const NO_STORE = 'no-store';
 
 /**
  * The renewal endpoint's own rate limit, read at class-definition time.
@@ -61,6 +84,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly configService: ConfigService,
+    private readonly passwordReset: PasswordResetService,
   ) {}
 
   /** The attributes the refresh cookie is set and cleared with; shared so the two
@@ -118,6 +142,8 @@ export class AuthController {
   }
 
   @Post('login')
+  // Never kept by a browser or service-worker HTTP cache (029 FR-050): the body is an access token.
+  @Header('Cache-Control', NO_STORE)
   @ApiOkResponse({ type: TokenDto })
   async login(
     // `rememberMe` is accepted by the DTO and deliberately not destructured here:
@@ -132,6 +158,7 @@ export class AuthController {
       accessToken: result.accessToken,
       name: result.name,
       mustChangePassword: result.mustChangePassword,
+      homeModule: result.homeModule,
     };
   }
 
@@ -148,6 +175,7 @@ export class AuthController {
    * office behind one NAT shares that ten between everybody in it.
    */
   @Throttle({ default: REFRESH_THROTTLE })
+  @Header('Cache-Control', NO_STORE)
   @ApiOkResponse({ type: TokenDto })
   async refreshToken(
     @Req() req: Request,
@@ -168,7 +196,7 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ): Promise<void> {
     const rawToken = this.readRefreshCookie(req);
-    await this.auth.logout(rawToken);
+    await this.auth.logout(rawToken, req.ip);
     // Cleared through the same helper that sets it, so the two cannot drift. A
     // browser matches a clearing Set-Cookie on name, path and domain, and the path
     // is now configurable — hardcoding `/auth` here would silently stop clearing the
@@ -191,6 +219,7 @@ export class AuthController {
    */
   @Post('confirm-password')
   @HttpCode(200)
+  @Header('Cache-Control', NO_STORE)
   @ApiBearerAuth()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @SelfService()
@@ -208,18 +237,69 @@ export class AuthController {
   @ApiUnauthorizedResponse()
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermissions(Permission.USER_MANAGEMENT)
-  @ApiOkResponse()
+  @HttpCode(200)
+  // The body may hold a temporary password: no cache anywhere may keep it.
+  @Header('Cache-Control', NO_STORE)
+  @ApiOkResponse({ type: AdminResetPasswordResultDto })
   async adminResetPassword(
     @UserEntity() caller: AuthenticatedUser,
-    @Body() { targetAccountId, temporaryPassword }: AdminResetPasswordDto,
+    @Body()
+    { targetAccountId, method, temporaryPassword }: AdminResetPasswordDto,
     @Req() req: Request,
-  ): Promise<{ success: true }> {
-    await this.auth.adminResetPassword(
+  ): Promise<AdminResetPasswordResultDto & { success: true }> {
+    const result = await this.auth.adminResetPassword(
       caller,
       targetAccountId,
-      temporaryPassword,
+      { method, temporaryPassword },
       req.ip,
     );
+    // `success` kept for any caller written against the pre-029 response.
+    return { success: true, ...result };
+  }
+
+  /**
+   * Forgot Password (029 FR-010, FR-011). Always 202 with the same body: it must not say
+   * whether the address has an account.
+   */
+  @Post('forgot-password')
+  @HttpCode(202)
+  @Throttle({ default: RESET_REQUEST_THROTTLE })
+  @Header('Cache-Control', NO_STORE)
+  @ApiOkResponse()
+  async forgotPassword(
+    @Body() { identifier }: ForgotPasswordDto,
+    @Req() req: Request,
+  ): Promise<{ message: string }> {
+    await this.passwordReset.requestSelfService(identifier, req.ip);
+    return {
+      message:
+        'If that matches an active account, a link to reset its password is on its way. Check your inbox.',
+    };
+  }
+
+  /** Whether a reset link still works, so the page can say so before the user types (029 FR-012). */
+  @Post('reset-password/validate')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Header('Cache-Control', NO_STORE)
+  @ApiOkResponse()
+  async validateResetLink(
+    @Body() { token }: ResetTokenDto,
+  ): Promise<ResetLinkValidation> {
+    return this.passwordReset.validate(token);
+  }
+
+  /** Sets the new password and signs out every device (029 FR-013). */
+  @Post('reset-password')
+  @HttpCode(200)
+  @Throttle({ default: RESET_REQUEST_THROTTLE })
+  @Header('Cache-Control', NO_STORE)
+  @ApiOkResponse()
+  async resetPassword(
+    @Body() { token, password }: ResetPasswordDto,
+    @Req() req: Request,
+  ): Promise<{ success: true }> {
+    await this.passwordReset.complete(token, password, req.ip);
     return { success: true };
   }
 }

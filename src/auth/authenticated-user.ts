@@ -6,6 +6,7 @@ import {
   User,
   UserRole,
 } from '@prisma/client';
+import { HomeModule, resolveHomeModule } from '../settings/roles/home-modules';
 
 /** A User row plus its effective permissions — the union of every role it holds
  * (2026-08-28 clarification: an account can hold multiple roles). This is the shape
@@ -54,6 +55,11 @@ export interface AuthenticatedUser extends User {
    * is offered no switcher. `rlsContextFor` reads this — see there for what it changes.
    */
   selectedCompanyId?: string | null;
+  /** Where this user lands after signing in, from their roles (029 FR-021). */
+  homeModule: HomeModule | null;
+  /** The signed-in session (refresh-token family) the request's access token belongs to,
+   * from its `sid` claim (029 FR-006). Absent for a token issued before 029. */
+  sessionId?: string | null;
 }
 
 /** One area the caller holds, at one level. */
@@ -102,5 +108,8 @@ export function toAuthenticatedUser(user: UserWithRoles): AuthenticatedUser {
     }),
     roleNames,
     roleIds,
+    homeModule: resolveHomeModule(
+      user.userRoles.map((userRole) => userRole.role),
+    ),
   };
 }

@@ -7,7 +7,6 @@ import {
 import { UserStatus } from '@prisma/client';
 import { PasswordService } from '../auth/password.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
-import { ChangePasswordDto } from './dto/change-password.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import {
   RlsContext,
@@ -45,66 +44,7 @@ export class UsersService {
       grants: caller.grants,
       roleNames: caller.roleNames,
       roleIds: caller.roleIds,
-    };
-  }
-
-  async changePassword(
-    caller: AuthenticatedUser,
-    changePassword: ChangePasswordDto,
-  ): Promise<AuthenticatedUser> {
-    const passwordValid = await this.passwordService.validatePassword(
-      changePassword.oldPassword,
-      caller.password,
-    );
-
-    if (!passwordValid) {
-      throw new BadRequestException('Invalid password');
-    }
-
-    // Reusing the current password is not a change. It matters most for an account
-    // created with an admin-set password (010 FR-017): re-entering that value would
-    // clear `mustChangePassword` below and leave in force precisely the credential
-    // the forced change exists to retire, with the account's own screen having
-    // reported success.
-    //
-    // Compared against the stored hash rather than the submitted `oldPassword`, so
-    // it also holds for any other path that reaches here.
-    const unchanged = await this.passwordService.validatePassword(
-      changePassword.newPassword,
-      caller.password,
-    );
-    if (unchanged) {
-      throw new BadRequestException(
-        'Your new password must be different from your current one.',
-      );
-    }
-
-    const hashedPassword = await this.passwordService.hashPassword(
-      changePassword.newPassword,
-    );
-
-    const updated = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      (tx) =>
-        tx.user.update({
-          data: {
-            password: hashedPassword,
-            // Cleared in the same write as the hash (010 FR-017b). Two writes
-            // could leave an account that has changed its password and is still
-            // refused everything; left set entirely, the user is redirected on
-            // every login with no way out.
-            mustChangePassword: false,
-          },
-          where: { id: caller.id },
-        }),
-    );
-    return {
-      ...updated,
-      permissions: caller.permissions,
-      grants: caller.grants,
-      roleNames: caller.roleNames,
-      roleIds: caller.roleIds,
+      homeModule: caller.homeModule,
     };
   }
 
@@ -196,6 +136,20 @@ export class UsersService {
       }),
     );
     return users.map(toUserSummary);
+  }
+
+  /** An account's current status and address, or null when the caller cannot see it — what
+   * `UsersAdminService` needs to tell a real deactivation from a repeated one (029 FR-030). */
+  async accountStatus(
+    id: string,
+    ctx: RlsContext,
+  ): Promise<{ status: UserStatus; email: string } | null> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.user.findUnique({
+        where: { id },
+        select: { status: true, email: true },
+      }),
+    );
   }
 
   /**

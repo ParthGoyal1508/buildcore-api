@@ -11,6 +11,12 @@ import { CredentialOrigin } from '@prisma/client';
 import { AuthenticatedUser } from './authenticated-user';
 import { PASSWORD_CHANGE_EXEMPT_KEY } from '../common/decorators/password-change-exempt.decorator';
 
+/** Origins whose password an administrator knows, and so must be replaced (029 FR-016). */
+const ADMIN_CHOSEN: ReadonlySet<CredentialOrigin | null | undefined> = new Set([
+  CredentialOrigin.admin_direct,
+  CredentialOrigin.admin_reset,
+]);
+
 /** The code clients branch on. Never the message — that is prose and may change. */
 export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
 
@@ -18,10 +24,10 @@ export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED';
  * Refuses an account that must replace an admin-set password before doing anything
  * (010 FR-017a).
  *
- * Scoped to `admin_direct` accounts only. `mustChangePassword` alone cannot decide:
- * an admin *reset* sets the same flag and is deliberately left unenforced for now
- * (FR-017a-ii), so the flag means "enforced" on one account and "advisory" on
- * another, and only `credentialOrigin` separates them.
+ * Scoped to passwords an admin chose: `admin_direct` (set at creation) and, since 029
+ * FR-016, `admin_reset` — which 010 left advisory (FR-017a-ii), even though the admin knows
+ * that value exactly as well. `mustChangePassword` alone still does not decide: it is the
+ * origin that says an admin chose the value.
  *
  * An absent or unrecognised origin is never refused (FR-017a-i). Failing open is
  * confined to this one rule — the request still needs a valid session and its
@@ -68,7 +74,7 @@ export class PasswordChangeInterceptor implements NestInterceptor {
 
     const mustChange =
       user.mustChangePassword === true &&
-      user.credentialOrigin === CredentialOrigin.admin_direct;
+      ADMIN_CHOSEN.has(user.credentialOrigin);
     if (!mustChange) {
       return next.handle();
     }
@@ -76,7 +82,7 @@ export class PasswordChangeInterceptor implements NestInterceptor {
     throw new ForbiddenException({
       code: PASSWORD_CHANGE_REQUIRED,
       message:
-        'This account was created with a password set by an administrator. Change it before continuing.',
+        'Your password was set by an administrator. Change it before continuing.',
     });
   }
 }

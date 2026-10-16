@@ -5,8 +5,13 @@ import type { EmailConfig } from '../../common/configs/config.interface';
 import { EmailDeliveryError, EmailService } from './email.service';
 import {
   RenderedEmail,
+  renderAccountDeactivatedEmail,
   renderAccountLockedEmail,
+  renderAccountReadyEmail,
+  renderAdminPasswordResetEmail,
   renderInviteEmail,
+  renderPasswordChangedEmail,
+  renderPasswordResetEmail,
   renderPayslipEmail,
 } from './email-templates';
 
@@ -86,6 +91,39 @@ export class ResendEmailAdapter extends EmailService {
     unlockAt: Date;
   }): Promise<void> {
     await this.send(input.to, renderAccountLockedEmail(input));
+  }
+
+  async sendPasswordResetEmail(input: {
+    to: string;
+    resetUrl: string;
+    expiresAt: Date;
+    requestedByAdmin: boolean;
+  }): Promise<void> {
+    await this.send(input.to, renderPasswordResetEmail(input));
+  }
+
+  async sendPasswordChangedEmail(input: {
+    to: string;
+    changedAt: Date;
+    via: 'self' | 'reset_link';
+  }): Promise<void> {
+    await this.send(input.to, renderPasswordChangedEmail(input));
+  }
+
+  async sendAdminPasswordResetEmail(input: { to: string }): Promise<void> {
+    await this.send(input.to, renderAdminPasswordResetEmail());
+  }
+
+  async sendAccountDeactivatedEmail(input: { to: string }): Promise<void> {
+    await this.send(input.to, renderAccountDeactivatedEmail());
+  }
+
+  async sendAccountReadyEmail(input: {
+    to: string;
+    loginUrl: string;
+    username: string | null;
+  }): Promise<void> {
+    await this.send(input.to, renderAccountReadyEmail(input));
   }
 
   async sendPayslipEmail(input: {

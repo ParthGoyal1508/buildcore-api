@@ -186,6 +186,7 @@ export class RolesService {
         name,
         permissions: dto.permissions,
         isProtected: false,
+        homeModule: dto.homeModule ?? null,
         // Both shapes written together, in one statement. `Role.permissions` is on its way
         // out (019 Phase 1) but is still what the rest of the codebase reads, so the two must
         // never be written apart — a role whose array and rows disagreed would grant one thing
@@ -221,8 +222,14 @@ export class RolesService {
   ): Promise<RoleWithAssignedCount> {
     const existing = await this.requireRole(id);
     // Checked before touching the database, and regardless of who is asking — the
-    // Super Admin role's name and permission set are immutable (FR-008).
-    this.assertNotProtected(existing, 'edited');
+    // Super Admin role's name and permission set are immutable (FR-008). Its landing page is
+    // not part of that (029 FR-020): where an administrator starts their day grants nothing.
+    const onlyHomeModule = Object.keys(dto).every(
+      (key) => key === 'homeModule',
+    );
+    if (!onlyHomeModule) {
+      this.assertNotProtected(existing, 'edited');
+    }
 
     const name = dto.name?.trim();
     if (name && name !== existing.name) {
@@ -252,6 +259,7 @@ export class RolesService {
       data: {
         ...(name ? { name } : {}),
         ...(dto.permissions ? { permissions: dto.permissions } : {}),
+        ...(dto.homeModule !== undefined ? { homeModule: dto.homeModule } : {}),
         ...(grantRows
           ? { rolePermissions: { deleteMany: {}, create: grantRows } }
           : {}),
@@ -353,6 +361,13 @@ export class RolesService {
   ): Promise<{ clearedAssignments: number }> {
     const existing = await this.requireRole(id);
     this.assertNotProtected(existing, 'deleted');
+    // New accounts are given this role when the creator names none (029 FR-001); deleting it
+    // would turn every such creation into a refusal.
+    if (existing.isDefault) {
+      throw new ConflictException(
+        `The ${existing.name} role is the default for new accounts and cannot be deleted.`,
+      );
+    }
 
     const clearedAssignments = await this.usersService.clearRoleAssignment(id);
     await this.prisma.role.delete({ where: { id } });

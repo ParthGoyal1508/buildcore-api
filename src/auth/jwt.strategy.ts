@@ -46,6 +46,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // edge case is cross-company access being revoked while the other company is selected, and
     // a stored selection honoured at read time is how that becomes a cross-tenant read.
     user.selectedCompanyId = await this.companySelection.resolve(user);
+    user.sessionId = payload.sid ?? null;
     return user;
   }
 }

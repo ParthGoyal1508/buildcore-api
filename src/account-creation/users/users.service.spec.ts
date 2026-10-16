@@ -29,21 +29,32 @@ describe('UsersService', () => {
     rls: { isSuperAdmin: false, companyId: 'co-1' },
   };
 
-  let email: { sendInviteEmail: jest.Mock; sendAccountLockedEmail: jest.Mock };
+  let email: {
+    sendInviteEmail: jest.Mock;
+    sendAccountLockedEmail: jest.Mock;
+    sendAccountReadyEmail: jest.Mock;
+  };
   let employees: { linkEmployeeToUser: jest.Mock; getByUserIds: jest.Mock };
 
   const build = (
     opts: {
       role?: TestRole | null;
+      defaultRole?: TestRole | null;
       existingUser?: { status: UserStatus } | null;
       userById?: { id: string; status: UserStatus; companyId: string } | null;
     } = {},
   ) => {
-    const { role = SCOPED_ROLE, existingUser = null, userById = null } = opts;
+    const {
+      role = SCOPED_ROLE,
+      defaultRole = null,
+      existingUser = null,
+      userById = null,
+    } = opts;
 
     email = {
       sendInviteEmail: jest.fn().mockResolvedValue(undefined),
       sendAccountLockedEmail: jest.fn().mockResolvedValue(undefined),
+      sendAccountReadyEmail: jest.fn().mockResolvedValue(undefined),
     };
     employees = {
       linkEmployeeToUser: jest.fn().mockResolvedValue(undefined),
@@ -51,14 +62,18 @@ describe('UsersService', () => {
     };
 
     const prisma = createPrismaMock({
-      role: { findUnique: jest.fn().mockResolvedValue(role) },
+      role: {
+        findUnique: jest.fn().mockResolvedValue(role),
+        findFirst: jest.fn().mockResolvedValue(defaultRole),
+      },
       user: {
         findUnique: jest.fn().mockResolvedValue(existingUser),
         findFirst: jest.fn().mockResolvedValue(userById),
         create: jest.fn().mockImplementation(({ data }: never) => ({
           id: 'user-new',
           email: (data as Record<string, string>).email,
-          status: UserStatus.pending,
+          status: (data as Record<string, UserStatus>).status,
+          username: 'new.person',
         })),
         update: jest.fn().mockResolvedValue({}),
         findMany: jest.fn().mockResolvedValue([]),
@@ -138,6 +153,60 @@ describe('UsersService', () => {
       await expect(service.create(caller, dto())).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  describe('create — default role (029 FR-001)', () => {
+    it('gives the default role when none is named', async () => {
+      const general = {
+        ...SCOPED_ROLE,
+        id: 'role-general',
+        name: 'General User',
+      };
+      const { service, prisma } = build({ defaultRole: general });
+      await service.create(caller, dto({ roleId: undefined }));
+      expect(
+        (prisma as unknown as { userRole: { create: jest.Mock } }).userRole
+          .create,
+      ).toHaveBeenCalledWith({
+        data: expect.objectContaining({ roleId: 'role-general' }),
+      });
+    });
+
+    it('refuses with a reason when none is named and no default exists', async () => {
+      const { service, prisma } = build({ defaultRole: null });
+      await expect(
+        service.create(caller, dto({ roleId: undefined })),
+      ).rejects.toThrow(/no default role/);
+      expect(
+        (prisma as unknown as { user: { create: jest.Mock } }).user.create,
+      ).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('create — account-ready email on the direct path (029 FR-031)', () => {
+    it('tells the new holder where to sign in, never the password', async () => {
+      const { service } = build();
+      await service.create(caller, dto({ password: 'Initial123' }));
+      expect(email.sendInviteEmail).not.toHaveBeenCalled();
+      expect(email.sendAccountReadyEmail).toHaveBeenCalledWith({
+        to: 'new.person@example.com',
+        loginUrl: 'http://localhost:3001/login',
+        username: 'new.person',
+      });
+      expect(
+        JSON.stringify(email.sendAccountReadyEmail.mock.calls),
+      ).not.toContain('Initial123');
+    });
+
+    it('keeps the account and reports it when that email fails', async () => {
+      const { service } = build();
+      email.sendAccountReadyEmail.mockRejectedValue(new Error('provider down'));
+      const created = await service.create(
+        caller,
+        dto({ password: 'Initial123' }),
+      );
+      expect(created.emailDispatchFailed).toBe(true);
     });
   });
 

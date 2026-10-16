@@ -7,9 +7,12 @@ import {
   User,
 } from '@prisma/client';
 import {
+  BadRequestException,
+  ConflictException,
   ForbiddenException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -29,6 +32,12 @@ import {
   ConfirmationPurpose,
   PasswordConfirmationService,
 } from './password-confirmation.service';
+import { PasswordResetService } from './password-reset.service';
+import { generateTemporaryPassword } from './password-policy';
+import {
+  AdminResetMethod,
+  AdminResetPasswordResultDto,
+} from './dto/admin-reset-password.dto';
 
 const GENERIC_INVALID_CREDENTIALS = 'Invalid email or password';
 
@@ -48,8 +57,17 @@ function displayName(
   return full || user.username;
 }
 
+/**
+ * Areas an admin may hand back to anyone, whatever they hold themselves: My Workspace is
+ * authorised by ownership, so holding it grants nothing over anybody else (as in
+ * `settings/roles/grant-ceiling.ts`).
+ */
+const ALWAYS_HELD: ReadonlySet<Permission> = new Set([Permission.MY_WORKSPACE]);
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
@@ -59,15 +77,18 @@ export class AuthService {
     private readonly auditLogService: AuditLogService,
     private readonly emailService: EmailService,
     private readonly passwordConfirmation: PasswordConfirmationService,
+    private readonly passwordReset: PasswordResetService,
   ) {}
 
-  private accessTokenFor(user: AuthenticatedUser): string {
+  /** `sessionId` is the refresh-token family the token is minted for (029 FR-006). */
+  private accessTokenFor(user: AuthenticatedUser, sessionId: string): string {
     const payload: Omit<JwtDto, 'iat' | 'exp'> = {
       userId: user.id,
       permissions: user.permissions,
       companyId: user.companyId,
       mustChangePassword: user.mustChangePassword,
       name: displayName(user),
+      sid: sessionId,
     };
     return this.jwtService.sign(payload);
   }
@@ -172,7 +193,7 @@ export class AuthService {
       }),
     );
 
-    const { rawToken } = await this.refreshTokenService.issueFamily({
+    const { rawToken, familyId } = await this.refreshTokenService.issueFamily({
       accountId: user.id,
       companyId: user.companyId,
     });
@@ -184,10 +205,11 @@ export class AuthService {
     });
 
     return {
-      accessToken: this.accessTokenFor(user),
+      accessToken: this.accessTokenFor(user, familyId),
       rawRefreshToken: rawToken,
       name: displayName(user),
       mustChangePassword: user.mustChangePassword,
+      homeModule: user.homeModule,
     };
   }
 
@@ -274,13 +296,23 @@ export class AuthService {
     }
 
     return {
-      accessToken: this.accessTokenFor(user),
+      accessToken: this.accessTokenFor(user, result.familyId),
       rawRefreshToken: result.rawToken,
     };
   }
 
-  async logout(rawToken: string): Promise<void> {
-    await this.refreshTokenService.revokeFamilyByToken(rawToken);
+  async logout(rawToken: string, ipAddress = 'unknown'): Promise<void> {
+    const session = await this.refreshTokenService.revokeFamilyByToken(
+      rawToken,
+    );
+    // `LOGOUT` was in the audit vocabulary from feature 001 and never written (029 FR-040).
+    if (session) {
+      await this.auditLogService.recordAuthEvent(AuditEntityType.LOGOUT, {
+        accountId: session.accountId,
+        companyId: session.companyId,
+        ipAddress,
+      });
+    }
   }
 
   /**
@@ -403,35 +435,108 @@ export class AuthService {
   }
 
   /**
-   * Admin-only: sets a target account's password to a temporary value and forces a
-   * change on next login (FR-022). Restricted to the caller's own company unless
-   * the caller holds CROSS_COMPANY_ACCESS (FR-022a) — enforced both here
-   * (service-layer check) and by RLS (the update runs under the caller's own
-   * context, so a cross-company target simply isn't visible to update,
-   * defense-in-depth against a bug in this check).
+   * Admin-only: gets a user back into their account (FR-022, 029 FR-014 to FR-016).
+   *
+   * Two ways, chosen by `method` — see `AdminResetPasswordDto`. Restricted to the caller's own
+   * company unless they hold CROSS_COMPANY_ACCESS (FR-022a), enforced here and again by RLS (the
+   * read runs under the caller's own context, so a cross-company target is simply not found).
+   *
+   * **Nobody resets the password of an account that holds more than they do** (029 FR-017). A
+   * temporary password is a working credential the admin knows; for an account above them it is
+   * a way to become that account. A link is safer — it goes to the holder's inbox — but the same
+   * rule keeps one answer for "may I act on this account's sign-in", rather than two.
    */
   async adminResetPassword(
     caller: AuthenticatedUser,
     targetAccountId: string,
-    temporaryPassword: string,
+    options: { method?: AdminResetMethod; temporaryPassword?: string },
     ipAddress: string,
-  ): Promise<void> {
-    const target = await withRlsContext(
+  ): Promise<AdminResetPasswordResultDto> {
+    const found = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) => tx.user.findUnique({ where: { id: targetAccountId } }),
+      (tx) =>
+        tx.user.findUnique({
+          where: { id: targetAccountId },
+          include: {
+            userRoles: {
+              include: { role: { include: { rolePermissions: true } } },
+            },
+          },
+        }),
     );
 
-    if (!target) {
+    if (!found) {
       throw new NotFoundException();
     }
+    const target = toAuthenticatedUser(found);
     if (
       !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
       target.companyId !== caller.companyId
     ) {
       throw new ForbiddenException();
     }
+    if (target.id === caller.id) {
+      throw new BadRequestException(
+        'Use Change password to change your own password.',
+      );
+    }
+    if (target.status === 'pending') {
+      throw new ConflictException(
+        'That account has not accepted its invite yet, so it has no password to reset. Resend the invite instead.',
+      );
+    }
+    if (target.status === 'deactivated') {
+      throw new ConflictException(
+        'That account is deactivated. Reactivate it before resetting its password.',
+      );
+    }
+    const beyondCaller = target.permissions.filter(
+      (permission) =>
+        !ALWAYS_HELD.has(permission) &&
+        !caller.permissions.includes(permission),
+    );
+    if (beyondCaller.length > 0) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'GRANT_EXCEEDS_CALLER',
+        message:
+          'That account has access you do not have, so you cannot reset its password. Ask an administrator who holds that access.',
+      });
+    }
 
+    const method: AdminResetMethod =
+      options.method ??
+      (options.temporaryPassword ? 'temporary_password' : 'link');
+
+    if (method === 'link') {
+      if (options.temporaryPassword) {
+        throw new BadRequestException(
+          'A temporary password is only used with method "temporary_password".',
+        );
+      }
+      const { emailDispatchFailed } = await this.passwordReset.issue(target, {
+        requestedById: caller.id,
+        ttlMs:
+          this.configService.get<SecurityConfig>('security').passwordReset
+            .adminTtlHours * 3_600_000,
+        ipAddress,
+      });
+      await this.auditLogService.recordAuthEvent(
+        AuditEntityType.ADMIN_PASSWORD_RESET,
+        {
+          accountId: target.id,
+          companyId: target.companyId,
+          ipAddress,
+          changes: { method, byAccountId: caller.id, emailDispatchFailed },
+        },
+      );
+      return { method, emailDispatchFailed };
+    }
+
+    const generated = options.temporaryPassword === undefined;
+    const temporaryPassword =
+      options.temporaryPassword ?? generateTemporaryPassword();
     const hashed = await this.passwordService.hashPassword(temporaryPassword);
 
     await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
@@ -440,9 +545,8 @@ export class AuthService {
         data: {
           password: hashed,
           mustChangePassword: true,
-          // Recorded so the forced-change refusal can tell this apart from an
-          // admin-*created* account: reset accounts are deliberately left
-          // unenforced for now (010 FR-017a-ii).
+          // The forced-change refusal applies to this origin since 029 FR-016: the admin
+          // knows this value, which is the whole reason the change is forced.
           credentialOrigin: CredentialOrigin.admin_reset,
           // An admin resetting a locked-out account's password is the
           // account's way back in — leaving the lockout in place would make
@@ -455,13 +559,39 @@ export class AuthService {
 
     await this.refreshTokenService.revokeAllForAccount(target.id);
 
+    let emailDispatchFailed = false;
+    try {
+      await this.emailService.sendAdminPasswordResetEmail({ to: target.email });
+    } catch (error) {
+      emailDispatchFailed = true;
+      this.logger.error(
+        `Admin-reset notice failed for ${target.email}. ${
+          (error as Error).message
+        }`,
+      );
+    }
+
     await this.auditLogService.recordAuthEvent(
       AuditEntityType.ADMIN_PASSWORD_RESET,
       {
         accountId: target.id,
         companyId: target.companyId,
         ipAddress,
+        // Who, how, and whether the server chose it — never the value, in any form.
+        changes: {
+          method,
+          generated,
+          byAccountId: caller.id,
+          emailDispatchFailed,
+        },
       },
     );
+
+    return {
+      method,
+      // Only a value the admin has not already seen. One they typed, they know.
+      ...(generated ? { temporaryPassword } : {}),
+      emailDispatchFailed,
+    };
   }
 }

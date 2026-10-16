@@ -64,6 +64,7 @@ function build(passwordValid: boolean) {
     auditLog as never,
     email,
     confirmation,
+    {} as never,
   );
   return { service, auditLog, userUpdate, confirmation };
 }

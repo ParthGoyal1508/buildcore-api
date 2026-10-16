@@ -68,19 +68,20 @@ model User {
   /// How this account's first password came to exist (010 FR-017a-i).
   ///
   /// `mustChangePassword` alone cannot carry this: the forced-change refusal applies
-  /// to `admin_direct` accounts only, so the same flag means *enforced* on one
-  /// account and *advisory* on an admin-reset one, and nothing else separates them.
-  /// Only an explicit `admin_direct` is ever refused — an absent or unrecognised
-  /// value must not lock a real user out over missing metadata.
+  /// only to passwords an admin chose (`admin_direct`, and `admin_reset` since 029),
+  /// never to one the holder chose. Only an explicit admin origin is ever refused —
+  /// an absent or unrecognised value must not lock a real user out over missing
+  /// metadata.
   credentialOrigin    CredentialOrigin @default(invite)
   /// Resets to 0 on next successful login (FR-013).
   consecutiveFailures Int              @default(0)
   /// Set when consecutiveFailures reaches the configured threshold (FR-012).
   lockedUntil         DateTime?
 
-  refreshTokens   RefreshToken[]
-  inviteTokens    InviteToken[]
-  auditLogEntries AuditLogEntry[]
+  refreshTokens       RefreshToken[]
+  inviteTokens        InviteToken[]
+  passwordResetTokens PasswordResetToken[]
+  auditLogEntries     AuditLogEntry[]
 
   // Feature 016's approval spine. Two relations to the same table because the person
   // who raised an item and the people who decide on it are different roles in the
@@ -99,8 +100,9 @@ enum CredentialOrigin {
   /// Set by an admin at creation time (FR-015). The only origin the forced-change
   /// refusal applies to.
   admin_direct
-  /// Set by an admin resetting an existing account's password. Deliberately left
-  /// unenforced for now (FR-017a-ii).
+  /// Set by an admin resetting an existing account's password. Enforced like
+  /// `admin_direct` since 029 FR-016 — the admin knows this value too, which is the
+  /// whole reason the forced change exists (it was advisory under 010 FR-017a-ii).
   admin_reset
 
   @@schema("shared")
@@ -148,6 +150,15 @@ model Role {
   /// delete (002-settings-backend FR-008; enforced there once it owns role editing —
   /// this feature only ever reads roles, it doesn't expose role management).
   isProtected     Boolean          @default(false)
+  /// The role a new account is given when the creator names none (029 FR-001). At most
+  /// one role carries it — a partial unique index in the migration, since Prisma cannot
+  /// express "unique where true". Seeded on "General User".
+  isDefault       Boolean          @default(false)
+  /// Where a holder of this role lands after signing in (029 FR-020): a module key from
+  /// `HOME_MODULES` (src/settings/roles/home-modules.ts), never a URL — the frontend owns
+  /// the routes, and a stored path would be a redirect target an editor could aim anywhere.
+  /// Null means "the first module the user can open", the behaviour before this column.
+  homeModule      String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -1206,6 +1217,33 @@ model ReimbursementCategory {
 /// password. Only the SHA-256 hash of the token is stored, mirroring how
 /// `RefreshToken` already handles its own opaque value (010 research.md §2) — so a
 /// database dump alone can never be turned back into a working invite link.
+/// A single-use, short-lived link to choose a new password (029 FR-010) — Forgot
+/// Password, or one an admin sends. Shaped like `InviteToken` on purpose: only the
+/// SHA-256 of the token is stored, "current" is derived (newest unconsumed row), and a
+/// redeemed row stays for the audit trail.
+///
+/// A separate table rather than a `purpose` column on `InviteToken`: an invite activates
+/// a `pending` account and a reset rewrites an `active` one's credential, and validation
+/// that had to branch on which it was holding is where one gets accepted as the other.
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hex of the raw token. The raw value exists only inside the email.
+  tokenHash String @unique
+
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  /// The admin who sent it; null when the holder asked for it themselves.
+  requestedById String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@schema("shared")
+}
+
 model InviteToken {
   id     String @id @default(cuid())
   userId String
@@ -1350,6 +1388,12 @@ enum AuditEntityType {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  /// 029: the account holder changed their own password while signed in.
+  PASSWORD_CHANGED
+  /// 029: a reset link was asked for — by the holder (Forgot Password) or sent by an admin.
+  PASSWORD_RESET_REQUESTED
+  /// 029: a reset link was redeemed and a new password set.
+  PASSWORD_RESET_COMPLETED
 
   // Settings entities audited by feature 002 (FR-025).
   COMPANY
@@ -1529,6 +1573,12 @@ enum AuditAction {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  /// 029: the account holder changed their own password while signed in.
+  PASSWORD_CHANGED
+  /// 029: a reset link was asked for — by the holder (Forgot Password) or sent by an admin.
+  PASSWORD_RESET_REQUESTED
+  /// 029: a reset link was redeemed and a new password set.
+  PASSWORD_RESET_COMPLETED
 
   @@schema("shared")
 }

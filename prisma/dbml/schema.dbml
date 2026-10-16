@@ -33,14 +33,15 @@ account can still meaningfully belong to one home company.']
   credentialOrigin CredentialOrigin [not null, default: 'invite', note: 'How this account\'s first password came to exist (010 FR-017a-i).
 
 `mustChangePassword` alone cannot carry this: the forced-change refusal applies
-to `admin_direct` accounts only, so the same flag means *enforced* on one
-account and *advisory* on an admin-reset one, and nothing else separates them.
-Only an explicit `admin_direct` is ever refused — an absent or unrecognised
-value must not lock a real user out over missing metadata.']
+only to passwords an admin chose (`admin_direct`, and `admin_reset` since 029),
+never to one the holder chose. Only an explicit admin origin is ever refused —
+an absent or unrecognised value must not lock a real user out over missing
+metadata.']
   consecutiveFailures Int [not null, default: 0, note: 'Resets to 0 on next successful login (FR-013).']
   lockedUntil DateTime [note: 'Set when consecutiveFailures reaches the configured threshold (FR-012).']
   refreshTokens RefreshToken [not null]
   inviteTokens InviteToken [not null]
+  passwordResetTokens PasswordResetToken [not null]
   auditLogEntries AuditLogEntry [not null]
   approvalsRaised ApprovalInstance [not null]
   approvalsDelegated ApprovalInstance [not null]
@@ -62,6 +63,13 @@ both shapes and is what proves the two agree (FR-006, SC-002).']
   isProtected Boolean [not null, default: false, note: 'True only for the seeded Super Admin role — blocks rename/permission-change/
 delete (002-settings-backend FR-008; enforced there once it owns role editing —
 this feature only ever reads roles, it doesn\'t expose role management).']
+  isDefault Boolean [not null, default: false, note: 'The role a new account is given when the creator names none (029 FR-001). At most
+one role carries it — a partial unique index in the migration, since Prisma cannot
+express "unique where true". Seeded on "General User".']
+  homeModule String [note: 'Where a holder of this role lands after signing in (029 FR-020): a module key from
+`HOME_MODULES` (src/settings/roles/home-modules.ts), never a URL — the frontend owns
+the routes, and a stored path would be a redirect target an editor could aim anywhere.
+Null means "the first module the user can open", the behaviour before this column.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   userRoles UserRole [not null]
@@ -744,6 +752,32 @@ through `ReimbursementCategoriesService`, to answer one question per claim: is a
 receipt mandatory at this amount?'
 }
 
+Table PasswordResetToken {
+  id String [pk]
+  userId String [not null]
+  user User [not null]
+  tokenHash String [unique, not null, note: 'SHA-256 hex of the raw token. The raw value exists only inside the email.']
+  expiresAt DateTime [not null]
+  consumedAt DateTime
+  requestedById String [note: 'The admin who sent it; null when the holder asked for it themselves.']
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One signed-in period on one device/client, as a chain of rotating refresh tokens
+sharing a `familyId` — see data-model.md "Refresh Token".
+A single-use, time-limited invite carrying the right to set an account\'s first
+password. Only the SHA-256 hash of the token is stored, mirroring how
+`RefreshToken` already handles its own opaque value (010 research.md §2) — so a
+database dump alone can never be turned back into a working invite link.
+A single-use, short-lived link to choose a new password (029 FR-010) — Forgot
+Password, or one an admin sends. Shaped like `InviteToken` on purpose: only the
+SHA-256 of the token is stored, "current" is derived (newest unconsumed row), and a
+redeemed row stays for the audit trail.
+
+A separate table rather than a `purpose` column on `InviteToken`: an invite activates
+a `pending` account and a reset rewrites an `active` one\'s credential, and validation
+that had to branch on which it was holding is where one gets accepted as the other.'
+}
+
 Table InviteToken {
   id String [pk]
   userId String [not null]
@@ -752,13 +786,6 @@ Table InviteToken {
   expiresAt DateTime [not null]
   consumedAt DateTime [note: 'Set when the invite is redeemed, which is what makes it single-use.']
   createdAt DateTime [default: `now()`, not null]
-
-  Note: 'One signed-in period on one device/client, as a chain of rotating refresh tokens
-sharing a `familyId` — see data-model.md "Refresh Token".
-A single-use, time-limited invite carrying the right to set an account\'s first
-password. Only the SHA-256 hash of the token is stored, mirroring how
-`RefreshToken` already handles its own opaque value (010 research.md §2) — so a
-database dump alone can never be turned back into a working invite link.'
 }
 
 Table RefreshToken {
@@ -5497,6 +5524,9 @@ Enum AuditEntityType {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
   COMPANY
   ROLE
   DEPARTMENT
@@ -5600,6 +5630,9 @@ Enum AuditAction {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  PASSWORD_CHANGED
+  PASSWORD_RESET_REQUESTED
+  PASSWORD_RESET_COMPLETED
 }
 
 Enum SiteStatus {
@@ -6359,6 +6392,8 @@ Ref: Shift.companyId > Company.id [delete: Cascade]
 Ref: EmployeeCodeSequence.companyId - Company.id [delete: Cascade]
 
 Ref: ReimbursementCategory.companyId > Company.id [delete: Cascade]
+
+Ref: PasswordResetToken.userId > User.id [delete: Cascade]
 
 Ref: InviteToken.userId > User.id [delete: Cascade]
 

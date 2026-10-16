@@ -172,6 +172,21 @@ const config: Config = {
       maxAttempts: 5,
       durationMinutes: 15,
     },
+    passwordReset: {
+      selfServiceTtlMinutes: numberFromEnv(
+        process.env.PASSWORD_RESET_TTL_MINUTES,
+        30,
+      ),
+      adminTtlHours: numberFromEnv(
+        process.env.ADMIN_PASSWORD_RESET_TTL_HOURS,
+        24,
+      ),
+      minIntervalSeconds: numberFromEnv(
+        process.env.PASSWORD_RESET_MIN_INTERVAL_SECONDS,
+        60,
+      ),
+      maxPerHour: numberFromEnv(process.env.PASSWORD_RESET_MAX_PER_HOUR, 5),
+    },
     refreshCookie: {
       // `lax`, not the old `CORS_ORIGINS ? 'none' : 'strict'` inference. That inference
       // was right about the deployment and wrong about the consequence: `SameSite=None`
