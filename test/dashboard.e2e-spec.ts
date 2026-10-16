@@ -1,6 +1,7 @@
 import { INestApplication, Module } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { hash } from 'argon2';
+import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 
@@ -47,6 +48,9 @@ class E2EDocumentExpiryRule implements ReminderRuleProvider {
   readonly entityType = 'E2E_DOCUMENT';
   readonly leadDays = 30;
   readonly severityLadder = { warnWithinDays: 7 };
+  // Every rule names its module since 2026-10-16; DASHBOARD keeps this one visible to the suite's
+  // callers, which is what it is here to observe.
+  readonly requires = [Permission.DASHBOARD];
 
   isAvailable(): boolean {
     return E2EDocumentExpiryRule.available;
