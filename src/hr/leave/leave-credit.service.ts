@@ -256,6 +256,7 @@ export class LeaveCreditService {
             leaveType: true,
             kind: true,
             period: true,
+            days: true,
           },
         });
         const previousBalances = await tx.leaveBalance.findMany({
@@ -270,6 +271,14 @@ export class LeaveCreditService {
         (e) => `${e.employeeId}|${e.leaveType}|${e.kind}|${e.period}`,
       ),
     );
+    // What each employee has already had from yearly grants this year, so a raised allowance can
+    // be topped up (2026-10-16: HR raising casual leave from 8 to 12 expects the 4 days now).
+    const yearlySoFar = new Map<string, number>();
+    for (const entry of existing) {
+      if (entry.kind !== LeaveLedgerKind.yearly_credit) continue;
+      const k = `${entry.employeeId}|${entry.leaveType}`;
+      yearlySoFar.set(k, (yearlySoFar.get(k) ?? 0) + entry.days.toNumber());
+    }
     const prevBalance = new Map(
       previousBalances.map((b) => [
         `${b.employeeId}|${b.leaveType}`,
@@ -328,23 +337,31 @@ export class LeaveCreditService {
         if (rule.annualDays <= 0) continue;
 
         if (rule.creditMode === LeaveCreditMode.yearly) {
-          if (have.has(key(LeaveLedgerKind.yearly_credit, fy))) continue;
           const monthsLeft = monthsOfYear(
             fy,
             firstMonth,
             `${Number(fy.slice(0, 4)) + 1}-03`,
           ).length;
-          const days =
+          const target =
             rule.prorateJoiners && monthsLeft < 12
               ? toHalf((rule.annualDays * monthsLeft) / 12)
               : rule.annualDays;
-          if (days > 0) {
+          const already =
+            yearlySoFar.get(`${employee.id}|${rule.leaveType}`) ?? 0;
+          // A raised allowance is topped up; a lowered one takes nothing back. The top-up's period
+          // names the allowance it brings the year up to, so each raise is credited once.
+          const due = r2(target - already);
+          const period = already === 0 ? fy : `${fy}:${target}`;
+          if (
+            due > 0 &&
+            !have.has(key(LeaveLedgerKind.yearly_credit, period))
+          ) {
             pending.push({
               employeeId: employee.id,
               leaveType: rule.leaveType,
               kind: LeaveLedgerKind.yearly_credit,
-              period: fy,
-              days,
+              period,
+              days: due,
               column: 'accrued',
             });
           }

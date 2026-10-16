@@ -10,7 +10,12 @@ describe('LeaveCreditService.runCredits', () => {
 
   function build(opts: {
     joined: string;
-    existing?: { leaveType: string; kind: LeaveLedgerKind; period: string }[];
+    existing?: {
+      leaveType: string;
+      kind: LeaveLedgerKind;
+      period: string;
+      days?: number;
+    }[];
     previous?: {
       leaveType: string;
       opening: number;
@@ -35,11 +40,13 @@ describe('LeaveCreditService.runCredits', () => {
         ]),
       },
       leaveLedgerEntry: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue(
-            (opts.existing ?? []).map((e) => ({ employeeId: 'emp-1', ...e })),
-          ),
+        findMany: jest.fn().mockResolvedValue(
+          (opts.existing ?? []).map((e) => ({
+            employeeId: 'emp-1',
+            ...e,
+            days: d(e.days ?? (e.leaveType === 'casual' ? 8 : 7)),
+          })),
+        ),
         create: jest.fn(({ data }) => {
           created.push({
             leaveType: data.leaveType,
@@ -151,5 +158,41 @@ describe('LeaveCreditService.runCredits', () => {
     const { service, created } = build({ joined: '2026-11-01' });
     await service.runCredits(ctx, 'co-1', '2026-10-16');
     expect(created).toEqual([]);
+  });
+
+  it('tops up a raised yearly allowance once, and takes nothing back when it is lowered', async () => {
+    const existing = [
+      {
+        leaveType: 'casual',
+        kind: LeaveLedgerKind.yearly_credit,
+        period: '2026-27',
+        days: 8,
+      },
+    ];
+    const raised = build({ joined: '2020-01-01', existing });
+    const prisma = (
+      raised.service as unknown as {
+        prisma: { tx: Record<string, { findMany: jest.Mock }> };
+      }
+    ).prisma;
+    prisma.tx.leavePolicy.findMany.mockResolvedValue([
+      {
+        leaveType: 'casual',
+        annualDays: d(12),
+        creditMode: 'yearly',
+        carryForward: false,
+        carryForwardCap: null,
+        prorateJoiners: true,
+      },
+    ]);
+    await raised.service.runCredits(ctx, 'co-1', '2026-10-16');
+    expect(raised.created.filter((c) => c.leaveType === 'casual')).toEqual([
+      {
+        leaveType: 'casual',
+        kind: 'yearly_credit',
+        period: '2026-27:12',
+        days: 4,
+      },
+    ]);
   });
 });
