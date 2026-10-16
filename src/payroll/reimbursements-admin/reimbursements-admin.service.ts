@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -85,6 +86,7 @@ export class ReimbursementsAdminService {
   /** Approves a submitted claim (FR-037). */
   async approveClaim(caller: Caller, claimId: string, dto: ApproveClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.approved);
 
     const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -108,6 +110,7 @@ export class ReimbursementsAdminService {
   /** Rejects a submitted claim. Remarks are mandatory (FR-037). */
   async rejectClaim(caller: Caller, claimId: string, dto: RejectClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.rejected);
 
     const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -138,6 +141,7 @@ export class ReimbursementsAdminService {
    */
   async payClaim(caller: Caller, claimId: string, dto: PayClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.paid);
 
     if (
@@ -252,6 +256,29 @@ export class ReimbursementsAdminService {
     );
     if (!claim) throw new NotFoundException('Claim not found');
     return claim;
+  }
+
+  /**
+   * Nobody approves, rejects or pays their own claim (2026-10-16 access-control audit, H3) — the
+   * admin list shows every claim in the company to anyone holding EMPLOYEES, the claimant
+   * included.
+   */
+  private async assertNotOwnClaim(
+    caller: Caller,
+    claim: { employeeId: string },
+  ): Promise<void> {
+    const claimant = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: claim.employeeId },
+        select: { userId: true },
+      }),
+    );
+    if (claimant?.userId && claimant.userId === caller.userId) {
+      throw new ForbiddenException({
+        code: 'SELF_APPROVAL',
+        message: 'You cannot decide your own claim. Another approver must.',
+      });
+    }
   }
 
   /**

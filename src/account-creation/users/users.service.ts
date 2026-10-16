@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -24,6 +25,8 @@ import { EmailService } from '../../shared/email/email.service';
 import { INVITE_TOKEN_TTL_HOURS } from '../constants/account-creation.constants';
 import { TokenService } from '../invites/token.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { assertMayGrant, roleGrants } from '../../settings/roles/grant-ceiling';
+import type { Grant } from '../../auth/authenticated-user';
 import { allocateUsername, isUsernameConflict } from './username';
 
 /** One row of the account list (data-model.md). */
@@ -58,6 +61,9 @@ export interface AdminCaller {
   companyId: string | null;
   ipAddress: string;
   rls: RlsContext;
+  /** What the caller holds — the ceiling on the role they may give (2026-10-16, C2). */
+  permissions: Permission[];
+  grants: Grant[];
 }
 
 @Injectable()
@@ -107,6 +113,30 @@ export class UsersService {
     );
     if (!role) {
       throw new BadRequestException('That role does not exist.');
+    }
+
+    // The new account may hold no more than its creator (2026-10-16 audit, C2). Without this the
+    // form's own role list — which includes Super Admin — let a company administrator mint a
+    // cross-company account.
+    const grants = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      roleGrants(tx, role.id),
+    );
+    assertMayGrant(
+      caller,
+      grants ?? [],
+      `give a new account the ${role.name} role`,
+    );
+    // And only in their own company. Row-level security on the insert says the same; this says
+    // it with a reason rather than a constraint failure.
+    if (
+      !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
+      dto.companyId &&
+      dto.companyId !== caller.rls.companyId
+    ) {
+      throw new ForbiddenException({
+        code: 'COMPANY_NOT_ACCESSIBLE',
+        message: 'You can only create accounts in your own company.',
+      });
     }
 
     // "Super Admin" is a capability, not a name: 001's 2026-08-28 redesign replaced

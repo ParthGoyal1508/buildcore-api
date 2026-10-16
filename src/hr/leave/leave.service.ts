@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   BadRequestException,
   ConflictException,
   HttpException,
@@ -374,6 +375,20 @@ export class LeaveService {
           throw new ConflictException(
             `This application is already ${application.status}.`,
           );
+        }
+        // Nobody decides their own leave (2026-10-16 access-control audit, H3). The review list
+        // shows the whole company's applications to anyone holding ATTENDANCE — the applicant
+        // included — and nothing stopped them approving their own.
+        const applicant = await tx.employee.findFirst({
+          where: { id: application.employeeId },
+          select: { userId: true },
+        });
+        if (applicant?.userId && applicant.userId === caller.userId) {
+          throw new ForbiddenException({
+            code: 'SELF_APPROVAL',
+            message:
+              'You cannot decide your own leave application. Another approver must.',
+          });
         }
 
         const updated = await tx.leaveApplication.update({

@@ -1,4 +1,8 @@
-import { BadRequestException, ConflictException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { Permission, UserStatus } from '@prisma/client';
 import { createPrismaMock } from '../../settings/testing/prisma-mock';
 import { TokenService } from '../invites/token.service';
@@ -27,6 +31,9 @@ describe('UsersService', () => {
     companyId: 'co-1',
     ipAddress: '127.0.0.1',
     rls: { isSuperAdmin: false, companyId: 'co-1' },
+    // Holds everything, so the grant ceiling (2026-10-16) never refuses here; it has its own spec.
+    permissions: Object.values(Permission),
+    grants: [],
   };
 
   let email: { sendInviteEmail: jest.Mock; sendAccountLockedEmail: jest.Mock };
@@ -138,6 +145,35 @@ describe('UsersService', () => {
       await expect(service.create(caller, dto())).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  // 2026-10-16 access-control audit, C2: a company administrator could create a Super Admin.
+  describe('create — grant ceiling', () => {
+    const companyAdmin: AdminCaller = {
+      ...caller,
+      permissions: [Permission.USER_MANAGEMENT, Permission.MY_WORKSPACE],
+      grants: [],
+    };
+
+    it('refuses a role carrying a permission the creator does not hold', async () => {
+      const { service } = build({ role: CROSS_COMPANY_ROLE });
+      await expect(
+        service.create(companyAdmin, dto({ companyId: undefined })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses an account in another company', async () => {
+      const { service } = build();
+      await expect(
+        service.create(companyAdmin, dto({ companyId: 'co-2' })),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('allows a role within what the creator holds, in their own company', async () => {
+      const { service } = build();
+      const result = await service.create(companyAdmin, dto());
+      expect(result.status).toBe(UserStatus.pending);
     });
   });
 

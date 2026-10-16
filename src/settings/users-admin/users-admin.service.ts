@@ -10,6 +10,7 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { assertMayGrant } from '../roles/grant-ceiling';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { UserSummary } from '../../users/user-summary';
@@ -53,6 +54,23 @@ export class UsersAdminService {
     ipAddress: string,
   ): Promise<UserSummary> {
     this.assertMayAdminister(caller);
+
+    if (dto.roleId !== undefined) {
+      // 2026-10-16 audit, C1. Before this, any USER_MANAGEMENT holder could give any account —
+      // their own included — the protected Super Admin role, and with it every company.
+      if (id === caller.id) {
+        throw new ForbiddenException({
+          code: 'OWN_ROLE_CHANGE',
+          message:
+            'You cannot change your own role. Ask another administrator to do it.',
+        });
+      }
+      const grants = await this.usersService.grantsOfRole(dto.roleId);
+      if (grants === null) {
+        throw new ConflictException(`Role ${dto.roleId} does not exist`);
+      }
+      assertMayGrant(caller, grants, 'assign that role');
+    }
 
     // Deactivating the last Super Admin, or moving its role elsewhere, would leave
     // nobody able to administer the system (FR-016). Both are the same failure, so

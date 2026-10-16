@@ -5,6 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { UserStatus } from '@prisma/client';
+import type { Grant } from '../auth/authenticated-user';
+import { roleGrants } from '../settings/roles/grant-ceiling';
 import { PasswordService } from '../auth/password.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -122,6 +124,34 @@ export class UsersService {
 
   /** How many accounts currently hold `roleId` — powers the Roles list's
    * assignedUserCount (002 FR-009). */
+  /**
+   * What a role grants, as area-and-level pairs, or null when there is no such role — the
+   * ceiling check on assigning it (2026-10-16 audit, C1). `Role` is global and carries no
+   * row-level security, so the context is immaterial.
+   */
+  async grantsOfRole(roleId: string): Promise<Grant[] | null> {
+    return roleGrants(this.prisma, roleId);
+  }
+
+  /**
+   * Accounts holding `roleId` outside `companyId` — including cross-company accounts, which
+   * belong to none. Roles are global, so this is what decides whether a company administrator's
+   * edit would reach other companies (2026-10-16 audit, C3).
+   */
+  async countRoleHoldersOutside(
+    roleId: string,
+    companyId: string | null,
+  ): Promise<number> {
+    return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.userRole.count({
+        where: {
+          roleId,
+          OR: [{ companyId: null }, { companyId: { not: companyId ?? '' } }],
+        },
+      }),
+    );
+  }
+
   async countByRoleId(roleId: string): Promise<number> {
     return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.userRole.count({ where: { roleId } }),

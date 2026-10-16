@@ -18,6 +18,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { UsersService } from '../../users/users.service';
+import { assertMayGrant } from './grant-ceiling';
 import { CreateRoleDto } from './dto/create-role.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 
@@ -179,6 +180,8 @@ export class RolesService {
     }
 
     const grantRows = this.grantRowsFor(dto);
+    // 2026-10-16 audit, C3: a role grants no more than its author holds.
+    assertMayGrant(caller, grantRows, 'create that role');
 
     // Custom roles are never protected — only the seeded Super Admin row is.
     const created = await this.prisma.role.create({
@@ -223,6 +226,7 @@ export class RolesService {
     // Checked before touching the database, and regardless of who is asking — the
     // Super Admin role's name and permission set are immutable (FR-008).
     this.assertNotProtected(existing, 'edited');
+    await this.assertOnlyCallersCompany(caller, id, 'edit');
 
     const name = dto.name?.trim();
     if (name && name !== existing.name) {
@@ -246,6 +250,8 @@ export class RolesService {
     const grantRows = dto.permissions
       ? this.grantRowsFor({ permissions: dto.permissions, grants: dto.grants })
       : null;
+    if (grantRows)
+      assertMayGrant(caller, grantRows, 'give that role these permissions');
 
     const updated = await this.prisma.role.update({
       where: { id },
@@ -353,6 +359,7 @@ export class RolesService {
   ): Promise<{ clearedAssignments: number }> {
     const existing = await this.requireRole(id);
     this.assertNotProtected(existing, 'deleted');
+    await this.assertOnlyCallersCompany(caller, id, 'delete');
 
     const clearedAssignments = await this.usersService.clearRoleAssignment(id);
     await this.prisma.role.delete({ where: { id } });
@@ -378,6 +385,30 @@ export class RolesService {
       throw new NotFoundException(`Role ${id} not found`);
     }
     return role;
+  }
+
+  /**
+   * Roles are global — one "Site Admin" serves every company — so a change made from one company
+   * lands on every other company's accounts holding it (2026-10-16 audit, C3). A company-scoped
+   * administrator may therefore change only a role nobody outside their company holds; a role in
+   * wider use is a group administrator's to change.
+   */
+  private async assertOnlyCallersCompany(
+    caller: AuthenticatedUser,
+    roleId: string,
+    verb: string,
+  ): Promise<void> {
+    if (caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) return;
+    const elsewhere = await this.usersService.countRoleHoldersOutside(
+      roleId,
+      caller.companyId,
+    );
+    if (elsewhere > 0) {
+      throw new ForbiddenException({
+        code: 'ROLE_SHARED_ACROSS_COMPANIES',
+        message: `This role is also held by accounts outside your company, so only a group administrator can ${verb} it. Create a role of your own instead.`,
+      });
+    }
   }
 
   private assertNotProtected(role: Role, verb: string): void {

@@ -135,13 +135,20 @@ export class ExportJobService {
     };
   }
 
-  /** A poll of one job's status, company-scoped (contracts/dashboard-api.md). */
+  /**
+   * A poll of one job's status — the requester's own (contracts/dashboard-api.md).
+   *
+   * Every read below is narrowed to `requestedByUserId` (2026-10-16 access-control audit, H4).
+   * They were company-scoped only, so anyone holding REPORTS could download a colleague's payroll
+   * or attendance export by id, and their own bell "announced" it — marking it notified, so the
+   * person who ran it was never told it was ready.
+   */
   async status(
     user: AuthenticatedUser,
     id: string,
   ): Promise<ExportJobStatusView> {
     const job = await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
-      tx.exportJob.findFirst({ where: { id } }),
+      tx.exportJob.findFirst({ where: { id, requestedByUserId: user.id } }),
     );
     if (!job) throw new NotFoundException('Export job not found');
     return {
@@ -160,7 +167,7 @@ export class ExportJobService {
     id: string,
   ): Promise<{ buffer: Buffer; contentType: string; filename: string }> {
     const job = await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
-      tx.exportJob.findFirst({ where: { id } }),
+      tx.exportJob.findFirst({ where: { id, requestedByUserId: user.id } }),
     );
     if (!job || job.status !== ExportJobStatus.ready || !job.fileRef) {
       throw new NotFoundException('Export not ready');
@@ -179,7 +186,11 @@ export class ExportJobService {
   ): Promise<{ id: string; reportType: string; completedAt: Date | null }[]> {
     return withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
       tx.exportJob.findMany({
-        where: { status: ExportJobStatus.ready, notifiedAt: null },
+        where: {
+          status: ExportJobStatus.ready,
+          notifiedAt: null,
+          requestedByUserId: user.id,
+        },
         select: { id: true, reportType: true, completedAt: true },
         orderBy: { completedAt: 'desc' },
       }),
@@ -191,7 +202,7 @@ export class ExportJobService {
     if (ids.length === 0) return;
     await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
       tx.exportJob.updateMany({
-        where: { id: { in: ids } },
+        where: { id: { in: ids }, requestedByUserId: user.id },
         data: { notifiedAt: new Date() },
       }),
     );
