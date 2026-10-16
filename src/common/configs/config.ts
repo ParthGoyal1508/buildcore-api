@@ -374,7 +374,8 @@ const config: Config = {
   payrollSchedule: {
     // 00:30 on the 1st: late enough that the last day of the month is certainly over in
     // the business timezone, early enough that the run is waiting when HR arrives.
-    cron: process.env.PAYROLL_SCHEDULE_CRON || '30 0 1 * *',
+    // 2026-10-16: each of the first seven days, so a missed 1st is caught up — see the cron.
+    cron: process.env.PAYROLL_SCHEDULE_CRON || '30 0 1-7 * *',
     // Defaults to the same business timezone attendance already uses, so "the 1st"
     // means one thing across the product.
     timeZone:

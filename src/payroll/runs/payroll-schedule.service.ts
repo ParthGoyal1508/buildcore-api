@@ -95,8 +95,13 @@ export class PayrollScheduleService {
         if (existing) {
           result.alreadyPresent.push(company.id);
           // Still ensure it is in a chain: a run created manually before the schedule
-          // fired must not skip approval simply because it got there first.
-          await this.submitForApproval(company.id, existing.id, period);
+          // fired must not skip approval simply because it got there first. But only one that
+          // has never been submitted (2026-10-16): the sweep now repeats over the first week of
+          // the month, and a run already approved or rejected must not be pulled back into a
+          // fresh chain the next morning.
+          await this.submitForApproval(company.id, existing.id, period, {
+            onlyIfNeverSubmitted: true,
+          });
           continue;
         }
 
@@ -245,6 +250,7 @@ export class PayrollScheduleService {
     companyId: string,
     runId: string,
     period?: string,
+    options: { onlyIfNeverSubmitted?: boolean } = {},
   ): Promise<void> {
     const existing = await this.approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
@@ -252,6 +258,9 @@ export class PayrollScheduleService {
       companyId,
     );
     if (existing && isLive(existing.state)) return;
+    // The sweep's guard: any chain at all — approved, rejected or abandoned — means this run has
+    // been through approval, and a scheduled job is not the one to start it again.
+    if (existing && options.onlyIfNeverSubmitted) return;
 
     const run = period ? { period } : await this.findRunById(companyId, runId);
 
