@@ -8,6 +8,7 @@ import {
   AuditAction,
   AuditEntityType,
   EngagementType,
+  LabourGender,
   Prisma,
   WorkerStatus,
 } from '@prisma/client';
@@ -17,8 +18,15 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
-import { assertInScope, companyScope } from '../../settings/company-scope';
-import { BiometricsService } from '../../hr/biometrics/biometrics.service';
+import {
+  assertInScope,
+  companyScope,
+  resolveCompanyId,
+} from '../../settings/company-scope';
+import {
+  BiometricsService,
+  NoFaceDetectedError,
+} from '../../hr/biometrics/biometrics.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
 import {
@@ -30,6 +38,7 @@ import {
   WORKER_FACE_NAMESPACE,
 } from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
+import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 
 /** Masks a PII string to its last 4 characters (FR-009). Null stays null. */
 export function maskPii(value: string | null): string | null {
@@ -43,8 +52,10 @@ export interface WorkerListItem {
   id: string;
   labourCode: string;
   fullName: string;
-  phone: string;
-  skillCategoryId: string;
+  fatherName: string | null;
+  gender: LabourGender | null;
+  phone: string | null;
+  skillCategoryId: string | null;
   engagementType: EngagementType;
   contractorId: string | null;
   siteId: string;
@@ -70,14 +81,17 @@ export class LabourWorkerService {
     private readonly storage: StorageService,
     private readonly biometrics: BiometricsService,
     private readonly images: ImageProcessingService,
+    private readonly supervisorSites: SupervisorSiteService,
   ) {}
 
   private toListItem(row: {
     id: string;
     labourCode: string;
     fullName: string;
-    phone: string;
-    skillCategoryId: string;
+    fatherName: string | null;
+    gender: LabourGender | null;
+    phone: string | null;
+    skillCategoryId: string | null;
     engagementType: EngagementType;
     contractorId: string | null;
     siteId: string;
@@ -90,6 +104,8 @@ export class LabourWorkerService {
       id: row.id,
       labourCode: row.labourCode,
       fullName: row.fullName,
+      fatherName: row.fatherName,
+      gender: row.gender,
       phone: row.phone,
       skillCategoryId: row.skillCategoryId,
       engagementType: row.engagementType,
@@ -120,10 +136,19 @@ export class LabourWorkerService {
       MAX_PAGE_SIZE,
     );
 
+    // A supervisor sees labour only at the sites assigned to them (031).
+    const allowed = await this.supervisorSites.allowedSiteIds(caller);
+    if (query.siteId && allowed !== null && !allowed.includes(query.siteId)) {
+      return { items: [], total: 0, page, pageSize };
+    }
     const where: Prisma.LabourWorkerWhereInput = {
       ...companyScope(caller, query.companyId),
       deletedAt: null,
-      ...(query.siteId ? { siteId: query.siteId } : {}),
+      ...(query.siteId
+        ? { siteId: query.siteId }
+        : allowed !== null
+        ? { siteId: { in: allowed } }
+        : {}),
       ...(query.skillCategoryId
         ? { skillCategoryId: query.skillCategoryId }
         : {}),
@@ -134,6 +159,7 @@ export class LabourWorkerService {
               { fullName: { contains: query.search, mode: 'insensitive' } },
               { labourCode: { contains: query.search, mode: 'insensitive' } },
               { phone: { contains: query.search } },
+              { fatherName: { contains: query.search, mode: 'insensitive' } },
             ],
           }
         : {}),
@@ -176,36 +202,44 @@ export class LabourWorkerService {
       throw new NotFoundException(`Worker ${id} not found`);
     }
     assertInScope(caller, row, `Worker ${id}`);
+    await this.assertSiteVisible(caller, row.siteId, id);
     return {
       ...this.toListItem(row),
       rateOverride: row.rateOverride ? row.rateOverride.toNumber() : null,
     };
   }
 
+  /**
+   * Registers labour (031): name and gender required, father's name and mobile optional, at a
+   * site the caller is assigned to. When `photos` come with it, the face template is built first,
+   * so a photo with no usable face fails the registration instead of leaving labour on the list
+   * who can never be punched in.
+   */
   async create(
     caller: AuthenticatedUser,
     dto: {
       companyId?: string;
       fullName: string;
-      phone: string;
-      gender: string;
-      dateOfBirth: string;
-      skillCategoryId: string;
-      engagementType: EngagementType;
-      contractorId?: string;
+      gender: LabourGender;
+      fatherName?: string;
+      phone?: string;
       siteId: string;
+      photos?: string[];
+      dateOfBirth?: string;
+      skillCategoryId?: string;
+      engagementType?: EngagementType;
+      contractorId?: string;
       aadhaarNumber?: string;
       bankAccount?: string;
       rateOverride?: number;
     },
     ipAddress: string,
   ): Promise<WorkerListItem> {
-    const companyId = companyScope(caller, dto.companyId).companyId;
-    if (!companyId) {
-      throw new NotFoundException('Company not found');
-    }
+    const companyId = resolveCompanyId(caller, dto.companyId);
+    await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
 
-    if (dto.engagementType === EngagementType.contractor) {
+    const engagementType = dto.engagementType ?? EngagementType.direct;
+    if (engagementType === EngagementType.contractor) {
       if (!dto.contractorId) {
         throw new BadRequestException(
           'A contractor is required for a contractor-engaged worker',
@@ -213,57 +247,72 @@ export class LabourWorkerService {
       }
       await this.refs.assertActiveContractor(caller, dto.contractorId);
     }
+    if (dto.skillCategoryId) {
+      await this.refs.requireSkillCategory(caller, dto.skillCategoryId);
+    }
 
-    await this.refs.requireSkillCategory(caller, dto.skillCategoryId);
+    const faceEnrolmentId = dto.photos
+      ? await this.storeFaceTemplate(dto.photos)
+      : null;
 
-    const created = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      async (tx) => {
-        if (dto.aadhaarNumber) {
-          const clash = await tx.labourWorker.findFirst({
-            where: {
+    let created;
+    try {
+      created = await withRlsContext(
+        this.prisma,
+        rlsContextFor(caller),
+        async (tx) => {
+          if (dto.aadhaarNumber) {
+            const clash = await tx.labourWorker.findFirst({
+              where: {
+                companyId,
+                aadhaarNumber: dto.aadhaarNumber,
+                status: WorkerStatus.active,
+                deletedAt: null,
+              },
+            });
+            if (clash) {
+              throw new ConflictException({
+                message: 'A worker with this Aadhaar already exists',
+                existingWorkerId: clash.id,
+              });
+            }
+          }
+
+          const labourCode = await this.nextLabourCode(tx, companyId);
+
+          return tx.labourWorker.create({
+            data: {
               companyId,
-              aadhaarNumber: dto.aadhaarNumber,
-              status: WorkerStatus.active,
-              deletedAt: null,
+              labourCode,
+              fullName: dto.fullName.trim(),
+              fatherName: dto.fatherName?.trim() || null,
+              phone: dto.phone?.trim() || null,
+              gender: dto.gender,
+              dateOfBirth: dto.dateOfBirth
+                ? new Date(`${dto.dateOfBirth.slice(0, 10)}T00:00:00.000Z`)
+                : null,
+              skillCategoryId: dto.skillCategoryId ?? null,
+              engagementType,
+              contractorId:
+                engagementType === EngagementType.contractor
+                  ? dto.contractorId
+                  : null,
+              siteId: dto.siteId,
+              aadhaarNumber: dto.aadhaarNumber ?? null,
+              bankAccount: dto.bankAccount ?? null,
+              rateOverride: dto.rateOverride ?? null,
+              faceEnrolmentId,
+              createdBy: caller.id,
             },
           });
-          if (clash) {
-            throw new ConflictException({
-              message: 'A worker with this Aadhaar already exists',
-              existingWorkerId: clash.id,
-            });
-          }
-        }
-
-        const labourCode = await this.nextLabourCode(tx, companyId);
-
-        return tx.labourWorker.create({
-          data: {
-            companyId,
-            labourCode,
-            fullName: dto.fullName.trim(),
-            phone: dto.phone.trim(),
-            gender: dto.gender,
-            dateOfBirth: new Date(
-              `${dto.dateOfBirth.slice(0, 10)}T00:00:00.000Z`,
-            ),
-            skillCategoryId: dto.skillCategoryId,
-            engagementType: dto.engagementType,
-            contractorId:
-              dto.engagementType === EngagementType.contractor
-                ? dto.contractorId
-                : null,
-            siteId: dto.siteId,
-            aadhaarNumber: dto.aadhaarNumber ?? null,
-            bankAccount: dto.bankAccount ?? null,
-            rateOverride: dto.rateOverride ?? null,
-            createdBy: caller.id,
-          },
-        });
-      },
-    );
+        },
+      );
+    } catch (err) {
+      if (faceEnrolmentId) {
+        await this.storage.delete(faceEnrolmentId).catch(() => undefined);
+      }
+      throw err;
+    }
 
     await this.auditLog.record({
       entityType: AuditEntityType.LABOUR_WORKER,
@@ -297,6 +346,7 @@ export class LabourWorkerService {
           throw new NotFoundException(`Worker ${id} not found`);
         }
         assertInScope(caller, existing, `Worker ${id}`);
+        await this.supervisorSites.assertSiteAllowed(caller, existing.siteId);
 
         await tx.gangMember.updateMany({
           where: { workerId: id, isActive: true },
@@ -349,26 +399,19 @@ export class LabourWorkerService {
     }
     assertInScope(caller, worker, `Worker ${id}`);
 
-    const decoded = photos.map((p, i) =>
-      decodePhotoPayload(p, `Enrolment photo ${i + 1}`),
-    );
-    const compressed = await Promise.all(
-      decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),
-    );
-    const descriptor = await this.biometrics.computeDescriptor(compressed);
-    const serialized = this.biometrics.serializeDescriptor(descriptor);
-    const ref = await this.storage.put(
-      WORKER_FACE_NAMESPACE,
-      serialized,
-      'application/octet-stream',
-    );
+    await this.supervisorSites.assertSiteAllowed(caller, worker.siteId);
 
+    const ref = await this.storeFaceTemplate(photos);
     await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.labourWorker.update({
         where: { id },
         data: { faceEnrolmentId: ref },
       }),
     );
+    // The replaced template is unreachable from here on.
+    if (worker.faceEnrolmentId) {
+      await this.storage.delete(worker.faceEnrolmentId).catch(() => undefined);
+    }
 
     await this.auditLog.record({
       entityType: AuditEntityType.LABOUR_WORKER,
@@ -402,13 +445,67 @@ export class LabourWorkerService {
     }
   }
 
+  /**
+   * Builds the averaged face template from 3–5 photos and stores it encrypted, returning its ref.
+   * Every photo must show a detectable face; the descriptor computation rejects one that does not.
+   */
+  private async storeFaceTemplate(photos: string[]): Promise<string> {
+    const decoded = photos.map((p, i) =>
+      decodePhotoPayload(p, `Face photo ${i + 1}`),
+    );
+    const compressed = await Promise.all(
+      decoded.map((photo) => this.images.compressEnrolmentPhoto(photo)),
+    );
+    let descriptor: Float32Array;
+    try {
+      descriptor = await this.biometrics.computeDescriptor(compressed);
+    } catch (error) {
+      if (error instanceof NoFaceDetectedError) {
+        throw new BadRequestException({
+          code: 'LABOUR_FACE_NOT_DETECTED',
+          message: `${error.message} Retake it in good light with the face filling the frame.`,
+        });
+      }
+      throw error;
+    }
+    return this.storage.put(
+      WORKER_FACE_NAMESPACE,
+      this.biometrics.serializeDescriptor(descriptor),
+      'application/octet-stream',
+    );
+  }
+
+  private async assertSiteVisible(
+    caller: AuthenticatedUser,
+    siteId: string,
+    id: string,
+  ): Promise<void> {
+    const allowed = await this.supervisorSites.allowedSiteIds(caller);
+    if (allowed !== null && !allowed.includes(siteId)) {
+      throw new NotFoundException(`Worker ${id} not found`);
+    }
+  }
+
+  /**
+   * The next code from the company's counter (031). `count()+1` handed two simultaneous
+   * registrations the same code, and reused a number once anyone was deleted. The first call for a
+   * company seeds the counter past the highest code already issued.
+   */
   private async nextLabourCode(
     tx: Prisma.TransactionClient,
     companyId: string,
   ): Promise<string> {
-    const count = await tx.labourWorker.count({ where: { companyId } });
-    const next = count + 1;
-    return `${LABOUR_CODE_PREFIX}-${String(next).padStart(
+    const [{ lastNumber }] = await tx.$queryRaw<{ lastNumber: number }[]>`
+      INSERT INTO "labour"."LabourCodeSequence" ("companyId", "lastNumber")
+      VALUES (
+        ${companyId},
+        (SELECT COALESCE(MAX(NULLIF(regexp_replace("labourCode", '[^0-9]', '', 'g'), '')::int), 0) + 1
+           FROM "labour"."LabourWorker" WHERE "companyId" = ${companyId})
+      )
+      ON CONFLICT ("companyId")
+      DO UPDATE SET "lastNumber" = "labour"."LabourCodeSequence"."lastNumber" + 1
+      RETURNING "lastNumber"`;
+    return `${LABOUR_CODE_PREFIX}-${String(lastNumber).padStart(
       LABOUR_CODE_PAD,
       '0',
     )}`;

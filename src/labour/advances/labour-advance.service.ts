@@ -19,6 +19,8 @@ import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { SkillCategoriesService } from '../../settings/skill-categories/skill-categories.service';
 import { LabourRefsService } from '../labour-refs.service';
+import { SiteWageRateService } from '../site-rates/site-wage-rate.service';
+import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { roundMoney } from '../payment-sheets/wage-calc.util';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
 
@@ -43,6 +45,7 @@ export class LabourAdvanceService {
     private readonly auditLog: AuditLogService,
     private readonly refs: LabourRefsService,
     private readonly skillCategories: SkillCategoriesService,
+    private readonly siteRates: SiteWageRateService,
   ) {}
 
   async findAll(
@@ -274,6 +277,10 @@ export class LabourAdvanceService {
     };
   }
 
+  /**
+   * Today's daily rate for the advance limit: the worker's override, else their site's rate for
+   * their gender (031), else the pre-031 skill default.
+   */
   private async workerDailyRate(
     caller: AuthenticatedUser,
     workerId: string,
@@ -287,6 +294,8 @@ export class LabourAdvanceService {
           select: {
             rateOverride: true,
             skillCategoryId: true,
+            siteId: true,
+            gender: true,
             deletedAt: true,
           },
         }),
@@ -295,6 +304,23 @@ export class LabourAdvanceService {
       throw new BadRequestException(`Worker ${workerId} not found`);
     }
     if (worker.rateOverride) return worker.rateOverride.toNumber();
+    if (worker.gender) {
+      const today = parseDateOnly(
+        zonedDateOnly(new Date(), this.refs.timeZone),
+      );
+      const siteRate = await withRlsContext(
+        this.prisma,
+        rlsContextFor(caller),
+        (tx) =>
+          this.siteRates.resolve(tx, {
+            siteId: worker.siteId,
+            gender: worker.gender,
+            date: today,
+          }),
+      );
+      if (siteRate !== null) return siteRate;
+    }
+    if (!worker.skillCategoryId) return null;
     const category = await this.skillCategories.getById(
       caller,
       worker.skillCategoryId,

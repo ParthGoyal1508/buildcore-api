@@ -4064,18 +4064,18 @@ model LeaveLedgerEntry {
   employeeId String
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  leaveType     LeaveTypeCode
-  financialYear String
-  kind          LeaveLedgerKind
+  leaveType       LeaveTypeCode
+  financialYear   String
+  kind            LeaveLedgerKind
   /// `YYYY-MM` for a monthly credit, the financial year for a yearly credit, carry-forward or
   /// import, and a unique token for an adjustment (several may fall in one year).
-  period        String
+  period          String
   /// Signed: an adjustment may take days away.
-  days          Decimal         @db.Decimal(6, 2)
-  reason        String?
+  days            Decimal         @db.Decimal(6, 2)
+  reason          String?
   /// Null for the system (the crediting job).
   createdByUserId String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   @@unique([employeeId, leaveType, financialYear, kind, period])
   @@index([companyId, financialYear])
@@ -7751,6 +7751,8 @@ enum WorkerStatus {
 enum MusterSource {
   mobile
   admin_entry
+  /// 031: built from supervisor face punches, one roll per site and day.
+  face_punch
 
   @@schema("labour")
 }
@@ -7775,6 +7777,34 @@ enum AttendanceType {
 enum RateSource {
   override
   project_rate
+  /// 031: the site's male/female daily rate.
+  site_rate
+
+  @@schema("labour")
+}
+
+/// 031: the two rates HR sets per site. Labour-schema owned rather than reusing `hr.Gender`,
+/// which also carries `other` — a value no site rate exists for.
+enum LabourGender {
+  male
+  female
+
+  @@schema("labour")
+}
+
+enum LabourPunchType {
+  in
+  out
+
+  @@schema("labour")
+}
+
+/// 031: why a labour punch was refused. Mirrors `hr.PunchRefusalReason` value for value.
+enum LabourPunchRefusalReason {
+  outside_geofence
+  unlocatable
+  face_mismatch
+  no_face_detected
 
   @@schema("labour")
 }
@@ -7854,17 +7884,21 @@ model LabourWorker {
   labourCode String
 
   fullName    String
-  phone       String
-  gender      String
-  dateOfBirth DateTime @db.Date
+  /// 031: optional — a supervisor registering at the gate may have neither.
+  fatherName  String?
+  phone       String?
+  /// Null only for workers registered before 031 whose free-text gender did not read as
+  /// male or female; such a worker cannot be priced until it is set.
+  gender      LabourGender?
+  dateOfBirth DateTime?     @db.Date
 
   aadhaarNumber String?
   bankAccount   String?
 
-  /// → settings.SkillCategory.
-  skillCategoryId String
+  /// → settings.SkillCategory. Optional since 031: pay comes from the site rate.
+  skillCategoryId String?
 
-  engagementType EngagementType
+  engagementType EngagementType @default(direct)
   /// Required when `engagementType` is contractor (FR-008); → partners vendor
   /// resolved via PartnersService (FR-034).
   contractorId   String?
@@ -8022,7 +8056,7 @@ model MusterLine {
 
   /// Snapshot of the worker's skill category at capture time so a mid-period skill
   /// change prices historical days correctly.
-  skillCategoryIdOnDay String
+  skillCategoryIdOnDay String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -8040,7 +8074,11 @@ model LabourPaymentSheet {
   id        String @id @default(cuid())
   companyId String
 
-  projectId String
+  /// The site's project for a 031 site sheet (null when the site has none); the billed
+  /// project for a pre-031 project sheet.
+  projectId String?
+  /// 031: set on a site sheet, null on a pre-031 project sheet.
+  siteId    String?
 
   periodFrom DateTime @db.Date
   periodTo   DateTime @db.Date
@@ -8072,6 +8110,7 @@ model LabourPaymentSheet {
 
   @@index([companyId])
   @@index([companyId, projectId, engagementType])
+  @@index([companyId, siteId])
   @@index([companyId, status])
   @@schema("labour")
 }
@@ -9315,4 +9354,117 @@ model Resignation {
   @@index([companyId, employeeId])
   @@index([companyId, status])
   @@schema("recruitment")
+}
+
+/// 031: the male and female daily rate HR sets for a site, effective-dated and appended
+/// forward exactly as `WageRate` is, so a sheet for a past period prices at the rate then in force.
+model SiteWageRate {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// → projects.Site.
+  siteId String
+  gender LabourGender
+
+  dailyRate     Decimal   @db.Decimal(12, 2)
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, siteId, gender, effectiveFrom])
+  @@schema("labour")
+}
+
+/// 031: the sites a supervisor may register labour at and mark attendance for.
+model SupervisorSite {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// → shared.User.
+  userId String
+  /// → projects.Site.
+  siteId String
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  @@unique([userId, siteId])
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@schema("labour")
+}
+
+/// 031: the last labour code number issued per company, bumped with UPDATE … RETURNING so two
+/// supervisors registering at the same moment can never be handed the same code.
+model LabourCodeSequence {
+  companyId  String @id
+  lastNumber Int    @default(0)
+
+  @@schema("labour")
+}
+
+/// 031: one accepted face punch. The day's muster line is derived from these: punch-in alone is
+/// a half day, punch-in and punch-out a full day.
+model LabourPunch {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId  String
+  siteId    String
+  /// Company-timezone calendar day.
+  punchDate DateTime        @db.Date
+  type      LabourPunchType
+  /// Server time — the punch is online-only, so the supervisor's clock is never trusted.
+  punchedAt DateTime        @default(now())
+
+  /// The supervisor (User) who took the photo.
+  supervisorId String
+
+  photoRef          String
+  faceMatchDistance Decimal @db.Decimal(6, 4)
+
+  latitude               Decimal  @db.Decimal(10, 7)
+  longitude              Decimal  @db.Decimal(10, 7)
+  accuracyMetres         Decimal? @db.Decimal(8, 2)
+  geofenceDistanceMetres Decimal  @db.Decimal(10, 2)
+  /// Outside the fence or unlocatable, accepted because the company has not switched the
+  /// punch block on — the same rule employee punches follow.
+  geofenceViolation      Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([workerId, punchDate, type])
+  @@index([companyId])
+  @@index([companyId, siteId, punchDate])
+  @@schema("labour")
+}
+
+/// 031: a refused labour punch. Nothing is written to attendance, so this is the only trace.
+model LabourPunchRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId     String
+  siteId       String
+  type         LabourPunchType
+  reason       LabourPunchRefusalReason
+  supervisorId String
+
+  latitude          Decimal  @db.Decimal(10, 7)
+  longitude         Decimal  @db.Decimal(10, 7)
+  accuracyMetres    Decimal? @db.Decimal(8, 2)
+  distanceMetres    Decimal? @db.Decimal(10, 2)
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([companyId, siteId, createdAt])
+  @@schema("labour")
 }

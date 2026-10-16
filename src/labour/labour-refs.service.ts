@@ -114,6 +114,16 @@ export class LabourRefsService {
     return category;
   }
 
+  /** The company's GPS accuracy limit for a punch — the same one employee punches use (031). */
+  async getPunchAccuracyMaxMetres(companyId: string): Promise<number> {
+    return this.companies.getPunchAccuracyMaxMetres(companyId);
+  }
+
+  /** Whether a location failure refuses a punch or only flags it — the employee rule (031). */
+  async isPunchBlockEnforced(companyId: string): Promise<boolean> {
+    return this.companies.isPunchBlockEnforced(companyId);
+  }
+
   async getLabourSettings(companyId: string) {
     return this.companies.getLabourSettings(companyId);
   }

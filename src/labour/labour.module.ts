@@ -25,6 +25,15 @@ import { PaymentSheetService } from './payment-sheets/payment-sheet.service';
 import { LabourReportsController } from './reports/labour-reports.controller';
 import { LabourReportsService } from './reports/labour-reports.service';
 import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service';
+import { LabourPunchController } from './attendance/labour-punch.controller';
+import { LabourPunchService } from './attendance/labour-punch.service';
+import { SiteWageRateController } from './site-rates/site-wage-rate.controller';
+import { SiteWageRateService } from './site-rates/site-wage-rate.service';
+import { SupervisorSiteController } from './supervisor-sites/supervisor-site.controller';
+import { SupervisorSiteService } from './supervisor-sites/supervisor-site.service';
+import { UsersModule } from '../users/users.module';
+import { LabourSheetsController } from './reports/labour-sheets.controller';
+import { LabourSheetsService } from './reports/labour-sheets.service';
 
 /**
  * The `labour` module (feature 013): per-project wage rates, workers and gangs,
@@ -43,7 +52,7 @@ import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service'
  * `projects` needs from `labour` arrives as a service call, never a cross-schema join.
  */
 @Module({
-  imports: [SettingsModule, ProjectsModule, PartnersModule],
+  imports: [SettingsModule, ProjectsModule, PartnersModule, UsersModule],
   controllers: [
     WageRateController,
     SkillCategoriesController,
@@ -53,6 +62,10 @@ import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service'
     LabourAdvanceController,
     PaymentSheetController,
     LabourReportsController,
+    LabourPunchController,
+    SiteWageRateController,
+    SupervisorSiteController,
+    LabourSheetsController,
   ],
   providers: [
     LabourRefsService,
@@ -65,6 +78,10 @@ import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service'
     PaymentSheetService,
     LabourReportsService,
     MonthlyWageRollupService,
+    LabourPunchService,
+    SiteWageRateService,
+    SupervisorSiteService,
+    LabourSheetsService,
     ImageProcessingService,
     AuditLogService,
     { provide: BiometricsService, useClass: FaceApiBiometricsService },
