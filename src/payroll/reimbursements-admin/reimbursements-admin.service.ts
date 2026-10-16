@@ -54,6 +54,13 @@ export class ReimbursementsAdminService {
       // Drafts belong to the employee who has not submitted them yet; an admin
       // list that included them would show claims nobody has asked for.
       status: query.status ?? { not: ReimbursementClaimStatus.draft },
+      // HR's submitted queue holds only what is HR's to decide (2026-10-16): no reporting manager,
+      // or the manager has approved it on. One still with the manager is not HR's yet.
+      ...(query.status === ReimbursementClaimStatus.submitted
+        ? {
+            OR: [{ managerUserId: null }, { managerDecidedAt: { not: null } }],
+          }
+        : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.from || query.to
         ? {
@@ -265,8 +272,20 @@ export class ReimbursementsAdminService {
    */
   private async assertNotOwnClaim(
     caller: Caller,
-    claim: { employeeId: string },
+    claim: {
+      employeeId: string;
+      managerUserId: string | null;
+      managerDecidedAt: Date | null;
+    },
   ): Promise<void> {
+    // Still with the reporting manager (2026-10-16): not HR's to decide yet.
+    if (claim.managerUserId && !claim.managerDecidedAt) {
+      throw new ConflictException({
+        code: 'AWAITING_MANAGER',
+        message:
+          'This claim is still with the employee’s reporting manager. HR decides it once they have approved it.',
+      });
+    }
     const claimant = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findFirst({
         where: { id: claim.employeeId },

@@ -33,6 +33,8 @@ import { PiiCipherService } from './employees/pii-cipher.service';
 import { PiiMaskingInterceptor } from './employees/pii-masking.interceptor';
 import { LeaveAdminController } from './leave/leave-admin.controller';
 import { LeaveHrAdminController } from './leave/leave-hr-admin.controller';
+import { ReimbursementTeamController } from './reimbursements/reimbursement-team.controller';
+import { LeaveTeamController } from './leave/leave-team.controller';
 import { LeaveController } from './leave/leave.controller';
 import { LeaveService } from './leave/leave.service';
 import { AttendanceHistoryService } from './punch/attendance-history.service';
@@ -86,6 +88,8 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     LettersModule,
   ],
   controllers: [
+    LeaveTeamController,
+    ReimbursementTeamController,
     LocationAssignmentsController,
     ExitClearanceController,
     EmployeesController,

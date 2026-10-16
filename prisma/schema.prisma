@@ -3927,11 +3927,22 @@ model LeaveApplication {
   decidedByUserId String?
   decidedAt       DateTime?
 
+  /// The reporting manager's login, who decides first (2026-10-16: "first go to reporting manager
+  /// and then HR"). Null when the employee has no reporting manager with a login — the application
+  /// then goes straight to HR, as every one did before. Set at application and never changed, so
+  /// a later change of manager does not move an application already in somebody's queue.
+  managerUserId    String?
+  /// When the manager approved it on to HR. A manager's rejection is final and is recorded in the
+  /// decision fields above instead.
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([employeeId, fromDate, toDate])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 
@@ -3997,11 +4008,18 @@ model ReimbursementClaim {
   decidedAt       DateTime?
   adminRemarks    String?
 
+  /// The reporting manager's login, who decides first (2026-10-16) — the same stage as
+  /// `LeaveApplication.managerUserId`, set when the claim is submitted.
+  managerUserId    String?
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([companyId, status])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 
