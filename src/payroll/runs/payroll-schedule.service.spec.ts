@@ -196,6 +196,23 @@ describe('PayrollScheduleService.createRunsForPreviousPeriod (T031, T039)', () =
     expect(approvals.submit).not.toHaveBeenCalled();
   });
 
+  // 2026-10-16: the sweep repeats over the first week, so it must never reopen a finished chain.
+  it.each(['approved', 'rejected', 'abandoned'] as const)(
+    'does not resubmit a run whose chain is already %s',
+    async (state) => {
+      const { service, approvals } = harness({
+        existingRuns: {
+          'co-1': { id: 'run-1', status: PayrollRunStatus.draft },
+        },
+        companies: [{ id: 'co-1' }],
+        approval: view({ state }),
+      });
+
+      await service.createRunsForPreviousPeriod(onTheFirst);
+      expect(approvals.submit).not.toHaveBeenCalled();
+    },
+  );
+
   it('is idempotent across a repeated fire', async () => {
     // The real guarantee is the partial unique index; this proves the service does not
     // fight it, and that a second sweep reports rather than duplicates.
