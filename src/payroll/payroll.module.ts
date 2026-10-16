@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { AuditLogService } from '../auth/audit-log.service';
+import { MyPayrollController } from './my-payroll.controller';
 import { HrModule } from '../hr/hr.module';
 import { SettingsModule } from '../settings/settings.module';
 import { ChallansController } from './challans/challans.controller';
@@ -58,6 +59,7 @@ import { SalaryService } from './salary/salary.service';
     forwardRef(() => PlantModule),
   ],
   controllers: [
+    MyPayrollController,
     SalaryController,
     EmployeeSalaryController,
     PayrollRunsController,

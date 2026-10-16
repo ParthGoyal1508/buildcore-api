@@ -38,6 +38,8 @@ function build(users: Record<string, jest.Mock> = {}) {
       status: UserStatus.active,
       email: 'u@example.test',
     }),
+    // The viewer role these fixtures assign grants nothing beyond what every caller holds.
+    grantsOfRole: jest.fn().mockResolvedValue([]),
     ...users,
   };
   const auditLog = { record: jest.fn() };
@@ -240,6 +242,52 @@ describe('UsersAdminService', () => {
       );
       expect(usersService.accountStatus).not.toHaveBeenCalled();
       expect(deactivation.afterDeactivation).not.toHaveBeenCalled();
+    });
+  });
+
+  // 2026-10-16 access-control audit, C1.
+  describe('role assignment ceiling', () => {
+    it('refuses a role carrying a permission the caller does not hold', async () => {
+      const { service, usersService } = build({
+        grantsOfRole: jest
+          .fn()
+          .mockResolvedValue([
+            { permission: Permission.CROSS_COMPANY_ACCESS, level: 'read' },
+          ]),
+      });
+      await expect(
+        service.update(hoUser, 'user-2', { roleId: 'role-super' }, '127.0.0.1'),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    });
+
+    it('refuses a change to the caller’s own role', async () => {
+      const { service, usersService } = build();
+      await expect(
+        service.update(
+          hoUser,
+          'caller-1', // hoUser's own id (callerFor)
+          { roleId: 'role-viewer' },
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    });
+
+    it('allows a role within what the caller holds', async () => {
+      const { service, usersService } = build({
+        grantsOfRole: jest.fn().mockResolvedValue([
+          { permission: Permission.USER_MANAGEMENT, level: 'write' },
+          { permission: Permission.MY_WORKSPACE, level: 'read' },
+        ]),
+      });
+      await service.update(
+        hoUser,
+        'user-2',
+        { roleId: 'role-admin' },
+        '127.0.0.1',
+      );
+      expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
     });
   });
 });

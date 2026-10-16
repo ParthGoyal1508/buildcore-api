@@ -1,5 +1,6 @@
 import { PrismaService } from 'nestjs-prisma';
 import {
+  AccessLevel,
   AuditAction,
   AuditEntityType,
   CredentialOrigin,
@@ -33,6 +34,7 @@ import {
   PasswordConfirmationService,
 } from './password-confirmation.service';
 import { PasswordResetService } from './password-reset.service';
+import { assertMayGrant } from '../settings/roles/grant-ceiling';
 import { generateTemporaryPassword } from './password-policy';
 import {
   AdminResetMethod,
@@ -56,13 +58,6 @@ function displayName(
   const full = [user.firstname, user.lastname].filter(Boolean).join(' ').trim();
   return full || user.username;
 }
-
-/**
- * Areas an admin may hand back to anyone, whatever they hold themselves: My Workspace is
- * authorised by ownership, so holding it grants nothing over anybody else (as in
- * `settings/roles/grant-ceiling.ts`).
- */
-const ALWAYS_HELD: ReadonlySet<Permission> = new Set([Permission.MY_WORKSPACE]);
 
 @Injectable()
 export class AuthService {
@@ -491,19 +486,23 @@ export class AuthService {
         'That account is deactivated. Reactivate it before resetting its password.',
       );
     }
-    const beyondCaller = target.permissions.filter(
-      (permission) =>
-        !ALWAYS_HELD.has(permission) &&
-        !caller.permissions.includes(permission),
+    // The same ceiling as giving someone a role (`grant-ceiling.ts`), so "may I act on this
+    // account" has one answer. A legacy-array area with no level rows counts at both levels, as
+    // `roleGrants` reads it.
+    const levelled = new Set(target.grants.map((grant) => grant.permission));
+    assertMayGrant(
+      caller,
+      [
+        ...target.grants,
+        ...target.permissions
+          .filter((permission) => !levelled.has(permission))
+          .flatMap((permission) => [
+            { permission, level: AccessLevel.read },
+            { permission, level: AccessLevel.write },
+          ]),
+      ],
+      "reset this account's password",
     );
-    if (beyondCaller.length > 0) {
-      throw new ForbiddenException({
-        statusCode: 403,
-        code: 'GRANT_EXCEEDS_CALLER',
-        message:
-          'That account has access you do not have, so you cannot reset its password. Ask an administrator who holds that access.',
-      });
-    }
 
     const method: AdminResetMethod =
       options.method ??

@@ -109,11 +109,16 @@ export const DEFAULT_ROLES: {
   {
     name: 'Site User',
     isProtected: false,
-    permissions: [
-      Permission.DASHBOARD,
-      Permission.MY_WORKSPACE,
-      Permission.ATTENDANCE,
-    ],
+    // ATTENDANCE removed 2026-10-16: it opened every employee's attendance and leave to the
+    // role employee logins were given (access-control audit, H2).
+    permissions: [Permission.DASHBOARD, Permission.MY_WORKSPACE],
+  },
+  {
+    // What an employee's own login holds (2026-10-16): My Workspace only — their own punches,
+    // leave, payslips and claims, and nobody else's.
+    name: 'General User',
+    isProtected: false,
+    permissions: [Permission.MY_WORKSPACE],
   },
   {
     name: 'Viewer',

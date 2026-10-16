@@ -3642,6 +3642,7 @@ model Employee {
   punchRecords                 PunchRecord[]
   leaveBalances                LeaveBalance[]
   leaveApplications            LeaveApplication[]
+  leaveLedger                  LeaveLedgerEntry[]
   reimbursementClaims          ReimbursementClaim[]
   salarySlips                  SalarySlip[]
   documents                    EmployeeDocument[]
@@ -3977,11 +3978,22 @@ model LeaveApplication {
   decidedByUserId String?
   decidedAt       DateTime?
 
+  /// The reporting manager's login, who decides first (2026-10-16: "first go to reporting manager
+  /// and then HR"). Null when the employee has no reporting manager with a login — the application
+  /// then goes straight to HR, as every one did before. Set at application and never changed, so
+  /// a later change of manager does not move an application already in somebody's queue.
+  managerUserId    String?
+  /// When the manager approved it on to HR. A manager's rejection is final and is recorded in the
+  /// decision fields above instead.
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([employeeId, fromDate, toDate])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 
@@ -3992,6 +4004,81 @@ enum LeaveTypeCode {
   /// Leave without pay — the one type not checked against a balance (FR-020).
   lwp
 
+  @@schema("hr")
+}
+
+/// How a leave type's yearly entitlement reaches the balance (2026-10-16).
+enum LeaveCreditMode {
+  /// A twelfth of the year's days on the first of each month — Earned leave, usually.
+  monthly
+  /// The whole year's days on 1 April (prorated for a mid-year joiner) — Casual and Sick, usually.
+  yearly
+
+  @@schema("hr")
+}
+
+/// What moved a leave balance, in `LeaveLedgerEntry` (2026-10-16).
+enum LeaveLedgerKind {
+  monthly_credit
+  yearly_credit
+  carry_forward
+  adjustment
+  opening_import
+
+  @@schema("hr")
+}
+
+/// A company's leave policy, one row per leave type (2026-10-16).
+///
+/// Absent rows mean the built-in defaults (`DEFAULT_LEAVE_POLICY`), so a company that never opens
+/// the screen still gets leave credited; saving the screen writes every type.
+model LeavePolicy {
+  id        String        @id @default(cuid())
+  companyId String
+  leaveType LeaveTypeCode
+
+  /// Days granted in a full financial year.
+  annualDays      Decimal         @db.Decimal(6, 2)
+  creditMode      LeaveCreditMode
+  /// Whether unused days move into next year's opening balance, up to `carryForwardCap`.
+  carryForward    Boolean         @default(false)
+  carryForwardCap Decimal?        @db.Decimal(6, 2)
+  /// A yearly credit for someone who joins mid-year is scaled to the months left.
+  prorateJoiners  Boolean         @default(true)
+
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([companyId, leaveType])
+  @@schema("hr")
+}
+
+/// Every change to a leave balance other than leave taken (2026-10-16): monthly and yearly credits,
+/// carry-forward, HR adjustments and the go-live import. The unique key is what makes crediting
+/// idempotent — a month is credited once however often the job runs — and the rows are the history
+/// HR reads when an employee asks where a balance came from.
+model LeaveLedgerEntry {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  leaveType     LeaveTypeCode
+  financialYear String
+  kind          LeaveLedgerKind
+  /// `YYYY-MM` for a monthly credit, the financial year for a yearly credit, carry-forward or
+  /// import, and a unique token for an adjustment (several may fall in one year).
+  period        String
+  /// Signed: an adjustment may take days away.
+  days          Decimal         @db.Decimal(6, 2)
+  reason        String?
+  /// Null for the system (the crediting job).
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@unique([employeeId, leaveType, financialYear, kind, period])
+  @@index([companyId, financialYear])
   @@schema("hr")
 }
 
@@ -4047,11 +4134,18 @@ model ReimbursementClaim {
   decidedAt       DateTime?
   adminRemarks    String?
 
+  /// The reporting manager's login, who decides first (2026-10-16) — the same stage as
+  /// `LeaveApplication.managerUserId`, set when the claim is submitted.
+  managerUserId    String?
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([companyId, status])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 

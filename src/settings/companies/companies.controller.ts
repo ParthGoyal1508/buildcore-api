@@ -32,6 +32,7 @@ import {
   EmployeeCodeService,
 } from '../employee-code/employee-code.service';
 import { CompaniesService } from './companies.service';
+import { OwnCompanyGuard } from './own-company.guard';
 import { CompanyResponseDto } from './dto/company-response.dto';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
@@ -45,7 +46,7 @@ import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
 
 @ApiTags('settings/companies')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, OwnCompanyGuard)
 // Company administration is Super-Admin-only in practice (FR-001); COMPANY_SETTINGS
 // is the permission that expresses it, and only the protected role carries it.
 @RequirePermissions(Permission.COMPANY_SETTINGS)
@@ -64,9 +65,15 @@ export class CompaniesController {
       "The Settings UI's own admin list — other modules' dropdowns read the active-only export instead (FR-005).",
   })
   @ApiOkResponse({ type: [CompanyResponseDto] })
-  async findAll(): Promise<CompanyResponseDto[]> {
+  async findAll(
+    @UserEntity() caller: AuthenticatedUser,
+  ): Promise<CompanyResponseDto[]> {
     const companies = await this.companiesService.findAll();
-    return companies.map(CompanyResponseDto.fromEntity);
+    // A company-scoped administrator sees their own company only (2026-10-16 audit, C4).
+    const visible = caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)
+      ? companies
+      : companies.filter((company) => company.id === caller.companyId);
+    return visible.map(CompanyResponseDto.fromEntity);
   }
 
   @Get(':id')

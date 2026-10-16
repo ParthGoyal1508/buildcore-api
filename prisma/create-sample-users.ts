@@ -22,7 +22,7 @@
  *
  * Env: COMPANY_SHORT_CODE (required — which company to attach to),
  * SAMPLE_USER_COUNT (default 3), SAMPLE_USER_PASSWORD (default "secret42"),
- * SAMPLE_USER_ROLE (default "Site User").
+ * SAMPLE_USER_ROLE (default "General User" — an employee's own login, My Workspace only).
  */
 import { PrismaClient } from '@prisma/client';
 import { hash } from 'argon2';
@@ -32,7 +32,7 @@ const prisma = new PrismaClient();
 
 const COUNT = Number(process.env.SAMPLE_USER_COUNT ?? 3);
 const PASSWORD = process.env.SAMPLE_USER_PASSWORD ?? 'secret42';
-const ROLE_NAME = process.env.SAMPLE_USER_ROLE ?? 'Site User';
+const ROLE_NAME = process.env.SAMPLE_USER_ROLE ?? 'General User';
 
 /**
  * Opening balances, in days, for the current financial year.

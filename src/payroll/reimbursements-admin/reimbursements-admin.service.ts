@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   BadRequestException,
   ConflictException,
   Injectable,
@@ -53,6 +54,13 @@ export class ReimbursementsAdminService {
       // Drafts belong to the employee who has not submitted them yet; an admin
       // list that included them would show claims nobody has asked for.
       status: query.status ?? { not: ReimbursementClaimStatus.draft },
+      // HR's submitted queue holds only what is HR's to decide (2026-10-16): no reporting manager,
+      // or the manager has approved it on. One still with the manager is not HR's yet.
+      ...(query.status === ReimbursementClaimStatus.submitted
+        ? {
+            OR: [{ managerUserId: null }, { managerDecidedAt: { not: null } }],
+          }
+        : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.from || query.to
         ? {
@@ -85,6 +93,7 @@ export class ReimbursementsAdminService {
   /** Approves a submitted claim (FR-037). */
   async approveClaim(caller: Caller, claimId: string, dto: ApproveClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.approved);
 
     const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -108,6 +117,7 @@ export class ReimbursementsAdminService {
   /** Rejects a submitted claim. Remarks are mandatory (FR-037). */
   async rejectClaim(caller: Caller, claimId: string, dto: RejectClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.rejected);
 
     const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -138,6 +148,7 @@ export class ReimbursementsAdminService {
    */
   async payClaim(caller: Caller, claimId: string, dto: PayClaimDto) {
     const claim = await this.requireClaim(caller, claimId);
+    await this.assertNotOwnClaim(caller, claim);
     this.assertTransition(claim.status, ReimbursementClaimStatus.paid);
 
     if (
@@ -252,6 +263,41 @@ export class ReimbursementsAdminService {
     );
     if (!claim) throw new NotFoundException('Claim not found');
     return claim;
+  }
+
+  /**
+   * Nobody approves, rejects or pays their own claim (2026-10-16 access-control audit, H3) — the
+   * admin list shows every claim in the company to anyone holding EMPLOYEES, the claimant
+   * included.
+   */
+  private async assertNotOwnClaim(
+    caller: Caller,
+    claim: {
+      employeeId: string;
+      managerUserId: string | null;
+      managerDecidedAt: Date | null;
+    },
+  ): Promise<void> {
+    // Still with the reporting manager (2026-10-16): not HR's to decide yet.
+    if (claim.managerUserId && !claim.managerDecidedAt) {
+      throw new ConflictException({
+        code: 'AWAITING_MANAGER',
+        message:
+          'This claim is still with the employee’s reporting manager. HR decides it once they have approved it.',
+      });
+    }
+    const claimant = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: claim.employeeId },
+        select: { userId: true },
+      }),
+    );
+    if (claimant?.userId && claimant.userId === caller.userId) {
+      throw new ForbiddenException({
+        code: 'SELF_APPROVAL',
+        message: 'You cannot decide your own claim. Another approver must.',
+      });
+    }
   }
 
   /**

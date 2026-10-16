@@ -2188,6 +2188,7 @@ somebody can still fix it.']
   punchRecords PunchRecord [not null]
   leaveBalances LeaveBalance [not null]
   leaveApplications LeaveApplication [not null]
+  leaveLedger LeaveLedgerEntry [not null]
   reimbursementClaims ReimbursementClaim [not null]
   salarySlips SalarySlip [not null]
   documents EmployeeDocument [not null]
@@ -2381,8 +2382,63 @@ the cost of their own leave.']
   adminRemarks String [note: 'Mandatory when `status` is `rejected` (FR-022a); enforced at the service layer.']
   decidedByUserId String
   decidedAt DateTime
+  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16: "first go to reporting manager
+and then HR"). Null when the employee has no reporting manager with a login — the application
+then goes straight to HR, as every one did before. Set at application and never changed, so
+a later change of manager does not move an application already in somebody\'s queue.']
+  managerDecidedAt DateTime [note: 'When the manager approved it on to HR. A manager\'s rejection is final and is recorded in the
+decision fields above instead.']
+  managerRemarks String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
+}
+
+Table LeavePolicy {
+  id String [pk]
+  companyId String [not null]
+  leaveType LeaveTypeCode [not null]
+  annualDays Decimal [not null, note: 'Days granted in a full financial year.']
+  creditMode LeaveCreditMode [not null]
+  carryForward Boolean [not null, default: false, note: 'Whether unused days move into next year\'s opening balance, up to `carryForwardCap`.']
+  carryForwardCap Decimal
+  prorateJoiners Boolean [not null, default: true, note: 'A yearly credit for someone who joins mid-year is scaled to the months left.']
+  updatedByUserId String
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  indexes {
+    (companyId, leaveType) [unique]
+  }
+
+  Note: 'A company\'s leave policy, one row per leave type (2026-10-16).
+
+Absent rows mean the built-in defaults (`DEFAULT_LEAVE_POLICY`), so a company that never opens
+the screen still gets leave credited; saving the screen writes every type.'
+}
+
+Table LeaveLedgerEntry {
+  id String [pk]
+  companyId String [not null]
+  employeeId String [not null]
+  employee Employee [not null]
+  leaveType LeaveTypeCode [not null]
+  financialYear String [not null]
+  kind LeaveLedgerKind [not null]
+  period String [not null, note: '`YYYY-MM` for a monthly credit, the financial year for a yearly credit, carry-forward or
+import, and a unique token for an adjustment (several may fall in one year).']
+  days Decimal [not null, note: 'Signed: an adjustment may take days away.']
+  reason String
+  createdByUserId String [note: 'Null for the system (the crediting job).']
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (employeeId, leaveType, financialYear, kind, period) [unique]
+  }
+
+  Note: 'Every change to a leave balance other than leave taken (2026-10-16): monthly and yearly credits,
+carry-forward, HR adjustments and the go-live import. The unique key is what makes crediting
+idempotent — a month is credited once however often the job runs — and the rows are the history
+HR reads when an employee asks where a balance came from.'
 }
 
 Table ReimbursementClaim {
@@ -2409,6 +2465,10 @@ category\'s configured threshold (FR-030).']
 splitting them into a second table would make "one claim, one status" untrue.']
   decidedAt DateTime
   adminRemarks String
+  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16) — the same stage as
+`LeaveApplication.managerUserId`, set when the claim is submitted.']
+  managerDecidedAt DateTime
+  managerRemarks String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -5822,6 +5882,19 @@ Enum LeaveTypeCode {
   lwp
 }
 
+Enum LeaveCreditMode {
+  monthly
+  yearly
+}
+
+Enum LeaveLedgerKind {
+  monthly_credit
+  yearly_credit
+  carry_forward
+  adjustment
+  opening_import
+}
+
 Enum LeaveApplicationStatus {
   pending
   approved
@@ -6486,6 +6559,8 @@ Ref: PunchRecord.employeeId > Employee.id [delete: Cascade]
 Ref: LeaveBalance.employeeId > Employee.id [delete: Cascade]
 
 Ref: LeaveApplication.employeeId > Employee.id [delete: Cascade]
+
+Ref: LeaveLedgerEntry.employeeId > Employee.id [delete: Cascade]
 
 Ref: ReimbursementClaim.employeeId > Employee.id [delete: Cascade]
 
