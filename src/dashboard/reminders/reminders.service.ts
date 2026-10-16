@@ -271,14 +271,18 @@ export class RemindersService {
     };
   }
 
-  /** Any one of the rule's declared permissions, or no declaration at all. */
+  /**
+   * Any one of the rule's declared permissions. A group administrator (`CROSS_COMPANY_ACCESS` —
+   * Super Admin) sees every rule, including one that names no module (2026-10-16: "super admin can
+   * see all the reminders").
+   */
   private mayRead(
     provider: ReminderRuleProvider,
     permissions: Permission[],
   ): boolean {
-    return (
-      !provider.requires ||
-      provider.requires.some((required) => permissions.includes(required))
+    if (permissions.includes(Permission.CROSS_COMPANY_ACCESS)) return true;
+    return (provider.requires ?? []).some((required) =>
+      permissions.includes(required),
     );
   }
 
@@ -301,16 +305,26 @@ export class RemindersService {
     return new Set(rows.map((row) => row.ruleKey));
   }
 
-  /** Every (company, rule, entity) currently suppressed by a live snooze. */
+  /**
+   * Every (company, rule, entity) currently suppressed by a live snooze.
+   *
+   * Narrowed to `userId`'s own snoozes when given (2026-10-16): a snooze is somebody's "not now",
+   * and it used to hide the reminder from the whole company — the person responsible included.
+   * The nightly sweep passes none, so its notification ledger behaves as before.
+   */
   private async activeSnoozes(
     ctx: RlsContext,
     today: string,
+    userId?: string,
   ): Promise<Set<LedgerKey>> {
     const rows = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.reminderSnooze.findMany({
         // Inclusive: a snooze "until the 14th" still suppresses on the 14th and
         // lapses on the 15th.
-        where: { snoozeUntil: { gte: new Date(`${today}T00:00:00Z`) } },
+        where: {
+          snoozeUntil: { gte: new Date(`${today}T00:00:00Z`) },
+          ...(userId ? { createdByUserId: userId } : {}),
+        },
         select: { companyId: true, ruleKey: true, entityId: true },
       }),
     );
@@ -327,7 +341,7 @@ export class RemindersService {
     const { ctx, companyId } = this.resolveScope(caller, query);
     const [{ reminders, unavailable }, snoozed] = await Promise.all([
       this.collect(ctx, companyId, caller.permissions),
-      this.activeSnoozes(ctx, this.today()),
+      this.activeSnoozes(ctx, this.today(), caller.id),
     ]);
 
     const visible = reminders

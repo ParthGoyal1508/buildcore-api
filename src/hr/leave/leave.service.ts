@@ -1,4 +1,5 @@
 import {
+  ForbiddenException,
   BadRequestException,
   ConflictException,
   HttpException,
@@ -61,6 +62,14 @@ export interface LeaveBalanceView {
  * from a parameter (FR-028); the two admin methods take an application id and rely
  * on RLS to confine what an approver can reach to their own company.
  */
+/**
+ * A pending application that is HR's to decide: no reporting manager, or the manager has approved
+ * it on (2026-10-16).
+ */
+const HR_STAGE = {
+  OR: [{ managerUserId: null }, { managerDecidedAt: { not: null } }],
+} satisfies Prisma.LeaveApplicationWhereInput;
+
 @Injectable()
 export class LeaveService {
   private readonly timeZone: string;
@@ -214,10 +223,17 @@ export class LeaveService {
       }
     }
 
+    // The reporting manager decides first, then HR (2026-10-16). No manager with a login: HR.
+    const managerUserId = await this.employees.reportingManagerUserId(
+      caller.rls,
+      employee,
+    );
+
     const created = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.leaveApplication.create({
         data: {
           employeeId: employee.id,
+          managerUserId,
           leaveType: dto.leaveType,
           fromDate: from,
           toDate: to,
@@ -310,6 +326,10 @@ export class LeaveService {
       tx.leaveApplication.findMany({
         where: {
           status,
+          // HR's pending queue holds only what is HR's to decide (2026-10-16): applications with
+          // no reporting manager, or ones their manager has approved on. One still with the
+          // manager is not HR's yet.
+          ...(status === LeaveApplicationStatus.pending ? HR_STAGE : {}),
           // The company is also stated, not left to row-level security alone (2026-10-15): the
           // queue now feeds the Approvals page and its badge, and a database role that bypasses
           // RLS — a superuser, as local development runs — listed every company's leave under
@@ -375,6 +395,27 @@ export class LeaveService {
             `This application is already ${application.status}.`,
           );
         }
+        if (application.managerUserId && !application.managerDecidedAt) {
+          throw new ConflictException({
+            code: 'AWAITING_MANAGER',
+            message:
+              'This application is still with the employee’s reporting manager. HR decides it once they have approved it.',
+          });
+        }
+        // Nobody decides their own leave (2026-10-16 access-control audit, H3). The review list
+        // shows the whole company's applications to anyone holding ATTENDANCE — the applicant
+        // included — and nothing stopped them approving their own.
+        const applicant = await tx.employee.findFirst({
+          where: { id: application.employeeId },
+          select: { userId: true },
+        });
+        if (applicant?.userId && applicant.userId === caller.userId) {
+          throw new ForbiddenException({
+            code: 'SELF_APPROVAL',
+            message:
+              'You cannot decide your own leave application. Another approver must.',
+          });
+        }
 
         const updated = await tx.leaveApplication.update({
           where: { id },
@@ -433,6 +474,94 @@ export class LeaveService {
     // nothing in this module calls it — so
     // the decision is recorded and surfaced on the employee's own applications
     // list. When a notifications module lands, this is its call site.
+    return decided;
+  }
+
+  /**
+   * Applications waiting on the caller as reporting manager (2026-10-16), each employee named.
+   * Self-service: authority is the reporting line recorded on the application, not a permission,
+   * so a manager holding nothing but My Workspace still has a queue.
+   */
+  async listForManager(caller: Caller) {
+    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.leaveApplication.findMany({
+        where: {
+          managerUserId: caller.userId,
+          managerDecidedAt: null,
+          status: LeaveApplicationStatus.pending,
+        },
+        orderBy: { fromDate: 'asc' },
+      }),
+    );
+    if (rows.length === 0) return [];
+    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findMany({
+        where: { id: { in: [...new Set(rows.map((row) => row.employeeId))] } },
+        select: EMPLOYEE_NAME_SELECT,
+      }),
+    );
+    return withEmployeeNames(rows, employees);
+  }
+
+  /**
+   * The reporting manager's decision (2026-10-16). Approval passes the application on to HR, who
+   * still make the final decision and debit the balance; rejection is final, and is recorded as
+   * the application's decision with the manager as decider.
+   */
+  async managerDecide(
+    caller: Caller,
+    id: string,
+    dto: LeaveDecisionDto,
+  ): Promise<LeaveApplication> {
+    const approved = dto.decision === 'approved';
+    const decided = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const application = await tx.leaveApplication.findFirst({
+          where: { id, managerUserId: caller.userId },
+        });
+        if (!application) {
+          throw new NotFoundException('Leave application not found');
+        }
+        if (
+          application.status !== LeaveApplicationStatus.pending ||
+          application.managerDecidedAt
+        ) {
+          throw new ConflictException(
+            'You have already decided this application, or it has been withdrawn.',
+          );
+        }
+        const now = new Date();
+        return tx.leaveApplication.update({
+          where: { id },
+          data: approved
+            ? { managerDecidedAt: now, managerRemarks: dto.remarks ?? null }
+            : {
+                managerDecidedAt: now,
+                managerRemarks: dto.remarks ?? null,
+                status: LeaveApplicationStatus.rejected,
+                adminRemarks: dto.remarks ?? null,
+                decidedByUserId: caller.userId,
+                decidedAt: now,
+              },
+        });
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.LEAVE_APPLICATION,
+      action: AuditAction.UPDATE,
+      entityId: decided.id,
+      changes: {
+        stage: 'manager',
+        decision: dto.decision,
+        remarks: dto.remarks ?? null,
+      } as Prisma.InputJsonValue,
+      accountId: caller.userId,
+      companyId: caller.companyId,
+      ipAddress: caller.ipAddress,
+    });
     return decided;
   }
 

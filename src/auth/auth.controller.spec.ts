@@ -33,7 +33,7 @@ function build(refreshCookie: {
     logout: jest.fn().mockResolvedValue(undefined),
   } as never;
 
-  const controller = new AuthController(auth, configService);
+  const controller = new AuthController(auth, configService, {} as never);
   // The warning is deliberate behaviour, but it should not colour the test output.
   jest
     .spyOn(

@@ -43,7 +43,12 @@ export class PayrollScheduleCron {
   // The expression and zone are read from configuration by the decorator factory below
   // rather than written here — Principle III, and a deployment must be able to move the
   // schedule without a release.
-  @Cron(process.env.PAYROLL_SCHEDULE_CRON || '30 0 1 * *', {
+  // 00:30 on each of the first seven days (2026-10-16), not only the 1st. The sweep creates only
+  // a period that has no run yet, so the later days do nothing — unless the 1st was missed (the
+  // instance was asleep or restarting), in which case the run appears the next morning instead of
+  // never. It stops after the 7th so a company set up mid-month is not given an empty run for the
+  // month before it existed.
+  @Cron(process.env.PAYROLL_SCHEDULE_CRON || '30 0 1-7 * *', {
     name: 'payroll-monthly-run',
     timeZone:
       process.env.PAYROLL_SCHEDULE_TIMEZONE ||

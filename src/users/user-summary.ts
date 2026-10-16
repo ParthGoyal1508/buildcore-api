@@ -26,9 +26,9 @@ export interface UserSummary {
 type UserWithRoles = User & { userRoles: (UserRole & { role: Role })[] };
 
 export function toUserSummary(user: UserWithRoles): UserSummary {
-  const name =
-    [user.firstname, user.lastname].filter(Boolean).join(' ').trim() ||
-    user.username;
+  // `displayNameOf`, not its own rule: this one skipped `displayName`, so an account created with
+  // a name typed on the invite form was listed under its generated username (029).
+  const name = displayNameOf(user);
 
   return {
     id: user.id,

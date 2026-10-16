@@ -132,6 +132,19 @@ export interface SecurityConfig {
     /** Lock duration in minutes (FR-012). */
     durationMinutes: number;
   };
+  /** Password reset links (029 FR-010 to FR-015). */
+  passwordReset: {
+    /** How long a Forgot Password link works. Short: it is a credential sitting in an inbox. */
+    selfServiceTtlMinutes: number;
+    /** How long a link an admin sends works — longer, because the holder may not be at a
+     * desk when it is sent. */
+    adminTtlHours: number;
+    /** No second self-service link to one account within this many seconds. Stops a
+     * double-click, and someone with only an address, from filling an inbox. */
+    minIntervalSeconds: number;
+    /** Self-service links to one account per rolling hour. */
+    maxPerHour: number;
+  };
   refreshCookie: {
     /**
      * Defaults to `lax` (015 FR-009).

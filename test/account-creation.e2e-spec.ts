@@ -53,6 +53,48 @@ class CapturingEmailService extends EmailService {
   }): Promise<void> {
     this.lockouts.push(input);
   }
+
+  /** 029. Captured so the reset and notice flows can be asserted on. */
+  public resets: {
+    to: string;
+    resetUrl: string;
+    expiresAt: Date;
+    requestedByAdmin: boolean;
+  }[] = [];
+  public notices: { kind: string; to: string }[] = [];
+
+  async sendPasswordResetEmail(input: {
+    to: string;
+    resetUrl: string;
+    expiresAt: Date;
+    requestedByAdmin: boolean;
+  }): Promise<void> {
+    this.resets.push(input);
+  }
+
+  async sendPasswordChangedEmail(input: {
+    to: string;
+    changedAt: Date;
+    via: 'self' | 'reset_link';
+  }): Promise<void> {
+    this.notices.push({ kind: `password_changed:${input.via}`, to: input.to });
+  }
+
+  async sendAdminPasswordResetEmail(input: { to: string }): Promise<void> {
+    this.notices.push({ kind: 'admin_reset', to: input.to });
+  }
+
+  async sendAccountDeactivatedEmail(input: { to: string }): Promise<void> {
+    this.notices.push({ kind: 'deactivated', to: input.to });
+  }
+
+  async sendAccountReadyEmail(input: {
+    to: string;
+    loginUrl: string;
+    username: string | null;
+  }): Promise<void> {
+    this.notices.push({ kind: 'account_ready', to: input.to });
+  }
   async sendPayslipEmail(input: {
     to: string;
     employeeName: string;

@@ -35,6 +35,37 @@ export abstract class EmailService {
   }): Promise<void>;
 
   /**
+   * A single-use link to choose a new password (029 FR-010, FR-015). Built by the caller for
+   * the reason `setPasswordUrl` is: the raw token stays with the code that generated it.
+   */
+  abstract sendPasswordResetEmail(input: {
+    to: string;
+    resetUrl: string;
+    expiresAt: Date;
+    requestedByAdmin: boolean;
+  }): Promise<void>;
+
+  /** After-the-fact notice that the password changed (029 FR-007, FR-013). */
+  abstract sendPasswordChangedEmail(input: {
+    to: string;
+    changedAt: Date;
+    via: 'self' | 'reset_link';
+  }): Promise<void>;
+
+  /** An admin set a temporary password; the value is never in the mail (029 FR-015). */
+  abstract sendAdminPasswordResetEmail(input: { to: string }): Promise<void>;
+
+  /** The account was deactivated (029 FR-030). */
+  abstract sendAccountDeactivatedEmail(input: { to: string }): Promise<void>;
+
+  /** An admin created the account with a password they chose (029 FR-031). */
+  abstract sendAccountReadyEmail(input: {
+    to: string;
+    loginUrl: string;
+    username: string | null;
+  }): Promise<void>;
+
+  /**
    * Sends one employee their payslip for one period (021 FR-005) — `bugs.md` item 8.
    *
    * The PDF is passed in rendered rather than fetched here, for the reason the invite's URL is: the

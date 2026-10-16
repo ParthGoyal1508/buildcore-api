@@ -10,10 +10,12 @@ import {
   UserStatus,
 } from '@prisma/client';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { assertMayGrant } from '../roles/grant-ceiling';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { UserSummary } from '../../users/user-summary';
 import { UsersService } from '../../users/users.service';
+import { AccountDeactivationService } from '../../users/account-deactivation.service';
 import { UpdateUserAccountDto } from './dto/update-user.dto';
 
 /**
@@ -37,6 +39,7 @@ export class UsersAdminService {
   constructor(
     private readonly usersService: UsersService,
     private readonly auditLog: AuditLogService,
+    private readonly deactivation: AccountDeactivationService,
   ) {}
 
   /** Accounts in the caller's company, or all of them for a cross-company caller
@@ -54,6 +57,23 @@ export class UsersAdminService {
   ): Promise<UserSummary> {
     this.assertMayAdminister(caller);
 
+    if (dto.roleId !== undefined) {
+      // 2026-10-16 audit, C1. Before this, any USER_MANAGEMENT holder could give any account —
+      // their own included — the protected Super Admin role, and with it every company.
+      if (id === caller.id) {
+        throw new ForbiddenException({
+          code: 'OWN_ROLE_CHANGE',
+          message:
+            'You cannot change your own role. Ask another administrator to do it.',
+        });
+      }
+      const grants = await this.usersService.grantsOfRole(dto.roleId);
+      if (grants === null) {
+        throw new ConflictException(`Role ${dto.roleId} does not exist`);
+      }
+      assertMayGrant(caller, grants, 'assign that role');
+    }
+
     // Deactivating the last Super Admin, or moving its role elsewhere, would leave
     // nobody able to administer the system (FR-016). Both are the same failure, so
     // both are checked here rather than only on the deactivate path.
@@ -63,11 +83,22 @@ export class UsersAdminService {
       await this.assertNotLastSuperAdmin(id);
     }
 
+    // Read first, so only a real transition to deactivated revokes sessions and emails — saving
+    // an already-deactivated account again must not send the notice twice (029 FR-030).
+    const before =
+      dto.status === UserStatus.deactivated
+        ? await this.usersService.accountStatus(id, rlsContextFor(caller))
+        : null;
+
     const updated = await this.usersService.updateRoleOrStatus(
       id,
       { roleId: dto.roleId, status: dto.status },
       rlsContextFor(caller),
     );
+
+    if (before && before.status !== UserStatus.deactivated) {
+      await this.deactivation.afterDeactivation({ id, email: before.email });
+    }
 
     await this.auditLog.record({
       // Shared with feature 010 so both features' writes to an account appear under

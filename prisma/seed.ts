@@ -78,12 +78,12 @@ async function main() {
     },
   });
 
-  // Site User — DASHBOARD + MY_WORKSPACE + ATTENDANCE (002 FR-006). The narrowest
-  // default role that can actually reach `/my/*`, which is what this account is for:
+  // General User — MY_WORKSPACE only (2026-10-16; was Site User, whose ATTENDANCE opened
+  // everyone's attendance and leave). The role employee logins hold, which is what this account is for:
   // exercising the employee side without Super Admin's blanket permissions hiding a
   // missing authorization check.
   const siteUserRole = await prisma.role.findUniqueOrThrow({
-    where: { name: 'Site User' },
+    where: { name: 'General User' },
   });
   await prisma.userRole.create({
     data: { userId: user.id, roleId: siteUserRole.id },

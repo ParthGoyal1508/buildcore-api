@@ -19,6 +19,7 @@ export type RotateResult =
       rawToken: string;
       accountId: string;
       companyId: string | null;
+      familyId: string;
     };
 
 @Injectable()
@@ -76,7 +77,7 @@ export class RefreshTokenService {
   async issueFamily(params: {
     accountId: string;
     companyId: string | null;
-  }): Promise<{ rawToken: string }> {
+  }): Promise<{ rawToken: string; familyId: string }> {
     const rawToken = this.generateRawToken();
     const familyId = crypto.randomUUID();
 
@@ -95,7 +96,7 @@ export class RefreshTokenService {
       }),
     );
 
-    return { rawToken };
+    return { rawToken, familyId };
   }
 
   /**
@@ -163,31 +164,45 @@ export class RefreshTokenService {
         rawToken: newRawToken,
         accountId: record.accountId,
         companyId: record.companyId,
+        familyId: record.familyId,
       };
     });
   }
 
-  /** Revokes every active token in the presented token's family (spec FR-011, logout). */
-  async revokeFamilyByToken(rawToken: string): Promise<void> {
+  /** Revokes every active token in the presented token's family (spec FR-011, logout).
+   * Returns whose session it was, so the sign-out can be audited (029 FR-040); null for a
+   * token that was never issued. */
+  async revokeFamilyByToken(
+    rawToken: string,
+  ): Promise<{ accountId: string; companyId: string | null } | null> {
     const tokenHash = this.hash(rawToken);
-    await withRlsContext(this.prisma, { isSuperAdmin: true }, async (tx) => {
+    return withRlsContext(this.prisma, { isSuperAdmin: true }, async (tx) => {
       const record = await tx.refreshToken.findUnique({
         where: { tokenHash },
       });
-      if (!record) return;
+      if (!record) return null;
       await tx.refreshToken.updateMany({
         where: { familyId: record.familyId, revokedAt: null },
         data: { revokedAt: new Date() },
       });
+      return { accountId: record.accountId, companyId: record.companyId };
     });
   }
 
   /** Revokes every active session for an account (admin-reset-password FR-022, or
-   * deactivation cleanup). */
-  async revokeAllForAccount(accountId: string): Promise<void> {
+   * deactivation cleanup) — every one but `exceptFamilyId` when given, which is how a
+   * password change signs out the other devices and keeps the one that made it (029 FR-006). */
+  async revokeAllForAccount(
+    accountId: string,
+    exceptFamilyId?: string | null,
+  ): Promise<void> {
     await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.refreshToken.updateMany({
-        where: { accountId, revokedAt: null },
+        where: {
+          accountId,
+          revokedAt: null,
+          ...(exceptFamilyId ? { familyId: { not: exceptFamilyId } } : {}),
+        },
         data: { revokedAt: new Date() },
       }),
     );

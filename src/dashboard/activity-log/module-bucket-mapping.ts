@@ -32,6 +32,10 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.LOGOUT,
     AuditEntityType.REFRESH_REUSE_DETECTED,
     AuditEntityType.ADMIN_PASSWORD_RESET,
+    // 029: the rest of a password's life, next to the sign-in events it is read with.
+    AuditEntityType.PASSWORD_CHANGED,
+    AuditEntityType.PASSWORD_RESET_REQUESTED,
+    AuditEntityType.PASSWORD_RESET_COMPLETED,
     AuditEntityType.PUNCH,
     AuditEntityType.LEAVE_APPLICATION,
     AuditEntityType.FACE_ENROLMENT,

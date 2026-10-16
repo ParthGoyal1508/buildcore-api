@@ -29,7 +29,12 @@ describe('RolesService — grant rows', () => {
     return { service, created };
   };
 
-  const caller = { id: 'u-1', companyId: 'co-1' } as never;
+  const caller = {
+    id: 'u-1',
+    companyId: 'co-1',
+    // Holds everything: the 2026-10-16 grant ceiling is not what this spec is about.
+    permissions: Object.values(Permission),
+  } as never;
 
   const rowsOf = (data: Record<string, unknown>) =>
     (

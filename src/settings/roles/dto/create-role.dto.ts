@@ -9,8 +9,10 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { HOME_MODULES, HomeModule } from '../home-modules';
 
 /**
  * The permissions a role-management request may set (FR-007).
@@ -69,6 +71,18 @@ export class CreateRoleDto {
   @ValidateNested({ each: true })
   @Type(() => RoleGrantDto)
   grants?: RoleGrantDto[];
+
+  /**
+   * Where holders land after signing in (029 FR-020). Null clears it: holders land on the first
+   * module they can open, as before.
+   */
+  @ApiPropertyOptional({ enum: HOME_MODULES, nullable: true })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsIn(HOME_MODULES, {
+    message: `homeModule must be one of: ${HOME_MODULES.join(', ')}`,
+  })
+  homeModule?: HomeModule | null;
 }
 
 /** One area at one level. */

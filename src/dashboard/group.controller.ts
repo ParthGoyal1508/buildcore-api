@@ -13,6 +13,7 @@ import { EmployeeSearchQueryDto } from './dto/employee-search-query.dto';
 import { GroupCompanyCardProvider } from './widgets/group-company-card.provider';
 import { StatutoryCalendarProvider } from './widgets/statutory-calendar.provider';
 import type { WidgetResult } from './widgets/widget.types';
+import { GroupAccessGuard } from './group-access.guard';
 
 /**
  * The Group Dashboard (feature 004, US6): per-company cards + Group Total, a
@@ -40,7 +41,7 @@ import type { WidgetResult } from './widgets/widget.types';
  */
 @ApiTags('Dashboard')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard, GroupAccessGuard)
 @RequirePermissions(Permission.DASHBOARD)
 @Controller('group')
 export class GroupController {

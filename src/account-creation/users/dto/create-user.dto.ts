@@ -3,14 +3,10 @@ import {
   IsEmail,
   IsOptional,
   IsString,
-  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
-import {
-  PASSWORD_COMPLEXITY,
-  PASSWORD_COMPLEXITY_MESSAGE,
-} from '../../constants/account-creation.constants';
+import { IsNewPassword } from '../../../auth/password-policy';
 
 /**
  * The invite form's payload.
@@ -33,10 +29,14 @@ export class CreateUserDto {
   @IsEmail({}, { message: 'A valid email address is required.' })
   email: string;
 
-  @ApiProperty({ description: 'The role to assign (settings.Role id).' })
+  @ApiPropertyOptional({
+    description:
+      'The role to assign (settings.Role id). Omit for the default role — "General User", My Workspace only (029 FR-001).',
+  })
+  @IsOptional()
   @IsString()
   @MinLength(1)
-  roleId: string;
+  roleId?: string;
 
   @ApiPropertyOptional({
     description:
@@ -72,6 +72,6 @@ export class CreateUserDto {
   @IsString()
   // The invitee's own rule, reused rather than restated — the two paths must not
   // be able to drift apart on what counts as an acceptable password (FR-016).
-  @Matches(PASSWORD_COMPLEXITY, { message: PASSWORD_COMPLEXITY_MESSAGE })
+  @IsNewPassword()
   password?: string;
 }

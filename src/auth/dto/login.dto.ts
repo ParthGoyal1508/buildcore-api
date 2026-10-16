@@ -4,8 +4,10 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
 } from 'class-validator';
+import { PASSWORD_MAX_LENGTH } from '../password-policy';
 
 export class LoginDto {
   @ApiProperty({ description: "The account's email or username" })
@@ -16,6 +18,9 @@ export class LoginDto {
   @ApiProperty()
   @IsNotEmpty()
   @MinLength(8)
+  // The ceiling, and not the complexity rule: an account whose password predates the rule must
+  // still be able to sign in (029 FR-005).
+  @MaxLength(PASSWORD_MAX_LENGTH)
   password: string;
 
   /**

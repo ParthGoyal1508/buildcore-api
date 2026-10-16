@@ -5,7 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AuditAction, AuditEntityType, Company, Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  Company,
+  Permission,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { DEFAULT_SLOT_ROLE_NAMES } from '../../approvals/approval-slots';
@@ -424,13 +430,23 @@ export class CompaniesService {
    * Total. Scope is enforced by RLS: an ordinary caller's context filters to their
    * own `companyId`, a `CROSS_COMPANY_ACCESS` caller's spans all. Returns id, name
    * and shortCode only — the card needs no more.
+   *
+   * **Not RLS** (2026-10-16 access-control audit, H1): `Company` has no row-level security, so
+   * the claim above was never true and an ordinary caller got every active company. Filtered
+   * here instead.
    */
   async listAccessible(
     caller: AuthenticatedUser,
   ): Promise<{ id: string; name: string; shortCode: string }[]> {
+    // The permission, not the switcher: a group administrator who has picked one company still
+    // sees the whole group here, which is the point of a group view.
+    const group = caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS);
     return withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.company.findMany({
-        where: { status: 'active' },
+        where: {
+          status: 'active',
+          ...(group ? {} : { id: caller.companyId ?? '' }),
+        },
         select: { id: true, name: true, shortCode: true },
         orderBy: { name: 'asc' },
       }),

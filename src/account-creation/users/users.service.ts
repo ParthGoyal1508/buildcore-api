@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -24,6 +25,8 @@ import { EmailService } from '../../shared/email/email.service';
 import { INVITE_TOKEN_TTL_HOURS } from '../constants/account-creation.constants';
 import { TokenService } from '../invites/token.service';
 import { CreateUserDto } from './dto/create-user.dto';
+import { assertMayGrant, roleGrants } from '../../settings/roles/grant-ceiling';
+import type { Grant } from '../../auth/authenticated-user';
 import { allocateUsername, isUsernameConflict } from './username';
 
 /** One row of the account list (data-model.md). */
@@ -45,7 +48,8 @@ export interface CreatedUser {
   email: string;
   status: UserStatus;
   /**
-   * The account exists even when the invite could not be sent. Reported rather than
+   * The account exists even when its email — the invite, or on the direct path the
+   * account-ready notice (029 FR-031) — could not be sent. Reported rather than
    * thrown so the admin knows to resend instead of retrying a create that would now
    * fail on a duplicate email.
    */
@@ -58,6 +62,9 @@ export interface AdminCaller {
   companyId: string | null;
   ipAddress: string;
   rls: RlsContext;
+  /** What the caller holds — the ceiling on the role they may give (2026-10-16, C2). */
+  permissions: Permission[];
+  grants: Grant[];
 }
 
 @Injectable()
@@ -102,11 +109,43 @@ export class UsersService {
       ? await this.passwordService.hashPassword(dto.password as string)
       : null;
 
+    // No role named means the default one (029 FR-001) — resolved here, before anything checks
+    // what the role grants, so every rule below applies to the role actually given.
     const role = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.role.findUnique({ where: { id: dto.roleId } }),
+      dto.roleId
+        ? tx.role.findUnique({ where: { id: dto.roleId } })
+        : tx.role.findFirst({ where: { isDefault: true } }),
     );
     if (!role) {
-      throw new BadRequestException('That role does not exist.');
+      throw new BadRequestException(
+        dto.roleId
+          ? 'That role does not exist.'
+          : 'Choose a role: no default role is set up.',
+      );
+    }
+
+    // The new account may hold no more than its creator (2026-10-16 audit, C2). Without this the
+    // form's own role list — which includes Super Admin — let a company administrator mint a
+    // cross-company account.
+    const grants = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      roleGrants(tx, role.id),
+    );
+    assertMayGrant(
+      caller,
+      grants ?? [],
+      `give a new account the ${role.name} role`,
+    );
+    // And only in their own company. Row-level security on the insert says the same; this says
+    // it with a reason rather than a constraint failure.
+    if (
+      !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
+      dto.companyId &&
+      dto.companyId !== caller.rls.companyId
+    ) {
+      throw new ForbiddenException({
+        code: 'COMPANY_NOT_ACCESSIBLE',
+        message: 'You can only create accounts in your own company.',
+      });
     }
 
     // "Super Admin" is a capability, not a name: 001's 2026-08-28 redesign replaced
@@ -148,7 +187,7 @@ export class UsersService {
 
     const created = await this.insertUser(
       caller,
-      dto,
+      { ...dto, roleId: role.id },
       hashedPassword,
       isDirect,
       token?.hash ?? null,
@@ -157,6 +196,24 @@ export class UsersService {
 
     // After commit — see the note above.
     let emailDispatchFailed = false;
+    if (isDirect) {
+      // The direct path used to send nothing at all (029 FR-031). It says where to sign in and
+      // with what name; the password stays with the admin, who chose it.
+      try {
+        await this.email.sendAccountReadyEmail({
+          to: dto.email,
+          loginUrl: `${this.appBaseUrl.replace(/\/+$/, '')}/login`,
+          username: created.username,
+        });
+      } catch (error) {
+        emailDispatchFailed = true;
+        this.logger.error(
+          `Account-ready email failed for ${dto.email}. ${
+            (error as Error).message
+          }`,
+        );
+      }
+    }
     if (!isDirect && token && expiresAt) {
       try {
         await this.email.sendInviteEmail({
@@ -189,7 +246,8 @@ export class UsersService {
       // who chose the credential, not what it was.
       changes: {
         email: dto.email,
-        roleId: dto.roleId,
+        roleId: role.id,
+        defaultRole: !dto.roleId,
         companyId: dto.companyId ?? null,
         employeeLinked: Boolean(dto.employeeId),
         credentialOrigin: isDirect
@@ -250,13 +308,18 @@ export class UsersService {
   /** The transactional half of `create()`, retried once on a username collision. */
   private async insertUser(
     caller: AdminCaller,
-    dto: CreateUserDto,
+    dto: CreateUserDto & { roleId: string },
     hashedPassword: string | null,
     isDirect: boolean,
     tokenHash: string | null,
     expiresAt: Date | null,
     retry = 0,
-  ): Promise<{ id: string; email: string; status: UserStatus }> {
+  ): Promise<{
+    id: string;
+    email: string;
+    status: UserStatus;
+    username: string | null;
+  }> {
     try {
       return await withRlsContext(this.prisma, caller.rls, async (tx) => {
         const username = await allocateUsername(tx, dto.email);
@@ -280,7 +343,7 @@ export class UsersService {
               ? CredentialOrigin.admin_direct
               : CredentialOrigin.invite,
           },
-          select: { id: true, email: true, status: true },
+          select: { id: true, email: true, status: true, username: true },
         });
 
         await tx.userRole.create({

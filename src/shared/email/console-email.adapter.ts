@@ -1,8 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EmailService } from './email.service';
 import {
+  renderAccountDeactivatedEmail,
   renderAccountLockedEmail,
+  renderAccountReadyEmail,
+  renderAdminPasswordResetEmail,
   renderInviteEmail,
+  renderPasswordChangedEmail,
+  renderPasswordResetEmail,
   renderPayslipEmail,
 } from './email-templates';
 
@@ -53,6 +58,59 @@ export class ConsoleEmailAdapter extends EmailService {
       `[console adapter] ${subject} → ${
         input.to
       } (unlocks ${input.unlockAt.toISOString()})`,
+    );
+  }
+
+  async sendPasswordResetEmail(input: {
+    to: string;
+    resetUrl: string;
+    expiresAt: Date;
+    requestedByAdmin: boolean;
+  }): Promise<void> {
+    const { subject } = renderPasswordResetEmail(input);
+    // The link in full, as the invite's is, and for the same reason: it is the only way to
+    // reach the next step locally — and why this adapter is refused in production.
+    this.logger.log(
+      [
+        '',
+        '──────── password reset email (not sent — console adapter) ────────',
+        `  to:      ${input.to}`,
+        `  subject: ${subject}`,
+        `  by admin: ${input.requestedByAdmin}`,
+        `  expires: ${input.expiresAt.toISOString()}`,
+        `  link:    ${input.resetUrl}`,
+        '────────────────────────────────────────────────────────────────────',
+      ].join('\n'),
+    );
+  }
+
+  async sendPasswordChangedEmail(input: {
+    to: string;
+    changedAt: Date;
+    via: 'self' | 'reset_link';
+  }): Promise<void> {
+    const { subject } = renderPasswordChangedEmail(input);
+    this.logger.log(`[console adapter] ${subject} → ${input.to}`);
+  }
+
+  async sendAdminPasswordResetEmail(input: { to: string }): Promise<void> {
+    const { subject } = renderAdminPasswordResetEmail();
+    this.logger.log(`[console adapter] ${subject} → ${input.to}`);
+  }
+
+  async sendAccountDeactivatedEmail(input: { to: string }): Promise<void> {
+    const { subject } = renderAccountDeactivatedEmail();
+    this.logger.log(`[console adapter] ${subject} → ${input.to}`);
+  }
+
+  async sendAccountReadyEmail(input: {
+    to: string;
+    loginUrl: string;
+    username: string | null;
+  }): Promise<void> {
+    const { subject } = renderAccountReadyEmail(input);
+    this.logger.log(
+      `[console adapter] ${subject} → ${input.to} (sign in at ${input.loginUrl})`,
     );
   }
 

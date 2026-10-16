@@ -10,6 +10,11 @@ import { RolesService } from './roles.service';
 import { ASSIGNABLE_PERMISSIONS, CreateRoleDto } from './dto/create-role.dto';
 import { callerFor } from '../testing/prisma-mock';
 
+/** Holds everything, so the 2026-10-16 grant ceiling never refuses the behaviour under test. */
+const admin = callerFor('company-1', {
+  permissions: Object.values(Permission),
+});
+
 const protectedRole = { id: 'role-sa', name: 'Super Admin', isProtected: true };
 const customRole = { id: 'role-x', name: 'Site Clerk', isProtected: false };
 
@@ -27,6 +32,7 @@ function build(
   const auditLog = { record: jest.fn() };
   const usersService = {
     countByRoleId: jest.fn().mockResolvedValue(0),
+    countRoleHoldersOutside: jest.fn().mockResolvedValue(0),
     clearRoleAssignment: jest.fn().mockResolvedValue(0),
     ...users,
   };
@@ -143,12 +149,7 @@ describe('RolesService', () => {
       });
 
       await expect(
-        service.update(
-          callerFor('company-1'),
-          'role-sa',
-          { name: 'Root' },
-          '127.0.0.1',
-        ),
+        service.update(admin, 'role-sa', { name: 'Root' }, '127.0.0.1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
       // Rejected before touching the database, regardless of caller.
       expect(update).not.toHaveBeenCalled();
@@ -164,12 +165,7 @@ describe('RolesService', () => {
       });
 
       await expect(
-        service.update(
-          callerFor('company-1'),
-          'role-x',
-          { name: 'Viewer' },
-          '127.0.0.1',
-        ),
+        service.update(admin, 'role-x', { name: 'Viewer' }, '127.0.0.1'),
       ).rejects.toBeInstanceOf(ConflictException);
     });
 
@@ -186,7 +182,7 @@ describe('RolesService', () => {
       });
 
       await service.update(
-        callerFor('company-1'),
+        admin,
         'role-x',
         {
           permissions: [Permission.CASH_ENTRY],
@@ -218,7 +214,7 @@ describe('RolesService', () => {
       });
 
       await service.update(
-        callerFor('company-1'),
+        admin,
         'role-x',
         { permissions: [Permission.DASHBOARD] },
         '127.0.0.1',
@@ -243,7 +239,7 @@ describe('RolesService', () => {
       });
 
       const result = await service.update(
-        callerFor('company-1'),
+        admin,
         'role-x',
         { permissions: [Permission.DASHBOARD] },
         '127.0.0.1',
@@ -270,7 +266,7 @@ describe('RolesService', () => {
       });
 
       await expect(
-        service.remove(callerFor('company-1'), 'role-sa', '127.0.0.1'),
+        service.remove(admin, 'role-sa', '127.0.0.1'),
       ).rejects.toBeInstanceOf(ForbiddenException);
       expect(del).not.toHaveBeenCalled();
       expect(usersService.clearRoleAssignment).not.toHaveBeenCalled();
@@ -283,11 +279,7 @@ describe('RolesService', () => {
         { clearRoleAssignment: jest.fn().mockResolvedValue(4) },
       );
 
-      const result = await service.remove(
-        callerFor('company-1'),
-        'role-x',
-        '127.0.0.1',
-      );
+      const result = await service.remove(admin, 'role-x', '127.0.0.1');
 
       expect(usersService.clearRoleAssignment).toHaveBeenCalledWith('role-x');
       expect(del).toHaveBeenCalledWith({ where: { id: 'role-x' } });
@@ -299,8 +291,74 @@ describe('RolesService', () => {
         findUnique: jest.fn().mockResolvedValue(null),
       });
       await expect(
-        service.remove(callerFor('company-1'), 'nope', '127.0.0.1'),
+        service.remove(admin, 'nope', '127.0.0.1'),
       ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('refuses to delete the default role for new accounts (029 FR-001)', async () => {
+      const del = jest.fn();
+      const { service, usersService } = build({
+        findUnique: jest.fn().mockResolvedValue({
+          ...customRole,
+          name: 'General User',
+          isDefault: true,
+        }),
+        delete: del,
+      });
+      await expect(
+        service.remove(callerFor('company-1'), 'role-x', '127.0.0.1'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(del).not.toHaveBeenCalled();
+      expect(usersService.clearRoleAssignment).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('home page (029 FR-020)', () => {
+    it('lets the protected role change its home page and nothing else', async () => {
+      const update = jest
+        .fn()
+        .mockResolvedValue({ ...protectedRole, homeModule: 'dashboard' });
+      const { service } = build({
+        findUnique: jest.fn().mockResolvedValue(protectedRole),
+        update,
+      });
+      await service.update(
+        callerFor('company-1'),
+        'role-sa',
+        { homeModule: 'dashboard' },
+        '127.0.0.1',
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'role-sa' },
+        data: { homeModule: 'dashboard' },
+      });
+
+      await expect(
+        service.update(
+          callerFor('company-1'),
+          'role-sa',
+          { homeModule: 'dashboard', name: 'Root' },
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('clears the home page when sent null', async () => {
+      const update = jest.fn().mockResolvedValue(customRole);
+      const { service } = build({
+        findUnique: jest.fn().mockResolvedValue(customRole),
+        update,
+      });
+      await service.update(
+        callerFor('company-1'),
+        'role-x',
+        { homeModule: null },
+        '127.0.0.1',
+      );
+      expect(update).toHaveBeenCalledWith({
+        where: { id: 'role-x' },
+        data: { homeModule: null },
+      });
     });
   });
 });
@@ -329,6 +387,25 @@ describe('CreateRoleDto validation (FR-007)', () => {
     ).resolves.toContain('permissions');
   });
 
+  it('accepts a known home module, null, or none — and nothing else (029 FR-020)', async () => {
+    const errorsWith = async (homeModule: unknown) =>
+      (
+        await validate(
+          plainToInstance(CreateRoleDto, {
+            name: 'Custom',
+            permissions: [],
+            homeModule,
+          }),
+        )
+      ).map((e) => e.property);
+    await expect(errorsWith('my-workspace')).resolves.toEqual([]);
+    await expect(errorsWith(null)).resolves.toEqual([]);
+    await expect(errorsWith(undefined)).resolves.toEqual([]);
+    await expect(errorsWith('https://evil.example')).resolves.toContain(
+      'homeModule',
+    );
+  });
+
   it('does not let role editing grant CROSS_COMPANY_ACCESS', async () => {
     expect(ASSIGNABLE_PERMISSIONS).not.toContain(
       Permission.CROSS_COMPANY_ACCESS,
@@ -336,5 +413,44 @@ describe('CreateRoleDto validation (FR-007)', () => {
     await expect(
       errorsFor([Permission.CROSS_COMPANY_ACCESS]),
     ).resolves.toContain('permissions');
+  });
+
+  // 2026-10-16 access-control audit, C3.
+  describe('grant ceiling', () => {
+    const companyAdmin = callerFor('company-1', {
+      permissions: [Permission.USER_MANAGEMENT, Permission.DASHBOARD],
+    });
+
+    it('refuses to create a role granting more than its author holds', async () => {
+      const { service } = build({
+        findUnique: jest.fn().mockResolvedValue(null),
+        create: jest.fn(),
+      });
+      await expect(
+        service.create(
+          companyAdmin,
+          { name: 'Escalator', permissions: [Permission.COMPANY_SETTINGS] },
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('refuses a company administrator editing a role held in other companies', async () => {
+      const { service } = build(
+        {
+          findUnique: jest.fn().mockResolvedValue(customRole),
+          update: jest.fn(),
+        },
+        { countRoleHoldersOutside: jest.fn().mockResolvedValue(3) },
+      );
+      await expect(
+        service.update(
+          companyAdmin,
+          'role-x',
+          { name: 'Renamed' },
+          '127.0.0.1',
+        ),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
   });
 });

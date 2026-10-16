@@ -67,10 +67,15 @@ export interface ReminderRuleProvider {
    *
    * Declared by the **owning module**, which is the only place that knows what gates
    * its own screens — the same division of labour the rule itself already follows under
-   * Principle I. A rule that declares nothing is shown to anyone who can reach the
-   * endpoint, so omitting it is a decision, not a default to fall into.
+   * Principle I.
+   *
+   * **Required since 2026-10-16** (client: "show only relevant reminders and the modules they have
+   * access to"). It was optional, and a rule declaring nothing was shown to everyone who could
+   * reach the endpoint — one forgotten line away from putting a module's expiries in front of
+   * people who cannot open it. Now a rule must name its module, and one naming none (an empty
+   * list) is shown to group administrators only.
    */
-  readonly requires?: Permission[];
+  readonly requires: Permission[];
   /** The reminder family, used by the list's type filter: `document_expiry`. */
   readonly type: string;
   /** What the rule evaluates over: `EQUIPMENT_DOCUMENT`. */

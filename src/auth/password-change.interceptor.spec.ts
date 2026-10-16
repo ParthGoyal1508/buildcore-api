@@ -93,19 +93,20 @@ describe('PasswordChangeInterceptor', () => {
     expect(result).toBeDefined();
   });
 
-  it('never refuses an admin-reset account (FR-017a-ii)', () => {
-    // Deliberately unenforced: enforcing it would lock out anyone mid-reset the
-    // moment this deploys. A recorded limitation, not an oversight.
-    const result = build().intercept(
-      contextFor(
-        account({
-          mustChangePassword: true,
-          credentialOrigin: CredentialOrigin.admin_reset,
-        }),
+  it('refuses an admin-reset account that has not changed its password (029 FR-016)', () => {
+    // 010 left this advisory (FR-017a-ii). The admin knows a reset password exactly as well as
+    // one set at creation, so it is retired the same way.
+    expect(() =>
+      build().intercept(
+        contextFor(
+          account({
+            mustChangePassword: true,
+            credentialOrigin: CredentialOrigin.admin_reset,
+          }),
+        ),
+        next,
       ),
-      next,
-    );
-    expect(result).toBeDefined();
+    ).toThrow(ForbiddenException);
   });
 
   it('never refuses an account with no recorded origin (FR-017a-i)', () => {

@@ -35,8 +35,11 @@ class FakeRule implements ReminderRuleProvider {
   readonly leadDays = 30;
   readonly severityLadder = { warnWithinDays: 7 };
 
-  /** Undeclared by default, so every pre-existing test keeps its old meaning. */
-  readonly requires?: Permission[];
+  /**
+   * DASHBOARD by default — what every caller of the reminders endpoint holds — so the
+   * pre-existing tests keep their meaning now that a rule must declare its module (2026-10-16).
+   */
+  readonly requires: Permission[];
 
   constructor(
     readonly ruleKey = 'testing-document-expiry',
@@ -50,7 +53,7 @@ class FakeRule implements ReminderRuleProvider {
   ) {
     this.sourceModule = overrides.sourceModule ?? 'testing';
     this.type = overrides.type ?? 'document_expiry';
-    this.requires = overrides.requires;
+    this.requires = overrides.requires ?? [Permission.DASHBOARD];
   }
 
   isAvailable(): boolean {
@@ -86,7 +89,12 @@ interface LedgerRow {
 class FakeLedger {
   rows: LedgerRow[] = [];
   private nextId = 1;
-  snoozes: { companyId: string; ruleKey: string; entityId: string }[] = [];
+  snoozes: {
+    companyId: string;
+    ruleKey: string;
+    entityId: string;
+    createdByUserId?: string;
+  }[] = [];
   /** Rule keys an operator has switched off in the catalogue. */
   disabled: string[] = [];
 
@@ -155,7 +163,19 @@ class FakeLedger {
         ),
       },
       reminderSnooze: {
-        findMany: jest.fn(() => Promise.resolve(this.snoozes)),
+        // Honours the per-user filter the list applies (2026-10-16); a snooze with no author in
+        // a fixture belongs to the default caller.
+        findMany: jest.fn(
+          ({ where }: { where: { createdByUserId?: string } }) =>
+            Promise.resolve(
+              this.snoozes.filter(
+                (snooze) =>
+                  !where.createdByUserId ||
+                  (snooze.createdByUserId ?? 'caller-1') ===
+                    where.createdByUserId,
+              ),
+            ),
+        ),
         create: jest.fn(() => Promise.resolve({})),
       },
       reminderRule: {
@@ -194,7 +214,8 @@ const candidate = (
 });
 
 describe('RemindersService', () => {
-  const caller = callerFor(COMPANY);
+  // DASHBOARD, as every caller of the endpoint holds: rules now always name a module (2026-10-16).
+  const caller = callerFor(COMPANY, { permissions: [Permission.DASHBOARD] });
 
   describe('severity and ordering (FR-030)', () => {
     it('bands by days remaining, counting a due date today as not yet overdue', async () => {
@@ -398,6 +419,22 @@ describe('RemindersService', () => {
   });
 
   describe('snooze (FR-034)', () => {
+    // 2026-10-16: a snooze is the snoozer's own "not now", not the company's.
+    it('hides the reminder only from the person who snoozed it', async () => {
+      const ledger = new FakeLedger();
+      const rule = new FakeRule('testing-document-expiry', [candidate('a', 3)]);
+      const { service } = serviceWith([rule], ledger);
+      ledger.snoozes = [
+        {
+          companyId: COMPANY,
+          ruleKey: 'testing-document-expiry',
+          entityId: 'a',
+          createdByUserId: 'someone-else',
+        },
+      ];
+      expect((await service.list(caller, {})).reminders).toHaveLength(1);
+    });
+
     it('suppresses the reminder from the list while the snooze is live', async () => {
       const ledger = new FakeLedger();
       const rule = new FakeRule('testing-document-expiry', [candidate('a', 3)]);
@@ -695,17 +732,44 @@ describe('RemindersService', () => {
       ).rejects.toThrow(/not found/i);
     });
 
-    it('keeps a rule that declares no permission', async () => {
-      const { service } = serviceWith(
-        [new FakeRule('testing-document-expiry', [candidate('a', 3)])],
-        new FakeLedger(),
-      );
+    // 2026-10-16: a rule must name its module; one naming none is for group administrators.
+    it('hides a rule naming no module from everyone but a group administrator', async () => {
+      const rule = () =>
+        new FakeRule('testing-document-expiry', [candidate('a', 3)], true, {
+          requires: [],
+        });
+      const { service } = serviceWith([rule()], new FakeLedger());
 
-      const { reminders } = await service.list(
-        callerFor(COMPANY, { permissions: [] }),
+      const ordinary = await service.list(
+        callerFor(COMPANY, { permissions: [Permission.DASHBOARD] }),
         {},
       );
+      expect(ordinary.reminders).toEqual([]);
 
+      const group = await service.list(
+        callerFor(COMPANY, {
+          permissions: [Permission.DASHBOARD, Permission.CROSS_COMPANY_ACCESS],
+        }),
+        {},
+      );
+      expect(group.reminders.map((r) => r.entityId)).toEqual(['a']);
+    });
+
+    it('shows a group administrator every module’s reminders', async () => {
+      const { service } = serviceWith(
+        [
+          new FakeRule('testing-document-expiry', [candidate('a', 3)], true, {
+            requires: [Permission.MACHINERY],
+          }),
+        ],
+        new FakeLedger(),
+      );
+      const { reminders } = await service.list(
+        callerFor(COMPANY, {
+          permissions: [Permission.DASHBOARD, Permission.CROSS_COMPANY_ACCESS],
+        }),
+        {},
+      );
       expect(reminders.map((r) => r.entityId)).toEqual(['a']);
     });
   });

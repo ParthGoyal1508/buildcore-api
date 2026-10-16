@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { HOME_MODULES, HomeModule } from '../../settings/roles/home-modules';
 import { AccessLevel, Permission } from '@prisma/client';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 
@@ -26,6 +27,20 @@ export class UserResponseDto {
 
   @ApiProperty({ type: [String] })
   roleNames: string[];
+
+  @ApiProperty({
+    enum: HOME_MODULES,
+    nullable: true,
+    description:
+      'Where this user lands after signing in, from their roles (029 FR-021). Null: the first module they can open.',
+  })
+  homeModule: HomeModule | null;
+
+  @ApiProperty({
+    description:
+      'An administrator set the current password and it must be replaced (029 FR-016). Lets the change-password screen say "required" or not without a second source of truth.',
+  })
+  mustChangePassword: boolean;
 
   @ApiProperty({ enum: Permission, isArray: true })
   permissions: Permission[];
@@ -59,6 +74,8 @@ export class UserResponseDto {
       roleNames,
       permissions,
       grants,
+      homeModule,
+      mustChangePassword,
     } = user;
     return {
       id,
@@ -71,6 +88,8 @@ export class UserResponseDto {
       roleNames,
       permissions,
       grants: grants ?? [],
+      homeModule: homeModule ?? null,
+      mustChangePassword: Boolean(mustChangePassword),
     };
   }
 }

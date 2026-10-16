@@ -29,6 +29,8 @@ function callerFrom(user: AuthenticatedUser, request: Request): AdminCaller {
     companyId: user.companyId,
     ipAddress: request.ip ?? request.socket?.remoteAddress ?? 'unknown',
     rls: rlsContextFor(user),
+    permissions: user.permissions,
+    grants: user.grants,
   };
 }
 

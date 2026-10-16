@@ -1,3 +1,4 @@
+import { MyResignationController } from './resignations/my-resignation.controller';
 import { Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
@@ -43,6 +44,7 @@ import { RecruitmentReportsService } from './reports/recruitment-reports.service
   // posting, named through its services (2026-10-13). Neither imports this module back.
   imports: [SettingsModule, HrModule, LettersModule, ProjectsModule],
   controllers: [
+    MyResignationController,
     RequisitionController,
     CandidateController,
     InterviewController,

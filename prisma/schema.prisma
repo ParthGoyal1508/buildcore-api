@@ -68,19 +68,20 @@ model User {
   /// How this account's first password came to exist (010 FR-017a-i).
   ///
   /// `mustChangePassword` alone cannot carry this: the forced-change refusal applies
-  /// to `admin_direct` accounts only, so the same flag means *enforced* on one
-  /// account and *advisory* on an admin-reset one, and nothing else separates them.
-  /// Only an explicit `admin_direct` is ever refused — an absent or unrecognised
-  /// value must not lock a real user out over missing metadata.
+  /// only to passwords an admin chose (`admin_direct`, and `admin_reset` since 029),
+  /// never to one the holder chose. Only an explicit admin origin is ever refused —
+  /// an absent or unrecognised value must not lock a real user out over missing
+  /// metadata.
   credentialOrigin    CredentialOrigin @default(invite)
   /// Resets to 0 on next successful login (FR-013).
   consecutiveFailures Int              @default(0)
   /// Set when consecutiveFailures reaches the configured threshold (FR-012).
   lockedUntil         DateTime?
 
-  refreshTokens   RefreshToken[]
-  inviteTokens    InviteToken[]
-  auditLogEntries AuditLogEntry[]
+  refreshTokens       RefreshToken[]
+  inviteTokens        InviteToken[]
+  passwordResetTokens PasswordResetToken[]
+  auditLogEntries     AuditLogEntry[]
 
   // Feature 016's approval spine. Two relations to the same table because the person
   // who raised an item and the people who decide on it are different roles in the
@@ -99,8 +100,9 @@ enum CredentialOrigin {
   /// Set by an admin at creation time (FR-015). The only origin the forced-change
   /// refusal applies to.
   admin_direct
-  /// Set by an admin resetting an existing account's password. Deliberately left
-  /// unenforced for now (FR-017a-ii).
+  /// Set by an admin resetting an existing account's password. Enforced like
+  /// `admin_direct` since 029 FR-016 — the admin knows this value too, which is the
+  /// whole reason the forced change exists (it was advisory under 010 FR-017a-ii).
   admin_reset
 
   @@schema("shared")
@@ -148,6 +150,15 @@ model Role {
   /// delete (002-settings-backend FR-008; enforced there once it owns role editing —
   /// this feature only ever reads roles, it doesn't expose role management).
   isProtected     Boolean          @default(false)
+  /// The role a new account is given when the creator names none (029 FR-001). At most
+  /// one role carries it — a partial unique index in the migration, since Prisma cannot
+  /// express "unique where true". Seeded on "General User".
+  isDefault       Boolean          @default(false)
+  /// Where a holder of this role lands after signing in (029 FR-020): a module key from
+  /// `HOME_MODULES` (src/settings/roles/home-modules.ts), never a URL — the frontend owns
+  /// the routes, and a stored path would be a redirect target an editor could aim anywhere.
+  /// Null means "the first module the user can open", the behaviour before this column.
+  homeModule      String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -1206,6 +1217,33 @@ model ReimbursementCategory {
 /// password. Only the SHA-256 hash of the token is stored, mirroring how
 /// `RefreshToken` already handles its own opaque value (010 research.md §2) — so a
 /// database dump alone can never be turned back into a working invite link.
+/// A single-use, short-lived link to choose a new password (029 FR-010) — Forgot
+/// Password, or one an admin sends. Shaped like `InviteToken` on purpose: only the
+/// SHA-256 of the token is stored, "current" is derived (newest unconsumed row), and a
+/// redeemed row stays for the audit trail.
+///
+/// A separate table rather than a `purpose` column on `InviteToken`: an invite activates
+/// a `pending` account and a reset rewrites an `active` one's credential, and validation
+/// that had to branch on which it was holding is where one gets accepted as the other.
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hex of the raw token. The raw value exists only inside the email.
+  tokenHash String @unique
+
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  /// The admin who sent it; null when the holder asked for it themselves.
+  requestedById String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@schema("shared")
+}
+
 model InviteToken {
   id     String @id @default(cuid())
   userId String
@@ -1350,6 +1388,12 @@ enum AuditEntityType {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  /// 029: the account holder changed their own password while signed in.
+  PASSWORD_CHANGED
+  /// 029: a reset link was asked for — by the holder (Forgot Password) or sent by an admin.
+  PASSWORD_RESET_REQUESTED
+  /// 029: a reset link was redeemed and a new password set.
+  PASSWORD_RESET_COMPLETED
 
   // Settings entities audited by feature 002 (FR-025).
   COMPANY
@@ -1529,6 +1573,12 @@ enum AuditAction {
   LOGOUT
   REFRESH_REUSE_DETECTED
   ADMIN_PASSWORD_RESET
+  /// 029: the account holder changed their own password while signed in.
+  PASSWORD_CHANGED
+  /// 029: a reset link was asked for — by the holder (Forgot Password) or sent by an admin.
+  PASSWORD_RESET_REQUESTED
+  /// 029: a reset link was redeemed and a new password set.
+  PASSWORD_RESET_COMPLETED
 
   @@schema("shared")
 }
@@ -3592,6 +3642,7 @@ model Employee {
   punchRecords                 PunchRecord[]
   leaveBalances                LeaveBalance[]
   leaveApplications            LeaveApplication[]
+  leaveLedger                  LeaveLedgerEntry[]
   reimbursementClaims          ReimbursementClaim[]
   salarySlips                  SalarySlip[]
   documents                    EmployeeDocument[]
@@ -3927,11 +3978,22 @@ model LeaveApplication {
   decidedByUserId String?
   decidedAt       DateTime?
 
+  /// The reporting manager's login, who decides first (2026-10-16: "first go to reporting manager
+  /// and then HR"). Null when the employee has no reporting manager with a login — the application
+  /// then goes straight to HR, as every one did before. Set at application and never changed, so
+  /// a later change of manager does not move an application already in somebody's queue.
+  managerUserId    String?
+  /// When the manager approved it on to HR. A manager's rejection is final and is recorded in the
+  /// decision fields above instead.
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([employeeId, fromDate, toDate])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 
@@ -3942,6 +4004,81 @@ enum LeaveTypeCode {
   /// Leave without pay — the one type not checked against a balance (FR-020).
   lwp
 
+  @@schema("hr")
+}
+
+/// How a leave type's yearly entitlement reaches the balance (2026-10-16).
+enum LeaveCreditMode {
+  /// A twelfth of the year's days on the first of each month — Earned leave, usually.
+  monthly
+  /// The whole year's days on 1 April (prorated for a mid-year joiner) — Casual and Sick, usually.
+  yearly
+
+  @@schema("hr")
+}
+
+/// What moved a leave balance, in `LeaveLedgerEntry` (2026-10-16).
+enum LeaveLedgerKind {
+  monthly_credit
+  yearly_credit
+  carry_forward
+  adjustment
+  opening_import
+
+  @@schema("hr")
+}
+
+/// A company's leave policy, one row per leave type (2026-10-16).
+///
+/// Absent rows mean the built-in defaults (`DEFAULT_LEAVE_POLICY`), so a company that never opens
+/// the screen still gets leave credited; saving the screen writes every type.
+model LeavePolicy {
+  id        String        @id @default(cuid())
+  companyId String
+  leaveType LeaveTypeCode
+
+  /// Days granted in a full financial year.
+  annualDays      Decimal         @db.Decimal(6, 2)
+  creditMode      LeaveCreditMode
+  /// Whether unused days move into next year's opening balance, up to `carryForwardCap`.
+  carryForward    Boolean         @default(false)
+  carryForwardCap Decimal?        @db.Decimal(6, 2)
+  /// A yearly credit for someone who joins mid-year is scaled to the months left.
+  prorateJoiners  Boolean         @default(true)
+
+  updatedByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([companyId, leaveType])
+  @@schema("hr")
+}
+
+/// Every change to a leave balance other than leave taken (2026-10-16): monthly and yearly credits,
+/// carry-forward, HR adjustments and the go-live import. The unique key is what makes crediting
+/// idempotent — a month is credited once however often the job runs — and the rows are the history
+/// HR reads when an employee asks where a balance came from.
+model LeaveLedgerEntry {
+  id         String   @id @default(cuid())
+  companyId  String
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  leaveType     LeaveTypeCode
+  financialYear String
+  kind          LeaveLedgerKind
+  /// `YYYY-MM` for a monthly credit, the financial year for a yearly credit, carry-forward or
+  /// import, and a unique token for an adjustment (several may fall in one year).
+  period        String
+  /// Signed: an adjustment may take days away.
+  days          Decimal         @db.Decimal(6, 2)
+  reason        String?
+  /// Null for the system (the crediting job).
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@unique([employeeId, leaveType, financialYear, kind, period])
+  @@index([companyId, financialYear])
   @@schema("hr")
 }
 
@@ -3997,11 +4134,18 @@ model ReimbursementClaim {
   decidedAt       DateTime?
   adminRemarks    String?
 
+  /// The reporting manager's login, who decides first (2026-10-16) — the same stage as
+  /// `LeaveApplication.managerUserId`, set when the claim is submitted.
+  managerUserId    String?
+  managerDecidedAt DateTime?
+  managerRemarks   String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([employeeId, status])
   @@index([companyId, status])
+  @@index([managerUserId, status])
   @@schema("hr")
 }
 

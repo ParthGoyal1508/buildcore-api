@@ -92,6 +92,27 @@ export class EmployeesService {
     return employee;
   }
 
+  /**
+   * The login of an employee's reporting manager, who decides their leave and claims before HR
+   * (2026-10-16). Null — straight to HR — when there is no reporting manager, the manager has no
+   * login, has left, or is somehow the employee themself.
+   */
+  async reportingManagerUserId(
+    ctx: RlsContext,
+    employee: Pick<Employee, 'reportingToEmployeeId' | 'userId'>,
+  ): Promise<string | null> {
+    if (!employee.reportingToEmployeeId) return null;
+    const manager = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.employee.findFirst({
+        where: { id: employee.reportingToEmployeeId ?? '' },
+        select: { userId: true, isActive: true },
+      }),
+    );
+    if (!manager?.userId || manager.userId === employee.userId) return null;
+    if (!manager.isActive) return null;
+    return manager.userId;
+  }
+
   /** Look up an employee by id — for admin-side flows that legitimately act on
    * someone else's record, where RLS still confines the result to the caller's
    * company. */

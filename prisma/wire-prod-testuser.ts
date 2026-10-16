@@ -156,18 +156,18 @@ async function main() {
     console.log('role: already carries MY_WORKSPACE, left alone');
   } else {
     const siteUser = await prisma.role.findUnique({
-      where: { name: 'Site User' },
+      where: { name: 'General User' },
     });
     if (!siteUser) {
       throw new Error(
-        'No "Site User" role in this database — aborting role grant.',
+        'No "General User" role in this database — aborting role grant.',
       );
     }
     await prisma.userRole.create({
       data: { userId: user.id, roleId: siteUser.id },
     });
     console.log(
-      'granted role: Site User (DASHBOARD + MY_WORKSPACE + ATTENDANCE)',
+      'granted role: General User (MY_WORKSPACE)',
     );
   }
 
