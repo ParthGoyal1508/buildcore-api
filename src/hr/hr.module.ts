@@ -34,6 +34,7 @@ import { PiiMaskingInterceptor } from './employees/pii-masking.interceptor';
 import { LeaveAdminController } from './leave/leave-admin.controller';
 import { LeaveHrAdminController } from './leave/leave-hr-admin.controller';
 import { ReimbursementTeamController } from './reimbursements/reimbursement-team.controller';
+import { MyProfileController } from './employees/my-profile.controller';
 import { LeaveTeamController } from './leave/leave-team.controller';
 import { LeaveController } from './leave/leave.controller';
 import { LeaveService } from './leave/leave.service';
@@ -88,6 +89,7 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     LettersModule,
   ],
   controllers: [
+    MyProfileController,
     LeaveTeamController,
     ReimbursementTeamController,
     LocationAssignmentsController,
