@@ -27,14 +27,12 @@ describe('LeaveCreditService.runCredits', () => {
     const prisma = createPrismaMock({
       leavePolicy: { findMany: jest.fn().mockResolvedValue([]) },
       employee: {
-        findMany: jest
-          .fn()
-          .mockResolvedValue([
-            {
-              id: 'emp-1',
-              dateOfJoining: new Date(`${opts.joined}T00:00:00Z`),
-            },
-          ]),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'emp-1',
+            dateOfJoining: new Date(`${opts.joined}T00:00:00Z`),
+          },
+        ]),
       },
       leaveLedgerEntry: {
         findMany: jest
