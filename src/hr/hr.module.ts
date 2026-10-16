@@ -35,6 +35,9 @@ import { LeaveAdminController } from './leave/leave-admin.controller';
 import { LeaveHrAdminController } from './leave/leave-hr-admin.controller';
 import { ReimbursementTeamController } from './reimbursements/reimbursement-team.controller';
 import { MyProfileController } from './employees/my-profile.controller';
+import { LeaveCreditController } from './leave/leave-credit.controller';
+import { LeaveCreditCron } from './leave/leave-credit.cron';
+import { LeaveCreditService } from './leave/leave-credit.service';
 import { LeaveTeamController } from './leave/leave-team.controller';
 import { LeaveController } from './leave/leave.controller';
 import { LeaveService } from './leave/leave.service';
@@ -89,6 +92,7 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     LettersModule,
   ],
   controllers: [
+    LeaveCreditController,
     MyProfileController,
     LeaveTeamController,
     ReimbursementTeamController,
@@ -113,6 +117,8 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     SalaryRevisionsController,
   ],
   providers: [
+    LeaveCreditService,
+    LeaveCreditCron,
     EmployeeLetterSource,
     PunchRefusalsService,
     LocationAssignmentsService,
