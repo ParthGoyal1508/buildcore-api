@@ -749,6 +749,14 @@ export interface EmailConfig {
    * refuses to boot.
    */
   allowConsoleInProduction: boolean;
+  /**
+   * Whether payroll may email employees their payslips (021 FR-005). Off unless set — the
+   * client turned it off on 2026-10-16: only account emails go out for now, and a payslip run
+   * for a full company would also exceed a free email plan's daily allowance in one press.
+   * Off, the send and retry endpoints refuse and the payroll screen hides the controls; the
+   * delivery history stays readable.
+   */
+  payslipsEnabled: boolean;
 }
 
 /**

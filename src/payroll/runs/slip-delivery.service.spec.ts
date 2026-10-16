@@ -38,6 +38,9 @@ function build(opts: {
   rejectAddresses?: string[];
   outstandingApproval?: { state: string; levelLabel?: string } | null;
   noSlipFor?: string[];
+  /** `PAYSLIP_EMAIL_ENABLED`. On here unless a test says otherwise, so the delivery rules below
+   * are exercised; the deployed default is off. */
+  emailEnabled?: boolean;
 }) {
   const employees = opts.employees ?? [employee()];
   const writes: Record<string, unknown>[] = [];
@@ -145,6 +148,7 @@ function build(opts: {
       pdf as never,
       schedule as never,
       salary as never,
+      { get: () => ({ payslipsEnabled: opts.emailEnabled ?? true }) } as never,
     ),
     writes,
     sent,
@@ -390,6 +394,27 @@ describe('SlipDeliveryService', () => {
       failed: 1,
       undeliverable: 0,
       notAttempted: 1,
+    });
+  });
+
+  describe('turned off by setting (2026-10-16)', () => {
+    it.each(['send', 'retry'] as const)(
+      'refuses to %s, sends nothing and reads nothing',
+      async (action) => {
+        const { service, sent, queries } = build({ emailEnabled: false });
+        await expect(service[action](ctx, 'run-1')).rejects.toMatchObject({
+          response: { code: 'PAYSLIP_EMAIL_DISABLED' },
+        });
+        expect(sent).toHaveLength(0);
+        expect(queries).toHaveLength(0);
+      },
+    );
+
+    it('still reports the delivery history, saying sending is off', async () => {
+      const { service } = build({ emailEnabled: false });
+      await expect(service.report(ctx, 'run-1')).resolves.toMatchObject({
+        emailEnabled: false,
+      });
     });
   });
 });
