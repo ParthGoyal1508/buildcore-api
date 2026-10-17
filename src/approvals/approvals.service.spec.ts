@@ -396,6 +396,7 @@ describe('ApprovalService', () => {
       expect(state.currentPosition).toBe(2);
       expect(state.state).toBe('pending');
       expect(view.levelLabel).toBe('HR');
+      expect(view.isFinalAuthority).toBe(false);
       expect(view.totalLevels).toBe(3);
       // Not finished, so nothing is announced.
       expect(events.emit).not.toHaveBeenCalled();
@@ -1029,6 +1030,8 @@ describe('ApprovalService', () => {
         // The module the Approvals screen groups the queue by (2026-10-15).
         module: 'attendance',
         moduleLabel: 'Attendance',
+        // First approver is not the chain's final authority (036 D4).
+        isFinalAuthority: false,
       });
       expect(typeof page.items[0].ageHours).toBe('number');
     });

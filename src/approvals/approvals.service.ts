@@ -1116,6 +1116,7 @@ export class ApprovalService {
           levelLabel: level
             ? labelForSlot(level.slotKey, level.label)
             : `Level ${instance.currentPosition}`,
+          isFinalAuthority: level?.isFinalAuthority ?? false,
         };
       }),
       nextCursor: rows.length > limit ? page[page.length - 1].id : null,
@@ -1255,6 +1256,7 @@ export class ApprovalService {
         levelLabel: level
           ? labelForSlot(level.slotKey, level.label)
           : `Level ${instance.currentPosition}`,
+        isFinalAuthority: level?.isFinalAuthority ?? false,
         yourPosition,
         yourLevelLabel: yours
           ? labelForSlot(yours.slotKey, yours.label)
@@ -1734,6 +1736,7 @@ export class ApprovalService {
         : 'The system',
       levelLabel:
         finished || !level ? null : labelForSlot(level.slotKey, level.label),
+      isFinalAuthority: !finished && (level?.isFinalAuthority ?? false),
       awaitingRoleName,
       // A reassignment names one person, so it answers this precisely. Otherwise only a
       // sole holder can be named without guessing.

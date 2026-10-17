@@ -84,6 +84,11 @@ export interface ApprovalInstanceView {
   /** "The system" when a scheduled job raised it — never a fabricated person. */
   originatorName: string;
 
+  /**
+   * Whether the level deciding now is the chain's final authority (036 D4) — the screen asks
+   * for confirmation before an Approve there, since nothing after it can catch a mistake.
+   */
+  isFinalAuthority?: boolean;
   /** The label of the level that decides now — null once the chain is finished. */
   levelLabel: string | null;
   /** The role that level resolves to for this company; null when the slot is unmapped. */
@@ -183,6 +188,8 @@ export interface ApprovalQueueEntry {
   ageHours: number;
   currentPosition: number;
   levelLabel: string;
+  /** The caller's level is the chain's final authority (036 D4). */
+  isFinalAuthority: boolean;
 }
 
 /**
