@@ -196,6 +196,41 @@ All five module streams are merged into `036-ux-qa-hardening` in both repos (loc
 - **ESS payslip PDF:** uses a raw `fetch`.
 - **e2e test environment:** dashboard needs the `QA No Modules` fixture role; letters, letters-regression and bill-package debits fail as they did before 036.
 
+### Wave 4: outcome (18-10-2026)
+
+Both agents are merged and pushed.
+
+**Design system + accessibility:**
+- Every button variant is in `app/ui/button.tsx`.
+- About 70 raw buttons were migrated; the rest are custom controls with the shared focus ring.
+- StatusBadge uses semantic tones; 27 hand-made pills were migrated.
+- 51 faint grey text classes were darkened, and nothing is below 12px.
+- Required markers, `aria-required` and `aria-describedby` are built into the fields.
+- Tablet icon rail, scrolling tab cues, and breadcrumbs on 12 detail pages.
+- The login page was rebuilt.
+- Lint regression rules were added.
+- The transitional `blue: brand` remap is removed; `blue` is Tailwind's own again.
+
+**Follow-ups:**
+- The last 5 plant pickers now search the server.
+- Interview and bank-sheet history pagers show page counts (`authFetchWithMeta`, `X-Total-Count` exposed).
+- **Company-scoped custom roles** (`20261019100000_company_scoped_roles`, backfilled from holders).
+- Client-bill decimal entry; RA bills filtered by work order; labour project pickers search the server.
+- Resignations report fixed; payslip PDF goes through the authenticated helper.
+- `npm run seed:defaults`.
+
+**e2e:** every suite that failed before 036 was stale against intended behaviour or missing setup, not a code bug. All are green now:
+- settings, dashboard, assets, plant, dwr, letters, letters-regression, bill-package, ra-bills.
+- Debit notes have no e2e coverage now (unit spec only).
+
+**Results:** API 256/256 unit suites (2,848 tests). Web typecheck clean, lint 0 errors / 2 old warnings, `next build` succeeds.
+
+**Still open from Wave 4:**
+- `PUT /approvals/slot-mappings` doesn't refuse another company's role.
+- Account creation lists every visible role (the server refuses a wrong one).
+- Three plant pickers are still capped at 200: service-bill vendor, the equipment page site filter, and the spare-part linked item.
+- File-download controllers still override the exposed headers, hiding `X-Company-Id` on downloads.
+
 ### Remaining for the final pass (written 18-10-2026, while Wave 4 runs)
 
 Wave 4 runs two agents: **design system + accessibility** (A21–A23, A29, A16, lint rules) and **follow-ups** (the Wave 3 list plus company-scoped roles and the e2e environment). Everything below is outside both.
