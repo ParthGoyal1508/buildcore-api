@@ -18,6 +18,7 @@ import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import type { CreateLoanDto, ListLoansQueryDto } from './dto/create-loan.dto';
 import { generateSchedule, nextPeriod, periodOf } from './loan-schedule';
+import { assertNotMakerOrPayee } from '../maker-checker';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -86,6 +87,8 @@ export class LoansService {
           reason: dto.reason.trim(),
           remarks: dto.remarks?.trim() ?? null,
           status: LoanStatus.pending,
+          // 036 F19: the maker, so the checker can be required to be somebody else.
+          createdByUserId: caller.userId,
           schedule: {
             create: schedule.map((e) => ({
               month: e.month,
@@ -133,13 +136,33 @@ export class LoansService {
     if (loan.status !== LoanStatus.pending) {
       throw new ConflictException(`A ${loan.status} loan cannot be approved.`);
     }
+    // 036 F19 (decision 4: block, no override). Not the person who recorded the loan, and not the
+    // employee it is for — see `assertNotMakerOrPayee`.
+    await assertNotMakerOrPayee(this.prisma, caller, {
+      createdByUserId: loan.createdByUserId,
+      employeeId: loan.employeeId,
+      noun: 'loan',
+    });
 
-    const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.loan.update({
-        where: { id: loanId },
-        data: { status: LoanStatus.active, approvedByUserId: caller.userId },
-        include: { schedule: { orderBy: { month: 'asc' } } },
-      }),
+    // Conditional on still pending, so two approvals at once activate it once (036 F19).
+    const updated = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const moved = await tx.loan.updateMany({
+          where: { id: loanId, status: LoanStatus.pending },
+          data: { status: LoanStatus.active, approvedByUserId: caller.userId },
+        });
+        if (moved.count !== 1) {
+          throw new ConflictException(
+            'This loan was decided by someone else a moment ago. Reload to see where it stands.',
+          );
+        }
+        return tx.loan.findFirstOrThrow({
+          where: { id: loanId },
+          include: { schedule: { orderBy: { month: 'asc' } } },
+        });
+      },
     );
 
     await this.auditLog.record({
@@ -292,6 +315,7 @@ export class LoansService {
     reason: string;
     remarks: string | null;
     status: LoanStatus;
+    createdByUserId?: string | null;
     schedule: {
       month: string;
       emiAmount: Prisma.Decimal;
@@ -314,6 +338,8 @@ export class LoansService {
       reason: loan.reason,
       remarks: loan.remarks,
       status: loan.status,
+      // 036 F19: so the screen can say "someone else must approve this" before the 403 does.
+      createdByUserId: loan.createdByUserId ?? null,
       totalRecovered: recovered,
       outstanding: r2(Math.max(amount - recovered, 0)),
       instalments: loan.schedule.length,

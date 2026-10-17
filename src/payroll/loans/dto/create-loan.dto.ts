@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -19,14 +20,23 @@ export class CreateLoanDto {
   @IsNotEmpty()
   employeeId: string;
 
-  @ApiProperty({ description: 'Principal advanced to the employee.' })
-  @IsNumber()
+  @ApiProperty({
+    description: 'Principal advanced to the employee.',
+    maximum: 10_000_000,
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  // 036 F19. One crore: above any employee loan this business makes, below a typo's reach.
+  @Max(10_000_000, { message: 'A loan cannot exceed 1,00,00,000.' })
   amount: number;
 
-  @ApiProperty({ description: 'Monthly instalment recovered through payroll.' })
-  @IsNumber()
+  @ApiProperty({
+    description: 'Monthly instalment recovered through payroll.',
+    maximum: 10_000_000,
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  @Max(10_000_000, { message: 'An EMI cannot exceed 1,00,00,000.' })
   emiAmount: number;
 
   @ApiProperty({ example: '2026-09-15' })
