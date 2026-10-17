@@ -251,12 +251,16 @@ describe('HR documents (036 3b, e2e)', () => {
       })
       .expect(200);
     expect(current.headers['content-type']).toContain('application/pdf');
-    expect(current.headers['content-disposition']).toContain('passport-new.pdf');
+    expect(current.headers['content-disposition']).toContain(
+      'passport-new.pdf',
+    );
     expect((current.body as Buffer).toString('ascii')).toContain('second');
 
     const old = await http()
       .get(
-        `${base()}/${first.body.id}/file?versionId=${doc.previousVersions[0].id}`,
+        `${base()}/${first.body.id}/file?versionId=${
+          doc.previousVersions[0].id
+        }`,
       )
       .set(auth())
       .buffer(true)
