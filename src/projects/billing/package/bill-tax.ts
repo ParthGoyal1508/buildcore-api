@@ -32,6 +32,11 @@ export interface TaxBasisDecision {
   /** The two state codes, where they could be read. Reported so a reviewer can check the reading. */
   issuerStateCode: string | null;
   receiverStateCode: string | null;
+  /**
+   * Set when the two state codes say the opposite of the basis charged (036 I5) — additive, and
+   * never a refusal. See `taxBasisWarning`.
+   */
+  warning: string | null;
 }
 
 export interface TaxBasisInput {
@@ -69,12 +74,51 @@ export function stateCodeOf(gstin?: string | null): string | null {
  * beside the tax that was charged.
  */
 export function decideTaxBasis(input: TaxBasisInput): TaxBasisDecision {
+  const basis = input.projectCgstApplicable
+    ? BillTaxBasis.intra_state
+    : BillTaxBasis.inter_state;
   return {
-    basis: input.projectCgstApplicable
-      ? BillTaxBasis.intra_state
-      : BillTaxBasis.inter_state,
+    basis,
     source: BillTaxBasisSource.from_project_flag,
     issuerStateCode: stateCodeOf(input.issuerGstin),
     receiverStateCode: stateCodeOf(input.receiverGstin),
+    warning: taxBasisWarning({
+      basis,
+      issuerGstin: input.issuerGstin,
+      receiverGstin: input.receiverGstin,
+    }),
   };
+}
+
+/**
+ * A sentence when the parties' registrations point the other way from the tax charged (036 I5).
+ *
+ * The project decides the basis (above) and that stays true: the company holds several
+ * registrations, so a mismatch is sometimes right. But "both registered in 08 and charged IGST" is
+ * also exactly what a wrong project setting looks like, and it is an eighteen per cent error on a
+ * document somebody pays. So it is **said**, beside the figures, and never refused — the reviewer
+ * is the one who knows which registration the bill goes out under.
+ *
+ * Null when either code cannot be read: an absent registration is reported as a missing header
+ * field already, and a guess here would be a confident answer about somebody's tax.
+ */
+export function taxBasisWarning(input: {
+  basis: BillTaxBasis;
+  issuerGstin?: string | null;
+  receiverGstin?: string | null;
+}): string | null {
+  const issuer = stateCodeOf(input.issuerGstin);
+  const receiver = stateCodeOf(input.receiverGstin);
+  if (!issuer || !receiver) return null;
+
+  const sameState = issuer === receiver;
+  const chargedIntra = input.basis === BillTaxBasis.intra_state;
+  if (sameState === chargedIntra) return null;
+
+  return sameState
+    ? `Both parties are registered in state ${issuer}, which usually means CGST + SGST, but ` +
+        'this bill charges IGST. Check the project’s tax setting before issuing it.'
+    : `The parties are registered in different states (${issuer} and ${receiver}), which ` +
+        'usually means IGST, but this bill charges CGST + SGST. Check the project’s tax setting ' +
+        'before issuing it.';
 }

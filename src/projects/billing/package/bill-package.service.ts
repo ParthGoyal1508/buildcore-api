@@ -46,7 +46,7 @@ import { assertCertifiedLines, certifiedAmountOf } from '../certified-lines';
 import type { CertifiedCopyLine } from './certified-copy.reader';
 import type { AbstractColumn } from './bill-abstract';
 import { balanceColumn, billAbstract, displayRupees } from './bill-abstract';
-import { decideTaxBasis } from './bill-tax';
+import { decideTaxBasis, taxBasisWarning } from './bill-tax';
 import type { SetBillAdjustmentsDto } from './dto/bill-adjustments.dto';
 import { BILLING_ERRORS } from '../billing-error-codes';
 import { PACKAGE_ERRORS } from './package-error-codes';
@@ -1495,6 +1495,8 @@ export class BillPackageService {
   ): Promise<{
     package: BillPackageView;
     missingHeaderFields: string[];
+    /** 036 I5: the parties' state codes disagree with the basis charged. Never a refusal. */
+    taxBasisWarning: string | null;
   }> {
     const result = await withRlsContext(this.prisma, ctx, async (tx) => {
       const pkg = await tx.billPackage.findFirst({
@@ -1571,8 +1573,11 @@ export class BillPackageService {
       const abstract = await this.abstractColumns(tx, pkg);
       await this.freezeDeductionLines(tx, pkg);
 
-      await tx.billPackage.update({
-        where: { id: pkg.id },
+      // Conditional on `approved` (036): two Issue clicks both read `approved` above, and an
+      // unconditional update let both freeze the figures and move the bill. Only the one whose
+      // update matches goes on; the other's transaction rolls back with a 409.
+      const issued = await tx.billPackage.updateMany({
+        where: { id: pkg.id, status: BillPackageStatus.approved },
         data: {
           status: BillPackageStatus.issued,
           issuedAt: new Date(),
@@ -1584,6 +1589,13 @@ export class BillPackageService {
           ...abstract,
         },
       });
+      if (issued.count !== 1) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: PACKAGE_ERRORS.notApproved,
+          message: `${packageLabel(pkg.sequenceNo)} has already been issued.`,
+        });
+      }
 
       // **The 018 bill this package is built on leaves draft here too** (025 FR-043).
       //
@@ -1632,12 +1644,20 @@ export class BillPackageService {
         });
       }
 
-      return { missing: header.missing };
+      return {
+        missing: header.missing,
+        taxBasisWarning: taxBasisWarning({
+          basis: pkg.taxBasis,
+          issuerGstin: header.columns.issuerGstin,
+          receiverGstin: header.columns.receiverGstin,
+        }),
+      };
     });
 
     return {
       package: await this.view(ctx, packageId),
       missingHeaderFields: result.missing,
+      taxBasisWarning: result.taxBasisWarning,
     };
   }
 
@@ -2848,6 +2868,55 @@ export class BillPackageService {
   }
 
   /**
+   * The two GSTINs a package's tax basis should be checked against (036 I5): the frozen header
+   * once issued — what the document actually says — and, before that, the header it would freeze.
+   *
+   * The live read goes through the party services and is advisory, so a failure there yields no
+   * warning rather than failing the abstract the whole bill screen is built on.
+   */
+  private async gstinsFor(
+    ctx: RlsContext,
+    tx: Prisma.TransactionClient,
+    pkg: {
+      id: string;
+      companyId: string;
+      status: BillPackageStatus;
+      issuerGstin: string | null;
+      receiverGstin: string | null;
+    },
+  ): Promise<{ issuerGstin: string | null; receiverGstin: string | null }> {
+    if (
+      pkg.status === BillPackageStatus.issued ||
+      pkg.status === BillPackageStatus.certified
+    ) {
+      return { issuerGstin: pkg.issuerGstin, receiverGstin: pkg.receiverGstin };
+    }
+    try {
+      const parties = await tx.billPackage.findFirst({
+        where: { id: pkg.id },
+        select: {
+          direction: true,
+          project: { select: { name: true, clientId: true } },
+          raBill: { select: { workOrderId: true } },
+        },
+      });
+      if (!parties) return { issuerGstin: null, receiverGstin: null };
+      const { columns } = await this.freezeHeader(
+        ctx,
+        tx,
+        pkg.companyId,
+        parties,
+      );
+      return {
+        issuerGstin: columns.issuerGstin,
+        receiverGstin: columns.receiverGstin,
+      };
+    } catch {
+      return { issuerGstin: null, receiverGstin: null };
+    }
+  }
+
+  /**
    * The abstract: four blocks, three columns (FR-012 to FR-023).
    *
    * **The up-to-previous column is read from the previous package's stored figures** (FR-013a,
@@ -2871,6 +2940,12 @@ export class BillPackageService {
     taxBasis: string;
     /** How the basis was decided, reported rather than merely stored (FR-016a). */
     taxBasisSource: string;
+    /**
+     * 036 I5: set when the parties' GSTIN state codes say the opposite of `taxBasis`. Advisory —
+     * the project's choice still decides. Read from the frozen header once issued, and from the
+     * header the bill would freeze while it is not.
+     */
+    taxBasisWarning: string | null;
     /** True while the package is a draft: the cumulative column is not yet frozen (FR-013b). */
     cumulativeProvisional: boolean;
     rates: FrozenRates;
@@ -2900,6 +2975,7 @@ export class BillPackageService {
 
       const previous = await this.previousIssuedColumn(tx, pkg);
       const deductionLines = await this.deductionLinesFor(tx, pkg);
+      const gstins = await this.gstinsFor(ctx, tx, pkg);
 
       const abstract = billAbstract({
         workDone:
@@ -2947,6 +3023,7 @@ export class BillPackageService {
         periodTo: iso(pkg.periodTo),
         taxBasis: pkg.taxBasis,
         taxBasisSource: pkg.taxBasisSource,
+        taxBasisWarning: taxBasisWarning({ basis: pkg.taxBasis, ...gstins }),
         cumulativeProvisional: pkg.status === BillPackageStatus.draft,
         rates: {
           retentionFraction: pkg.retentionFraction.toFixed(6),
