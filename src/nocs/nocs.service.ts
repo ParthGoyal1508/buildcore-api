@@ -11,6 +11,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { holdsAtLevel } from '../common/access-levels';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
+import { LettersService } from '../letters/letters.service';
 import {
   assertAllowedFileType,
   compressImageUpload,
@@ -32,10 +33,11 @@ import {
  */
 const SUBJECT_TABLE: Record<
   NocSubject,
-  (
-    tx: Prisma.TransactionClient,
-    where: { id: string; companyId: string },
-  ) => Promise<{ id: string } | null>
+  | ((
+      tx: Prisma.TransactionClient,
+      where: { id: string; companyId: string },
+    ) => Promise<{ id: string } | null>)
+  | null
 > = {
   work_order: (tx, where) =>
     tx.workOrder.findFirst({ where, select: { id: true } }),
@@ -46,8 +48,9 @@ const SUBJECT_TABLE: Record<
   vendor: (tx, where) => tx.vendor.findFirst({ where, select: { id: true } }),
   employee: (tx, where) =>
     tx.employee.findFirst({ where, select: { id: true } }),
-  purchase_order: (tx, where) =>
-    tx.issuedLetter.findFirst({ where, select: { id: true } }),
+  // A purchase order is a letter; letters own their table (Principle I), so it is asked of
+  // `LettersService` in `upload` instead.
+  purchase_order: null,
 };
 
 /**
@@ -121,6 +124,7 @@ export class NocsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly letters: LettersService,
   ) {}
 
   async list(
@@ -191,13 +195,13 @@ export class NocsService {
     if (dto.stage && dto.subjectType !== 'work_order') {
       throw new BadRequestException('Only a work order NOC names a stage.');
     }
-    const subject = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      (tx) =>
-        SUBJECT_TABLE[dto.subjectType](tx, { id: dto.subjectId, companyId }),
-    );
-    if (!subject) {
+    const lookup = SUBJECT_TABLE[dto.subjectType];
+    const exists = lookup
+      ? (await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+          lookup(tx, { id: dto.subjectId, companyId }),
+        )) !== null
+      : await this.letters.letterExists(caller, dto.subjectId, companyId);
+    if (!exists) {
       throw new NotFoundException({
         statusCode: 404,
         code: 'NOC_SUBJECT_NOT_FOUND',

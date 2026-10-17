@@ -40,7 +40,12 @@ function build(subjectFound = true) {
     put: jest.fn(async () => 'stored-ref'),
     delete: jest.fn(async () => undefined),
   };
-  const service = new NocsService(prisma as never, storage as never);
+  const letters = { letterExists: jest.fn(async () => subjectFound) };
+  const service = new NocsService(
+    prisma as never,
+    storage as never,
+    letters as never,
+  );
   return { service, prisma, storage, created };
 }
 

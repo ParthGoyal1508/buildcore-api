@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AccessLevel,
   AuditAction,
   AuditEntityType,
   LetterFieldSource,
@@ -19,6 +20,7 @@ import { ApprovalService } from '../approvals/approvals.service';
 import { ACTION_LETTER_PURCHASE_ORDER } from '../approvals/default-chains';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
+import { holdsAtLevel } from '../common/access-levels';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
 import { effectiveCompanyId } from '../settings/company-scope';
@@ -282,7 +284,7 @@ export class LettersService {
       companyId,
       dto.letterKindKey,
     );
-    this.assertMayActOnKind(caller, kind.key);
+    this.assertMayActOnKind(caller, kind.key, AccessLevel.write);
     this.assertExactlyOneSubject(dto);
 
     if (kind.requiresSignature && !dto.signatoryId) {
@@ -368,7 +370,7 @@ export class LettersService {
     const companyId = this.companyOf(caller);
     const ctx = rlsContextFor(caller);
     const letter = await this.requireLetter(ctx, companyId, letterId);
-    this.assertMayActOnKind(caller, letter.letterKind.key);
+    this.assertMayActOnKind(caller, letter.letterKind.key, AccessLevel.write);
     this.assertNotIssued(letter);
 
     // Re-read from the letter's own recipient, which is what keeps a letter composed
@@ -462,7 +464,7 @@ export class LettersService {
     const companyId = this.companyOf(caller);
     const ctx = rlsContextFor(caller);
     const original = await this.requireLetter(ctx, companyId, letterId);
-    this.assertMayActOnKind(caller, original.letterKind.key);
+    this.assertMayActOnKind(caller, original.letterKind.key, AccessLevel.write);
 
     if (original.issuedAt === null) {
       throw new ConflictException({
@@ -582,7 +584,7 @@ export class LettersService {
     const companyId = this.companyOf(caller);
     const ctx = rlsContextFor(caller);
     const letter = await this.requireLetter(ctx, companyId, letterId);
-    this.assertMayActOnKind(caller, letter.letterKind.key);
+    this.assertMayActOnKind(caller, letter.letterKind.key, AccessLevel.write);
 
     if (letter.issuedAt === null) {
       throw new ConflictException({
@@ -1322,18 +1324,51 @@ export class LettersService {
     }
   }
 
-  private mayActOnKind(caller: AuthenticatedUser, key: string): boolean {
-    return caller.permissions.includes(permissionForKind(key));
+  /**
+   * Whether `id` is a letter of the company, for a module that files something against a letter
+   * (a purchase order's NOC) and so must not reach into `shared.IssuedLetter` itself (Principle I).
+   */
+  async letterExists(
+    caller: AuthenticatedUser,
+    id: string,
+    companyId: string,
+  ): Promise<boolean> {
+    const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.issuedLetter.findFirst({
+        where: { id, companyId },
+        select: { id: true },
+      }),
+    );
+    return row !== null;
   }
 
-  private assertMayActOnKind(caller: AuthenticatedUser, key: string): void {
-    if (this.mayActOnKind(caller, key)) return;
+  /**
+   * The kind's permission at `level` (036 B16): reading a letter needs read, composing, issuing,
+   * reissuing and filing a countersigned copy need write. It used to check the area alone, so a
+   * read-only holder could issue letters.
+   */
+  private mayActOnKind(
+    caller: AuthenticatedUser,
+    key: string,
+    level: AccessLevel = AccessLevel.read,
+  ): boolean {
+    return holdsAtLevel(caller, permissionForKind(key), level);
+  }
+
+  private assertMayActOnKind(
+    caller: AuthenticatedUser,
+    key: string,
+    level: AccessLevel = AccessLevel.read,
+  ): void {
+    if (this.mayActOnKind(caller, key, level)) return;
     throw new ForbiddenException({
       statusCode: 403,
       message:
-        `Your roles do not carry the permission a "${key}" letter requires. There is no ` +
-        `single letters permission: a work order and a relieving letter are not the ` +
-        `same authority.`,
+        level === AccessLevel.write && this.mayActOnKind(caller, key)
+          ? `You can read "${key}" letters but not compose, issue or change them.`
+          : `Your roles do not carry the permission a "${key}" letter requires. There is no ` +
+            `single letters permission: a work order and a relieving letter are not the ` +
+            `same authority.`,
       code: LETTER_KIND_FORBIDDEN,
     });
   }

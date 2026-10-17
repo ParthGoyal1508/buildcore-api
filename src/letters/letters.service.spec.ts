@@ -317,6 +317,23 @@ describe('LettersService — per-kind authority (contract Part 2)', () => {
     );
   });
 
+  it('refuses a read-only holder of the kind’s permission a compose (036 B16)', async () => {
+    const { service } = harness({ kind: WORK_ORDER });
+    const readOnly = {
+      ...financeCaller,
+      grants: [{ permission: Permission.PROJECT_FINANCIALS, level: 'read' }],
+    };
+
+    const error = await service
+      .compose(readOnly, composeWorkOrder)
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(
+      (error as { response: { message: string } }).response.message,
+    ).toMatch(/can read .* but not compose/);
+  });
+
   it('requires SETTINGS for a kind nobody mapped a permission for', async () => {
     const brandNew = kind({
       id: 'k-new',
