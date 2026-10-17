@@ -8,6 +8,7 @@ import { ACTION_DWR } from '../src/approvals/default-chains';
 import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 import * as ExcelJS from 'exceljs';
 import * as request from 'supertest';
+import type { Sharp, SharpOptions } from 'sharp';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
@@ -35,6 +36,9 @@ import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-projec
  *
  * Every fixture is prefixed `E2E` and removed in `afterAll`.
  */
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const sharp: (input?: Buffer, options?: SharpOptions) => Sharp = require('sharp');
+
 const stamp = `${Date.now() % 100000}`;
 const unique = (s: string) => `E2E${s}${stamp}`;
 
@@ -687,6 +691,118 @@ describe('Daily work reports (e2e)', () => {
       expect(
         view.body.attachments.map((a: { fileName: string }) => a.fileName),
       ).toEqual(['Late evidence.png']);
+    });
+  });
+
+  /**
+   * 036 B6/I8/I9: photos are compressed with a thumbnail, and a wrong file can be taken back while
+   * the report is still a draft.
+   */
+  describe('photos are compressed, and a draft’s file can be removed (036)', () => {
+    it('stores a large photo at ≤ 2048 px with a thumbnail, and serves both', async () => {
+      // A 3000 × 2000 noisy JPEG: large enough to be resized, noisy enough not to compress to
+      // nothing at the source.
+      const raw = Buffer.alloc(3000 * 2000 * 3);
+      for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+      const big = await sharp(raw, { raw: { width: 3000, height: 2000, channels: 3 } })
+        .jpeg({ quality: 95 })
+        .toBuffer();
+
+      const report = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemB, servedQty: '1' },
+      ]);
+      expect(report.status).toBe(201);
+      const dwrId = report.body.id;
+
+      const added = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send({ data: big.toString('base64'), fileName: 'Site view.jpg' })
+        .expect(201);
+      expect(added.body.hasThumbnail).toBe(true);
+      expect(added.body.sizeBytes).toBeLessThan(big.length);
+
+      const full = await http()
+        .get(`/projects/dwr/attachments/${added.body.id}`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const fullMeta = await sharp(full.body as Buffer).metadata();
+      expect(Math.max(fullMeta.width ?? 0, fullMeta.height ?? 0)).toBeLessThanOrEqual(2048);
+
+      const thumb = await http()
+        .get(`/projects/dwr/attachments/${added.body.id}/thumbnail`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const thumbMeta = await sharp(thumb.body as Buffer).metadata();
+      expect(Math.max(thumbMeta.width ?? 0, thumbMeta.height ?? 0)).toBeLessThanOrEqual(320);
+
+      const view = await http().get(`/projects/dwr/${dwrId}`).set(auth()).expect(200);
+      const filed = view.body.attachments.find((a: { id: string }) => a.id === added.body.id);
+      expect(filed.hasThumbnail).toBe(true);
+      // The storage reference never leaves the service.
+      expect(filed.thumbnailRef).toBeUndefined();
+    });
+
+    it('removes a draft’s file, audited, and refuses once submitted', async () => {
+      const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const report = await createReport([
+        { paymentMode: 'work_basis', boqItemId: itemB, length: '2' },
+      ]);
+      expect(report.status).toBe(201);
+      const dwrId = report.body.id;
+      const file = (name: string) => ({ data: PNG.toString('base64'), fileName: name });
+
+      const wrong = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(file('Wrong site.png'))
+        .expect(201);
+      const kept = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(file('Right site.png'))
+        .expect(201);
+
+      await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${wrong.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      // An id from another report does not resolve under this one.
+      await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${wrong.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(404);
+
+      const view = await http().get(`/projects/dwr/${dwrId}`).set(auth()).expect(200);
+      expect(view.body.attachments.map((a: { id: string }) => a.id)).toEqual([kept.body.id]);
+
+      const entry = await sys.auditLogEntry.findFirst({
+        where: { entityType: 'DWR', entityId: dwrId, action: 'UPDATE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry.changes.attachmentRemoved.fileName).toBe('Wrong site.png');
+
+      await http()
+        .post(`/projects/dwr/${dwrId}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      const refused = await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${kept.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(409);
+      expect(refused.body.code).toBe('DWR_WRONG_STATUS');
     });
   });
 

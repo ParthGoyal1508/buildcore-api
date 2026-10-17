@@ -2287,6 +2287,11 @@ model DWRAttachment {
   mimeType  String
   sizeBytes Int
 
+  /// A 320 px copy of a photo, for the report's thumbnails (036 B6/I8). Null for a PDF or any
+  /// other non-image, and for every photo filed before 2026-10-18 — the thumbnail route serves
+  /// the full image then, so old rows need no backfill.
+  thumbnailRef String?
+
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String?
   uploadedAt       DateTime @default(now())
