@@ -955,7 +955,11 @@ export class EquipmentService {
     // `contentType` used to be stored as given, so an HTML page declared as a PDF came back as
     // HTML. A photographed paper is compressed on the way in (036 B6).
     const bytes = decodeBase64Upload(dto.file, 'The document');
-    const detected = assertAllowedFileType(bytes, DOCUMENT_TYPES, 'The document');
+    const detected = assertAllowedFileType(
+      bytes,
+      DOCUMENT_TYPES,
+      'The document',
+    );
     const image = await compressImageUpload(bytes, detected.contentType);
     const storedType = image?.main.contentType ?? detected.contentType;
 

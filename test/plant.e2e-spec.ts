@@ -680,6 +680,19 @@ describe('Plant module (e2e)', () => {
     });
   });
 
+  describe('List exports (036 K16)', () => {
+    it.each(['/plant/logbook/export.xlsx', '/plant/fuel/export.xlsx'])(
+      '%s downloads the filtered list as Excel',
+      async (path) => {
+        const res = await http()
+          .get(`${path}?equipmentId=${ownedEquipmentId}`)
+          .set(auth())
+          .expect(200);
+        expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+      },
+    );
+  });
+
   // ── Fuel ────────────────────────────────────────────────────────────────
 
   describe('Fuel (US4)', () => {

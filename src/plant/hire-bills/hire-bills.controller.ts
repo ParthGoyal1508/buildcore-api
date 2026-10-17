@@ -63,7 +63,8 @@ export class HireBillsController {
   @ExportThrottle()
   @ApiOperation({
     summary: 'The filtered hire bills as Excel (036 K9)',
-    description: 'Same filters as the list, without paging (at most 5,000 rows).',
+    description:
+      'Same filters as the list, without paging (at most 5,000 rows).',
   })
   async export(
     @UserEntity() caller: AuthenticatedUser,

@@ -24,6 +24,9 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { formFormatOf, sendForm } from '../../common/form-document';
+import { businessToday } from '../../common/business-date';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
+import { allPages, ddmmyyyy, sendListXlsx } from '../list-export';
 import { SaveLogbookSheetDto } from './dto/logbook-sheet.dto';
 import { LogbookSheetService } from './logbook-sheet.service';
 import {
@@ -93,6 +96,65 @@ export class LogbookController {
     sendForm(
       res,
       await this.sheet.document(caller, equipmentId, month ?? '', kind),
+    );
+  }
+
+  @Get('export.xlsx')
+  @ExportThrottle()
+  @ApiOperation({
+    summary: 'The filtered logbook as Excel (036 K16)',
+    description:
+      'Same filters as the list, without paging (at most 5,000 rows).',
+  })
+  async export(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: ListLogbookDto,
+    @Res() res: Response,
+  ) {
+    const rows = await allPages((page, pageSize) =>
+      this.logbook.findAll(caller, { ...query, page, pageSize }),
+    );
+    await sendListXlsx(
+      res,
+      `Logbook_${ddmmyyyy(businessToday())}.xlsx`,
+      'Logbook',
+      [
+        { header: 'Date', width: 12, value: (r) => ddmmyyyy(r.date) },
+        { header: 'Machine code', width: 16, value: (r) => r.equipmentCode },
+        { header: 'Machine', width: 26, value: (r) => r.equipmentName },
+        {
+          header: 'Opening',
+          width: 12,
+          value: (r) => r.openingReading,
+          numFmt: '#,##0.###',
+        },
+        {
+          header: 'Closing',
+          width: 12,
+          value: (r) => r.closingReading,
+          numFmt: '#,##0.###',
+        },
+        {
+          header: 'Run (h / km)',
+          width: 12,
+          value: (r) => r.totalHours,
+          numFmt: '#,##0.###',
+        },
+        {
+          header: 'Fuel (litres)',
+          width: 12,
+          value: (r) => r.fuelConsumed,
+          numFmt: '#,##0.###',
+        },
+        { header: 'Operator', width: 22, value: (r) => r.operatorName },
+        { header: 'Remarks', width: 30, value: (r) => r.remarks },
+        {
+          header: 'Reading gap reason',
+          width: 30,
+          value: (r) => r.readingGapReason,
+        },
+      ],
+      rows,
     );
   }
 

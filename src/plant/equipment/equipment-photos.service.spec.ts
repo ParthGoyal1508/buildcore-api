@@ -1,4 +1,7 @@
-import { callerFor, createPrismaMock } from '../../settings/testing/prisma-mock';
+import {
+  callerFor,
+  createPrismaMock,
+} from '../../settings/testing/prisma-mock';
 import {
   EquipmentPhotosService,
   MAX_PHOTOS_PER_EQUIPMENT,
@@ -29,7 +32,9 @@ const photoRow = (over: Record<string, unknown> = {}) => ({
 const build = (count = 0) => {
   const prisma = createPrismaMock({
     equipment: {
-      findUnique: jest.fn().mockResolvedValue({ id: 'eq-1', companyId: 'co-1' }),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ id: 'eq-1', companyId: 'co-1' }),
     },
     equipmentPhoto: {
       count: jest.fn().mockResolvedValue(count),
@@ -45,7 +50,10 @@ const build = (count = 0) => {
     },
   });
   const storage = {
-    put: jest.fn().mockResolvedValueOnce('main-ref').mockResolvedValueOnce('thumb-ref'),
+    put: jest
+      .fn()
+      .mockResolvedValueOnce('main-ref')
+      .mockResolvedValueOnce('thumb-ref'),
     get: jest.fn(),
     delete: jest.fn().mockResolvedValue(undefined),
   };
