@@ -7,6 +7,7 @@ import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
+import { StorageService } from '../src/common/storage/storage.service';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 
 /**
@@ -16,6 +17,8 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
  * - F15: an uploaded document can be opened (`GET …/documents/:id/file`), with its detected type;
  *   the replaced upload is kept and openable by `versionId`; file name and size are recorded; a
  *   file whose bytes are not on the allow-list is refused 415.
+ *
+ * - F17/F18: the approver can open a claim's receipt; approving needs PAYROLL, not EMPLOYEES.
  *
  * Every fixture is prefixed `E2EHD` and removed in `afterAll`.
  */
@@ -157,6 +160,7 @@ describe('HR documents (036 3b, e2e)', () => {
   });
 
   afterAll(async () => {
+    await sys.reimbursementClaim.deleteMany({ where: { companyId } });
     await sys.employeeDocumentVersion.deleteMany({ where: { employeeId } });
     await sys.employeeDocument.deleteMany({ where: { employeeId } });
     await sys.employee.deleteMany({ where: { companyId } });
@@ -271,6 +275,39 @@ describe('HR documents (036 3b, e2e)', () => {
       })
       .expect(200);
     expect((old.body as Buffer).toString('ascii')).toContain('first');
+  });
+
+  it('opens a claim receipt for the approver; approving needs PAYROLL (036 F17 F18)', async () => {
+    const storage = app.get(StorageService);
+    const receiptRef = await storage.put(
+      'reimbursement-receipts',
+      pdf('receipt'),
+      'application/pdf',
+    );
+    const claim = await sys.reimbursementClaim.create({
+      data: {
+        employeeId,
+        companyId,
+        categoryId: 'e2e-category',
+        amount: 1200,
+        expenseDate: new Date('2026-10-01'),
+        description: 'Dummy fuel receipt',
+        receiptRef,
+        status: 'submitted',
+      },
+    });
+    const file = await http()
+      .get(`/hr/reimbursements/${claim.id}/receipt`)
+      .set(auth())
+      .expect(200);
+    expect(file.headers['content-type']).toContain('application/pdf');
+
+    // This user holds EMPLOYEES only.
+    await http()
+      .patch(`/hr/reimbursements/${claim.id}/approve`)
+      .set(auth())
+      .send({})
+      .expect(403);
   });
 
   it('404s a document of another employee', async () => {

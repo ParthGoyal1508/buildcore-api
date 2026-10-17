@@ -21,7 +21,13 @@ import {
 } from '../../settings/reimbursement-categories/reimbursement-categories.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { ImageProcessingService } from '../biometrics/image-processing.service';
-import { decodePhotoPayload } from '../biometrics/photo-payload';
+import { describeStoredFile } from '../../common/storage/file-type';
+import {
+  assertAllowedFileType,
+  decodeBase64Upload,
+  IMAGE_TYPES,
+  PDF,
+} from '../../common/uploads';
 import { EmployeesService } from '../employees/employees.service';
 import { parseDateOnly } from '../leave/leave-days';
 import { CreateClaimDto, UpdateClaimDto } from './dto/claim.dto';
@@ -80,7 +86,18 @@ export class ReimbursementService {
    * photos (research.md §3).
    */
   private async storeReceipt(receipt: string): Promise<string> {
-    const bytes = decodePhotoPayload(receipt, 'The receipt');
+    const bytes = decodeBase64Upload(receipt, 'The receipt');
+    // A PDF invoice is accepted as well as a photo (036 G5): many fuel and travel receipts arrive
+    // as PDFs, and the form used to refuse them. Decided by the bytes, so an HTML page labelled a
+    // PDF is refused 415. A PDF is stored as uploaded; there is no EXIF to strip.
+    const type = assertAllowedFileType(
+      bytes,
+      [PDF, ...IMAGE_TYPES],
+      'The receipt',
+    );
+    if (type.contentType === PDF) {
+      return this.storage.put(RECEIPT_NAMESPACE, bytes, PDF);
+    }
     // Normalised before storage rather than stored as uploaded. Two reasons, both
     // load-bearing: it strips the EXIF a phone camera embeds — GPS coordinates
     // included — and it makes `image/jpeg` an honest content type, where storing
@@ -130,10 +147,12 @@ export class ReimbursementService {
       );
     }
     // Resolved before the rule check so an uploaded receipt satisfies the
-    // threshold — the rule cares that a receipt exists, not how it arrived.
+    // threshold. Only a receipt uploaded here counts (036 F18): a client-sent `receiptRef` is
+    // ignored, because any storage key — another employee's receipt, or nothing at all — used to
+    // satisfy the threshold.
     const receiptRef = dto.receipt
       ? await this.storeReceipt(dto.receipt)
-      : dto.receiptRef;
+      : undefined;
     this.assertReceiptRule(category, dto.amount, receiptRef);
 
     // The reporting manager decides first, then HR (2026-10-16); stamped now even on a draft, and
@@ -195,10 +214,13 @@ export class ReimbursementService {
     // not need.
     const categoryId = dto.categoryId ?? existing.categoryId;
     const amount = dto.amount ?? existing.amount.toNumber();
+    // A new upload replaces the receipt; `receiptRef: null` removes it; anything else keeps the
+    // one on file (036 F18) — a client can no longer point the claim at a storage key of its
+    // choosing.
     const receiptRef = dto.receipt
       ? await this.storeReceipt(dto.receipt)
-      : dto.receiptRef !== undefined
-      ? dto.receiptRef
+      : dto.receiptRef === null
+      ? null
       : existing.receiptRef;
     const category = await this.categories.requireCategory(
       caller.rls,
@@ -444,6 +466,19 @@ export class ReimbursementService {
     return decided;
   }
 
+  /** The caller's own receipt, to open from My Workspace (036 F17/G5). */
+  async ownReceipt(
+    caller: Caller,
+    id: string,
+  ): Promise<{ data: Buffer; filename: string; contentType: string }> {
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    const claim = await this.requireOwnClaim(caller, employee.id, id);
+    return readReceipt(this.storage, claim);
+  }
+
   private async requireOwnClaim(
     caller: Caller,
     employeeId: string,
@@ -474,4 +509,28 @@ export class ReimbursementService {
       ipAddress: caller.ipAddress,
     });
   }
+}
+
+/**
+ * A claim's receipt bytes, with a type and a name to serve them under (036 F17).
+ *
+ * Exported so the admin review screen and My Workspace serve receipts the same way. The type is
+ * sniffed from the bytes: receipts were stored as JPEG only until 036 G5 added PDFs, and there is
+ * no column recording which a given one is.
+ */
+export async function readReceipt(
+  storage: StorageService,
+  claim: { id: string; receiptRef: string | null },
+): Promise<{ data: Buffer; filename: string; contentType: string }> {
+  if (!claim.receiptRef) {
+    throw new NotFoundException('This claim has no receipt.');
+  }
+  const data = await storage.get(claim.receiptRef);
+  const { filename, contentType } = describeStoredFile({
+    bytes: data,
+    storedName: null,
+    storedType: null,
+    fallbackName: `receipt-${claim.id}`,
+  });
+  return { data, filename, contentType };
 }

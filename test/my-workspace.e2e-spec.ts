@@ -1551,8 +1551,8 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         .expect(400);
     });
 
-    it('accepts the same claim once a receipt is attached (T078)', async () => {
-      const res = await http()
+    it('does not count a client-sent receiptRef as a receipt (036 F18)', async () => {
+      await http()
         .post('/my/reimbursements')
         .set(auth(employeeToken))
         .send({
@@ -1561,12 +1561,34 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
           expenseDate: dayOf(3),
           description: 'Intercity travel',
           receiptRef: 'receipts/ref-1',
+        })
+        .expect(400);
+    });
+
+    it('accepts the same claim once a receipt is attached — a PDF since 036 G5 (T078)', async () => {
+      const receipt = Buffer.from('%PDF-1.4\n% e2e receipt\n%%EOF\n');
+      const res = await http()
+        .post('/my/reimbursements')
+        .set(auth(employeeToken))
+        .send({
+          categoryId,
+          amount: 4500,
+          expenseDate: dayOf(3),
+          description: 'Intercity travel',
+          receipt: receipt.toString('base64'),
           status: 'draft',
         })
         .expect(201);
 
       expect(res.body.status).toBe('draft');
       draftClaimId = res.body.id;
+
+      // …and its owner can open it again, served as the PDF it is (036 G5).
+      const file = await http()
+        .get(`/my/reimbursements/${draftClaimId}/receipt`)
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(file.headers['content-type']).toContain('application/pdf');
     });
 
     it('accepts any amount for a category with no threshold (T078)', async () => {

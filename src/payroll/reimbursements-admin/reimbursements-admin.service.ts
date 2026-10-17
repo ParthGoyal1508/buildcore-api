@@ -16,6 +16,8 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { StorageService } from '../../common/storage/storage.service';
+import { readReceipt } from '../../hr/reimbursements/reimbursement.service';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import type {
   ApproveClaimDto,
@@ -39,7 +41,25 @@ export class ReimbursementsAdminService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly storage: StorageService,
   ) {}
+
+  /**
+   * A claim's receipt, for the approver (036 F17). There was no way to see it before: the review
+   * screen showed only that one existed. Scoped by RLS, plus the company check, so a Super Admin
+   * working in one company cannot open another's by id.
+   */
+  async receipt(caller: Caller, claimId: string) {
+    const claim = await this.requireClaim(caller, claimId);
+    if (
+      !caller.rls.isSuperAdmin &&
+      caller.rls.companyId &&
+      claim.companyId !== caller.rls.companyId
+    ) {
+      throw new NotFoundException('Claim not found');
+    }
+    return readReceipt(this.storage, claim);
+  }
 
   async listClaims(
     caller: Caller,
