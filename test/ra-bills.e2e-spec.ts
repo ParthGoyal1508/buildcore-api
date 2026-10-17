@@ -1090,6 +1090,8 @@ describe('RA bills against an award (e2e)', () => {
         .expect(200);
     });
 
+    let doubleSubmittedId = '';
+
     it('opens one approval when the same bill is submitted twice at once', async () => {
       const bill = await compose({
         billNumber: billNumber(),
@@ -1104,12 +1106,56 @@ describe('RA bills against an award (e2e)', () => {
       )
         .map((res) => res.status)
         .sort();
+      doubleSubmittedId = bill.body.id;
       expect(statuses).toEqual([201, 409]);
       expect(
         await sys.approvalInstance.count({
           where: { entityType: ACTION_RA_BILL, entityId: bill.body.id },
         }),
       ).toBe(1);
+    });
+
+    /**
+     * 036 I4. Two payments that each fit but together exceed the certified figure, sent at once.
+     * The check was aggregate-then-insert with no lock, so both could read "nothing paid yet".
+     */
+    it('pays only one of two payments that together exceed what was certified', async () => {
+      // Certified directly: the chain is not what this test is about, and the bill reaching
+      // `approved` is the precondition the payment route checks.
+      const bill = await sys.rABill.update({
+        where: { id: doubleSubmittedId },
+        data: { status: 'approved', approvedAt: new Date() },
+        select: { netPayable: true },
+      });
+      const share = (Number(bill.netPayable) * 0.6).toFixed(2);
+      const pay = () =>
+        http()
+          .post(
+            `/projects/ra-bills/${doubleSubmittedId}/payments?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({
+            paidOn: '2026-09-28',
+            amount: share,
+            instrument: 'bank_transfer',
+          });
+
+      try {
+        const statuses = (await Promise.all([pay(), pay()]))
+          .map((res) => res.status)
+          .sort();
+        expect(statuses).toEqual([201, 409]);
+        expect(
+          await sys.rABillPayment.count({
+            where: { raBillId: doubleSubmittedId },
+          }),
+        ).toBe(1);
+      } finally {
+        // Payments restrict the bill's deletion, which `afterAll` relies on.
+        await sys.rABillPayment.deleteMany({
+          where: { raBillId: doubleSubmittedId },
+        });
+      }
     });
 
     it('refuses bill writes on a locked project with 423 (036 I2)', async () => {
