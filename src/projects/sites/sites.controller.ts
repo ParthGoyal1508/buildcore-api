@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -27,6 +26,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
+import { resolveCompanyId } from '../../settings/company-scope';
 import { CreateSiteDto, ListSitesDto, UpdateSiteDto } from './dto/site.dto';
 import { SitesService } from './sites.service';
 
@@ -72,13 +72,15 @@ export class SitesController {
     @Req() request: Request,
     @Query('companyId') companyId?: string,
   ): Promise<{ id: string; name: string }[]> {
-    const scoped = user.companyId ?? companyId;
-    if (!scoped) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return this.sites.listForCompany(callerFrom(user, request).rls, scoped);
+    // 036 B2/B3: the *selected* company, through the shared helper. `user.companyId ?? companyId`
+    // read the account's home company first, so a cross-company caller who had switched to
+    // another company was shown the home company's sites in every picker that calls this (the
+    // employee form, the site filters) — and the requested id was ignored whenever the account
+    // had a company of its own.
+    return this.sites.listForCompany(
+      callerFrom(user, request).rls,
+      resolveCompanyId(user, companyId),
+    );
   }
 
   /**
