@@ -586,11 +586,20 @@ describe('The running-account bill package (e2e)', () => {
       });
     }
 
+    // 036 I16: the confirmation names the gaps before issuing, from the same lookup.
+    const preview = await http()
+      .get(`/projects/bill-packages/${packageId}/header-preview`)
+      .set(auth())
+      .expect(200);
+
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
       .set(auth())
       .expect(201);
 
+    expect([...preview.body.missingHeaderFields].sort()).toEqual(
+      [...issued.body.missingHeaderFields].sort(),
+    );
     expect(issued.body.package.status).toBe('issued');
     // FR-027a. This client carries no PAN and no state — the columns exist as of 025 FR-039 and
     // this fixture leaves them unset, which is the ordinary case for a client recorded before they

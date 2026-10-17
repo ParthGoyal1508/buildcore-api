@@ -359,6 +359,27 @@ export class BillPackageController {
     );
   }
 
+  @Get('projects/bill-packages/:packageId/header-preview')
+  @ApiOperation({
+    summary: 'The party identifiers issuing now would leave blank (036 I16)',
+    description:
+      'For the issue confirmation: `{ missingHeaderFields: string[] }`, the same names the issue ' +
+      'response and the `X-Bill-Package-Missing-Fields` header carry. Read-only.',
+  })
+  async headerPreview(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+  ): Promise<{ missingHeaderFields: string[] }> {
+    const missing = await this.packages.previewMissingHeaderFields(
+      rlsContextFor(caller),
+      packageId,
+    );
+    if (missing === null) {
+      throw new NotFoundException('Bill package not found');
+    }
+    return { missingHeaderFields: missing };
+  }
+
   @Get('projects/bill-packages/:packageId/abstract')
   @ApiOperation({
     summary: 'The abstract — four blocks, three columns',

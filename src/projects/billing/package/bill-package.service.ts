@@ -1689,6 +1689,31 @@ export class BillPackageService {
   }
 
   /**
+   * The party identifiers issuing now would leave blank (036 I16) — for the issue confirmation,
+   * which must name them *before* the figures are frozen, not after. Read-only, the same lookup
+   * `previewHeader` makes. `null` when the package is not visible to the caller.
+   */
+  async previewMissingHeaderFields(
+    ctx: RlsContext,
+    packageId: string,
+  ): Promise<string[] | null> {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const pkg = await tx.billPackage.findFirst({
+        where: { id: packageId },
+        select: {
+          companyId: true,
+          direction: true,
+          project: { select: { name: true, clientId: true } },
+          raBill: { select: { workOrderId: true } },
+        },
+      });
+      if (!pkg) return null;
+      const { missing } = await this.freezeHeader(ctx, tx, pkg.companyId, pkg);
+      return missing;
+    });
+  }
+
+  /**
    * The statutory header, copied **once** and never re-read (FR-026, FR-028).
    *
    * Each party comes through the service that owns its table — Principle I forbids reading
