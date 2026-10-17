@@ -757,8 +757,21 @@ export class RaBillsService {
     billId: string,
   ): Promise<RaBillView> {
     await this.refuseIfPackaged(ctx, billId, 'sent for approval');
-    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.rABill.findFirst({
+
+    // 036 I3. Two things happen in one transaction, under a lock on the work order:
+    //
+    //  1. **The bill is re-measured against the award.** Drafts are left out of measured-to-date
+    //     (see `measuredToDate`), so two drafts could each take the whole remaining award and both
+    //     pass composition. Submission is where a draft starts to count, so it is where the ceiling
+    //     has to be checked again — against every bill already out of draft, plus this one.
+    //  2. **The status moves draft → submitted conditionally**, and only the caller whose update
+    //     matched goes on to open an approval. A double-click used to open the approval first and
+    //     write the status after, so both clicks could reach the spine.
+    //
+    // The work-order lock serialises submissions on one award: the second waits, then reads the
+    // first as submitted and is measured against it. `revise` takes the same lock in `priceLines`.
+    const bill = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const found = await tx.rABill.findFirst({
         where: { id: billId },
         select: {
           id: true,
@@ -766,41 +779,73 @@ export class RaBillsService {
           status: true,
           billNumber: true,
           projectId: true,
+          workOrderId: true,
+          lines: { select: { workOrderBoqItemId: true, quantity: true } },
         },
-      }),
-    );
-    if (!bill) throw new NotFoundException('RA bill not found');
-    if (bill.status !== RaBillStatus.draft) {
-      throw new ConflictException({
-        statusCode: 409,
-        code: BILLING_ERRORS.notDraft,
-        message:
-          `This bill is already ${bill.status}. A bill out of draft is either waiting on somebody ` +
-          `or certified; revising its quantities is the way to change it.`,
       });
-    }
+      if (!found) throw new NotFoundException('RA bill not found');
+      if (found.status !== RaBillStatus.draft) {
+        throw this.notDraft(found.status);
+      }
 
-    await this.approvals.submit({
-      companyId: bill.companyId,
-      actionType: ACTION_RA_BILL,
-      entityType: ACTION_RA_BILL,
-      entityId: bill.id,
-      originatorUserId: caller.id,
-      subject: `RA bill ${bill.billNumber}`,
-      href: webRoutes.projectRaBills(bill.projectId),
-      viewPermission: Permission.PROJECT_FINANCIALS,
+      if (found.workOrderId) {
+        // `priceLines` takes the work-order lock and refuses `RA_BILL_EXCEEDS_AWARD`; its
+        // figures are discarded, because the bill's frozen rates are what was composed.
+        await this.priceLines(tx, found.workOrderId, {
+          lines: found.lines.map((line) => ({
+            workOrderBoqItemId: line.workOrderBoqItemId,
+            quantity: line.quantity.toNumber(),
+          })),
+          excludeBillId: found.id,
+        });
+      }
+
+      const flipped = await tx.rABill.updateMany({
+        where: { id: found.id, status: RaBillStatus.draft },
+        data: { status: RaBillStatus.submitted, submittedAt: new Date() },
+      });
+      if (flipped.count !== 1) {
+        // Somebody else's submit (or a discard) won the row between the read and the write.
+        throw this.notDraft(RaBillStatus.submitted);
+      }
+      return found;
     });
 
-    await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.rABill.update({
-        where: { id: bill.id },
-        data: {
-          status: RaBillStatus.submitted,
-          submittedAt: new Date(),
-        },
-      }),
-    );
+    try {
+      await this.approvals.submit({
+        companyId: bill.companyId,
+        actionType: ACTION_RA_BILL,
+        entityType: ACTION_RA_BILL,
+        entityId: bill.id,
+        originatorUserId: caller.id,
+        subject: `RA bill ${bill.billNumber}`,
+        href: webRoutes.projectRaBills(bill.projectId),
+        viewPermission: Permission.PROJECT_FINANCIALS,
+      });
+    } catch (error) {
+      // Put it back. A bill left `submitted` with no instance behind it waits on nobody, sits in
+      // no queue, and looks to its author exactly like one that was submitted — the reason the old
+      // order asked the spine first. Conditional on `submitted`, so a completion that somehow
+      // landed in between is never undone.
+      await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.rABill.updateMany({
+          where: { id: bill.id, status: RaBillStatus.submitted },
+          data: { status: RaBillStatus.draft, submittedAt: null },
+        }),
+      );
+      throw error;
+    }
     return this.view(ctx, bill.id);
+  }
+
+  private notDraft(status: string): ConflictException {
+    return new ConflictException({
+      statusCode: 409,
+      code: BILLING_ERRORS.notDraft,
+      message:
+        `This bill is already ${status}. A bill out of draft is either waiting on somebody ` +
+        `or certified; revising its quantities is the way to change it.`,
+    });
   }
 
   /**
@@ -1046,6 +1091,12 @@ export class RaBillsService {
       excludeBillId?: string;
     },
   ) {
+    // 036 I3. Held to the end of the caller's transaction, so a submission or a revision of a
+    // decided bill measures against a to-date figure nobody else can move underneath it. Composing
+    // a draft takes it too — harmless, since drafts do not count, and simpler than a flag.
+    await tx.$queryRaw`
+      SELECT "id" FROM "projects"."WorkOrder" WHERE "id" = ${workOrderId} FOR UPDATE
+    `;
     const workOrder = await tx.workOrder.findFirst({
       where: { id: workOrderId },
       select: { id: true, retentionPercent: true, status: true },

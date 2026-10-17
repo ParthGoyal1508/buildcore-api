@@ -1048,6 +1048,110 @@ describe('RA bills against an award (e2e)', () => {
     });
   });
 
+  /**
+   * 036 I3. Drafts do not count toward measured-to-date, so two drafts could each take the whole
+   * remaining award and both pass composition — and then both went for approval. Submission is
+   * where a draft starts to count, so it is where the ceiling is now checked again.
+   *
+   * PCC has 40 awarded and 10 measured above, so 30 remain: each draft of 20 fits on its own and
+   * the pair does not.
+   */
+  describe('two drafts that each fit the award, but not together (036 I3)', () => {
+    it('submits the first and refuses the second at submission', async () => {
+      const pcc = awarded['PCC 1:4:8'].id;
+      const a = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: pcc, quantity: 20 }],
+      });
+      const b = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: pcc, quantity: 20 }],
+      });
+
+      await submit(a.body.id);
+      const refused = await submit(b.body.id, 400);
+      expect(refused.body.code).toBe('RA_BILL_EXCEEDS_AWARD');
+
+      // Refused before anything was written: still a draft, and nothing waiting on anybody.
+      const still = await http()
+        .get(`/projects/ra-bills/${b.body.id}`)
+        .set(auth())
+        .expect(200);
+      expect(still.body.status).toBe('draft');
+      expect(
+        await sys.approvalInstance.count({
+          where: { entityType: ACTION_RA_BILL, entityId: b.body.id },
+        }),
+      ).toBe(0);
+
+      await http()
+        .delete(`/projects/ra-bills/${b.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+    });
+
+    it('opens one approval when the same bill is submitted twice at once', async () => {
+      const bill = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: awarded['PCC 1:4:8'].id, quantity: 5 }],
+      });
+
+      const statuses = (
+        await Promise.all([
+          http().post(`/projects/ra-bills/${bill.body.id}/submit`).set(auth()),
+          http().post(`/projects/ra-bills/${bill.body.id}/submit`).set(auth()),
+        ])
+      )
+        .map((res) => res.status)
+        .sort();
+      expect(statuses).toEqual([201, 409]);
+      expect(
+        await sys.approvalInstance.count({
+          where: { entityType: ACTION_RA_BILL, entityId: bill.body.id },
+        }),
+      ).toBe(1);
+    });
+
+    it('refuses bill writes on a locked project with 423 (036 I2)', async () => {
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: true },
+      });
+      try {
+        const composed = await http()
+          .post(`/projects/ra-bills?companyId=${companyId}`)
+          .set(auth())
+          .send({
+            projectId,
+            workOrderId,
+            billingDate: '2026-08-21',
+            billNumber: billNumber(),
+            lines: [
+              { workOrderBoqItemId: awarded['PCC 1:4:8'].id, quantity: 1 },
+            ],
+          });
+        expect(composed.status).toBe(423);
+
+        const award = await http()
+          .put(`/projects/ra-bills/awards/${workOrderId}?companyId=${companyId}`)
+          .set(auth())
+          .send({ lines: [] });
+        expect(award.status).toBe(423);
+
+        const order = await http()
+          .patch(`/projects/work-orders/${workOrderId}`)
+          .set(auth())
+          .send({ workDetail: 'edited while locked' });
+        expect(order.status).toBe(423);
+      } finally {
+        await sys.project.update({
+          where: { id: projectId },
+          data: { isLocked: false },
+        });
+      }
+    });
+  });
+
   describe('approve, then revise (T024, FR-009)', () => {
     // `RaBillStatus` is `draft | submitted | approved` — there is no `certified` state on an RA
     // bill, and the first draft of this suite asserted one. The client-side bill has `certified`
