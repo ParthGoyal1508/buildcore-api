@@ -1,7 +1,11 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
-import { Prisma } from '@prisma/client';
+import { Permission, Prisma } from '@prisma/client';
 import { CompaniesService } from './companies.service';
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { callerFor, createPrismaMock } from '../testing/prisma-mock';
@@ -300,13 +304,80 @@ describe('CompaniesService', () => {
 
       await expect(
         service.update(
-          callerFor('company-1'),
+          // A group administrator: only they may change a short code at all (036 C9).
+          callerFor('company-1', {
+            permissions: [Permission.CROSS_COMPANY_ACCESS],
+          }),
           'company-1',
           { shortCode: 'ACME' },
           '127.0.0.1',
         ),
       ).rejects.toBeInstanceOf(ConflictException);
       expect(prisma.tx.company.update).not.toHaveBeenCalled();
+    });
+
+    describe('status and short code are the group’s (036 C9)', () => {
+      const existing = {
+        id: 'company-1',
+        shortCode: 'BCI',
+        status: 'active',
+        name: 'Dummy Test Firm',
+        pfEmployerRate: new Prisma.Decimal(12),
+        esicEmployerRate: new Prisma.Decimal(3.25),
+        gratuityRate: new Prisma.Decimal(4.81),
+        bonusRate: new Prisma.Decimal(8.33),
+        otMultiplier: new Prisma.Decimal(2),
+      };
+      const build = () => {
+        const prisma = createPrismaMock({
+          company: {
+            findUnique: jest.fn().mockResolvedValue(existing),
+            findFirst: jest.fn().mockResolvedValue(null),
+            update: jest.fn(async ({ data }) => ({ ...existing, ...data })),
+          },
+        });
+        const service = new CompaniesService(
+          prisma as never,
+          configService as never,
+          auditLog as never,
+          documentTypes as never,
+          vendorCategories as never,
+          itemCategories as never,
+          assetCategories as never,
+          assetDocTypes as never,
+          conditionGrades as never,
+          equipmentCategories as never,
+          equipmentDocTypes as never,
+          approvalChains as never,
+          standardTemplates as never,
+          storage as never,
+        );
+        return { service, prisma };
+      };
+
+      it.each([
+        ['deactivate their company', { status: 'inactive' }],
+        ['change its short code', { shortCode: 'NEW' }],
+      ])('refuses a company administrator who tries to %s', async (_l, dto) => {
+        const { service, prisma } = build();
+        const error = await service
+          .update(callerFor('company-1'), 'company-1', dto as never, 'ip')
+          .catch((e) => e);
+        expect(error).toBeInstanceOf(ForbiddenException);
+        expect(error.response.code).toBe('GROUP_ACCESS_REQUIRED');
+        expect(prisma.tx.company.update).not.toHaveBeenCalled();
+      });
+
+      it('still saves the edit form, which sends the unchanged values back', async () => {
+        const { service, prisma } = build();
+        await service.update(
+          callerFor('company-1'),
+          'company-1',
+          { name: 'Renamed', status: 'active', shortCode: 'bci' } as never,
+          'ip',
+        );
+        expect(prisma.tx.company.update).toHaveBeenCalled();
+      });
     });
 
     it('404s on a company that does not exist', async () => {

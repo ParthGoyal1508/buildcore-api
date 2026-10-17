@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -1035,6 +1036,29 @@ export class CompaniesService {
         const shortCode = dto.shortCode
           ? normalizeShortCode(dto.shortCode)
           : undefined;
+
+        // 036 C9: status and short code are the group's to change. A company-scoped
+        // administrator could deactivate their own company (locking everyone in it out) or
+        // re-prefix its codes. Refused only when the value actually changes, so the edit form,
+        // which sends every field back, still saves for them.
+        const group = caller.permissions.includes(
+          Permission.CROSS_COMPANY_ACCESS,
+        );
+        const changesStatus =
+          dto.status !== undefined && dto.status !== existing.status;
+        const changesShortCode =
+          shortCode !== undefined &&
+          shortCode.toUpperCase() !== existing.shortCode.toUpperCase();
+        if (!group && (changesStatus || changesShortCode)) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            code: 'GROUP_ACCESS_REQUIRED',
+            message: changesStatus
+              ? 'Only a group administrator can activate or deactivate a company.'
+              : 'Only a group administrator can change a company’s short code.',
+          });
+        }
+
         if (shortCode && shortCode !== existing.shortCode) {
           const clash = await tx.company.findFirst({
             where: {
