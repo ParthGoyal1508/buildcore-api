@@ -500,6 +500,22 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // module's own approval. Also clears `allocation.dto.ts` and `stock.dto.ts`, which
           // B12 changed and which had been failing this check since.
           ':(exclude,glob)src/**/dto/**',
+          // 036 stream 3e (inventory, partners, labour), 2026-10-17: structured purchase orders
+          // behind the unchanged PO letter (M9), the stock ledger and valuation (M13), the register
+          // exports (M12), contractor document view and the RAG/BOCW exports (N4, N6), and the
+          // labour contractor company check. **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.** The PO's approval is still the letter's own
+          // 016 chain, untouched; the indent, muster, payment sheet and advance approvals keep
+          // their per-file `approve()` assertions above.
+          ':(exclude)src/inventory/exports',
+          ':(exclude)src/inventory/purchase-orders',
+          ':(exclude)src/inventory/stock/stock-query.service.ts',
+          ':(exclude)src/inventory/stock/stock.controller.ts',
+          ':(exclude)src/labour/labour-refs.service.spec.ts',
+          ':(exclude)src/partners/bocw',
+          ':(exclude)src/partners/compliance/compliance.service.ts',
+          ':(exclude)src/partners/contractors',
+          ':(exclude)src/partners/rag',
         ],
         {
           cwd: REPO_ROOT,
