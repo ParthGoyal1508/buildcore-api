@@ -36,6 +36,11 @@ const TODAY = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 }).format(new Date());
 const [YEAR, MONTH, DAY] = TODAY.split('-').map(Number);
+/** 034: hours are tested on yesterday, through corrections — a punch uses the server's clock. */
+const YESTERDAY = new Date(Date.UTC(YEAR, MONTH - 1, DAY - 1))
+  .toISOString()
+  .slice(0, 10);
+const [Y_YEAR, Y_MONTH, Y_DAY] = YESTERDAY.split('-').map(Number);
 
 /** The face-api stand-in: "same person" is whatever `nextValue` the test sets. */
 class ScriptedBiometrics extends BiometricsService {
@@ -190,6 +195,7 @@ describe('Labour face attendance (031, e2e)', () => {
     hr = await makeUser('hr', [
       Permission.DAILY_WORKER_REGISTRY,
       Permission.LABOUR_APPROVE,
+      Permission.LABOUR_PUNCH_CORRECT,
     ]);
     supervisor = await makeUser('supervisor', [
       Permission.DAILY_WORKER_REGISTRY,
@@ -199,6 +205,8 @@ describe('Labour face attendance (031, e2e)', () => {
   afterAll(async () => {
     if (companyId) {
       await sys.labourPunch.deleteMany({ where: { companyId } });
+      await sys.labourPunchCorrection.deleteMany({ where: { companyId } });
+      await sys.labourSitePhoto.deleteMany({ where: { companyId } });
       await sys.labourPunchRefusal.deleteMany({ where: { companyId } });
       await sys.labourPaymentSheet.deleteMany({ where: { companyId } });
       await sys.musterRoll.deleteMany({ where: { companyId } });
@@ -396,11 +404,12 @@ describe('Labour face attendance (031, e2e)', () => {
       }
     });
 
-    it('marks a half day on punch-in and refuses a second punch-in', async () => {
+    it('is on site after punch-in and refuses a second punch-in', async () => {
       const res = await punch({ workerId: male }).expect(201);
       expect(res.body).toMatchObject({
         type: 'in',
-        attendance: 'half_day',
+        status: 'on_site',
+        hours: null,
         geofenceViolation: false,
       });
       const again = await punch({ workerId: male }).expect(409);
@@ -414,9 +423,10 @@ describe('Labour face attendance (031, e2e)', () => {
       expect(res.body.geofenceViolation).toBe(true);
     });
 
-    it('marks a full day on punch-out and builds an approved muster', async () => {
+    it('counts a punch-out minutes after the punch-in as short, by the hours', async () => {
       const res = await punch({ workerId: male, type: 'out' }).expect(201);
-      expect(res.body.attendance).toBe('full_day');
+      expect(res.body.status).toBe('short');
+      expect(res.body.hours).toBeLessThan(1);
 
       const today = await http()
         .get(`/labour/attendance/today?siteId=${siteA}`)
@@ -437,17 +447,241 @@ describe('Labour face attendance (031, e2e)', () => {
         status: 'approved',
         geofenceViolation: true,
       });
+      // Short is kept as an unpaid line; still on site has no line until the punch-out.
       const types = Object.fromEntries(
         rolls[0].lines.map((l: any) => [l.workerId, l.attendanceType]),
       );
-      expect(types[male]).toBe('full_day');
-      expect(types[female]).toBe('half_day');
+      expect(types[male]).toBe('absent');
+      expect(types[female]).toBeUndefined();
     });
 
     it('refuses to list a site the supervisor is not assigned to', async () => {
       await http()
         .get(`/labour/attendance/today?siteId=${siteB}`)
         .set(auth(supervisor.token))
+        .expect(403);
+    });
+  });
+
+  describe('Muster attendance and corrections (034)', () => {
+    let male: string;
+    let female: string;
+    const correct = (body: Record<string, unknown>, token = hr.token) =>
+      http()
+        .post('/labour/muster-attendance/corrections')
+        .set(auth(token))
+        .send({ date: YESTERDAY, reason: 'Phone had no signal', ...body });
+
+    beforeAll(async () => {
+      const workers = await sys.labourWorker.findMany({ where: { companyId } });
+      male = workers.find((w: any) => w.labourCode === 'LAB-0001').id;
+      female = workers.find((w: any) => w.labourCode === 'LAB-0002').id;
+    });
+
+    it('lists today with on site, short and absent, and the summary counts', async () => {
+      const res = await http()
+        .get(`/labour/muster-attendance/daily?siteId=${siteA}`)
+        .set(auth(supervisor.token))
+        .expect(200);
+      expect(res.body.date).toBe(TODAY);
+      const byId = Object.fromEntries(
+        res.body.items.map((i: any) => [i.workerId, i]),
+      );
+      expect(byId[male]).toMatchObject({ status: 'short', flag: null });
+      expect(byId[male].punchIn.source).toBe('face');
+      expect(byId[male].punchIn.recordedBy).toBe('supervisor Tester');
+      expect(byId[female]).toMatchObject({ status: 'on_site', flag: null });
+      expect(byId[female].punchIn.outsideFence).toBe(true);
+      expect(res.body.summary).toMatchObject({
+        workers: 5,
+        short: 1,
+        onSite: 1,
+        absent: 3,
+        missingPunchOut: 0,
+      });
+    });
+
+    it('refuses a correction without the permission, a reason, or in order', async () => {
+      await correct(
+        { workerId: male, punchIn: '08:00' },
+        supervisor.token,
+      ).expect(403);
+      await correct({ workerId: male, punchIn: '08:00', reason: '' }).expect(
+        400,
+      );
+      const backwards = await correct({
+        workerId: male,
+        punchIn: '18:00',
+        punchOut: '09:00',
+      }).expect(400);
+      expect(backwards.body.code).toBe('LABOUR_PUNCH_OUT_BEFORE_IN');
+      expect(
+        await sys.labourPunch.count({
+          where: { workerId: male, punchDate: new Date(YESTERDAY) },
+        }),
+      ).toBe(0);
+    });
+
+    it('adds both punches by correction and counts overtime beyond the shift', async () => {
+      const res = await correct({
+        workerId: male,
+        punchIn: '08:00',
+        punchOut: '18:30',
+      }).expect(201);
+      expect(res.body).toMatchObject({
+        status: 'full_day',
+        hours: 10.5,
+        overtimeHours: 2.5,
+        flag: null,
+      });
+      expect(res.body.punchIn).toMatchObject({
+        source: 'correction',
+        corrected: true,
+      });
+    });
+
+    it('flags a missing punch out on an earlier day and filters by it', async () => {
+      await correct({ workerId: female, punchIn: '09:00' }).expect(201);
+      const res = await http()
+        .get(
+          `/labour/muster-attendance/daily?siteId=${siteA}&date=${YESTERDAY}&filter=missing_punch_out`,
+        )
+        .set(auth(supervisor.token))
+        .expect(200);
+      expect(res.body.summary.missingPunchOut).toBe(1);
+      expect(res.body.items).toHaveLength(1);
+      expect(res.body.items[0]).toMatchObject({
+        workerId: female,
+        status: 'unresolved',
+        flag: 'missing_punch_out',
+      });
+    });
+
+    it('will not make a payment sheet while a day has a missing punch', async () => {
+      const res = await http()
+        .post('/labour/payment-sheets')
+        .set(auth(hr.token))
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: TODAY })
+        .expect(409);
+      expect(res.body.code).toBe('LABOUR_UNRESOLVED_PUNCHES');
+      expect(res.body.unresolved).toEqual([
+        { workerId: female, date: YESTERDAY },
+      ]);
+    });
+
+    it('resolves it by correction and keeps the edit history', async () => {
+      const res = await correct({
+        workerId: female,
+        punchOut: '14:00',
+        reason: 'Left early, forgot to punch out',
+      }).expect(201);
+      expect(res.body).toMatchObject({ status: 'half_day', hours: 5 });
+
+      await correct({
+        workerId: female,
+        punchOut: '14:30',
+        reason: 'Gate register says 2:30',
+      }).expect(201);
+      const history = await http()
+        .get(
+          `/labour/muster-attendance/corrections?workerId=${female}&date=${YESTERDAY}`,
+        )
+        .set(auth(supervisor.token))
+        .expect(200);
+      expect(history.body).toHaveLength(3);
+      expect(history.body[0]).toMatchObject({
+        type: 'out',
+        reason: 'Gate register says 2:30',
+        correctedBy: 'hr Tester',
+      });
+      expect(history.body[0].oldPunchedAt).toBe(history.body[1].newPunchedAt);
+      expect(history.body[2]).toMatchObject({ type: 'in', oldPunchedAt: null });
+    });
+
+    it('re-counts unpaid days when HR changes the day rules', async () => {
+      await http()
+        .put('/labour/muster-attendance/rules')
+        .set(auth(supervisor.token))
+        .send({ fullDayHours: 11, halfDayHours: 4, standardHours: 8 })
+        .expect(403);
+      await http()
+        .put('/labour/muster-attendance/rules')
+        .set(auth(hr.token))
+        .send({ fullDayHours: 4, halfDayHours: 4, standardHours: 8 })
+        .expect(400);
+
+      const lineFor = async (workerId: string) =>
+        (
+          await sys.musterLine.findFirst({
+            where: { workerId, muster: { date: new Date(YESTERDAY) } },
+          })
+        )?.attendanceType;
+      const changed = await http()
+        .put('/labour/muster-attendance/rules')
+        .set(auth(hr.token))
+        .send({ fullDayHours: 11, halfDayHours: 4, standardHours: 8 })
+        .expect(200);
+      expect(changed.body.recounted).toBeGreaterThanOrEqual(3);
+      expect(await lineFor(male)).toBe('half_day');
+
+      await http()
+        .put('/labour/muster-attendance/rules')
+        .set(auth(hr.token))
+        .send({ fullDayHours: 8, halfDayHours: 4, standardHours: 8 })
+        .expect(200);
+      expect(await lineFor(male)).toBe('full_day');
+      const rules = await http()
+        .get('/labour/muster-attendance/rules')
+        .set(auth(supervisor.token))
+        .expect(200);
+      expect(rules.body).toEqual({
+        fullDayHours: 8,
+        halfDayHours: 4,
+        standardHours: 8,
+      });
+    });
+
+    it("shows the month's times and hours per day", async () => {
+      const res = await http()
+        .get(
+          `/labour/muster-attendance/monthly?siteId=${siteA}&year=${Y_YEAR}&month=${Y_MONTH}`,
+        )
+        .set(auth(supervisor.token))
+        .expect(200);
+      const m = res.body.items.find((i: any) => i.workerId === male);
+      expect(m.days[YESTERDAY]).toMatchObject({
+        status: 'full_day',
+        hours: 10.5,
+      });
+      expect(m.totals).toMatchObject({ fullDays: 1, overtimeHours: 2.5 });
+      expect(res.body.summary.unresolved).toBe(0);
+    });
+
+    it('keeps a group photo for reference without marking anyone', async () => {
+      const before = await sys.labourPunch.count({ where: { companyId } });
+      const added = await http()
+        .post('/labour/muster-attendance/site-photos')
+        .set(auth(supervisor.token))
+        .send({ siteId: siteA, photo: JPEG, note: 'Morning gang' })
+        .expect(201);
+      expect(added.body).toMatchObject({ siteId: siteA, note: 'Morning gang' });
+      const list = await http()
+        .get(`/labour/muster-attendance/site-photos?siteId=${siteA}`)
+        .set(auth(supervisor.token))
+        .expect(200);
+      expect(list.body).toHaveLength(1);
+      await http()
+        .get(`/labour/muster-attendance/site-photos/${added.body.id}/image`)
+        .set(auth(supervisor.token))
+        .expect(200)
+        .expect('Content-Type', /image\/jpeg/);
+      expect(await sys.labourPunch.count({ where: { companyId } })).toBe(
+        before,
+      );
+      await http()
+        .post('/labour/muster-attendance/site-photos')
+        .set(auth(supervisor.token))
+        .send({ siteId: siteB, photo: JPEG })
         .expect(403);
     });
   });
@@ -470,38 +704,51 @@ describe('Labour face attendance (031, e2e)', () => {
       expect(res.body.code).toBe('LABOUR_SITE_RATE_MISSING');
     });
 
-    it('prices full and half days at the male and female site rates', async () => {
-      const monthStart = `${YEAR}-${String(MONTH).padStart(2, '0')}-01`;
+    it('prices days and overtime from the punch hours, then locks those days', async () => {
       await http()
         .post('/labour/site-rates')
         .set(auth(hr.token))
         .send({
           siteId: siteA,
-          effectiveFrom: monthStart,
+          effectiveFrom: YESTERDAY,
           maleRate: 600,
           femaleRate: 500,
         })
         .expect(201);
-
       const res = await http()
         .post('/labour/payment-sheets')
         .set(auth(hr.token))
-        .send({ siteId: siteA, periodFrom: monthStart, periodTo: TODAY })
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: TODAY })
         .expect(201);
       expect(res.body.siteId).toBe(siteA);
-      expect(res.body.grossTotal).toBe(850);
+      // Male: a full day at 600 plus 2.5 h overtime at 600 / 8 × 2; today short, unpaid.
+      // Female: a half day at 500 (5.5 h); today still on site, not counted.
+      expect(res.body.grossTotal).toBe(600 + 375 + 250);
       const byRate = res.body.lines
         .map((l: any) => [
           l.daysWorked,
+          l.overtimeHours,
           l.resolvedRate,
           l.grossWage,
-          l.rateSource,
         ])
         .sort();
       expect(byRate).toEqual([
-        [0.5, 500, 250, 'site_rate'],
-        [1, 600, 600, 'site_rate'],
+        [0.5, 0, 500, 250],
+        [1, 2.5, 600, 975],
       ]);
+
+      const locked = await http()
+        .post('/labour/muster-attendance/corrections')
+        .set(auth(hr.token))
+        .send({
+          workerId: res.body.lines.find((l: any) => l.daysWorked === 1)
+            .workerId,
+          date: YESTERDAY,
+          punchOut: '17:00',
+          reason: 'Late change',
+        })
+        .expect(409);
+      expect(locked.body.code).toBe('LABOUR_DAY_ON_PAYMENT_SHEET');
 
       const xlsx = await http()
         .get(`/labour/sheets/payment/${res.body.id}`)
@@ -532,10 +779,10 @@ describe('Labour face attendance (031, e2e)', () => {
   });
 
   describe('Month-end attendance sheet', () => {
-    it('marks P for in+out and H for in only', async () => {
+    it('marks the day codes and lists the punch times', async () => {
       const res = await http()
         .get(
-          `/labour/sheets/attendance?siteId=${siteA}&year=${YEAR}&month=${MONTH}`,
+          `/labour/sheets/attendance?siteId=${siteA}&year=${Y_YEAR}&month=${Y_MONTH}`,
         )
         .set(auth(supervisor.token))
         .buffer(true)
@@ -545,21 +792,27 @@ describe('Labour face attendance (031, e2e)', () => {
           r.on('end', () => cb(null, Buffer.concat(chunks)));
         })
         .expect(200);
-      const ws = (await readWorkbook(res.body)).getWorksheet('Attendance');
+      const wb = await readWorkbook(res.body);
+      const ws = wb.getWorksheet('Attendance');
       const rows: any[] = [];
       ws.eachRow((row) => rows.push(row.values));
-      // Columns: [unused, Code, Name, Father, Gender, day1..dayN, Full, Half, Total]
-      const dayCol = 4 + DAY;
+      // Columns: [unused, Code, Name, Father, Gender, Contractor/Gang, day1..dayN, …]
+      const dayCol = 5 + Y_DAY;
       const ramesh = rows.find((r) => r[2] === 'Dummy Ramesh');
       expect(ramesh[dayCol]).toBe('P');
-      const halfRow = rows.find(
-        (r) => r[1] === 'LAB-0002' && r[dayCol] === 'H',
-      );
-      expect(halfRow).toBeTruthy();
+      const female = rows.find((r) => r[1] === 'LAB-0002');
+      expect(female[dayCol]).toBe('H');
       // Everyone active at the site is listed, worked or not.
       expect(rows.filter((r) => String(r[1]).startsWith('LAB-'))).toHaveLength(
         5,
       );
+
+      const punches = JSON.stringify(
+        wb.getWorksheet('Punch times').getSheetValues(),
+      );
+      expect(punches).toContain(YESTERDAY);
+      expect(punches).toContain('10.5');
+      expect(punches).toContain('Full day');
     });
 
     it('refuses a site the supervisor is not assigned to', async () => {

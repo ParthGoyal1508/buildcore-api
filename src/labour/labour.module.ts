@@ -27,6 +27,9 @@ import { LabourReportsService } from './reports/labour-reports.service';
 import { MonthlyWageRollupService } from './reports/monthly-wage-rollup.service';
 import { LabourPunchController } from './attendance/labour-punch.controller';
 import { LabourPunchService } from './attendance/labour-punch.service';
+import { LabourDayService } from './attendance/labour-day.service';
+import { MusterAttendanceController } from './attendance/muster-attendance.controller';
+import { MusterAttendanceService } from './attendance/muster-attendance.service';
 import { SiteWageRateController } from './site-rates/site-wage-rate.controller';
 import { SiteWageRateService } from './site-rates/site-wage-rate.service';
 import { SupervisorSiteController } from './supervisor-sites/supervisor-site.controller';
@@ -66,6 +69,7 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     SiteWageRateController,
     SupervisorSiteController,
     LabourSheetsController,
+    MusterAttendanceController,
   ],
   providers: [
     LabourRefsService,
@@ -82,6 +86,8 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     SiteWageRateService,
     SupervisorSiteService,
     LabourSheetsService,
+    LabourDayService,
+    MusterAttendanceService,
     ImageProcessingService,
     AuditLogService,
     { provide: BiometricsService, useClass: FaceApiBiometricsService },

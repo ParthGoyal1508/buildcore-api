@@ -7,6 +7,8 @@ export const ACKNOWLEDGEMENT_NAMESPACE = 'labour-acknowledgement';
 export const WORKER_FACE_NAMESPACE = 'labour-face';
 /** 031: the photo behind each accepted labour face punch. */
 export const LABOUR_PUNCH_NAMESPACE = 'labour-punch';
+/** 034: a supervisor's group photo of a site, kept for reference only. */
+export const LABOUR_SITE_PHOTO_NAMESPACE = 'labour-site-photo';
 
 /** Auto-generated labour-code prefix (e.g. LAB-0001). */
 export const LABOUR_CODE_PREFIX = 'LAB';

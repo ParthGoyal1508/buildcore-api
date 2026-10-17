@@ -340,6 +340,8 @@ enum Permission {
   /// the only value this feature adds — it reuses the existing
   /// `DAILY_WORKER_REGISTRY` and `REPORTS` values verbatim.
   LABOUR_APPROVE
+  /// 034: add or correct a labour punch time, with a reason, kept in an edit history.
+  LABOUR_PUNCH_CORRECT
 
   /// Added by 006. Maintenance jobs, service schedules, spare parts and service
   /// bills. `MACHINERY`, `LOGBOOK` and `FUEL` already existed — 002 reserved them by
@@ -532,6 +534,14 @@ model Company {
   /// is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
   /// default. Company-configurable rather than a literal — Constitution Principle III.
   labourWageCycle LabourWageCycle @default(weekly)
+
+  /// 034: how a labour day is counted from its punch times. At least `labourFullDayHours` between
+  /// punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
+  /// paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
+  /// × `otMultiplier`. Set by the HR office under Labour → Muster attendance.
+  labourFullDayHours Decimal @default(8) @db.Decimal(4, 2)
+  labourHalfDayHours Decimal @default(4) @db.Decimal(4, 2)
+  labourStandardHours Decimal @default(8) @db.Decimal(4, 2)
 
   /// The company's own account the payroll transfer is debited from (021 FR-008a).
   ///
@@ -7809,6 +7819,15 @@ enum LabourPunchType {
   @@schema("labour")
 }
 
+/// 034: how a punch came to exist — a face-checked photo at the site, or a correction by a
+/// supervisor or the HR office with a reason.
+enum LabourPunchSource {
+  face
+  correction
+
+  @@schema("labour")
+}
+
 /// 031: why a labour punch was refused. Mirrors `hr.PunchRefusalReason` value for value.
 enum LabourPunchRefusalReason {
   outside_geofence
@@ -9433,16 +9452,22 @@ model LabourPunch {
   /// Server time — the punch is online-only, so the supervisor's clock is never trusted.
   punchedAt DateTime        @default(now())
 
-  /// The supervisor (User) who took the photo.
+  /// The supervisor (User) who took the photo, or who added it by correction.
   supervisorId String
 
-  photoRef          String
-  faceMatchDistance Decimal @db.Decimal(6, 4)
+  /// 034: a punch added by correction has no photo, face match or location.
+  source LabourPunchSource @default(face)
+  /// 034: set when the time was changed after it was recorded; the edits are in
+  /// `LabourPunchCorrection`.
+  correctedAt DateTime?
 
-  latitude               Decimal  @db.Decimal(10, 7)
-  longitude              Decimal  @db.Decimal(10, 7)
+  photoRef          String?
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  latitude               Decimal? @db.Decimal(10, 7)
+  longitude              Decimal? @db.Decimal(10, 7)
   accuracyMetres         Decimal? @db.Decimal(8, 2)
-  geofenceDistanceMetres Decimal  @db.Decimal(10, 2)
+  geofenceDistanceMetres Decimal? @db.Decimal(10, 2)
   /// Outside the fence or unlocatable, accepted because the company has not switched the
   /// punch block on — the same rule employee punches follow.
   geofenceViolation      Boolean  @default(false)
@@ -9452,6 +9477,51 @@ model LabourPunch {
   @@unique([workerId, punchDate, type])
   @@index([companyId])
   @@index([companyId, siteId, punchDate])
+  @@schema("labour")
+}
+
+/// 034: one edit to a labour punch time — the edit history. `oldPunchedAt` is null when the punch
+/// was missing and the correction added it. Never updated or deleted.
+model LabourPunchCorrection {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId  String
+  siteId    String
+  punchDate DateTime        @db.Date
+  type      LabourPunchType
+
+  oldPunchedAt DateTime?
+  newPunchedAt DateTime
+  reason       String
+
+  correctedById String
+  createdAt     DateTime @default(now())
+
+  @@index([companyId])
+  @@index([workerId, punchDate])
+  @@schema("labour")
+}
+
+/// 034: a group photo a supervisor takes at a site for reference. It is **not** attendance: nobody
+/// is matched or marked from it.
+model LabourSitePhoto {
+  id        String @id @default(cuid())
+  companyId String
+
+  siteId    String
+  photoDate DateTime @db.Date
+  photoRef  String
+  note      String?
+
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+
+  takenById String
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([companyId, siteId, photoDate])
   @@schema("labour")
 }
 

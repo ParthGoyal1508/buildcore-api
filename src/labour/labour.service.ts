@@ -60,10 +60,13 @@ export class LabourService {
     if (dateRange?.from) dateFilter.gte = dateRange.from;
     if (dateRange?.to) dateFilter.lte = dateRange.to;
 
-    const otMultiplier = companyId
-      ? (await this.refs.getLabourSettings(companyId)).otMultiplier
-      : 2;
-    const standardHours = this.refs.standardHoursPerDay;
+    const settings = companyId
+      ? await this.refs.getLabourSettings(companyId)
+      : null;
+    const otMultiplier = settings?.otMultiplier ?? 2;
+    // 034: the company's labour shift, the same one overtime is counted beyond.
+    const standardHours =
+      settings?.standardHours ?? this.refs.standardHoursPerDay;
 
     const { lines, unapprovedMusterCount } = await withRlsContext(
       this.prisma,

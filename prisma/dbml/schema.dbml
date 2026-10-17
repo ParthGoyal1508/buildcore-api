@@ -284,6 +284,12 @@ same statutory 1% this product already configures for 007\'s cess calculation.']
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
 default. Company-configurable rather than a literal — Constitution Principle III.']
+  labourFullDayHours Decimal [not null, default: 8, note: '034: how a labour day is counted from its punch times. At least `labourFullDayHours` between
+punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
+paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
+× `otMultiplier`. Set by the HR office under Labour → Muster attendance.']
+  labourHalfDayHours Decimal [not null, default: 4]
+  labourStandardHours Decimal [not null, default: 8]
   payrollDebitAccountNumber String [note: 'The company\'s own account the payroll transfer is debited from (021 FR-008a).
 
 A **string**, not a number, and the sample file is the argument: every value in the
@@ -5525,13 +5531,16 @@ Table LabourPunch {
   punchDate DateTime [not null, note: 'Company-timezone calendar day.']
   type LabourPunchType [not null]
   punchedAt DateTime [default: `now()`, not null, note: 'Server time — the punch is online-only, so the supervisor\'s clock is never trusted.']
-  supervisorId String [not null, note: 'The supervisor (User) who took the photo.']
-  photoRef String [not null]
-  faceMatchDistance Decimal [not null]
-  latitude Decimal [not null]
-  longitude Decimal [not null]
+  supervisorId String [not null, note: 'The supervisor (User) who took the photo, or who added it by correction.']
+  source LabourPunchSource [not null, default: 'face', note: '034: a punch added by correction has no photo, face match or location.']
+  correctedAt DateTime [note: '034: set when the time was changed after it was recorded; the edits are in
+`LabourPunchCorrection`.']
+  photoRef String
+  faceMatchDistance Decimal
+  latitude Decimal
+  longitude Decimal
   accuracyMetres Decimal
-  geofenceDistanceMetres Decimal [not null]
+  geofenceDistanceMetres Decimal
   geofenceViolation Boolean [not null, default: false, note: 'Outside the fence or unlocatable, accepted because the company has not switched the
 punch block on — the same rule employee punches follow.']
   createdAt DateTime [default: `now()`, not null]
@@ -5542,6 +5551,39 @@ punch block on — the same rule employee punches follow.']
 
   Note: '031: one accepted face punch. The day\'s muster line is derived from these: punch-in alone is
 a half day, punch-in and punch-out a full day.'
+}
+
+Table LabourPunchCorrection {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  siteId String [not null]
+  punchDate DateTime [not null]
+  type LabourPunchType [not null]
+  oldPunchedAt DateTime
+  newPunchedAt DateTime [not null]
+  reason String [not null]
+  correctedById String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '034: one edit to a labour punch time — the edit history. `oldPunchedAt` is null when the punch
+was missing and the correction added it. Never updated or deleted.'
+}
+
+Table LabourSitePhoto {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  photoDate DateTime [not null]
+  photoRef String [not null]
+  note String
+  latitude Decimal
+  longitude Decimal
+  takenById String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '034: a group photo a supervisor takes at a site for reference. It is **not** attendance: nobody
+is matched or marked from it.'
 }
 
 Table LabourPunchRefusal {
@@ -5654,6 +5696,7 @@ Enum Permission {
   CROSS_COMPANY_ACCESS
   INVENTORY_APPROVE
   LABOUR_APPROVE
+  LABOUR_PUNCH_CORRECT
   MAINTENANCE
   HIRE_BILLS
   RECRUITMENT
@@ -6410,6 +6453,11 @@ Enum LabourGender {
 Enum LabourPunchType {
   in
   out
+}
+
+Enum LabourPunchSource {
+  face
+  correction
 }
 
 Enum LabourPunchRefusalReason {

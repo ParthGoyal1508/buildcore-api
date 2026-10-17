@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import { AttendanceType, MusterStatus } from '@prisma/client';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -11,7 +6,16 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope } from '../../settings/company-scope';
 import { LabourRefsService } from '../labour-refs.service';
-import { dayFractionOf } from '../payment-sheets/wage-calc.util';
+import type {
+  LabourDayFlag,
+  LabourDayStatus,
+} from '../attendance/labour-day.util';
+import {
+  monthRange,
+  MusterAttendanceService,
+  type MusterDay,
+  type MusterWorkerRef,
+} from '../attendance/muster-attendance.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 
 export interface SheetFile {
@@ -51,85 +55,31 @@ export class LabourSheetsService {
     private readonly prisma: PrismaService,
     private readonly refs: LabourRefsService,
     private readonly supervisorSites: SupervisorSiteService,
+    private readonly muster: MusterAttendanceService,
   ) {}
 
   /**
-   * One row per labour, one column per day of the month: P for a full day (in and out), H for a
-   * half day (in only), blank when absent. A second tab lists every punch with its times. Without a
-   * `siteId`, every site the caller can see is included, with a Site column to tell them apart.
+   * One row per labour, one column per day of the month (034): P full day, H half day, S short, ?
+   * unresolved (a missing or wrong punch, highlighted, and not counted until corrected), O still on
+   * site today, M marked on a muster before punches. Totals give full, half, short and unresolved
+   * days, payable days, hours and overtime. A second tab lists every day's punch in and out with
+   * hours, status, overtime and flags. Without a `siteId`, every site the caller can see is
+   * included, with a Site column to tell them apart.
    */
   async attendanceSheet(
     caller: AuthenticatedUser,
     query: { siteId?: string; year: number; month: number },
   ): Promise<SheetFile> {
-    const sites = await this.supervisorSites.mySites(caller);
-    if (query.siteId && !sites.some((s) => s.id === query.siteId)) {
-      await this.supervisorSites.assertSiteAllowed(caller, query.siteId);
-      throw new NotFoundException('Site not found');
-    }
-    const chosen = query.siteId
-      ? sites.filter((s) => s.id === query.siteId)
-      : sites;
-    if (chosen.length === 0) {
-      throw new BadRequestException('You have no sites to report on');
-    }
-    const siteIds = chosen.map((s) => s.id);
+    const chosen = await this.muster.chosenSites(caller, query.siteId);
     const siteName = new Map(chosen.map((s) => [s.id, s.name]));
-
-    const from = new Date(Date.UTC(query.year, query.month - 1, 1));
-    const to = new Date(Date.UTC(query.year, query.month, 0));
-    const daysInMonth = to.getUTCDate();
-
-    const { lines, punches, workers } = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      async (tx) => {
-        const lines = await tx.musterLine.findMany({
-          where: {
-            muster: {
-              siteId: { in: siteIds },
-              date: { gte: from, lte: to },
-              status: MusterStatus.approved,
-              deletedAt: null,
-            },
-          },
-          include: { muster: { select: { date: true, siteId: true } } },
-        });
-        const punches = await tx.labourPunch.findMany({
-          where: { siteId: { in: siteIds }, punchDate: { gte: from, lte: to } },
-          orderBy: [{ punchDate: 'asc' }, { punchedAt: 'asc' }],
-        });
-        const workedIds = new Set(lines.map((l) => l.workerId));
-        // Everyone active at these sites, and anyone who worked here this month and has since
-        // left or moved — a month-end sheet that dropped them would under-report the month.
-        const workers = await tx.labourWorker.findMany({
-          where: {
-            deletedAt: null,
-            OR: [
-              { siteId: { in: siteIds }, status: 'active' },
-              { id: { in: Array.from(workedIds) } },
-            ],
-          },
-          orderBy: { labourCode: 'asc' },
-        });
-        return { lines, punches, workers };
-      },
-    );
-
-    // workerId → site → day → attendance
-    const grid = new Map<string, Map<string, Map<number, AttendanceType>>>();
-    for (const line of lines) {
-      const bySite = grid.get(line.workerId) ?? new Map();
-      const byDay = bySite.get(line.muster.siteId) ?? new Map();
-      byDay.set(line.muster.date.getUTCDate(), line.attendanceType);
-      bySite.set(line.muster.siteId, byDay);
-      grid.set(line.workerId, bySite);
-    }
+    const { from, to, daysInMonth } = monthRange(query.year, query.month);
+    const grid = await this.muster.collect(caller, chosen, from, to);
 
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
+    const fixedCols = query.siteId ? 5 : 6;
     const sheet = workbook.addWorksheet('Attendance', {
-      views: [{ state: 'frozen', xSplit: 3, ySplit: 3 }],
+      views: [{ state: 'frozen', xSplit: fixedCols, ySplit: 3 }],
     });
     const monthLabel = `${MONTHS[query.month - 1]} ${query.year}`;
     const title = query.siteId
@@ -137,11 +87,8 @@ export class LabourSheetsService {
       : `Labour attendance — all sites — ${monthLabel}`;
     sheet.addRow([title]).font = { bold: true, size: 13 };
     sheet.addRow([
-      'P = full day (punched in and out)   H = half day (punched in only)',
-    ]).font = {
-      italic: true,
-      color: { argb: 'FF555555' },
-    };
+      'P = full day   H = half day   S = short (not paid)   ? = missing or wrong punch, not counted until corrected   O = on site today   M = marked before punches',
+    ]).font = { italic: true, color: { argb: 'FF555555' } };
 
     const dayHeaders = Array.from({ length: daysInMonth }, (_, i) => {
       const d = new Date(Date.UTC(query.year, query.month - 1, i + 1));
@@ -152,11 +99,16 @@ export class LabourSheetsService {
       'Name',
       "Father's name",
       'Gender',
+      'Contractor / Gang',
       ...(query.siteId ? [] : ['Site']),
       ...dayHeaders,
       'Full days',
       'Half days',
-      'Total days',
+      'Short days',
+      'Unresolved',
+      'Payable days',
+      'Hours',
+      'OT hours',
     ]);
     header.font = { bold: true };
     header.alignment = {
@@ -167,66 +119,89 @@ export class LabourSheetsService {
     header.height = 30;
     header.eachCell((c) => (c.fill = HEADER_FILL));
 
-    const fixedCols = query.siteId ? 4 : 5;
-    let grandTotal = 0;
-    for (const w of workers) {
-      const bySite = grid.get(w.id);
-      // A worker who moved mid-month gets a row per site they worked at.
-      const rowSites =
-        bySite && bySite.size > 0 ? Array.from(bySite.keys()) : [w.siteId];
-      for (const siteId of rowSites) {
-        if (!siteIds.includes(siteId)) continue;
-        const byDay = bySite?.get(siteId) ?? new Map<number, AttendanceType>();
-        let full = 0;
-        let half = 0;
-        const cells = Array.from({ length: daysInMonth }, (_, i) => {
-          const t = byDay.get(i + 1);
-          if (t === AttendanceType.full_day) {
+    const totals = { payable: 0, hours: 0, ot: 0, unresolved: 0 };
+    for (const { ref, days } of grid) {
+      let full = 0;
+      let half = 0;
+      let short = 0;
+      let unresolved = 0;
+      let hours = 0;
+      let ot = 0;
+      const flagged: number[] = [];
+      const cells = Array.from({ length: daysInMonth }, (_, i) => {
+        const date = `${from.slice(0, 8)}${String(i + 1).padStart(2, '0')}`;
+        const day = days.get(date);
+        if (!day) return '';
+        hours += day.hours ?? 0;
+        ot += day.overtimeHours;
+        switch (day.status) {
+          case 'full_day':
             full += 1;
-            return 'P';
-          }
-          if (t === AttendanceType.half_day) {
+            return day.manual ? 'M' : 'P';
+          case 'half_day':
             half += 1;
-            return 'H';
-          }
-          return '';
-        });
-        const total = full + half * dayFractionOf(AttendanceType.half_day);
-        grandTotal += total;
-        sheet.addRow([
-          w.labourCode,
-          w.fullName,
-          w.fatherName ?? '',
-          w.gender ? capitalise(w.gender) : '',
-          ...(query.siteId ? [] : [siteName.get(siteId) ?? '']),
-          ...cells,
-          full,
-          half,
-          total,
-        ]);
+            return day.manual ? 'M' : 'H';
+          case 'short':
+            short += 1;
+            return 'S';
+          case 'unresolved':
+            unresolved += 1;
+            flagged.push(i);
+            return '?';
+          case 'on_site':
+            return 'O';
+          default:
+            return '';
+        }
+      });
+      const payable = full + half * 0.5;
+      totals.payable += payable;
+      totals.hours += hours;
+      totals.ot += ot;
+      totals.unresolved += unresolved;
+      const row = sheet.addRow([
+        ref.labourCode,
+        ref.fullName,
+        ref.fatherName ?? '',
+        ref.gender ? capitalise(ref.gender) : '',
+        contractorGang(ref),
+        ...(query.siteId ? [] : [ref.siteName]),
+        ...cells,
+        full,
+        half,
+        short,
+        unresolved,
+        payable,
+        round2(hours),
+        round2(ot),
+      ]);
+      for (const i of flagged) {
+        row.getCell(fixedCols + 1 + i).fill = FLAG_FILL;
       }
+      if (unresolved > 0)
+        row.getCell(fixedCols + daysInMonth + 4).fill = FLAG_FILL;
     }
     const totalsRow = sheet.addRow([
       'Total',
-      ...Array(fixedCols - 1 + daysInMonth + 2).fill(''),
-      grandTotal,
+      ...Array(fixedCols - 1 + daysInMonth + 3).fill(''),
+      totals.unresolved,
+      totals.payable,
+      round2(totals.hours),
+      round2(totals.ot),
     ]);
     totalsRow.font = { bold: true };
 
-    sheet.getColumn(1).width = 11;
-    sheet.getColumn(2).width = 24;
-    sheet.getColumn(3).width = 22;
-    sheet.getColumn(4).width = 8;
-    if (!query.siteId) sheet.getColumn(5).width = 20;
+    [11, 24, 22, 8, 22].forEach((w, i) => (sheet.getColumn(i + 1).width = w));
+    if (!query.siteId) sheet.getColumn(6).width = 20;
     for (let i = 0; i < daysInMonth; i++) {
       const col = sheet.getColumn(fixedCols + 1 + i);
       col.width = 4;
       col.alignment = { horizontal: 'center' };
     }
-    for (let i = 1; i <= 3; i++)
+    for (let i = 1; i <= 7; i++)
       sheet.getColumn(fixedCols + daysInMonth + i).width = 10;
 
-    this.addPunchesTab(workbook, punches, workers, siteName);
+    this.addPunchesTab(workbook, grid);
 
     const slug = query.siteId
       ? slugify(siteName.get(query.siteId) ?? 'site')
@@ -376,18 +351,10 @@ export class LabourSheetsService {
     };
   }
 
+  /** Every punched day with its times, hours, status and flags, by date then code. */
   private addPunchesTab(
     workbook: ExcelJS.Workbook,
-    punches: {
-      workerId: string;
-      siteId: string;
-      punchDate: Date;
-      type: 'in' | 'out';
-      punchedAt: Date;
-      geofenceViolation: boolean;
-    }[],
-    workers: { id: string; labourCode: string; fullName: string }[],
-    siteName: Map<string, string>,
+    grid: { ref: MusterWorkerRef; days: Map<string, MusterDay> }[],
   ) {
     const ws = workbook.addWorksheet('Punch times', {
       views: [{ state: 'frozen', ySplit: 1 }],
@@ -396,54 +363,94 @@ export class LabourSheetsService {
       'Date',
       'Code',
       'Name',
+      'Contractor / Gang',
       'Site',
-      'In',
-      'Out',
-      'Day',
+      'Punch in',
+      'Punch out',
+      'Hours',
+      'Status',
+      'OT hours',
+      'Flag',
+      'Corrected',
+      'Recorded by',
       'Location flagged',
     ]);
     header.font = { bold: true };
     header.eachCell((c) => (c.fill = HEADER_FILL));
 
-    const byId = new Map(workers.map((w) => [w.id, w]));
-    const days = new Map<
-      string,
-      { in?: (typeof punches)[0]; out?: (typeof punches)[0] }
-    >();
-    for (const p of punches) {
-      const key = `${p.punchDate.toISOString().slice(0, 10)}|${p.workerId}|${
-        p.siteId
-      }`;
-      const entry = days.get(key) ?? {};
-      entry[p.type] = p;
-      days.set(key, entry);
-    }
     const time = new Intl.DateTimeFormat('en-IN', {
       timeZone: this.refs.timeZone,
       hour: '2-digit',
       minute: '2-digit',
       hour12: true,
     });
-    for (const [key, entry] of days) {
-      const [date, workerId, siteId] = key.split('|');
-      const w = byId.get(workerId);
-      ws.addRow([
-        date,
-        w?.labourCode ?? '',
-        w?.fullName ?? '',
-        siteName.get(siteId) ?? '',
-        entry.in ? time.format(entry.in.punchedAt) : '',
-        entry.out ? time.format(entry.out.punchedAt) : '',
-        entry.out ? 'Full' : 'Half',
-        entry.in?.geofenceViolation || entry.out?.geofenceViolation
-          ? 'Yes'
-          : '',
+    const rows = grid
+      .flatMap(({ ref, days }) =>
+        [...days.values()]
+          .filter((d) => d.punchIn || d.punchOut)
+          .map((d) => ({ ref, d })),
+      )
+      .sort(
+        (a, b) =>
+          a.d.date.localeCompare(b.d.date) ||
+          a.ref.labourCode.localeCompare(b.ref.labourCode),
+      );
+    for (const { ref, d } of rows) {
+      const recordedBy = [d.punchIn?.recordedBy, d.punchOut?.recordedBy]
+        .filter((n): n is string => !!n)
+        .filter((n, i, all) => all.indexOf(n) === i)
+        .join(', ');
+      const row = ws.addRow([
+        d.date,
+        ref.labourCode,
+        ref.fullName,
+        contractorGang(ref),
+        ref.siteName,
+        d.punchIn ? time.format(new Date(d.punchIn.at)) : '',
+        d.punchOut ? time.format(new Date(d.punchOut.at)) : '',
+        d.hours ?? '',
+        STATUS_LABEL[d.status],
+        d.overtimeHours || '',
+        d.flag ? FLAG_LABEL[d.flag] : '',
+        d.punchIn?.corrected || d.punchOut?.corrected ? 'Yes' : '',
+        recordedBy,
+        d.punchIn?.outsideFence || d.punchOut?.outsideFence ? 'Yes' : '',
       ]);
+      if (d.flag) row.getCell(11).fill = FLAG_FILL;
     }
-    [12, 11, 24, 20, 10, 10, 7, 16].forEach(
+    [12, 11, 24, 22, 20, 10, 10, 7, 11, 9, 18, 10, 22, 16].forEach(
       (w, i) => (ws.getColumn(i + 1).width = w),
     );
   }
+}
+
+const FLAG_FILL: ExcelJS.Fill = {
+  type: 'pattern',
+  pattern: 'solid',
+  fgColor: { argb: 'FFFDE68A' },
+};
+
+const STATUS_LABEL: Record<LabourDayStatus, string> = {
+  full_day: 'Full day',
+  half_day: 'Half day',
+  short: 'Short',
+  on_site: 'On site',
+  unresolved: 'Unresolved',
+  absent: 'Absent',
+};
+
+const FLAG_LABEL: Record<LabourDayFlag, string> = {
+  missing_punch_out: 'Missing punch out',
+  missing_punch_in: 'Missing punch in',
+  out_before_in: 'Out before in',
+};
+
+function contractorGang(ref: MusterWorkerRef): string {
+  return [ref.contractorName, ref.gangName].filter(Boolean).join(' / ');
+}
+
+function round2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function capitalise(value: string): string {

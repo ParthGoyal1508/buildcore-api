@@ -27,6 +27,7 @@ import { SitesService } from '../../projects/sites/sites.service';
 import { ACKNOWLEDGEMENT_NAMESPACE } from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
 import { SiteWageRateService } from '../site-rates/site-wage-rate.service';
+import { LabourDayService } from '../attendance/labour-day.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { computeWage, roundMoney, WorkedDay } from './wage-calc.util';
 import { computeDenominationBreakup, WorkerNet } from './denomination.util';
@@ -51,14 +52,17 @@ export class PaymentSheetService {
     private readonly supervisorSites: SupervisorSiteService,
     private readonly storage: StorageService,
     private readonly images: ImageProcessingService,
+    private readonly days: LabourDayService,
   ) {}
 
   /**
    * Generates a draft sheet for one site and period (031) from the period's approved musters —
-   * which, since 031, the face punches write: one line per worker with days (in + out = 1, in only
-   * = 0.5), the rate for their gender at the site, gross, advance deductions and net. A worked day
-   * with no rate fails with 409 naming the worker, gender and date. A sheet overlapping this one
-   * for the same site, or a pre-031 project sheet covering the site, is rejected (FR-023).
+   * which, since 031, the face punches write: one line per worker with days (since 034 counted from
+   * the hours between punch in and out, by the company's day rules), the rate for their gender at
+   * the site, gross, advance deductions and net. A worked day with no rate fails with 409 naming
+   * the worker, gender and date, and a past day with a missing punch fails until it is corrected.
+   * A sheet overlapping this one for the same site, or a pre-031 project sheet covering the site,
+   * is rejected (FR-023).
    */
   async generate(
     caller: AuthenticatedUser,
@@ -90,8 +94,10 @@ export class PaymentSheetService {
     const companyId = site.companyId;
     const projectId = site.projectId ?? null;
 
-    const { otMultiplier } = await this.refs.getLabourSettings(companyId);
-    const standardHours = this.refs.standardHoursPerDay;
+    // 034: overtime is priced on the company's labour shift, the one it is counted beyond.
+    const { otMultiplier, standardHours } = await this.refs.getLabourSettings(
+      companyId,
+    );
 
     const sheetId = await withRlsContext(
       this.prisma,
@@ -120,6 +126,26 @@ export class PaymentSheetService {
               .toISOString()
               .slice(0, 10)} already covers part of these dates`,
             existingSheetId: overlap.id,
+          });
+        }
+
+        // 034: a day with a missing punch is not counted until it is corrected, and once a sheet
+        // covers it, it can no longer be corrected — so the sheet waits for the corrections.
+        const unresolved = await this.days.unresolvedDays(
+          tx,
+          dto.siteId,
+          periodFrom,
+          periodTo,
+        );
+        if (unresolved.length > 0) {
+          throw new ConflictException({
+            code: 'LABOUR_UNRESOLVED_PUNCHES',
+            message: `${unresolved.length} labour day${
+              unresolved.length === 1 ? ' has' : 's have'
+            } a missing or wrong punch between these dates (first on ${
+              unresolved[0].date
+            }). Correct them under Labour → Muster attendance, then generate again.`,
+            unresolved,
           });
         }
 

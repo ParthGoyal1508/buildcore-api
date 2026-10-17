@@ -5,7 +5,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
-  AttendanceType,
   AuditAction,
   AuditEntityType,
   LabourPunchRefusalReason,
@@ -31,6 +30,12 @@ import { LABOUR_PUNCH_NAMESPACE } from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
+import { LabourDayService } from './labour-day.service';
+import {
+  deriveLabourDay,
+  type LabourDay,
+  type LabourDayStatus,
+} from './labour-day.util';
 import { labourPunchRefused } from './labour-punch-refusal';
 
 export interface LabourDayRow {
@@ -42,14 +47,21 @@ export interface LabourDayRow {
   faceEnrolled: boolean;
   punchInAt: string | null;
   punchOutAt: string | null;
+  /** 034: how the day counts so far, from the hours between the punches. */
+  status: LabourDayStatus;
+  hours: number | null;
+  overtimeHours: number;
 }
 
 export interface LabourPunchResult {
   workerId: string;
   type: LabourPunchType;
   punchedAt: string;
-  /** What the day counts as after this punch: in alone is a half day, in and out a full day. */
-  attendance: 'half_day' | 'full_day';
+  /** How the day counts after this punch, from the hours between punch in and out (034). */
+  status: LabourDayStatus;
+  /** Hours between punch in and out, once both are in. */
+  hours: number | null;
+  overtimeHours: number;
   /** Accepted outside the fence or without a usable fix, because the company has not switched
    * the punch block on — the employee rule. */
   geofenceViolation: boolean;
@@ -65,7 +77,8 @@ export interface LabourPunchResult {
  *
  * Accepted punches build the day's muster, which is what payment sheets, reports and project
  * costing already read: one roll per site and day (`source = face_punch`), approved as written —
- * the face match and geofence are the control the old approval step stood in for.
+ * the face match and geofence are the control the old approval step stood in for. Since 034 the
+ * line is counted from the hours between punch in and out (`LabourDayService`).
  */
 @Injectable()
 export class LabourPunchService {
@@ -77,6 +90,7 @@ export class LabourPunchService {
     private readonly biometrics: BiometricsService,
     private readonly images: ImageProcessingService,
     private readonly supervisorSites: SupervisorSiteService,
+    private readonly days: LabourDayService,
   ) {}
 
   /** Every active labour at the site with today's punches, for the supervisor's list. */
@@ -105,10 +119,19 @@ export class LabourPunchService {
       entry[p.type] = p.punchedAt;
       byWorker.set(p.workerId, entry);
     }
+    const rules = await this.refs.getDayRules(
+      await this.refs.getSiteCompanyId(caller, siteId),
+    );
     return {
       date,
       items: workers.map((w) => {
         const day = byWorker.get(w.id);
+        const counted = deriveLabourDay(
+          day?.in ?? null,
+          day?.out ?? null,
+          false,
+          rules,
+        );
         return {
           workerId: w.id,
           labourCode: w.labourCode,
@@ -118,6 +141,9 @@ export class LabourPunchService {
           faceEnrolled: w.faceEnrolmentId !== null,
           punchInAt: day?.in?.toISOString() ?? null,
           punchOutAt: day?.out?.toISOString() ?? null,
+          status: counted.status,
+          hours: counted.hours,
+          overtimeHours: counted.overtimeHours,
         };
       }),
     };
@@ -284,6 +310,8 @@ export class LabourPunchService {
       'image/jpeg',
     );
     const geofenceViolation = locationReason !== null;
+    const rules = await this.refs.getDayRules(worker.companyId);
+    let day!: LabourDay;
 
     try {
       await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
@@ -312,41 +340,18 @@ export class LabourPunchService {
           },
         });
 
-        const roll = await this.musterRollFor(tx, {
+        day = await this.days.syncDay(tx, {
           companyId: worker.companyId,
+          workerId: worker.id,
           siteId: dto.siteId,
           punchDate,
-          supervisorId: caller.id,
+          rules,
+          actorId: caller.id,
           latitude: dto.latitude,
           longitude: dto.longitude,
           accuracyMetres: dto.accuracyMeters ?? 0,
-          now,
-        });
-        if (geofenceViolation && !roll.geofenceViolation) {
-          await tx.musterRoll.update({
-            where: { id: roll.id },
-            data: { geofenceViolation: true },
-          });
-        }
-
-        const attendanceType =
-          dto.type === LabourPunchType.out
-            ? AttendanceType.full_day
-            : AttendanceType.half_day;
-        await tx.musterLine.upsert({
-          where: {
-            musterId_workerId: { musterId: roll.id, workerId: worker.id },
-          },
-          create: {
-            companyId: worker.companyId,
-            musterId: roll.id,
-            workerId: worker.id,
-            attendanceType,
-            photoRef,
-            faceMatchScore: match?.distance ?? null,
-            skillCategoryIdOnDay: worker.skillCategoryId,
-          },
-          update: { attendanceType },
+          geofenceViolation,
+          skillCategoryIdOnDay: worker.skillCategoryId,
         });
       });
     } catch (err) {
@@ -381,7 +386,9 @@ export class LabourPunchService {
       workerId: worker.id,
       type: dto.type,
       punchedAt: now.toISOString(),
-      attendance: dto.type === LabourPunchType.out ? 'full_day' : 'half_day',
+      status: day.status,
+      hours: day.hours,
+      overtimeHours: day.overtimeHours,
       geofenceViolation,
     };
   }
@@ -452,46 +459,6 @@ export class LabourPunchService {
           'This labour is already on a muster for today that was entered another way.',
       });
     }
-  }
-
-  private async musterRollFor(
-    tx: Prisma.TransactionClient,
-    input: {
-      companyId: string;
-      siteId: string;
-      punchDate: Date;
-      supervisorId: string;
-      latitude: number;
-      longitude: number;
-      accuracyMetres: number;
-      now: Date;
-    },
-  ) {
-    const existing = await tx.musterRoll.findFirst({
-      where: {
-        siteId: input.siteId,
-        date: input.punchDate,
-        source: MusterSource.face_punch,
-        deletedAt: null,
-      },
-    });
-    if (existing) return existing;
-    return tx.musterRoll.create({
-      data: {
-        companyId: input.companyId,
-        siteId: input.siteId,
-        date: input.punchDate,
-        supervisorId: input.supervisorId,
-        latitude: input.latitude,
-        longitude: input.longitude,
-        accuracyMetres: input.accuracyMetres,
-        source: MusterSource.face_punch,
-        capturedAt: input.now,
-        status: MusterStatus.approved,
-        approvedAt: input.now,
-        createdBy: input.supervisorId,
-      },
-    });
   }
 
   private todayInCompanyZone(): string {
