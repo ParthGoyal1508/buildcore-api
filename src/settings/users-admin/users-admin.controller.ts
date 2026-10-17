@@ -6,6 +6,7 @@ import {
   Ip,
   Param,
   Patch,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -23,7 +24,8 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { UserSummary } from '../../users/user-summary';
 import { UpdateUserAccountDto } from './dto/update-user.dto';
-import { UsersAdminService } from './users-admin.service';
+import { ListUsersQueryDto } from './dto/list-users-query.dto';
+import { Paged, UsersAdminService } from './users-admin.service';
 
 /**
  * Account *creation* is deliberately absent: new accounts come only from feature
@@ -44,8 +46,9 @@ export class UsersAdminController {
   })
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
-  ): Promise<UserSummary[]> {
-    return this.usersAdminService.findAll(caller);
+    @Query() query: ListUsersQueryDto,
+  ): Promise<UserSummary[] | Paged<UserSummary>> {
+    return this.usersAdminService.findAll(caller, query);
   }
 
   @Patch(':id')

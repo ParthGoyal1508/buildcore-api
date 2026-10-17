@@ -4,7 +4,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { AccessLevel, Permission, UserStatus } from '@prisma/client';
+import { AccessLevel, Permission, Prisma, UserStatus } from '@prisma/client';
 import type { Grant } from '../auth/authenticated-user';
 import { roleGrants } from '../settings/roles/grant-ceiling';
 import { PasswordService } from '../auth/password.service';
@@ -208,14 +208,80 @@ export class UsersService {
    * caller holding CROSS_COMPANY_ACCESS (002 FR-013). RLS on `UserRole` does the
    * scoping; `shared.User` rows are filtered to match. */
   async findAllForCompany(ctx: RlsContext): Promise<UserSummary[]> {
-    const users = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.user.findMany({
-        where: ctx.isSuperAdmin ? {} : { companyId: ctx.companyId ?? null },
-        include: { userRoles: { include: { role: true } } },
-        orderBy: { createdAt: 'asc' },
-      }),
+    return (await this.listForCompany(ctx)).items;
+  }
+
+  /**
+   * The Users list with search, filters, sort and an optional page (036 C5). Without `take` it is
+   * every matching account, which is what `findAllForCompany` has always returned.
+   *
+   * `companyId` only narrows: a company-scoped caller's `where` is already their company, and an
+   * AND of the two cannot widen it.
+   */
+  async listForCompany(
+    ctx: RlsContext,
+    filters: {
+      q?: string;
+      status?: UserStatus;
+      roleId?: string;
+      companyId?: string;
+      sort?: { key: 'name' | 'email' | 'status' | 'lastLoginAt' | 'createdAt'; dir: 'asc' | 'desc' };
+      skip?: number;
+      take?: number;
+    } = {},
+  ): Promise<{ items: UserSummary[]; total: number }> {
+    const q = filters.q?.trim();
+    const where: Prisma.UserWhereInput = {
+      AND: [
+        ctx.isSuperAdmin ? {} : { companyId: ctx.companyId ?? null },
+        filters.companyId ? { companyId: filters.companyId } : {},
+        filters.status ? { status: filters.status } : {},
+        filters.roleId ? { userRoles: { some: { roleId: filters.roleId } } } : {},
+        q
+          ? {
+              OR: [
+                { displayName: { contains: q, mode: 'insensitive' } },
+                { firstname: { contains: q, mode: 'insensitive' } },
+                { lastname: { contains: q, mode: 'insensitive' } },
+                { username: { contains: q, mode: 'insensitive' } },
+                { email: { contains: q, mode: 'insensitive' } },
+              ],
+            }
+          : {},
+      ],
+    };
+    const dir = filters.sort?.dir ?? 'asc';
+    const orderBy: Prisma.UserOrderByWithRelationInput[] =
+      filters.sort?.key === 'name'
+        ? [
+            { displayName: { sort: dir, nulls: 'last' } },
+            { firstname: { sort: dir, nulls: 'last' } },
+            { username: dir },
+          ]
+        : filters.sort?.key === 'lastLoginAt'
+        ? [{ lastLoginAt: { sort: dir, nulls: 'last' } }]
+        : filters.sort?.key
+        ? [{ [filters.sort.key]: dir }]
+        : [{ createdAt: 'asc' }];
+    const [users, total] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.user.findMany({
+          where,
+          include: { userRoles: { include: { role: true } } },
+          // `id` last so equal sort values page stably.
+          orderBy: [...orderBy, { id: 'asc' }],
+          skip: filters.skip,
+          take: filters.take,
+        }),
+        filters.take === undefined
+          ? Promise.resolve(-1)
+          : tx.user.count({ where }),
+      ]),
     );
-    return users.map(toUserSummary);
+    return {
+      items: users.map(toUserSummary),
+      total: total < 0 ? users.length : total,
+    };
   }
 
   /** An account's current status and address, or null when the caller cannot see it — what
@@ -235,17 +301,18 @@ export class UsersService {
   /**
    * Replaces an account's role assignment and/or flips its status (002 FR-014).
    *
-   * `roleId` is singular by contract — the Users form offers one Role dropdown — so
-   * under the many-to-many model it means "make this the account's only role",
-   * replacing whatever set it held. Callers needing additive assignment should not
-   * use this method.
+   * `roleIds` is the account's complete role set after the save (036 C1). Only the
+   * difference is written: roles no longer listed are removed, new ones added, and a
+   * role held and still listed is left alone — its `UserRole` row (and `createdAt`)
+   * survives. The old singular `roleId` reaches here as a one-element set, which is the
+   * "make this the account's only role" meaning it always had.
    *
    * The last-active-Super-Admin guard is NOT applied here; it belongs to the
    * caller (`UsersAdminService`), which owns that policy (research.md §5).
    */
   async updateRoleOrStatus(
     id: string,
-    changes: { roleId?: string; status?: UserStatus },
+    changes: { roleIds?: string[]; status?: UserStatus },
     ctx: RlsContext,
   ): Promise<UserSummary> {
     return withRlsContext(this.prisma, ctx, async (tx) => {
@@ -273,26 +340,42 @@ export class UsersService {
         );
       }
 
-      if (changes.roleId) {
-        const role = await tx.role.findUnique({
-          where: { id: changes.roleId },
+      if (changes.roleIds && changes.roleIds.length > 0) {
+        const wanted = [...new Set(changes.roleIds)];
+        const found = await tx.role.findMany({
+          where: { id: { in: wanted } },
           select: { id: true },
         });
-        if (!role) {
+        const missing = wanted.filter((r) => !found.some((f) => f.id === r));
+        if (missing.length > 0) {
           throw new BadRequestException(
-            `Role ${changes.roleId} does not exist`,
+            `Role ${missing.join(', ')} does not exist`,
           );
         }
-        await tx.userRole.deleteMany({ where: { userId: id } });
-        await tx.userRole.create({
-          data: {
-            userId: id,
-            roleId: changes.roleId,
-            // Denormalized from the account at assignment time, matching the
-            // pattern every other tenant-scoped row uses.
-            companyId: existing.companyId,
-          },
-        });
+        const held = (
+          await tx.userRole.findMany({
+            where: { userId: id },
+            select: { roleId: true },
+          })
+        ).map((r) => r.roleId);
+        const removed = held.filter((r) => !wanted.includes(r));
+        const added = wanted.filter((r) => !held.includes(r));
+        if (removed.length > 0) {
+          await tx.userRole.deleteMany({
+            where: { userId: id, roleId: { in: removed } },
+          });
+        }
+        if (added.length > 0) {
+          await tx.userRole.createMany({
+            data: added.map((roleId) => ({
+              userId: id,
+              roleId,
+              // Denormalized from the account at assignment time, matching the
+              // pattern every other tenant-scoped row uses.
+              companyId: existing.companyId,
+            })),
+          });
+        }
       }
 
       if (changes.status) {
@@ -350,6 +433,29 @@ export class UsersService {
         },
       }),
     );
+  }
+
+  /** The ids of the roles an account holds now — what a role-set save is diffed against
+   * (036 C1). Read across companies: the guard runs before the write, under the caller's
+   * own checks. */
+  async roleIdsOf(id: string): Promise<string[]> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.userRole.findMany({ where: { userId: id }, select: { roleId: true } }),
+    );
+    return rows.map((r) => r.roleId);
+  }
+
+  /** Which of `roleIds` are protected (Super Admin) roles (036 C1). `Role` is global. */
+  async protectedRoleIds(roleIds: string[]): Promise<string[]> {
+    if (roleIds.length === 0) return [];
+    const rows = await this.prisma.role.findMany({
+      where: { id: { in: roleIds }, isProtected: true },
+      select: { id: true },
+    });
+    return rows.map((r) => r.id);
   }
 
   /** Whether this account is one of the protected-role holders — used alongside
