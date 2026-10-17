@@ -1,7 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { EngagementType, WorkerStatus } from '@prisma/client';
+import { EngagementType, LabourGender, WorkerStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsDateString,
@@ -12,9 +13,15 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Matches,
   MaxLength,
   Min,
 } from 'class-validator';
+
+import { ENROLMENT_PHOTOS } from '../../constants/labour.constants';
+
+/** Ten digits, optionally after +91 / 91 / 0, spaces and dashes allowed. */
+const PHONE_PATTERN = /^(?:\+?91[\s-]?|0)?[6-9]\d{4}[\s-]?\d{5}$/;
 
 export class ListWorkersDto {
   @ApiPropertyOptional()
@@ -69,29 +76,57 @@ export class CreateWorkerDto {
   @MaxLength(120)
   fullName!: string;
 
-  @ApiProperty()
+  @ApiProperty({ enum: LabourGender })
+  @IsEnum(LabourGender)
+  gender!: LabourGender;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  @MaxLength(20)
-  phone!: string;
+  @MaxLength(120)
+  fatherName?: string;
+
+  @ApiPropertyOptional({ example: '9876543210' })
+  @IsOptional()
+  @IsString()
+  @Matches(PHONE_PATTERN, {
+    message: 'Mobile number should be 10 digits, optionally starting with +91',
+  })
+  phone?: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
-  gender!: string;
+  siteId!: string;
 
-  @ApiProperty({ example: '1990-05-20' })
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Base64 face photos (3 to 5). Sent with the registration so a labour is never left ' +
+      'registered without a face to match.',
+  })
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(ENROLMENT_PHOTOS.min)
+  @ArrayMaxSize(ENROLMENT_PHOTOS.max)
+  @IsString({ each: true })
+  photos?: string[];
+
+  // Optional since 031 — kept for the office, which may know them.
+  @ApiPropertyOptional({ example: '1990-05-20' })
+  @IsOptional()
   @IsDateString()
-  dateOfBirth!: string;
+  dateOfBirth?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  skillCategoryId!: string;
+  skillCategoryId?: string;
 
-  @ApiProperty({ enum: EngagementType })
+  @ApiPropertyOptional({ enum: EngagementType, default: EngagementType.direct })
+  @IsOptional()
   @IsEnum(EngagementType)
-  engagementType!: EngagementType;
+  engagementType?: EngagementType;
 
   @ApiPropertyOptional({
     description: 'Required when engagementType is contractor',
@@ -99,11 +134,6 @@ export class CreateWorkerDto {
   @IsOptional()
   @IsString()
   contractorId?: string;
-
-  @ApiProperty()
-  @IsString()
-  @IsNotEmpty()
-  siteId!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -142,7 +172,8 @@ export class EnrolWorkerFaceDto {
     description: 'Base64/data-URL enrolment photos',
   })
   @IsArray()
-  @ArrayMinSize(1)
+  @ArrayMinSize(ENROLMENT_PHOTOS.min)
+  @ArrayMaxSize(ENROLMENT_PHOTOS.max)
   @IsString({ each: true })
   photos!: string[];
 }

@@ -9,9 +9,11 @@ import { PrismaService } from 'nestjs-prisma';
 import * as ExcelJS from 'exceljs';
 
 import type { BankSheetConfig } from '../../common/configs/config.interface';
+import { PayrollRunStatus } from '@prisma/client';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { BankSheetRecoveryService } from './bank-sheet-recovery.service';
 import { PayrollScheduleService } from './payroll-schedule.service';
 
@@ -51,6 +53,90 @@ export const BANK_SHEET_COLUMN_COUNT = 16;
  */
 export const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
+/** A debit account typed for one sheet: digits only, as banks issue them (2026-10-17). */
+export const DEBIT_ACCOUNT_PATTERN = /^\d{6,20}$/;
+
+export interface BankSheetOptions {
+  /** Overrides the company's payroll debit account for this sheet. */
+  debitAccount?: string;
+  /** Employees to leave off — paid another way this month. */
+  excludeEmployeeIds?: string[];
+  /** `Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx` rather than the run's own name. */
+  companyNamedFile?: boolean;
+}
+
+/** Where generated bank sheets are kept for the history (2026-10-17). */
+const BANK_SHEET_NAMESPACE = 'payroll-bank-sheet';
+const XLSX_TYPE =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+export interface BankSheetExportView {
+  id: string;
+  period: string;
+  debitAccount: string;
+  employeeCount: number;
+  transferTotal: number;
+  leftOffCount: number;
+  fileName: string;
+  generatedBy: string | null;
+  generatedAt: string;
+}
+
+export interface BankSheetLeftOff {
+  employeeId: string;
+  employeeCode: string;
+  name: string;
+  netPay: number;
+  kind: 'bank_details' | 'excluded' | 'nothing_to_pay';
+  reason: string;
+}
+
+export interface BankSheetPreview {
+  runId: string;
+  period: string;
+  companyName: string;
+  debitAccount: string;
+  defaultDebitAccount: string | null;
+  employeeCount: number;
+  transferTotal: number;
+  payrollNetTotal: number;
+  recoveredTotal: number;
+  leftOffTotal: number;
+  reconciles: boolean;
+  leftOff: BankSheetLeftOff[];
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** `Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx`, the company name made filename-safe. */
+export function salaryBankSheetFilename(
+  company: string,
+  period: string,
+): string {
+  const [year, month] = period.split('-').map(Number);
+  const safe =
+    company
+      .trim()
+      .replace(/[^A-Za-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'Company';
+  return `Salary_Bank_Sheet_${safe}_${
+    MONTH_NAMES[month - 1] ?? month
+  }_${year}.xlsx`;
+}
+
 /**
  * The bank transfer sheet for a payroll run (005 FR-017, 021 FR-008a to FR-008g).
  *
@@ -86,97 +172,82 @@ export class BankSheetService {
      */
     private readonly recoveries: BankSheetRecoveryService,
     configService: ConfigService,
+    /** Keeps each generated file for the history (2026-10-17). */
+    private readonly storage: StorageService,
   ) {
     this.format = configService.get<BankSheetConfig>(
       'bankSheet',
     ) as BankSheetConfig;
   }
 
+  /**
+   * The regular (non-F&F) payroll run for a company and month, finalised — the run the salary
+   * bank sheet is generated from (2026-10-17). A run still in draft is not payroll anybody has
+   * agreed, so it is refused by name rather than treated as missing.
+   */
+  async findRegularRun(
+    caller: Caller,
+    companyId: string,
+    period: string,
+  ): Promise<{ id: string; status: PayrollRunStatus }> {
+    const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.findFirst({
+        where: { companyId, period, isFnf: false },
+        select: { id: true, status: true },
+      }),
+    );
+    if (!run) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PAYROLL_RUN_NOT_FOUND',
+        message: `No payroll has been run for ${period} for this company.`,
+      });
+    }
+    if (run.status === PayrollRunStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_FINALISED',
+        message: `The payroll for ${period} is still a draft. Process it before generating the bank sheet.`,
+      });
+    }
+    return run;
+  }
+
+  /**
+   * What the sheet would contain, without producing it or recovering anything (2026-10-17): the
+   * count and total the bank will be asked to pay, everyone left off and why, and whether it all adds
+   * back up to the payroll's net pay.
+   */
+  async preview(
+    caller: Caller,
+    runId: string,
+    options: BankSheetOptions = {},
+  ): Promise<BankSheetPreview> {
+    const computed = await this.compute(caller, runId, options, false);
+    return {
+      runId,
+      period: computed.run.period,
+      companyName: computed.companyName,
+      debitAccount: computed.debitAccount,
+      defaultDebitAccount: computed.defaultDebitAccount,
+      employeeCount: computed.rows.length,
+      transferTotal: computed.transferTotal,
+      payrollNetTotal: computed.payrollNetTotal,
+      recoveredTotal: computed.recoveredTotal,
+      leftOffTotal: computed.leftOffTotal,
+      reconciles: computed.reconciles,
+      leftOff: computed.leftOff,
+    };
+  }
+
   async build(
     caller: Caller,
     runId: string,
+    options: BankSheetOptions = {},
   ): Promise<{ buffer: Buffer; filename: string }> {
-    const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.payrollRun.findFirst({
-        where: { id: runId },
-        include: { lineItems: true },
-      }),
-    );
-    if (!run) throw new NotFoundException('Payroll run not found');
-
-    // 016 FR-015: a run may not produce a bank transfer sheet until its approval chain
-    // is complete. This is the point where the chain stops being paperwork and starts
-    // being control — everything before it is a record of opinions; this is the file
-    // that moves money.
-    //
-    // The refusal names the outstanding level, because "not approved" leaves whoever is
-    // waiting to guess whose desk it is on.
-    const outstanding = await this.schedule.outstandingApproval(
-      run.companyId,
-      run.id,
-    );
-    if (outstanding) {
-      throw new ConflictException({
-        statusCode: 409,
-        message:
-          outstanding.state === 'pending'
-            ? `This payroll run is awaiting ${
-                outstanding.levelLabel ?? 'approval'
-              }. A bank transfer sheet cannot be produced until every level has approved.`
-            : `This payroll run was ${outstanding.state} and cannot produce a bank ` +
-              `transfer sheet.`,
-        code: 'PAYROLL_RUN_NOT_APPROVED',
-      });
-    }
-
-    const [company, employees] = await Promise.all([
-      withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
-        tx.company.findUnique({
-          where: { id: run.companyId },
-          select: { payrollDebitAccountNumber: true },
-        }),
-      ),
-      withRlsContext(this.prisma, caller.rls, (tx) =>
-        tx.employee.findMany({
-          where: { id: { in: run.lineItems.map((l) => l.employeeId) } },
-        }),
-      ),
-    ]);
-
-    const debitAccount = company?.payrollDebitAccountNumber?.trim();
-    if (!debitAccount) {
-      // Refused for the whole file, not skipped per row: every row names the same debit account,
-      // and a sheet with that column blank is a sheet the bank cannot act on at all.
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'PAYROLL_DEBIT_ACCOUNT_UNSET',
-        message:
-          'This company has no payroll debit account on file. Every row of a transfer sheet ' +
-          'names the account the money leaves from, so the sheet cannot be produced without it.',
-      });
-    }
-
-    const byId = new Map(employees.map((e) => [e.id, e]));
+    const computed = await this.compute(caller, runId, options, true);
+    const { run, rows, debitAccount } = computed;
     const valueDate = this.valueDateFor(new Date());
-
-    // FR-010. Applied before a single row is written, because the figure on the row is the transfer
-    // and not the run's net pay. Idempotent — regenerating the sheet recovers nothing further, which
-    // is the database's `@@unique([payrollRunId, salaryAdvanceId])` doing the work rather than a
-    // check in this method.
-    const transfers = await this.recoveries.apply(
-      caller.rls,
-      {
-        id: run.id,
-        companyId: run.companyId,
-        // `generatedAt` where the run has one: that is when its figures were fixed, and an advance
-        // taken after it is an advance the run could not have recovered.
-        drawnUpAt: run.generatedAt ?? run.createdAt,
-      },
-      run.lineItems.map((l) => ({
-        employeeId: l.employeeId,
-        netPay: l.netPay.toNumber(),
-      })),
-    );
 
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
@@ -211,6 +282,14 @@ export class BankSheetService {
       { header: 'Reason', key: 'reason', width: 52 },
     ];
     unpayable.getRow(1).font = { bold: true };
+    for (const left of computed.leftOff) {
+      unpayable.addRow({
+        code: left.employeeCode,
+        name: left.name,
+        net: left.netPay,
+        reason: left.reason,
+      });
+    }
 
     /**
      * FR-011. Each recovery as a **named line**, never a netted figure.
@@ -231,34 +310,7 @@ export class BankSheetService {
     ];
     recoverySheet.getRow(1).font = { bold: true };
 
-    for (const line of run.lineItems) {
-      const employee = byId.get(line.employeeId);
-      if (!employee) continue;
-      const name = [employee.firstName, employee.lastName]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      const transfer = transfers.get(employee.id);
-      // The **transfer**, not the run's net pay. They differ by whatever advances were recovered
-      // from it, and the run's own figure is left exactly as approved.
-      const net = transfer?.transferAmount ?? line.netPay.toNumber();
-      const account = this.pii.decrypt(employee.bankAccountNumberEncrypted);
-
-      const refusal = this.refusalFor({
-        account,
-        ifsc: employee.ifscCode,
-        holderName: employee.bankAccountHolderName,
-      });
-      if (refusal) {
-        unpayable.addRow({
-          code: employee.employeeCode,
-          name,
-          net,
-          reason: refusal,
-        });
-        continue;
-      }
-
+    for (const r of rows) {
       const row: (string | number)[] = new Array(BANK_SHEET_COLUMN_COUNT).fill(
         '',
       );
@@ -269,28 +321,26 @@ export class BankSheetService {
       row[BANK_SHEET_COLUMN.debitAccount] = debitAccount;
       // FR-008e. The **bank's** name for the account holder, never the employee master's — see
       // `refusalFor`, which refuses rather than falling back.
-      row[BANK_SHEET_COLUMN.beneficiaryName] =
-        employee.bankAccountHolderName as string;
+      row[BANK_SHEET_COLUMN.beneficiaryName] = r.holderName;
       // The one genuinely numeric cell. An amount is arithmetic and the bank totals the column.
-      row[BANK_SHEET_COLUMN.paymentAmount] = net;
-      row[BANK_SHEET_COLUMN.ifsc] = (employee.ifscCode as string).toUpperCase();
-      row[BANK_SHEET_COLUMN.beneficiaryAccount] = String(account);
+      row[BANK_SHEET_COLUMN.paymentAmount] = r.transfer.transferAmount;
+      row[BANK_SHEET_COLUMN.ifsc] = r.ifsc;
+      row[BANK_SHEET_COLUMN.beneficiaryAccount] = r.account;
       row[BANK_SHEET_COLUMN.transactionTypeCode] =
         this.format.transactionTypeCode;
-
       sheet.addRow(row);
 
       // One line per advance, not one per employee: an employee with two advances recovered has two
       // facts to account for, and a single summed row leaves them indistinguishable from one larger
       // advance.
-      for (const recovery of transfer?.recoveries ?? []) {
+      for (const recovery of r.transfer.recoveries) {
         recoverySheet.addRow({
-          code: employee.employeeCode,
-          name,
-          net: transfer?.netPay ?? 0,
+          code: r.employeeCode,
+          name: r.name,
+          net: r.transfer.netPay,
           recovered: recovery.amount,
           advance: recovery.salaryAdvanceId,
-          transfer: transfer?.transferAmount ?? 0,
+          transfer: r.transfer.transferAmount,
         });
       }
     }
@@ -309,9 +359,330 @@ export class BankSheetService {
     }
 
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-    return {
+    const filename = options.companyNamedFile
+      ? salaryBankSheetFilename(computed.companyName, run.period)
+      : `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`;
+
+    // The history (2026-10-17). Recorded before the file is handed over, and a failure to record
+    // fails the download: a payment instruction nobody can later find is exactly what the history
+    // exists to prevent.
+    const fileRef = await this.storage.put(
+      BANK_SHEET_NAMESPACE,
       buffer,
-      filename: `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`,
+      XLSX_TYPE,
+    );
+    try {
+      await withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.bankSheetExport.create({
+          data: {
+            companyId: run.companyId,
+            payrollRunId: run.id,
+            period: run.period,
+            debitAccount,
+            employeeCount: rows.length,
+            transferTotal: computed.transferTotal,
+            leftOffCount: computed.leftOff.length,
+            fileName: filename,
+            fileRef,
+            generatedById: caller.userId,
+          },
+        }),
+      );
+    } catch (error) {
+      await this.storage.delete(fileRef).catch(() => undefined);
+      throw error;
+    }
+
+    return { buffer, filename };
+  }
+
+  /** Generated bank sheets for a company, newest first, optionally for one month (2026-10-17). */
+  async history(
+    caller: Caller,
+    companyId: string,
+    period?: string,
+  ): Promise<BankSheetExportView[]> {
+    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.bankSheetExport.findMany({
+        where: { companyId, ...(period ? { period } : {}) },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    );
+    const ids = [
+      ...new Set(
+        rows.map((r) => r.generatedById).filter((id): id is string => !!id),
+      ),
+    ];
+    const users = ids.length
+      ? await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+          tx.user.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              displayName: true,
+              firstname: true,
+              lastname: true,
+              username: true,
+            },
+          }),
+        )
+      : [];
+    const names = new Map(
+      users.map((u) => [
+        u.id,
+        u.displayName?.trim() ||
+          [u.firstname, u.lastname].filter(Boolean).join(' ').trim() ||
+          u.username,
+      ]),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      period: r.period,
+      debitAccount: r.debitAccount,
+      employeeCount: r.employeeCount,
+      transferTotal: r.transferTotal.toNumber(),
+      leftOffCount: r.leftOffCount,
+      fileName: r.fileName,
+      generatedBy: r.generatedById ? names.get(r.generatedById) ?? null : null,
+      generatedAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  /** The exact file a history entry gave the bank. */
+  async historyFile(
+    caller: Caller,
+    id: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const row = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.bankSheetExport.findUnique({ where: { id } }),
+    );
+    if (!row) {
+      throw new NotFoundException('Bank sheet not found');
+    }
+    return {
+      buffer: await this.storage.get(row.fileRef),
+      filename: row.fileName,
+    };
+  }
+
+  /**
+   * Everything the sheet and its preview share: the approval gate, the debit account, each
+   * employee's transfer after advance recoveries, and who is left off and why.
+   *
+   * `write` is true only for the download — recovering an advance is money moving, and a preview
+   * that recorded recoveries would take them again from nobody's file.
+   */
+  private async compute(
+    caller: Caller,
+    runId: string,
+    options: BankSheetOptions,
+    write: boolean,
+  ) {
+    const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.findFirst({
+        where: { id: runId },
+        include: { lineItems: true },
+      }),
+    );
+    if (!run) throw new NotFoundException('Payroll run not found');
+
+    // 016 FR-015: a run may not produce a bank transfer sheet until its approval chain
+    // is complete. This is the point where the chain stops being paperwork and starts
+    // being control — everything before it is a record of opinions; this is the file
+    // that moves money.
+    //
+    // The refusal names the outstanding level, because "not approved" leaves whoever is
+    // waiting to guess whose desk it is on.
+    const outstanding = await this.schedule.outstandingApproval(
+      run.companyId,
+      run.id,
+    );
+    if (outstanding && !outstanding.submitted) {
+      // 2026-10-17: a run processed by hand before processing submitted it. Said plainly, with the
+      // run named, so the screen can offer to submit it rather than leave everyone waiting on an
+      // approval nobody was ever asked for.
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          'This payroll run has not been submitted for approval yet. Submit it, and the bank ' +
+          'sheet can be produced once every level has approved.',
+        code: 'PAYROLL_RUN_NOT_SUBMITTED',
+        runId: run.id,
+      });
+    }
+    if (outstanding) {
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          outstanding.state === 'pending'
+            ? `This payroll run is awaiting ${
+                outstanding.levelLabel ?? 'approval'
+              }. A bank transfer sheet cannot be produced until every level has approved.`
+            : `This payroll run was ${outstanding.state} and cannot produce a bank ` +
+              `transfer sheet.`,
+        code: 'PAYROLL_RUN_NOT_APPROVED',
+      });
+    }
+
+    const [company, employees] = await Promise.all([
+      withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+        tx.company.findUnique({
+          where: { id: run.companyId },
+          select: { name: true, payrollDebitAccountNumber: true },
+        }),
+      ),
+      withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.employee.findMany({
+          where: { id: { in: run.lineItems.map((l) => l.employeeId) } },
+        }),
+      ),
+    ]);
+
+    const defaultDebitAccount =
+      company?.payrollDebitAccountNumber?.trim() || null;
+    // 2026-10-17: the account the money leaves from may be chosen for this sheet; the company's
+    // payroll account is the default.
+    const debitAccount = options.debitAccount?.trim() || defaultDebitAccount;
+    if (!debitAccount) {
+      // Refused for the whole file, not skipped per row: every row names the same debit account,
+      // and a sheet with that column blank is a sheet the bank cannot act on at all.
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_DEBIT_ACCOUNT_UNSET',
+        message:
+          'This company has no payroll debit account on file. Every row of a transfer sheet ' +
+          'names the account the money leaves from, so the sheet cannot be produced without it.',
+      });
+    }
+    if (!DEBIT_ACCOUNT_PATTERN.test(debitAccount)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_DEBIT_ACCOUNT_INVALID',
+        message: 'The debit account number should be 6 to 20 digits.',
+      });
+    }
+
+    const byId = new Map(employees.map((e) => [e.id, e]));
+    const excluded = new Set(options.excludeEmployeeIds ?? []);
+    const leftOff: BankSheetLeftOff[] = [];
+    const payable: {
+      line: (typeof run.lineItems)[number];
+      employee: (typeof employees)[number];
+      name: string;
+      account: string;
+    }[] = [];
+
+    for (const line of run.lineItems) {
+      const employee = byId.get(line.employeeId);
+      if (!employee) continue;
+      const name = [employee.firstName, employee.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      const base = {
+        employeeId: employee.id,
+        employeeCode: employee.employeeCode,
+        name,
+        netPay: line.netPay.toNumber(),
+      };
+      // 2026-10-17: only net pay above zero is a payment; a zero row is an instruction to move
+      // nothing, which some banks reject outright.
+      if (line.netPay.toNumber() <= 0) {
+        leftOff.push({
+          ...base,
+          kind: 'nothing_to_pay',
+          reason: 'Net pay is zero',
+        });
+        continue;
+      }
+      if (excluded.has(employee.id)) {
+        leftOff.push({
+          ...base,
+          kind: 'excluded',
+          reason:
+            'Excluded when the sheet was generated — to be paid another way',
+        });
+        continue;
+      }
+      const account = this.pii.decrypt(employee.bankAccountNumberEncrypted);
+      const refusal = this.refusalFor({
+        account,
+        ifsc: employee.ifscCode,
+        holderName: employee.bankAccountHolderName,
+      });
+      if (refusal) {
+        leftOff.push({ ...base, kind: 'bank_details', reason: refusal });
+        continue;
+      }
+      payable.push({ line, employee, name, account: String(account) });
+    }
+
+    // FR-010. Applied before a single row is written, because the figure on the row is the transfer
+    // and not the run's net pay. Idempotent — regenerating the sheet recovers nothing further, which
+    // is the database's `@@unique([payrollRunId, salaryAdvanceId])` doing the work rather than a
+    // check in this method.
+    const transfers = await this.recoveries.apply(
+      caller.rls,
+      {
+        id: run.id,
+        companyId: run.companyId,
+        // `generatedAt` where the run has one: that is when its figures were fixed, and an advance
+        // taken after it is an advance the run could not have recovered.
+        drawnUpAt: run.generatedAt ?? run.createdAt,
+      },
+      payable.map((p) => ({
+        employeeId: p.employee.id,
+        netPay: p.line.netPay.toNumber(),
+      })),
+      { write },
+    );
+
+    const rows = payable
+      .map((p) => ({
+        employeeId: p.employee.id,
+        employeeCode: p.employee.employeeCode,
+        name: p.name,
+        holderName: p.employee.bankAccountHolderName as string,
+        ifsc: (p.employee.ifscCode as string).trim().toUpperCase(),
+        account: p.account,
+        transfer: transfers.get(p.employee.id) ?? {
+          employeeId: p.employee.id,
+          netPay: p.line.netPay.toNumber(),
+          recoveries: [],
+          recoveredTotal: 0,
+          transferAmount: p.line.netPay.toNumber(),
+        },
+      }))
+      // A transfer an advance recovery took to zero moves nothing either.
+      .filter((r) => r.transfer.transferAmount > 0);
+
+    const sum = (values: number[]) =>
+      Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
+    const transferTotal = sum(rows.map((r) => r.transfer.transferAmount));
+    const recoveredTotal = sum(
+      [...transfers.values()].map((t) => t.recoveredTotal),
+    );
+    const leftOffTotal = sum(leftOff.map((l) => l.netPay));
+    const payrollNetTotal = sum(run.lineItems.map((l) => l.netPay.toNumber()));
+
+    return {
+      run,
+      companyName: company?.name ?? '',
+      debitAccount,
+      defaultDebitAccount,
+      rows,
+      leftOff,
+      transferTotal,
+      recoveredTotal,
+      leftOffTotal,
+      payrollNetTotal,
+      // The sheet's total, plus what advances took, plus everyone left off, must be the payroll's
+      // net pay to the paisa. Anything else means someone was paid twice or not at all.
+      reconciles:
+        Math.abs(
+          transferTotal + recoveredTotal + leftOffTotal - payrollNetTotal,
+        ) < 0.01,
     };
   }
 

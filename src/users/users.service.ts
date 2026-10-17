@@ -4,7 +4,7 @@ import {
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
-import { UserStatus } from '@prisma/client';
+import { AccessLevel, Permission, UserStatus } from '@prisma/client';
 import type { Grant } from '../auth/authenticated-user';
 import { roleGrants } from '../settings/roles/grant-ceiling';
 import { PasswordService } from '../auth/password.service';
@@ -126,6 +126,56 @@ export class UsersService {
             companyId,
             status: 'active',
             userRoles: { some: { roleId } },
+          },
+          select: {
+            id: true,
+            displayName: true,
+            firstname: true,
+            lastname: true,
+            username: true,
+            email: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+    );
+    return rows.map((u) => ({ id: u.id, name: displayNameOf(u) }));
+  }
+
+  /**
+   * Active accounts in `companyId` whose roles grant `permission` at write level, with their
+   * display names.
+   *
+   * Added for 031's supervisor site assignment: HR picks from the people who can actually mark
+   * labour attendance, and only `UserRole` says who that is. Write level because read-only access
+   * to the labour register cannot punch anyone. The legacy `Role.permissions` array is consulted
+   * too, the same fallback the guard keeps while that column is retired.
+   */
+  async findActiveHoldersOfPermission(
+    permission: Permission,
+    companyId: string,
+  ): Promise<{ id: string; name: string }[]> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.user.findMany({
+          where: {
+            companyId,
+            status: 'active',
+            userRoles: {
+              some: {
+                role: {
+                  OR: [
+                    {
+                      rolePermissions: {
+                        some: { permission, level: AccessLevel.write },
+                      },
+                    },
+                    { permissions: { has: permission } },
+                  ],
+                },
+              },
+            },
           },
           select: {
             id: true,

@@ -1,4 +1,5 @@
 import { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ApprovalDecisionAction, Permission } from '@prisma/client';
 import { hash } from 'argon2';
@@ -6,6 +7,7 @@ import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
+import type { EmailConfig } from '../src/common/configs/config.interface';
 import { ApprovalService } from '../src/approvals/approvals.service';
 import { ChainsService } from '../src/approvals/chains.service';
 import { SLOT_FIRST_APPROVER, SLOT_HR } from '../src/approvals/approval-slots';
@@ -235,6 +237,9 @@ describe('Payroll approval chain (e2e)', () => {
     app = moduleFixture.createNestApplication({ bodyParser: false });
     configureApp(app);
     await app.init();
+    // Payslip email is off by default (PAYSLIP_EMAIL_ENABLED). The slip scenarios below test the
+    // approval gate in front of it, so they run with it on; the flag is read on every send.
+    app.get(ConfigService).get<EmailConfig>('email').payslipsEnabled = true;
 
     prisma = app.get(PrismaService);
     approvals = app.get(ApprovalService);
@@ -399,6 +404,7 @@ describe('Payroll approval chain (e2e)', () => {
     await sys.attendanceModification.deleteMany({ where: { employeeId } });
     await sys.punchRecord.deleteMany({ where: { employeeId } });
     await sys.payrollLineItem.deleteMany({ where: {} }).catch(() => undefined);
+    await sys.bankSheetExport.deleteMany({ where: { companyId } });
     await sys.payrollRun.deleteMany({ where: { companyId } });
     await sys.employee.deleteMany({ where: { companyId } });
     await sys.refreshToken.deleteMany({ where: { companyId } });
@@ -788,5 +794,79 @@ describe('Payroll approval chain (e2e)', () => {
       .set(auth(siteUser.token))
       .send({ employeeId, date: `${period}-13`, inTime: '09:10' })
       .expect(201);
+  }, 60_000);
+
+  it('2026-10-17 — processing a run by hand puts it into its approval chain', async () => {
+    const draft = await sys.payrollRun.create({
+      data: { companyId, period: '2019-02', status: 'draft' },
+    });
+    await http()
+      .patch(`/hr/payroll/runs/${draft.id}/status`)
+      .set(auth(hrUser.token))
+      .send({ status: 'processed' })
+      .expect(200);
+
+    const state = await approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      draft.id,
+      companyId,
+    );
+    expect(state).toMatchObject({ state: 'pending', currentPosition: 1 });
+  }, 60_000);
+
+  it('2026-10-17 — a run processed without approval says so, and can be submitted once', async () => {
+    const run = await sys.payrollRun.create({
+      data: { companyId, period: '2019-01', status: 'processed' },
+    });
+
+    const error = await bankSheet
+      .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
+      .catch((e) => e);
+    expect(error.response).toMatchObject({
+      code: 'PAYROLL_RUN_NOT_SUBMITTED',
+      runId: run.id,
+    });
+
+    await http()
+      .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
+      .set(auth(hrUser.token))
+      .expect(201, { runId: run.id, submitted: true });
+    const again = await http()
+      .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
+      .set(auth(hrUser.token))
+      .expect(409);
+    expect(again.body.message).toMatch(/already in its approval chain/);
+
+    const refused = await bankSheet
+      .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
+      .catch((e) => e);
+    expect(refused.response.code).toBe('PAYROLL_RUN_NOT_APPROVED');
+  }, 60_000);
+
+  it('2026-10-17 — every generated bank sheet is in the history, and downloads again', async () => {
+    const run = await runForPeriod();
+    const [year, month] = run.period.split('-').map(Number);
+    const res = await http()
+      .get(`/hr/payroll/bank-sheet/history?year=${year}&month=${month}`)
+      .set(auth(hrUser.token))
+      .expect(200);
+    expect(res.body.length).toBeGreaterThanOrEqual(1);
+    expect(res.body[0]).toMatchObject({
+      period: run.period,
+      fileName: expect.stringMatching(/\.xlsx$/),
+    });
+
+    const file = await http()
+      .get(`/hr/payroll/bank-sheet/history/${res.body[0].id}/file`)
+      .set(auth(hrUser.token))
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    expect(file.headers['content-type']).toContain('spreadsheetml');
+    expect((file.body as Buffer).subarray(0, 2).toString()).toBe('PK');
   }, 60_000);
 });

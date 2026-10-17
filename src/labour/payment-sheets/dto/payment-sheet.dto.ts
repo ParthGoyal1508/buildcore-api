@@ -25,6 +25,11 @@ export class ListPaymentSheetsDto {
   @IsString()
   projectId?: string;
 
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  siteId?: string;
+
   @ApiPropertyOptional({ enum: EngagementType })
   @IsOptional()
   @IsEnum(EngagementType)
@@ -42,10 +47,10 @@ export class GeneratePaymentSheetDto {
   @IsString()
   companyId?: string;
 
-  @ApiProperty()
+  @ApiProperty({ description: 'The site whose labour the sheet pays (031)' })
   @IsString()
   @IsNotEmpty()
-  projectId!: string;
+  siteId!: string;
 
   @ApiProperty({ example: '2026-09-01' })
   @IsDateString()
@@ -55,9 +60,10 @@ export class GeneratePaymentSheetDto {
   @IsDateString()
   periodTo!: string;
 
-  @ApiProperty({ enum: EngagementType })
+  @ApiPropertyOptional({ enum: EngagementType, default: EngagementType.direct })
+  @IsOptional()
   @IsEnum(EngagementType)
-  engagementType!: EngagementType;
+  engagementType?: EngagementType;
 }
 
 export class ReopenPaymentSheetDto {

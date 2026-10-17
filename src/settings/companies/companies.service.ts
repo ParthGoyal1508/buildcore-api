@@ -766,6 +766,9 @@ export class CompaniesService {
     wageCycle: 'weekly' | 'fortnightly' | 'monthly';
     cashDenominations: number[];
     otMultiplier: number;
+    fullDayHours: number;
+    halfDayHours: number;
+    standardHours: number;
   }> {
     const company = await withRlsContext(
       this.prisma,
@@ -777,6 +780,9 @@ export class CompaniesService {
             labourWageCycle: true,
             labourCashDenominations: true,
             otMultiplier: true,
+            labourFullDayHours: true,
+            labourHalfDayHours: true,
+            labourStandardHours: true,
           },
         }),
     );
@@ -789,7 +795,31 @@ export class CompaniesService {
         (a, b) => b - a,
       ),
       otMultiplier: company.otMultiplier.toNumber(),
+      fullDayHours: company.labourFullDayHours.toNumber(),
+      halfDayHours: company.labourHalfDayHours.toNumber(),
+      standardHours: company.labourStandardHours.toNumber(),
     };
+  }
+
+  /** 034: how a labour day is counted from its punch times. Validated by the caller. */
+  async setLabourDayRules(
+    companyId: string,
+    rules: {
+      fullDayHours: number;
+      halfDayHours: number;
+      standardHours: number;
+    },
+  ): Promise<void> {
+    await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+      tx.company.update({
+        where: { id: companyId },
+        data: {
+          labourFullDayHours: rules.fullDayHours,
+          labourHalfDayHours: rules.halfDayHours,
+          labourStandardHours: rules.standardHours,
+        },
+      }),
+    );
   }
 
   /** Every company, whatever its status — the Settings UI's own admin list. Not the

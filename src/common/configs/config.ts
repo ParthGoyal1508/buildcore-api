@@ -573,6 +573,7 @@ const config: Config = {
       process.env.ALLOW_CONSOLE_EMAIL,
       false,
     ),
+    payslipsEnabled: booleanFromEnv(process.env.PAYSLIP_EMAIL_ENABLED, false),
   },
   storage: {
     // Local by default so a fresh clone and the e2e suite work with no cloud

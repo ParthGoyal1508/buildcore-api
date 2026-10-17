@@ -488,7 +488,10 @@ export class PayrollEngineService {
     );
   }
 
-  /** One run with its line items. */
+  /**
+   * One run with its line items, each carrying the employee's code and name (2026-10-17): the line
+   * stores only the employee id, and a register of ids is unreadable to the people checking it.
+   */
   async getRun(caller: Caller, runId: string) {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({
@@ -497,7 +500,32 @@ export class PayrollEngineService {
       }),
     );
     if (!run) throw new NotFoundException('Payroll run not found');
-    return run;
+    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findMany({
+        where: { id: { in: run.lineItems.map((l) => l.employeeId) } },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+        },
+      }),
+    );
+    const byId = new Map(employees.map((e) => [e.id, e]));
+    return {
+      ...run,
+      lineItems: run.lineItems.map((line) => {
+        const e = byId.get(line.employeeId);
+        const name = e
+          ? [e.firstName, e.lastName].filter(Boolean).join(' ').trim()
+          : '';
+        return {
+          ...line,
+          employeeCode: e?.employeeCode ?? undefined,
+          name: name || undefined,
+        };
+      }),
+    };
   }
 
   // ── inputs ─────────────────────────────────────────────────────────────────

@@ -284,6 +284,12 @@ same statutory 1% this product already configures for 007\'s cess calculation.']
 independent of the monthly salary `payCycle` above, because daily-wage labour
 is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
 default. Company-configurable rather than a literal — Constitution Principle III.']
+  labourFullDayHours Decimal [not null, default: 8, note: '034: how a labour day is counted from its punch times. At least `labourFullDayHours` between
+punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
+paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
+× `otMultiplier`. Set by the HR office under Labour → Muster attendance.']
+  labourHalfDayHours Decimal [not null, default: 4]
+  labourStandardHours Decimal [not null, default: 8]
   payrollDebitAccountNumber String [note: 'The company\'s own account the payroll transfer is debited from (021 FR-008a).
 
 A **string**, not a number, and the sample file is the argument: every value in the
@@ -3059,6 +3065,26 @@ item 9: an advance taken *between* approval and payment day must still come out 
 actually moves, and an approved run is immutable.'
 }
 
+Table BankSheetExport {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  period String [not null]
+  debitAccount String [not null]
+  employeeCount Int [not null]
+  transferTotal Decimal [not null]
+  leftOffCount Int [not null, note: 'People left off the transfer (bank details, excluded by hand, nothing to pay).']
+  fileName String [not null]
+  fileRef String [not null, note: 'The workbook as downloaded, in encrypted storage — it carries unmasked account numbers.']
+  generatedById String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One generated salary bank sheet (2026-10-17): the history HR and accounts see under Generate Bank
+Payment Sheet, with the exact file given to the bank kept so it can be downloaded again. Written
+on every download, from the company-and-month card and from a run\'s own Bank sheet button.
+Never updated.'
+}
+
 Table BankTransactionLine {
   id String [pk]
   companyId String [not null]
@@ -4596,13 +4622,15 @@ Table LabourWorker {
   companyId String [not null]
   labourCode String [not null, note: 'Auto-generated, unique per company (e.g. LAB-0001).']
   fullName String [not null]
-  phone String [not null]
-  gender String [not null]
-  dateOfBirth DateTime [not null]
+  fatherName String [note: '031: optional — a supervisor registering at the gate may have neither.']
+  phone String
+  gender LabourGender [note: 'Null only for workers registered before 031 whose free-text gender did not read as
+male or female; such a worker cannot be priced until it is set.']
+  dateOfBirth DateTime
   aadhaarNumber String
   bankAccount String
-  skillCategoryId String [not null, note: '→ settings.SkillCategory.']
-  engagementType EngagementType [not null]
+  skillCategoryId String [note: '→ settings.SkillCategory. Optional since 031: pay comes from the site rate.']
+  engagementType EngagementType [not null, default: 'direct']
   contractorId String [note: 'Required when `engagementType` is contractor (FR-008); → partners vendor
 resolved via PartnersService (FR-034).']
   siteId String [not null, note: '→ projects.Site.']
@@ -4712,7 +4740,7 @@ line before its photo is captured; submission requires every line to have one
 (FR-010).']
   faceMatchScore Decimal
   faceMatchLow Boolean [not null, default: false]
-  skillCategoryIdOnDay String [not null, note: 'Snapshot of the worker\'s skill category at capture time so a mid-period skill
+  skillCategoryIdOnDay String [note: 'Snapshot of the worker\'s skill category at capture time so a mid-period skill
 change prices historical days correctly.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -4730,7 +4758,9 @@ worker\'s skill so a mid-period change still prices correctly.'
 Table LabourPaymentSheet {
   id String [pk]
   companyId String [not null]
-  projectId String [not null]
+  projectId String [note: 'The site\'s project for a 031 site sheet (null when the site has none); the billed
+project for a pre-031 project sheet.']
+  siteId String [note: '031: set on a site sheet, null on a pre-031 project sheet.']
   periodFrom DateTime [not null]
   periodTo DateTime [not null]
   engagementType EngagementType [not null]
@@ -5472,6 +5502,177 @@ Table Resignation {
   Note: 'An employee\'s resignation record (011 US8) — the trigger 005\'s exit flow consumes.'
 }
 
+Table SiteWageRate {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null, note: '→ projects.Site.']
+  gender LabourGender [not null]
+  dailyRate Decimal [not null]
+  effectiveFrom DateTime [not null]
+  effectiveTo DateTime
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  createdBy String
+  deletedAt DateTime
+  deletedBy String
+
+  Note: '031: the male and female daily rate HR sets for a site, effective-dated and appended
+forward exactly as `WageRate` is, so a sheet for a past period prices at the rate then in force.'
+}
+
+Table SupervisorSite {
+  id String [pk]
+  companyId String [not null]
+  userId String [not null, note: '→ shared.User.']
+  siteId String [not null, note: '→ projects.Site.']
+  createdAt DateTime [default: `now()`, not null]
+  createdBy String
+
+  indexes {
+    (userId, siteId) [unique]
+  }
+
+  Note: '031: the sites a supervisor may register labour at and mark attendance for.'
+}
+
+Table LabourCodeSequence {
+  companyId String [pk]
+  lastNumber Int [not null, default: 0]
+
+  Note: '031: the last labour code number issued per company, bumped with UPDATE … RETURNING so two
+supervisors registering at the same moment can never be handed the same code.'
+}
+
+Table LabourPunch {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  siteId String [not null]
+  punchDate DateTime [not null, note: 'Company-timezone calendar day.']
+  type LabourPunchType [not null]
+  punchedAt DateTime [default: `now()`, not null, note: 'Server time — the punch is online-only, so the supervisor\'s clock is never trusted.']
+  supervisorId String [not null, note: 'The supervisor (User) who took the photo, or who added it by correction.']
+  source LabourPunchSource [not null, default: 'face', note: '034: a punch added by correction has no photo, face match or location.']
+  correctedAt DateTime [note: '034: set when the time was changed after it was recorded; the edits are in
+`LabourPunchCorrection`.']
+  photoRef String
+  faceMatchDistance Decimal
+  latitude Decimal
+  longitude Decimal
+  accuracyMetres Decimal
+  geofenceDistanceMetres Decimal
+  geofenceViolation Boolean [not null, default: false, note: 'Outside the fence or unlocatable, accepted because the company has not switched the
+punch block on — the same rule employee punches follow.']
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (workerId, punchDate, type) [unique]
+  }
+
+  Note: '031: one accepted face punch. The day\'s muster line is derived from these: punch-in alone is
+a half day, punch-in and punch-out a full day.'
+}
+
+Table LabourPunchCorrection {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  siteId String [not null]
+  punchDate DateTime [not null]
+  type LabourPunchType [not null]
+  oldPunchedAt DateTime
+  newPunchedAt DateTime [not null]
+  reason String [not null]
+  correctedById String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '034: one edit to a labour punch time — the edit history. `oldPunchedAt` is null when the punch
+was missing and the correction added it. Never updated or deleted.'
+}
+
+Table LabourSitePhoto {
+  id String [pk]
+  companyId String [not null]
+  siteId String [not null]
+  photoDate DateTime [not null]
+  photoRef String [not null]
+  note String
+  latitude Decimal
+  longitude Decimal
+  takenById String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '034: a group photo a supervisor takes at a site for reference. It is **not** attendance: nobody
+is matched or marked from it.'
+}
+
+Table LabourPunchRefusal {
+  id String [pk]
+  companyId String [not null]
+  workerId String [not null]
+  siteId String [not null]
+  type LabourPunchType [not null]
+  reason LabourPunchRefusalReason [not null]
+  supervisorId String [not null]
+  latitude Decimal [not null]
+  longitude Decimal [not null]
+  accuracyMetres Decimal
+  distanceMetres Decimal
+  faceMatchDistance Decimal
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '031: a refused labour punch. Nothing is written to attendance, so this is the only trace.'
+}
+
+Table EquipmentDisposal {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  type EquipmentDisposalType [not null]
+  disposalDate DateTime [not null]
+  scrapReason EquipmentScrapReason [note: 'Scrap only.']
+  counterpartyName String [note: 'Sale: the buyer. Scrap: the scrap vendor or buyer, if any.']
+  buyerContact String [note: 'Sale only.']
+  paymentMode String
+  invoiceNumber String
+  valueRealised Decimal [note: 'Sale amount, or the scrap value realised (optional for scrap).']
+  bookValue Decimal [note: 'The machine\'s book value on the disposal date: from its depreciation where it has one,
+otherwise as entered.']
+  bookValueSource String [note: '`depreciation` or `manual`.']
+  profitLoss Decimal [note: 'Sale: amount − book value. Null where either is unknown.']
+  approvedBy String [not null, note: 'The approver\'s name as written on the form.']
+  remarks String
+  attachmentRef String
+  attachmentName String
+  attachmentMime String
+  previousStatus EquipmentStatus [not null, note: 'The status the machine had before, restored on reversal.']
+  releasedSiteId String [note: 'The site it was deployed at, released by the disposal; null if it was not deployed.']
+  projectId String [note: 'That site\'s project at the time, for the dashboard\'s project filter.']
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  reversedAt DateTime
+  reversedByUserId String
+  reversalReason String
+
+  Note: 'A machine retired by scrapping or sale (2026-10-17). At most one is in force per machine — a
+reversal stamps `reversedAt` and the machine goes back to the status it had (enforced by a partial
+unique index in the migration). Nothing is deleted: a reversed disposal stays as history.'
+}
+
+Table EquipmentEvent {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  kind String [not null, note: '`disposed_scrapped`, `disposed_sold`, `disposal_reversed`, `site_released`.']
+  summary String [not null]
+  detail Json
+  actorUserId String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A machine\'s history: what happened to it and who did it (2026-10-17). Written by disposal and
+its reversal today; any other lifecycle event can add a `kind` without a schema change.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -5515,11 +5716,13 @@ Enum Permission {
   CROSS_COMPANY_ACCESS
   INVENTORY_APPROVE
   LABOUR_APPROVE
+  LABOUR_PUNCH_CORRECT
   MAINTENANCE
   HIRE_BILLS
   RECRUITMENT
   RECRUITMENT_APPROVE
   HR_LETTERS
+  MACHINERY_DISPOSE
   ASSETS
   ASSETS_APPROVE
   CASH_ENTRY
@@ -5645,6 +5848,7 @@ Enum AuditEntityType {
   LABOUR_ADVANCE
   EQUIPMENT
   EQUIPMENT_DOCUMENT
+  EQUIPMENT_DISPOSAL
   LOGBOOK_ENTRY
   FUEL_ENTRY
   FUEL_VARIANCE_EXCEPTION
@@ -6148,6 +6352,8 @@ Enum EquipmentStatus {
   active
   under_maintenance
   inactive
+  scrapped
+  sold
 }
 
 Enum MaintenanceType {
@@ -6237,6 +6443,7 @@ Enum WorkerStatus {
 Enum MusterSource {
   mobile
   admin_entry
+  face_punch
 }
 
 Enum MusterStatus {
@@ -6255,6 +6462,29 @@ Enum AttendanceType {
 Enum RateSource {
   override
   project_rate
+  site_rate
+}
+
+Enum LabourGender {
+  male
+  female
+}
+
+Enum LabourPunchType {
+  in
+  out
+}
+
+Enum LabourPunchSource {
+  face
+  correction
+}
+
+Enum LabourPunchRefusalReason {
+  outside_geofence
+  unlocatable
+  face_mismatch
+  no_face_detected
 }
 
 Enum PaymentSheetStatus {
@@ -6422,6 +6652,19 @@ Enum ResignationStatus {
   submitted
   accepted
   withdrawn
+}
+
+Enum EquipmentDisposalType {
+  scrapped
+  sold
+}
+
+Enum EquipmentScrapReason {
+  damaged_beyond_repair
+  end_of_life
+  accident
+  obsolete
+  other
 }
 
 Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]

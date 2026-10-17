@@ -1,11 +1,14 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, SlipDeliveryStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { ConfigService } from '@nestjs/config';
+import type { EmailConfig } from '../../common/configs/config.interface';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
@@ -34,6 +37,9 @@ export interface SlipDeliverySummary {
   undeliverable: number;
   /** Employees in the run with no delivery row at all — never attempted. */
   notAttempted: number;
+  /** Whether payslips may be emailed at all (`PAYSLIP_EMAIL_ENABLED`); off by default. The screen
+   * hides its send controls when false. */
+  emailEnabled: boolean;
   rows: SlipDeliveryView[];
 }
 
@@ -74,7 +80,23 @@ export class SlipDeliveryService {
      * document the employee downloads rather than the bare layout it used to be.
      */
     private readonly salary: SalaryService,
+    private readonly configService: ConfigService,
   ) {}
+
+  private get emailEnabled(): boolean {
+    return this.configService.get<EmailConfig>('email').payslipsEnabled;
+  }
+
+  /** Refused before any run is read, so a disabled send costs nothing and leaks nothing. */
+  private assertEmailEnabled(): void {
+    if (!this.emailEnabled) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'PAYSLIP_EMAIL_DISABLED',
+        message: 'Emailing payslips is turned off.',
+      });
+    }
+  }
 
   /**
    * Sends to every employee in the run who has not already been sent to (FR-005).
@@ -84,6 +106,7 @@ export class SlipDeliveryService {
    * leaves the company, in this case into an inbox the company cannot recall it from.
    */
   async send(ctx: RlsContext, runId: string): Promise<SlipDeliverySummary> {
+    this.assertEmailEnabled();
     const run = await this.requireApprovedRun(ctx, runId);
     const targets = await this.targetsFor(ctx, run, { onlyFailures: false });
     await this.deliver(ctx, run, targets);
@@ -98,6 +121,7 @@ export class SlipDeliveryService {
    * separate status rather than as a kind of failure.
    */
   async retry(ctx: RlsContext, runId: string): Promise<SlipDeliverySummary> {
+    this.assertEmailEnabled();
     const run = await this.requireApprovedRun(ctx, runId);
     const targets = await this.targetsFor(ctx, run, { onlyFailures: true });
     await this.deliver(ctx, run, targets);
@@ -158,6 +182,7 @@ export class SlipDeliveryService {
       // send would otherwise show a negative or a nonsense figure, and "nobody has tried yet" is a
       // different thing to say from "it failed".
       notAttempted: run.lineItems.length - rows.length,
+      emailEnabled: this.emailEnabled,
       rows,
     };
   }

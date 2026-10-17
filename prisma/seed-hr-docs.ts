@@ -90,7 +90,8 @@ const num = (v: Prisma.Decimal | null | undefined) => (v ? v.toNumber() : 0);
 
 /** A stable, cuid-shaped id, so re-running finds the row it made last time. */
 const sid = (key: string) =>
-  'c' + createHash('sha256').update(`hr-docs:${key}`).digest('hex').slice(0, 24);
+  'c' +
+  createHash('sha256').update(`hr-docs:${key}`).digest('hex').slice(0, 24);
 
 /** Last month, as payroll names a period, and its last day. */
 function lastMonth(): { period: string; end: Date; days: number } {
@@ -108,9 +109,26 @@ const addDays = (t: Date, n: number) => new Date(t.getTime() + n * 86_400_000);
 
 /** Fathers' first names; the surname is the employee's own. */
 const FATHER_FIRST = [
-  'Ramesh', 'Suresh', 'Prakash', 'Venkatesh', 'Gopal', 'Mahesh', 'Shankar',
-  'Srinivas', 'Narayan', 'Ashok', 'Dinesh', 'Vijay', 'Anil', 'Mohan', 'Vishwanath',
-  'Raghunath', 'Krishna', 'Dattatray', 'Vasant', 'Balaji',
+  'Ramesh',
+  'Suresh',
+  'Prakash',
+  'Venkatesh',
+  'Gopal',
+  'Mahesh',
+  'Shankar',
+  'Srinivas',
+  'Narayan',
+  'Ashok',
+  'Dinesh',
+  'Vijay',
+  'Anil',
+  'Mohan',
+  'Vishwanath',
+  'Raghunath',
+  'Krishna',
+  'Dattatray',
+  'Vasant',
+  'Balaji',
 ];
 
 /** Where "father's first name + own surname" would read wrong. */
@@ -119,9 +137,15 @@ const FATHER_OVERRIDES: Record<string, string> = {
 };
 
 const STREETS = [
-  'Ganesh Nagar, 2nd Cross', 'Shanti Colony, Main Road', 'Vidya Nagar, 4th Lane',
-  'Gandhi Chowk, Ward 7', 'Station Road, Near Bus Stand', 'Laxmi Layout, 1st Main',
-  'Saraswati Nagar, 3rd Cross', 'Old Market Road', 'Ram Mandir Road',
+  'Ganesh Nagar, 2nd Cross',
+  'Shanti Colony, Main Road',
+  'Vidya Nagar, 4th Lane',
+  'Gandhi Chowk, Ward 7',
+  'Station Road, Near Bus Stand',
+  'Laxmi Layout, 1st Main',
+  'Saraswati Nagar, 3rd Cross',
+  'Old Market Road',
+  'Ram Mandir Road',
   'Teachers Colony, 5th Lane',
 ];
 
@@ -151,7 +175,9 @@ function addressFor(shortCode: string, i: number) {
   const homes = HOMES[shortCode] ?? HOMES.PRPL;
   const home = homes[i % homes.length];
   return {
-    permanentAddress: `${10 + ((i * 37) % 180)}, ${STREETS[i % STREETS.length]}`,
+    permanentAddress: `${10 + ((i * 37) % 180)}, ${
+      STREETS[i % STREETS.length]
+    }`,
     permanentCity: home.city,
     permanentState: home.state,
     permanentPinCode: String(home.pinBase + (i % 9)),
@@ -169,7 +195,12 @@ interface Heads {
 }
 
 interface PersonSpec {
-  role: 'appointment' | 'increment' | 'transfer' | 'resignation' | 'termination';
+  role:
+    | 'appointment'
+    | 'increment'
+    | 'transfer'
+    | 'resignation'
+    | 'termination';
   code: string; // suffix after `${shortCode}-`
   firstName: string;
   lastName: string;
@@ -205,41 +236,115 @@ const SPECS: CompanySpec[] = [
     domain: 'parthrealcon.com',
     people: [
       {
-        role: 'appointment', code: '0901', firstName: 'Arjun', lastName: 'Venkatesh',
-        fatherFirst: 'Srinivasa', gender: 'male', designation: 'Senior Engineer',
-        department: 'Engineering', site: 0, doj: '2026-10-05', mobile: '9845090101',
-        heads: { basic: 42000, hra: 16800, conveyance: 1600, siteAllowance: 3000, specialAllowance: 14600 },
+        role: 'appointment',
+        code: '0901',
+        firstName: 'Arjun',
+        lastName: 'Venkatesh',
+        fatherFirst: 'Srinivasa',
+        gender: 'male',
+        designation: 'Senior Engineer',
+        department: 'Engineering',
+        site: 0,
+        doj: '2026-10-05',
+        mobile: '9845090101',
+        heads: {
+          basic: 42000,
+          hra: 16800,
+          conveyance: 1600,
+          siteAllowance: 3000,
+          specialAllowance: 14600,
+        },
       },
       {
-        role: 'increment', code: '0902', firstName: 'Bhavana', lastName: 'Narayanan',
-        fatherFirst: 'Sridhar', gender: 'female', designation: 'Quantity Surveyor',
-        department: 'Engineering', site: 1, doj: '2023-04-03', mobile: '9845090102',
-        heads: { basic: 34000, hra: 13600, conveyance: 1600, siteAllowance: 2500, specialAllowance: 15300 },
+        role: 'increment',
+        code: '0902',
+        firstName: 'Bhavana',
+        lastName: 'Narayanan',
+        fatherFirst: 'Sridhar',
+        gender: 'female',
+        designation: 'Quantity Surveyor',
+        department: 'Engineering',
+        site: 1,
+        doj: '2023-04-03',
+        mobile: '9845090102',
+        heads: {
+          basic: 34000,
+          hra: 13600,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 15300,
+        },
       },
       {
-        role: 'transfer', code: '0903', firstName: 'Harish', lastName: 'Acharya',
-        fatherFirst: 'Raghavendra', gender: 'male', designation: 'Site Supervisor',
-        department: 'Projects', site: 1, doj: '2022-08-16', mobile: '9845090103',
-        heads: { basic: 26000, hra: 10400, conveyance: 1600, siteAllowance: 2500, specialAllowance: 11500 },
+        role: 'transfer',
+        code: '0903',
+        firstName: 'Harish',
+        lastName: 'Acharya',
+        fatherFirst: 'Raghavendra',
+        gender: 'male',
+        designation: 'Site Supervisor',
+        department: 'Projects',
+        site: 1,
+        doj: '2022-08-16',
+        mobile: '9845090103',
+        heads: {
+          basic: 26000,
+          hra: 10400,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 11500,
+        },
       },
       {
-        role: 'resignation', code: '0904', firstName: 'Divya', lastName: 'Hegde',
-        fatherFirst: 'Ganapati', gender: 'female', designation: 'Accountant',
-        department: 'Accounts & Finance', site: 2, doj: '2022-07-11', mobile: '9845090104',
-        heads: { basic: 32000, hra: 12800, conveyance: 1600, siteAllowance: 2500, specialAllowance: 14100 },
+        role: 'resignation',
+        code: '0904',
+        firstName: 'Divya',
+        lastName: 'Hegde',
+        fatherFirst: 'Ganapati',
+        gender: 'female',
+        designation: 'Accountant',
+        department: 'Accounts & Finance',
+        site: 2,
+        doj: '2022-07-11',
+        mobile: '9845090104',
+        heads: {
+          basic: 32000,
+          hra: 12800,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 14100,
+        },
       },
       {
-        role: 'termination', code: '0905', firstName: 'Naveen', lastName: 'Shenoy',
-        fatherFirst: 'Umesh', gender: 'male', designation: 'Store Keeper',
-        department: 'Stores & Procurement', site: 0, doj: '2024-03-04', mobile: '9845090105',
-        heads: { basic: 21000, hra: 8400, conveyance: 1600, siteAllowance: 2500, specialAllowance: 8500 },
+        role: 'termination',
+        code: '0905',
+        firstName: 'Naveen',
+        lastName: 'Shenoy',
+        fatherFirst: 'Umesh',
+        gender: 'male',
+        designation: 'Store Keeper',
+        department: 'Stores & Procurement',
+        site: 0,
+        doj: '2024-03-04',
+        mobile: '9845090105',
+        heads: {
+          basic: 21000,
+          hra: 8400,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 8500,
+        },
       },
     ],
     candidate: {
-      fullName: 'Rohan Kamath', fatherName: 'Sudhakar Kamath',
+      fullName: 'Rohan Kamath',
+      fatherName: 'Sudhakar Kamath',
       address: '48, Kadri Hills Road, Mangaluru, Karnataka - 575004',
-      phone: '9845090110', email: 'rohan.kamath@example.com',
-      designation: 'Site Engineer', department: 'Engineering', annualCtc: 540000,
+      phone: '9845090110',
+      email: 'rohan.kamath@example.com',
+      designation: 'Site Engineer',
+      department: 'Engineering',
+      annualCtc: 540000,
     },
   },
   {
@@ -247,41 +352,115 @@ const SPECS: CompanySpec[] = [
     domain: 'shreejibuildtech.in',
     people: [
       {
-        role: 'appointment', code: '0901', firstName: 'Aniket', lastName: 'Deshmukh',
-        fatherFirst: 'Prabhakar', gender: 'male', designation: 'Senior Engineer',
-        department: 'Engineering', site: 0, doj: '2026-10-05', mobile: '9822090101',
-        heads: { basic: 40000, hra: 16000, conveyance: 1600, siteAllowance: 3000, specialAllowance: 13400 },
+        role: 'appointment',
+        code: '0901',
+        firstName: 'Aniket',
+        lastName: 'Deshmukh',
+        fatherFirst: 'Prabhakar',
+        gender: 'male',
+        designation: 'Senior Engineer',
+        department: 'Engineering',
+        site: 0,
+        doj: '2026-10-05',
+        mobile: '9822090101',
+        heads: {
+          basic: 40000,
+          hra: 16000,
+          conveyance: 1600,
+          siteAllowance: 3000,
+          specialAllowance: 13400,
+        },
       },
       {
-        role: 'increment', code: '0902', firstName: 'Prajakta', lastName: 'Shinde',
-        fatherFirst: 'Dilip', gender: 'female', designation: 'Quantity Surveyor',
-        department: 'Engineering', site: 1, doj: '2023-02-13', mobile: '9822090102',
-        heads: { basic: 33000, hra: 13200, conveyance: 1600, siteAllowance: 2500, specialAllowance: 14700 },
+        role: 'increment',
+        code: '0902',
+        firstName: 'Prajakta',
+        lastName: 'Shinde',
+        fatherFirst: 'Dilip',
+        gender: 'female',
+        designation: 'Quantity Surveyor',
+        department: 'Engineering',
+        site: 1,
+        doj: '2023-02-13',
+        mobile: '9822090102',
+        heads: {
+          basic: 33000,
+          hra: 13200,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 14700,
+        },
       },
       {
-        role: 'transfer', code: '0903', firstName: 'Omkar', lastName: 'Patwardhan',
-        fatherFirst: 'Madhukar', gender: 'male', designation: 'Site Supervisor',
-        department: 'Projects', site: 0, doj: '2022-11-07', mobile: '9822090103',
-        heads: { basic: 25000, hra: 10000, conveyance: 1600, siteAllowance: 2500, specialAllowance: 10900 },
+        role: 'transfer',
+        code: '0903',
+        firstName: 'Omkar',
+        lastName: 'Patwardhan',
+        fatherFirst: 'Madhukar',
+        gender: 'male',
+        designation: 'Site Supervisor',
+        department: 'Projects',
+        site: 0,
+        doj: '2022-11-07',
+        mobile: '9822090103',
+        heads: {
+          basic: 25000,
+          hra: 10000,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 10900,
+        },
       },
       {
-        role: 'resignation', code: '0904', firstName: 'Snehal', lastName: 'Gokhale',
-        fatherFirst: 'Shrikant', gender: 'female', designation: 'Accountant',
-        department: 'Accounts & Finance', site: 1, doj: '2021-06-21', mobile: '9822090104',
-        heads: { basic: 31000, hra: 12400, conveyance: 1600, siteAllowance: 2500, specialAllowance: 13500 },
+        role: 'resignation',
+        code: '0904',
+        firstName: 'Snehal',
+        lastName: 'Gokhale',
+        fatherFirst: 'Shrikant',
+        gender: 'female',
+        designation: 'Accountant',
+        department: 'Accounts & Finance',
+        site: 1,
+        doj: '2021-06-21',
+        mobile: '9822090104',
+        heads: {
+          basic: 31000,
+          hra: 12400,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 13500,
+        },
       },
       {
-        role: 'termination', code: '0905', firstName: 'Tushar', lastName: 'Mane',
-        fatherFirst: 'Bhimrao', gender: 'male', designation: 'Store Keeper',
-        department: 'Stores & Procurement', site: 0, doj: '2024-01-15', mobile: '9822090105',
-        heads: { basic: 20000, hra: 8000, conveyance: 1600, siteAllowance: 2500, specialAllowance: 8100 },
+        role: 'termination',
+        code: '0905',
+        firstName: 'Tushar',
+        lastName: 'Mane',
+        fatherFirst: 'Bhimrao',
+        gender: 'male',
+        designation: 'Store Keeper',
+        department: 'Stores & Procurement',
+        site: 0,
+        doj: '2024-01-15',
+        mobile: '9822090105',
+        heads: {
+          basic: 20000,
+          hra: 8000,
+          conveyance: 1600,
+          siteAllowance: 2500,
+          specialAllowance: 8100,
+        },
       },
     ],
     candidate: {
-      fullName: 'Kunal Thakur', fatherName: 'Rajendra Thakur',
+      fullName: 'Kunal Thakur',
+      fatherName: 'Rajendra Thakur',
       address: '12, Shivaji Peth, Kolhapur, Maharashtra - 416012',
-      phone: '9822090110', email: 'kunal.thakur@example.com',
-      designation: 'Site Engineer', department: 'Engineering', annualCtc: 510000,
+      phone: '9822090110',
+      email: 'kunal.thakur@example.com',
+      designation: 'Site Engineer',
+      department: 'Engineering',
+      annualCtc: 510000,
     },
   },
 ];
@@ -307,7 +486,8 @@ async function main() {
     where: { email: 'admin@buildcore.dev' },
     select: { id: true },
   });
-  if (!admin) throw new Error('admin@buildcore.dev not found — run seed-demo first.');
+  if (!admin)
+    throw new Error('admin@buildcore.dev not found — run seed-demo first.');
 
   // Lazy: `config.ts` reads process.env when it is evaluated, after `expand` above.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -372,12 +552,13 @@ async function main() {
     if (!manager) throw new Error(`${sc}: ${sc}-0001 not found.`);
 
     // ── Employees: the documents' people ──────────────────────────────────────
-    const made: Record<PersonSpec['role'], { id: string; code: string; name: string }> =
-      {} as never;
+    const made: Record<
+      PersonSpec['role'],
+      { id: string; code: string; name: string }
+    > = {} as never;
     for (const [i, p] of spec.people.entries()) {
       const employeeCode = `${sc}-${p.code}`;
-      const heads =
-        p.role === 'increment' ? previousOf(p.heads) : p.heads;
+      const heads = p.role === 'increment' ? previousOf(p.heads) : p.heads;
       const employee = await prisma.employee.upsert({
         where: { companyId_employeeCode: { companyId, employeeCode } },
         update: {},
@@ -404,7 +585,9 @@ async function main() {
           paymentMode: 'bank',
           pfApplicable: true,
           uan: `10${sc === 'PRPL' ? '77' : '88'}0090${p.code}`,
-          pfNumber: `${sc === 'PRPL' ? 'KN/BNG' : 'MH/PUN'}/0012345/000/${p.code}`,
+          pfNumber: `${sc === 'PRPL' ? 'KN/BNG' : 'MH/PUN'}/0012345/000/${
+            p.code
+          }`,
           basic: money(heads.basic),
           hra: money(heads.hra),
           conveyanceAllowance: money(heads.conveyance),
@@ -489,7 +672,8 @@ async function main() {
                 conveyance: money(p.heads.conveyance),
                 siteAllowance: money(p.heads.siteAllowance),
                 specialAllowance: money(p.heads.specialAllowance),
-                remarks: 'Annual increment — performance rating "Exceeds expectations"',
+                remarks:
+                  'Annual increment — performance rating "Exceeds expectations"',
                 createdByUserId: admin.id,
               },
             }),
@@ -511,7 +695,12 @@ async function main() {
         const from = siteAt(p.site);
         const to = siteAt(p.site + 1);
         const rows = [
-          { key: 'assign:from', siteId: from.id, at: p.doj, reason: 'Posted on joining' },
+          {
+            key: 'assign:from',
+            siteId: from.id,
+            at: p.doj,
+            reason: 'Posted on joining',
+          },
           {
             key: 'assign:to',
             siteId: to.id,
@@ -550,7 +739,8 @@ async function main() {
             employeeId: employee.id,
             resignationDate: resigned,
             reasonCategory: 'better_opportunity',
-            reasonDetail: 'Moving closer to family; has an offer in the home town.',
+            reasonDetail:
+              'Moving closer to family; has an offer in the home town.',
             noticePeriodDays: 30,
             expectedLastWorkingDay: lwd,
             agreedLastWorkingDay: lwd,
@@ -581,7 +771,8 @@ async function main() {
             employeeId: employee.id,
             lastWorkingDay: addDays(today, -4),
             reason: 'termination',
-            remarks: 'Repeated unauthorised absence after two written warnings.',
+            remarks:
+              'Repeated unauthorised absence after two written warnings.',
             initiatedByUserId: admin.id,
           },
         });
@@ -621,7 +812,8 @@ async function main() {
       },
       orderBy: { requisitionCode: 'asc' },
     });
-    if (!requisition) throw new Error(`${sc}: no open requisition on a project.`);
+    if (!requisition)
+      throw new Error(`${sc}: no open requisition on a project.`);
     const c = spec.candidate;
     const candidate = await prisma.candidate.upsert({
       where: { id: k('candidate') },
@@ -646,7 +838,12 @@ async function main() {
     });
     for (const [step, toStage] of (
       [
-        'applied', 'shortlisted', 'interviewing', 'selected', 'offer_issued', 'offer_accepted',
+        'applied',
+        'shortlisted',
+        'interviewing',
+        'selected',
+        'offer_issued',
+        'offer_accepted',
       ] as const
     ).entries()) {
       await prisma.candidateStageHistory.upsert({
@@ -656,9 +853,18 @@ async function main() {
           id: k(`stage:${toStage}`),
           companyId,
           candidateId: candidate.id,
-          fromStage: step === 0 ? null : (
-            ['applied', 'shortlisted', 'interviewing', 'selected', 'offer_issued'] as const
-          )[step - 1],
+          fromStage:
+            step === 0
+              ? null
+              : (
+                  [
+                    'applied',
+                    'shortlisted',
+                    'interviewing',
+                    'selected',
+                    'offer_issued',
+                  ] as const
+                )[step - 1],
           toStage,
           occurredAt: addDays(today, -30 + step * 5),
           actorId: admin.id,
@@ -697,14 +903,25 @@ async function main() {
     });
 
     // ── Payslip: last month's run, processed with slips ──────────────────────
-    const payslip = await processLastMonth(companyId, month, statutory, company);
+    const payslip = await processLastMonth(
+      companyId,
+      month,
+      statutory,
+      company,
+    );
 
     console.log(`  ${sc} (${company.name})`);
     for (const [role, e] of Object.entries(made)) {
-      console.log(`    ${role.padEnd(12)} ${e.code}  ${e.name.padEnd(20)} ${e.id}`);
+      console.log(
+        `    ${role.padEnd(12)} ${e.code}  ${e.name.padEnd(20)} ${e.id}`,
+      );
     }
-    console.log(`    offer        candidate     ${c.fullName.padEnd(20)} ${candidate.id}`);
-    console.log(`    filled father's name / permanent address on ${filled} employee(s)`);
+    console.log(
+      `    offer        candidate     ${c.fullName.padEnd(20)} ${candidate.id}`,
+    );
+    console.log(
+      `    filled father's name / permanent address on ${filled} employee(s)`,
+    );
     console.log(`    payslip      ${payslip}`);
     console.log(
       `    signatory    ${
@@ -747,7 +964,11 @@ async function processLastMonth(
   }
   if (!run) {
     run = await prisma.payrollRun.create({
-      data: { id: sid(`${companyId}:run:${month.period}`), companyId, period: month.period },
+      data: {
+        id: sid(`${companyId}:run:${month.period}`),
+        companyId,
+        period: month.period,
+      },
       include: { _count: { select: { lineItems: true } } },
     });
   }
@@ -768,106 +989,116 @@ async function processLastMonth(
     otMultiplier: company.otMultiplier.toNumber(),
   };
   const now = new Date();
-  await prisma.$transaction(async (tx) => {
-    for (const e of employees) {
-      const f = computePayrollLine(
-        {
-          employeeId: e.id,
-          projectId: null,
-          basic: num(e.basic),
-          hra: num(e.hra),
-          conveyanceAllowance: num(e.conveyanceAllowance),
-          siteAllowance: num(e.siteAllowance),
-          specialAllowance: num(e.specialAllowance),
-          pfApplicable: e.pfApplicable,
-          pfUpperLimit: e.pfUpperLimit,
-          esicApplicable: e.esicApplicable,
-          esicUpperLimit: e.esicUpperLimit,
-          hoursPerDay: num(e.hoursPerDay) || 8,
-          loanEmiDeduction: 0,
-          tds: 0,
-        },
-        { monthDays: month.days, payableDays: month.days, lopDays: 0, otHours: 0 },
-        rates,
-        statutory,
-      );
-      await tx.payrollLineItem.create({
-        data: {
-          payrollRunId: run!.id,
-          employeeId: e.id,
+  await prisma.$transaction(
+    async (tx) => {
+      for (const e of employees) {
+        const f = computePayrollLine(
+          {
+            employeeId: e.id,
+            projectId: null,
+            basic: num(e.basic),
+            hra: num(e.hra),
+            conveyanceAllowance: num(e.conveyanceAllowance),
+            siteAllowance: num(e.siteAllowance),
+            specialAllowance: num(e.specialAllowance),
+            pfApplicable: e.pfApplicable,
+            pfUpperLimit: e.pfUpperLimit,
+            esicApplicable: e.esicApplicable,
+            esicUpperLimit: e.esicUpperLimit,
+            hoursPerDay: num(e.hoursPerDay) || 8,
+            loanEmiDeduction: 0,
+            tds: 0,
+          },
+          {
+            monthDays: month.days,
+            payableDays: month.days,
+            lopDays: 0,
+            otHours: 0,
+          },
+          rates,
+          statutory,
+        );
+        await tx.payrollLineItem.create({
+          data: {
+            payrollRunId: run!.id,
+            employeeId: e.id,
+            monthDays: f.monthDays,
+            payableDays: f.payableDays,
+            lopDays: f.lopDays,
+            otHours: f.otHours,
+            otWages: f.otWages,
+            basic: f.basic,
+            hra: f.hra,
+            conveyanceAllowance: f.conveyanceAllowance,
+            siteAllowance: f.siteAllowance,
+            specialAllowance: f.specialAllowance,
+            employeePf: f.employeePf,
+            employeeEsic: f.employeeEsic,
+            professionalTax: f.professionalTax,
+            tds: f.tds,
+            loanEmiDeduction: f.loanEmiDeduction,
+            netPay: f.netPay,
+            employerPf: f.employerPf,
+            employerEps: f.employerEps,
+            employerEdli: f.employerEdli,
+            adminCharges: f.adminCharges,
+            employerEsic: f.employerEsic,
+            gratuity: f.gratuity,
+            bonus: f.bonus,
+          },
+        });
+        // As `PayrollEngineService.materialiseSalarySlips` writes it at Processed.
+        const slip = {
           monthDays: f.monthDays,
           payableDays: f.payableDays,
           lopDays: f.lopDays,
           otHours: f.otHours,
-          otWages: f.otWages,
-          basic: f.basic,
-          hra: f.hra,
-          conveyanceAllowance: f.conveyanceAllowance,
-          siteAllowance: f.siteAllowance,
-          specialAllowance: f.specialAllowance,
-          employeePf: f.employeePf,
-          employeeEsic: f.employeeEsic,
-          professionalTax: f.professionalTax,
-          tds: f.tds,
-          loanEmiDeduction: f.loanEmiDeduction,
-          netPay: f.netPay,
+          earningBasic: f.basic,
+          earningHra: f.hra,
+          earningConveyance: f.conveyanceAllowance,
+          earningSiteAllowance: f.siteAllowance,
+          earningSpecialAllowance: f.specialAllowance,
+          earningOt: f.otWages,
+          fullEarningBasic: e.basic,
+          fullEarningHra: e.hra,
+          fullEarningConveyance: e.conveyanceAllowance,
+          fullEarningSiteAllowance: e.siteAllowance,
+          fullEarningSpecialAllowance: e.specialAllowance,
+          deductionPf: f.employeePf,
+          deductionEsic: f.employeeEsic,
+          deductionPt: f.professionalTax,
+          deductionTds: f.tds,
+          deductionLoanEmi: f.loanEmiDeduction,
+          deductionAdvanceRecovery: 0,
+          deductionFuelRecovery: 0,
           employerPf: f.employerPf,
           employerEps: f.employerEps,
           employerEdli: f.employerEdli,
-          adminCharges: f.adminCharges,
-          employerEsic: f.employerEsic,
-          gratuity: f.gratuity,
-          bonus: f.bonus,
+          employerAdminCharges: f.adminCharges,
+          employerGratuity: f.gratuity,
+          employerBonus: f.bonus,
+          netPay: f.netPay,
+        };
+        await tx.salarySlip.upsert({
+          where: {
+            employeeId_period: { employeeId: e.id, period: month.period },
+          },
+          create: { employeeId: e.id, period: month.period, ...slip },
+          update: slip,
+        });
+      }
+      await tx.payrollRun.update({
+        where: { id: run!.id },
+        data: {
+          status: 'processed',
+          generatedAt: run!.generatedAt ?? now,
+          processedAt: now,
         },
       });
-      // As `PayrollEngineService.materialiseSalarySlips` writes it at Processed.
-      const slip = {
-        monthDays: f.monthDays,
-        payableDays: f.payableDays,
-        lopDays: f.lopDays,
-        otHours: f.otHours,
-        earningBasic: f.basic,
-        earningHra: f.hra,
-        earningConveyance: f.conveyanceAllowance,
-        earningSiteAllowance: f.siteAllowance,
-        earningSpecialAllowance: f.specialAllowance,
-        earningOt: f.otWages,
-        fullEarningBasic: e.basic,
-        fullEarningHra: e.hra,
-        fullEarningConveyance: e.conveyanceAllowance,
-        fullEarningSiteAllowance: e.siteAllowance,
-        fullEarningSpecialAllowance: e.specialAllowance,
-        deductionPf: f.employeePf,
-        deductionEsic: f.employeeEsic,
-        deductionPt: f.professionalTax,
-        deductionTds: f.tds,
-        deductionLoanEmi: f.loanEmiDeduction,
-        deductionAdvanceRecovery: 0,
-        deductionFuelRecovery: 0,
-        employerPf: f.employerPf,
-        employerEps: f.employerEps,
-        employerEdli: f.employerEdli,
-        employerAdminCharges: f.adminCharges,
-        employerGratuity: f.gratuity,
-        employerBonus: f.bonus,
-        netPay: f.netPay,
-      };
-      await tx.salarySlip.upsert({
-        where: { employeeId_period: { employeeId: e.id, period: month.period } },
-        create: { employeeId: e.id, period: month.period, ...slip },
-        update: slip,
-      });
-    }
-    await tx.payrollRun.update({
-      where: { id: run!.id },
-      data: {
-        status: 'processed',
-        generatedAt: run!.generatedAt ?? now,
-        processedAt: now,
-      },
-    });
-  // A remote database is a network hop per statement; the 5 s default expires mid-run.
-  }, { timeout: 120_000, maxWait: 30_000 });
+      // A remote database is a network hop per statement; the 5 s default expires mid-run.
+    },
+    { timeout: 120_000, maxWait: 30_000 },
+  );
   return `${month.period} run ${run.id} processed with ${employees.length} slip(s)`;
 }
 

@@ -340,6 +340,8 @@ enum Permission {
   /// the only value this feature adds — it reuses the existing
   /// `DAILY_WORKER_REGISTRY` and `REPORTS` values verbatim.
   LABOUR_APPROVE
+  /// 034: add or correct a labour punch time, with a reason, kept in an edit history.
+  LABOUR_PUNCH_CORRECT
 
   /// Added by 006. Maintenance jobs, service schedules, spare parts and service
   /// bills. `MACHINERY`, `LOGBOOK` and `FUEL` already existed — 002 reserved them by
@@ -366,6 +368,11 @@ enum Permission {
   /// who must not put an employment decision in writing — the client's rule is that HR, and
   /// only HR, issues these. The offer letter stays with `RECRUITMENT`.
   HR_LETTERS
+
+  /// Retiring a machine as scrapped or sold, and reversing that (2026-10-17). Its own permission
+  /// because it removes a machine from every list and cannot be done by `MACHINERY`'s editors;
+  /// granted to Super Admin only, as the client asked.
+  MACHINERY_DISPOSE
 
   /// Added by 012 (FR-033). Registering, allocating, transferring, inspecting and
   /// requesting project assets. `INVENTORY` is deliberately not reused: a storekeeper
@@ -527,6 +534,14 @@ model Company {
   /// is settled weekly, fortnightly, or monthly on its own cadence. Weekly by
   /// default. Company-configurable rather than a literal — Constitution Principle III.
   labourWageCycle LabourWageCycle @default(weekly)
+
+  /// 034: how a labour day is counted from its punch times. At least `labourFullDayHours` between
+  /// punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
+  /// paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
+  /// × `otMultiplier`. Set by the HR office under Labour → Muster attendance.
+  labourFullDayHours Decimal @default(8) @db.Decimal(4, 2)
+  labourHalfDayHours Decimal @default(4) @db.Decimal(4, 2)
+  labourStandardHours Decimal @default(8) @db.Decimal(4, 2)
 
   /// The company's own account the payroll transfer is debited from (021 FR-008a).
   ///
@@ -1495,6 +1510,8 @@ enum AuditEntityType {
   // `settings`-schema masters — the same arrangement `ITEM_CATEGORY` has.
   EQUIPMENT
   EQUIPMENT_DOCUMENT
+  /// 2026-10-17: a machine scrapped or sold, or that disposal reversed.
+  EQUIPMENT_DISPOSAL
   LOGBOOK_ENTRY
   FUEL_ENTRY
   /// 020 FR-002: a reviewer's decision about a fuel variance. The entity is the decision,
@@ -4064,18 +4081,18 @@ model LeaveLedgerEntry {
   employeeId String
   employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  leaveType     LeaveTypeCode
-  financialYear String
-  kind          LeaveLedgerKind
+  leaveType       LeaveTypeCode
+  financialYear   String
+  kind            LeaveLedgerKind
   /// `YYYY-MM` for a monthly credit, the financial year for a yearly credit, carry-forward or
   /// import, and a unique token for an adjustment (several may fall in one year).
-  period        String
+  period          String
   /// Signed: an adjustment may take days away.
-  days          Decimal         @db.Decimal(6, 2)
-  reason        String?
+  days            Decimal         @db.Decimal(6, 2)
+  reason          String?
   /// Null for the system (the crediting job).
   createdByUserId String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   @@unique([employeeId, leaveType, financialYear, kind, period])
   @@index([companyId, financialYear])
@@ -5056,6 +5073,35 @@ model BankSheetRecovery {
 
   @@unique([payrollRunId, salaryAdvanceId])
   @@index([companyId])
+  @@index([payrollRunId])
+  @@schema("payroll")
+}
+
+/// One generated salary bank sheet (2026-10-17): the history HR and accounts see under Generate Bank
+/// Payment Sheet, with the exact file given to the bank kept so it can be downloaded again. Written
+/// on every download, from the company-and-month card and from a run's own Bank sheet button.
+/// Never updated.
+model BankSheetExport {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId String
+  period       String
+
+  debitAccount  String
+  employeeCount Int
+  transferTotal Decimal @db.Decimal(14, 2)
+  /// People left off the transfer (bank details, excluded by hand, nothing to pay).
+  leftOffCount  Int
+
+  fileName String
+  /// The workbook as downloaded, in encrypted storage — it carries unmasked account numbers.
+  fileRef  String
+
+  generatedById String?
+  createdAt     DateTime @default(now())
+
+  @@index([companyId, createdAt])
   @@index([payrollRunId])
   @@schema("payroll")
 }
@@ -6840,6 +6886,9 @@ enum EquipmentStatus {
   active
   under_maintenance
   inactive
+  /// 2026-10-17: retired by a disposal record. Set and cleared only by disposal and its reversal.
+  scrapped
+  sold
 
   @@schema("plant")
 }
@@ -7751,6 +7800,8 @@ enum WorkerStatus {
 enum MusterSource {
   mobile
   admin_entry
+  /// 031: built from supervisor face punches, one roll per site and day.
+  face_punch
 
   @@schema("labour")
 }
@@ -7775,6 +7826,43 @@ enum AttendanceType {
 enum RateSource {
   override
   project_rate
+  /// 031: the site's male/female daily rate.
+  site_rate
+
+  @@schema("labour")
+}
+
+/// 031: the two rates HR sets per site. Labour-schema owned rather than reusing `hr.Gender`,
+/// which also carries `other` — a value no site rate exists for.
+enum LabourGender {
+  male
+  female
+
+  @@schema("labour")
+}
+
+enum LabourPunchType {
+  in
+  out
+
+  @@schema("labour")
+}
+
+/// 034: how a punch came to exist — a face-checked photo at the site, or a correction by a
+/// supervisor or the HR office with a reason.
+enum LabourPunchSource {
+  face
+  correction
+
+  @@schema("labour")
+}
+
+/// 031: why a labour punch was refused. Mirrors `hr.PunchRefusalReason` value for value.
+enum LabourPunchRefusalReason {
+  outside_geofence
+  unlocatable
+  face_mismatch
+  no_face_detected
 
   @@schema("labour")
 }
@@ -7854,17 +7942,21 @@ model LabourWorker {
   labourCode String
 
   fullName    String
-  phone       String
-  gender      String
-  dateOfBirth DateTime @db.Date
+  /// 031: optional — a supervisor registering at the gate may have neither.
+  fatherName  String?
+  phone       String?
+  /// Null only for workers registered before 031 whose free-text gender did not read as
+  /// male or female; such a worker cannot be priced until it is set.
+  gender      LabourGender?
+  dateOfBirth DateTime?     @db.Date
 
   aadhaarNumber String?
   bankAccount   String?
 
-  /// → settings.SkillCategory.
-  skillCategoryId String
+  /// → settings.SkillCategory. Optional since 031: pay comes from the site rate.
+  skillCategoryId String?
 
-  engagementType EngagementType
+  engagementType EngagementType @default(direct)
   /// Required when `engagementType` is contractor (FR-008); → partners vendor
   /// resolved via PartnersService (FR-034).
   contractorId   String?
@@ -8022,7 +8114,7 @@ model MusterLine {
 
   /// Snapshot of the worker's skill category at capture time so a mid-period skill
   /// change prices historical days correctly.
-  skillCategoryIdOnDay String
+  skillCategoryIdOnDay String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -8040,7 +8132,11 @@ model LabourPaymentSheet {
   id        String @id @default(cuid())
   companyId String
 
-  projectId String
+  /// The site's project for a 031 site sheet (null when the site has none); the billed
+  /// project for a pre-031 project sheet.
+  projectId String?
+  /// 031: set on a site sheet, null on a pre-031 project sheet.
+  siteId    String?
 
   periodFrom DateTime @db.Date
   periodTo   DateTime @db.Date
@@ -8072,6 +8168,7 @@ model LabourPaymentSheet {
 
   @@index([companyId])
   @@index([companyId, projectId, engagementType])
+  @@index([companyId, siteId])
   @@index([companyId, status])
   @@schema("labour")
 }
@@ -9315,4 +9412,261 @@ model Resignation {
   @@index([companyId, employeeId])
   @@index([companyId, status])
   @@schema("recruitment")
+}
+
+/// 031: the male and female daily rate HR sets for a site, effective-dated and appended
+/// forward exactly as `WageRate` is, so a sheet for a past period prices at the rate then in force.
+model SiteWageRate {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// → projects.Site.
+  siteId String
+  gender LabourGender
+
+  dailyRate     Decimal   @db.Decimal(12, 2)
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy String?
+  deletedAt DateTime?
+  deletedBy String?
+
+  @@index([companyId])
+  @@index([companyId, siteId, gender, effectiveFrom])
+  @@schema("labour")
+}
+
+/// 031: the sites a supervisor may register labour at and mark attendance for.
+model SupervisorSite {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// → shared.User.
+  userId String
+  /// → projects.Site.
+  siteId String
+
+  createdAt DateTime @default(now())
+  createdBy String?
+
+  @@unique([userId, siteId])
+  @@index([companyId])
+  @@index([companyId, siteId])
+  @@schema("labour")
+}
+
+/// 031: the last labour code number issued per company, bumped with UPDATE … RETURNING so two
+/// supervisors registering at the same moment can never be handed the same code.
+model LabourCodeSequence {
+  companyId  String @id
+  lastNumber Int    @default(0)
+
+  @@schema("labour")
+}
+
+/// 031: one accepted face punch. The day's muster line is derived from these: punch-in alone is
+/// a half day, punch-in and punch-out a full day.
+model LabourPunch {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId  String
+  siteId    String
+  /// Company-timezone calendar day.
+  punchDate DateTime        @db.Date
+  type      LabourPunchType
+  /// Server time — the punch is online-only, so the supervisor's clock is never trusted.
+  punchedAt DateTime        @default(now())
+
+  /// The supervisor (User) who took the photo, or who added it by correction.
+  supervisorId String
+
+  /// 034: a punch added by correction has no photo, face match or location.
+  source LabourPunchSource @default(face)
+  /// 034: set when the time was changed after it was recorded; the edits are in
+  /// `LabourPunchCorrection`.
+  correctedAt DateTime?
+
+  photoRef          String?
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  latitude               Decimal? @db.Decimal(10, 7)
+  longitude              Decimal? @db.Decimal(10, 7)
+  accuracyMetres         Decimal? @db.Decimal(8, 2)
+  geofenceDistanceMetres Decimal? @db.Decimal(10, 2)
+  /// Outside the fence or unlocatable, accepted because the company has not switched the
+  /// punch block on — the same rule employee punches follow.
+  geofenceViolation      Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([workerId, punchDate, type])
+  @@index([companyId])
+  @@index([companyId, siteId, punchDate])
+  @@schema("labour")
+}
+
+/// 034: one edit to a labour punch time — the edit history. `oldPunchedAt` is null when the punch
+/// was missing and the correction added it. Never updated or deleted.
+model LabourPunchCorrection {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId  String
+  siteId    String
+  punchDate DateTime        @db.Date
+  type      LabourPunchType
+
+  oldPunchedAt DateTime?
+  newPunchedAt DateTime
+  reason       String
+
+  correctedById String
+  createdAt     DateTime @default(now())
+
+  @@index([companyId])
+  @@index([workerId, punchDate])
+  @@schema("labour")
+}
+
+/// 034: a group photo a supervisor takes at a site for reference. It is **not** attendance: nobody
+/// is matched or marked from it.
+model LabourSitePhoto {
+  id        String @id @default(cuid())
+  companyId String
+
+  siteId    String
+  photoDate DateTime @db.Date
+  photoRef  String
+  note      String?
+
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+
+  takenById String
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([companyId, siteId, photoDate])
+  @@schema("labour")
+}
+
+/// 031: a refused labour punch. Nothing is written to attendance, so this is the only trace.
+model LabourPunchRefusal {
+  id        String @id @default(cuid())
+  companyId String
+
+  workerId     String
+  siteId       String
+  type         LabourPunchType
+  reason       LabourPunchRefusalReason
+  supervisorId String
+
+  latitude          Decimal  @db.Decimal(10, 7)
+  longitude         Decimal  @db.Decimal(10, 7)
+  accuracyMetres    Decimal? @db.Decimal(8, 2)
+  distanceMetres    Decimal? @db.Decimal(10, 2)
+  faceMatchDistance Decimal? @db.Decimal(6, 4)
+
+  createdAt DateTime @default(now())
+
+  @@index([companyId])
+  @@index([companyId, siteId, createdAt])
+  @@schema("labour")
+}
+
+enum EquipmentDisposalType {
+  scrapped
+  sold
+
+  @@schema("plant")
+}
+
+enum EquipmentScrapReason {
+  damaged_beyond_repair
+  end_of_life
+  accident
+  obsolete
+  other
+
+  @@schema("plant")
+}
+
+/// A machine retired by scrapping or sale (2026-10-17). At most one is in force per machine — a
+/// reversal stamps `reversedAt` and the machine goes back to the status it had (enforced by a partial
+/// unique index in the migration). Nothing is deleted: a reversed disposal stays as history.
+model EquipmentDisposal {
+  id          String @id @default(cuid())
+  companyId   String
+  equipmentId String
+
+  type         EquipmentDisposalType
+  disposalDate DateTime              @db.Date
+
+  /// Scrap only.
+  scrapReason      EquipmentScrapReason?
+  /// Sale: the buyer. Scrap: the scrap vendor or buyer, if any.
+  counterpartyName String?
+  /// Sale only.
+  buyerContact     String?
+  paymentMode      String?
+  invoiceNumber    String?
+
+  /// Sale amount, or the scrap value realised (optional for scrap).
+  valueRealised   Decimal? @db.Decimal(18, 2)
+  /// The machine's book value on the disposal date: from its depreciation where it has one,
+  /// otherwise as entered.
+  bookValue       Decimal? @db.Decimal(18, 2)
+  /// `depreciation` or `manual`.
+  bookValueSource String?
+  /// Sale: amount − book value. Null where either is unknown.
+  profitLoss      Decimal? @db.Decimal(18, 2)
+
+  /// The approver's name as written on the form.
+  approvedBy String
+  remarks    String?
+
+  attachmentRef  String?
+  attachmentName String?
+  attachmentMime String?
+
+  /// The status the machine had before, restored on reversal.
+  previousStatus EquipmentStatus
+  /// The site it was deployed at, released by the disposal; null if it was not deployed.
+  releasedSiteId String?
+  /// That site's project at the time, for the dashboard's project filter.
+  projectId      String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
+
+  @@index([companyId])
+  @@index([companyId, type, disposalDate])
+  @@index([equipmentId])
+  @@schema("plant")
+}
+
+/// A machine's history: what happened to it and who did it (2026-10-17). Written by disposal and
+/// its reversal today; any other lifecycle event can add a `kind` without a schema change.
+model EquipmentEvent {
+  id          String   @id @default(cuid())
+  companyId   String
+  equipmentId String
+  /// `disposed_scrapped`, `disposed_sold`, `disposal_reversed`, `site_released`.
+  kind        String
+  summary     String
+  detail      Json?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+  @@index([equipmentId, createdAt])
+  @@schema("plant")
 }

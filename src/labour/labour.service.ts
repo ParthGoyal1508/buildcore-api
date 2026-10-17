@@ -6,7 +6,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { LabourRefsService } from './labour-refs.service';
-import { WageRateService } from './wage-rates/wage-rate.service';
+import { SiteWageRateService } from './site-rates/site-wage-rate.service';
 import { computeWage, WorkedDay } from './payment-sheets/wage-calc.util';
 
 /** A caller stand-in used only for internal rate resolution that always runs inside a
@@ -42,7 +42,7 @@ export class LabourService {
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly refs: LabourRefsService,
-    private readonly wageRates: WageRateService,
+    private readonly siteRates: SiteWageRateService,
   ) {}
 
   async getLabourCostByProject(
@@ -60,10 +60,13 @@ export class LabourService {
     if (dateRange?.from) dateFilter.gte = dateRange.from;
     if (dateRange?.to) dateFilter.lte = dateRange.to;
 
-    const otMultiplier = companyId
-      ? (await this.refs.getLabourSettings(companyId)).otMultiplier
-      : 2;
-    const standardHours = this.refs.standardHoursPerDay;
+    const settings = companyId
+      ? await this.refs.getLabourSettings(companyId)
+      : null;
+    const otMultiplier = settings?.otMultiplier ?? 2;
+    // 034: the company's labour shift, the same one overtime is counted beyond.
+    const standardHours =
+      settings?.standardHours ?? this.refs.standardHoursPerDay;
 
     const { lines, unapprovedMusterCount } = await withRlsContext(
       this.prisma,
@@ -78,7 +81,7 @@ export class LabourService {
               ...(dateRange ? { date: dateFilter } : {}),
             },
           },
-          include: { muster: { select: { date: true } } },
+          include: { muster: { select: { date: true, siteId: true } } },
         });
         const unapproved = await tx.musterRoll.count({
           where: {
@@ -119,13 +122,19 @@ export class LabourService {
 
         const workedDays: WorkedDay[] = [];
         for (const line of workerLines) {
-          const resolved = await this.wageRates.resolveRate(SYSTEM_CALLER, {
-            projectId,
-            skillCategoryId: line.skillCategoryIdOnDay,
-            rateOverride,
-            date: line.muster.date,
+          // 031: the site × gender rate, falling back to the pre-031 project × skill rate.
+          const resolved = await this.siteRates.resolveDayRate(
+            SYSTEM_CALLER,
             tx,
-          });
+            {
+              rateOverride,
+              gender: worker.gender,
+              siteId: line.muster.siteId,
+              projectId,
+              skillCategoryIdOnDay: line.skillCategoryIdOnDay,
+              date: line.muster.date,
+            },
+          );
           if (!resolved) continue;
           workedDays.push({
             attendanceType: line.attendanceType,

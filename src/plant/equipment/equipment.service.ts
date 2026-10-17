@@ -16,6 +16,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { DISPOSED_STATUSES } from '../disposal/in-service';
+
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -200,7 +202,10 @@ export class EquipmentService {
       ...companyScope(caller, query.companyId),
       ...(query.categoryId ? { categoryId: query.categoryId } : {}),
       ...(query.siteId ? { deployedSiteId: query.siteId } : {}),
-      ...(query.status ? { status: query.status } : {}),
+      // Scrapped and sold machines appear only when asked for by status (2026-10-17).
+      ...(query.status
+        ? { status: query.status }
+        : { status: { notIn: DISPOSED_STATUSES } }),
       ...(query.ownership ? { ownership: query.ownership } : {}),
       ...(query.search
         ? {
@@ -257,7 +262,10 @@ export class EquipmentService {
             ...companyScope(caller, query.companyId),
             ...(query.categoryId ? { categoryId: query.categoryId } : {}),
             ...(query.siteId ? { deployedSiteId: query.siteId } : {}),
-            ...(query.status ? { status: query.status } : {}),
+            // Scrapped and sold machines appear only when asked for by status (2026-10-17).
+            ...(query.status
+              ? { status: query.status }
+              : { status: { notIn: DISPOSED_STATUSES } }),
             ...(query.ownership ? { ownership: query.ownership } : {}),
           },
           orderBy: { code: 'asc' },
@@ -741,6 +749,11 @@ export class EquipmentService {
   ): Promise<EquipmentRow> {
     // FR-002. Checked before anything else so the refusal is about the intent, not
     // about whichever validation happened to run first.
+    if (dto.status && DISPOSED_STATUSES.includes(dto.status)) {
+      throw new BadRequestException(
+        'A machine is scrapped or sold through Dispose, which records who approved it and why.',
+      );
+    }
     if (dto.status === EquipmentStatus.under_maintenance) {
       throw new BadRequestException(
         'A machine is put under maintenance by opening a maintenance job, not by ' +
@@ -769,6 +782,17 @@ export class EquipmentService {
         caller,
         dto.deployedSiteId,
         existing.companyId,
+      );
+    }
+
+    // A disposed machine is out of service until the disposal is reversed (2026-10-17): no status
+    // change and no deployment by editing the row.
+    if (
+      DISPOSED_STATUSES.includes(existing.status) &&
+      (dto.status !== undefined || dto.deployedSiteId)
+    ) {
+      throw new ConflictException(
+        `This machine is ${existing.status}. Reverse the disposal before changing its status or deploying it.`,
       );
     }
 

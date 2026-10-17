@@ -23,10 +23,12 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
-import { ProjectsService } from '../../projects/portfolio/projects.service';
+import { SitesService } from '../../projects/sites/sites.service';
 import { ACKNOWLEDGEMENT_NAMESPACE } from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
-import { WageRateService } from '../wage-rates/wage-rate.service';
+import { SiteWageRateService } from '../site-rates/site-wage-rate.service';
+import { LabourDayService } from '../attendance/labour-day.service';
+import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { computeWage, roundMoney, WorkedDay } from './wage-calc.util';
 import { computeDenominationBreakup, WorkerNet } from './denomination.util';
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
@@ -45,78 +47,112 @@ export class PaymentSheetService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly refs: LabourRefsService,
-    private readonly projects: ProjectsService,
-    private readonly wageRates: WageRateService,
+    private readonly sites: SitesService,
+    private readonly siteRates: SiteWageRateService,
+    private readonly supervisorSites: SupervisorSiteService,
     private readonly storage: StorageService,
     private readonly images: ImageProcessingService,
+    private readonly days: LabourDayService,
   ) {}
 
   /**
-   * Generates a draft sheet from the period's approved musters (FR-022): one line
-   * per worker aggregating days, overtime, gross, advance deductions and net. A
-   * worked date with no applicable rate fails with 409 naming the project, skill
-   * category and date (FR-007). An overlapping sheet is rejected (FR-023).
+   * Generates a draft sheet for one site and period (031) from the period's approved musters —
+   * which, since 031, the face punches write: one line per worker with days (since 034 counted from
+   * the hours between punch in and out, by the company's day rules), the rate for their gender at
+   * the site, gross, advance deductions and net. A worked day with no rate fails with 409 naming
+   * the worker, gender and date, and a past day with a missing punch fails until it is corrected.
+   * A sheet overlapping this one for the same site, or a pre-031 project sheet covering the site,
+   * is rejected (FR-023).
    */
   async generate(
     caller: AuthenticatedUser,
     dto: {
       companyId?: string;
-      projectId: string;
+      siteId: string;
       periodFrom: string;
       periodTo: string;
-      engagementType: EngagementType;
+      engagementType?: EngagementType;
     },
     ipAddress: string,
   ) {
-    const companyId = companyScope(caller, dto.companyId).companyId;
-    if (!companyId) {
-      throw new NotFoundException('Company not found');
-    }
     const periodFrom = new Date(`${dto.periodFrom.slice(0, 10)}T00:00:00.000Z`);
     const periodTo = new Date(`${dto.periodTo.slice(0, 10)}T00:00:00.000Z`);
     if (periodTo < periodFrom) {
-      throw new BadRequestException('periodTo must be on or after periodFrom');
+      throw new BadRequestException(
+        'The "to" date must be on or after the "from" date',
+      );
     }
+    const engagementType = dto.engagementType ?? EngagementType.direct;
 
-    const { otMultiplier } = await this.refs.getLabourSettings(companyId);
-    const standardHours = this.refs.standardHoursPerDay;
-    const siteIds = await this.projects.getSitesByProject(
-      dto.projectId,
+    await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
+    const site = await this.sites.getSiteById(
       rlsContextFor(caller),
+      dto.siteId,
+    );
+    assertInScope(caller, site, `Site ${dto.siteId}`);
+    // The sheet belongs to the site's company, whoever generates it.
+    const companyId = site.companyId;
+    const projectId = site.projectId ?? null;
+
+    // 034: overtime is priced on the company's labour shift, the one it is counted beyond.
+    const { otMultiplier, standardHours } = await this.refs.getLabourSettings(
+      companyId,
     );
 
     const sheetId = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        // Overlap guard (FR-023).
+        // Overlap guard (FR-023): this site's sheets, and any pre-031 sheet for its project,
+        // which priced this site's musters too.
         const overlap = await tx.labourPaymentSheet.findFirst({
           where: {
             companyId,
-            projectId: dto.projectId,
-            engagementType: dto.engagementType,
+            engagementType,
             deletedAt: null,
             periodFrom: { lte: periodTo },
             periodTo: { gte: periodFrom },
+            OR: [
+              { siteId: dto.siteId },
+              ...(projectId ? [{ siteId: null, projectId }] : []),
+            ],
           },
         });
         if (overlap) {
           throw new ConflictException({
-            message: 'A payment sheet overlapping this period already exists',
+            message: `A payment sheet for ${overlap.periodFrom
+              .toISOString()
+              .slice(0, 10)} to ${overlap.periodTo
+              .toISOString()
+              .slice(0, 10)} already covers part of these dates`,
             existingSheetId: overlap.id,
           });
         }
 
-        if (siteIds.length === 0) {
-          throw new ConflictException(
-            'This project has no sites, so there are no approved musters to bill',
-          );
+        // 034: a day with a missing punch is not counted until it is corrected, and once a sheet
+        // covers it, it can no longer be corrected — so the sheet waits for the corrections.
+        const unresolved = await this.days.unresolvedDays(
+          tx,
+          dto.siteId,
+          periodFrom,
+          periodTo,
+        );
+        if (unresolved.length > 0) {
+          throw new ConflictException({
+            code: 'LABOUR_UNRESOLVED_PUNCHES',
+            message: `${unresolved.length} labour day${
+              unresolved.length === 1 ? ' has' : 's have'
+            } a missing or wrong punch between these dates (first on ${
+              unresolved[0].date
+            }). Correct them under Labour → Muster attendance, then generate again.`,
+            unresolved,
+          });
         }
 
         const musterLines = await tx.musterLine.findMany({
           where: {
             muster: {
-              siteId: { in: siteIds },
+              siteId: dto.siteId,
               date: { gte: periodFrom, lte: periodTo },
               status: MusterStatus.approved,
               deletedAt: null,
@@ -127,7 +163,7 @@ export class PaymentSheetService {
 
         if (musterLines.length === 0) {
           throw new ConflictException(
-            'No approved musters found for this project and period',
+            'No attendance was marked at this site between these dates',
           );
         }
 
@@ -143,7 +179,7 @@ export class PaymentSheetService {
         const perWorker = new Map<string, typeof musterLines>();
         for (const line of musterLines) {
           const worker = workerById.get(line.workerId);
-          if (!worker || worker.engagementType !== dto.engagementType) continue;
+          if (!worker || worker.engagementType !== engagementType) continue;
           const list = perWorker.get(line.workerId) ?? [];
           list.push(line);
           perWorker.set(line.workerId, list);
@@ -151,17 +187,20 @@ export class PaymentSheetService {
 
         if (perWorker.size === 0) {
           throw new ConflictException(
-            'No approved musters for the requested engagement type in this period',
+            engagementType === EngagementType.direct
+              ? 'No directly engaged labour worked at this site between these dates'
+              : 'No contractor labour worked at this site between these dates',
           );
         }
 
         const created = await tx.labourPaymentSheet.create({
           data: {
             companyId,
-            projectId: dto.projectId,
+            projectId,
+            siteId: dto.siteId,
             periodFrom,
             periodTo,
-            engagementType: dto.engagementType,
+            engagementType,
             status: PaymentSheetStatus.draft,
             createdBy: caller.id,
           },
@@ -180,24 +219,33 @@ export class PaymentSheetService {
 
           const workedDays: WorkedDay[] = [];
           let resolvedRateForLine = rateOverride ?? 0;
+          let rateSource: RateSource = RateSource.site_rate;
           for (const line of lines) {
-            const resolved = await this.wageRates.resolveRate(caller, {
-              projectId: dto.projectId,
-              skillCategoryId: line.skillCategoryIdOnDay,
+            const resolved = await this.siteRates.resolveDayRate(caller, tx, {
               rateOverride,
+              gender: worker.gender,
+              siteId: dto.siteId,
+              projectId,
+              skillCategoryIdOnDay: line.skillCategoryIdOnDay,
               date: line.muster.date,
-              tx,
             });
             if (!resolved) {
+              const date = line.muster.date.toISOString().slice(0, 10);
               throw new ConflictException({
-                message:
-                  'No wage rate applies for a worked date; create the rate before generating',
-                projectId: dto.projectId,
-                skillCategoryId: line.skillCategoryIdOnDay,
-                date: line.muster.date.toISOString().slice(0, 10),
+                code: worker.gender
+                  ? 'LABOUR_SITE_RATE_MISSING'
+                  : 'LABOUR_GENDER_MISSING',
+                message: worker.gender
+                  ? `No ${worker.gender} daily rate is set for ${site.name} on ${date}. Set it under Labour → Site rates, then generate again.`
+                  : `${worker.fullName} (${worker.labourCode}) has no gender recorded, so no rate applies. Set it on their labour record, then generate again.`,
+                workerId,
+                siteId: dto.siteId,
+                gender: worker.gender,
+                date,
               });
             }
             resolvedRateForLine = resolved.rate;
+            rateSource = resolved.source;
             workedDays.push({
               attendanceType: line.attendanceType,
               overtimeHours: line.overtimeHours
@@ -228,10 +276,7 @@ export class PaymentSheetService {
               daysWorked: wage.daysWorked,
               overtimeHours: wage.overtimeHours,
               resolvedRate: resolvedRateForLine,
-              rateSource:
-                rateOverride !== null
-                  ? RateSource.override
-                  : RateSource.project_rate,
+              rateSource,
               grossWage: wage.grossWage,
               deductions: deductions as unknown as Prisma.InputJsonValue,
               netPayable,
@@ -267,6 +312,7 @@ export class PaymentSheetService {
     query: {
       companyId?: string;
       projectId?: string;
+      siteId?: string;
       engagementType?: EngagementType;
       status?: PaymentSheetStatus;
     },
@@ -280,6 +326,7 @@ export class PaymentSheetService {
             ...companyScope(caller, query.companyId),
             deletedAt: null,
             ...(query.projectId ? { projectId: query.projectId } : {}),
+            ...(query.siteId ? { siteId: query.siteId } : {}),
             ...(query.engagementType
               ? { engagementType: query.engagementType }
               : {}),
@@ -291,6 +338,7 @@ export class PaymentSheetService {
     return rows.map((row) => ({
       id: row.id,
       projectId: row.projectId,
+      siteId: row.siteId,
       periodFrom: row.periodFrom.toISOString().slice(0, 10),
       periodTo: row.periodTo.toISOString().slice(0, 10),
       engagementType: row.engagementType,
@@ -329,6 +377,7 @@ export class PaymentSheetService {
     return {
       id: row.id,
       projectId: row.projectId,
+      siteId: row.siteId,
       periodFrom: row.periodFrom.toISOString().slice(0, 10),
       periodTo: row.periodTo.toISOString().slice(0, 10),
       engagementType: row.engagementType,

@@ -2,6 +2,8 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HireBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { DISPOSED_STATUSES } from './disposal/in-service';
+
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { companyScope } from '../settings/company-scope';
@@ -242,7 +244,11 @@ export class PlantService implements OnModuleInit {
       rlsContextFor(caller),
       (tx) =>
         tx.equipment.findMany({
-          where: companyScope(caller),
+          where: {
+            ...companyScope(caller),
+            // Utilisation is about the fleet in service (2026-10-17).
+            status: { notIn: DISPOSED_STATUSES },
+          },
           orderBy: { code: 'asc' },
           select: {
             code: true,

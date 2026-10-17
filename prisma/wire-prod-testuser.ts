@@ -166,9 +166,7 @@ async function main() {
     await prisma.userRole.create({
       data: { userId: user.id, roleId: siteUser.id },
     });
-    console.log(
-      'granted role: General User (MY_WORKSPACE)',
-    );
+    console.log('granted role: General User (MY_WORKSPACE)');
   }
 
   // ------------------------------------------------------------------ employee

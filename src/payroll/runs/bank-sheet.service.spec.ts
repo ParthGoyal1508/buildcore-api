@@ -5,6 +5,7 @@ import {
   BANK_SHEET_COLUMN_COUNT,
   BankSheetService,
   IFSC_PATTERN,
+  salaryBankSheetFilename,
 } from './bank-sheet.service';
 
 /**
@@ -65,6 +66,9 @@ function employee(over: Partial<EmployeeFixture> = {}): EmployeeFixture {
   };
 }
 
+/** Whether each `recoveries.apply` call was allowed to record recoveries. */
+let recoveryWrites: boolean[] = [];
+
 function build(opts: {
   employees?: EmployeeFixture[];
   netPay?: number[];
@@ -93,6 +97,7 @@ function build(opts: {
     },
     company: {
       findUnique: async () => ({
+        name: 'Parth Realcon Pvt. Ltd.',
         payrollDebitAccountNumber:
           opts.debitAccount === undefined
             ? '09310400000819'
@@ -100,6 +105,7 @@ function build(opts: {
       }),
     },
     employee: { findMany: async () => employees },
+    bankSheetExport: { create: async () => ({}) },
   };
   const prisma = {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
@@ -109,6 +115,12 @@ function build(opts: {
     decrypt: (value: string | null) => value?.replace(/^enc:/, '') ?? null,
   };
   const schedule = { outstandingApproval: async () => null };
+  // 2026-10-17: every generated file is kept for the history.
+  const storage = {
+    put: async () => 'ref-1',
+    get: async () => Buffer.from(''),
+    delete: async () => undefined,
+  };
   const config = { get: () => FORMAT };
   // 021 FR-010. Recovers nothing by default — these tests are about the file's shape, and a fixture
   // that quietly reduced a transfer would make every amount assertion wrong for an unrelated reason.
@@ -117,8 +129,10 @@ function build(opts: {
       _ctx: unknown,
       _run: unknown,
       lines: { employeeId: string; netPay: number }[],
-    ) =>
-      new Map(
+      options?: { write: boolean },
+    ) => {
+      recoveryWrites.push(options?.write ?? true);
+      return new Map(
         lines.map((l) => [
           l.employeeId,
           {
@@ -137,7 +151,8 @@ function build(opts: {
               ),
           },
         ]),
-      ),
+      );
+    },
   };
 
   return new BankSheetService(
@@ -146,6 +161,7 @@ function build(opts: {
     schedule as never,
     recoveries as never,
     config as never,
+    storage as never,
   );
 }
 
@@ -441,5 +457,88 @@ describe('advance recoveries on the sheet', () => {
     await workbook.xlsx.load(buffer as never);
 
     expect(workbook.getWorksheet('Advance Recoveries')!.rowCount).toBe(1);
+  });
+});
+
+describe('BankSheetService — salary bank sheet by month (2026-10-17)', () => {
+  beforeEach(() => {
+    recoveryWrites = [];
+  });
+
+  it('previews count, total and reconciliation without recording any recovery', async () => {
+    const service = build({
+      employees: [
+        employee({ id: 'e1' }),
+        employee({ id: 'e2', employeeCode: 'EMP002', ifscCode: 'BAD' }),
+      ],
+      netPay: [55000, 20000],
+    });
+    const preview = await service.preview(caller, 'run-1');
+    expect(recoveryWrites).toEqual([false]);
+    expect(preview.employeeCount).toBe(1);
+    expect(preview.transferTotal).toBe(55000);
+    expect(preview.payrollNetTotal).toBe(75000);
+    expect(preview.leftOff).toEqual([
+      expect.objectContaining({ employeeId: 'e2', kind: 'bank_details' }),
+    ]);
+    expect(preview.reconciles).toBe(true);
+  });
+
+  it('leaves off zero net pay and anyone excluded, and lists why', async () => {
+    const service = build({
+      employees: [
+        employee({ id: 'e1' }),
+        employee({ id: 'e2', employeeCode: 'EMP002' }),
+        employee({ id: 'e3', employeeCode: 'EMP003' }),
+      ],
+      netPay: [55000, 0, 30000],
+    });
+    const preview = await service.preview(caller, 'run-1', {
+      excludeEmployeeIds: ['e3'],
+    });
+    expect(preview.employeeCount).toBe(1);
+    expect(preview.leftOff.map((l) => [l.employeeId, l.kind])).toEqual([
+      ['e2', 'nothing_to_pay'],
+      ['e3', 'excluded'],
+    ]);
+    expect(preview.reconciles).toBe(true);
+
+    const { buffer } = await service.build(caller, 'run-1', {
+      excludeEmployeeIds: ['e3'],
+    });
+    const { main, unpayable } = await sheetOf(buffer);
+    expect(main.rowCount).toBe(2);
+    expect(unpayable.rowCount).toBe(3);
+  });
+
+  it('uses a debit account chosen for the sheet over the company default', async () => {
+    const service = build({});
+    const { buffer } = await service.build(caller, 'run-1', {
+      debitAccount: '00112233445566',
+    });
+    const { main } = await sheetOf(buffer);
+    expect(
+      main.getRow(2).getCell(BANK_SHEET_COLUMN.debitAccount + 1).value,
+    ).toBe('00112233445566');
+  });
+
+  it('names the file Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx', async () => {
+    expect(salaryBankSheetFilename('Parth Realcon Pvt. Ltd.', '2026-09')).toBe(
+      'Salary_Bank_Sheet_Parth_Realcon_Pvt_Ltd_September_2026.xlsx',
+    );
+    const { filename } = await build({}).build(caller, 'run-1', {
+      companyNamedFile: true,
+    });
+    expect(filename).toBe(
+      'Salary_Bank_Sheet_Parth_Realcon_Pvt_Ltd_July_2026.xlsx',
+    );
+  });
+
+  it('writes no total row, as the bank upload sample has none', async () => {
+    const { buffer } = await build({
+      employees: [employee({ id: 'e1' }), employee({ id: 'e2' })],
+    }).build(caller, 'run-1');
+    const { main } = await sheetOf(buffer);
+    expect(main.rowCount).toBe(3);
   });
 });

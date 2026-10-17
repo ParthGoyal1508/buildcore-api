@@ -18,7 +18,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { contentDispositionFor } from '../common/storage/file-type';
-import { ListNocsDto, UploadNocDto } from './dto/noc.dto';
+import { ListNocsDto, NocStatusQueryDto, UploadNocDto } from './dto/noc.dto';
 import { NocsService } from './nocs.service';
 
 /**
@@ -42,6 +42,24 @@ export class NocsController {
     @Query() query: ListNocsDto,
   ) {
     return this.nocs.list(caller, query);
+  }
+
+  @Get('status')
+  @ApiOperation({
+    summary: 'Open or closed for a page of records',
+    description:
+      'Open until a NOC is uploaded, closed from then on. A work order closes on its ' +
+      'NOC after the work order, not the one after the LOI.',
+  })
+  async status(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: NocStatusQueryDto,
+  ) {
+    return this.nocs.statuses(
+      caller,
+      query.subjectType,
+      query.subjectIds.split(','),
+    );
   }
 
   @Post()

@@ -3,6 +3,8 @@ import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'nestjs-prisma';
 
+import { assertInService } from '../disposal/in-service';
+
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -292,6 +294,7 @@ export class FuelService {
           );
         }
         assertInScope(caller, equipment, 'Equipment');
+        assertInService(equipment);
 
         const category = await tx.equipmentCategory.findUnique({
           where: { id: equipment.categoryId },
