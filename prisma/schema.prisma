@@ -6646,6 +6646,12 @@ model Payment {
   proofRef        String?
   proofUploadedAt DateTime?
 
+  /// The client's `Idempotency-Key` header (036 M10). A double-clicked "Record payment" sends
+  /// the same key twice; the unique index below makes the second insert impossible, and the
+  /// service answers it with the payment the first one created. Null for payments recorded
+  /// without a key — Postgres treats NULLs as distinct, so they never collide.
+  idempotencyKey  String?
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -6653,6 +6659,8 @@ model Payment {
   updatedAt DateTime @updatedAt
 
   allocations PaymentAllocation[]
+
+  @@unique([companyId, idempotencyKey])
 
   @@index([companyId])
   @@index([companyId, vendorId])

@@ -3980,11 +3980,19 @@ would push people to record it somewhere else.
 `referenceNumber` above is a number somebody typed. This is the document behind
 it, which is the whole of what US7 closes.']
   proofUploadedAt DateTime
+  idempotencyKey String [note: 'The client\'s `Idempotency-Key` header (036 M10). A double-clicked "Record payment" sends
+the same key twice; the unique index below makes the second insert impossible, and the
+service answers it with the payment the first one created. Null for payments recorded
+without a key — Postgres treats NULLs as distinct, so they never collide.']
   deleted Boolean [not null, default: false]
   deletedAt DateTime
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   allocations PaymentAllocation [not null]
+
+  indexes {
+    (companyId, idempotencyKey) [unique]
+  }
 }
 
 Table PaymentAllocation {

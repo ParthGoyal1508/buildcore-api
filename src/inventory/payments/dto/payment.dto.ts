@@ -14,6 +14,7 @@ import {
   IsString,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 /**
@@ -42,11 +43,32 @@ export class CreatePaymentDto {
   @IsEnum(PaymentMode)
   paymentMode!: PaymentMode;
 
-  @ApiProperty({ description: 'UTR, cheque number or UPI reference' })
+  /**
+   * Required for every mode except cash (036 M10): a cash payment has no UTR or cheque to quote,
+   * and requiring one made people type "cash" or "-" into a field that is meant to be traceable.
+   */
+  @ApiPropertyOptional({
+    description:
+      'UTR, cheque number or UPI reference. Required unless paymentMode is cash.',
+  })
+  // Skipped for cash with nothing typed (absent, null or blank). Cash *with* a reference is still
+  // validated, so it cannot exceed the column or arrive as a non-string.
+  @ValidateIf(
+    (dto: CreatePaymentDto) =>
+      dto.paymentMode !== PaymentMode.cash ||
+      !(
+        dto.referenceNumber === undefined ||
+        dto.referenceNumber === null ||
+        (typeof dto.referenceNumber === 'string' &&
+          dto.referenceNumber.trim() === '')
+      ),
+  )
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({
+    message: 'referenceNumber is required unless the payment is in cash',
+  })
   @MaxLength(60)
-  referenceNumber!: string;
+  referenceNumber?: string;
 }
 
 export class ListPaymentsDto {

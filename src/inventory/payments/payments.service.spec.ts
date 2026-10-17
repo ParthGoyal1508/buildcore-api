@@ -48,6 +48,8 @@ const build = (bills: ReturnType<typeof bill>[]) => {
       findMany: jest.fn().mockResolvedValue([]),
     },
     payment: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
       create: jest.fn(async ({ data }: never) => {
         createdPayment = data as Record<string, unknown>;
         return {
@@ -230,5 +232,110 @@ describe('PaymentsService — automatic FIFO allocation (FR-005, research.md §7
     expect(billUpdates).toEqual([
       { id: 'open', paidAmount: 2000, status: PurchaseBillStatus.paid },
     ]);
+  });
+});
+
+describe('PaymentsService — cash, duplicates and double submits (036 M10)', () => {
+  it('records a cash payment with no reference as a blank one', async () => {
+    const { service, payment } = build([]);
+    await service.create(
+      caller,
+      {
+        ...dto(100),
+        paymentMode: PaymentMode.cash,
+        referenceNumber: undefined,
+      },
+      '127.0.0.1',
+    );
+    expect(payment().referenceNumber).toBe('');
+  });
+
+  it('stores the Idempotency-Key with the payment', async () => {
+    const { service, payment } = build([]);
+    const created = await service.create(
+      caller,
+      dto(100),
+      '127.0.0.1',
+      undefined,
+      'key-1',
+    );
+    expect(payment().idempotencyKey).toBe('key-1');
+    expect(created.replayed).toBe(false);
+  });
+
+  const earlier = (over: Record<string, unknown> = {}) => ({
+    id: 'pay-0',
+    companyId: 'co-1',
+    vendorId: 'vendor-1',
+    amount: decimal(100),
+    allocatedAmount: decimal(0),
+    date: new Date('2026-09-04T00:00:00.000Z'),
+    paymentMode: PaymentMode.bank_transfer,
+    referenceNumber: 'UTR-1',
+    proofRef: null,
+    proofUploadedAt: null,
+    createdAt: new Date(),
+    deleted: false,
+    _count: { allocations: 0 },
+    ...over,
+  });
+
+  it('answers a repeated key with the first payment, recording nothing new', async () => {
+    const { service, prisma } = build([bill('old', 5000)]);
+    prisma.tx.payment.findUnique.mockResolvedValue(earlier());
+    const replay = await service.create(
+      caller,
+      dto(100),
+      '127.0.0.1',
+      undefined,
+      'key-1',
+    );
+    expect(replay).toMatchObject({ id: 'pay-0', replayed: true });
+    expect(prisma.tx.payment.create).not.toHaveBeenCalled();
+    expect(prisma.tx.purchaseBill.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a key reused for a different payment', async () => {
+    const { service, prisma } = build([]);
+    prisma.tx.payment.findUnique.mockResolvedValue(
+      earlier({ amount: decimal(999) }),
+    );
+    await expect(
+      service.create(caller, dto(100), '127.0.0.1', undefined, 'key-1'),
+    ).rejects.toThrow(/different payment/);
+  });
+
+  it('answers the loser of a same-key race with the winner', async () => {
+    const { service, prisma } = build([]);
+    prisma.tx.payment.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(earlier());
+    prisma.tx.payment.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('unique', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    const result = await service.create(
+      caller,
+      dto(100),
+      '127.0.0.1',
+      undefined,
+      'key-1',
+    );
+    expect(result).toMatchObject({ id: 'pay-0', replayed: true });
+  });
+
+  it('warns, without refusing, when the vendor already has a payment with this reference', async () => {
+    const { service, prisma } = build([]);
+    prisma.tx.payment.findFirst.mockResolvedValue({
+      date: new Date('2026-09-01T00:00:00.000Z'),
+      amount: decimal(5000),
+    });
+    const created = await service.create(caller, dto(100), '127.0.0.1');
+    expect(created.warnings).toHaveLength(1);
+    expect(created.warnings[0]).toMatch(
+      /UTR-1 was already used .* on 01-09-2026/,
+    );
   });
 });
