@@ -825,46 +825,65 @@ describe('Dashboard reminders (e2e)', () => {
      * would have passed too; the label was never wrong.
      */
     it('names the department and designation rather than their ids', async () => {
-      const employee = await sys.employee.findFirst({
-        where: {
+      // Its own employee, department and designation (036 follow-up): the suite used to look for
+      // one in the developer data and fail on a freshly provisioned database, which has none.
+      const site = await sys.site.create({
+        data: {
           companyId: callerCompanyId,
-          isActive: true,
-          departmentId: { not: null },
-          designationId: { not: null },
-        },
-        select: {
-          employeeCode: true,
-          departmentId: true,
-          designationId: true,
+          name: unique('Site'),
+          latitude: 12.97,
+          longitude: 77.59,
+          geofenceRadiusMeters: 100,
+          weeklyOffDay: 0,
         },
       });
-      // Not skipped when absent: a test that quietly passes on no data is the failure
-      // mode this suite exists to avoid.
-      expect(employee).not.toBeNull();
+      const shift = await sys.shift.create({
+        data: {
+          companyId: callerCompanyId,
+          name: unique('Shift'),
+          inTime: new Date('1970-01-01T09:00:00Z'),
+          outTime: new Date('1970-01-01T18:00:00Z'),
+        },
+      });
+      const department = await sys.department.create({
+        data: { companyId: callerCompanyId, name: unique('Dept') },
+      });
+      const designation = await sys.designation.create({
+        data: { companyId: callerCompanyId, name: unique('Desig') },
+      });
+      const employee = await sys.employee.create({
+        data: {
+          companyId: callerCompanyId,
+          siteId: site.id,
+          shiftId: shift.id,
+          employeeCode: unique('EMP'),
+          firstName: 'Dummy',
+          lastName: 'Roster',
+          departmentId: department.id,
+          designationId: designation.id,
+        },
+      });
 
-      const [department, designation] = await Promise.all([
-        sys.department.findUniqueOrThrow({
-          where: { id: employee.departmentId },
-          select: { name: true },
-        }),
-        sys.designation.findUniqueOrThrow({
-          where: { id: employee.designationId },
-          select: { name: true },
-        }),
-      ]);
+      try {
+        const res = await http()
+          .post('/reports/employee/run')
+          .set(auth())
+          .send({})
+          .expect(201);
 
-      const res = await http()
-        .post('/reports/employee/run')
-        .set(auth())
-        .send({})
-        .expect(201);
-
-      const row = res.body.rows.find(
-        (r: { employeeCode: string }) =>
-          r.employeeCode === employee.employeeCode,
-      );
-      expect(row.department).toBe(department.name);
-      expect(row.designation).toBe(designation.name);
+        const row = res.body.rows.find(
+          (r: { employeeCode: string }) =>
+            r.employeeCode === employee.employeeCode,
+        );
+        expect(row.department).toBe(department.name);
+        expect(row.designation).toBe(designation.name);
+      } finally {
+        await sys.employee.delete({ where: { id: employee.id } });
+        await sys.department.delete({ where: { id: department.id } });
+        await sys.designation.delete({ where: { id: designation.id } });
+        await sys.shift.delete({ where: { id: shift.id } });
+        await sys.site.delete({ where: { id: site.id } });
+      }
     });
 
     it('refuses the cross-company employee search', async () => {
@@ -883,10 +902,10 @@ describe('Dashboard reminders (e2e)', () => {
       await http().get('/group/companies').set(auth()).expect(200);
     });
 
-    // 2026-10-15: the calendar is computed now, not a "module pending" placeholder, and
-    // it gates its payroll figures per scheme rather than at the route — so the engineer
-    // (DASHBOARD, no PAYROLL or CHALLANS) reaches it and is given no dates.
-    it('computes the statutory calendar, showing no payroll dates without payroll access', async () => {
+    // 2026-10-15: the calendar is computed now, not a "module pending" placeholder.
+    // 2026-10-16 (access-control audit, H1): every /group route sits behind GroupAccessGuard, so
+    // a single-company engineer is refused the calendar outright rather than shown an empty one.
+    it('computes the statutory calendar for a group administrator and refuses everyone else', async () => {
       const admin = await http()
         .get('/group/statutory-calendar')
         .set(auth())
@@ -897,9 +916,8 @@ describe('Dashboard reminders (e2e)', () => {
       const engineer = await http()
         .get('/group/statutory-calendar')
         .set(auth(engineerToken))
-        .expect(200);
-      expect(engineer.body.value.schemes).toEqual([]);
-      expect(engineer.body.value.items).toEqual([]);
+        .expect(403);
+      expect(engineer.body.code).toBe('GROUP_ACCESS_REQUIRED');
     });
   });
 });
