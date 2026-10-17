@@ -231,6 +231,22 @@ Both agents are merged and pushed.
 - Three plant pickers are still capped at 200: service-bill vendor, the equipment page site filter, and the spare-part linked item.
 - File-download controllers still override the exposed headers, hiding `X-Company-Id` on downloads.
 
+### Wave 5: outcome (18-10-2026)
+
+**Browser walkthrough.** Production builds on separate ports, against a copy of the local `buildcore` data. Headless Chrome visited all 142 routes at 1440, 820 and 390 px: 426 page visits, recording failed API calls, console and page errors, error boxes, horizontal overflow and screenshots.
+
+**Found and fixed (merged, pushed):**
+- A missing stored file returned 500 instead of 404, which broke company logos. Both storage adapters now return 404, with a spec.
+- The group P&L refused 4 or more projects: B11 had capped `projectIds` at 100 characters. It now allows 200 ids.
+- `@MaxLength` was duplicated beside `@Length` on 4 fields, which made the generated `src/metadata.ts` fail to type-check. Any local `metadata.ts` generated before this needs deleting once.
+- The equipment register scrolled sideways on phones, because of a long documents badge.
+
+**Live API checks pass:** Inactive filter (B12), invite rate limit (B1), `X-Company-Id` and `COMPANY_CHANGED` (B17), helmet headers (B9), and a friendly 413 above the default body limit (B8).
+
+**Full e2e** on a freshly provisioned database (`migrate deploy`, `db seed`, `seed:chains`, `seed:defaults`), every suite one at a time: 58 suites, all pass. `account-creation` and `search` failed once in the full run, then passed on two re-runs, including in the same order. Treated as flaky timing (first suites while the compile cache was cold).
+
+**Manual checklist:** `manual-checklist.md`.
+
 ### Remaining for the final pass (written 18-10-2026, while Wave 4 runs)
 
 Wave 4 runs two agents: **design system + accessibility** (A21–A23, A29, A16, lint rules) and **follow-ups** (the Wave 3 list plus company-scoped roles and the e2e environment). Everything below is outside both.
