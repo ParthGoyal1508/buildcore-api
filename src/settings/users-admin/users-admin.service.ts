@@ -13,6 +13,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { assertMayGrant } from '../roles/grant-ceiling';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor } from '../../common/prisma/rls-context';
+import { effectiveCompanyId } from '../company-scope';
 import { UserSummary } from '../../users/user-summary';
 import { UsersService } from '../../users/users.service';
 import { AccountDeactivationService } from '../../users/account-deactivation.service';
@@ -56,6 +57,9 @@ export class UsersAdminService {
     ipAddress: string,
   ): Promise<UserSummary> {
     this.assertMayAdminister(caller);
+    await this.assertMayActOn(caller, id, {
+      removesAccess: dto.status === UserStatus.deactivated,
+    });
 
     if (dto.roleId !== undefined) {
       // 2026-10-16 audit, C1. Before this, any USER_MANAGEMENT holder could give any account —
@@ -120,6 +124,7 @@ export class UsersAdminService {
     ipAddress: string,
   ): Promise<void> {
     this.assertMayAdminister(caller);
+    await this.assertMayActOn(caller, id, { removesAccess: true });
     await this.assertNotLastSuperAdmin(id);
 
     await this.usersService.deleteAccount(id, rlsContextFor(caller));
@@ -129,7 +134,7 @@ export class UsersAdminService {
       action: AuditAction.DELETE,
       entityId: id,
       accountId: caller.id,
-      companyId: caller.companyId,
+      companyId: effectiveCompanyId(caller),
       ipAddress,
     });
   }
@@ -145,6 +150,42 @@ export class UsersAdminService {
       throw new ConflictException(
         'This is the last active Super Admin account; it cannot be deactivated, deleted, or reassigned',
       );
+    }
+  }
+
+  /**
+   * Who an administrator may act on (036 C3).
+   *
+   * - **Not themselves, to remove their own access.** Deleting or deactivating your own account
+   *   locks you out mid-session and, for the only administrator of a company, locks the company
+   *   out of its own user management. Another administrator does it.
+   * - **A holder of a protected role (Super Admin) only with cross-company access.** A company
+   *   administrator could delete or deactivate a Super Admin who happened to be homed in their
+   *   company — removing an account whose authority is wider than their own.
+   */
+  private async assertMayActOn(
+    caller: AuthenticatedUser,
+    id: string,
+    action: { removesAccess: boolean },
+  ): Promise<void> {
+    if (action.removesAccess && id === caller.id) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'OWN_ACCOUNT',
+        message:
+          'You cannot delete or deactivate your own account. Ask another administrator to do it.',
+      });
+    }
+    if (
+      !caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS) &&
+      (await this.usersService.holdsProtectedRole(id))
+    ) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'PROTECTED_ACCOUNT',
+        message:
+          'This account holds a group-wide role. Only a group administrator can change or remove it.',
+      });
     }
   }
 

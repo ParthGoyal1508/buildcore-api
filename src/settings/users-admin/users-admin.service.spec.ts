@@ -9,7 +9,9 @@ import { callerFor } from '../testing/prisma-mock';
 // last-Super-Admin guard still reasons about which role an account holds.
 const superAdmin = callerFor('company-1', {
   roleNames: ['Super Admin'],
-  permissions: [Permission.USER_MANAGEMENT],
+  // A real Super Admin holds cross-company access, which is what lets them act on another
+  // protected-role holder (036 C3).
+  permissions: [Permission.USER_MANAGEMENT, Permission.CROSS_COMPANY_ACCESS],
 });
 const hoUser = callerFor('company-1', {
   roleNames: ['HO User'],
@@ -289,5 +291,44 @@ describe('UsersAdminService', () => {
       );
       expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
     });
+  });
+});
+
+describe('who an administrator may act on (036 C3)', () => {
+  it.each([
+    ['delete', (s: UsersAdminService) => s.remove(hoUser, 'caller-1', 'ip')],
+    [
+      'deactivate',
+      (s: UsersAdminService) =>
+        s.update(hoUser, 'caller-1', { status: UserStatus.deactivated }, 'ip'),
+    ],
+  ])(
+    'refuses to let an administrator %s their own account',
+    async (_l, act) => {
+      const { service, usersService } = build();
+      const error = await act(service).catch((e) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect(error.response.code).toBe('OWN_ACCOUNT');
+      expect(usersService.deleteAccount).not.toHaveBeenCalled();
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a company administrator acting on a Super Admin', async () => {
+    const { service, usersService } = build({
+      holdsProtectedRole: jest.fn().mockResolvedValue(true),
+    });
+    const error = await service.remove(hoUser, 'super-1', 'ip').catch((e) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(error.response.code).toBe('PROTECTED_ACCOUNT');
+    expect(usersService.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('lets a group administrator act on another Super Admin', async () => {
+    const { service, usersService } = build({
+      holdsProtectedRole: jest.fn().mockResolvedValue(true),
+    });
+    await service.remove(superAdmin, 'super-2', 'ip');
+    expect(usersService.deleteAccount).toHaveBeenCalled();
   });
 });
