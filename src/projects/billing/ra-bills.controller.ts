@@ -33,6 +33,7 @@ import {
   ReviseRaBillDto,
   SetAwardDto,
 } from './dto/ra-bill.dto';
+import { ProjectLockFrom, ProjectLockGuard } from '../guards/project-lock.guard';
 
 /**
  * Subcontractor bills measured against the award (018 US2) — `bugs.md` item 12.
@@ -109,6 +110,7 @@ export class RaBillsController {
   }
 
   @Post('retention/:workOrderId/release')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'Record retention going back to the subcontractor (FR-016a)',
     description:
@@ -134,6 +136,8 @@ export class RaBillsController {
   }
 
   @Delete(':id')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary: 'Discard a draft bill that should not exist',
     description:
@@ -167,6 +171,8 @@ export class RaBillsController {
   }
 
   @Post(':id/submit')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary: 'Send a measured bill for certification (FR-009’s precondition)',
     description:
@@ -193,6 +199,8 @@ export class RaBillsController {
   }
 
   @Patch(':id/lines')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary:
       'Revise the measured quantities, invalidating any approval (FR-009)',
@@ -225,6 +233,7 @@ export class RaBillsController {
   }
 
   @Put('awards/:workOrderId')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'Capture the award — the subcontractor’s own rates (FR-006)',
     description:
@@ -266,6 +275,8 @@ export class RaBillsController {
   }
 
   @Post()
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('body')
   @ApiOperation({
     summary: 'Measure a bill against the award (FR-007, FR-008)',
     description:

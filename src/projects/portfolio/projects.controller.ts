@@ -24,6 +24,7 @@ import {
   UpdateProjectDto,
 } from './dto/project.dto';
 import { ProjectsService } from './projects.service';
+import { ProjectLockGuard } from '../guards/project-lock.guard';
 
 /**
  * The project portfolio (008 US3).
@@ -32,6 +33,10 @@ import { ProjectsService } from './projects.service';
  * project itself, so guarding this controller would make every lock permanent. The
  * guard belongs on the data-entry controllers (BOQ, DWR, revenue, bills) that later
  * stories add.
+ *
+ * The exception is `DELETE /projects/:id` (036 I2): deleting is not unlocking, and a
+ * locked project is precisely one somebody has declared finished — deleting it should
+ * take the deliberate step of unlocking it first.
  */
 @ApiTags('Projects')
 @ApiBearerAuth()
@@ -113,6 +118,7 @@ export class ProjectsController {
   }
 
   @Delete(':id')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'Delete a project nothing has been recorded against',
     description:

@@ -567,6 +567,25 @@ describe('The running-account bill package (e2e)', () => {
 
   it('issues the bill, reporting the header gaps rather than refusing', async () => {
     await approve(packageId);
+
+    // 036 I1: `/issue` names the package, not the project, and the guard used to admit it for
+    // that reason — so a locked project could still freeze a bill's figures for ever.
+    await sys.project.update({
+      where: { id: projectId },
+      data: { isLocked: true },
+    });
+    try {
+      const refused = await http()
+        .post(`/projects/bill-packages/${packageId}/issue`)
+        .set(auth());
+      expect(refused.status).toBe(423);
+    } finally {
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: false },
+      });
+    }
+
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
       .set(auth())

@@ -25,6 +25,7 @@ import {
   UploadProjectDocumentDto,
 } from './dto/project-document-upload.dto';
 import { ProjectDocumentsService } from './project-documents.service';
+import { ProjectLockGuard } from '../guards/project-lock.guard';
 
 /**
  * Filing documents against a project, and staging them before one exists (017 FR-008a, FR-009b).
@@ -85,6 +86,7 @@ export class ProjectDocumentUploadController {
   }
 
   @Post('projects/:projectId/documents')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'File a document against an existing project',
     description:

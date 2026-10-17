@@ -26,6 +26,7 @@ import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { ClientBillsService } from './client-bills.service';
 import { CertifyBillDto, ComposeBillDto } from './dto/client-bill.dto';
+import { ProjectLockFrom, ProjectLockGuard } from '../guards/project-lock.guard';
 
 /**
  * Client bills measured against the BOQ (018 US1) — `bugs.md` item 11.
@@ -100,6 +101,8 @@ export class ClientBillsController {
   }
 
   @Post()
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('body')
   @ApiOperation({
     summary: 'Compose a draft bill, priced from the BOQ (FR-002)',
     description:
@@ -129,6 +132,8 @@ export class ClientBillsController {
   }
 
   @Post(':id/submit')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('clientBill')
   @ApiOperation({
     summary: 'Send the bill to the client',
     description:
@@ -147,6 +152,8 @@ export class ClientBillsController {
   }
 
   @Post(':id/certify')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('clientBill')
   @ApiOperation({
     summary: 'Record what the client certified (FR-005)',
     description:

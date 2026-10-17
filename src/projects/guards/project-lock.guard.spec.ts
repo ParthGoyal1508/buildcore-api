@@ -2,7 +2,7 @@ import { ExecutionContext, NotFoundException } from '@nestjs/common';
 
 import { createPrismaMock } from '../../settings/testing/prisma-mock';
 import { HTTP_STATUS_LOCKED } from '../constants/projects.constants';
-import { ProjectLockGuard } from './project-lock.guard';
+import { PROJECT_LOCK_SUBJECT, ProjectLockGuard } from './project-lock.guard';
 
 /**
  * The 423 path, tested here rather than end-to-end.
@@ -15,6 +15,7 @@ import { ProjectLockGuard } from './project-lock.guard';
 describe('ProjectLockGuard', () => {
   const contextFor = (params: Record<string, string>): ExecutionContext =>
     ({
+      getHandler: () => () => undefined,
       switchToHttp: () => ({
         getRequest: () => ({
           params,
@@ -73,5 +74,112 @@ describe('ProjectLockGuard', () => {
     await expect(
       guardFor(null).canActivate(contextFor({ id: 'someone-elses-project' })),
     ).rejects.toThrow(NotFoundException);
+  });
+
+  describe('routes keyed by a record of the project, not the project (036 I1)', () => {
+    // Before 036 every one of these was admitted as "no project in the route", so a
+    // locked project still took DWR edits and issued bill packages.
+    const handler = () => undefined;
+    const contextWith = (
+      params: Record<string, string>,
+      extra: { body?: unknown; subject?: string } = {},
+    ): ExecutionContext => {
+      if (extra.subject) {
+        Reflect.defineMetadata(PROJECT_LOCK_SUBJECT, extra.subject, handler);
+      } else {
+        Reflect.deleteMetadata(PROJECT_LOCK_SUBJECT, handler);
+      }
+      return {
+        getHandler: () => handler,
+        switchToHttp: () => ({
+          getRequest: () => ({
+            params,
+            body: extra.body,
+            user: { id: 'user-1', companyId: 'company-1', permissions: [] },
+          }),
+        }),
+      } as unknown as ExecutionContext;
+    };
+    const lockedVia = (delegate: string, isLocked = true) => {
+      const findFirst = jest
+        .fn()
+        .mockResolvedValue({ project: { isLocked } });
+      const prisma = createPrismaMock({
+        [delegate]: { findFirst },
+        project: { findFirst: jest.fn().mockResolvedValue({ isLocked }) },
+      });
+      return { guard: new ProjectLockGuard(prisma as never), findFirst };
+    };
+
+    it.each([
+      ['dwrId', 'dailyWorkReport'],
+      ['packageId', 'billPackage'],
+      ['raBillId', 'rABill'],
+      ['workOrderId', 'workOrder'],
+      ['noteId', 'billPackageDebitNote'],
+      ['debitId', 'billPackageDebit'],
+    ])('refuses `:%s` on a locked project with 423', async (param, delegate) => {
+      const { guard, findFirst } = lockedVia(delegate);
+      await expect(
+        guard.canActivate(contextWith({ [param]: 'row-1' })),
+      ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
+      expect(findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'row-1' } }),
+      );
+    });
+
+    it('admits `:dwrId` on an unlocked project', async () => {
+      const { guard } = lockedVia('dailyWorkReport', false);
+      await expect(
+        guard.canActivate(contextWith({ dwrId: 'dwr-1' })),
+      ).resolves.toBe(true);
+    });
+
+    it('admits a record it cannot find, so the handler 404s in its own words', async () => {
+      const prisma = createPrismaMock({
+        dailyWorkReport: { findFirst: jest.fn().mockResolvedValue(null) },
+      });
+      await expect(
+        new ProjectLockGuard(prisma as never).canActivate(
+          contextWith({ dwrId: 'missing' }),
+        ),
+      ).resolves.toBe(true);
+    });
+
+    it('reads `:id` as the declared record, never as a project', async () => {
+      // `/projects/ra-bills/:id` names a bill. Looking it up as a project would 404 it.
+      const { guard, findFirst } = lockedVia('rABill');
+      await expect(
+        guard.canActivate(contextWith({ id: 'bill-1' }, { subject: 'raBill' })),
+      ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
+      expect(findFirst).toHaveBeenCalled();
+    });
+
+    it('reads the project from the body on a create route', async () => {
+      const { guard } = lockedVia('project');
+      await expect(
+        guard.canActivate(
+          contextWith({}, { subject: 'body', body: { projectId: 'project-1' } }),
+        ),
+      ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
+    });
+
+    it('leaves a body with no projectId to the ValidationPipe', async () => {
+      const { guard } = lockedVia('project');
+      await expect(
+        guard.canActivate(contextWith({}, { subject: 'body', body: {} })),
+      ).resolves.toBe(true);
+    });
+
+    it('admits a body naming an unknown project, for the service to refuse', async () => {
+      const prisma = createPrismaMock({
+        project: { findFirst: jest.fn().mockResolvedValue(null) },
+      });
+      await expect(
+        new ProjectLockGuard(prisma as never).canActivate(
+          contextWith({}, { subject: 'body', body: { projectId: 'nope' } }),
+        ),
+      ).resolves.toBe(true);
+    });
   });
 });

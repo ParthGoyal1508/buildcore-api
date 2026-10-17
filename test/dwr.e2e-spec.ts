@@ -1446,6 +1446,52 @@ describe('Daily work reports (e2e)', () => {
       });
     });
 
+    it('refuses an edit keyed by the report, not the project, on a locked project (036 I1)', async () => {
+      // `PATCH /projects/dwr/:dwrId` carries no project in its path, and the guard used to
+      // admit it for exactly that reason — so a locked project still took edits.
+      const created = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      expect(created.status).toBe(201);
+      const dwrId = created.body.id as string;
+
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: true },
+      });
+      try {
+        const edit = await http()
+          .patch(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+          .set(auth())
+          .send({ workerCount: 15 });
+        expect(edit.status).toBe(423);
+
+        const removal = await http()
+          .delete(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+          .set(auth());
+        expect(removal.status).toBe(423);
+
+        // An unknown report is still the handler's 404, not the guard's.
+        const unknown = await http()
+          .patch(
+            `/projects/dwr/clnonexistent000000000000?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({ workerCount: 15 });
+        expect(unknown.status).toBe(404);
+      } finally {
+        await sys.project.update({
+          where: { id: projectId },
+          data: { isLocked: false },
+        });
+      }
+
+      await http()
+        .delete(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+        .set(auth())
+        .expect((res) => expect([200, 204]).toContain(res.status));
+    });
+
     it('reports an unknown report as 404 rather than 403', async () => {
       const res = await http()
         .get(`/projects/dwr/clnonexistent000000000000?companyId=${companyId}`)
