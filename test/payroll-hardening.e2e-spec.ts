@@ -224,7 +224,7 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
     await sys.shift.deleteMany({ where: { id: shiftId } });
     await sys.site.deleteMany({ where: { id: siteId } });
     await sys.company.deleteMany({ where: { id: companyId } });
-    await app?.close();
+    await app.close();
   }, 90_000);
 
   describe('F19 — maker-checker', () => {
