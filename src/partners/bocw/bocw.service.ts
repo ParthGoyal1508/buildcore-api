@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { businessTodayIso } from '../../common/business-date';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
@@ -122,6 +124,65 @@ export class BOCWService {
           status: deriveStatus(balance, totalPaid),
         };
       }),
+    };
+  }
+
+  /**
+   * The cess list as an Excel sheet (036 N6, 2026-10-17) — what is handed to the welfare
+   * board or an auditor. Built from `list`, so the sheet and the screen cannot disagree.
+   */
+  async exportXlsx(
+    caller: AuthenticatedUser,
+    companyId?: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const { rows } = await this.list(caller, companyId);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('BOCW cess', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    ws.columns = [
+      { header: 'Project', key: 'project', width: 34 },
+      { header: 'Contract value', key: 'contractValue', width: 18 },
+      { header: 'Cess rate (%)', key: 'rate', width: 13 },
+      { header: 'Cess liability', key: 'liability', width: 16 },
+      { header: 'Paid', key: 'paid', width: 16 },
+      { header: 'Balance', key: 'balance', width: 16 },
+      { header: 'Status', key: 'status', width: 12 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    const STATUS: Record<BocwStatus, string> = {
+      pending: 'Pending',
+      partial: 'Part paid',
+      paid: 'Paid',
+    };
+    for (const row of rows) {
+      ws.addRow({
+        project: row.projectName,
+        contractValue: row.contractValue,
+        rate: toPaise(row.cessRate * 100),
+        liability: row.cessLiability,
+        paid: row.totalPaid,
+        balance: row.balance,
+        status: STATUS[row.status],
+      });
+    }
+    if (rows.length > 0) {
+      const sum = (pick: (row: BocwProjectRow) => number) =>
+        toPaise(rows.reduce((total, row) => total + pick(row), 0));
+      ws.addRow({
+        project: 'Total',
+        contractValue: sum((row) => row.contractValue),
+        liability: sum((row) => row.cessLiability),
+        paid: sum((row) => row.totalPaid),
+        balance: sum((row) => row.balance),
+      }).font = { bold: true };
+    }
+    for (const key of ['contractValue', 'liability', 'paid', 'balance']) {
+      ws.getColumn(key).numFmt = '#,##0.00';
+    }
+    return {
+      buffer: Buffer.from(await wb.xlsx.writeBuffer()),
+      filename: `BOCW_Cess_${businessTodayIso()}.xlsx`,
     };
   }
 

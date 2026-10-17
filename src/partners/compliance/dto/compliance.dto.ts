@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MonthlyComplianceStatus } from '@prisma/client';
 import {
   IsDateString,
+  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -115,6 +117,12 @@ export class ListComplianceDto {
   @IsOptional()
   @Matches(MONTH_REGEX, { message: 'month must be in YYYY-MM format' })
   month?: string;
+
+  // The compliance screen's status filter (036 N6, 2026-10-17).
+  @ApiPropertyOptional({ enum: MonthlyComplianceStatus })
+  @IsOptional()
+  @IsEnum(MonthlyComplianceStatus)
+  status?: MonthlyComplianceStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

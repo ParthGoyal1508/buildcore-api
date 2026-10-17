@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, Res, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -6,12 +6,15 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { contentDispositionFor } from '../../common/storage/file-type';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { RagService } from './rag.service';
 
 @ApiTags('Partners')
@@ -36,5 +39,31 @@ export class RagController {
     @Query('companyId') companyId?: string,
   ) {
     return this.rag.buildMatrix(caller, fy, companyId);
+  }
+
+  @Get('export')
+  // A whole year's matrix per call, rendered to a workbook (036 N6, B9).
+  @ExportThrottle()
+  @ApiOperation({
+    summary: 'The compliance matrix for one financial year, as Excel',
+  })
+  @ApiQuery({ name: 'fy', example: '2025-26' })
+  async export(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('fy') fy: string,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { buffer, filename } = await this.rag.exportXlsx(
+      caller,
+      fy,
+      companyId,
+    );
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
+    res.send(buffer);
   }
 }

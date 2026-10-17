@@ -1,7 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { monthLabel } from '../../common/form-document/form-format';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { companyScope } from '../../settings/company-scope';
 
@@ -25,6 +27,24 @@ export interface RagMatrixResponse {
     }>;
   }>;
 }
+
+/** What a cell reads as in the Excel export — words, since a sheet has no coloured dots. */
+const RAG_EXPORT_LABELS: Record<RagCellStatus, string> = {
+  verified: 'Verified',
+  submitted: 'Submitted',
+  partial: 'Partial',
+  missing: 'Missing',
+  gray: 'Not due',
+};
+
+/** Cell fills for the export, matching the screen's dots so the sheet reads the same way. */
+const RAG_EXPORT_FILLS: Record<RagCellStatus, string | null> = {
+  verified: 'FFC6EFCE',
+  submitted: 'FFDDEBF7',
+  partial: 'FFFFEB9C',
+  missing: 'FFFFC7CE',
+  gray: null,
+};
 
 const FY_REGEX = /^(\d{4})-(\d{2})$/;
 
@@ -166,5 +186,52 @@ export class RagService {
         })),
       };
     });
+  }
+
+  /**
+   * The same matrix as an Excel sheet (036 N6, 2026-10-17): the regulator-facing copy of the
+   * screen, one row per contractor and one column per month, each cell a word with the
+   * screen's colour behind it. Built from `buildMatrix`, so the two can never disagree.
+   */
+  async exportXlsx(
+    caller: AuthenticatedUser,
+    fy: string,
+    companyId?: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const matrix = await this.buildMatrix(caller, fy, companyId);
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet(`RAG ${matrix.fy}`, {
+      views: [{ state: 'frozen', xSplit: 1, ySplit: 1 }],
+    });
+    ws.columns = [
+      { header: 'Contractor', key: 'contractor', width: 32 },
+      ...matrix.months.map((month) => ({
+        header: monthLabel(month),
+        key: month,
+        width: 15,
+      })),
+    ];
+    ws.getRow(1).font = { bold: true };
+    for (const row of matrix.rows) {
+      const added = ws.addRow({
+        contractor: row.contractorName,
+        ...Object.fromEntries(
+          row.cells.map((cell) => [cell.month, RAG_EXPORT_LABELS[cell.status]]),
+        ),
+      });
+      row.cells.forEach((cell, index) => {
+        const fill = RAG_EXPORT_FILLS[cell.status];
+        if (!fill) return;
+        added.getCell(index + 2).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: fill },
+        };
+      });
+    }
+    return {
+      buffer: Buffer.from(await wb.xlsx.writeBuffer()),
+      filename: `RAG_Matrix_${matrix.fy}.xlsx`,
+    };
   }
 }
