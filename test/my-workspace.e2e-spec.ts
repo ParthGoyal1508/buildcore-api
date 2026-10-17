@@ -994,6 +994,20 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       expect(casual.balance).toBe(0);
     });
 
+    it('previews the same day count the application will charge (036 G3)', async () => {
+      const res = await http()
+        .get(`/my/leave/day-count?fromDate=${LEAVE_FROM}&toDate=${LEAVE_TO}`)
+        .set(auth(employeeToken))
+        .expect(200);
+      expect(res.body.days).toBe(LEAVE_WORKING_DAYS);
+      expect(res.body.weeklyOffDay).toBe(0);
+      expect(res.body.excluded.length).toBeGreaterThan(0);
+      await http()
+        .get(`/my/leave/day-count?fromDate=${LEAVE_TO}&toDate=${LEAVE_FROM}`)
+        .set(auth(employeeToken))
+        .expect(LEAVE_TO === LEAVE_FROM ? 200 : 400);
+    });
+
     it('computes dayCount excluding weekly offs and site holidays (T044)', async () => {
       const res = await http()
         .post('/my/leave/applications')

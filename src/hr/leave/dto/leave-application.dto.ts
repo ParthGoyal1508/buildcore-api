@@ -43,3 +43,17 @@ export class LeaveBalanceQueryDto {
   })
   financialYear?: string;
 }
+
+/**
+ * The range a leave day-count preview is asked for (036 G3). Validated like the application's own
+ * dates, and capped at a year so a mistyped year cannot make the server walk a century of days.
+ */
+export class LeaveDayCountQueryDto {
+  @ApiProperty({ example: '2026-09-14' })
+  @Matches(DATE_ONLY, { message: 'fromDate must be a YYYY-MM-DD date' })
+  fromDate: string;
+
+  @ApiProperty({ example: '2026-09-16' })
+  @Matches(DATE_ONLY, { message: 'toDate must be a YYYY-MM-DD date' })
+  toDate: string;
+}

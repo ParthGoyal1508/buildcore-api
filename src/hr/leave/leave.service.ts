@@ -645,6 +645,54 @@ export class LeaveService {
     return new Set(applications.map((a) => a.employeeId));
   }
 
+  /**
+   * The apply form's preview (036 G3): the same count `apply` will charge, plus what it left out
+   * and why, so the form can say "excludes Sun 14-09 (weekly off)". 400 for a reversed range or one
+   * over a year — a preview of a typo is not worth a year-long walk.
+   */
+  async previewDayCount(
+    caller: Caller,
+    fromDate: string,
+    toDate: string,
+  ): Promise<{
+    days: number;
+    weeklyOffDay: number;
+    excluded: { date: string; reason: 'weekly_off' | 'holiday' }[];
+  }> {
+    const from = parseDateOnly(fromDate);
+    const to = parseDateOnly(toDate);
+    if (to.getTime() < from.getTime()) {
+      throw new BadRequestException('toDate cannot precede fromDate.');
+    }
+    if (to.getTime() - from.getTime() > 366 * 86_400_000) {
+      throw new BadRequestException('A leave range cannot exceed a year.');
+    }
+    const employee = await this.employees.requireByUserId(
+      caller.rls,
+      caller.userId,
+    );
+    const [weeklyOffDay, holidays] = await Promise.all([
+      this.sites.getWeeklyOffDay(caller.rls, employee.siteId),
+      this.holidays.getHolidayCalendar(
+        caller.rls,
+        employee.companyId,
+        employee.siteId,
+      ),
+    ]);
+    const holidaySet = new Set(holidays);
+    const excluded: { date: string; reason: 'weekly_off' | 'holiday' }[] = [];
+    for (const date of eachDateInRange(fromDate, toDate)) {
+      if (holidaySet.has(date)) excluded.push({ date, reason: 'holiday' });
+      else if (parseDateOnly(date).getUTCDay() === weeklyOffDay)
+        excluded.push({ date, reason: 'weekly_off' });
+    }
+    return {
+      days: countLeaveDays(fromDate, toDate, weeklyOffDay, holidays),
+      weeklyOffDay,
+      excluded,
+    };
+  }
+
   /** Chargeable days in the range, against the employee's own site calendar. */
   private async computeDayCount(
     ctx: RlsContext,
