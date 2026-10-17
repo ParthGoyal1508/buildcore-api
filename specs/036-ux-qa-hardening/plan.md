@@ -162,6 +162,40 @@ Each agent owns one module in **both** repos: the remaining backend items for th
 
 The backend upload pipeline (B4–B7) also lands here, through each module's upload routes, using the helpers from stream 1e.
 
+### Wave 3: outcome (17-10-2026)
+
+All five module streams are merged into `036-ux-qa-hardening` in both repos (local). Each was rebased and re-verified before merging. Then everything was verified together:
+- **API:** 256/256 unit suites (2,847 tests).
+- **API e2e:** a fresh database with all 12 of 036's migrations, 33 suites run one at a time. All pass except `plant`'s 2 failures, which already failed before 036 (plate number, hire-bill net).
+- **Web:** `typecheck` clean; lint shows 2 warnings and 0 errors; `next build` succeeds.
+
+**Migrations added in Wave 3:**
+- `20261018100000_notification_inbox`
+- `20261018110000_employee_document_versions`
+- `20261018120000_project_lock_permission`
+- `20261018120001_project_lock_grants`
+- `20261018120002_dwr_attachment_thumbnail`
+- `20261018130000_equipment_photos`
+- `20261018140000_purchase_order_lines`
+
+**Notable:**
+- The M9 PO document snapshot (text, layout, PDF hash) is unchanged.
+- The bank-sheet GET routes were removed once the web switched to POST.
+- `PROJECT_LOCK` is granted to every role that held PROJECTS.
+- A B11 regression was fixed: the labour cash acknowledgement photo had been refused.
+
+**Follow-ups not done in Wave 3 (candidates for Wave 4 or a later pass):**
+- **K15 pickers:** five plant pickers are still capped at 200 (job card, job parts, hire-order modal, equipment-modal vendor/site, spare-part vendor).
+- **Paging totals:** the web client can't read `X-Total-Count`, so interview and bank-history pagers show no page count. Expose headers in `authFetch`, or return `{items,total}`.
+- **Company-scoped custom roles (C10):** needs a migration.
+- **"Personal Settings" name (C16):** kept, because the client chose it.
+- **Decimal entry:** the certified-quantity input in `client-bill-view` is still `type=number`.
+- **RA bills:** add a `workOrderId` filter on `GET /projects/ra-bills`.
+- **Labour project pickers:** labour wage rates and reports still load 200 projects.
+- **Resignations report:** refetches on every date change, the same bug H5 fixed for new joinings.
+- **ESS payslip PDF:** uses a raw `fetch`.
+- **e2e test environment:** dashboard needs the `QA No Modules` fixture role; letters, letters-regression and bill-package debits fail as they did before 036.
+
 ### Wave 4: design system and accessibility (one agent, web, last)
 
 - **Design system:** A21 (button variants in one place, StatusBadge on semantic tokens, Tailwind config fix, migrate the 128 raw buttons and 32 hand-made pills).
