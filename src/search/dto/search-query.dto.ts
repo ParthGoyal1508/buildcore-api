@@ -25,7 +25,6 @@ export class SearchQueryDto {
       `Search needs at least ${SEARCH_MIN_TERM_LENGTH} characters, and at most ` +
       `${SEARCH_MAX_TERM_LENGTH}.`,
   })
-  @MaxLength(200)
   q!: string;
 
   @ApiPropertyOptional({

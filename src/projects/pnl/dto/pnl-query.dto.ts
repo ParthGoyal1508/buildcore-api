@@ -66,7 +66,9 @@ export class PnlGroupQueryDto {
   })
   @IsString()
   @MinLength(1)
-  @MaxLength(100)
+  // Room for 200 ids (25-character cuids plus commas). 036 B11 capped this at 100 characters,
+  // which is three ids, and the group P&L refused every company with a fourth project (Wave 5).
+  @MaxLength(5400)
   projectIds!: string;
 
   @ApiProperty({ example: '2026-10' })

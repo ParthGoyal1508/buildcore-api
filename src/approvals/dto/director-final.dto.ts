@@ -7,7 +7,6 @@ import {
   IsBoolean,
   IsString,
   Length,
-  MaxLength,
   ValidateNested,
 } from 'class-validator';
 
@@ -16,7 +15,6 @@ export class DirectorFinalChangeDto {
   @ApiProperty({ example: 'payment_release' })
   @IsString()
   @Length(1, 100)
-  @MaxLength(200)
   actionType: string;
 
   @ApiProperty()
