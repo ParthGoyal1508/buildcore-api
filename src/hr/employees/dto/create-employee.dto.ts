@@ -531,6 +531,17 @@ export class ListEmployeesQueryDto {
   @Max(100)
   @Type(() => Number)
   pageSize?: number;
+
+  /**
+   * Server-side order (036 F12): `code`, `name` or `joining`, then `:asc` or `:desc`. The list's
+   * header sort only ever reordered the 25 rows on screen, which read as the register's order.
+   */
+  @ApiPropertyOptional({ example: 'name:asc' })
+  @IsOptional()
+  @Matches(/^(code|name|joining):(asc|desc)$/, {
+    message: 'sort must be code, name or joining, then :asc or :desc',
+  })
+  sort?: string;
 }
 
 /** The single PII field a reveal request names (005 FR-003, research.md §3). */

@@ -714,7 +714,7 @@ export class EmployeesService {
         Promise.all([
           tx.employee.findMany({
             where,
-            orderBy: { employeeCode: 'asc' },
+            orderBy: employeeOrder(query.sort),
             skip: (page - 1) * pageSize,
             take: pageSize,
           }),
@@ -878,5 +878,27 @@ export class EmployeesService {
     const value = column === 'uan' ? stored ?? null : this.pii.decrypt(stored);
 
     return { field: dto.field, value };
+  }
+}
+
+/**
+ * The employee list's `sort` (036 F12) as a Prisma order. Code is always the last key, so rows that
+ * tie — two people with the same first name — keep a stable order from page to page.
+ */
+function employeeOrder(
+  sort: string | undefined,
+): Prisma.EmployeeOrderByWithRelationInput[] {
+  const [key, raw] = (sort ?? 'code:asc').split(':');
+  const dir: Prisma.SortOrder = raw === 'desc' ? 'desc' : 'asc';
+  switch (key) {
+    case 'name':
+      return [{ firstName: dir }, { lastName: dir }, { employeeCode: 'asc' }];
+    case 'joining':
+      return [
+        { dateOfJoining: { sort: dir, nulls: 'last' } },
+        { employeeCode: 'asc' },
+      ];
+    default:
+      return [{ employeeCode: dir }];
   }
 }
