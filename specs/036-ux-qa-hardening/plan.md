@@ -42,7 +42,17 @@ Neither approach on its own is right. Which one fits depends on whether the work
 
 ## 2. Waves
 
-### Wave 0: groundwork (one at a time, me, about half a day)
+### Wave 0: groundwork (one at a time, me), done on 17-10-2026
+
+**Where Wave 0 differed from this plan:**
+- **B1:** the guard went on `InvitesController` only, not global. The throttler's default limit is the sign-in limit (10 a minute), so a global guard would have capped every route at that. The app-wide limit stays in 1e (B9), as a separate, generous limit.
+- **E2E database:** `test/README-e2e.md` already prescribes `buildcore_scratch`. Instead of a new config, a first setup file (`test/refuse-shared-database.ts`) now refuses to start when `DATABASE_URL` is unset, is an unexpanded template, or names `buildcore`.
+- **A19:** also added `businessDate(instant)`, so timestamp-vs-today comparisons (interviews) use IST on both sides. Stored-date *display* (`toISOString` on stored values) is left for the A18 formatter in Wave 2.
+- **A6:** a full scan found 6 read-only buttons missing `intent="read"`: the 5 in the audit plus "Open onboarding".
+
+**Results:**
+- API: `tsc` clean; 222/222 unit suites and 2,506 tests pass.
+- Web: `npm run typecheck` clean; lint shows the 11 known warnings (down from 57,914).
 
 These are small changes to files every later stream touches, so they go in first.
 
