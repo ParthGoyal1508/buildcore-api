@@ -11,6 +11,7 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -59,6 +60,12 @@ export class ListInterviewsDto {
   @Min(1)
   @Max(100)
   pageSize?: number;
+
+  /** `desc` lists the newest rounds first — for the Completed and Cancelled tabs (036 H4). */
+  @ApiPropertyOptional({ enum: ['asc', 'desc'], default: 'asc' })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  order?: 'asc' | 'desc';
 }
 
 export class ScheduleInterviewDto {

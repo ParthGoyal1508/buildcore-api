@@ -35,6 +35,7 @@ export class InterviewService {
       status?: InterviewStatus;
       page?: number;
       pageSize?: number;
+      order?: 'asc' | 'desc';
     },
   ) {
     const where: Prisma.InterviewWhereInput = {
@@ -52,7 +53,7 @@ export class InterviewService {
         Promise.all([
           tx.interview.findMany({
             where,
-            orderBy: { scheduledAt: 'asc' },
+            orderBy: { scheduledAt: query.order === 'desc' ? 'desc' : 'asc' },
             skip,
             take,
             include: {
