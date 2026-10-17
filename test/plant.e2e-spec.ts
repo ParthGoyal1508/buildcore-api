@@ -820,6 +820,42 @@ describe('Plant module (e2e)', () => {
         .expect(409);
     });
 
+    it('refuses a second bill overlapping this one (036 K3)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const refused = await http()
+        .post('/plant/hire-bills')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          vendorId: bill.vendorId,
+          billedHours: 1,
+          rate: 100,
+          billingPeriodFrom: bill.billingPeriodTo.toISOString().slice(0, 10),
+          billingPeriodTo: bill.billingPeriodTo.toISOString().slice(0, 10),
+        })
+        .expect(409);
+      expect(refused.body.message).toMatch(/overlaps this period/);
+    });
+
+    it('refuses verification by the person who raised the bill (036 K8)', async () => {
+      const refused = await http()
+        .patch(`/plant/hire-bills/${billId}/verify`)
+        .set(auth())
+        .expect(403);
+      expect(refused.body.message).toMatch(/someone else must verify/);
+
+      // The rest of this suite verifies as the same admin, so the bill is handed to another
+      // creator — the API-less equivalent of a site clerk having raised it.
+      const other = await sys.user.findFirst({
+        where: { email: { not: 'admin@buildcore.dev' } },
+        select: { id: true },
+      });
+      await sys.hireBill.update({
+        where: { id: billId },
+        data: { createdByUserId: other.id },
+      });
+    });
+
     it('verifies then pays', async () => {
       const verified = await http()
         .patch(`/plant/hire-bills/${billId}/verify`)
@@ -833,6 +869,22 @@ describe('Plant module (e2e)', () => {
         .send({ paymentDate: today(), paymentReference: 'NEFT/2026/0912' })
         .expect(200);
       expect(paid.body.status).toBe('paid');
+    });
+
+    it('refuses deleting a logbook entry inside the paid bill (036 K5)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const inside = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: bill.equipmentId,
+          date: { gte: bill.billingPeriodFrom, lte: bill.billingPeriodTo },
+        },
+      });
+      expect(inside).toBeTruthy();
+      const refused = await http()
+        .delete(`/plant/logbook/${inside.id}`)
+        .set(auth())
+        .expect(409);
+      expect(refused.body.message).toMatch(/paid hire bill/);
     });
 
     it('refuses a hire bill against an owned machine (FR-022)', async () => {

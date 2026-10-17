@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { businessToday } from '../../common/business-date';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { HireRatesService } from '../../settings/machinery-masters/hire-rates.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -388,6 +390,35 @@ export class HireBillsService {
               'machine is a service bill, not a hire bill (FR-022).',
           );
         }
+        // 036 K3: one bill per machine per day. The machine's row is locked first so two bills
+        // raised at once for overlapping periods cannot both pass the check below; without it,
+        // both were accepted and both could be verified and paid. Hire bills have no cancelled
+        // state (nor a delete), so every existing bill counts.
+        await tx.$queryRaw`
+          SELECT "id" FROM "plant"."Equipment" WHERE "id" = ${dto.equipmentId} FOR UPDATE
+        `;
+        const overlapping = await tx.hireBill.findFirst({
+          where: {
+            equipmentId: dto.equipmentId,
+            billingPeriodFrom: { lte: to },
+            billingPeriodTo: { gte: from },
+          },
+          select: {
+            invoiceNo: true,
+            billingPeriodFrom: true,
+            billingPeriodTo: true,
+          },
+        });
+        if (overlapping) {
+          throw new ConflictException(
+            `${equipment.code} already has a hire bill${
+              overlapping.invoiceNo ? ` (${overlapping.invoiceNo})` : ''
+            } for ${isoDate(overlapping.billingPeriodFrom)} to ${isoDate(
+              overlapping.billingPeriodTo,
+            )}, which overlaps this period. A machine's hire is billed once for any day.`,
+          );
+        }
+
         if (dto.hireOrderId) {
           const order = await tx.hireOrder.findUnique({
             where: { id: dto.hireOrderId },
@@ -438,9 +469,20 @@ export class HireBillsService {
           dto.startReading ?? (first ? Number(first.openingReading) : null);
         const endReading =
           dto.endReading ?? (last ? Number(last.closingReading) : null);
+        // 036 K8: refused rather than clamped. An end reading below the start one was silently
+        // treated as zero run, which hid a typo behind a plausible-looking bill.
+        if (
+          startReading !== null &&
+          endReading !== null &&
+          endReading < startReading
+        ) {
+          throw new BadRequestException(
+            `The end reading (${endReading}) is below the start reading (${startReading}).`,
+          );
+        }
         const run =
           startReading !== null && endReading !== null
-            ? Math.max(0, endReading - startReading)
+            ? endReading - startReading
             : logbookHours;
         const category = await tx.equipmentCategory.findUnique({
           where: { id: equipment.categoryId },
@@ -499,6 +541,7 @@ export class HireBillsService {
           grossAmount,
           otherDeductions: [deductionAmount, holdAmount],
         });
+        assertNonNegativeNet(amounts.netPayable);
 
         return tx.hireBill.create({
           data: {
@@ -539,6 +582,7 @@ export class HireBillsService {
             ),
             deductionAmount,
             holdAmount,
+            createdByUserId: caller.id,
           },
           include: this.include,
         });
@@ -609,6 +653,7 @@ export class HireBillsService {
             : {}),
           otherDeductions: [deductionAmount, holdAmount],
         });
+        assertNonNegativeNet(amounts.netPayable);
         const date = (value: string | undefined) =>
           value === undefined
             ? undefined
@@ -709,6 +754,15 @@ export class HireBillsService {
             `This bill is already ${existing.status.replace('_', ' ')}.`,
           );
         }
+        // Maker-checker (036 K8, decision 4: block, no override). Verifying is checking the
+        // billed hours against the logbook; the person who typed them is the one person whose
+        // check adds nothing. A bill from before the column with no audit entry to backfill it
+        // from has no known creator, and stays verifiable by anyone.
+        if (existing.createdByUserId === caller.id) {
+          throw new ForbiddenException(
+            'You raised this hire bill, so someone else must verify it.',
+          );
+        }
         return tx.hireBill.update({
           where: { id: billId },
           data: {
@@ -770,7 +824,12 @@ export class HireBillsService {
           where: { id: billId },
           data: {
             status: HireBillStatus.paid,
-            paymentDate: this.refs.parseDate(dto.paymentDate),
+            // Optional since 036 K8; omitted, it is today in the business timezone — the old
+            // client sent "today" from the browser, and the server's UTC "today" would be
+            // yesterday until 05:30 IST.
+            paymentDate: dto.paymentDate
+              ? this.refs.parseDate(dto.paymentDate)
+              : businessToday(),
             paymentReference: dto.paymentReference.trim(),
           },
           include: this.include,
@@ -785,10 +844,32 @@ export class HireBillsService {
       accountId: caller.id,
       companyId: paid.companyId,
       ipAddress,
-      changes: { status: 'paid', paymentReference: dto.paymentReference },
+      changes: {
+        status: 'paid',
+        paymentReference: dto.paymentReference,
+        paymentDate: paid.paymentDate?.toISOString().slice(0, 10) ?? null,
+      },
     });
 
     const vendorName = await this.refs.requireVendorName(caller, paid.vendorId);
     return this.toRow(paid, vendorName);
+  }
+}
+
+/** `YYYY-MM-DD` of a date-only column, for messages. */
+function isoDate(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+/**
+ * Refuses a bill whose deductions exceed what it pays (036 K8). A negative net is not a bill — it
+ * says the vendor owes the company — and it used to be saved, verified and "paid" as one.
+ */
+function assertNonNegativeNet(netPayable: number): void {
+  if (netPayable < 0) {
+    throw new BadRequestException(
+      `The deductions exceed the bill: the net payable would be ${netPayable}. ` +
+        'Reduce the deduction or hold amount, or recover the difference another way.',
+    );
   }
 }

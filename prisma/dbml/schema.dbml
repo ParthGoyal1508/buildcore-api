@@ -4519,6 +4519,9 @@ it always did.']
   actualDiesel Decimal [note: 'Litres the work should have used at the agreed average.']
   deductionAmount Decimal [not null, default: 0, note: '"Deduction Amount" — the diesel the company supplied, or any other deduction agreed.']
   holdAmount Decimal [not null, default: 0, note: '"Debit / Hold Amount".']
+  createdByUserId String [note: 'Who raised the bill (036 K8), so the same person cannot also verify it. Backfilled from the
+audit log\'s CREATE entry; null only where no such entry exists, and such a bill can be
+verified by anyone, as before.']
   verifiedByUserId String
   verifiedAt DateTime
   paymentDate DateTime

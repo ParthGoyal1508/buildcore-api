@@ -224,9 +224,14 @@ export class UpdateHireBillDto {
 }
 
 export class PayHireBillDto {
-  @ApiProperty({ example: '2026-09-10' })
+  @ApiPropertyOptional({
+    example: '2026-09-10',
+    description:
+      'When the bill was paid (036: optional; defaults to today, IST).',
+  })
+  @IsOptional()
   @IsISO8601()
-  paymentDate!: string;
+  paymentDate?: string;
 
   @ApiProperty({ example: 'NEFT/2026/0912' })
   @IsString()

@@ -7643,6 +7643,10 @@ model HireBill {
   /// "Debit / Hold Amount".
   holdAmount      Decimal       @default(0) @db.Decimal(18, 2)
 
+  /// Who raised the bill (036 K8), so the same person cannot also verify it. Backfilled from the
+  /// audit log's CREATE entry; null only where no such entry exists, and such a bill can be
+  /// verified by anyone, as before.
+  createdByUserId  String?
   verifiedByUserId String?
   verifiedAt       DateTime?
 
