@@ -18,7 +18,18 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { detectContentType } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  IMAGE_TYPES,
+  JPEG,
+  PDF,
+  PNG,
+  WEBP,
+} from '../../common/uploads';
 import { VendorItemRateService } from '../rates/vendor-item-rate.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -40,6 +51,9 @@ import {
 
 /** Where bill uploads are stored. */
 const BILL_NAMESPACE = 'purchase-bills';
+
+/** What a bill may be: the vendor's PDF, or a photo of the paper bill (036 M11). */
+const BILL_TYPES: readonly string[] = [PDF, JPEG, PNG, WEBP];
 
 export interface PurchaseView {
   id: string;
@@ -149,40 +163,23 @@ export class PurchasesService {
     // network round trip, and a failed upload should not have opened a transaction
     // at all.
     //
+    // 036 M11/B4-B6: through the shared upload helpers — the 10 MB limit, the type read from
+    // the bytes (the declared `billContentType` is no longer trusted: an HTML page declared as
+    // a PDF was stored and served as whatever was claimed), and photos compressed. The bill may
+    // be a PDF or a photo of the paper bill; the delivery photo must be a photo.
+    //
     // TODO(VIRUS_SCAN): uploads are stored unscanned, the same gap 005's employee
     // documents and 007's contractor documents carry. The scan belongs between
     // decoding and `storage.put`, and is left explicit rather than faked.
-    let billFileRef: string | null = null;
-    if (dto.billFile) {
-      const buffer = Buffer.from(dto.billFile, 'base64');
-      if (buffer.length === 0) {
-        throw new BadRequestException(
-          'billFile must be non-empty base64 content.',
-        );
-      }
-      billFileRef = await this.storage.put(
-        BILL_NAMESPACE,
-        buffer,
-        dto.billContentType ?? 'application/octet-stream',
-      );
-    }
+    const billFileRef = dto.billFile
+      ? await this.storeUpload(dto.billFile, BILL_TYPES, 'The bill')
+      : null;
 
     // The delivery photograph (028 FR-017), stored exactly as the bill beside it. Optional today
     // because a purchase has no approval step to make it compulsory *before* — see the DTO's note.
-    let photoFileRef: string | null = null;
-    if (dto.photoFile) {
-      const buffer = Buffer.from(dto.photoFile, 'base64');
-      if (buffer.length === 0) {
-        throw new BadRequestException(
-          'photoFile must be non-empty base64 content.',
-        );
-      }
-      photoFileRef = await this.storage.put(
-        BILL_NAMESPACE,
-        buffer,
-        'image/jpeg',
-      );
-    }
+    const photoFileRef = dto.photoFile
+      ? await this.storeUpload(dto.photoFile, IMAGE_TYPES, 'The delivery photo')
+      : null;
 
     const date = this.refs.parseDate(dto.date);
     // Rounded once, here, and stored: this is what the vendor billed, and
@@ -484,11 +481,30 @@ export class PurchasesService {
     };
   }
 
-  /** The stored bill, for download. */
+  /** The stored bill, for download, with the type read from its bytes (036 M11). */
   async getBillFile(
     caller: AuthenticatedUser,
     id: string,
-  ): Promise<{ buffer: Buffer; purchaseId: string }> {
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
+    return this.storedFile(caller, id, 'bill');
+  }
+
+  /**
+   * The delivery photograph (036 M11). It was stored from 028 on and could never be opened —
+   * there was no route — so a photo taken at the gate as evidence was evidence nobody could see.
+   */
+  async getPhotoFile(
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
+    return this.storedFile(caller, id, 'photo');
+  }
+
+  private async storedFile(
+    caller: AuthenticatedUser,
+    id: string,
+    which: 'bill' | 'photo',
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
     const purchase = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -498,13 +514,39 @@ export class PurchasesService {
       throw new NotFoundException(`Purchase ${id} not found`);
     }
     assertInScope(caller, purchase, `Purchase ${id}`);
-    if (!purchase.billFileRef) {
-      throw new NotFoundException(`Purchase ${id} has no bill attached`);
+    const ref = which === 'bill' ? purchase.billFileRef : purchase.photoFileRef;
+    if (!ref) {
+      throw new NotFoundException(
+        which === 'bill'
+          ? `Purchase ${id} has no bill attached`
+          : `Purchase ${id} has no delivery photo`,
+      );
     }
+    const buffer = await this.storage.get(ref);
     return {
-      buffer: await this.storage.get(purchase.billFileRef),
+      buffer,
+      // Served as what the bytes are, never as `application/octet-stream`: the browser then
+      // shows a PDF or a photo inline instead of downloading an unnamed file.
+      contentType:
+        detectContentType(buffer)?.contentType ?? 'application/octet-stream',
       purchaseId: purchase.id,
     };
+  }
+
+  /** Decode, check, compress and store one upload; returns its storage ref (036 B4-B6). */
+  private async storeUpload(
+    payload: string,
+    allowed: readonly string[],
+    label: string,
+  ): Promise<string> {
+    const bytes = decodeBase64Upload(payload, label);
+    const type = assertAllowedFileType(bytes, allowed, label);
+    const image = await compressImageUpload(bytes, type.contentType);
+    return this.storage.put(
+      BILL_NAMESPACE,
+      image?.main.data ?? bytes,
+      image?.main.contentType ?? type.contentType,
+    );
   }
 
   async update(
@@ -729,6 +771,17 @@ export class PurchasesService {
       companyId: removed.companyId,
       ipAddress,
     });
+
+    // 036 M11: the delivery photo goes with the purchase, after the delete has committed. It was
+    // left behind in storage — an orphan nothing pointed at. Best effort: a storage hiccup must not
+    // turn a completed delete into an error. The bill is kept, deliberately: it is the vendor's
+    // document of a transaction that happened and was then reversed, and the soft-deleted row
+    // still points at it for whoever audits the reversal.
+    if (removed.photoFileRef) {
+      await this.storage
+        .deleteMany([removed.photoFileRef])
+        .catch(() => undefined);
+    }
   }
 
   /**

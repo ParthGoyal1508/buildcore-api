@@ -124,10 +124,9 @@ export class PaymentsController {
     return this.payments.attachProof(
       caller,
       id,
-      {
-        data: Buffer.from(dto.data, 'base64'),
-        contentType: dto.contentType,
-      },
+      // Decoded and type-checked in the service with the shared helpers (036 M11); the
+      // declared `contentType` is accepted for compatibility and ignored.
+      { data: dto.data },
       ipAddress,
     );
   }

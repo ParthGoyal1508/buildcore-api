@@ -1457,6 +1457,38 @@ describe('Inventory module (e2e)', () => {
     });
   });
 
+  describe('036 M11 purchase files', () => {
+    const PNG_1PX =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+    it('serves the delivery photo and the bill typed from their bytes', async () => {
+      const res = await purchase({
+        photoFile: PNG_1PX,
+        billFile: Buffer.from('%PDF-1.4 bill').toString('base64'),
+        billContentType: 'text/html',
+      }).expect(201);
+      expect(res.body.hasPhoto).toBe(true);
+      const photo = await http()
+        .get(`/inventory/purchases/${res.body.id}/photo`)
+        .set(auth())
+        .expect(200);
+      expect(photo.headers['content-type']).toMatch(/^image\//);
+      const bill = await http()
+        .get(`/inventory/purchases/${res.body.id}/bill`)
+        .set(auth())
+        .expect(200);
+      // The declared `text/html` is ignored: what is served is what the bytes are.
+      expect(bill.headers['content-type']).toMatch(/application\/pdf/);
+    });
+
+    it('refuses a bill that is not a PDF or a photo', async () => {
+      const res = await purchase({
+        billFile: Buffer.from('<html>not a bill</html>').toString('base64'),
+      }).expect(415);
+      expect(res.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
+    });
+  });
+
   /**
    * 036 M9: purchase orders structured behind the unchanged PO letter.
    *

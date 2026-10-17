@@ -13,6 +13,16 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { detectContentType } from '../../common/storage/file-type';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  JPEG,
+  PDF,
+  PNG,
+  WEBP,
+} from '../../common/uploads';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -625,7 +635,7 @@ export class PaymentsService {
   async attachProof(
     caller: AuthenticatedUser,
     paymentId: string,
-    input: { data: Buffer; contentType: string },
+    input: { data: string },
     ipAddress: string,
   ): Promise<PaymentView> {
     const ctx = rlsContextFor(caller);
@@ -635,10 +645,21 @@ export class PaymentsService {
     if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
     assertInScope(caller, payment, `Payment ${paymentId}`);
 
+    // 036 M11/B4-B6: the shared upload helpers — 413 past 10 MB, 415 for anything but a PDF or a
+    // photo (read from the bytes; the declared `contentType` is no longer what is stored), and a
+    // photographed advice compressed. These messages are what the screen now shows instead of a
+    // generic failure.
+    const bytes = decodeBase64Upload(input.data, 'The payment proof');
+    const type = assertAllowedFileType(
+      bytes,
+      [PDF, JPEG, PNG, WEBP],
+      'The payment proof',
+    );
+    const image = await compressImageUpload(bytes, type.contentType);
     const proofRef = await this.storage.put(
       `payment-proof/${payment.companyId}`,
-      input.data,
-      input.contentType,
+      image?.main.data ?? bytes,
+      image?.main.contentType ?? type.contentType,
     );
 
     const updated = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -717,6 +738,11 @@ export class PaymentsService {
     });
 
     const data = await this.storage.get(payment.proofRef);
-    return { data, contentType: 'application/octet-stream' };
+    // Typed from the bytes (036 M11), so the advice opens inline in the viewer.
+    return {
+      data,
+      contentType:
+        detectContentType(data)?.contentType ?? 'application/octet-stream',
+    };
   }
 }
