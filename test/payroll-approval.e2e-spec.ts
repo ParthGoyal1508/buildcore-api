@@ -404,6 +404,7 @@ describe('Payroll approval chain (e2e)', () => {
     await sys.attendanceModification.deleteMany({ where: { employeeId } });
     await sys.punchRecord.deleteMany({ where: { employeeId } });
     await sys.payrollLineItem.deleteMany({ where: {} }).catch(() => undefined);
+    await sys.bankSheetExport.deleteMany({ where: { companyId } });
     await sys.payrollRun.deleteMany({ where: { companyId } });
     await sys.employee.deleteMany({ where: { companyId } });
     await sys.refreshToken.deleteMany({ where: { companyId } });
@@ -840,5 +841,32 @@ describe('Payroll approval chain (e2e)', () => {
       .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
       .catch((e) => e);
     expect(refused.response.code).toBe('PAYROLL_RUN_NOT_APPROVED');
+  }, 60_000);
+
+  it('2026-10-17 — every generated bank sheet is in the history, and downloads again', async () => {
+    const run = await runForPeriod();
+    const [year, month] = run.period.split('-').map(Number);
+    const res = await http()
+      .get(`/hr/payroll/bank-sheet/history?year=${year}&month=${month}`)
+      .set(auth(hrUser.token))
+      .expect(200);
+    expect(res.body.length).toBeGreaterThanOrEqual(1);
+    expect(res.body[0]).toMatchObject({
+      period: run.period,
+      fileName: expect.stringMatching(/\.xlsx$/),
+    });
+
+    const file = await http()
+      .get(`/hr/payroll/bank-sheet/history/${res.body[0].id}/file`)
+      .set(auth(hrUser.token))
+      .buffer(true)
+      .parse((r, cb) => {
+        const chunks: Buffer[] = [];
+        r.on('data', (c: Buffer) => chunks.push(c));
+        r.on('end', () => cb(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    expect(file.headers['content-type']).toContain('spreadsheetml');
+    expect((file.body as Buffer).subarray(0, 2).toString()).toBe('PK');
   }, 60_000);
 });

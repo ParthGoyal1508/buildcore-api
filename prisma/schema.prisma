@@ -5077,6 +5077,35 @@ model BankSheetRecovery {
   @@schema("payroll")
 }
 
+/// One generated salary bank sheet (2026-10-17): the history HR and accounts see under Generate Bank
+/// Payment Sheet, with the exact file given to the bank kept so it can be downloaded again. Written
+/// on every download, from the company-and-month card and from a run's own Bank sheet button.
+/// Never updated.
+model BankSheetExport {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId String
+  period       String
+
+  debitAccount  String
+  employeeCount Int
+  transferTotal Decimal @db.Decimal(14, 2)
+  /// People left off the transfer (bank details, excluded by hand, nothing to pay).
+  leftOffCount  Int
+
+  fileName String
+  /// The workbook as downloaded, in encrypted storage — it carries unmasked account numbers.
+  fileRef  String
+
+  generatedById String?
+  createdAt     DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([payrollRunId])
+  @@schema("payroll")
+}
+
 /// One line of the bank's own transaction sheet, as uploaded (021 FR-008 to FR-011).
 ///
 /// **Stored whether or not it matched** (task T055). SC-004 asks that every line be either matched or

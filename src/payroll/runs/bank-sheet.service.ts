@@ -13,6 +13,7 @@ import { PayrollRunStatus } from '@prisma/client';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
+import { StorageService } from '../../common/storage/storage.service';
 import { BankSheetRecoveryService } from './bank-sheet-recovery.service';
 import { PayrollScheduleService } from './payroll-schedule.service';
 
@@ -62,6 +63,23 @@ export interface BankSheetOptions {
   excludeEmployeeIds?: string[];
   /** `Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx` rather than the run's own name. */
   companyNamedFile?: boolean;
+}
+
+/** Where generated bank sheets are kept for the history (2026-10-17). */
+const BANK_SHEET_NAMESPACE = 'payroll-bank-sheet';
+const XLSX_TYPE =
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+export interface BankSheetExportView {
+  id: string;
+  period: string;
+  debitAccount: string;
+  employeeCount: number;
+  transferTotal: number;
+  leftOffCount: number;
+  fileName: string;
+  generatedBy: string | null;
+  generatedAt: string;
 }
 
 export interface BankSheetLeftOff {
@@ -154,6 +172,8 @@ export class BankSheetService {
      */
     private readonly recoveries: BankSheetRecoveryService,
     configService: ConfigService,
+    /** Keeps each generated file for the history (2026-10-17). */
+    private readonly storage: StorageService,
   ) {
     this.format = configService.get<BankSheetConfig>(
       'bankSheet',
@@ -339,11 +359,110 @@ export class BankSheetService {
     }
 
     const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
-    return {
+    const filename = options.companyNamedFile
+      ? salaryBankSheetFilename(computed.companyName, run.period)
+      : `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`;
+
+    // The history (2026-10-17). Recorded before the file is handed over, and a failure to record
+    // fails the download: a payment instruction nobody can later find is exactly what the history
+    // exists to prevent.
+    const fileRef = await this.storage.put(
+      BANK_SHEET_NAMESPACE,
       buffer,
-      filename: options.companyNamedFile
-        ? salaryBankSheetFilename(computed.companyName, run.period)
-        : `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`,
+      XLSX_TYPE,
+    );
+    try {
+      await withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.bankSheetExport.create({
+          data: {
+            companyId: run.companyId,
+            payrollRunId: run.id,
+            period: run.period,
+            debitAccount,
+            employeeCount: rows.length,
+            transferTotal: computed.transferTotal,
+            leftOffCount: computed.leftOff.length,
+            fileName: filename,
+            fileRef,
+            generatedById: caller.userId,
+          },
+        }),
+      );
+    } catch (error) {
+      await this.storage.delete(fileRef).catch(() => undefined);
+      throw error;
+    }
+
+    return { buffer, filename };
+  }
+
+  /** Generated bank sheets for a company, newest first, optionally for one month (2026-10-17). */
+  async history(
+    caller: Caller,
+    companyId: string,
+    period?: string,
+  ): Promise<BankSheetExportView[]> {
+    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.bankSheetExport.findMany({
+        where: { companyId, ...(period ? { period } : {}) },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    );
+    const ids = [
+      ...new Set(
+        rows.map((r) => r.generatedById).filter((id): id is string => !!id),
+      ),
+    ];
+    const users = ids.length
+      ? await withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
+          tx.user.findMany({
+            where: { id: { in: ids } },
+            select: {
+              id: true,
+              displayName: true,
+              firstname: true,
+              lastname: true,
+              username: true,
+            },
+          }),
+        )
+      : [];
+    const names = new Map(
+      users.map((u) => [
+        u.id,
+        u.displayName?.trim() ||
+          [u.firstname, u.lastname].filter(Boolean).join(' ').trim() ||
+          u.username,
+      ]),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      period: r.period,
+      debitAccount: r.debitAccount,
+      employeeCount: r.employeeCount,
+      transferTotal: r.transferTotal.toNumber(),
+      leftOffCount: r.leftOffCount,
+      fileName: r.fileName,
+      generatedBy: r.generatedById ? names.get(r.generatedById) ?? null : null,
+      generatedAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  /** The exact file a history entry gave the bank. */
+  async historyFile(
+    caller: Caller,
+    id: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const row = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.bankSheetExport.findUnique({ where: { id } }),
+    );
+    if (!row) {
+      throw new NotFoundException('Bank sheet not found');
+    }
+    return {
+      buffer: await this.storage.get(row.fileRef),
+      filename: row.fileName,
     };
   }
 

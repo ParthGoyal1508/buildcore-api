@@ -105,6 +105,7 @@ function build(opts: {
       }),
     },
     employee: { findMany: async () => employees },
+    bankSheetExport: { create: async () => ({}) },
   };
   const prisma = {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
@@ -114,6 +115,12 @@ function build(opts: {
     decrypt: (value: string | null) => value?.replace(/^enc:/, '') ?? null,
   };
   const schedule = { outstandingApproval: async () => null };
+  // 2026-10-17: every generated file is kept for the history.
+  const storage = {
+    put: async () => 'ref-1',
+    get: async () => Buffer.from(''),
+    delete: async () => undefined,
+  };
   const config = { get: () => FORMAT };
   // 021 FR-010. Recovers nothing by default — these tests are about the file's shape, and a fixture
   // that quietly reduced a transfer would make every amount assertion wrong for an unrelated reason.
@@ -154,6 +161,7 @@ function build(opts: {
     schedule as never,
     recoveries as never,
     config as never,
+    storage as never,
   );
 }
 

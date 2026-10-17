@@ -3065,6 +3065,26 @@ item 9: an advance taken *between* approval and payment day must still come out 
 actually moves, and an approved run is immutable.'
 }
 
+Table BankSheetExport {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  period String [not null]
+  debitAccount String [not null]
+  employeeCount Int [not null]
+  transferTotal Decimal [not null]
+  leftOffCount Int [not null, note: 'People left off the transfer (bank details, excluded by hand, nothing to pay).']
+  fileName String [not null]
+  fileRef String [not null, note: 'The workbook as downloaded, in encrypted storage — it carries unmasked account numbers.']
+  generatedById String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'One generated salary bank sheet (2026-10-17): the history HR and accounts see under Generate Bank
+Payment Sheet, with the exact file given to the bank kept so it can be downloaded again. Written
+on every download, from the company-and-month card and from a run\'s own Bank sheet button.
+Never updated.'
+}
+
 Table BankTransactionLine {
   id String [pk]
   companyId String [not null]

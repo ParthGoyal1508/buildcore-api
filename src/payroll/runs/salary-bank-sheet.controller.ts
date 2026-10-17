@@ -1,4 +1,12 @@
-import { Controller, Get, Query, Req, Res, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 import type { Request, Response } from 'express';
@@ -12,7 +20,10 @@ import { contentDispositionFor } from '../../common/storage/file-type';
 import { callerFrom } from '../../hr/caller-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { BankSheetService } from './bank-sheet.service';
-import { SalaryBankSheetQueryDto } from './dto/salary-bank-sheet.dto';
+import {
+  BankSheetHistoryQueryDto,
+  SalaryBankSheetQueryDto,
+} from './dto/salary-bank-sheet.dto';
 
 /**
  * The salary bank payment sheet by company and month (2026-10-17), for HR and accounts: the same
@@ -50,6 +61,48 @@ export class SalaryBankSheetController {
       periodOf(query),
     );
     return this.bankSheet.preview(caller, run.id, optionsOf(query));
+  }
+
+  @Get('history')
+  @ApiOperation({
+    summary: 'Bank sheets generated for a company, newest first',
+    description:
+      'Every download, from here and from a run, with who generated it, the debit account, the ' +
+      'count and the total. Filter to one month with `year` and `month`.',
+  })
+  async history(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query() query: BankSheetHistoryQueryDto,
+  ) {
+    return this.bankSheet.history(
+      callerFrom(user, request),
+      resolveCompanyId(user, query.companyId),
+      query.year && query.month
+        ? periodOf(query as SalaryBankSheetQueryDto)
+        : undefined,
+    );
+  }
+
+  @Get('history/:id/file')
+  @ApiOperation({ summary: 'The exact file a history entry gave the bank' })
+  async historyFile(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    const { buffer, filename } = await this.bankSheet.historyFile(
+      callerFrom(user, request),
+      id,
+    );
+    response.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    response.setHeader('Content-Disposition', contentDispositionFor(filename));
+    response.setHeader('Cache-Control', 'no-store');
+    response.send(buffer);
   }
 
   @Get()

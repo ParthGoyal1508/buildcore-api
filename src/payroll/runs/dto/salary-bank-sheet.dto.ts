@@ -49,3 +49,29 @@ export class SalaryBankSheetQueryDto {
   @MaxLength(20_000)
   exclude?: string;
 }
+
+/** The generated-sheet history: a company's, optionally for one month (2026-10-17). */
+export class BankSheetHistoryQueryDto {
+  @ApiPropertyOptional({
+    description: 'Required for a cross-company caller; ignored otherwise',
+  })
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+
+  @ApiPropertyOptional({ example: 2026 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2999)
+  year?: number;
+
+  @ApiPropertyOptional({ example: 9 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(12)
+  month?: number;
+}
