@@ -4,7 +4,7 @@ import { Permission } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { DashboardContext } from '../context';
 import type { ReportData, ReportProvider } from './report.types';
-import { ReportsService } from './reports.service';
+import { ReportsService, assertReportRange } from './reports.service';
 
 const ROSTER: ReportData = {
   columns: [{ key: 'name', label: 'Name' }],
@@ -97,5 +97,23 @@ describe('ReportsService — which reports are the caller’s (2026-10-10)', () 
         .types([])
         .map((t) => t.id),
     ).toEqual(['project-cost']);
+  });
+});
+
+describe('report range (036 E2)', () => {
+  it.each([
+    [{ fromDate: '2026-10-05', toDate: '2026-10-01' }, 'must not be after'],
+    [{ fromDate: '2026-02-30' }, 'not a real calendar date'],
+    [{ fromDate: '2024-01-01', toDate: '2026-01-01' }, 'at most 366 days'],
+  ])('refuses %j', (params, message) => {
+    expect(() => assertReportRange(params)).toThrow(message);
+  });
+
+  it('accepts a same-day range, an open end, and no range', () => {
+    expect(() =>
+      assertReportRange({ fromDate: '2026-10-01', toDate: '2026-10-01' }),
+    ).not.toThrow();
+    expect(() => assertReportRange({ fromDate: '2026-10-01' })).not.toThrow();
+    expect(() => assertReportRange({})).not.toThrow();
   });
 });

@@ -65,11 +65,11 @@ export class AttendanceReportProvider implements ReportProvider {
 
     return {
       columns: [
-        { key: 'date', label: 'Date' },
-        { key: 'present', label: 'Present' },
-        { key: 'absent', label: 'Absent' },
-        { key: 'onLeave', label: 'On Leave' },
-        { key: 'total', label: 'Total' },
+        { key: 'date', label: 'Date', type: 'date' },
+        { key: 'present', label: 'Present', type: 'number' },
+        { key: 'absent', label: 'Absent', type: 'number' },
+        { key: 'onLeave', label: 'On Leave', type: 'number' },
+        { key: 'total', label: 'Total', type: 'number' },
       ],
       rows,
     };

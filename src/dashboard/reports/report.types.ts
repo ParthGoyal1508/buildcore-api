@@ -19,9 +19,24 @@ export interface ReportRunParams {
   filters?: Record<string, string | undefined>;
 }
 
+/**
+ * How a column's values should be shown (036 E1). The screen rendered every cell with
+ * `String(cell)`, so a net pay read `48213.5` and a date `2026-10-01`; with a type it formats them
+ * the way every other screen does (₹ with grouping, DD-MM-YYYY) and can total the money columns.
+ * Absent means text. The values themselves are unchanged — exports read them as before.
+ */
+export type ReportColumnType =
+  | 'text'
+  | 'number'
+  | 'money'
+  | 'quantity'
+  | 'percent'
+  | 'date'
+  | 'boolean';
+
 /** An available report's tabular result (data-model.md). */
 export interface ReportData {
-  columns: { key: string; label: string }[];
+  columns: { key: string; label: string; type?: ReportColumnType }[];
   rows: Record<string, unknown>[];
   /**
    * Why there is nothing to show, or what is missing from what is (2026-10-12).

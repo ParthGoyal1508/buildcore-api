@@ -95,11 +95,11 @@ export class PnlReportProvider implements ReportProvider {
     return {
       columns: [
         { key: 'project', label: 'Project' },
-        { key: 'contractValue', label: 'Contract value' },
-        { key: 'revenueMonthly', label: `Billed in ${period}` },
-        { key: 'revenueCumulative', label: 'Billed to date' },
-        { key: 'costCumulative', label: 'Cost to date' },
-        { key: 'marginCumulative', label: 'Margin to date' },
+        { key: 'contractValue', label: 'Contract value', type: 'money' },
+        { key: 'revenueMonthly', label: `Billed in ${period}`, type: 'money' },
+        { key: 'revenueCumulative', label: 'Billed to date', type: 'money' },
+        { key: 'costCumulative', label: 'Cost to date', type: 'money' },
+        { key: 'marginCumulative', label: 'Margin to date', type: 'money' },
         { key: 'notCounted', label: 'Cost sources unavailable' },
       ],
       rows: all.map((project) => {
@@ -178,10 +178,10 @@ export class ProjectCostReportProvider implements ReportProvider {
       columns: [
         { key: 'project', label: 'Project' },
         { key: 'category', label: 'Category' },
-        { key: 'monthly', label: `Spent in ${period}` },
-        { key: 'cumulative', label: 'Spent to date' },
-        { key: 'budget', label: 'Budget' },
-        { key: 'variance', label: 'Variance' },
+        { key: 'monthly', label: `Spent in ${period}`, type: 'money' },
+        { key: 'cumulative', label: 'Spent to date', type: 'money' },
+        { key: 'budget', label: 'Budget', type: 'money' },
+        { key: 'variance', label: 'Variance', type: 'money' },
       ],
       rows,
     };
