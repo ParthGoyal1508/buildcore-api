@@ -5,6 +5,7 @@ import { PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { configureApp } from './common/configure-app';
+import { COMPANY_HEADER } from './settings/company-selection/company-header.interceptor';
 import { assertRlsEnforceable } from './common/prisma/rls-preflight';
 import { logRefreshCookieConfig } from './auth/refresh-cookie-preflight';
 import type {
@@ -75,7 +76,16 @@ async function bootstrap() {
       credentials: true,
       // Readable cross-origin only when listed. Without these a download from the web app could not
       // see the file name the server chose, nor the header fields a bill printed blank.
-      exposedHeaders: ['Content-Disposition', 'X-Bill-Package-Missing-Fields'],
+      // `X-Company-Id`: the company each response was served for (036 B17).
+      exposedHeaders: [
+        'Content-Disposition',
+        'X-Bill-Package-Missing-Fields',
+        COMPANY_HEADER,
+      ],
+      // No `allowedHeaders`: left unset, the cors middleware reflects whatever request headers the
+      // preflight asks for, which already admits `X-Expected-Company-Id` (036 B17) alongside
+      // `X-Confirmation-Token` and the rest. An explicit list would have to be kept in step with
+      // every header the web sends, and the one forgotten would fail only cross-origin.
     });
   }
 

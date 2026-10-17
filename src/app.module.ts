@@ -17,6 +17,7 @@ import { NocsModule } from './nocs/nocs.module';
 import { SearchModule } from './search/search.module';
 import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
+import { CompanyHeaderInterceptor } from './settings/company-selection/company-header.interceptor';
 import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
@@ -132,6 +133,12 @@ import type { SecurityConfig } from './common/configs/config.interface';
       // `request.user` and allow everything.
       provide: APP_INTERCEPTOR,
       useClass: PasswordChangeInterceptor,
+    },
+    {
+      // 036 B17. Names the company on every authenticated response and refuses a save from a
+      // tab that thinks it is in another one. Global for the reason the two above are.
+      provide: APP_INTERCEPTOR,
+      useClass: CompanyHeaderInterceptor,
     },
     {
       // 019 FR-017a, FR-017b. Global for the same reason as the visibility interceptor above —
