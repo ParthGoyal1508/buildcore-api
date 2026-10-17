@@ -74,6 +74,12 @@ describe('IsBase64Payload (036 B11)', () => {
       errors,
     );
   });
+
+  it('validates a 10 MB file without running out of stack', async () => {
+    // class-validator's own `@IsBase64()` throws RangeError here.
+    const photo = Buffer.alloc(10 * 1024 * 1024, 7).toString('base64');
+    expect(await validate(plainToInstance(Photo, { photo }))).toHaveLength(0);
+  });
 });
 
 describe('assertAllowedFileType (036 B5)', () => {

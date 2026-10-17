@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsBoolean,
   IsDateString,
   IsOptional,
@@ -8,6 +7,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * One company document being uploaded (017 FR-001, FR-004).
@@ -28,7 +28,7 @@ export class UploadCompanyDocumentDto {
   documentTypeId: string;
 
   @ApiProperty({ description: 'The file, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })

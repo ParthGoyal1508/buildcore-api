@@ -1,12 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsObject,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../common/uploads/base64-payload';
 
 /**
  * Compose a letter (017 US3).
@@ -102,7 +102,7 @@ export class ReissueLetterDto {
 /** The executed copy that comes back signed by the other party (FR-017). */
 export class CountersignedLetterDto {
   @ApiProperty({ description: 'The scanned executed copy, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })

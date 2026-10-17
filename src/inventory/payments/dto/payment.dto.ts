@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentMode, PurchaseBillStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
-  IsBase64,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -17,6 +16,7 @@ import {
   Min,
   ValidateIf,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * No `allocations` array by design (research.md §7). Allocation is automatic and
@@ -162,7 +162,7 @@ export class ListBillsDto {
  */
 export class AttachPaymentProofDto {
   @ApiProperty({ description: 'The advice, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })

@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsBoolean,
   IsDateString,
   IsInt,
@@ -12,6 +11,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * **The programme fields are optional, and that is the amendment** (008 FR-037).
@@ -164,7 +164,7 @@ export class ValidateBoqImportDto {
       'The workbook, base64-encoded. `.xls` and `.xlsx` both accepted — the format is read from ' +
       'the content, not from any filename, because a renamed file is the common case.',
   })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 }
 

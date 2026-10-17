@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { EquipmentDisposalType, EquipmentScrapReason } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
-  IsBase64,
   IsDateString,
   IsEnum,
   IsIn,
@@ -14,6 +13,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /** A rupee figure above this is a typing slip, not a machine. */
 const MAX_AMOUNT = 1_000_000_000;
@@ -102,7 +102,7 @@ export class DisposeEquipmentDto {
 
   @ApiPropertyOptional({ description: 'Base64 photo, invoice or agreement' })
   @IsOptional()
-  @IsBase64()
+  @IsBase64Payload()
   attachment?: string;
 
   @ApiPropertyOptional()

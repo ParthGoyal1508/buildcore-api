@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsIn,
   IsISO8601,
   IsNotEmpty,
@@ -8,6 +7,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../common/uploads/base64-payload';
 
 /** What a NOC can be about (2026-10-15). */
 export const NOC_SUBJECTS = [
@@ -60,7 +60,7 @@ export class UploadNocDto extends ListNocsDto {
   stage?: string;
 
   @ApiProperty({ description: 'Base64-encoded file' })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()

@@ -10,7 +10,6 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsBase64,
   IsEnum,
   IsInt,
   IsISO8601,
@@ -23,6 +22,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 import {
   EQUIPMENT_YEAR_MAX,
@@ -321,7 +321,7 @@ export class UploadEquipmentDocumentDto {
   docTypeId!: string;
 
   @ApiProperty({ description: 'Base64-encoded file content' })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()
@@ -349,7 +349,7 @@ export class UploadEquipmentDocumentDto {
 /** The client's Equipment Master List, as a base64 `.xlsx` (2026-10-15). */
 export class ImportEquipmentDto {
   @ApiProperty({ description: 'Base64-encoded .xlsx workbook' })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()
