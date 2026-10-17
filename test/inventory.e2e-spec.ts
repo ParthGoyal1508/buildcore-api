@@ -1457,6 +1457,107 @@ describe('Inventory module (e2e)', () => {
     });
   });
 
+  describe('036 M12/M13 registers: totals, filters, ledger, exports', () => {
+    let lItem = '';
+    let slipNo = '';
+
+    beforeAll(async () => {
+      const item = await http()
+        .post(`/inventory/items?companyId=${companyId}`)
+        .set(auth())
+        .send({ name: unique('Ledger'), categoryId, unit: 'BAG' })
+        .expect(201);
+      lItem = item.body.id;
+      createdItemIds.push(lItem);
+    });
+
+    it('walks one item at one store from an opening balance to the closing one', async () => {
+      await purchase({
+        itemId: lItem,
+        quantity: 30,
+        rate: 100,
+        date: '2026-01-05',
+      }).expect(201);
+      await purchase({
+        itemId: lItem,
+        quantity: 20,
+        rate: 100,
+        date: today(),
+      }).expect(201);
+      const issued = await http()
+        .post(`/inventory/issues?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId: lItem,
+          date: today(),
+          quantity: 5,
+          issuedTo: 'Gang M13',
+        })
+        .expect(201);
+      slipNo = issued.body.slipNo;
+
+      const res = await http()
+        .get(`/inventory/stock/${lItem}/${siteA}/ledger?dateFrom=2026-02-01`)
+        .set(auth())
+        .expect(200);
+      expect(res.body).toMatchObject({
+        openingQuantity: 30,
+        inQuantity: 20,
+        outQuantity: 5,
+        closingQuantity: 45,
+        closingValue: 4500,
+      });
+      expect(
+        res.body.entries.map((e: { balance: number }) => e.balance),
+      ).toEqual([50, 45]);
+      expect(res.body.entries[1]).toMatchObject({
+        reference: slipNo,
+        counterparty: 'Gang M13',
+      });
+    });
+
+    it('totals every page of a filter and finds an issue by its slip number', async () => {
+      const purchases = await http()
+        .get(`/inventory/purchases?itemId=${lItem}&pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(purchases.body.totals).toMatchObject({
+        amount: 5000,
+        quantity: 50,
+      });
+      const issues = await http()
+        .get(`/inventory/issues?slipNo=${slipNo.toLowerCase()}`)
+        .set(auth())
+        .expect(200);
+      expect(
+        issues.body.issues.map((i: { itemId: string }) => i.itemId),
+      ).toContain(lItem);
+      const stock = await http()
+        .get(`/inventory/stock?pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(typeof stock.body.totals.stockValue).toBe('number');
+    });
+
+    it('downloads the registers and the ledger as Excel', async () => {
+      for (const path of [
+        `purchases.xlsx?itemId=${lItem}`,
+        'payments.xlsx',
+        `issues.xlsx?itemId=${lItem}`,
+        'stock.xlsx',
+        `stock-ledger.xlsx?itemId=${lItem}&siteId=${siteA}`,
+      ]) {
+        const res = await http()
+          .get(`/inventory/exports/${path}`)
+          .set(auth())
+          .buffer(true)
+          .expect(200);
+        expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+      }
+    });
+  });
+
   describe('036 M11 purchase files', () => {
     const PNG_1PX =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';

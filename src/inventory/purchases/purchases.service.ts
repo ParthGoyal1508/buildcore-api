@@ -87,6 +87,11 @@ export interface PurchaseView {
 
 export interface PaginatedPurchases {
   purchases: PurchaseView[];
+  /**
+   * Across every page of the filter (036 M12): billed and paid, and the quantity only when one
+   * item is filtered.
+   */
+  totals: { amount: number; paidAmount: number; quantity: number | null };
   total: number;
   page: number;
   pageSize: number;
@@ -409,7 +414,7 @@ export class PurchasesService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum, paid } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
@@ -427,7 +432,17 @@ export class PurchasesService {
           }),
           tx.purchase.count({ where }),
         ]);
-        return { rows, total };
+        const [sum, paid] = await Promise.all([
+          tx.purchase.aggregate({
+            where,
+            _sum: { amount: true, quantity: true },
+          }),
+          tx.purchaseBill.aggregate({
+            where: { purchase: where },
+            _sum: { paidAmount: true },
+          }),
+        ]);
+        return { rows, total, sum, paid };
       },
     );
 
@@ -475,6 +490,11 @@ export class PurchasesService {
           createdAt: row.createdAt,
         };
       }),
+      totals: {
+        amount: toNumber(sum._sum.amount),
+        paidAmount: toNumber(paid._sum.paidAmount),
+        quantity: query.itemId ? toNumber(sum._sum.quantity) : null,
+      },
       total,
       page,
       pageSize,

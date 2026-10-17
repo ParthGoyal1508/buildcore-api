@@ -65,6 +65,11 @@ const ISSUE_SLIP_INFIX = 'MIS';
 
 export interface PaginatedIssues {
   issues: IssueView[];
+  /**
+   * Across every page of the filter (036 M12). The quantity only when one item is filtered: a sum
+   * of bags and kilograms is not a number anybody can use.
+   */
+  totals: { quantity: number | null };
   total: number;
   page: number;
   pageSize: number;
@@ -303,6 +308,11 @@ export class IssuesService {
       deleted: false,
       ...(query.siteId ? { siteId: query.siteId } : {}),
       ...(query.itemId ? { itemId: query.itemId } : {}),
+      ...(query.projectId ? { projectId: query.projectId } : {}),
+      ...(query.vendorId ? { vendorId: query.vendorId } : {}),
+      ...(query.slipNo
+        ? { slipNo: { contains: query.slipNo.trim(), mode: 'insensitive' } }
+        : {}),
       ...(query.dateFrom || query.dateTo
         ? {
             date: {
@@ -317,11 +327,11 @@ export class IssuesService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const [rows, total] = await Promise.all([
+        const [rows, total, sum] = await Promise.all([
           tx.issue.findMany({
             where,
             orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
@@ -329,8 +339,11 @@ export class IssuesService {
             take: pageSize,
           }),
           tx.issue.count({ where }),
+          query.itemId
+            ? tx.issue.aggregate({ where, _sum: { quantity: true } })
+            : Promise.resolve(null),
         ]);
-        return { rows, total };
+        return { rows, total, sum };
       },
     );
 
@@ -396,6 +409,7 @@ export class IssuesService {
           receivedBy: row.receivedBy,
         };
       }),
+      totals: { quantity: sum ? toNumber(sum._sum.quantity) : null },
       total,
       page,
       pageSize,

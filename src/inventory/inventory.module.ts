@@ -10,6 +10,7 @@ import { SettingsModule } from '../settings/settings.module';
 import { StoreDocumentsController } from './documents/store-documents.controller';
 import { StoreDocumentsService } from './documents/store-documents.service';
 import { CategoriesController } from './categories/categories.controller';
+import { InventoryExportsController } from './exports/inventory-exports.controller';
 import { IndentFulfilmentService } from './indents/indent-fulfilment.service';
 import { IndentsController } from './indents/indents.controller';
 import { IndentsService } from './indents/indents.service';
@@ -63,6 +64,7 @@ import { TransfersService } from './transfers/transfers.service';
     IndentsController,
     StoreDocumentsController,
     PurchaseOrdersController,
+    InventoryExportsController,
   ],
   providers: [
     StockService,

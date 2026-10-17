@@ -78,6 +78,8 @@ export interface CreatedPaymentView extends PaymentView {
 
 export interface PaginatedPayments {
   payments: PaymentView[];
+  /** Across every page of the filter (036 M12). */
+  totals: { amount: number; allocatedAmount: number };
   total: number;
   page: number;
   pageSize: number;
@@ -452,7 +454,7 @@ export class PaymentsService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
@@ -466,7 +468,11 @@ export class PaymentsService {
           }),
           tx.payment.count({ where }),
         ]);
-        return { rows, total };
+        const sum = await tx.payment.aggregate({
+          where,
+          _sum: { amount: true, allocatedAmount: true },
+        });
+        return { rows, total, sum };
       },
     );
 
@@ -496,6 +502,10 @@ export class PaymentsService {
           createdAt: row.createdAt,
         };
       }),
+      totals: {
+        amount: toNumber(sum._sum.amount),
+        allocatedAmount: toNumber(sum._sum.allocatedAmount),
+      },
       total,
       page,
       pageSize,

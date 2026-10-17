@@ -105,6 +105,25 @@ export class CreateIssueDto {
 }
 
 export class ListIssuesDto {
+  /** 036 M12: the project, vendor and slip number the register is searched by. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  projectId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  vendorId?: string;
+
+  @ApiPropertyOptional({ description: 'Slip number, partial match' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  slipNo?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
