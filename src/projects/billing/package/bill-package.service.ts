@@ -62,6 +62,7 @@ import {
   nonBoqAwardNo,
   compareAwardLines,
 } from './award-line-number';
+import { ListPaging, UNPAGED } from '../../list-paging';
 
 /**
  * Re-exported: `packageLabel` moved to `../bill-number` when a second caller appeared, and
@@ -3141,10 +3142,18 @@ export class BillPackageService {
     return { ...column, payable: previous.payableUptoDate };
   }
 
+  /** How many packages a project has, for a paged `list` (036 I26). */
+  async countForProject(ctx: RlsContext, projectId: string): Promise<number> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.billPackage.count({ where: { projectId } }),
+    );
+  }
+
   /** Every package on a project, newest first. */
   async list(
     ctx: RlsContext,
     projectId: string,
+    paging: ListPaging = UNPAGED,
   ): Promise<
     {
       id: string;
@@ -3161,7 +3170,9 @@ export class BillPackageService {
     return withRlsContext(this.prisma, ctx, async (tx) => {
       const rows = await tx.billPackage.findMany({
         where: { projectId },
-        orderBy: [{ direction: 'asc' }, { sequenceNo: 'desc' }],
+        orderBy: [{ direction: 'asc' }, { sequenceNo: 'desc' }, { id: 'desc' }],
+        skip: paging.skip,
+        take: paging.take,
         select: {
           id: true,
           sequenceNo: true,

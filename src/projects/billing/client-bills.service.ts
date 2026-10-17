@@ -27,6 +27,7 @@ import {
   detectContentType,
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import { ListPaging, Paged, UNPAGED, shapeList } from '../list-paging';
 
 /** What a certification carries (2026-10-11). */
 export interface CertifyBillInput {
@@ -791,19 +792,27 @@ export class ClientBillsService {
   async listForProject(
     ctx: RlsContext,
     projectId: string,
-  ): Promise<ClientBillView[]> {
+    paging: ListPaging = UNPAGED,
+  ): Promise<ClientBillView[] | Paged<ClientBillView>> {
     const bills = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.clientBill.findMany({
         where: { projectId },
-        orderBy: { billingDate: 'desc' },
+        // `id` breaks ties so a page boundary between two bills of one date is stable (036 I26).
+        orderBy: [{ billingDate: 'desc' }, { id: 'desc' }],
         select: { id: true },
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
     // Sequential rather than `Promise.all`: each `view` opens its own RLS transaction, and a hundred
     // concurrent ones would exhaust the pool on a project with a long billing history.
     const out: ClientBillView[] = [];
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
-    return out;
+    return shapeList(paging, out, () =>
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.clientBill.count({ where: { projectId } }),
+      ),
+    );
   }
 
   /**

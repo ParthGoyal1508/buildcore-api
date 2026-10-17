@@ -33,7 +33,11 @@ import {
   ReviseRaBillDto,
   SetAwardDto,
 } from './dto/ra-bill.dto';
-import { ProjectLockFrom, ProjectLockGuard } from '../guards/project-lock.guard';
+import {
+  ProjectLockFrom,
+  ProjectLockGuard,
+} from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Subcontractor bills measured against the award (018 US2) — `bugs.md` item 12.
@@ -58,8 +62,15 @@ export class RaBillsController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('projectId') projectId: string,
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.bills.listForProject(rlsContextFor(caller), projectId);
+    return this.bills.listForProject(
+      rlsContextFor(caller),
+      projectId,
+      listPaging(page, pageSize),
+    );
   }
 
   /**
@@ -178,7 +189,8 @@ export class RaBillsController {
     description:
       'The bill enters the `ra_bill` approval chain and becomes `submitted`. **Nothing is certified ' +
       'here** — the 016 spine decides, and the bill becomes `approved` when the chain completes.\n\n' +
-      'The spine is asked **before** the bill’s status is written. A bill flipped to submitted with ' +
+      'The status moves to submitted **conditionally** first, so a double-click opens one approval ' +
+      '(036 I3), and is put back if the spine refuses: a bill left submitted with ' +
       'no instance behind it waits on nobody, sits in no queue, and looks to its author exactly like ' +
       'one that was submitted.',
   })

@@ -1158,6 +1158,35 @@ describe('RA bills against an award (e2e)', () => {
       }
     });
 
+    it('pages the list only when asked, keeping the bare array otherwise (036 I26)', async () => {
+      const plain = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      expect(Array.isArray(plain.body)).toBe(true);
+
+      const paged = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}&pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(paged.body.items).toHaveLength(1);
+      expect(paged.body.total).toBe(plain.body.length);
+      expect(paged.body).toMatchObject({ page: 1, pageSize: 1 });
+
+      for (const route of ['client-bills', 'work-orders']) {
+        const res = await http()
+          .get(`/projects/${route}?projectId=${projectId}&page=1`)
+          .set(auth())
+          .expect(200);
+        expect(res.body).toHaveProperty('total');
+      }
+      const packages = await http()
+        .get(`/projects/${projectId}/bill-packages?pageSize=5`)
+        .set(auth())
+        .expect(200);
+      expect(packages.body).toHaveProperty('items');
+    });
+
     it('refuses bill writes on a locked project with 423 (036 I2)', async () => {
       await sys.project.update({
         where: { id: projectId },
@@ -1179,7 +1208,9 @@ describe('RA bills against an award (e2e)', () => {
         expect(composed.status).toBe(423);
 
         const award = await http()
-          .put(`/projects/ra-bills/awards/${workOrderId}?companyId=${companyId}`)
+          .put(
+            `/projects/ra-bills/awards/${workOrderId}?companyId=${companyId}`,
+          )
           .set(auth())
           .send({ lines: [] });
         expect(award.status).toBe(423);

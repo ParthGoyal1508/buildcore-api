@@ -37,6 +37,7 @@ import {
   retentionOn,
 } from './bill-totals';
 import { webRoutes } from '../../common/web-routes';
+import { ListPaging, Paged, UNPAGED, shapeList } from '../list-paging';
 
 /** One award line as the work order captures it. */
 export interface AwardLineInput {
@@ -610,17 +611,25 @@ export class RaBillsService {
   async listForProject(
     ctx: RlsContext,
     projectId: string,
-  ): Promise<RaBillView[]> {
+    paging: ListPaging = UNPAGED,
+  ): Promise<RaBillView[] | Paged<RaBillView>> {
     const bills = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findMany({
         where: { projectId },
-        orderBy: { billingDate: 'desc' },
+        // `id` breaks ties so a page boundary between two bills of one date is stable (036 I26).
+        orderBy: [{ billingDate: 'desc' }, { id: 'desc' }],
         select: { id: true },
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
     const out: RaBillView[] = [];
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
-    return out;
+    return shapeList(paging, out, () =>
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.rABill.count({ where: { projectId } }),
+      ),
+    );
   }
 
   /**
@@ -629,10 +638,11 @@ export class RaBillsService {
    * The bill becomes `submitted` and enters the `ra_bill` chain. **Nothing is approved here** — the
    * spine decides, and `onApprovalCompleted` below is what marks the bill certified.
    *
-   * Order matters: the spine is asked **first**, and the bill's own status is written only once the
-   * instance exists. A bill flipped to `submitted` with no instance behind it is a bill waiting on
-   * nobody, sitting in no queue, that looks to its author as though it were submitted — the exact
-   * silent failure T022 is about, arriving on the happy path instead of the error path.
+   * Order (036 I3): the status moves draft → submitted **conditionally**, then the spine is asked,
+   * and a spine failure puts the bill back to draft. The spine used to be asked first, which kept a
+   * bill from ever sitting `submitted` with no instance — and let a double-click reach the spine
+   * twice. The compensating revert keeps the first property; the conditional update adds the
+   * second. See `submitForCertification`.
    */
   /**
    * Throws away a draft bill that should not exist (2026-10-08).

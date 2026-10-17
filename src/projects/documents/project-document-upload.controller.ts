@@ -26,6 +26,7 @@ import {
 } from './dto/project-document-upload.dto';
 import { ProjectDocumentsService } from './project-documents.service';
 import { ProjectLockGuard } from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Filing documents against a project, and staging them before one exists (017 FR-008a, FR-009b).
@@ -169,11 +170,14 @@ export class ProjectDocumentUploadController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
     @Query('companyId') companyId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
     return this.documents.listForProject(
       rlsContextFor(caller),
       resolveCompanyId(caller, companyId),
       projectId,
+      listPaging(page, pageSize),
     );
   }
 }

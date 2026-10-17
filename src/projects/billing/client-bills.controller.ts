@@ -26,7 +26,11 @@ import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { ClientBillsService } from './client-bills.service';
 import { CertifyBillDto, ComposeBillDto } from './dto/client-bill.dto';
-import { ProjectLockFrom, ProjectLockGuard } from '../guards/project-lock.guard';
+import {
+  ProjectLockFrom,
+  ProjectLockGuard,
+} from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Client bills measured against the BOQ (018 US1) — `bugs.md` item 11.
@@ -54,8 +58,15 @@ export class ClientBillsController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('projectId') projectId: string,
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.bills.listForProject(rlsContextFor(caller), projectId);
+    return this.bills.listForProject(
+      rlsContextFor(caller),
+      projectId,
+      listPaging(page, pageSize),
+    );
   }
 
   /**

@@ -101,9 +101,7 @@ describe('ProjectLockGuard', () => {
       } as unknown as ExecutionContext;
     };
     const lockedVia = (delegate: string, isLocked = true) => {
-      const findFirst = jest
-        .fn()
-        .mockResolvedValue({ project: { isLocked } });
+      const findFirst = jest.fn().mockResolvedValue({ project: { isLocked } });
       const prisma = createPrismaMock({
         [delegate]: { findFirst },
         project: { findFirst: jest.fn().mockResolvedValue({ isLocked }) },
@@ -118,15 +116,18 @@ describe('ProjectLockGuard', () => {
       ['workOrderId', 'workOrder'],
       ['noteId', 'billPackageDebitNote'],
       ['debitId', 'billPackageDebit'],
-    ])('refuses `:%s` on a locked project with 423', async (param, delegate) => {
-      const { guard, findFirst } = lockedVia(delegate);
-      await expect(
-        guard.canActivate(contextWith({ [param]: 'row-1' })),
-      ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
-      expect(findFirst).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { id: 'row-1' } }),
-      );
-    });
+    ])(
+      'refuses `:%s` on a locked project with 423',
+      async (param, delegate) => {
+        const { guard, findFirst } = lockedVia(delegate);
+        await expect(
+          guard.canActivate(contextWith({ [param]: 'row-1' })),
+        ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
+        expect(findFirst).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: 'row-1' } }),
+        );
+      },
+    );
 
     it('admits `:dwrId` on an unlocked project', async () => {
       const { guard } = lockedVia('dailyWorkReport', false);
@@ -159,7 +160,10 @@ describe('ProjectLockGuard', () => {
       const { guard } = lockedVia('project');
       await expect(
         guard.canActivate(
-          contextWith({}, { subject: 'body', body: { projectId: 'project-1' } }),
+          contextWith(
+            {},
+            { subject: 'body', body: { projectId: 'project-1' } },
+          ),
         ),
       ).rejects.toMatchObject({ status: HTTP_STATUS_LOCKED });
     });

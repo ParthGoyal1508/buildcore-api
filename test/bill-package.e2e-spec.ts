@@ -947,8 +947,12 @@ describe('The running-account bill package (e2e)', () => {
     // 036: two Issue clicks at once. Both used to read `approved` and both froze the figures;
     // the status update is now conditional, so exactly one goes through.
     const both = await Promise.all([
-      http().post(`/projects/bill-packages/${second.body.id}/issue`).set(auth()),
-      http().post(`/projects/bill-packages/${second.body.id}/issue`).set(auth()),
+      http()
+        .post(`/projects/bill-packages/${second.body.id}/issue`)
+        .set(auth()),
+      http()
+        .post(`/projects/bill-packages/${second.body.id}/issue`)
+        .set(auth()),
     ]);
     expect(both.map((res) => res.status).sort()).toEqual([201, 409]);
     const issued = both.find((res) => res.status === 201) as request.Response;

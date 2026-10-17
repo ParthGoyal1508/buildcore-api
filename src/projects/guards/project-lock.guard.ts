@@ -65,7 +65,8 @@ const LOOKUPS: Record<ProjectLockSubject, ProjectLookup> = {
     tx.dailyWorkReport.findFirst({ where: { id }, select: viaProject }),
   billPackage: (tx, id) =>
     tx.billPackage.findFirst({ where: { id }, select: viaProject }),
-  raBill: (tx, id) => tx.rABill.findFirst({ where: { id }, select: viaProject }),
+  raBill: (tx, id) =>
+    tx.rABill.findFirst({ where: { id }, select: viaProject }),
   clientBill: (tx, id) =>
     tx.clientBill.findFirst({ where: { id }, select: viaProject }),
   workOrder: (tx, id) =>
@@ -117,10 +118,9 @@ export class ProjectLockGuard implements CanActivate {
       .getRequest<Request & { user?: AuthenticatedUser }>();
 
     const params = request.params as Record<string, string | undefined>;
-    const declared = this.reflector.get<ProjectLockSubject | 'body' | undefined>(
-      PROJECT_LOCK_SUBJECT,
-      context.getHandler(),
-    );
+    const declared = this.reflector.get<
+      ProjectLockSubject | 'body' | undefined
+    >(PROJECT_LOCK_SUBJECT, context.getHandler());
 
     const { user } = request;
     if (!user) {
@@ -134,8 +134,9 @@ export class ProjectLockGuard implements CanActivate {
       // The guard runs before the ValidationPipe, so the body is still raw JSON. A
       // missing or non-string projectId is left for the DTO to refuse with its own
       // 400 — refusing it here would answer a validation error with a lock error.
-      const bodyProjectId = (request.body as { projectId?: unknown } | undefined)
-        ?.projectId;
+      const bodyProjectId = (
+        request.body as { projectId?: unknown } | undefined
+      )?.projectId;
       return typeof bodyProjectId === 'string' && bodyProjectId
         ? this.checkProject(ctx, bodyProjectId, { admitUnknown: true })
         : true;
@@ -191,14 +192,11 @@ export class ProjectLockGuard implements CanActivate {
     projectId: string,
     { admitUnknown = false }: { admitUnknown?: boolean } = {},
   ): Promise<boolean> {
-    const project = await withRlsContext(
-      this.prisma,
-      ctx,
-      (tx) =>
-        tx.project.findFirst({
-          where: { id: projectId },
-          select: { isLocked: true },
-        }),
+    const project = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findFirst({
+        where: { id: projectId },
+        select: { isLocked: true },
+      }),
     );
 
     // Reported as not-found rather than admitted, so a write against a project the

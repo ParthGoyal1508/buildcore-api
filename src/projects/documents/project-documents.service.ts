@@ -24,6 +24,7 @@ import {
   PROJECT_DOCUMENT_TYPE_UNKNOWN,
 } from './project-document-error-codes';
 import { SetProjectDocumentRequirementsDto } from './dto/project-document-requirement.dto';
+import { ListPaging, UNPAGED, shapeList } from '../list-paging';
 
 /** One configured requirement, with the words a person reads. */
 export interface ProjectDocumentRequirementView {
@@ -609,15 +610,29 @@ export class ProjectDocumentsService {
    * the same mistake is available here. Readiness is one view of a project's papers; it must not be
    * the only one.
    */
-  async listForProject(ctx: RlsContext, companyId: string, projectId: string) {
+  async listForProject(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    paging: ListPaging = UNPAGED,
+  ) {
     const documents = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.projectDocument.findMany({
         where: { companyId, projectId },
-        orderBy: { uploadedAt: 'desc' },
+        orderBy: [{ uploadedAt: 'desc' }, { id: 'desc' }],
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
+    // 036 I26: the bare array unless the caller asked for a page.
+    const shaped = <T>(items: T[]) =>
+      shapeList(paging, items, () =>
+        withRlsContext(this.prisma, ctx, (tx) =>
+          tx.projectDocument.count({ where: { companyId, projectId } }),
+        ),
+      );
     if (documents.length === 0)
-      return documents.map((d) => ({ ...d, uploadedByName: null }));
+      return shaped(documents.map((d) => ({ ...d, uploadedByName: null })));
 
     // Who filed it, by name (web T077). `uploadedByUserId` is a bare id, and a list of a
     // project's papers reading "filed by cmuoe9b7l00q5v8…" answers half the question it was
@@ -625,10 +640,12 @@ export class ProjectDocumentsService {
     const names = await this.actorNames([
       ...new Set(documents.map((d) => d.uploadedByUserId)),
     ]);
-    return documents.map((document) => ({
-      ...document,
-      uploadedByName: names.get(document.uploadedByUserId) ?? null,
-    }));
+    return shaped(
+      documents.map((document) => ({
+        ...document,
+        uploadedByName: names.get(document.uploadedByUserId) ?? null,
+      })),
+    );
   }
 
   /**

@@ -233,7 +233,9 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
         ],
       });
       const list = await service.listForProject(ctx, CO, 'p-1');
-      expect(list.map((d: { id: string }) => d.id)).toEqual(['d-1', 'd-2']);
+      expect(
+        (list as { id: string }[]).map((d: { id: string }) => d.id),
+      ).toEqual(['d-1', 'd-2']);
     });
 
     it('names who filed each document rather than reporting their id', async () => {

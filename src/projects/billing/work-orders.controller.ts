@@ -32,7 +32,11 @@ import {
   UpdateWorkOrderDto,
 } from './dto/work-order.dto';
 import { WorkOrdersService } from './work-orders.service';
-import { ProjectLockFrom, ProjectLockGuard } from '../guards/project-lock.guard';
+import {
+  ProjectLockFrom,
+  ProjectLockGuard,
+} from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Work orders, in the minimal form 018 needs (018 US2).
@@ -65,8 +69,15 @@ export class WorkOrdersController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('projectId') projectId: string,
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.workOrders.listForProject(rlsContextFor(caller), projectId);
+    return this.workOrders.listForProject(
+      rlsContextFor(caller),
+      projectId,
+      listPaging(page, pageSize),
+    );
   }
 
   @Post()
