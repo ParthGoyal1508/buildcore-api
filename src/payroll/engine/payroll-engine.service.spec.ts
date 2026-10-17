@@ -125,12 +125,10 @@ function build(
       findFirstOrThrow: jest
         .fn()
         .mockImplementation(() => ({ ...run, status: run.status })),
-      create: jest
-        .fn()
-        .mockImplementation(({ data }: never) => ({
-          id: 'run-1',
-          ...(data as object),
-        })),
+      create: jest.fn().mockImplementation(({ data }: never) => ({
+        id: 'run-1',
+        ...(data as object),
+      })),
       updateMany: jest.fn().mockImplementation(({ where }: never) => ({
         count: (where as { status?: string }).status
           ? (where as { status: string }).status === PayrollRunStatus.draft &&
