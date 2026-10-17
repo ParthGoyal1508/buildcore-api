@@ -74,4 +74,15 @@ export class ListHolidaysQueryDto {
   @IsString()
   @MaxLength(100)
   siteId?: string;
+
+  /**
+   * A cross-company caller's company (036 stream 3b). The controller has always read
+   * `?companyId=`, but this DTO did not declare it, so the whitelist refused it with a 400 and a
+   * Super Admin with nothing selected could never list another company's calendar.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  companyId?: string;
 }

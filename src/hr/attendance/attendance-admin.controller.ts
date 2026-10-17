@@ -33,6 +33,7 @@ import {
 } from './dto/mark-attendance.dto';
 import { RefusalsQueryDto } from './dto/refusals-query.dto';
 import { PunchRefusalsService } from '../punch/punch-refusals.service';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /** Admin attendance administration (005 US3). */
 @ApiTags('HR — Attendance')
@@ -47,13 +48,11 @@ export class AttendanceAdminController {
   ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, requested);
   }
 
   @Get()

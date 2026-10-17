@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -31,6 +30,7 @@ import {
   RejectClaimDto,
 } from './dto/decide-claim.dto';
 import { ReimbursementsAdminService } from './reimbursements-admin.service';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /** Reimbursement claim review and settlement (005 US12). */
 @ApiTags('HR — Payroll')
@@ -42,13 +42,11 @@ export class ReimbursementsAdminController {
   constructor(private readonly claims: ReimbursementsAdminService) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, requested);
   }
 
   @Get()

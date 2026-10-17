@@ -290,32 +290,33 @@ export class RequisitionService {
   }
 
   async remove(caller: AuthenticatedUser, id: string, ipAddress: string) {
-    await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
-      const existing = await tx.requisition.findUnique({
-        where: { id },
-        include: { _count: { select: { candidates: true } } },
-      });
-      if (!existing || existing.deletedAt) {
-        throw new NotFoundException(`Requisition ${id} not found`);
-      }
-      assertInScope(caller, existing, `Requisition ${id}`);
-      if (existing._count.candidates > 0) {
-        throw new ConflictException(
-          'Requisition has candidates — cannot delete',
-        );
-      }
-      await tx.requisition.update({
-        where: { id },
-        data: { deletedAt: new Date(), deletedBy: caller.id },
-      });
-    });
-    await this.audit(
-      AuditAction.DELETE,
-      id,
-      caller.companyId ?? null,
-      caller,
-      ipAddress,
+    // The audit row names the requisition's own company (036 stream 3b): `caller.companyId` is the
+    // account's home company, which is the wrong one for a Super Admin working in another company.
+    const companyId = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const existing = await tx.requisition.findUnique({
+          where: { id },
+          include: { _count: { select: { candidates: true } } },
+        });
+        if (!existing || existing.deletedAt) {
+          throw new NotFoundException(`Requisition ${id} not found`);
+        }
+        assertInScope(caller, existing, `Requisition ${id}`);
+        if (existing._count.candidates > 0) {
+          throw new ConflictException(
+            'Requisition has candidates — cannot delete',
+          );
+        }
+        await tx.requisition.update({
+          where: { id },
+          data: { deletedAt: new Date(), deletedBy: caller.id },
+        });
+        return existing.companyId;
+      },
     );
+    await this.audit(AuditAction.DELETE, id, companyId, caller, ipAddress);
   }
 
   /**

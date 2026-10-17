@@ -163,9 +163,18 @@ export class SalaryAdvancesService {
       },
     );
 
+    // The audit row names the advance's own company — its employee's (036 stream 3b). It used to
+    // be `caller.companyId ?? ''`: the account's home company, wrong for a Super Admin working in
+    // another company, and an empty string for one with no home company at all.
+    const owner = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: advance.employeeId },
+        select: { companyId: true },
+      }),
+    );
     await this.audit(
       caller,
-      caller.companyId ?? '',
+      owner?.companyId ?? caller.companyId ?? '',
       advanceId,
       AuditAction.UPDATE,
       { approved: true },
