@@ -631,7 +631,9 @@ export class PaymentSheetService {
    * gains its cash denomination breakup at this point (FR-027); a contractor sheet
    * does not (FR-028). */
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
-    const companyId = caller.companyId;
+    // The sheet's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const sheet = await tx.labourPaymentSheet.findUnique({
         where: { id },
@@ -641,6 +643,7 @@ export class PaymentSheetService {
         throw new NotFoundException(`Payment sheet ${id} not found`);
       }
       assertInScope(caller, sheet, `Payment sheet ${id}`);
+      companyId = sheet.companyId;
       if (sheet.status !== PaymentSheetStatus.draft) {
         throw new ConflictException('Only a draft sheet can be approved');
       }
@@ -673,7 +676,7 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -925,6 +928,8 @@ export class PaymentSheetService {
     ipAddress: string,
   ) {
     let sheetId = '';
+    // The line's own company for the audit row, not the caller's home company (036 3e).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const line = await tx.paymentSheetLine.findUnique({
         where: { id: lineId },
@@ -935,6 +940,7 @@ export class PaymentSheetService {
       }
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
+      companyId = line.sheet.companyId;
 
       if (
         line.sheet.status !== PaymentSheetStatus.approved &&
@@ -1024,7 +1030,7 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -1038,6 +1044,8 @@ export class PaymentSheetService {
     ipAddress: string,
   ) {
     let sheetId = '';
+    // The line's own company for the audit row, not the caller's home company (036 3e).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const line = await tx.paymentSheetLine.findUnique({
         where: { id: lineId },
@@ -1048,6 +1056,7 @@ export class PaymentSheetService {
       }
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
+      companyId = line.sheet.companyId;
 
       if (line.status !== PaymentSheetLineStatus.disbursed) {
         throw new ConflictException('Only a disbursed line can be reversed');
@@ -1113,7 +1122,7 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );

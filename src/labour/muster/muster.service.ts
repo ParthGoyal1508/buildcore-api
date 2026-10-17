@@ -213,12 +213,16 @@ export class MusterService {
   }
 
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
+    // The muster's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const muster = await tx.musterRoll.findUnique({ where: { id } });
       if (!muster || muster.deletedAt) {
         throw new NotFoundException(`Muster ${id} not found`);
       }
       assertInScope(caller, muster, `Muster ${id}`);
+      companyId = muster.companyId;
       if (muster.status !== MusterStatus.submitted) {
         throw new ConflictException('Only a submitted muster can be approved');
       }
@@ -241,7 +245,7 @@ export class MusterService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -254,12 +258,16 @@ export class MusterService {
     reason: string,
     ipAddress: string,
   ) {
+    // The muster's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const muster = await tx.musterRoll.findUnique({ where: { id } });
       if (!muster || muster.deletedAt) {
         throw new NotFoundException(`Muster ${id} not found`);
       }
       assertInScope(caller, muster, `Muster ${id}`);
+      companyId = muster.companyId;
       if (muster.status !== MusterStatus.submitted) {
         throw new ConflictException('Only a submitted muster can be returned');
       }
@@ -271,7 +279,7 @@ export class MusterService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
