@@ -142,11 +142,31 @@ export class ListIssuesDto {
  * far, so a second return is entered as the new total.
  */
 export class ReturnIssueDto {
-  @ApiProperty({ description: 'Total returned against this issue so far' })
+  /**
+   * 036 M4: the quantity coming back *now*. Preferred over `returnedQuantity`, whose "total so far"
+   * meaning confused people into entering what they were holding — and which, read by two
+   * simultaneous requests, could not say whether they described one return or two.
+   */
+  @ApiPropertyOptional({
+    description:
+      'The quantity coming back now (036). Give this or `returnedQuantity`; when both are ' +
+      'given they must agree.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsPositive()
+  returnedNow?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Total returned against this issue so far. Kept for older clients; prefer `returnedNow`.',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
-  returnedQuantity!: number;
+  returnedQuantity?: number;
 
   @ApiProperty({ example: '2026-10-15' })
   @IsISO8601()

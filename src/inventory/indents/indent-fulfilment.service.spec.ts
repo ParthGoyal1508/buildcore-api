@@ -9,10 +9,14 @@ const line = (over: Record<string, unknown> = {}) => ({
   id: 'line-1',
   companyId: 'co-1',
   indentId: 'indent-1',
+  itemId: 'item-1',
   requestedQuantity: decimal(100),
   approvedQuantity: decimal(80),
   fulfilledQuantity: decimal(0),
-  indent: { id: 'indent-1', status: IndentStatus.approved, companyId: 'co-1' },
+  indent: { id: 'indent-1', status: IndentStatus.approved,
+    companyId: 'co-1',
+    siteId: 'site-1',
+  },
   ...over,
 });
 
@@ -27,6 +31,7 @@ const build = (lines: ReturnType<typeof line>[]) => {
     lines[0]?.indent.status ?? IndentStatus.approved;
 
   const tx = {
+    $queryRaw: jest.fn().mockResolvedValue([]),
     materialIndentLine: {
       findUnique: jest.fn(async ({ where }: never) => {
         const w = where as { id: string };
@@ -60,6 +65,12 @@ const build = (lines: ReturnType<typeof line>[]) => {
   return { tx, state, status: () => indentStatus };
 };
 
+/** The locking query's SQL, joined, for asserting it is a row lock. */
+const lockSql = (tx: never) =>
+  (tx as unknown as { $queryRaw: jest.Mock }).$queryRaw.mock.calls.map(
+    (call) => (call[0] as string[]).join('?'),
+  );
+
 describe('IndentFulfilmentService (FR-023, FR-024)', () => {
   const service = new IndentFulfilmentService();
 
@@ -67,6 +78,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     const { tx, state } = build([line()]);
     await service.applyFulfilment(tx, {
       companyId: 'co-1',
+      itemId: 'item-1',
+      siteId: 'site-1',
       indentLineId: 'line-1',
       quantity: 30,
     });
@@ -78,6 +91,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     const error = await service
       .applyFulfilment(tx, {
         companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
         indentLineId: 'line-1',
         quantity: 25,
       })
@@ -94,6 +109,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     await expect(
       service.applyFulfilment(tx, {
         companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
         indentLineId: 'line-1',
         quantity: 90,
       }),
@@ -107,12 +124,15 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
           id: 'indent-1',
           status: IndentStatus.submitted,
           companyId: 'co-1',
+          siteId: 'site-1',
         },
       }),
     ]);
     await expect(
       service.applyFulfilment(tx, {
         companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
         indentLineId: 'line-1',
         quantity: 10,
       }),
@@ -124,6 +144,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     await expect(
       service.applyFulfilment(tx, {
         companyId: 'other-co',
+        itemId: 'item-1',
+        siteId: 'site-1',
         indentLineId: 'line-1',
         quantity: 10,
       }),
@@ -134,6 +156,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     const { tx, status } = build([line(), line({ id: 'line-2' })]);
     await service.applyFulfilment(tx, {
       companyId: 'co-1',
+      itemId: 'item-1',
+      siteId: 'site-1',
       indentLineId: 'line-1',
       quantity: 10,
     });
@@ -147,6 +171,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     ]);
     await service.applyFulfilment(tx, {
       companyId: 'co-1',
+      itemId: 'item-1',
+      siteId: 'site-1',
       indentLineId: 'line-1',
       quantity: 10,
     });
@@ -154,6 +180,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
 
     await service.applyFulfilment(tx, {
       companyId: 'co-1',
+      itemId: 'item-1',
+      siteId: 'site-1',
       indentLineId: 'line-2',
       quantity: 5,
     });
@@ -166,6 +194,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     ]);
     await service.applyFulfilment(tx, {
       companyId: 'co-1',
+      itemId: 'item-1',
+      siteId: 'site-1',
       indentLineId: 'line-1',
       quantity: 10,
     });
@@ -195,6 +225,7 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
           id: 'indent-1',
           status: IndentStatus.rejected,
           companyId: 'co-1',
+          siteId: 'site-1',
         },
       }),
     ]);
@@ -210,6 +241,8 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     for (const quantity of [10, 25, 15]) {
       await service.applyFulfilment(tx, {
         companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
         indentLineId: 'line-1',
         quantity,
       });
@@ -217,5 +250,62 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     const fulfilled = Number(state[0].fulfilledQuantity);
     expect(fulfilled).toBe(50);
     expect(Number(state[0].approvedQuantity) - fulfilled).toBe(30);
+  });
+
+  describe('the line must be the movement\'s (036 M2)', () => {
+    it('refuses a movement of a different item', async () => {
+      const { tx, state } = build([line()]);
+      await expect(
+        service.applyFulfilment(tx, {
+          companyId: 'co-1',
+          itemId: 'item-2',
+          siteId: 'site-1',
+          indentLineId: 'line-1',
+          quantity: 10,
+        }),
+      ).rejects.toThrow(/different item/);
+      expect(Number(state[0].fulfilledQuantity)).toBe(0);
+    });
+
+    it('refuses a movement at a different store', async () => {
+      const { tx } = build([line()]);
+      await expect(
+        service.applyFulfilment(tx, {
+          companyId: 'co-1',
+          itemId: 'item-1',
+          siteId: 'site-2',
+          indentLineId: 'line-1',
+          quantity: 10,
+        }),
+      ).rejects.toThrow(/different store/);
+    });
+
+    it('row-locks the line before reading the outstanding figure', async () => {
+      const { tx } = build([line()]);
+      await service.applyFulfilment(tx, {
+        companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
+        indentLineId: 'line-1',
+        quantity: 10,
+      });
+      const raw = tx as unknown as {
+        $queryRaw: jest.Mock;
+        materialIndentLine: { findUnique: jest.Mock };
+      };
+      expect(lockSql(tx)[0]).toMatch(/MaterialIndentLine[\s\S]*FOR UPDATE/);
+      expect(raw.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        raw.materialIndentLine.findUnique.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('locks the line on a reversal too', async () => {
+      const { tx } = build([line({ fulfilledQuantity: decimal(5) })]);
+      await service.reverseFulfilment(tx, {
+        indentLineId: 'line-1',
+        quantity: 5,
+      });
+      expect(lockSql(tx)[0]).toMatch(/FOR UPDATE/);
+    });
   });
 });

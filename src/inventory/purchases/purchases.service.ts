@@ -271,6 +271,8 @@ export class PurchasesService {
             companyId: targetCompanyId,
             indentLineId: dto.indentLineId,
             quantity: dto.quantity,
+            itemId: dto.itemId,
+            siteId: dto.siteId,
           });
         }
 
