@@ -115,6 +115,13 @@ function isAllowed(line: string): boolean {
   // by file rather than exempting every spec, so a fixture elsewhere is still looked at.
   if (file === 'src/projects/billing/payments/payment-advice.spec.ts')
     return true;
+  // Test fixtures, not writes (036 M10): a payment *sent* as cash, to check a cash payment needs no
+  // reference. The request body still carries the cash mode, so the interceptor still sees it.
+  if (
+    file === 'src/inventory/payments/payments.service.spec.ts' ||
+    file === 'src/inventory/payments/dto/payment.dto.spec.ts'
+  )
+    return true;
   const trimmed = code.trim();
   if (trimmed.startsWith('*') || trimmed.startsWith('//')) return true;
 

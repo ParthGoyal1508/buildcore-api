@@ -474,6 +474,25 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/projects/list-paging.spec.ts',
           ':(exclude)src/projects/sites/dto/site.dto.ts',
           ':(exclude)src/projects/sites/dto/site.dto.spec.ts',
+          // 036 stream 1d (inventory, plant, assets hardening), 2026-10-17: row locks, stock and
+          // vendor checks, payment idempotency, fuel and maintenance validation, and the asset
+          // allocation return made atomic. **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.** The one approval-adjacent change — the
+          // indent requester may not approve their own indent (M8) — is in `indents.service.ts`,
+          // already excluded above, and the per-file assertion at the top still requires its
+          // own `approve()`.
+          ':(exclude)src/inventory/stock/stock.service.ts',
+          ':(exclude)src/inventory/stock/stock.service.spec.ts',
+          ':(exclude)src/inventory/indents/indent-fulfilment.service.ts',
+          ':(exclude)src/inventory/indents/indent-fulfilment.service.spec.ts',
+          ':(exclude)src/inventory/indents/indents.service.spec.ts',
+          ':(exclude)src/inventory/inventory-refs.service.spec.ts',
+          ':(exclude)src/inventory/payments',
+          ':(exclude)src/inventory/purchases',
+          ':(exclude)src/plant/fuel',
+          ':(exclude)src/plant/maintenance/maintenance.service.spec.ts',
+          ':(exclude)src/assets/allocations/allocation.service.ts',
+          ':(exclude)src/assets/allocations/allocation-return.spec.ts',
         ],
         {
           cwd: REPO_ROOT,
