@@ -6596,6 +6596,10 @@ model StockTransfer {
   /// Counted at the receiving store; the slip prints the difference from what was sent.
   receivedQuantity  Decimal?  @db.Decimal(18, 3)
   reason            String?
+  /// Why fewer arrived than were sent (036 M3). Required whenever `receivedQuantity` is below
+  /// `quantity`; the difference is written off at the destination as a `transfer_in_reversal`
+  /// ledger row — a loss there, not a return to the source.
+  shortageReason    String?
 
   /// Physical-movement tracking only. Both balances move at creation regardless of
   /// this value: the material has left the source store the moment the transfer is

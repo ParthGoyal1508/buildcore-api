@@ -101,6 +101,16 @@ export class UpdateTransferDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   receivedQuantity?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Why fewer arrived than were sent (036). Required when receivedQuantity is below the ' +
+      'quantity sent; the difference is written off as a loss at the receiving store.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  shortageReason?: string;
 }
 
 export class ListTransfersDto {

@@ -3948,6 +3948,9 @@ Table StockTransfer {
   expectedArrival DateTime
   receivedQuantity Decimal [note: 'Counted at the receiving store; the slip prints the difference from what was sent.']
   reason String
+  shortageReason String [note: 'Why fewer arrived than were sent (036 M3). Required whenever `receivedQuantity` is below
+`quantity`; the difference is written off at the destination as a `transfer_in_reversal`
+ledger row — a loss there, not a return to the source.']
   status TransferStatus [not null, default: 'pending', note: 'Physical-movement tracking only. Both balances move at creation regardless of
 this value: the material has left the source store the moment the transfer is
 recorded, and holding the decrement until "received" would let the same units
