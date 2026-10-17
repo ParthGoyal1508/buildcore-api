@@ -342,7 +342,9 @@ describe('Assets module (e2e)', () => {
         currentSiteId: siteId,
       });
 
-      expect(asset.assetCode).toContain('-AST-');
+      // A named series since 2026-10-15: letters from the name, a serial counted within them, the
+      // separator and the year — `HM01/2026` — not the old `PRPL-AST-0001` counter.
+      expect(asset.assetCode).toMatch(/^[A-Z]+\d{2,}\/\d{4}$/);
       expect(asset.trackingMode).toBe('serialised');
       expect(asset.status).toBe('idle');
       // One whole month at 20% of 120,000 is 2,000.
