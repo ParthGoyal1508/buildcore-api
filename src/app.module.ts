@@ -50,13 +50,18 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PrismaModule.forRoot({
       isGlobal: true,
       prismaServiceOptions: {
-        middlewares: [
-          // configure your prisma middleware
-          loggingMiddleware({
-            logger: new Logger('PrismaMiddleware'),
-            logLevel: 'log',
-          }),
-        ],
+        // Query timing at `debug`, and not at all in production (036 B18). At `log` every
+        // query of every request was written to the production log — noise that buried the
+        // lines that mattered and cost a write per query.
+        middlewares:
+          process.env.NODE_ENV === 'production'
+            ? []
+            : [
+                loggingMiddleware({
+                  logger: new Logger('PrismaMiddleware'),
+                  logLevel: 'debug',
+                }),
+              ],
       },
     }),
 
