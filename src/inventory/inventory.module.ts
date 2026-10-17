@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
+import { LettersModule } from '../letters/letters.module';
 import { PartnersModule } from '../partners/partners.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { ItemCategoriesService } from '../settings/item-masters/item-categories.service';
@@ -20,6 +21,8 @@ import { IssuesController } from './issues/issues.controller';
 import { IssuesService } from './issues/issues.service';
 import { PaymentsController } from './payments/payments.controller';
 import { PaymentsService } from './payments/payments.service';
+import { PurchaseOrdersController } from './purchase-orders/purchase-orders.controller';
+import { PurchaseOrdersService } from './purchase-orders/purchase-orders.service';
 import { PurchasesController } from './purchases/purchases.controller';
 import { PurchasesService } from './purchases/purchases.service';
 import { VendorItemRateService } from './rates/vendor-item-rate.service';
@@ -46,7 +49,9 @@ import { TransfersService } from './transfers/transfers.service';
  * it is the same treatment `AuditLogService` gets in every feature module.
  */
 @Module({
-  imports: [SettingsModule, ProjectsModule, PartnersModule],
+  // `LettersModule` for 036 M9: a purchase order is a letter, and its lines are read through
+  // `LettersService.listForSubject` — never from `shared.IssuedLetter` directly.
+  imports: [SettingsModule, ProjectsModule, PartnersModule, LettersModule],
   controllers: [
     CategoriesController,
     ItemsController,
@@ -57,11 +62,13 @@ import { TransfersService } from './transfers/transfers.service';
     PaymentsController,
     IndentsController,
     StoreDocumentsController,
+    PurchaseOrdersController,
   ],
   providers: [
     StockService,
     StockQueryService,
     PurchasesService,
+    PurchaseOrdersService,
     VendorItemRateService,
     IssuesService,
     TransfersService,

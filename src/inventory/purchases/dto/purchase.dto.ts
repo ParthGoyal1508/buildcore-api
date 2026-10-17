@@ -171,6 +171,20 @@ export class CreatePurchaseDto {
   @MaxLength(100)
   indentLineId?: string;
 
+  /**
+   * The purchase order line this delivery is received against (036 M9). The line must order this
+   * item from this vendor and have at least `quantity` left to receive.
+   */
+  @ApiPropertyOptional({
+    description:
+      'The PO line received against (GET /inventory/purchase-orders/open-lines). 400 ' +
+      '`PO_LINE_OVER_RECEIPT` past what was ordered, `PO_LINE_MISMATCH` for another item or vendor.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  purchaseOrderLineId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()

@@ -29,6 +29,7 @@ import {
 } from '../constants/inventory.constants';
 import { IndentFulfilmentService } from '../indents/indent-fulfilment.service';
 import { InventoryRefsService } from '../inventory-refs.service';
+import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 import { StockService } from '../stock/stock.service';
 import { toNumber } from '../stock/stock.types';
 import {
@@ -60,6 +61,12 @@ export interface PurchaseView {
   paymentStatus: PurchaseBillStatus | null;
   paidAmount: number;
   indentLineId: string | null;
+  /** The PO line received against, and the PO's reference and row, for the list (036 M9). */
+  purchaseOrderLineId: string | null;
+  purchaseOrderRef: string | null;
+  purchaseOrderLineNo: number | null;
+  /** Whether a delivery photograph is stored (036 M11) — `GET :id/photo`. */
+  hasPhoto: boolean;
   remarks: string | null;
   createdAt: Date;
 }
@@ -69,6 +76,25 @@ export interface PaginatedPurchases {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** The PO a purchase was received against, as the purchase list shows it (036 M9). */
+function poRefOf(purchase: {
+  purchaseOrderLineId: string | null;
+  purchaseOrderLine?: {
+    lineNo: number;
+    purchaseOrder: { referenceNo: string | null };
+  } | null;
+}): Pick<
+  PurchaseView,
+  'purchaseOrderLineId' | 'purchaseOrderRef' | 'purchaseOrderLineNo'
+> {
+  return {
+    purchaseOrderLineId: purchase.purchaseOrderLineId,
+    purchaseOrderRef:
+      purchase.purchaseOrderLine?.purchaseOrder.referenceNo ?? null,
+    purchaseOrderLineNo: purchase.purchaseOrderLine?.lineNo ?? null,
+  };
 }
 
 /**
@@ -93,6 +119,7 @@ export class PurchasesService {
     private readonly storage: StorageService,
     private readonly indentFulfilment: IndentFulfilmentService,
     private readonly rates: VendorItemRateService,
+    private readonly purchaseOrders: PurchaseOrdersService,
   ) {}
 
   async create(
@@ -180,6 +207,19 @@ export class PurchasesService {
         );
         this.rates.assertMatchesAgreed(agreed, dto.rate);
 
+        // 036 M9: received against a PO line, the line caps it — same item, the PO's vendor, and
+        // no more than is left of what was ordered. Locked inside this transaction, so two
+        // deliveries racing for the last of a line cannot both pass.
+        if (dto.purchaseOrderLineId) {
+          await this.purchaseOrders.assertReceivable(tx, {
+            companyId: targetCompanyId,
+            purchaseOrderLineId: dto.purchaseOrderLineId,
+            itemId: dto.itemId,
+            vendorId: dto.vendorId,
+            quantity: dto.quantity,
+          });
+        }
+
         const purchase = await tx.purchase.create({
           data: {
             companyId: targetCompanyId,
@@ -194,6 +234,10 @@ export class PurchasesService {
             photoFileRef,
             remarks: dto.remarks?.trim() || null,
             indentLineId: dto.indentLineId ?? null,
+            purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+          },
+          include: {
+            purchaseOrderLine: { include: { purchaseOrder: true } },
           },
         });
 
@@ -326,6 +370,8 @@ export class PurchasesService {
       paymentStatus: PurchaseBillStatus.unpaid,
       paidAmount: 0,
       indentLineId: dto.indentLineId ?? null,
+      ...poRefOf(created.purchase),
+      hasPhoto: photoFileRef !== null,
       remarks: created.purchase.remarks,
       createdAt: created.purchase.createdAt,
     };
@@ -373,7 +419,11 @@ export class PurchasesService {
         const [rows, total] = await Promise.all([
           tx.purchase.findMany({
             where,
-            include: { bill: true, grn: true },
+            include: {
+              bill: true,
+              grn: true,
+              purchaseOrderLine: { include: { purchaseOrder: true } },
+            },
             orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
             skip: (page - 1) * pageSize,
             take: pageSize,
@@ -422,6 +472,8 @@ export class PurchasesService {
           paymentStatus: row.bill?.paymentStatus ?? null,
           paidAmount: row.bill ? toNumber(row.bill.paidAmount) : 0,
           indentLineId: row.indentLineId,
+          ...poRefOf(row),
+          hasPhoto: row.photoFileRef !== null,
           remarks: row.remarks,
           createdAt: row.createdAt,
         };
@@ -507,7 +559,11 @@ export class PurchasesService {
               ? { remarks: dto.remarks?.trim() || null }
               : {}),
           },
-          include: { bill: true, grn: true },
+          include: {
+            bill: true,
+            grn: true,
+            purchaseOrderLine: { include: { purchaseOrder: true } },
+          },
         });
       },
     );
@@ -548,6 +604,8 @@ export class PurchasesService {
       paymentStatus: updated.bill?.paymentStatus ?? null,
       paidAmount: updated.bill ? toNumber(updated.bill.paidAmount) : 0,
       indentLineId: updated.indentLineId,
+      ...poRefOf(updated),
+      hasPhoto: updated.photoFileRef !== null,
       remarks: updated.remarks,
       createdAt: updated.createdAt,
     };

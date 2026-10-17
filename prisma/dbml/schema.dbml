@@ -3793,12 +3793,81 @@ because the rule is not retrospective — purchases recorded before it existed k
   remarks String
   indentLineId String [note: 'The indent line this purchase fulfils, if it came from one (FR-023).']
   indentLine MaterialIndentLine
+  purchaseOrderLineId String [note: 'The purchase order line this delivery is received against (036 M9, 2026-10-17). Optional:
+purchases made without a PO — and every purchase recorded before POs were structured — have
+none. Set, the line\'s ordered quantity caps what may be received against it.']
+  purchaseOrderLine PurchaseOrderLine
   deleted Boolean [not null, default: false]
   deletedAt DateTime
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   bill PurchaseBill
   grn GoodsReceiptNote
+}
+
+Table PurchaseOrder {
+  id String [pk]
+  companyId String [not null]
+  letterId String [unique, not null, note: 'The current (newest, not superseded) issued version of the letter.']
+  referenceNo String [note: 'The letter\'s reference — `PRPL/2026-27/0042` — as printed. Null only for a letter issued
+before references existed.']
+  version Int [not null, default: 1]
+  vendorId String [note: 'The vendor the letter is addressed to (`subjectType: \'vendor\'`). Null if it was composed
+against no vendor.']
+  issuedAt DateTime [not null]
+  gstPercent Decimal [not null, note: 'The GST rate the letter\'s totals were worked at — its `gstRate`, 18 when left blank, exactly as
+`expandLineItems` reads it.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  lines PurchaseOrderLine [not null]
+
+  indexes {
+    (companyId, referenceNo) [unique]
+  }
+
+  Note: 'A purchase order, structured (036 M9, 2026-10-17).
+
+The client: "keep the same format which is there as of now, just make it structured so that we
+can trace everything. DO NOT CHANGE the PO format." The PO itself stays what it was — a letter
+(`shared.IssuedLetter`, kind `letter_purchase_order`) composed, approved and issued as the
+client\'s PDF. This row and its lines are the structure *behind* it: the lines that letter
+printed, read back out of what it was composed with, so deliveries (purchases and their GRNs)
+can be received against a line and the PO traced to its bills and payments.
+
+**Read from the letter, never typed twice.** The lines come from the issued letter\'s own
+`lineItems` through the same parser that drew its table (`letters/line-items.ts`), so the
+structure cannot disagree with the document. They are materialised when an issued PO is first
+read here, through `LettersService.listForSubject` — this module never queries
+`shared.IssuedLetter` (Principle I, `letters-boundary.spec.ts`), and `letterId` is a plain id.
+
+One row per PO, not per version: a reissue keeps the reference number (letters FR-014), so the
+row follows the reference to the newest version and its lines are refreshed in place, keeping
+the deliveries already received against them.'
+}
+
+Table PurchaseOrderLine {
+  id String [pk]
+  companyId String [not null]
+  purchaseOrderId String [not null]
+  purchaseOrder PurchaseOrder [not null]
+  lineNo Int [not null, note: '1-based, in the PO\'s row order — the "SR No." it prints.']
+  itemId String [note: 'The item-master item the row was picked from, matched on the code the row prints
+(`CODE - Name`). Null for a row typed by hand, which can be traced but not received against.']
+  description String [not null]
+  unit String [not null]
+  quantity Decimal [not null]
+  rate Decimal [not null]
+  amount Decimal [not null, note: '`quantity × rate`, to the paisa, as the PO prints "Net Value".']
+  gstPercent Decimal [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  purchases Purchase [not null]
+
+  indexes {
+    (purchaseOrderId, lineNo) [unique]
+  }
+
+  Note: 'One line of a purchase order: exactly what the PO prints on that row (036 M9).'
 }
 
 Table VendorItemRate {
@@ -6946,6 +7015,10 @@ Ref: Item.companyId > Company.id [delete: Cascade]
 Ref: Item.categoryId > ItemCategory.id
 
 Ref: Purchase.indentLineId > MaterialIndentLine.id
+
+Ref: Purchase.purchaseOrderLineId > PurchaseOrderLine.id
+
+Ref: PurchaseOrderLine.purchaseOrderId > PurchaseOrder.id [delete: Cascade]
 
 Ref: GoodsReceiptNote.purchaseId - Purchase.id [delete: Cascade]
 

@@ -6372,6 +6372,12 @@ model Purchase {
   indentLineId String?
   indentLine   MaterialIndentLine? @relation(fields: [indentLineId], references: [id])
 
+  /// The purchase order line this delivery is received against (036 M9, 2026-10-17). Optional:
+  /// purchases made without a PO — and every purchase recorded before POs were structured — have
+  /// none. Set, the line's ordered quantity caps what may be received against it.
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -6386,6 +6392,88 @@ model Purchase {
   @@index([companyId, vendorId])
   @@index([companyId, itemId, siteId])
   @@index([indentLineId])
+  @@index([purchaseOrderLineId])
+  @@schema("inventory")
+}
+
+/// A purchase order, structured (036 M9, 2026-10-17).
+///
+/// The client: "keep the same format which is there as of now, just make it structured so that we
+/// can trace everything. DO NOT CHANGE the PO format." The PO itself stays what it was — a letter
+/// (`shared.IssuedLetter`, kind `letter_purchase_order`) composed, approved and issued as the
+/// client's PDF. This row and its lines are the structure *behind* it: the lines that letter
+/// printed, read back out of what it was composed with, so deliveries (purchases and their GRNs)
+/// can be received against a line and the PO traced to its bills and payments.
+///
+/// **Read from the letter, never typed twice.** The lines come from the issued letter's own
+/// `lineItems` through the same parser that drew its table (`letters/line-items.ts`), so the
+/// structure cannot disagree with the document. They are materialised when an issued PO is first
+/// read here, through `LettersService.listForSubject` — this module never queries
+/// `shared.IssuedLetter` (Principle I, `letters-boundary.spec.ts`), and `letterId` is a plain id.
+///
+/// One row per PO, not per version: a reissue keeps the reference number (letters FR-014), so the
+/// row follows the reference to the newest version and its lines are refreshed in place, keeping
+/// the deliveries already received against them.
+model PurchaseOrder {
+  id String @id @default(cuid())
+
+  companyId   String
+  /// The current (newest, not superseded) issued version of the letter.
+  letterId    String   @unique
+  /// The letter's reference — `PRPL/2026-27/0042` — as printed. Null only for a letter issued
+  /// before references existed.
+  referenceNo String?
+  version     Int      @default(1)
+  /// The vendor the letter is addressed to (`subjectType: 'vendor'`). Null if it was composed
+  /// against no vendor.
+  vendorId    String?
+  issuedAt    DateTime
+  /// The GST rate the letter's totals were worked at — its `gstRate`, 18 when left blank, exactly as
+  /// `expandLineItems` reads it.
+  gstPercent  Decimal  @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines PurchaseOrderLine[]
+
+  @@unique([companyId, referenceNo])
+  @@index([companyId])
+  @@index([companyId, vendorId])
+  @@schema("inventory")
+}
+
+/// One line of a purchase order: exactly what the PO prints on that row (036 M9).
+model PurchaseOrderLine {
+  id String @id @default(cuid())
+
+  companyId String
+
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  /// 1-based, in the PO's row order — the "SR No." it prints.
+  lineNo Int
+
+  /// The item-master item the row was picked from, matched on the code the row prints
+  /// (`CODE - Name`). Null for a row typed by hand, which can be traced but not received against.
+  itemId      String?
+  description String
+  unit        String
+  quantity    Decimal @db.Decimal(18, 3)
+  rate        Decimal @db.Decimal(18, 2)
+  /// `quantity × rate`, to the paisa, as the PO prints "Net Value".
+  amount      Decimal @db.Decimal(18, 2)
+  gstPercent  Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases Purchase[]
+
+  @@unique([purchaseOrderId, lineNo])
+  @@index([companyId])
+  @@index([companyId, itemId])
   @@schema("inventory")
 }
 

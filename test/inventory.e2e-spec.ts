@@ -1456,4 +1456,167 @@ describe('Inventory module (e2e)', () => {
       expect(again.body.warnings[0]).toMatch(/UPI-036 was already used/);
     });
   });
+
+  /**
+   * 036 M9: purchase orders structured behind the unchanged PO letter.
+   *
+   * The PO letter is planted already issued — composing one runs it through its approval chain,
+   * which is the letters suites' business, not this one's. What is asserted is what inventory
+   * builds from it: the lines it printed, a delivery received against a line, the refusal past
+   * what was ordered, and the trace from the PO to the GRN and its bill.
+   */
+  describe('036 M9 structured purchase orders', () => {
+    let poItem = '';
+    let poItemCode = '';
+    let poVendor = '';
+    let letterId = '';
+
+    const post = (path: string, body: Record<string, unknown>) =>
+      http().post(`${path}?companyId=${companyId}`).set(auth()).send(body);
+
+    beforeAll(async () => {
+      const item = await post('/inventory/items', {
+        name: unique('POCement'),
+        categoryId,
+        unit: 'BAG',
+      }).expect(201);
+      poItem = item.body.id;
+      poItemCode = item.body.code;
+      createdItemIds.push(poItem);
+      const vendor = await post('/partners/vendors', {
+        name: unique('POSupplier'),
+        type: 'material',
+      }).expect(201);
+      poVendor = vendor.body.id;
+      createdVendorIds.push(poVendor);
+
+      const kind = await sys.letterKind.findFirst({
+        where: { key: 'letter_purchase_order' },
+        include: { templates: true },
+      });
+      const letter = await sys.issuedLetter.create({
+        data: {
+          companyId,
+          letterKindId: kind.id,
+          templateId: kind.templates[0].id,
+          subjectType: 'vendor',
+          subjectId: poVendor,
+          referenceNo: unique('PO/'),
+          composedVariables: {
+            lineItems: `${poItemCode} - Cement | BAG | 100 | 410\nFreight | LS | 1 | 2500`,
+            gstRate: '18',
+          },
+          renderedRef: 'e2e-not-rendered',
+          issuedAt: new Date(),
+          issuedBy: 'e2e',
+        },
+      });
+      letterId = letter.id;
+    });
+
+    afterAll(async () => {
+      await sys.purchaseOrder.deleteMany({ where: { letterId } });
+      await sys.issuedLetter.deleteMany({ where: { id: letterId } });
+    });
+
+    it('structures the issued PO from the lines it printed', async () => {
+      const res = await http()
+        .get(`/inventory/purchase-orders/${letterId}`)
+        .set(auth())
+        .expect(200);
+      expect(res.body).toMatchObject({
+        letterId,
+        vendorId: poVendor,
+        gstPercent: 18,
+        orderedValue: 43500,
+        orderedTotal: 51330,
+        status: 'not_received',
+      });
+      expect(res.body.lines).toEqual([
+        expect.objectContaining({
+          lineNo: 1,
+          itemId: poItem,
+          quantity: 100,
+          rate: 410,
+          remainingQuantity: 100,
+        }),
+        expect.objectContaining({ lineNo: 2, itemId: null, amount: 2500 }),
+      ]);
+    });
+
+    it('receives against a line, refuses past what was ordered, and traces PO → GRN → bill', async () => {
+      const open = await http()
+        .get(
+          `/inventory/purchase-orders/open-lines?vendorId=${poVendor}&itemId=${poItem}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(open.body.lines).toHaveLength(1);
+      const lineId = open.body.lines[0].id;
+
+      const delivery = {
+        siteId: siteA,
+        itemId: poItem,
+        vendorId: poVendor,
+        date: today(),
+        rate: 410,
+        purchaseOrderLineId: lineId,
+      };
+      const first = await post('/inventory/purchases', {
+        ...delivery,
+        quantity: 60,
+      }).expect(201);
+      expect(first.body).toMatchObject({
+        purchaseOrderLineId: lineId,
+        purchaseOrderLineNo: 1,
+      });
+
+      const over = await post('/inventory/purchases', {
+        ...delivery,
+        quantity: 40.5,
+      }).expect(400);
+      expect(over.body).toMatchObject({
+        code: 'PO_LINE_OVER_RECEIPT',
+        remainingQuantity: 40,
+      });
+
+      // Another vendor cannot deliver against this PO.
+      await post('/inventory/purchases', {
+        ...delivery,
+        vendorId: vendorId,
+        quantity: 1,
+      }).expect(400);
+
+      const traced = await http()
+        .get(`/inventory/purchase-orders/${letterId}`)
+        .set(auth())
+        .expect(200);
+      expect(traced.body).toMatchObject({
+        status: 'partly_received',
+        receivedValue: 24600,
+        billedAmount: 24600,
+        paidAmount: 0,
+      });
+      expect(traced.body.lines[0]).toMatchObject({
+        receivedQuantity: 60,
+        remainingQuantity: 40,
+      });
+      expect(traced.body.lines[0].deliveries).toEqual([
+        expect.objectContaining({
+          purchaseId: first.body.id,
+          grnNumber: first.body.grnNumber,
+          quantity: 60,
+          billedAmount: 24600,
+        }),
+      ]);
+
+      const list = await http()
+        .get(`/inventory/purchase-orders?vendorId=${poVendor}`)
+        .set(auth())
+        .expect(200);
+      expect(list.body.purchaseOrders).toEqual([
+        expect.objectContaining({ letterId, receivedValue: 24600 }),
+      ]);
+    });
+  });
 });

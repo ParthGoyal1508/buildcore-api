@@ -53,6 +53,7 @@ const build = (available: number, marked = 1) => {
     {} as never,
     { reverseFulfilment: jest.fn() } as never,
     {} as never,
+    {} as never,
   );
   return { service, prisma, stock };
 };
