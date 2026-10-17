@@ -10,7 +10,14 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { describeStoredFile } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  DOCUMENT_TYPES,
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+} from '../../common/uploads';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { CONTRACTOR_VENDOR_TYPES } from '../vendors/vendors.service';
 import {
@@ -258,14 +265,23 @@ export class ContractorsService {
     // documents carry. The scan belongs between decoding and `storage.put`, and is
     // left explicit rather than faked — a no-op scanner reads as protection that is
     // not there.
-    const buffer = Buffer.from(dto.file, 'base64');
-    if (buffer.length === 0) {
-      throw new BadRequestException('file must be non-empty base64 content.');
-    }
+    //
+    // The shared upload pipeline (036 B4–B6, N4, 2026-10-17): the decoded size is checked
+    // (413 `FILE_TOO_LARGE`), the type is decided by the bytes rather than the client's
+    // `contentType` (415 `FILE_TYPE_NOT_ALLOWED` for anything outside PDF, photos and
+    // Office), and a photographed licence is shrunk before it is stored. `dto.contentType`
+    // is now ignored: it was stored as the blob's type, so a browser's guess — or nothing,
+    // `application/octet-stream` — decided how the file would later be served.
+    const raw = decodeBase64Upload(dto.file, 'The document');
+    const detected = assertAllowedFileType(raw, DOCUMENT_TYPES, 'The document');
+    const image = await compressImageUpload(raw, detected.contentType);
+    const buffer = image?.main.data ?? raw;
+    const storedType = image?.main.contentType ?? detected.contentType;
+    // No thumbnail: `ContractorDocument` has no column for one and the list shows names.
     const fileRef = await this.storage.put(
       'contractor-documents',
       buffer,
-      dto.contentType ?? 'application/octet-stream',
+      storedType,
     );
 
     const created = await withRlsContext(
@@ -301,6 +317,46 @@ export class ContractorsService {
       expiryWarning: expiryWarningFor(created.expiresAt),
       uploadedAt: created.uploadedAt,
     };
+  }
+
+  /**
+   * The stored file behind a contractor document (036 N4, 2026-10-17).
+   *
+   * Licences and insurance certificates could be uploaded but never opened again — there
+   * was no route that served them. Scoped exactly like the list it is opened from: the
+   * document's contractor must be in the caller's (selected) company, else 404, the same
+   * answer as a document that does not exist.
+   *
+   * `ContractorDocument` stores no content type, so it is sniffed from the bytes
+   * (`describeStoredFile`); since N4 the upload stores only detected types anyway, and the
+   * sniff is what makes the documents filed before that open correctly too.
+   */
+  async documentFile(
+    caller: AuthenticatedUser,
+    documentId: string,
+  ): Promise<{ buffer: Buffer; filename: string; contentType: string }> {
+    const doc = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.contractorDocument.findUnique({
+        where: { id: documentId },
+        include: { contractorProfile: { select: { companyId: true } } },
+      }),
+    );
+    if (!doc) {
+      throw new NotFoundException(`Document ${documentId} not found`);
+    }
+    assertInScope(
+      caller,
+      { companyId: doc.contractorProfile.companyId },
+      `Document ${documentId}`,
+    );
+    const buffer = await this.storage.get(doc.fileRef);
+    const { filename, contentType } = describeStoredFile({
+      bytes: buffer,
+      storedName: doc.fileName,
+      storedType: null,
+      fallbackName: `${doc.documentType} ${doc.id}`,
+    });
+    return { buffer, filename, contentType };
   }
 
   async deleteDocument(

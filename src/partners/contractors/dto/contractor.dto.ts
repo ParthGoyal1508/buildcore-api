@@ -110,7 +110,11 @@ export class CreateContractorDocumentDto {
   @MaxLength(200)
   fileName?: string;
 
-  @ApiPropertyOptional({ description: 'MIME type of the decoded content' })
+  // Accepted for older clients and ignored: the stored type is detected from the bytes
+  // (036 N4, 2026-10-17).
+  @ApiPropertyOptional({
+    description: 'Ignored — the type is detected from the file itself',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(100)
