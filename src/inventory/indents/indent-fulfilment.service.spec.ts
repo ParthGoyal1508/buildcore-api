@@ -13,7 +13,9 @@ const line = (over: Record<string, unknown> = {}) => ({
   requestedQuantity: decimal(100),
   approvedQuantity: decimal(80),
   fulfilledQuantity: decimal(0),
-  indent: { id: 'indent-1', status: IndentStatus.approved,
+  indent: {
+    id: 'indent-1',
+    status: IndentStatus.approved,
     companyId: 'co-1',
     siteId: 'site-1',
   },
@@ -67,8 +69,8 @@ const build = (lines: ReturnType<typeof line>[]) => {
 
 /** The locking query's SQL, joined, for asserting it is a row lock. */
 const lockSql = (tx: never) =>
-  (tx as unknown as { $queryRaw: jest.Mock }).$queryRaw.mock.calls.map(
-    (call) => (call[0] as string[]).join('?'),
+  (tx as unknown as { $queryRaw: jest.Mock }).$queryRaw.mock.calls.map((call) =>
+    (call[0] as string[]).join('?'),
   );
 
 describe('IndentFulfilmentService (FR-023, FR-024)', () => {
@@ -252,7 +254,7 @@ describe('IndentFulfilmentService (FR-023, FR-024)', () => {
     expect(Number(state[0].approvedQuantity) - fulfilled).toBe(30);
   });
 
-  describe('the line must be the movement\'s (036 M2)', () => {
+  describe("the line must be the movement's (036 M2)", () => {
     it('refuses a movement of a different item', async () => {
       const { tx, state } = build([line()]);
       await expect(

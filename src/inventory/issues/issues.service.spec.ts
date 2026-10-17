@@ -108,7 +108,12 @@ describe('IssuesService.returnMaterial (036 M4, M2)', () => {
   it('refuses returning more than is still out', async () => {
     const { service, stock } = build(issue({ returnedQuantity: decimal(8) }));
     await expect(
-      service.returnMaterial(caller, 'iss-1', { ...base, returnedNow: 3 }, 'ip'),
+      service.returnMaterial(
+        caller,
+        'iss-1',
+        { ...base, returnedNow: 3 },
+        'ip',
+      ),
     ).rejects.toThrow(/at most 2 more/);
     expect(stock.appendLedgerEntry).not.toHaveBeenCalled();
   });
