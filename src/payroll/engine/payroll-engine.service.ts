@@ -556,6 +556,41 @@ export class PayrollEngineService {
     }
   }
 
+  /**
+   * Deletes a draft run and its lines (036 F9). Conditional on the run *still* being a draft, in
+   * the same statement, so a process that lands first wins and this gets the 409 — the F6 rule.
+   */
+  async discardDraft(caller: Caller, runId: string): Promise<void> {
+    const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.findFirst({
+        where: { id: runId },
+        select: { id: true, companyId: true, period: true },
+      }),
+    );
+    if (!run) throw new NotFoundException('Payroll run not found');
+    const deleted = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.deleteMany({
+        where: { id: runId, status: PayrollRunStatus.draft },
+      }),
+    );
+    if (deleted.count !== 1) {
+      throw new ConflictException({
+        code: 'PAYROLL_RUN_NOT_DRAFT',
+        message:
+          'Only a draft run can be discarded; this one has been processed.',
+      });
+    }
+    await this.auditLog.record({
+      entityType: AuditEntityType.PAYROLL_RUN,
+      action: AuditAction.DELETE,
+      entityId: run.id,
+      changes: { period: run.period, discarded: true },
+      accountId: caller.userId,
+      companyId: run.companyId,
+      ipAddress: caller.ipAddress,
+    });
+  }
+
   /** Runs for a company, newest period first. */
   async list(caller: Caller, companyId: string) {
     return withRlsContext(this.prisma, caller.rls, (tx) =>
