@@ -1322,6 +1322,43 @@ describe('ApprovalService', () => {
     });
   });
 
+  describe('reads under the selected company (036 B2)', () => {
+    // A Super Admin whose home company is A and who has selected B. Every read must run
+    // under B: under A the RLS policy hides B's instances and the screen shows no actions.
+    const selectedElsewhere = {
+      ...(caller('super-1', []) as object),
+      companyId: 'home-A',
+      selectedCompanyId: 'selected-B',
+      permissions: [Permission.CROSS_COMPANY_ACCESS, Permission.ATTENDANCE],
+    } as never;
+    const companyBound = (prisma: { tx: Record<string, jest.Mock> }) =>
+      prisma.tx.$executeRaw.mock.calls.map((call: unknown[]) => call[2]);
+
+    it.each([
+      [
+        'stateOf',
+        (s: ApprovalService) =>
+          s.stateOf('attendance_exception', 'punch-1', selectedElsewhere),
+      ],
+      [
+        'statesOf',
+        (s: ApprovalService) =>
+          s.statesOf('attendance_exception', ['punch-1'], selectedElsewhere),
+      ],
+      [
+        'historyOf',
+        (s: ApprovalService) =>
+          s.historyOf('attendance_exception', 'punch-1', selectedElsewhere),
+      ],
+    ])('%s', async (_name, read) => {
+      const { service, prisma } = harness();
+      await read(service);
+      const bound = companyBound(prisma);
+      expect(bound[0]).toBe('selected-B');
+      expect(bound).not.toContain('home-A');
+    });
+  });
+
   describe('the take-effect gate (FR-018, T049, T050)', () => {
     const directorFinal = (overrides: Record<string, unknown> = {}) =>
       instanceRow({
