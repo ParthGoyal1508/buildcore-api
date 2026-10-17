@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   AuditAction,
@@ -582,10 +583,37 @@ export class PurchasesService {
           );
         }
 
-        await tx.purchase.update({
-          where: { id },
+        // 036 M1: the received units must still be in the store to un-receive them. Without
+        // this, deleting a purchase whose material had already been issued or transferred took
+        // the balance negative — stock nobody could find, valued at a rate nobody paid. Locked
+        // rather than read, so an issue racing this delete cannot consume the same units between
+        // the check and the decrement.
+        const quantity = toNumber(existing.quantity);
+        const available = await this.stock.lockAvailable(tx, {
+          itemId: existing.itemId,
+          siteId: existing.siteId,
+        });
+        // Compared in thousandths — the column's own precision — so a float sum such as
+        // 0.1 + 0.2 cannot refuse a delete that is exactly covered.
+        if (Math.round(quantity * 1000) > Math.round(available * 1000)) {
+          throw new UnprocessableEntityException({
+            message:
+              `This purchase cannot be deleted: ${quantity} was received but only ${available} ` +
+              'is still in stock at this store — the rest has been issued or transferred. ' +
+              'Return or reverse those movements first.',
+            availableStock: available,
+          });
+        }
+
+        // Conditional, so two simultaneous deletes cannot both reverse the same purchase: the
+        // second waits on the balance lock above, then finds the row already deleted.
+        const marked = await tx.purchase.updateMany({
+          where: { id, deleted: false },
           data: { deleted: true, deletedAt: new Date() },
         });
+        if (marked.count === 0) {
+          throw new NotFoundException(`Purchase ${id} not found`);
+        }
 
         await this.stock.appendLedgerEntry(tx, {
           companyId: existing.companyId,

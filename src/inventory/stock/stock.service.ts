@@ -214,22 +214,7 @@ export class StockService {
   ): Promise<number> {
     const { itemId, siteId, quantity, label = 'this site' } = params;
 
-    const rows = await tx.$queryRaw<
-      {
-        received: Prisma.Decimal;
-        issued: Prisma.Decimal;
-        transferIn: Prisma.Decimal;
-        transferOut: Prisma.Decimal;
-        avgRate: Prisma.Decimal;
-      }[]
-    >`
-      SELECT "received", "issued", "transferIn", "transferOut", "avgRate"
-      FROM "inventory"."StockBalance"
-      WHERE "itemId" = ${itemId} AND "siteId" = ${siteId}
-      FOR UPDATE
-    `;
-
-    const available = rows.length === 0 ? 0 : inStockOf(this.totalsOf(rows[0]));
+    const available = await this.lockAvailable(tx, { itemId, siteId });
 
     if (quantity > available) {
       // 422 rather than 400: the request is well-formed and the quantity is a
@@ -242,6 +227,38 @@ export class StockService {
       });
     }
     return available;
+  }
+
+  /**
+   * Locks the item-site balance with `SELECT ... FOR UPDATE` and returns what is in stock
+   * there, without judging it.
+   *
+   * `validateAndLockStock` is this plus the over-issue refusal. Split out for callers whose
+   * refusal says something different (036 M1: deleting a purchase whose material has already
+   * been issued is not "insufficient stock requested", it is "this receipt has been consumed"),
+   * so they hold the same lock rather than each writing their own query.
+   *
+   * A missing row reads as zero, for the reason `validateAndLockStock` gives.
+   */
+  async lockAvailable(
+    tx: Prisma.TransactionClient,
+    params: { itemId: string; siteId: string },
+  ): Promise<number> {
+    const rows = await tx.$queryRaw<
+      {
+        received: Prisma.Decimal;
+        issued: Prisma.Decimal;
+        transferIn: Prisma.Decimal;
+        transferOut: Prisma.Decimal;
+        avgRate: Prisma.Decimal;
+      }[]
+    >`
+      SELECT "received", "issued", "transferIn", "transferOut", "avgRate"
+      FROM "inventory"."StockBalance"
+      WHERE "itemId" = ${params.itemId} AND "siteId" = ${params.siteId}
+      FOR UPDATE
+    `;
+    return rows.length === 0 ? 0 : inStockOf(this.totalsOf(rows[0]));
   }
 
   /** Appends one ledger row. The only way this module writes to the ledger. */
