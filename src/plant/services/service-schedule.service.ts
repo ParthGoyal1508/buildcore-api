@@ -6,6 +6,8 @@ import {
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { assertInService, DISPOSED_STATUSES } from '../disposal/in-service';
+
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -104,6 +106,8 @@ export class ServiceScheduleService {
         ...companyScope(caller, query.companyId),
         ...(query.equipmentId ? { equipmentId: query.equipmentId } : {}),
         ...(statusIds ? { id: { in: statusIds } } : {}),
+        // A scrapped or sold machine has no services due (2026-10-17).
+        equipment: { status: { notIn: DISPOSED_STATUSES } },
       };
 
       const [rows, total] = await Promise.all([
@@ -196,6 +200,7 @@ export class ServiceScheduleService {
           );
         }
         assertInScope(caller, equipment, 'Equipment');
+        assertInService(equipment);
 
         return tx.serviceSchedule.create({
           data: {

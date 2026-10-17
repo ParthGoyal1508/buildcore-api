@@ -25,6 +25,10 @@ import { BankSheetService } from './runs/bank-sheet.service';
 import { SlipDeliveryService } from './runs/slip-delivery.service';
 import { TransactionSheetService } from './runs/transaction-sheet.service';
 import { PayrollRunsController } from './runs/payroll-runs.controller';
+import { SalaryBankSheetController } from './runs/salary-bank-sheet.controller';
+import { MonthlyAttendanceSheetController } from './attendance-sheet/monthly-attendance-sheet.controller';
+import { MonthlyAttendanceSheetService } from './attendance-sheet/monthly-attendance-sheet.service';
+import { ProjectsModule } from '../projects/projects.module';
 import { PayrollScheduleCron } from './runs/payroll-schedule.cron';
 import { PayrollScheduleService } from './runs/payroll-schedule.service';
 import { SalaryPdfService } from './salary/salary-pdf.service';
@@ -57,12 +61,16 @@ import { SalaryService } from './salary/salary.service';
     // does not import payroll directly, so the cycle is through hr rather than between the two —
     // which is why it appears only now and why a forward reference is the whole fix.
     forwardRef(() => PlantModule),
+    // The monthly attendance sheet names sites and narrows by project (2026-10-17).
+    forwardRef(() => ProjectsModule),
   ],
   controllers: [
     MyPayrollController,
     SalaryController,
     EmployeeSalaryController,
     PayrollRunsController,
+    SalaryBankSheetController,
+    MonthlyAttendanceSheetController,
     ChallansController,
     LoansController,
     FnfController,
@@ -72,6 +80,7 @@ import { SalaryService } from './salary/salary.service';
     PayrollRegisterController,
   ],
   providers: [
+    MonthlyAttendanceSheetService,
     SalaryService,
     SalaryPdfService,
     PayrollEngineService,

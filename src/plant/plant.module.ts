@@ -47,6 +47,8 @@ import { ServiceScheduleService } from './services/service-schedule.service';
 import { SparePartsController } from './spare-parts/spare-parts.controller';
 import { SparePartsService } from './spare-parts/spare-parts.service';
 import { EquipmentSearchSource } from './equipment/equipment-search.source';
+import { EquipmentDisposalController } from './disposal/equipment-disposal.controller';
+import { EquipmentDisposalService } from './disposal/equipment-disposal.service';
 
 /**
  * The `plant` module: asset register, logbook, fuel, service schedules, maintenance
@@ -84,6 +86,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     InventoryModule,
   ],
   controllers: [
+    EquipmentDisposalController,
     FuelExceptionsController,
     FuelRecoveryController,
     EquipmentCategoriesController,
@@ -100,6 +103,7 @@ import { EquipmentSearchSource } from './equipment/equipment-search.source';
     ServiceBillsController,
   ],
   providers: [
+    EquipmentDisposalService,
     // 021 US1 — see ProjectSearchSource.
     EquipmentSearchSource,
     PlantService,

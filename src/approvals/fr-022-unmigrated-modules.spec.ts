@@ -423,6 +423,31 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/partners/partners.service.ts',
           ':(exclude)src/assets/register',
           ':(exclude)src/projects/portfolio/projects.controller.ts',
+          // Owned by 031 (labour face attendance) and 033 (machine disposal), 2026-10-17.
+          // **Verified by grep: none of these files calls `ApprovalService` or
+          // `approvals.submit`.** 031 replaced the muster *capture* routes with face punches that
+          // write approved rolls; the muster's own `approve()` and the payment sheet's are kept
+          // for rolls and sheets captured before it, and the per-file assertions at the top still
+          // read both files and still require them. 033's disposal is gated on a permission
+          // (`MACHINERY_DISPOSE`), not an approval chain, and the schedule service only stops
+          // listing and scheduling scrapped or sold machines.
+          ':(exclude)src/labour/attendance',
+          ':(exclude)src/labour/site-rates',
+          ':(exclude)src/labour/supervisor-sites',
+          ':(exclude)src/labour/reports/dto/labour-sheets.dto.ts',
+          ':(exclude)src/labour/reports/labour-sheets.controller.ts',
+          ':(exclude)src/labour/reports/labour-sheets.service.ts',
+          ':(exclude)src/labour/advances/labour-advance.service.ts',
+          ':(exclude)src/labour/constants/labour.constants.ts',
+          ':(exclude)src/labour/labour-refs.service.ts',
+          ':(exclude)src/labour/labour.service.ts',
+          ':(exclude)src/labour/muster',
+          ':(exclude)src/labour/payment-sheets/dto/payment-sheet.dto.ts',
+          ':(exclude)src/labour/payment-sheets/payment-sheet.service.ts',
+          ':(exclude)src/labour/workers/dto/worker.dto.ts',
+          ':(exclude)src/labour/workers/labour-worker.service.ts',
+          ':(exclude)src/plant/disposal',
+          ':(exclude)src/plant/services/service-schedule.service.ts',
         ],
         {
           cwd: REPO_ROOT,

@@ -38,7 +38,9 @@ export const DEFAULT_ROLES: {
       (p) =>
         p !== Permission.CROSS_COMPANY_ACCESS &&
         p !== Permission.COMPANY_SETTINGS &&
-        p !== Permission.DATA_DELETE,
+        p !== Permission.DATA_DELETE &&
+        // 2026-10-17: retiring a machine is Super Admin's alone.
+        p !== Permission.MACHINERY_DISPOSE,
     ),
   },
   {

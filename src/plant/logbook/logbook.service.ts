@@ -7,6 +7,8 @@ import {
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { assertInService } from '../disposal/in-service';
+
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -163,6 +165,7 @@ export class LogbookService {
           );
         }
         assertInScope(caller, equipment, 'Equipment');
+        assertInService(equipment);
 
         // Checked before inserting so the caller gets a useful message; the UNIQUE
         // index behind it (FR-003) is what makes the guarantee real under

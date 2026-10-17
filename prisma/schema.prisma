@@ -367,6 +367,11 @@ enum Permission {
   /// only HR, issues these. The offer letter stays with `RECRUITMENT`.
   HR_LETTERS
 
+  /// Retiring a machine as scrapped or sold, and reversing that (2026-10-17). Its own permission
+  /// because it removes a machine from every list and cannot be done by `MACHINERY`'s editors;
+  /// granted to Super Admin only, as the client asked.
+  MACHINERY_DISPOSE
+
   /// Added by 012 (FR-033). Registering, allocating, transferring, inspecting and
   /// requesting project assets. `INVENTORY` is deliberately not reused: a storekeeper
   /// who issues cement is not thereby accountable for who is holding the total
@@ -1495,6 +1500,8 @@ enum AuditEntityType {
   // `settings`-schema masters — the same arrangement `ITEM_CATEGORY` has.
   EQUIPMENT
   EQUIPMENT_DOCUMENT
+  /// 2026-10-17: a machine scrapped or sold, or that disposal reversed.
+  EQUIPMENT_DISPOSAL
   LOGBOOK_ENTRY
   FUEL_ENTRY
   /// 020 FR-002: a reviewer's decision about a fuel variance. The entity is the decision,
@@ -6840,6 +6847,9 @@ enum EquipmentStatus {
   active
   under_maintenance
   inactive
+  /// 2026-10-17: retired by a disposal record. Set and cleared only by disposal and its reversal.
+  scrapped
+  sold
 
   @@schema("plant")
 }
@@ -9467,4 +9477,97 @@ model LabourPunchRefusal {
   @@index([companyId])
   @@index([companyId, siteId, createdAt])
   @@schema("labour")
+}
+
+enum EquipmentDisposalType {
+  scrapped
+  sold
+
+  @@schema("plant")
+}
+
+enum EquipmentScrapReason {
+  damaged_beyond_repair
+  end_of_life
+  accident
+  obsolete
+  other
+
+  @@schema("plant")
+}
+
+/// A machine retired by scrapping or sale (2026-10-17). At most one is in force per machine — a
+/// reversal stamps `reversedAt` and the machine goes back to the status it had (enforced by a partial
+/// unique index in the migration). Nothing is deleted: a reversed disposal stays as history.
+model EquipmentDisposal {
+  id          String @id @default(cuid())
+  companyId   String
+  equipmentId String
+
+  type         EquipmentDisposalType
+  disposalDate DateTime              @db.Date
+
+  /// Scrap only.
+  scrapReason      EquipmentScrapReason?
+  /// Sale: the buyer. Scrap: the scrap vendor or buyer, if any.
+  counterpartyName String?
+  /// Sale only.
+  buyerContact     String?
+  paymentMode      String?
+  invoiceNumber    String?
+
+  /// Sale amount, or the scrap value realised (optional for scrap).
+  valueRealised   Decimal? @db.Decimal(18, 2)
+  /// The machine's book value on the disposal date: from its depreciation where it has one,
+  /// otherwise as entered.
+  bookValue       Decimal? @db.Decimal(18, 2)
+  /// `depreciation` or `manual`.
+  bookValueSource String?
+  /// Sale: amount − book value. Null where either is unknown.
+  profitLoss      Decimal? @db.Decimal(18, 2)
+
+  /// The approver's name as written on the form.
+  approvedBy String
+  remarks    String?
+
+  attachmentRef  String?
+  attachmentName String?
+  attachmentMime String?
+
+  /// The status the machine had before, restored on reversal.
+  previousStatus EquipmentStatus
+  /// The site it was deployed at, released by the disposal; null if it was not deployed.
+  releasedSiteId String?
+  /// That site's project at the time, for the dashboard's project filter.
+  projectId      String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+
+  reversedAt       DateTime?
+  reversedByUserId String?
+  reversalReason   String?
+
+  @@index([companyId])
+  @@index([companyId, type, disposalDate])
+  @@index([equipmentId])
+  @@schema("plant")
+}
+
+/// A machine's history: what happened to it and who did it (2026-10-17). Written by disposal and
+/// its reversal today; any other lifecycle event can add a `kind` without a schema change.
+model EquipmentEvent {
+  id          String   @id @default(cuid())
+  companyId   String
+  equipmentId String
+  /// `disposed_scrapped`, `disposed_sold`, `disposal_reversed`, `site_released`.
+  kind        String
+  summary     String
+  detail      Json?
+  actorUserId String?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+  @@index([equipmentId, createdAt])
+  @@schema("plant")
 }

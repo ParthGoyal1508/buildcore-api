@@ -5562,6 +5562,55 @@ Table LabourPunchRefusal {
   Note: '031: a refused labour punch. Nothing is written to attendance, so this is the only trace.'
 }
 
+Table EquipmentDisposal {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  type EquipmentDisposalType [not null]
+  disposalDate DateTime [not null]
+  scrapReason EquipmentScrapReason [note: 'Scrap only.']
+  counterpartyName String [note: 'Sale: the buyer. Scrap: the scrap vendor or buyer, if any.']
+  buyerContact String [note: 'Sale only.']
+  paymentMode String
+  invoiceNumber String
+  valueRealised Decimal [note: 'Sale amount, or the scrap value realised (optional for scrap).']
+  bookValue Decimal [note: 'The machine\'s book value on the disposal date: from its depreciation where it has one,
+otherwise as entered.']
+  bookValueSource String [note: '`depreciation` or `manual`.']
+  profitLoss Decimal [note: 'Sale: amount − book value. Null where either is unknown.']
+  approvedBy String [not null, note: 'The approver\'s name as written on the form.']
+  remarks String
+  attachmentRef String
+  attachmentName String
+  attachmentMime String
+  previousStatus EquipmentStatus [not null, note: 'The status the machine had before, restored on reversal.']
+  releasedSiteId String [note: 'The site it was deployed at, released by the disposal; null if it was not deployed.']
+  projectId String [note: 'That site\'s project at the time, for the dashboard\'s project filter.']
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  reversedAt DateTime
+  reversedByUserId String
+  reversalReason String
+
+  Note: 'A machine retired by scrapping or sale (2026-10-17). At most one is in force per machine — a
+reversal stamps `reversedAt` and the machine goes back to the status it had (enforced by a partial
+unique index in the migration). Nothing is deleted: a reversed disposal stays as history.'
+}
+
+Table EquipmentEvent {
+  id String [pk]
+  companyId String [not null]
+  equipmentId String [not null]
+  kind String [not null, note: '`disposed_scrapped`, `disposed_sold`, `disposal_reversed`, `site_released`.']
+  summary String [not null]
+  detail Json
+  actorUserId String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'A machine\'s history: what happened to it and who did it (2026-10-17). Written by disposal and
+its reversal today; any other lifecycle event can add a `kind` without a schema change.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -5610,6 +5659,7 @@ Enum Permission {
   RECRUITMENT
   RECRUITMENT_APPROVE
   HR_LETTERS
+  MACHINERY_DISPOSE
   ASSETS
   ASSETS_APPROVE
   CASH_ENTRY
@@ -5735,6 +5785,7 @@ Enum AuditEntityType {
   LABOUR_ADVANCE
   EQUIPMENT
   EQUIPMENT_DOCUMENT
+  EQUIPMENT_DISPOSAL
   LOGBOOK_ENTRY
   FUEL_ENTRY
   FUEL_VARIANCE_EXCEPTION
@@ -6238,6 +6289,8 @@ Enum EquipmentStatus {
   active
   under_maintenance
   inactive
+  scrapped
+  sold
 }
 
 Enum MaintenanceType {
@@ -6531,6 +6584,19 @@ Enum ResignationStatus {
   submitted
   accepted
   withdrawn
+}
+
+Enum EquipmentDisposalType {
+  scrapped
+  sold
+}
+
+Enum EquipmentScrapReason {
+  damaged_beyond_repair
+  end_of_life
+  accident
+  obsolete
+  other
 }
 
 Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]

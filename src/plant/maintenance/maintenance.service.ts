@@ -13,6 +13,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { assertInService } from '../disposal/in-service';
+
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -196,6 +198,7 @@ export class MaintenanceService {
           );
         }
         assertInScope(caller, equipment, 'Equipment');
+        assertInService(equipment);
 
         const open = await tx.maintenanceJob.findFirst({
           where: {

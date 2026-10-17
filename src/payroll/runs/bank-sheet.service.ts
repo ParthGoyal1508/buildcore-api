@@ -9,6 +9,7 @@ import { PrismaService } from 'nestjs-prisma';
 import * as ExcelJS from 'exceljs';
 
 import type { BankSheetConfig } from '../../common/configs/config.interface';
+import { PayrollRunStatus } from '@prisma/client';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
@@ -51,6 +52,73 @@ export const BANK_SHEET_COLUMN_COUNT = 16;
  */
 export const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 
+/** A debit account typed for one sheet: digits only, as banks issue them (2026-10-17). */
+export const DEBIT_ACCOUNT_PATTERN = /^\d{6,20}$/;
+
+export interface BankSheetOptions {
+  /** Overrides the company's payroll debit account for this sheet. */
+  debitAccount?: string;
+  /** Employees to leave off — paid another way this month. */
+  excludeEmployeeIds?: string[];
+  /** `Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx` rather than the run's own name. */
+  companyNamedFile?: boolean;
+}
+
+export interface BankSheetLeftOff {
+  employeeId: string;
+  employeeCode: string;
+  name: string;
+  netPay: number;
+  kind: 'bank_details' | 'excluded' | 'nothing_to_pay';
+  reason: string;
+}
+
+export interface BankSheetPreview {
+  runId: string;
+  period: string;
+  companyName: string;
+  debitAccount: string;
+  defaultDebitAccount: string | null;
+  employeeCount: number;
+  transferTotal: number;
+  payrollNetTotal: number;
+  recoveredTotal: number;
+  leftOffTotal: number;
+  reconciles: boolean;
+  leftOff: BankSheetLeftOff[];
+}
+
+const MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/** `Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx`, the company name made filename-safe. */
+export function salaryBankSheetFilename(
+  company: string,
+  period: string,
+): string {
+  const [year, month] = period.split('-').map(Number);
+  const safe =
+    company
+      .trim()
+      .replace(/[^A-Za-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '') || 'Company';
+  return `Salary_Bank_Sheet_${safe}_${
+    MONTH_NAMES[month - 1] ?? month
+  }_${year}.xlsx`;
+}
+
 /**
  * The bank transfer sheet for a payroll run (005 FR-017, 021 FR-008a to FR-008g).
  *
@@ -92,10 +160,206 @@ export class BankSheetService {
     ) as BankSheetConfig;
   }
 
+  /**
+   * The regular (non-F&F) payroll run for a company and month, finalised — the run the salary
+   * bank sheet is generated from (2026-10-17). A run still in draft is not payroll anybody has
+   * agreed, so it is refused by name rather than treated as missing.
+   */
+  async findRegularRun(
+    caller: Caller,
+    companyId: string,
+    period: string,
+  ): Promise<{ id: string; status: PayrollRunStatus }> {
+    const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.payrollRun.findFirst({
+        where: { companyId, period, isFnf: false },
+        select: { id: true, status: true },
+      }),
+    );
+    if (!run) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PAYROLL_RUN_NOT_FOUND',
+        message: `No payroll has been run for ${period} for this company.`,
+      });
+    }
+    if (run.status === PayrollRunStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_FINALISED',
+        message: `The payroll for ${period} is still a draft. Process it before generating the bank sheet.`,
+      });
+    }
+    return run;
+  }
+
+  /**
+   * What the sheet would contain, without producing it or recovering anything (2026-10-17): the
+   * count and total the bank will be asked to pay, everyone left off and why, and whether it all adds
+   * back up to the payroll's net pay.
+   */
+  async preview(
+    caller: Caller,
+    runId: string,
+    options: BankSheetOptions = {},
+  ): Promise<BankSheetPreview> {
+    const computed = await this.compute(caller, runId, options, false);
+    return {
+      runId,
+      period: computed.run.period,
+      companyName: computed.companyName,
+      debitAccount: computed.debitAccount,
+      defaultDebitAccount: computed.defaultDebitAccount,
+      employeeCount: computed.rows.length,
+      transferTotal: computed.transferTotal,
+      payrollNetTotal: computed.payrollNetTotal,
+      recoveredTotal: computed.recoveredTotal,
+      leftOffTotal: computed.leftOffTotal,
+      reconciles: computed.reconciles,
+      leftOff: computed.leftOff,
+    };
+  }
+
   async build(
     caller: Caller,
     runId: string,
+    options: BankSheetOptions = {},
   ): Promise<{ buffer: Buffer; filename: string }> {
+    const computed = await this.compute(caller, runId, options, true);
+    const { run, rows, debitAccount } = computed;
+    const valueDate = this.valueDateFor(new Date());
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.created = new Date();
+    const sheet = workbook.addWorksheet('Sheet1');
+
+    // `columns` with widths and no `key`: rows are written as positional arrays, because the
+    // contract is the order. A keyed row would let a reordered config silently move a value into
+    // the wrong column while every key still looked right.
+    sheet.columns = this.format.columns.map((header) => ({
+      header,
+      width: Math.max(14, header.length + 2),
+    }));
+    if (sheet.columns.length !== BANK_SHEET_COLUMN_COUNT) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'BANK_SHEET_FORMAT_INVALID',
+        message:
+          `The configured bank sheet format has ${sheet.columns.length} columns; the bank's ` +
+          `template has ${BANK_SHEET_COLUMN_COUNT}. A parser counting columns rejects the file.`,
+      });
+    }
+
+    // Employees who cannot be paid by transfer are listed on a second sheet rather than dropped,
+    // because a bank sheet whose total silently differs from the payroll total is how someone goes
+    // unpaid without anyone noticing. The *first* sheet stays exactly the bank's template — a
+    // second worksheet is ignored by a parser reading Sheet1 by position.
+    const unpayable = workbook.addWorksheet('Not Transferable');
+    unpayable.columns = [
+      { header: 'Employee Code', key: 'code', width: 16 },
+      { header: 'Employee Name', key: 'name', width: 28 },
+      { header: 'Net Pay', key: 'net', width: 14 },
+      { header: 'Reason', key: 'reason', width: 52 },
+    ];
+    unpayable.getRow(1).font = { bold: true };
+    for (const left of computed.leftOff) {
+      unpayable.addRow({
+        code: left.employeeCode,
+        name: left.name,
+        net: left.netPay,
+        reason: left.reason,
+      });
+    }
+
+    /**
+     * FR-011. Each recovery as a **named line**, never a netted figure.
+     *
+     * A third worksheet, because the bank's template has no column for it and must not grow one.
+     * Without this sheet the only record of why a transfer is short of the payslip is a row in a
+     * table nobody looking at the file can see — and "my transfer does not match my payslip" is the
+     * question this is here to answer before it is asked.
+     */
+    const recoverySheet = workbook.addWorksheet('Advance Recoveries');
+    recoverySheet.columns = [
+      { header: 'Employee Code', key: 'code', width: 16 },
+      { header: 'Employee Name', key: 'name', width: 28 },
+      { header: 'Net Pay (as approved)', key: 'net', width: 20 },
+      { header: 'Advance Recovered', key: 'recovered', width: 18 },
+      { header: 'Advance Reference', key: 'advance', width: 28 },
+      { header: 'Amount Transferred', key: 'transfer', width: 20 },
+    ];
+    recoverySheet.getRow(1).font = { bold: true };
+
+    for (const r of rows) {
+      const row: (string | number)[] = new Array(BANK_SHEET_COLUMN_COUNT).fill(
+        '',
+      );
+      row[BANK_SHEET_COLUMN.valueDate] = valueDate;
+      row[BANK_SHEET_COLUMN.messageType] = this.format.messageType;
+      // A string, always. The sample's single debit account is `09310400000819`, and a numeric cell
+      // loses that leading zero before anybody looks at the file.
+      row[BANK_SHEET_COLUMN.debitAccount] = debitAccount;
+      // FR-008e. The **bank's** name for the account holder, never the employee master's — see
+      // `refusalFor`, which refuses rather than falling back.
+      row[BANK_SHEET_COLUMN.beneficiaryName] = r.holderName;
+      // The one genuinely numeric cell. An amount is arithmetic and the bank totals the column.
+      row[BANK_SHEET_COLUMN.paymentAmount] = r.transfer.transferAmount;
+      row[BANK_SHEET_COLUMN.ifsc] = r.ifsc;
+      row[BANK_SHEET_COLUMN.beneficiaryAccount] = r.account;
+      row[BANK_SHEET_COLUMN.transactionTypeCode] =
+        this.format.transactionTypeCode;
+      sheet.addRow(row);
+
+      // One line per advance, not one per employee: an employee with two advances recovered has two
+      // facts to account for, and a single summed row leaves them indistinguishable from one larger
+      // advance.
+      for (const recovery of r.transfer.recoveries) {
+        recoverySheet.addRow({
+          code: r.employeeCode,
+          name: r.name,
+          net: r.transfer.netPay,
+          recovered: recovery.amount,
+          advance: recovery.salaryAdvanceId,
+          transfer: r.transfer.transferAmount,
+        });
+      }
+    }
+
+    // Header row and payment rows only (FR-008g). **No totals row** — see the class comment.
+    // `numFmt '@'` on the two account columns so a reader opening the file does not re-parse a
+    // numeric-looking string back into a number. The cell *values* are already strings, which is
+    // what actually preserves the digits; this stops Excel undoing it on the way in.
+    sheet.getColumn(BANK_SHEET_COLUMN.debitAccount + 1).numFmt = '@';
+    sheet.getColumn(BANK_SHEET_COLUMN.beneficiaryAccount + 1).numFmt = '@';
+    sheet.getColumn(BANK_SHEET_COLUMN.valueDate + 1).numFmt = '@';
+    sheet.getColumn(BANK_SHEET_COLUMN.paymentAmount + 1).numFmt = '#,##0.00';
+    unpayable.getColumn('net').numFmt = '#,##0.00';
+    for (const key of ['net', 'recovered', 'transfer']) {
+      recoverySheet.getColumn(key).numFmt = '#,##0.00';
+    }
+
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    return {
+      buffer,
+      filename: options.companyNamedFile
+        ? salaryBankSheetFilename(computed.companyName, run.period)
+        : `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`,
+    };
+  }
+
+  /**
+   * Everything the sheet and its preview share: the approval gate, the debit account, each
+   * employee's transfer after advance recoveries, and who is left off and why.
+   *
+   * `write` is true only for the download — recovering an advance is money moving, and a preview
+   * that recorded recoveries would take them again from nobody's file.
+   */
+  private async compute(
+    caller: Caller,
+    runId: string,
+    options: BankSheetOptions,
+    write: boolean,
+  ) {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({
         where: { id: runId },
@@ -133,7 +397,7 @@ export class BankSheetService {
       withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
         tx.company.findUnique({
           where: { id: run.companyId },
-          select: { payrollDebitAccountNumber: true },
+          select: { name: true, payrollDebitAccountNumber: true },
         }),
       ),
       withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -143,7 +407,11 @@ export class BankSheetService {
       ),
     ]);
 
-    const debitAccount = company?.payrollDebitAccountNumber?.trim();
+    const defaultDebitAccount =
+      company?.payrollDebitAccountNumber?.trim() || null;
+    // 2026-10-17: the account the money leaves from may be chosen for this sheet; the company's
+    // payroll account is the default.
+    const debitAccount = options.debitAccount?.trim() || defaultDebitAccount;
     if (!debitAccount) {
       // Refused for the whole file, not skipped per row: every row names the same debit account,
       // and a sheet with that column blank is a sheet the bank cannot act on at all.
@@ -155,9 +423,68 @@ export class BankSheetService {
           'names the account the money leaves from, so the sheet cannot be produced without it.',
       });
     }
+    if (!DEBIT_ACCOUNT_PATTERN.test(debitAccount)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_DEBIT_ACCOUNT_INVALID',
+        message: 'The debit account number should be 6 to 20 digits.',
+      });
+    }
 
     const byId = new Map(employees.map((e) => [e.id, e]));
-    const valueDate = this.valueDateFor(new Date());
+    const excluded = new Set(options.excludeEmployeeIds ?? []);
+    const leftOff: BankSheetLeftOff[] = [];
+    const payable: {
+      line: (typeof run.lineItems)[number];
+      employee: (typeof employees)[number];
+      name: string;
+      account: string;
+    }[] = [];
+
+    for (const line of run.lineItems) {
+      const employee = byId.get(line.employeeId);
+      if (!employee) continue;
+      const name = [employee.firstName, employee.lastName]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+      const base = {
+        employeeId: employee.id,
+        employeeCode: employee.employeeCode,
+        name,
+        netPay: line.netPay.toNumber(),
+      };
+      // 2026-10-17: only net pay above zero is a payment; a zero row is an instruction to move
+      // nothing, which some banks reject outright.
+      if (line.netPay.toNumber() <= 0) {
+        leftOff.push({
+          ...base,
+          kind: 'nothing_to_pay',
+          reason: 'Net pay is zero',
+        });
+        continue;
+      }
+      if (excluded.has(employee.id)) {
+        leftOff.push({
+          ...base,
+          kind: 'excluded',
+          reason:
+            'Excluded when the sheet was generated — to be paid another way',
+        });
+        continue;
+      }
+      const account = this.pii.decrypt(employee.bankAccountNumberEncrypted);
+      const refusal = this.refusalFor({
+        account,
+        ifsc: employee.ifscCode,
+        holderName: employee.bankAccountHolderName,
+      });
+      if (refusal) {
+        leftOff.push({ ...base, kind: 'bank_details', reason: refusal });
+        continue;
+      }
+      payable.push({ line, employee, name, account: String(account) });
+    }
 
     // FR-010. Applied before a single row is written, because the figure on the row is the transfer
     // and not the run's net pay. Idempotent — regenerating the sheet recovers nothing further, which
@@ -172,146 +499,58 @@ export class BankSheetService {
         // taken after it is an advance the run could not have recovered.
         drawnUpAt: run.generatedAt ?? run.createdAt,
       },
-      run.lineItems.map((l) => ({
-        employeeId: l.employeeId,
-        netPay: l.netPay.toNumber(),
+      payable.map((p) => ({
+        employeeId: p.employee.id,
+        netPay: p.line.netPay.toNumber(),
       })),
+      { write },
     );
 
-    const workbook = new ExcelJS.Workbook();
-    workbook.created = new Date();
-    const sheet = workbook.addWorksheet('Sheet1');
+    const rows = payable
+      .map((p) => ({
+        employeeId: p.employee.id,
+        employeeCode: p.employee.employeeCode,
+        name: p.name,
+        holderName: p.employee.bankAccountHolderName as string,
+        ifsc: (p.employee.ifscCode as string).trim().toUpperCase(),
+        account: p.account,
+        transfer: transfers.get(p.employee.id) ?? {
+          employeeId: p.employee.id,
+          netPay: p.line.netPay.toNumber(),
+          recoveries: [],
+          recoveredTotal: 0,
+          transferAmount: p.line.netPay.toNumber(),
+        },
+      }))
+      // A transfer an advance recovery took to zero moves nothing either.
+      .filter((r) => r.transfer.transferAmount > 0);
 
-    // `columns` with widths and no `key`: rows are written as positional arrays, because the
-    // contract is the order. A keyed row would let a reordered config silently move a value into
-    // the wrong column while every key still looked right.
-    sheet.columns = this.format.columns.map((header) => ({
-      header,
-      width: Math.max(14, header.length + 2),
-    }));
-    if (sheet.columns.length !== BANK_SHEET_COLUMN_COUNT) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'BANK_SHEET_FORMAT_INVALID',
-        message:
-          `The configured bank sheet format has ${sheet.columns.length} columns; the bank's ` +
-          `template has ${BANK_SHEET_COLUMN_COUNT}. A parser counting columns rejects the file.`,
-      });
-    }
+    const sum = (values: number[]) =>
+      Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
+    const transferTotal = sum(rows.map((r) => r.transfer.transferAmount));
+    const recoveredTotal = sum(
+      [...transfers.values()].map((t) => t.recoveredTotal),
+    );
+    const leftOffTotal = sum(leftOff.map((l) => l.netPay));
+    const payrollNetTotal = sum(run.lineItems.map((l) => l.netPay.toNumber()));
 
-    // Employees who cannot be paid by transfer are listed on a second sheet rather than dropped,
-    // because a bank sheet whose total silently differs from the payroll total is how someone goes
-    // unpaid without anyone noticing. The *first* sheet stays exactly the bank's template — a
-    // second worksheet is ignored by a parser reading Sheet1 by position.
-    const unpayable = workbook.addWorksheet('Not Transferable');
-    unpayable.columns = [
-      { header: 'Employee Code', key: 'code', width: 16 },
-      { header: 'Employee Name', key: 'name', width: 28 },
-      { header: 'Net Pay', key: 'net', width: 14 },
-      { header: 'Reason', key: 'reason', width: 52 },
-    ];
-    unpayable.getRow(1).font = { bold: true };
-
-    /**
-     * FR-011. Each recovery as a **named line**, never a netted figure.
-     *
-     * A third worksheet, because the bank's template has no column for it and must not grow one.
-     * Without this sheet the only record of why a transfer is short of the payslip is a row in a
-     * table nobody looking at the file can see — and "my transfer does not match my payslip" is the
-     * question this is here to answer before it is asked.
-     */
-    const recoverySheet = workbook.addWorksheet('Advance Recoveries');
-    recoverySheet.columns = [
-      { header: 'Employee Code', key: 'code', width: 16 },
-      { header: 'Employee Name', key: 'name', width: 28 },
-      { header: 'Net Pay (as approved)', key: 'net', width: 20 },
-      { header: 'Advance Recovered', key: 'recovered', width: 18 },
-      { header: 'Advance Reference', key: 'advance', width: 28 },
-      { header: 'Amount Transferred', key: 'transfer', width: 20 },
-    ];
-    recoverySheet.getRow(1).font = { bold: true };
-
-    for (const line of run.lineItems) {
-      const employee = byId.get(line.employeeId);
-      if (!employee) continue;
-      const name = [employee.firstName, employee.lastName]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      const transfer = transfers.get(employee.id);
-      // The **transfer**, not the run's net pay. They differ by whatever advances were recovered
-      // from it, and the run's own figure is left exactly as approved.
-      const net = transfer?.transferAmount ?? line.netPay.toNumber();
-      const account = this.pii.decrypt(employee.bankAccountNumberEncrypted);
-
-      const refusal = this.refusalFor({
-        account,
-        ifsc: employee.ifscCode,
-        holderName: employee.bankAccountHolderName,
-      });
-      if (refusal) {
-        unpayable.addRow({
-          code: employee.employeeCode,
-          name,
-          net,
-          reason: refusal,
-        });
-        continue;
-      }
-
-      const row: (string | number)[] = new Array(BANK_SHEET_COLUMN_COUNT).fill(
-        '',
-      );
-      row[BANK_SHEET_COLUMN.valueDate] = valueDate;
-      row[BANK_SHEET_COLUMN.messageType] = this.format.messageType;
-      // A string, always. The sample's single debit account is `09310400000819`, and a numeric cell
-      // loses that leading zero before anybody looks at the file.
-      row[BANK_SHEET_COLUMN.debitAccount] = debitAccount;
-      // FR-008e. The **bank's** name for the account holder, never the employee master's — see
-      // `refusalFor`, which refuses rather than falling back.
-      row[BANK_SHEET_COLUMN.beneficiaryName] =
-        employee.bankAccountHolderName as string;
-      // The one genuinely numeric cell. An amount is arithmetic and the bank totals the column.
-      row[BANK_SHEET_COLUMN.paymentAmount] = net;
-      row[BANK_SHEET_COLUMN.ifsc] = (employee.ifscCode as string).toUpperCase();
-      row[BANK_SHEET_COLUMN.beneficiaryAccount] = String(account);
-      row[BANK_SHEET_COLUMN.transactionTypeCode] =
-        this.format.transactionTypeCode;
-
-      sheet.addRow(row);
-
-      // One line per advance, not one per employee: an employee with two advances recovered has two
-      // facts to account for, and a single summed row leaves them indistinguishable from one larger
-      // advance.
-      for (const recovery of transfer?.recoveries ?? []) {
-        recoverySheet.addRow({
-          code: employee.employeeCode,
-          name,
-          net: transfer?.netPay ?? 0,
-          recovered: recovery.amount,
-          advance: recovery.salaryAdvanceId,
-          transfer: transfer?.transferAmount ?? 0,
-        });
-      }
-    }
-
-    // Header row and payment rows only (FR-008g). **No totals row** — see the class comment.
-    // `numFmt '@'` on the two account columns so a reader opening the file does not re-parse a
-    // numeric-looking string back into a number. The cell *values* are already strings, which is
-    // what actually preserves the digits; this stops Excel undoing it on the way in.
-    sheet.getColumn(BANK_SHEET_COLUMN.debitAccount + 1).numFmt = '@';
-    sheet.getColumn(BANK_SHEET_COLUMN.beneficiaryAccount + 1).numFmt = '@';
-    sheet.getColumn(BANK_SHEET_COLUMN.valueDate + 1).numFmt = '@';
-    sheet.getColumn(BANK_SHEET_COLUMN.paymentAmount + 1).numFmt = '#,##0.00';
-    unpayable.getColumn('net').numFmt = '#,##0.00';
-    for (const key of ['net', 'recovered', 'transfer']) {
-      recoverySheet.getColumn(key).numFmt = '#,##0.00';
-    }
-
-    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     return {
-      buffer,
-      filename: `bank-transfer-${run.period}${run.isFnf ? '-fnf' : ''}.xlsx`,
+      run,
+      companyName: company?.name ?? '',
+      debitAccount,
+      defaultDebitAccount,
+      rows,
+      leftOff,
+      transferTotal,
+      recoveredTotal,
+      leftOffTotal,
+      payrollNetTotal,
+      // The sheet's total, plus what advances took, plus everyone left off, must be the payroll's
+      // net pay to the paisa. Anything else means someone was paid twice or not at all.
+      reconciles:
+        Math.abs(
+          transferTotal + recoveredTotal + leftOffTotal - payrollNetTotal,
+        ) < 0.01,
     };
   }
 

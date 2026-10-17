@@ -83,6 +83,11 @@ export class BankSheetRecoveryService {
       drawnUpAt: Date;
     },
     lines: { employeeId: string; netPay: number }[],
+    /**
+     * False for a preview (2026-10-17): the same figures, with nothing recorded and no advance
+     * reduced. Only the download that produces the file the bank acts on may recover money.
+     */
+    options: { write: boolean } = { write: true },
   ): Promise<Map<string, RecoveredTransfer>> {
     const employeeIds = lines.map((l) => l.employeeId);
 
@@ -148,7 +153,9 @@ export class BankSheetRecoveryService {
         const amount = r2(Math.min(owed, headroom));
         if (amount <= 0) continue;
 
-        await this.write(ctx, run, line.employeeId, advance, amount);
+        if (options.write) {
+          await this.write(ctx, run, line.employeeId, advance, amount);
+        }
         recoveries.push({ salaryAdvanceId: advance.id, amount });
         headroom = r2(headroom - amount);
       }

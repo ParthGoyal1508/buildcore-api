@@ -85,6 +85,7 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
   machinery: [
     AuditEntityType.EQUIPMENT,
     AuditEntityType.EQUIPMENT_DOCUMENT,
+    AuditEntityType.EQUIPMENT_DISPOSAL,
     AuditEntityType.LOGBOOK_ENTRY,
     AuditEntityType.FUEL_ENTRY,
     // 020 FR-002: the reviewer's decision about a fuel variance belongs with the reading it is
@@ -204,6 +205,7 @@ export const MODULE_PERMISSIONS: Record<ActivityModule, Permission[]> = {
     Permission.LOGBOOK,
     Permission.FUEL,
     Permission.HIRE_BILLS,
+    Permission.MACHINERY_DISPOSE,
   ],
   projects: [
     Permission.PROJECTS,
