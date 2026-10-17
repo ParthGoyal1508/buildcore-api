@@ -22,6 +22,15 @@
  * name, which is what makes this safe to run twice or against a partly provisioned database. Nest
  * is not stood up: the methods need a transaction client and nothing from the container.
  *
+ * ## Approval chains and their slot mappings
+ *
+ * Also through the service company creation calls (`ChainsService.seedDefaultsForCompany`), with
+ * the same role resolution: the `final` slot to the protected Super Admin role, every other slot to
+ * its default role by name, among the global roles. `seed:chains` installs the chains alone and
+ * leaves every slot unmapped, which is what `dwr.e2e-spec.ts` refuses to run against. Both a chain
+ * a company already has and a slot already mapped are left as they are — a mapping somebody chose
+ * is never overwritten.
+ *
  * ## The fixture role
  *
  * `QA No Modules` — a global role with no permissions — is what `test/dashboard.e2e-spec.ts` signs a
@@ -32,6 +41,8 @@
  */
 import { PrismaClient } from '@prisma/client';
 
+import { DEFAULT_SLOT_ROLE_NAMES } from '../src/approvals/approval-slots';
+import { ChainsService } from '../src/approvals/chains.service';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 import { AssetCategoriesService } from '../src/settings/asset-masters/asset-categories.service';
 import { AssetDocTypesService } from '../src/settings/asset-masters/asset-doc-types.service';
@@ -63,6 +74,27 @@ async function main(): Promise<void> {
       ['equipment document types', new EquipmentDocTypesService(...deps)],
     ];
 
+    // Resolved once, exactly as `CompaniesService.create` resolves them.
+    const chains = new ChainsService(...deps);
+    const superAdminRole = await prisma.role.findFirst({
+      where: { isProtected: true },
+      select: { id: true },
+    });
+    const slotRoles = await prisma.role.findMany({
+      where: {
+        name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) },
+        companyId: null,
+      },
+      select: { id: true, name: true },
+    });
+    const idByName = new Map(slotRoles.map((r) => [r.name, r.id]));
+    const slotRoleIds = Object.fromEntries(
+      Object.entries(DEFAULT_SLOT_ROLE_NAMES).map(([slotKey, roleName]) => [
+        slotKey,
+        idByName.get(roleName) ?? null,
+      ]),
+    );
+
     const companies = await withRlsContext(
       prisma as never,
       { isSuperAdmin: true },
@@ -83,12 +115,16 @@ async function main(): Promise<void> {
           for (const [, service] of masters) {
             await service.seedDefaultsForCompany(company.id, tx as never);
           }
+          await chains.seedDefaultsForCompany(company.id, tx as never, {
+            superAdminRoleId: superAdminRole?.id ?? null,
+            slotRoleIds,
+          });
         },
       );
       console.log(
         `${company.name}: ${masters
           .map(([label]) => label)
-          .join(', ')} — present.`,
+          .join(', ')}, approval chains and slot mappings — present.`,
       );
     }
 

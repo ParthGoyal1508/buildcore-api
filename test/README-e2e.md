@@ -49,9 +49,11 @@ database was not ready. `npm run seed:chains` is idempotent and safe to re-run.
 `npm run seed:defaults` (`prisma/seed-company-defaults.ts`, 036 follow-up) does the same for the rest
 of what `CompaniesService.create` installs: document types, vendor categories, item categories,
 asset categories, asset document types, condition grades, equipment categories and equipment
-document types, for every company. It calls each master's own `seedDefaultsForCompany` — the method
-company creation calls — so it cannot drift from the product's list, and each inserts with
-`skipDuplicates`, so it too is idempotent. It also creates the global `QA No Modules` role (no
+document types, for every company — and the approval chains **with their slot mappings** (`final` to
+Super Admin, the rest to their default roles), which `seed:chains` leaves unmapped and without which
+`dwr.e2e-spec.ts` refuses to run. It calls each master's own `seedDefaultsForCompany` — the method
+company creation calls — so it cannot drift from the product's list; each inserts with
+`skipDuplicates`, and an existing chain or slot mapping is left alone, so it too is idempotent. It also creates the global `QA No Modules` role (no
 permissions) that `dashboard.e2e-spec.ts` signs in with; that is a QA fixture, which is why no
 migration makes it.
 
