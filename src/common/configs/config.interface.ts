@@ -255,6 +255,19 @@ export interface SecurityConfig {
      * Both are worth deciding on; neither belongs in a defect fix.
      */
     refreshLimit: number;
+    /**
+     * The app-wide ceiling (036 B9): requests per `appTtlSeconds` per source address, across
+     * **every** route, as its own named throttler (`app`) so the auth limits above are unchanged.
+     *
+     * Generous on purpose. One page load fires a dozen requests, widgets poll, and behind an
+     * office NAT every person shares one address — the same reason `refreshLimit` is high. This
+     * is a backstop against a runaway client or a scripted flood, not a per-user quota.
+     */
+    appLimit: number;
+    appTtlSeconds: number;
+    /** Exports (activity CSV, report export) per window per address — each one is a full scan. */
+    exportLimit: number;
+    exportTtlSeconds: number;
   };
 }
 

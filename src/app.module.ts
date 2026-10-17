@@ -6,7 +6,11 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { PrismaShutdownService } from './common/prisma/prisma-shutdown.service';
 import { AppController } from './app.controller';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import {
+  AppThrottlerGuard,
+  throttlersFor,
+} from './common/throttle/app-throttle';
 import { AppService } from './app.service';
 import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
@@ -41,11 +45,9 @@ import type { SecurityConfig } from './common/configs/config.interface';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [config] }),
     ThrottlerModule.forRootAsync({
-      useFactory: (configService: ConfigService) => {
-        const { ttlSeconds, limit } =
-          configService.get<SecurityConfig>('security').throttle;
-        return [{ ttl: ttlSeconds * 1000, limit }];
-      },
+      // `default` (the auth limit), `app` (app-wide) and `export` — see common/throttle (036 B9).
+      useFactory: (configService: ConfigService) =>
+        throttlersFor(configService.get<SecurityConfig>('security').throttle),
       inject: [ConfigService],
     }),
     PrismaModule.forRoot({
@@ -117,6 +119,12 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // on its own — see the service's docblock for how that was found.
     PrismaShutdownService,
     AppService,
+    {
+      // 036 B9: the app-wide rate limit. Applies the `app` and `export` throttlers only, so
+      // the stricter auth limits stay where they are declared.
+      provide: APP_GUARD,
+      useClass: AppThrottlerGuard,
+    },
     {
       // 019 FR-014, FR-015. Global, because "across the application" is the requirement: a
       // per-controller interceptor would be right on the modules somebody remembered and

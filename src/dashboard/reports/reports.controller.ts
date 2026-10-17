@@ -17,6 +17,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { buildDashboardContext } from '../context';
 import { ExportReportDto } from './dto/export-report.dto';
 import { RunReportDto } from './dto/run-report.dto';
@@ -72,6 +73,8 @@ export class ReportsController {
   }
 
   @Post(':type/export')
+  // Each export renders a whole report (036 B9).
+  @ExportThrottle()
   // 019 T014: a POST that reads. Exporting a report is seeing its data — the verb is a
   // POST only because the filter set will not fit in a query string. It may record an
   // export job for the async path, but that row is bookkeeping about a read, not the

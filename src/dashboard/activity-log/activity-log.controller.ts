@@ -7,6 +7,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import {
   ActivityLogService,
   type ActivityLogExportRow,
@@ -44,6 +45,8 @@ export class ActivityLogController {
   }
 
   @Get('export')
+  // A full scan of the audit log per call (036 B9).
+  @ExportThrottle()
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="activity-log.csv"')
   @ApiOperation({

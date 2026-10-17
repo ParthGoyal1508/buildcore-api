@@ -66,6 +66,7 @@
     "cookie-parser": "^1.4.7",
     "docx": "9.0.2",
     "exceljs": "^4.4.0",
+    "helmet": "7.1.0",
     "nestjs-prisma": "0.22.0-dev.0",
     "passport": "0.6.0",
     "passport-jwt": "4.0.1",

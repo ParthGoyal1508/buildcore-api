@@ -1,5 +1,6 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import helmet from 'helmet';
 import type { NestConfig } from './configs/config.interface';
 import { ApiExceptionFilter } from './filters/api-exception.filter';
 import { installBodyParsers } from './uploads/large-body';
@@ -30,6 +31,32 @@ export function configureApp(app: INestApplication): void {
    * ships is a suite that cannot see any of those three being wrong.
    */
   app.getHttpAdapter().getInstance().set('trust proxy', nest.trustProxy);
+
+  // Security headers (036 B9): `X-Content-Type-Options: nosniff` above all — uploaded files are
+  // served with their stored type, and nosniff stops a browser second-guessing it into HTML —
+  // plus HSTS, a frame-ancestors restriction and the rest of helmet's defaults.
+  //
+  // Two defaults relaxed, each for a reason that would otherwise break something real:
+  // - CSP allows inline styles and `data:` images, which Swagger UI needs; scripts stay 'self'.
+  // - `Cross-Origin-Resource-Policy: cross-origin`, so a file the web app loads from a different
+  //   origin in local development is not blocked. Access is still decided by the bearer token.
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: false,
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'"],
+          imgSrc: ["'self'", 'data:'],
+          frameAncestors: ["'self'"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+        },
+      },
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    }),
+  );
 
   // Two body limits (036 B8): the upload limit on the routes that carry files, derived from
   // their DTOs, and a small default everywhere else — see `uploads/large-body.ts`. Read from

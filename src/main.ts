@@ -5,6 +5,7 @@ import { PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { configureApp } from './common/configure-app';
+import { assertCorsConfigured } from './common/configs/config';
 import { COMPANY_HEADER } from './settings/company-selection/company-header.interceptor';
 import { assertRlsEnforceable } from './common/prisma/rls-preflight';
 import { logRefreshCookieConfig } from './auth/refresh-cookie-preflight';
@@ -16,6 +17,9 @@ import type {
 } from './common/configs/config.interface';
 
 async function bootstrap() {
+  // Before anything else: a production server that would allow every origin does not start.
+  assertCorsConfigured();
+
   // `bodyParser: false` disables Nest's built-in parsers so the ones registered
   // below — with an explicit size limit — are the only ones handling a body.
   // Raising the limit on Nest's defaults after the fact is not reliable: they are
