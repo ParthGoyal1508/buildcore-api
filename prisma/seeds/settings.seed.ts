@@ -51,6 +51,8 @@ export const DEFAULT_ROLES: {
       Permission.EMPLOYEES,
       Permission.ATTENDANCE,
       Permission.PROJECTS,
+      // 036 review decision 5: every role that held PROJECTS keeps the right to lock/unlock.
+      Permission.PROJECT_LOCK,
       Permission.DWR,
       Permission.MACHINERY,
       Permission.REPORTS,
@@ -64,6 +66,7 @@ export const DEFAULT_ROLES: {
       Permission.EMPLOYEES,
       Permission.ATTENDANCE,
       Permission.PROJECTS,
+      Permission.PROJECT_LOCK,
       Permission.DWR,
       Permission.PROJECT_FINANCIALS,
       Permission.MACHINERY,

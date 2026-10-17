@@ -106,7 +106,10 @@ export class ProjectsController {
     summary: 'Update a project, including its lock state',
     description:
       'Partial: only the fields present in the body are written. Setting ' +
-      '`isLocked` is audit-logged with its before and after.',
+      '`isLocked` is audit-logged with its before and after.\n\n' +
+      'Changing `isLocked` also needs `PROJECT_LOCK` write (036 review decision 5); without it ' +
+      'the request is refused with 403 `PROJECT_LOCK_PERMISSION_REQUIRED`. Sending the current ' +
+      'value unchanged is not a change and is not checked.',
   })
   async update(
     @UserEntity() caller: AuthenticatedUser,

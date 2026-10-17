@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
+import { hash } from 'argon2';
 
 import { AppModule } from '../src/app.module';
 import { withRlsContext } from '../src/common/prisma/rls-context';
@@ -281,7 +282,9 @@ describe('Projects module (e2e)', () => {
       expect(Number(second.code)).toBe(Number(first.code) + 10);
     });
 
-    it('honours a caller-supplied code, for projects migrated with one already', async () => {
+    // Rewritten 036 (pre-existing failure): the code is always allocated from the company series
+    // now and "cannot be supplied" (see the controller). A supplied code is ignored, not honoured.
+    it('ignores a caller-supplied code and allocates from the series', async () => {
       const code = unique('MIGRATED');
       const project = await createProject({
         name: unique('Migrated'),
@@ -290,7 +293,8 @@ describe('Projects module (e2e)', () => {
         contractValue: 1,
         startDate: '2026-03-01',
       });
-      expect(project.code).toBe(code);
+      expect(project.code).not.toBe(code);
+      expect(project.code).toMatch(/^\d+$/);
     });
 
     it('refuses a project whose client belongs to another company', async () => {
@@ -354,6 +358,78 @@ describe('Projects module (e2e)', () => {
       expect(entry.changes).toEqual({
         isLocked: { before: false, after: true },
       });
+    });
+
+    it('refuses lock and unlock to a PROJECTS editor without PROJECT_LOCK (036 decision 5)', async () => {
+      const project = await createProject({
+        name: unique('LockPerm'),
+        clientId,
+        contractValue: 1,
+        startDate: '2026-04-01',
+      });
+
+      // A role holding PROJECTS only (legacy array, no level rows: counts at every level).
+      const user = await sys.user.create({
+        data: {
+          email: `${unique('lockless')}@example.test`,
+          username: unique('lockless'),
+          password: await hash('secret42'),
+          firstname: 'Dummy',
+          lastname: 'Editor',
+          companyId,
+        },
+      });
+      const role = await sys.role.create({
+        data: { name: unique('LocklessRole'), permissions: ['PROJECTS'] },
+      });
+      await sys.userRole.create({ data: { userId: user.id, roleId: role.id } });
+      try {
+        const login = await http()
+          .post('/auth/login')
+          .send({ identifier: user.email, password: 'secret42', rememberMe: false })
+          .expect(201);
+        const editor = { Authorization: `Bearer ${login.body.accessToken}` };
+
+        const refused = await http()
+          .patch(`/projects/${project.id}`)
+          .set(editor)
+          .send({ isLocked: true })
+          .expect(403);
+        expect(refused.body.code).toBe('PROJECT_LOCK_PERMISSION_REQUIRED');
+
+        // Other fields still save, even when the form echoes the unchanged lock.
+        await http()
+          .patch(`/projects/${project.id}`)
+          .set(editor)
+          .send({ description: 'Edited without the lock permission', isLocked: false })
+          .expect(200);
+
+        // The seeded admin (Super Admin) holds PROJECT_LOCK from the migration.
+        await http()
+          .patch(`/projects/${project.id}`)
+          .set(auth())
+          .send({ isLocked: true })
+          .expect(200);
+        await http()
+          .patch(`/projects/${project.id}`)
+          .set(editor)
+          .send({ isLocked: false })
+          .expect(403);
+        await http()
+          .patch(`/projects/${project.id}`)
+          .set(auth())
+          .send({ isLocked: false })
+          .expect(200);
+      } finally {
+        await sys.userRole.deleteMany({ where: { userId: user.id } });
+        await sys.refreshToken.deleteMany({ where: { accountId: user.id } });
+        await sys.auditLogEntry.updateMany({
+          where: { accountId: user.id },
+          data: { accountId: null },
+        });
+        await sys.user.deleteMany({ where: { id: user.id } });
+        await sys.role.deleteMany({ where: { id: role.id } });
+      }
     });
 
     it('returns aggregated tabs, naming the modules it could not consult', async () => {

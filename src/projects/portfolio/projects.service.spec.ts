@@ -290,3 +290,93 @@ describe('ProjectsService.remove', () => {
     expect(deleteFn).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * 036 review decision 5: locking and unlocking takes `PROJECT_LOCK`, separate from `PROJECTS`.
+ */
+describe('ProjectsService.update — the lock permission', () => {
+  const build = (isLocked: boolean) => {
+    const update = jest
+      .fn()
+      .mockImplementation(({ data }) =>
+        Promise.resolve({ id: 'project-1', companyId: 'company-1', isLocked, ...data }),
+      );
+    const prisma = createPrismaMock({
+      project: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ id: 'project-1', companyId: 'company-1', isLocked }),
+        update,
+      },
+    });
+    const service = new ProjectsService(
+      prisma as never,
+      { record: jest.fn() } as never,
+      { next: jest.fn() } as never,
+      {} as never,
+      { machinerySource: () => null, materialsSource: () => null } as never,
+      {} as never,
+      {} as never,
+    );
+    return { service, update };
+  };
+
+  it('refuses to unlock without PROJECT_LOCK, with its own code', async () => {
+    const { service, update } = build(true);
+    const caller = callerFor('company-1', {
+      permissions: ['PROJECTS'],
+      grants: [
+        { permission: 'PROJECTS', level: 'read' },
+        { permission: 'PROJECTS', level: 'write' },
+      ],
+    });
+    await expect(
+      service.update(caller, 'project-1', { isLocked: false }, '10.0.0.1'),
+    ).rejects.toMatchObject({
+      response: { code: 'PROJECT_LOCK_PERMISSION_REQUIRED' },
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a read-only PROJECT_LOCK grant', async () => {
+    const { service } = build(false);
+    const caller = callerFor('company-1', {
+      permissions: ['PROJECTS', 'PROJECT_LOCK'],
+      grants: [
+        { permission: 'PROJECTS', level: 'write' },
+        { permission: 'PROJECT_LOCK', level: 'read' },
+      ],
+    });
+    await expect(
+      service.update(caller, 'project-1', { isLocked: true }, '10.0.0.1'),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('locks with PROJECT_LOCK write', async () => {
+    const { service, update } = build(false);
+    const caller = callerFor('company-1', {
+      permissions: ['PROJECTS', 'PROJECT_LOCK'],
+      grants: [
+        { permission: 'PROJECTS', level: 'write' },
+        { permission: 'PROJECT_LOCK', level: 'write' },
+      ],
+    });
+    await service.update(caller, 'project-1', { isLocked: true }, '10.0.0.1');
+    expect(update).toHaveBeenCalled();
+  });
+
+  it('lets an editor without PROJECT_LOCK save other fields that echo the current lock', async () => {
+    const { service, update } = build(true);
+    const caller = callerFor('company-1', {
+      permissions: ['PROJECTS'],
+      grants: [{ permission: 'PROJECTS', level: 'write' }],
+    });
+    await service.update(
+      caller,
+      'project-1',
+      { name: 'Renamed', isLocked: true },
+      '10.0.0.1',
+    );
+    expect(update).toHaveBeenCalled();
+  });
+});

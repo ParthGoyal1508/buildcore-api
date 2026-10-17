@@ -395,6 +395,15 @@ enum Permission {
   /// deployed, which is the exact failure the two-control design existed to avoid.
   CASH_ENTRY
 
+  /// Locking and unlocking a project (036 review decision 5, 2026-10-18). Its own permission
+  /// rather than `PROJECTS`, because a lock is the declaration that a project's figures are
+  /// final — billing, DWRs and documents all stop — and every project editor could reverse it.
+  ///
+  /// Granted, in the migration that adds it, to every role that held `PROJECTS` at the same
+  /// levels, so nobody who could lock or unlock yesterday silently cannot today. Narrowing it is
+  /// a Settings → Roles decision the client makes deliberately.
+  PROJECT_LOCK
+
   @@schema("settings")
 }
 

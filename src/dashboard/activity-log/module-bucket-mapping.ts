@@ -209,6 +209,7 @@ export const MODULE_PERMISSIONS: Record<ActivityModule, Permission[]> = {
   ],
   projects: [
     Permission.PROJECTS,
+    Permission.PROJECT_LOCK,
     Permission.DWR,
     Permission.PROJECT_FINANCIALS,
   ],

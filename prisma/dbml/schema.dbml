@@ -5835,6 +5835,7 @@ Enum Permission {
   ASSETS
   ASSETS_APPROVE
   CASH_ENTRY
+  PROJECT_LOCK
 }
 
 Enum CompanyStatus {
