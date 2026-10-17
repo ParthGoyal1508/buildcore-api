@@ -134,28 +134,9 @@ export class SalaryBankSheetController {
     return this.sendSheet(user, request, body, response);
   }
 
-  /**
-   * **Deprecated (036 F11): use `POST`.** Still generates — and so still writes recoveries and a
-   * history entry — because the web app calls it until Wave 3. It cannot simply stop writing: the
-   * file it returns shows transfers net of recoveries, and handing the bank that file without
-   * recording them would recover the same advance again next time. Once the web app posts, this
-   * route should go (re-download a past file from `history/:id/file`).
-   */
-  @Get()
-  @ApiOperation({
-    summary:
-      'Deprecated — use POST. Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx in the bank format',
-    deprecated: true,
-  })
-  async download(
-    @UserEntity() user: AuthenticatedUser,
-    @Req() request: Request,
-    @Query() query: SalaryBankSheetQueryDto,
-    @Res() response: Response,
-  ): Promise<void> {
-    response.setHeader('Deprecation', 'true');
-    return this.sendSheet(user, request, query, response);
-  }
+  // The deprecated mutating `GET` (036 F11) was removed in Wave 3, stream 3b, once the web app
+  // posted. It still generated — writing recoveries and a history entry — on a verb that promises
+  // to change nothing. Re-download a past file from `history/:id/file`.
 
   private async sendSheet(
     user: AuthenticatedUser,

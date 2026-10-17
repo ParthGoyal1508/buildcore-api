@@ -288,7 +288,8 @@ export class PayrollRunsController {
 
   /**
    * 036 F11. Generating the run's bank sheet records advance recoveries and a history entry, so it
-   * is a `POST`; the `GET` below stays until the web app switches (Wave 3).
+   * is a `POST`. The old mutating `GET` was removed in Wave 3 (stream 3b) once the web app posted;
+   * re-download a past sheet from `hr/payroll/bank-sheet/history/:id/file`.
    */
   @Post(':id/bank-sheet')
   @HttpCode(200)
@@ -308,19 +309,11 @@ export class PayrollRunsController {
     return this.bankSheetExport(user, request, id, response);
   }
 
-  @Get(':id/bank-sheet')
-  @ApiOperation({
-    summary: 'Deprecated — use POST. Bank transfer sheet for the run (XLSX)',
-    description:
-      'Still generates (and so writes recoveries and history) until the web app ' +
-      'moves to POST; see 036 F11.',
-    deprecated: true,
-  })
-  async bankSheetExport(
-    @UserEntity() user: AuthenticatedUser,
-    @Req() request: Request,
-    @Param('id') id: string,
-    @Res() response: Response,
+  private async bankSheetExport(
+    user: AuthenticatedUser,
+    request: Request,
+    id: string,
+    response: Response,
   ): Promise<void> {
     const { buffer, filename } = await this.bankSheet.build(
       callerFrom(user, request),
