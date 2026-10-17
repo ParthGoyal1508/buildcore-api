@@ -465,6 +465,15 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // fire on the commit that made the change.
           ':(exclude)src/assets/allocations/dto/allocation.dto.ts',
           ':(exclude)src/inventory/stock/dto/stock.dto.ts',
+          // Owned by 036 I1/I2/I24/I26 (project lock coverage, list paging, geofence cap),
+          // 2026-10-17. **Verified by grep: none of these files calls `ApprovalService` or
+          // `approvals.submit`.** The lock guard only refuses writes to locked projects, the paging
+          // helper shapes list responses, and the site DTO gains a radius maximum.
+          ':(exclude)src/projects/guards',
+          ':(exclude)src/projects/list-paging.ts',
+          ':(exclude)src/projects/list-paging.spec.ts',
+          ':(exclude)src/projects/sites/dto/site.dto.ts',
+          ':(exclude)src/projects/sites/dto/site.dto.spec.ts',
         ],
         {
           cwd: REPO_ROOT,
