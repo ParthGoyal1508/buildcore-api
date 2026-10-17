@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { UserStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpdateUserAccountDto {
   /**
@@ -13,6 +13,7 @@ export class UpdateUserAccountDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   roleId?: string;
 
   @ApiPropertyOptional({ enum: UserStatus })

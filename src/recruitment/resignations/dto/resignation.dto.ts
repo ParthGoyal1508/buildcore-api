@@ -7,22 +7,47 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
 
 export class ListResignationsDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
   @ApiPropertyOptional({ enum: ResignationStatus })
   @IsOptional()
   @IsEnum(ResignationStatus)
   status?: ResignationStatus;
-  @ApiPropertyOptional() @IsOptional() @IsString() employeeId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  employeeId?: string;
 }
 
 export class CreateResignationDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
-  @ApiProperty() @IsString() @IsNotEmpty() employeeId!: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(100)
+  employeeId!: string;
   @ApiProperty({ example: '2026-11-01' })
   @IsDateString()
   resignationDate!: string;
@@ -34,7 +59,13 @@ export class CreateResignationDto {
   @IsNotEmpty()
   @MaxLength(2000)
   reasonDetail!: string;
-  @ApiProperty({ example: 30 }) @IsInt() @Min(0) noticePeriodDays!: number;
+  @ApiProperty({ example: 30 })
+  @IsInt()
+  @Min(0)
+  @ApiProperty({ example: 30 })
+  @IsInt()
+  @Max(2_147_483_647)
+  noticePeriodDays!: number;
 }
 
 export class AcceptResignationDto {
@@ -46,10 +77,23 @@ export class AcceptResignationDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2_147_483_647)
   noticeWaiverDays?: number;
-  @ApiPropertyOptional() @IsOptional() @IsString() waiverReason?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(2_000)
+  waiverReason?: string;
 }
 
 export class WithdrawResignationDto {
-  @ApiProperty() @IsString() @IsNotEmpty() reason!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(2_000)
+  reason!: string;
 }

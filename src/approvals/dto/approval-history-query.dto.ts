@@ -54,6 +54,7 @@ export class ApprovalHistoryQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })

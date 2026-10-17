@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Length } from 'class-validator';
+import { IsOptional, IsString, Length, MaxLength } from 'class-validator';
 
 import {
   SEARCH_MAX_TERM_LENGTH,
@@ -25,6 +25,7 @@ export class SearchQueryDto {
       `Search needs at least ${SEARCH_MIN_TERM_LENGTH} characters, and at most ` +
       `${SEARCH_MAX_TERM_LENGTH}.`,
   })
+  @MaxLength(200)
   q!: string;
 
   @ApiPropertyOptional({
@@ -34,5 +35,6 @@ export class SearchQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

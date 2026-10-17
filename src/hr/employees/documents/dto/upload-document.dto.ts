@@ -6,6 +6,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../../common/uploads/base64-payload';
 
 /**
  * One employee document upload (005 US2).
@@ -20,16 +21,19 @@ export class UploadEmployeeDocumentDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   documentTypeId: string;
 
   @ApiProperty({ description: 'Base64-encoded file contents.' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   file: string;
 
   @ApiProperty({ example: 'application/pdf' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   contentType: string;
 
   @ApiPropertyOptional({

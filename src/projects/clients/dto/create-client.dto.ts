@@ -74,6 +74,7 @@ export class CreateClientDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   address?: string;
 
   @ApiPropertyOptional({

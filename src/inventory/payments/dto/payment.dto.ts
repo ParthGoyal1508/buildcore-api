@@ -12,6 +12,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateIf,
@@ -27,12 +28,14 @@ export class CreatePaymentDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiProperty({ description: 'In rupees' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   amount!: number;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -87,6 +90,7 @@ export class ListPaymentsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({ enum: PaymentMode })
@@ -109,6 +113,7 @@ export class ListPaymentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -116,11 +121,13 @@ export class ListPaymentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -128,6 +135,7 @@ export class ListBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -141,6 +149,7 @@ export class ListBillsDto {
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 

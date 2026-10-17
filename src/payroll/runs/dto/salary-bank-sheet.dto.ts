@@ -16,6 +16,7 @@ export class SalaryBankSheetQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ example: 2026 })
@@ -57,6 +58,7 @@ export class BankSheetHistoryQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ example: 2026 })

@@ -31,6 +31,7 @@ export class ListNocsDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   subjectId!: string;
 }
 

@@ -1,10 +1,17 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsDateString, IsEnum, IsNotEmpty, IsString } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsNotEmpty,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class DeploymentReportDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   projectId!: string;
 
   @ApiProperty({ example: '2026-09-01' })
@@ -24,6 +31,7 @@ export class AttendanceReportDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ example: '2026-09-01' })
@@ -39,6 +47,7 @@ export class PaymentRegisterReportDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   projectId!: string;
 
   @ApiProperty({ example: '2026-09-01' })

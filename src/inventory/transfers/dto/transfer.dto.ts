@@ -10,6 +10,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -18,16 +19,19 @@ export class CreateTransferDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   fromSiteId!: string;
 
   @ApiProperty({ description: 'Must differ from fromSiteId' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   toSiteId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   itemId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -38,6 +42,7 @@ export class CreateTransferDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiPropertyOptional()
@@ -100,6 +105,7 @@ export class UpdateTransferDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   receivedQuantity?: number;
 
   @ApiPropertyOptional({
@@ -117,16 +123,19 @@ export class ListTransfersDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   fromSiteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   toSiteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   itemId?: string;
 
   @ApiPropertyOptional({ enum: TransferStatus })
@@ -149,6 +158,7 @@ export class ListTransfersDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -156,10 +166,12 @@ export class ListTransfersDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

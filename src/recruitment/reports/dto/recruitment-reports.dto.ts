@@ -1,6 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Matches, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -33,11 +41,13 @@ export class NewJoiningsQueryDto extends ReportPeriodQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   departmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 }
 
@@ -45,6 +55,7 @@ export class ResignationsQueryDto extends ReportPeriodQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   departmentId?: string;
 
   /**
@@ -59,6 +70,7 @@ export class ResignationsQueryDto extends ReportPeriodQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   headcount?: number;
 }
 
@@ -66,5 +78,6 @@ export class FunnelQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   requisitionId?: string;
 }

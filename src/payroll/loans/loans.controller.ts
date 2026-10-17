@@ -25,6 +25,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
+import { CloseLoanDto } from './dto/close-loan.dto';
 import { CreateLoanDto, ListLoansQueryDto } from './dto/create-loan.dto';
 import { LoansService } from './loans.service';
 
@@ -123,8 +124,8 @@ export class LoansController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('id') id: string,
-    @Body('reason') reason: string,
+    @Body() dto: CloseLoanDto,
   ) {
-    return this.loans.close(callerFrom(user, request), id, reason ?? '');
+    return this.loans.close(callerFrom(user, request), id, dto.reason ?? '');
   }
 }

@@ -13,6 +13,7 @@ export class TransferEmployeeDto {
   @ApiProperty({ description: 'Destination company.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   toCompanyId: string;
 
   @ApiProperty({ example: '2026-10-01' })

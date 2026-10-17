@@ -14,11 +14,13 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class ComposeBillLineDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   boqTaskItemId: string;
 
   @ApiProperty({
@@ -29,6 +31,7 @@ export class ComposeBillLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity: number;
 
   @ApiPropertyOptional({
@@ -47,6 +50,7 @@ export class ComposeBillDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   projectId: string;
 
   /**
@@ -97,6 +101,7 @@ export class CertifiedLineDto {
   @ApiProperty({ description: 'The `ClientBillLine` being certified.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   lineId: string;
 
   @ApiProperty({
@@ -108,6 +113,7 @@ export class CertifiedLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   certifiedQty: number;
 }
 
@@ -125,6 +131,7 @@ export class CertifyBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   certifiedAmount?: number;
 
   @ApiPropertyOptional({
@@ -149,6 +156,8 @@ export class CertifyBillDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
+  @IsBase64Payload()
   certificateData?: string;
 
   @ApiPropertyOptional({

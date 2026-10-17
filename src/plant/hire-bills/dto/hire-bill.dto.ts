@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -24,11 +25,13 @@ export class CreateHireBillDto {
   @ApiProperty({ description: 'A hired machine — an owned one is refused' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiPropertyOptional({
@@ -40,6 +43,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   billedHours?: number;
 
   @ApiPropertyOptional({
@@ -51,6 +55,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   rate?: number;
 
   @ApiProperty({ example: '2026-08-01' })
@@ -76,6 +81,7 @@ export class CreateHireBillDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   hireOrderId?: string;
 
   @ApiPropertyOptional({
@@ -116,6 +122,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   periodDays?: number;
 
   @ApiPropertyOptional({ description: 'Monthly rent, on a monthly bill' })
@@ -123,6 +130,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   monthlyRate?: number;
 
   @ApiPropertyOptional({
@@ -134,6 +142,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(9_999_999.999)
   agreedAverage?: number;
 
   @ApiPropertyOptional({ description: 'Defaults to the first logbook opening' })
@@ -141,6 +150,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   startReading?: number;
 
   @ApiPropertyOptional({ description: 'Defaults to the last logbook closing' })
@@ -148,6 +158,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   endReading?: number;
 
   @ApiPropertyOptional({
@@ -158,6 +169,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   deductionAmount?: number;
 
   @ApiPropertyOptional({ description: '"Debit / Hold Amount"' })
@@ -165,6 +177,7 @@ export class CreateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   holdAmount?: number;
 }
 
@@ -206,6 +219,7 @@ export class UpdateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(9_999_999.999)
   agreedAverage?: number;
 
   @ApiPropertyOptional()
@@ -213,6 +227,7 @@ export class UpdateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   deductionAmount?: number;
 
   @ApiPropertyOptional()
@@ -220,6 +235,7 @@ export class UpdateHireBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   holdAmount?: number;
 }
 
@@ -244,11 +260,13 @@ export class ListHireBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({ enum: HireBillStatus })
@@ -259,6 +277,7 @@ export class ListHireBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -266,6 +285,7 @@ export class ListHireBillsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -273,5 +293,6 @@ export class ListHireBillsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

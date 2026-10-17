@@ -7,6 +7,7 @@ import {
   IsPositive,
   IsString,
   Max,
+  MaxLength,
 } from 'class-validator';
 
 /** A daily wage above this is a typing slip (an extra zero), not a rate. */
@@ -16,6 +17,7 @@ export class ListSiteWageRatesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }
 
@@ -23,6 +25,7 @@ export class CreateSiteWageRateDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ example: '2026-11-01' })

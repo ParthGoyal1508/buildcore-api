@@ -13,6 +13,7 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../../common/uploads/base64-payload';
 
 import { CertifiedLineDto } from '../../dto/client-bill.dto';
 
@@ -60,6 +61,8 @@ export class CertifyBillPackageDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
+  @IsBase64Payload()
   certificateData?: string;
 
   @ApiPropertyOptional({ example: 'RA-09 certification.pdf' })
@@ -83,6 +86,7 @@ export class ReadCertifiedCopyDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   data?: string;
 
   @ApiPropertyOptional({ example: 'RA-04 certified.xlsx' })

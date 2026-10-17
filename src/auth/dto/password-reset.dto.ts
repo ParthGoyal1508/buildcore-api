@@ -23,6 +23,7 @@ export class ResetTokenDto {
   @ApiProperty()
   @IsString()
   @Matches(RESET_TOKEN_PATTERN, { message: 'That reset link is not valid.' })
+  @MaxLength(500)
   token: string;
 }
 

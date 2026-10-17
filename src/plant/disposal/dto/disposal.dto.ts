@@ -136,6 +136,7 @@ export class ListDisposalsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ enum: EquipmentDisposalType })
@@ -156,11 +157,13 @@ export class ListDisposalsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()

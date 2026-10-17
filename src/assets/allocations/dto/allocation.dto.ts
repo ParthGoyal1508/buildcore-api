@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -18,16 +19,19 @@ export class CreateAllocationDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   assetId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   projectId!: string;
 
   @ApiProperty({ description: 'Must be a site of the named project' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiPropertyOptional({
@@ -37,6 +41,7 @@ export class CreateAllocationDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   custodianEmployeeId?: string;
 
   @ApiPropertyOptional({ default: 1, description: 'Bulk assets only' })
@@ -44,6 +49,7 @@ export class CreateAllocationDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0.001)
+  @Max(999_999_999_999_999)
   quantity?: number;
 
   @ApiProperty({ example: '2026-09-01' })
@@ -76,6 +82,7 @@ export class ReturnAllocationDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   conditionOnReturnId!: string;
 
   @ApiPropertyOptional()
@@ -89,21 +96,25 @@ export class ListAllocationsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   assetId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   custodianEmployeeId?: string;
 
   @ApiPropertyOptional({ enum: AssetAllocationStatus })
@@ -121,6 +132,7 @@ export class ListAllocationsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -128,6 +140,7 @@ export class ListAllocationsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -135,5 +148,6 @@ export class ListAllocationsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

@@ -17,6 +17,7 @@ export class CreateWorkOrderDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   projectId: string;
 
   @ApiPropertyOptional({
@@ -26,6 +27,7 @@ export class CreateWorkOrderDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   partnerId?: string;
 
   @ApiProperty({ example: 'RCC works — blocks A to C' })
@@ -57,6 +59,7 @@ export class CreateWorkOrderDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   labourAmount?: number;
 
   @ApiPropertyOptional()
@@ -64,6 +67,7 @@ export class CreateWorkOrderDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   materialAmount?: number;
 
   @ApiPropertyOptional({
@@ -94,6 +98,7 @@ export class UpdateWorkOrderDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   partnerId?: string;
 
   @ApiPropertyOptional()
@@ -126,6 +131,7 @@ export class UpdateWorkOrderDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   labourAmount?: number;
 
   @ApiPropertyOptional()
@@ -133,6 +139,7 @@ export class UpdateWorkOrderDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   materialAmount?: number;
 
   @ApiPropertyOptional({

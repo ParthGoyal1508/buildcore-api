@@ -20,8 +20,20 @@ import {
 } from 'class-validator';
 
 export class ListInterviewsDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() candidateId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  candidateId?: string;
   @ApiPropertyOptional({ enum: InterviewStatus })
   @IsOptional()
   @IsEnum(InterviewStatus)
@@ -29,7 +41,13 @@ export class ListInterviewsDto {
 }
 
 export class ScheduleInterviewDto {
-  @ApiProperty({ example: 1 }) @IsInt() @Min(1) roundNumber!: number;
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  @Min(1)
+  @ApiProperty({ example: 1 })
+  @IsInt()
+  @Max(2_147_483_647)
+  roundNumber!: number;
   @ApiProperty({ enum: InterviewRoundType })
   @IsEnum(InterviewRoundType)
   roundType!: InterviewRoundType;
@@ -42,6 +60,7 @@ export class ScheduleInterviewDto {
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   interviewerEmployeeIds!: string[];
 
   @ApiPropertyOptional()
@@ -52,7 +71,13 @@ export class ScheduleInterviewDto {
 }
 
 export class InterviewFeedbackDto {
-  @ApiProperty() @IsString() @IsNotEmpty() interviewerEmployeeId!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(100)
+  interviewerEmployeeId!: string;
   @ApiProperty({ enum: InterviewOutcome })
   @IsEnum(InterviewOutcome)
   outcome!: InterviewOutcome;
@@ -62,5 +87,11 @@ export class InterviewFeedbackDto {
 
 export class RescheduleInterviewDto {
   @ApiProperty() @IsDateString() scheduledAt!: string;
-  @ApiProperty() @IsString() @IsNotEmpty() reason!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(2_000)
+  reason!: string;
 }

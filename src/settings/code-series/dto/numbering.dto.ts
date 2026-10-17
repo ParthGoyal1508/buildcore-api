@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength } from 'class-validator';
 
 /**
  * One series' format in Settings → Numbering. Counted series (projects, vendors, work orders) use
@@ -21,18 +21,21 @@ export class SetNumberingDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Max(2_147_483_647)
   base?: number;
 
   @ApiPropertyOptional({ example: 10, description: 'The gap between codes.' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Max(2_147_483_647)
   step?: number;
 
   @ApiPropertyOptional({ example: 3, description: 'Digits, zero-padded.' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Max(2_147_483_647)
   width?: number;
 
   @ApiPropertyOptional({ example: '/', description: 'Machines and assets.' })

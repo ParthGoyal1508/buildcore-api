@@ -24,6 +24,7 @@ export class UploadCompanyDocumentDto {
   @ApiProperty({ description: 'The `DocumentType` this document satisfies.' })
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   documentTypeId: string;
 
   @ApiProperty({ description: 'The file, base64-encoded.' })

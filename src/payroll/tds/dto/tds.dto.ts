@@ -12,6 +12,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -22,6 +23,7 @@ export class TaxSlabBandDto {
   @ApiProperty({ description: 'Inclusive lower bound.' })
   @IsNumber()
   @Min(0)
+  @Max(999_999_999_999.99)
   lowerBound: number;
 
   @ApiPropertyOptional({
@@ -30,6 +32,7 @@ export class TaxSlabBandDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(999_999_999_999.99)
   upperBound?: number | null;
 
   @ApiProperty()
@@ -58,6 +61,7 @@ export class SetTaxSlabsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -65,11 +69,13 @@ export class DeclarationLineDto {
   @ApiProperty({ example: '80C' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   sectionCode: string;
 
   @ApiProperty()
   @IsNumber()
   @Min(0)
+  @Max(999_999_999_999.99)
   declaredAmount: number;
 
   @ApiPropertyOptional({
@@ -77,6 +83,7 @@ export class DeclarationLineDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   proofRef?: string;
 }
 
@@ -111,6 +118,7 @@ export class QuarterlyQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -135,6 +143,7 @@ export class SlabsQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 

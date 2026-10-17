@@ -26,11 +26,13 @@ export class CreateServiceBillDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   maintenanceJobId!: string;
 
   @ApiProperty({ description: 'The workshop' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiProperty({ example: 'SVC/2026/0421' })
@@ -47,6 +49,7 @@ export class CreateServiceBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   grossAmount!: number;
 
   @ApiPropertyOptional({ description: 'GST or equivalent, in rupees' })
@@ -54,6 +57,7 @@ export class CreateServiceBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   taxAmount?: number;
 
   @ApiPropertyOptional({
@@ -81,6 +85,7 @@ export class PayServiceBillDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999.99)
   paidAmount!: number;
 
   @ApiProperty({ example: 'NEFT/2026/1188' })
@@ -94,16 +99,19 @@ export class ListServiceBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({ description: 'Bills against jobs on this machine' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   maintenanceJobId?: string;
 
   @ApiPropertyOptional({ enum: ServiceBillStatus })
@@ -129,6 +137,7 @@ export class ListServiceBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -136,6 +145,7 @@ export class ListServiceBillsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -143,5 +153,6 @@ export class ListServiceBillsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

@@ -18,6 +18,7 @@ export class CreateLoanDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   employeeId: string;
 
   @ApiProperty({
@@ -75,6 +76,7 @@ export class ListLoansQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ enum: LoanStatus })
@@ -87,6 +89,7 @@ export class ListLoansQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -94,5 +97,6 @@ export class ListLoansQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

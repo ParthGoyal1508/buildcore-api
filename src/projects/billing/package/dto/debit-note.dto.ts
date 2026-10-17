@@ -55,6 +55,7 @@ export class RaiseDebitNoteDto {
     description: 'The subcontractor’s work order on this project.',
   })
   @IsString()
+  @MaxLength(100)
   workOrderId: string;
 
   @ApiPropertyOptional({

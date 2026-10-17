@@ -15,6 +15,7 @@ import {
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class CreateAssetDto {
   @ApiProperty({ example: 'Hilti TE 60 rotary hammer' })
@@ -26,6 +27,7 @@ export class CreateAssetDto {
   @ApiProperty({ description: 'An existing AssetCategory in the same company' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId!: string;
 
   @ApiPropertyOptional()
@@ -59,6 +61,7 @@ export class CreateAssetDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0.001)
+  @Max(999_999_999_999_999)
   quantity?: number;
 
   @ApiPropertyOptional({ example: 'NOS' })
@@ -90,6 +93,7 @@ export class CreateAssetDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   purchaseCost?: number;
 
   @ApiProperty({
@@ -125,11 +129,13 @@ export class CreateAssetDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   salvageValue?: number;
 
   @ApiPropertyOptional({ description: 'An existing vendor' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -138,11 +144,13 @@ export class CreateAssetDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   purchaseId?: string;
 
   @ApiProperty({ description: 'Where the asset starts life' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   currentSiteId!: string;
 
   @ApiPropertyOptional({
@@ -150,6 +158,7 @@ export class CreateAssetDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   currentConditionGradeId?: string;
 }
 
@@ -169,21 +178,25 @@ export class ListAssetsDto {
   @ApiPropertyOptional({ description: 'Matches name, code or serial number' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   custodianId?: string;
 
   @ApiPropertyOptional({ enum: AssetStatus })
@@ -202,6 +215,7 @@ export class ListAssetsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -209,6 +223,7 @@ export class ListAssetsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -216,6 +231,7 @@ export class ListAssetsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }
 
@@ -229,11 +245,13 @@ export class UploadAssetDocumentDto {
   @ApiProperty({ description: 'An existing AssetDocType in the same company' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   docTypeId!: string;
 
   @ApiProperty({ description: 'Base64-encoded file content' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()

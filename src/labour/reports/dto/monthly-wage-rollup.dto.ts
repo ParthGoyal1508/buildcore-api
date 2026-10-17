@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -26,6 +27,7 @@ export class MonthlyWageRollupDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   projectId!: string;
 
   /**
@@ -50,5 +52,6 @@ export class MonthlyWageRollupDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsString, Length } from 'class-validator';
+import { IsIn, IsString, Length, MaxLength } from 'class-validator';
 
 import { CLEARANCE_KIND } from '../exit-clearance.service';
 
@@ -16,6 +16,7 @@ export class WaiveClearanceDto {
   })
   @IsString()
   @Length(1, 200)
+  @MaxLength(2_000)
   ref: string;
 
   @ApiProperty({
@@ -26,5 +27,6 @@ export class WaiveClearanceDto {
   })
   @IsString()
   @Length(10, 1000)
+  @MaxLength(2_000)
   reason: string;
 }

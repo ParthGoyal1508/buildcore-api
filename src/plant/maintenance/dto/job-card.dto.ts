@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -64,6 +65,7 @@ export class JobCardInspectionDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   quotationAmount?: number;
 
   @Text(20) startTime?: string;
@@ -80,6 +82,7 @@ export class JobCardPartDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   quantity?: number;
 
   @Text(20) unit?: string;
@@ -89,6 +92,7 @@ export class JobCardPartDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   rate?: number;
 }
 
@@ -186,6 +190,7 @@ export class JobCardDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   downTimeHours?: number;
 
   @ApiPropertyOptional()

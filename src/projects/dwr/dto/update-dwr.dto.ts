@@ -36,6 +36,7 @@ export class UpdateDwrLineDto extends CreateDwrLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   id?: string;
 }
 
@@ -55,11 +56,28 @@ export class UpdateDwrDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   supervisorEmployeeId?: string;
   // `weather` removed from entry by 028 FR-023, column and history kept. See `create-dwr.dto.ts`.
 
-  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) workerCount?: number;
-  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) machineryCount?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Max(2_147_483_647)
+  workerCount?: number;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsInt()
+  @Max(2_147_483_647)
+  machineryCount?: number;
   @ApiPropertyOptional()
   @IsOptional()
   @IsInt()

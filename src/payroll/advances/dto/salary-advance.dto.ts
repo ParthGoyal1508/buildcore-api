@@ -16,6 +16,7 @@ export class CreateSalaryAdvanceDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   employeeId: string;
 
   @ApiProperty({ maximum: 1_000_000 })
@@ -44,6 +45,7 @@ export class CreateSalaryAdvanceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -51,6 +53,7 @@ export class ListAdvancesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ enum: SalaryAdvanceStatus })
@@ -61,5 +64,6 @@ export class ListAdvancesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

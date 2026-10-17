@@ -50,6 +50,7 @@ export class CreateEquipmentCategoryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   fuelBenchmark?: number;
 
   @ApiPropertyOptional({
@@ -72,6 +73,7 @@ export class CreateEquipmentCategoryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   targetHoursPerMonth?: number;
 }
 
@@ -124,12 +126,14 @@ export class CreateHireRateDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId!: string;
 
   @ApiProperty({ example: 1250.0, description: 'Per meter unit (hour or km)' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   ratePerUnit!: number;
 
   @ApiProperty({ example: '2026-04-01' })
@@ -150,10 +154,12 @@ export class ListHireRatesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

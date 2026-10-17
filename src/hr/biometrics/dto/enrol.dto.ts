@@ -8,6 +8,7 @@ import {
   IsEnum,
   IsString,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * Photos arrive as base64 strings rather than multipart.
@@ -31,6 +32,7 @@ export class EnrolFaceDto {
   @ArrayMinSize(3, { message: 'At least 3 photos are required to enrol.' })
   @ArrayMaxSize(5, { message: 'At most 5 photos may be submitted.' })
   @IsString({ each: true })
+  @IsBase64Payload({ each: true })
   photos: string[];
 
   @ApiProperty({ enum: ConsentMethod })

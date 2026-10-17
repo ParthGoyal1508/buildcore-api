@@ -19,6 +19,7 @@ export class StageProjectDocumentDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   documentTypeId?: string;
 
   @ApiProperty({

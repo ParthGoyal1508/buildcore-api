@@ -54,6 +54,7 @@ export class ComposeBillPackageDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   workOrderId?: string;
 
   @ApiPropertyOptional({

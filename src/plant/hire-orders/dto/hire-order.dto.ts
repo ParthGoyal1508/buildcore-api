@@ -48,6 +48,7 @@ export class HireOrderLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiProperty({ example: 'MON' })
@@ -60,6 +61,7 @@ export class HireOrderLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   rate!: number;
 
   @ApiPropertyOptional({
@@ -67,6 +69,7 @@ export class HireOrderLineDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 }
 
@@ -84,11 +87,13 @@ export class CreateHireOrderDto {
   @ApiProperty({ description: 'The supplier — a vendor of this company' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()

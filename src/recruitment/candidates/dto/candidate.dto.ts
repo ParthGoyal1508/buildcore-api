@@ -9,35 +9,69 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class ListCandidatesDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() requisitionId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  requisitionId?: string;
   @ApiPropertyOptional({ enum: CandidateStage })
   @IsOptional()
   @IsEnum(CandidateStage)
   stage?: CandidateStage;
-  @ApiPropertyOptional() @IsOptional() @IsString() search?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(200)
+  search?: string;
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }
 
 export class CreateCandidateDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
-  @ApiProperty() @IsString() @IsNotEmpty() requisitionId!: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(100)
+  requisitionId!: string;
   @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(120) fullName!: string;
   @ApiProperty() @IsString() @IsNotEmpty() @MaxLength(20) phone!: string;
   @ApiProperty() @IsEmail() email!: string;
@@ -59,6 +93,7 @@ export class CreateCandidateDto {
   @ApiProperty()
   @IsNumber({ maxDecimalPlaces: 1 })
   @Min(0)
+  @Max(999.9)
   totalExperienceYears!: number;
   @ApiPropertyOptional()
   @IsOptional()
@@ -69,11 +104,13 @@ export class CreateCandidateDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999.99)
   currentCtc?: number;
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999.99)
   expectedCtc?: number;
   @ApiProperty({ enum: CandidateSource })
   @IsEnum(CandidateSource)
@@ -81,6 +118,7 @@ export class CreateCandidateDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   referredByEmployeeId?: string;
 }
 
@@ -88,11 +126,13 @@ export class UploadResumeDto {
   @ApiProperty({ description: 'Base64/data-URL resume (.pdf/.doc/.docx)' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   file!: string;
 
   @ApiProperty({ example: 'application/pdf' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   contentType!: string;
 }
 
@@ -109,9 +149,21 @@ export class TransitionStageDto {
 }
 
 export class RejectCandidateDto {
-  @ApiProperty() @IsString() @IsNotEmpty() rejectionReason!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(2_000)
+  rejectionReason!: string;
 }
 
 export class MarkNoShowDto {
-  @ApiProperty() @IsString() @IsNotEmpty() reason!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(2_000)
+  reason!: string;
 }

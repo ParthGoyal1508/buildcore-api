@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -19,16 +20,19 @@ export class ListPaymentSheetsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ enum: EngagementType })
@@ -46,11 +50,13 @@ export class GeneratePaymentSheetDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ description: 'The site whose labour the sheet pays (031)' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ example: '2026-09-01' })
@@ -71,6 +77,7 @@ export class ReopenPaymentSheetDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   reason!: string;
 }
 
@@ -90,11 +97,13 @@ export class DisburseLineDto {
   })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999.99)
   paidAmount!: number;
 
   @ApiPropertyOptional({ description: 'Required for a cash disbursement' })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   acknowledgement?: string;
 
   @ApiPropertyOptional({
@@ -102,6 +111,7 @@ export class DisburseLineDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   shortPaymentReason?: string;
 }
 
@@ -118,5 +128,6 @@ export class ReverseLineDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   reason!: string;
 }

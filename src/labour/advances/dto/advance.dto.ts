@@ -24,11 +24,13 @@ export class ListAdvancesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   workerId?: string;
 
   @ApiPropertyOptional({ enum: AdvanceStatus })
@@ -41,11 +43,13 @@ export class CreateAdvanceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   workerId!: string;
 
   @ApiProperty({ example: 3000 })

@@ -9,8 +9,10 @@ import {
   IsPositive,
   IsString,
   Matches,
+  Max,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -18,6 +20,7 @@ export class CreateClaimDto {
   @ApiProperty({ description: 'A `settings.ReimbursementCategory` id.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId: string;
 
   @ApiProperty({ example: 2450.5 })
@@ -26,6 +29,7 @@ export class CreateClaimDto {
   // caller submit an amount the database then silently rounds to something else.
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   amount: number;
 
   @ApiProperty({ example: '2026-08-14' })
@@ -45,6 +49,7 @@ export class CreateClaimDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   receiptRef?: string;
 
   @ApiPropertyOptional({
@@ -54,6 +59,7 @@ export class CreateClaimDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   receipt?: string;
 
   @ApiPropertyOptional({

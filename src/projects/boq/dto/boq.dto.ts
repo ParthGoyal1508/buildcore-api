@@ -8,6 +8,8 @@ import {
   IsNumberString,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -22,11 +24,13 @@ export class CreateBoqGroupDto {
   @ApiProperty({ example: '1' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   boqNo!: string;
 
   @ApiProperty({ example: 'Earthwork' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   name!: string;
 
   @ApiProperty({
@@ -51,16 +55,19 @@ export class CreateBoqItemDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   groupId!: string;
 
   @ApiProperty({ example: '1' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   boqNo!: string;
 
   @ApiProperty({ example: 'Excavation in ordinary rock' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   taskName!: string;
 
   @ApiProperty({
@@ -71,6 +78,7 @@ export class CreateBoqItemDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   unit!: string;
 
   @ApiProperty({ example: '825.729' })
@@ -103,6 +111,7 @@ export class CreateBoqItemDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   duration?: number;
 
   @ApiPropertyOptional({
@@ -122,6 +131,7 @@ export class CreateBoqItemDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   variationRef?: string;
 }
 
@@ -131,6 +141,7 @@ export class ConfirmBoqImportDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   batchId!: string;
 }
 
@@ -208,6 +219,7 @@ export class PlanBoqItemDto {
   @IsOptional()
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   duration?: number | null;
 
   @ApiPropertyOptional({

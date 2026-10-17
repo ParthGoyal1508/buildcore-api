@@ -53,6 +53,7 @@ export class CreateHolidayDto {
     message: 'siteIds is required when appliesToAllSites is false',
   })
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   siteIds?: string[];
 }
 
@@ -71,5 +72,6 @@ export class ListHolidaysQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }

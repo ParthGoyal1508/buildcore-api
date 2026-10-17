@@ -12,6 +12,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -21,22 +22,26 @@ export class CreateIndentLineDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   itemId!: string;
 
   @ApiProperty()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   requestedQuantity!: number;
 
   @ApiPropertyOptional({ description: 'The BOQ task group this is for' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   activityId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   boqItemId?: string;
 }
 
@@ -44,6 +49,7 @@ export class CreateIndentDto {
   @ApiProperty({ description: 'The store the material is wanted at' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ example: '2026-09-20' })
@@ -76,6 +82,7 @@ export class ApproveIndentLineDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   lineId!: string;
 
   @ApiProperty({
@@ -85,6 +92,7 @@ export class ApproveIndentLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   approvedQuantity!: number;
 
   @ApiPropertyOptional()
@@ -118,6 +126,7 @@ export class MarkProcurementNeededDto {
   @IsArray()
   @ArrayMinSize(1)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   lineIds!: string[];
 }
 
@@ -130,16 +139,19 @@ export class ListIndentsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   itemId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -147,6 +159,7 @@ export class ListIndentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -154,10 +167,12 @@ export class ListIndentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

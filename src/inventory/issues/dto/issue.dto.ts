@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -17,11 +18,13 @@ export class CreateIssueDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   itemId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -32,6 +35,7 @@ export class CreateIssueDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiPropertyOptional({
@@ -50,6 +54,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({
@@ -57,6 +62,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -66,6 +72,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   activityId?: string;
 
   @ApiPropertyOptional({
@@ -81,11 +88,13 @@ export class CreateIssueDto {
   @ApiPropertyOptional({ description: 'The BOQ task item, if known' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   boqItemId?: string;
 
   @ApiPropertyOptional({ description: 'The approved indent line this fulfils' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   indentLineId?: string;
 
   @ApiPropertyOptional()
@@ -99,11 +108,13 @@ export class ListIssuesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   itemId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
@@ -121,6 +132,7 @@ export class ListIssuesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -128,11 +140,13 @@ export class ListIssuesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -166,6 +180,7 @@ export class ReturnIssueDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   returnedQuantity?: number;
 
   @ApiProperty({ example: '2026-10-15' })

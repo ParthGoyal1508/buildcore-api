@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsString } from 'class-validator';
+import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 import {
   CONFIRMATION_PURPOSES,
@@ -11,6 +11,7 @@ export class ConfirmPasswordDto {
   @ApiProperty({ description: "The caller's own current password" })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   password: string;
 
   @ApiProperty({

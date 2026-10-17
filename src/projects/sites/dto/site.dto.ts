@@ -10,8 +10,8 @@ import {
   IsOptional,
   IsString,
   Max,
-  Min,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 /**
@@ -80,6 +80,7 @@ export class CreateSiteDto {
   @ApiPropertyOptional({ description: 'The project this site belongs to.' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({
@@ -89,6 +90,7 @@ export class CreateSiteDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   address?: string;
 
   @ApiPropertyOptional({ enum: SiteStatus, default: SiteStatus.active })
@@ -108,11 +110,13 @@ export class ListSitesDto {
   @ApiPropertyOptional({ description: 'Matches the site name' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({
@@ -128,6 +132,7 @@ export class ListSitesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -135,10 +140,12 @@ export class ListSitesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

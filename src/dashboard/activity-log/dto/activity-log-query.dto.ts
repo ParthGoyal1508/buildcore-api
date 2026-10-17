@@ -1,6 +1,14 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /** The time windows the Activity Log feed can be narrowed to. */
 export const ACTIVITY_TIME_RANGES = ['today', '7d', '30d', '90d'] as const;
@@ -15,6 +23,7 @@ export class ActivityLogQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   module?: string;
 
   @ApiPropertyOptional({ enum: ACTIVITY_TIME_RANGES })
@@ -27,5 +36,6 @@ export class ActivityLogQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 }

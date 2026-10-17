@@ -4,17 +4,19 @@ import { Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
   IsString,
-  IsIn,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /** The GRN form's tick boxes, in its order. */
 export const GRN_CONDITIONS = [
@@ -47,6 +49,7 @@ export class GrnDetailsDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   receivedQuantity?: number;
 
   @ApiPropertyOptional()
@@ -54,6 +57,7 @@ export class GrnDetailsDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   acceptedQuantity?: number;
 
   @ApiPropertyOptional()
@@ -61,6 +65,7 @@ export class GrnDetailsDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   rejectedQuantity?: number;
 
   @ApiPropertyOptional({ enum: GRN_CONDITIONS })
@@ -85,16 +90,19 @@ export class CreatePurchaseDto {
   @ApiProperty({ description: 'The project store receiving the material' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   itemId!: string;
 
   @ApiProperty({ description: 'A vendor from the Partners module' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiProperty({ example: '2026-09-04', description: 'YYYY-MM-DD' })
@@ -107,12 +115,14 @@ export class CreatePurchaseDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiProperty({ description: 'Per-unit rate in rupees' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   rate!: number;
 
   @ApiPropertyOptional({
@@ -122,6 +132,7 @@ export class CreatePurchaseDto {
   })
   @IsOptional()
   @IsString()
+  @IsBase64Payload()
   billFile?: string;
 
   /**
@@ -145,6 +156,7 @@ export class CreatePurchaseDto {
   })
   @IsOptional()
   @IsString()
+  @IsBase64Payload()
   photoFile?: string;
 
   @ApiPropertyOptional({ example: 'application/pdf' })
@@ -156,6 +168,7 @@ export class CreatePurchaseDto {
   @ApiPropertyOptional({ description: 'The approved indent line this fulfils' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   indentLineId?: string;
 
   @ApiPropertyOptional()
@@ -196,16 +209,19 @@ export class ListPurchasesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   itemId?: string;
 
   @ApiPropertyOptional({ enum: PurchaseBillStatus })
@@ -228,6 +244,7 @@ export class ListPurchasesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -235,10 +252,12 @@ export class ListPurchasesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
 } from 'class-validator';
 
@@ -13,6 +14,7 @@ export class CreateSkillCategoryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ example: 'Mason' })
@@ -31,6 +33,7 @@ export class CreateSkillCategoryDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   defaultDailyRate?: number;
 }
 
@@ -51,6 +54,7 @@ export class UpdateSkillCategoryDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   defaultDailyRate?: number;
 
   @ApiPropertyOptional()

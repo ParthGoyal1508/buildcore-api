@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -15,6 +16,7 @@ export class CreateLogbookEntryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -25,6 +27,7 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   openingReading!: number;
 
   @ApiProperty({
@@ -35,6 +38,7 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   closingReading!: number;
 
   @ApiPropertyOptional({
@@ -44,11 +48,13 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   fuelConsumed?: number;
 
   @ApiPropertyOptional({ description: 'The operating employee' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   operatorId?: string;
 
   @ApiPropertyOptional({
@@ -59,6 +65,7 @@ export class CreateLogbookEntryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
@@ -90,6 +97,7 @@ export class UpdateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   fuelConsumed?: number;
 
   @ApiPropertyOptional()
@@ -101,6 +109,7 @@ export class UpdateLogbookEntryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   operatorId?: string;
 }
 
@@ -108,11 +117,13 @@ export class ListLogbookDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
@@ -128,6 +139,7 @@ export class ListLogbookDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -135,6 +147,7 @@ export class ListLogbookDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -142,5 +155,6 @@ export class ListLogbookDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

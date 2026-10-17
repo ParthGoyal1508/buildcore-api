@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -18,6 +19,7 @@ export class CreateComplianceDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   contractorProfileId: string;
 
   @ApiProperty({ example: '2026-08' })
@@ -34,6 +36,7 @@ export class CreateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   pfAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -51,6 +54,7 @@ export class CreateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   esicAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -73,6 +77,7 @@ export class UpdateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   pfAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -90,6 +95,7 @@ export class UpdateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   esicAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -102,6 +108,7 @@ export class ListComplianceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   contractorProfileId?: string;
 
   @ApiPropertyOptional({ example: '2026-08' })
@@ -112,5 +119,6 @@ export class ListComplianceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

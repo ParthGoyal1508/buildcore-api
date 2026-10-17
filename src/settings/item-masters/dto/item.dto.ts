@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -24,6 +25,7 @@ export class CreateItemDto {
   @ApiProperty({ description: 'An existing ItemCategory in the same company' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId!: string;
 
   @ApiProperty({ enum: ItemUnit, description: 'The eight units of FR-018' })
@@ -39,6 +41,7 @@ export class CreateItemDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   reorderLevel?: number;
 
   @ApiPropertyOptional({ description: 'HS code for GST returns' })
@@ -78,11 +81,13 @@ export class ListItemsDto {
   @ApiPropertyOptional({ description: 'Matches name, code or HSN code' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional({ description: 'Omit to see both active and retired' })
@@ -96,6 +101,7 @@ export class ListItemsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -103,10 +109,12 @@ export class ListItemsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

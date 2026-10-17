@@ -16,6 +16,7 @@ import {
   Min,
   IsNumber,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class SubmitPunchDto {
   @ApiProperty({ enum: PunchType })
@@ -27,6 +28,7 @@ export class SubmitPunchDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   photo: string;
 
   @ApiProperty({ example: 19.076 })

@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -65,6 +66,7 @@ export class ListClaimsQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
@@ -82,6 +84,7 @@ export class ListClaimsQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -89,5 +92,6 @@ export class ListClaimsQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

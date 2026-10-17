@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -20,6 +21,7 @@ export class ListDwrDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   /** Inclusive, on **work date** — the day described, not the day recorded. */
@@ -43,6 +45,7 @@ export class ListDwrDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({

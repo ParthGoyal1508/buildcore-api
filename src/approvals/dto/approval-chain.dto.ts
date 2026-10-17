@@ -8,6 +8,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -25,6 +26,7 @@ export class ApprovalLevelDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   position: number;
 
   @ApiProperty({
@@ -117,5 +119,6 @@ export class PutSlotMappingDto {
       'The role whose holders decide at every level bound to this slot.',
   })
   @IsString()
+  @MaxLength(100)
   roleId: string;
 }
