@@ -24,6 +24,14 @@ import {
  * the database or force a null check into the attendance hot path — so the DTO
  * states the requirement the schema already enforces.
  */
+/**
+ * The widest geofence a site may declare (036 I24). Nothing stopped 5,000,000 m being typed —
+ * a radius that flags nobody anywhere in the country, which is a geofence switched off while
+ * looking switched on. Five kilometres covers the largest real site (a highway package's camp
+ * and batching plant) with room to spare.
+ */
+export const GEOFENCE_RADIUS_MAX_METERS = 5000;
+
 export class CreateSiteDto {
   @ApiProperty({ maxLength: 200 })
   @IsString()
@@ -46,11 +54,16 @@ export class CreateSiteDto {
 
   @ApiProperty({
     minimum: 1,
-    description: 'Employees punching outside this radius will be flagged.',
+    maximum: GEOFENCE_RADIUS_MAX_METERS,
+    description:
+      'Employees punching outside this radius will be flagged. At most 5,000 m (036 I24).',
   })
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(GEOFENCE_RADIUS_MAX_METERS, {
+    message: `geofenceRadiusMeters must be at most ${GEOFENCE_RADIUS_MAX_METERS} (5 km)`,
+  })
   geofenceRadiusMeters!: number;
 
   @ApiProperty({
