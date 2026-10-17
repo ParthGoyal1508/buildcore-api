@@ -20,11 +20,13 @@ import {
   renderFormFile,
   shortDate,
 } from '../../common/form-document';
+import { businessToday } from '../../common/business-date';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope } from '../../settings/company-scope';
 import { FuelService } from '../fuel/fuel.service';
 import { PlantRefsService } from '../plant-refs.service';
 import type { SaveLogbookSheetDto } from './dto/logbook-sheet.dto';
+import { readingProblem } from './logbook-readings';
 import { LogbookService } from './logbook.service';
 
 /** One day of the sheet. Readings are null on a day with no logbook entry. */
@@ -260,6 +262,40 @@ export class LogbookSheetService {
       }
     }
 
+    // 036 K4, checked for every row before any is written — the readings rule `LogbookService`
+    // applies per entry, walked across the month so each typed day is compared with the closing
+    // reading before it, whether that was saved earlier or typed on this sheet.
+    const typed = new Map(
+      dto.rows
+        .filter(
+          (row) =>
+            row.openingReading !== undefined &&
+            row.closingReading !== undefined,
+        )
+        .map((row) => [row.date.slice(0, 10), row]),
+    );
+    const today = businessToday();
+    let previousClosing = current.carriedReading;
+    for (const day of current.days) {
+      const row = typed.get(day.date);
+      if (row) {
+        const problem = readingProblem({
+          date: shortDate(day.date),
+          dateValue: new Date(`${day.date}T00:00:00.000Z`),
+          today,
+          meterType: current.equipment.meterType,
+          openingReading: row.openingReading as number,
+          closingReading: row.closingReading as number,
+          previousClosing,
+          readingGapReason: row.readingGapReason,
+        });
+        if (problem) throw new BadRequestException(problem);
+        previousClosing = row.closingReading as number;
+      } else if (day.closingReading !== null) {
+        previousClosing = day.closingReading;
+      }
+    }
+
     // Readings first, so the fuel entries that follow find the day's logbook entry and their
     // variance is computed against it.
     for (const row of [...dto.rows].sort((a, b) =>
@@ -277,6 +313,9 @@ export class LogbookSheetService {
             openingReading: row.openingReading,
             closingReading: row.closingReading,
             ...(row.dieselQuantity ? { fuelConsumed: row.dieselQuantity } : {}),
+            ...(row.readingGapReason
+              ? { readingGapReason: row.readingGapReason }
+              : {}),
           },
           ipAddress,
         );

@@ -4,18 +4,25 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  HireBillStatus,
+  Prisma,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { assertInService } from '../disposal/in-service';
 
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { businessToday } from '../../common/business-date';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants/plant.constants';
 import { EquipmentService } from '../equipment/equipment.service';
 import { PlantRefsService } from '../plant-refs.service';
+import { hasReadingGap, readingProblem } from './logbook-readings';
 import {
   CreateLogbookEntryDto,
   ListLogbookDto,
@@ -37,6 +44,8 @@ export interface LogbookRow {
   operatorName: string | null;
   projectId: string | null;
   remarks: string | null;
+  /** Why the opening reading does not follow the previous closing one (036 K4). */
+  readingGapReason: string | null;
   createdAt: Date;
 }
 
@@ -132,6 +141,7 @@ export class LogbookService {
           : null,
         projectId: row.projectId,
         remarks: row.remarks,
+        readingGapReason: row.readingGapReason,
         createdAt: row.createdAt,
       })),
       total,
@@ -192,6 +202,38 @@ export class LogbookService {
             equipment.companyId,
           );
         }
+        // 036 K2: the project must be one of the machine's company's — the same check fuel,
+        // hire orders and job cards make. Unchecked, an entry could carry any project id at all,
+        // including another company's, and its hours would land in that project's costs.
+        if (dto.projectId) {
+          await this.refs.requireProject(
+            caller,
+            dto.projectId,
+            equipment.companyId,
+          );
+        }
+
+        // 036 K4. The previous entry is the latest one *before* this date, so a backdated entry
+        // is checked against the day before it, not against whatever was entered last.
+        const previous = await tx.logbookEntry.findFirst({
+          where: { equipmentId: dto.equipmentId, date: { lt: date } },
+          orderBy: { date: 'desc' },
+          select: { closingReading: true },
+        });
+        const previousClosing = previous
+          ? Number(previous.closingReading)
+          : null;
+        const problem = readingProblem({
+          date: dto.date.slice(0, 10),
+          dateValue: date,
+          today: businessToday(),
+          meterType: equipment.meterType,
+          openingReading: dto.openingReading,
+          closingReading: dto.closingReading,
+          previousClosing,
+          readingGapReason: dto.readingGapReason,
+        });
+        if (problem) throw new BadRequestException(problem);
 
         const entry = await tx.logbookEntry.create({
           data: {
@@ -205,6 +247,9 @@ export class LogbookService {
             operatorId: dto.operatorId ?? null,
             projectId: dto.projectId ?? null,
             remarks: dto.remarks ?? null,
+            readingGapReason: hasReadingGap(dto.openingReading, previousClosing)
+              ? dto.readingGapReason?.trim() ?? null
+              : null,
           },
           include: { equipment: { select: { code: true, name: true } } },
         });
@@ -246,6 +291,7 @@ export class LogbookService {
         });
         if (!existing) throw new NotFoundException('Logbook entry not found');
         assertInScope(caller, existing, 'Logbook entry');
+        await this.assertNotBilled(tx, existing, 'edited');
 
         if (dto.operatorId) {
           await this.refs.requireEmployee(
@@ -297,6 +343,7 @@ export class LogbookService {
         });
         if (!existing) throw new NotFoundException('Logbook entry not found');
         assertInScope(caller, existing, 'Logbook entry');
+        await this.assertNotBilled(tx, existing, 'deleted');
 
         await tx.logbookEntry.delete({ where: { id: entryId } });
         await this.syncEquipmentFromLogbook(tx, caller, existing.equipmentId);
@@ -311,7 +358,26 @@ export class LogbookService {
       accountId: caller.id,
       companyId: removed.companyId,
       ipAddress,
-      changes: { equipmentId: removed.equipmentId },
+      // The whole row (036 K5). A delete is the one change after which the entry itself is gone,
+      // so the audit trail is the only place its readings survive — the equipment id alone said
+      // that something was deleted, and nothing about what.
+      changes: {
+        equipmentId: removed.equipmentId,
+        before: {
+          id: removed.id,
+          date: removed.date.toISOString().slice(0, 10),
+          openingReading: Number(removed.openingReading),
+          closingReading: Number(removed.closingReading),
+          totalHours: Number(removed.totalHours),
+          fuelConsumed:
+            removed.fuelConsumed === null ? null : Number(removed.fuelConsumed),
+          operatorId: removed.operatorId,
+          projectId: removed.projectId,
+          remarks: removed.remarks,
+          readingGapReason: removed.readingGapReason,
+          createdAt: removed.createdAt.toISOString(),
+        },
+      },
     });
   }
 
@@ -328,13 +394,56 @@ export class LogbookService {
    * nothing at all, so the reading is left where it is: there is no honest value to
    * move it to, and zeroing it would be worse than stale.
    */
+  /**
+   * Refuses to change an entry a verified or paid hire bill was raised over (036 K5).
+   *
+   * The bill snapshots the logbook hours when it is raised, so editing or deleting an entry inside
+   * its period afterwards leaves a bill that was verified against figures that no longer exist —
+   * and once it is paid there is no way to tell what the payment was checked against. A bill
+   * still awaiting verification does not block: correcting the logbook before verifying is the
+   * point of verification.
+   */
+  private async assertNotBilled(
+    tx: Prisma.TransactionClient,
+    entry: { equipmentId: string; date: Date },
+    action: 'edited' | 'deleted',
+  ): Promise<void> {
+    const bill = await tx.hireBill.findFirst({
+      where: {
+        equipmentId: entry.equipmentId,
+        status: { in: [HireBillStatus.verified, HireBillStatus.paid] },
+        billingPeriodFrom: { lte: entry.date },
+        billingPeriodTo: { gte: entry.date },
+      },
+      select: {
+        status: true,
+        invoiceNo: true,
+        billingPeriodFrom: true,
+        billingPeriodTo: true,
+      },
+    });
+    if (bill) {
+      const period = `${bill.billingPeriodFrom
+        .toISOString()
+        .slice(0, 10)} to ${bill.billingPeriodTo.toISOString().slice(0, 10)}`;
+      throw new ConflictException(
+        `This entry is inside a ${bill.status} hire bill${
+          bill.invoiceNo ? ` (${bill.invoiceNo})` : ''
+        } for ${period} and cannot be ${action}.`,
+      );
+    }
+  }
+
   private async syncEquipmentFromLogbook(
     tx: Prisma.TransactionClient,
     caller: AuthenticatedUser,
     equipmentId: string,
   ): Promise<void> {
+    // Entries dated after today are ignored (036 K4). Future dates are refused now, but rows
+    // written before that rule — a typo year such as 2062 — would otherwise stay the "latest"
+    // entry forever and hold the meter at their reading whatever was logged afterwards.
     const latest = await tx.logbookEntry.findFirst({
-      where: { equipmentId },
+      where: { equipmentId, date: { lte: businessToday() } },
       orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
       select: { closingReading: true },
     });
@@ -390,6 +499,7 @@ export class LogbookService {
       operatorName,
       projectId: row.projectId,
       remarks: row.remarks,
+      readingGapReason: row.readingGapReason,
       createdAt: row.createdAt,
     };
   }

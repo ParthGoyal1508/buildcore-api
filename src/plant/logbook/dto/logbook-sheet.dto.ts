@@ -53,6 +53,16 @@ export class LogbookSheetRowDto {
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
   dieselQuantity?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "036. Why the starting reading differs from the previous day's closing one; required " +
+      'when it does.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  readingGapReason?: string;
 }
 
 export class SaveLogbookSheetDto {

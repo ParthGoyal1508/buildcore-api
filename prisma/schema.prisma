@@ -7250,6 +7250,11 @@ model LogbookEntry {
 
   remarks String?
 
+  /// Why this entry's opening reading is not the previous entry's closing one (036 K4). A gap is
+  /// refused unless it is explained — a machine moved on a trailer, a meter replaced — because an
+  /// unexplained one is usually a typo that silently adds or loses hours on a hire bill.
+  readingGapReason String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

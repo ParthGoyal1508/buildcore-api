@@ -66,6 +66,16 @@ export class CreateLogbookEntryDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "036. Required when openingReading differs from the previous entry's closing reading — " +
+      'why the meter jumped (meter replaced, machine moved on a trailer). Ignored otherwise.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  readingGapReason?: string;
 }
 
 /**
