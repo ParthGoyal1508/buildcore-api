@@ -48,13 +48,11 @@ describe('AllocationService.returnAllocation — once only (036 L1)', () => {
       { register: jest.fn() } as never,
       prisma as never,
       {
-        requireGrade: jest
-          .fn()
-          .mockResolvedValue({
-            name: 'Good',
-            isDamaged: false,
-            isScrap: false,
-          }),
+        requireGrade: jest.fn().mockResolvedValue({
+          name: 'Good',
+          isDamaged: false,
+          isScrap: false,
+        }),
         parseDate: (value: string) => new Date(`${value}T00:00:00.000Z`),
       } as never,
       stock as never,
