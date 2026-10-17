@@ -196,6 +196,52 @@ All five module streams are merged into `036-ux-qa-hardening` in both repos (loc
 - **ESS payslip PDF:** uses a raw `fetch`.
 - **e2e test environment:** dashboard needs the `QA No Modules` fixture role; letters, letters-regression and bill-package debits fail as they did before 036.
 
+### Remaining for the final pass (written 18-10-2026, while Wave 4 runs)
+
+Wave 4 runs two agents: **design system + accessibility** (A21–A23, A29, A16, lint rules) and **follow-ups** (the Wave 3 list plus company-scoped roles and the e2e environment). Everything below is outside both.
+
+**Need a product decision or a migration (deferred so far):**
+1. **Purchase GST, invoice number and accepted quantity:** purchases record no GST % or invoice number, and stock is credited with the billed quantity rather than the accepted quantity. This is separate from the PO format, which stays unchanged.
+2. **Fully paid labour sheets can't be reversed.** This was the case before 036 (review decision 4: later).
+3. **Fuel tank capacity:** a flag for fills larger than the tank needs a tank-capacity field on equipment or its category.
+4. **NOC photo thumbnails:** need a column.
+5. **"Personal Settings":** rename it, or keep the client's name.
+
+**Engineering items not yet done:**
+6. **Bypass contexts (B15):** an allow-list for the ~110 hard-coded RLS bypass contexts. Today all callers pass a context, but nothing enforces it.
+7. **Search permissions:** search has no permission guard, by choice. It checks permission per register, and a guard would turn empty results into 403s.
+8. **Fuel recovery and hire bills:** fuel recovery can still push a hire bill's net negative (no check in fuel-recovery recompute).
+9. **Logbook sheet:** errors other than the reading rules can still leave a sheet half-written. Correcting a day's readings doesn't re-check the next day's opening reading.
+10. **Hand-typed PO lines:** a line typed without picking an item can be traced but not received against.
+11. **Client-side filtering:**
+    - labour daily name/code search (the endpoint has no search);
+    - workers' NOC filter (applies to the current page only);
+    - partners RAG/BOCW filters (the endpoints return the full set).
+12. **Mobile Safari:** PDF print can come out blank, and the "View receipt" / new-tab fallback can be popup-blocked.
+13. **Operator picker scope:** it searches the whole company, not just the machine's site.
+
+**Data and release (needs you):**
+14. **Run the read-only data-repair reports against real data and decide on repairs:**
+    - `scripts/036-report-payroll-recoveries.ts` (F1–F5)
+    - `scripts/036-report-labour-advances.ts` (O1)
+    - M2 historic issue fulfilment (no script yet)
+15. **Deployment:**
+    - set `CORS_ORIGINS` (or `none`);
+    - `npm install` (helmet);
+    - `prisma migrate deploy` (19 new migrations; more if Wave 4 adds any);
+    - restart the API so `src/metadata.ts` regenerates.
+16. **Release note for users:**
+    - DD-MM-YYYY dates and 24-hour IST times;
+    - stricter upload types and sizes;
+    - nobody approves their own requests;
+    - labour sheets must end before today;
+    - logbook reading gaps need a reason;
+    - transfer shortages need a reason;
+    - payroll drafts must be regenerated if inputs changed;
+    - company-changed warning across tabs.
+
+**Wave 5 (verification, me):** click through every module in a browser (desktop, tablet and phone widths), run the audit's 35 reproduction steps, run full unit and e2e on a freshly provisioned database, and write a manual checklist for you. Then merge `036-ux-qa-hardening` into `004-dashboard-backend` / `004-dashboard`.
+
 ### Wave 4: design system and accessibility (one agent, web, last)
 
 - **Design system:** A21 (button variants in one place, StatusBadge on semantic tokens, Tailwind config fix, migrate the 128 raw buttons and 32 hand-made pills).
