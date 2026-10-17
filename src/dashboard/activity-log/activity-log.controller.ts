@@ -13,7 +13,10 @@ import {
   ActivityLogService,
   type ActivityLogExportRow,
 } from './activity-log.service';
-import { ActivityLogQueryDto } from './dto/activity-log-query.dto';
+import {
+  ActivityLogQueryDto,
+  ActivityLogUsersQueryDto,
+} from './dto/activity-log-query.dto';
 
 /**
  * The Activity Log (feature 004, US3) — a read/query view over the shared audit
@@ -38,6 +41,17 @@ export class ActivityLogController {
     @Query() query: ActivityLogQueryDto,
   ) {
     return this.activityLog.feed(user, query);
+  }
+
+  @Get('users')
+  @ApiOperation({
+    summary: 'Accounts for the User filter, searched by name or email (036 E3)',
+  })
+  async users(
+    @UserEntity() user: AuthenticatedUser,
+    @Query() query: ActivityLogUsersQueryDto,
+  ) {
+    return this.activityLog.actors(user, query);
   }
 
   @Get('export')
