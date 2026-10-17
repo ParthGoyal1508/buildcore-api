@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsInt,
   IsISO8601,
   IsNotEmpty,
   IsNumber,
@@ -113,3 +114,39 @@ export class CreateHireOrderDto {
 
 /** Lines, when given, replace the order's lines. The number never changes. */
 export class UpdateHireOrderDto extends PartialType(CreateHireOrderDto) {}
+
+/** The list's filters and, since 036 K17, its optional paging. */
+export class ListHireOrdersDto {
+  @ApiPropertyOptional({ description: 'Cross-company callers only' })
+  @IsOptional()
+  @IsString()
+  companyId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  vendorId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  projectId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Send page (and optionally pageSize) to get { items, total, page, pageSize }. ' +
+      'Without either, the response is the old bare array, capped at 200.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 25, maximum: 200 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  pageSize?: number;
+}

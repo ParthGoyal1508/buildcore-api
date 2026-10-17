@@ -22,6 +22,7 @@ import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { rupeesFirstInWords } from '../../common/rupees-in-words';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
 import type {
   CreateHireOrderDto,
@@ -63,6 +64,16 @@ export interface HireOrderView {
   createdAt: Date;
 }
 
+export interface PaginatedHireOrders {
+  items: HireOrderView[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** The unpaged list's old ceiling, kept for clients that do not send `page` (036 K17). */
+const LEGACY_LIST_LIMIT = 200;
+
 /** Work orders and hire orders draw on the same series. */
 const WORK_ORDER_CODE_INFIX = 'WO';
 
@@ -86,26 +97,55 @@ export class HireOrdersService {
     private readonly codeSeries: CodeSeriesService,
   ) {}
 
+  /**
+   * Hire orders, newest first.
+   *
+   * Paginated when the caller asks for a page (036 K17): `{ items, total, page, pageSize }`.
+   * Without `page`/`pageSize` it keeps the old shape — a bare array — for clients that predate
+   * paging; that path still stops at 200, which is exactly the silent cap paging exists to
+   * replace, so a client should send `page`.
+   */
   async findAll(
     caller: AuthenticatedUser,
-    query: { companyId?: string; vendorId?: string; projectId?: string },
-  ): Promise<HireOrderView[]> {
-    const rows = await withRlsContext(
+    query: {
+      companyId?: string;
+      vendorId?: string;
+      projectId?: string;
+      page?: number;
+      pageSize?: number;
+    },
+  ): Promise<HireOrderView[] | PaginatedHireOrders> {
+    const where: Prisma.HireOrderWhereInput = {
+      ...companyScope(caller, query.companyId),
+      ...(query.vendorId ? { vendorId: query.vendorId } : {}),
+      ...(query.projectId ? { projectId: query.projectId } : {}),
+    };
+    const paged = query.page !== undefined || query.pageSize !== undefined;
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(
+      query.pageSize ?? DEFAULT_PAGE_SIZE,
+      MAX_PAGE_SIZE,
+    );
+
+    const { rows, total } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.hireOrder.findMany({
-          where: {
-            ...companyScope(caller, query.companyId),
-            ...(query.vendorId ? { vendorId: query.vendorId } : {}),
-            ...(query.projectId ? { projectId: query.projectId } : {}),
-          },
-          include: { lines: { orderBy: { position: 'asc' } } },
-          orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
-          take: 200,
-        }),
+      async (tx) => {
+        const [rows, total] = await Promise.all([
+          tx.hireOrder.findMany({
+            where,
+            include: { lines: { orderBy: { position: 'asc' } } },
+            orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+            skip: paged ? (page - 1) * pageSize : 0,
+            take: paged ? pageSize : LEGACY_LIST_LIMIT,
+          }),
+          paged ? tx.hireOrder.count({ where }) : Promise.resolve(0),
+        ]);
+        return { rows, total };
+      },
     );
-    return this.views(caller, rows);
+    const items = await this.views(caller, rows);
+    return paged ? { items, total, page, pageSize } : items;
   }
 
   async findOne(caller: AuthenticatedUser, id: string): Promise<HireOrderView> {
