@@ -16,6 +16,8 @@ import {
   Min,
 } from 'class-validator';
 
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
+
 export class ListPaymentSheetsDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -100,10 +102,16 @@ export class DisburseLineDto {
   @Max(999_999_999_999.99)
   paidAmount!: number;
 
-  @ApiPropertyOptional({ description: 'Required for a cash disbursement' })
+  // 036 3e (2026-10-17): this was `@MaxLength(2_000)` (B11), which refused every real photo — a
+  // cash disbursement could not be recorded at all — and kept the route on the default body limit.
+  // It is a file, so it is validated as one, which also routes it to the upload limit.
+  @ApiPropertyOptional({
+    description:
+      'Required for a cash disbursement. Base64 image (data-URL prefix optional).',
+  })
   @IsOptional()
   @IsString()
-  @MaxLength(2_000)
+  @IsBase64Payload()
   acknowledgement?: string;
 
   @ApiPropertyOptional({
