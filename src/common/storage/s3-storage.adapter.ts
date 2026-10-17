@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectCommand,
@@ -89,9 +89,22 @@ export class S3StorageAdapter extends StorageService {
   }
 
   async get(ref: string): Promise<Buffer> {
-    const response = await this.client.send(
-      new GetObjectCommand({ Bucket: this.bucket, Key: ref }),
-    );
+    let response;
+    try {
+      response = await this.client.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: ref }),
+      );
+    } catch (error) {
+      // Same contract as the local adapter (036 Wave 5): a missing object is a 404, not a 500.
+      const name = (error as { name?: string }).name;
+      if (name === 'NoSuchKey' || name === 'NotFound') {
+        throw new NotFoundException({
+          code: 'STORED_FILE_MISSING',
+          message: 'The stored file could not be found.',
+        });
+      }
+      throw error;
+    }
     const bytes = await response.Body.transformToByteArray();
     return decryptBlob(Buffer.from(bytes), this.key);
   }

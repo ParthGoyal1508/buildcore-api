@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { promises as fs } from 'fs';
 import { dirname, join, resolve, sep } from 'path';
@@ -65,7 +65,21 @@ export class LocalStorageAdapter extends StorageService {
   }
 
   async get(ref: string): Promise<Buffer> {
-    const envelope = await fs.readFile(this.pathFor(ref));
+    let envelope: Buffer;
+    try {
+      envelope = await fs.readFile(this.pathFor(ref));
+    } catch (error) {
+      // A row that names a file the store no longer has is a 404 for that file, not a server
+      // fault (036 Wave 5). Raw ENOENT reached the client as a 500 on every page that shows a
+      // company logo whenever the blob was missing.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new NotFoundException({
+          code: 'STORED_FILE_MISSING',
+          message: 'The stored file could not be found.',
+        });
+      }
+      throw error;
+    }
     return decryptBlob(envelope, this.key);
   }
 
