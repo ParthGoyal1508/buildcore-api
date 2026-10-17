@@ -121,7 +121,7 @@ async function main() {
       `Company ${company.name} needs both a Site and a Shift before employees can be attached.`,
     );
   }
-  const role = await prisma.role.findUnique({ where: { name: ROLE_NAME } });
+  const role = await prisma.role.findFirst({ where: { name: ROLE_NAME, companyId: null } });
   if (!role) {
     throw new Error(`No "${ROLE_NAME}" role in this database.`);
   }

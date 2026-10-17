@@ -69,7 +69,7 @@ async function main() {
   console.log(`Account ready: ${user.email} (@${user.username})`);
 
   if (roleName) {
-    const role = await prisma.role.findUnique({ where: { name: roleName } });
+    const role = await prisma.role.findFirst({ where: { name: roleName, companyId: null } });
     if (!role) {
       const available = await prisma.role.findMany({ select: { name: true } });
       throw new Error(

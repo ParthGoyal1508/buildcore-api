@@ -61,8 +61,8 @@ async function main() {
     },
   });
 
-  const superAdminRole = await prisma.role.findUniqueOrThrow({
-    where: { name: 'Super Admin' },
+  const superAdminRole = await prisma.role.findFirstOrThrow({
+    where: { name: 'Super Admin', companyId: null },
   });
   await prisma.userRole.create({
     data: { userId: admin.id, roleId: superAdminRole.id },
@@ -82,8 +82,8 @@ async function main() {
   // everyone's attendance and leave). The role employee logins hold, which is what this account is for:
   // exercising the employee side without Super Admin's blanket permissions hiding a
   // missing authorization check.
-  const siteUserRole = await prisma.role.findUniqueOrThrow({
-    where: { name: 'General User' },
+  const siteUserRole = await prisma.role.findFirstOrThrow({
+    where: { name: 'General User', companyId: null },
   });
   await prisma.userRole.create({
     data: { userId: user.id, roleId: siteUserRole.id },

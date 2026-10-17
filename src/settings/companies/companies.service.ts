@@ -978,7 +978,11 @@ export class CompaniesService {
         // uncreatable. The unmapped slot is then reported by `APPROVAL_SLOT_UNMAPPED`,
         // which is the behaviour this used to rely on for all three.
         const slotRoles = await tx.role.findMany({
-          where: { name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) } },
+          // The global defaults only — another company's role of the same name is not one (036 C10).
+          where: {
+            name: { in: Object.values(DEFAULT_SLOT_ROLE_NAMES) },
+            companyId: null,
+          },
           select: { id: true, name: true },
         });
         const idByName = new Map(slotRoles.map((r) => [r.name, r.id]));

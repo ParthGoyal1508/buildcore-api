@@ -50,7 +50,13 @@ metadata.']
 
 Table Role {
   id String [pk]
-  name String [unique, not null]
+  name String [not null, note: 'Unique among the global roles, and within each company\'s own (036 C10) — two partial unique
+indexes in `20261019100000_company_scoped_roles`, since Prisma cannot express either.']
+  companyId String [note: 'The company a custom role belongs to (036 C10). Null for the system roles every company
+shares — Super Admin, General User and the other seeded defaults — and for a role a group
+administrator created with no company selected. A company role is listed, assignable and
+mappable to approval slots only in its own company.']
+  company Company
   permissions Permission[] [not null, note: '**Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
 the client\'s Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
 switches the guard over; kept through that cutover on purpose, so a rollback of
@@ -382,6 +388,7 @@ payment-sheet builder while concealing nothing anybody wanted concealed.']
   approvalChains ApprovalChain [not null]
   approvalLevels ApprovalLevel [not null]
   roleSlotMappings RoleSlotMapping [not null]
+  roles Role [not null, note: '036 C10 — custom roles this company created.']
   approvalInstances ApprovalInstance [not null]
   approvalDecisions ApprovalDecision [not null]
   companyDocuments CompanyDocument [not null, note: '017 US1 — the certificates behind this company\'s registration numbers.']
@@ -6876,6 +6883,8 @@ Enum EquipmentScrapReason {
   obsolete
   other
 }
+
+Ref: Role.companyId > Company.id [delete: Cascade]
 
 Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]
 

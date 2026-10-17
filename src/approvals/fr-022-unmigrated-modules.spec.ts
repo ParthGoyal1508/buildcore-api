@@ -529,6 +529,10 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/assets/stock/asset-stock.controller.ts',
           ':(exclude)src/assets/stock/asset-stock.service.ts',
           ':(exclude)src/assets/summary/asset-summary.service.ts',
+          // 036 follow-ups (Wave 4), 2026-10-18: the wage-rate list names each row's project.
+          // **Verified by grep: neither file calls `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/labour/wage-rates/wage-rate.service.ts',
+          ':(exclude)src/labour/wage-rates/wage-rate.service.spec.ts',
         ],
         {
           cwd: REPO_ROOT,

@@ -132,7 +132,16 @@ enum UserStatus {
 /// actually *holds* a role) is the tenant-scoped side, and is RLS-protected.
 model Role {
   id   String @id @default(cuid())
-  name String @unique
+  /// Unique among the global roles, and within each company's own (036 C10) — two partial unique
+  /// indexes in `20261019100000_company_scoped_roles`, since Prisma cannot express either.
+  name String
+
+  /// The company a custom role belongs to (036 C10). Null for the system roles every company
+  /// shares — Super Admin, General User and the other seeded defaults — and for a role a group
+  /// administrator created with no company selected. A company role is listed, assignable and
+  /// mappable to approval slots only in its own company.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   /// **Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
   /// the client's Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
@@ -169,6 +178,7 @@ model Role {
   /// since the alternative is a level that resolves to nothing.
   roleSlotMappings RoleSlotMapping[]
 
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -668,6 +678,8 @@ model Company {
   approvalChains    ApprovalChain[]
   approvalLevels    ApprovalLevel[]
   roleSlotMappings  RoleSlotMapping[]
+  /// 036 C10 — custom roles this company created.
+  roles             Role[]
   approvalInstances ApprovalInstance[]
   approvalDecisions ApprovalDecision[]
   /// 017 US1 — the certificates behind this company's registration numbers.

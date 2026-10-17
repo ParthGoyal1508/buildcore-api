@@ -365,13 +365,26 @@ export class UsersService {
         const wanted = [...new Set(changes.roleIds)];
         const found = await tx.role.findMany({
           where: { id: { in: wanted } },
-          select: { id: true },
+          select: { id: true, name: true, companyId: true },
         });
         const missing = wanted.filter((r) => !found.some((f) => f.id === r));
         if (missing.length > 0) {
           throw new BadRequestException(
             `Role ${missing.join(', ')} does not exist`,
           );
+        }
+        // A company's own role is held only in that company (036 C10).
+        const foreign = found.filter(
+          (r) => r.companyId !== null && r.companyId !== existing.companyId,
+        );
+        if (foreign.length > 0) {
+          throw new BadRequestException({
+            statusCode: 400,
+            code: 'ROLE_OF_ANOTHER_COMPANY',
+            message: `${foreign
+              .map((r) => r.name)
+              .join(', ')} belongs to another company and cannot be given to this account.`,
+          });
         }
         const held = (
           await tx.userRole.findMany({

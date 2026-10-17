@@ -150,8 +150,8 @@ describe('Dashboard reminders (e2e)', () => {
 
     // Project Manager grants DASHBOARD but not CROSS_COMPANY_ACCESS — the only
     // caller here that actually exercises the company-isolation path.
-    const projectManager = await sys.role.findUniqueOrThrow({
-      where: { name: 'Project Manager' },
+    const projectManager = await sys.role.findFirstOrThrow({
+      where: { name: 'Project Manager', companyId: null },
     });
     const scoped = await sys.user.create({
       data: {
@@ -181,8 +181,8 @@ describe('Dashboard reminders (e2e)', () => {
     ).body.accessToken;
 
     // "QA No Modules" grants no DASHBOARD, for the FR-037 guard check.
-    const noModules = await sys.role.findUniqueOrThrow({
-      where: { name: 'QA No Modules' },
+    const noModules = await sys.role.findFirstOrThrow({
+      where: { name: 'QA No Modules', companyId: null },
     });
     const denied = await sys.user.create({
       data: {
@@ -214,8 +214,8 @@ describe('Dashboard reminders (e2e)', () => {
     // Site Engineer grants DASHBOARD, ATTENDANCE, DWR, MACHINERY, LOGBOOK, FUEL and
     // INVENTORY — and no EMPLOYEES. The reported defect is exactly this account being
     // shown things it cannot act on.
-    const siteEngineer = await sys.role.findUniqueOrThrow({
-      where: { name: 'Site Engineer' },
+    const siteEngineer = await sys.role.findFirstOrThrow({
+      where: { name: 'Site Engineer', companyId: null },
     });
     const engineer = await sys.user.create({
       data: {
@@ -246,8 +246,8 @@ describe('Dashboard reminders (e2e)', () => {
 
     // Viewer grants exactly DASHBOARD and REPORTS — the caller the reports gate is
     // about: entitled to the reporting surface, entitled to no module's data.
-    const viewerRole = await sys.role.findUniqueOrThrow({
-      where: { name: 'Viewer' },
+    const viewerRole = await sys.role.findFirstOrThrow({
+      where: { name: 'Viewer', companyId: null },
     });
     const viewer = await sys.user.create({
       data: {
