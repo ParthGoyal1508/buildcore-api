@@ -1,3 +1,7 @@
+import {
+  DEFAULT_REQUEST_BODY_LIMIT,
+  UPLOAD_REQUEST_BODY_LIMIT,
+} from '../uploads/upload-limits';
 import type { Config } from './config.interface';
 
 /** Parses a numeric env override, falling back when unset or non-numeric. */
@@ -131,7 +135,11 @@ const config: Config = {
     // See NestConfig.maxRequestBodySize for why the Express default is unusable
     // here. Env-overridable so a fleet capturing larger frames can be accommodated
     // without a code release.
-    maxRequestBodySize: process.env.MAX_REQUEST_BODY_SIZE || '10mb',
+    maxRequestBodySize:
+      process.env.MAX_REQUEST_BODY_SIZE || UPLOAD_REQUEST_BODY_LIMIT,
+    // 036 B8: every route that does not carry a file. See NestConfig.defaultRequestBodySize.
+    defaultRequestBodySize:
+      process.env.DEFAULT_REQUEST_BODY_SIZE || DEFAULT_REQUEST_BODY_LIMIT,
     // See NestConfig.trustProxy. Unset means "no proxy", which is the honest default
     // for local development and the safe one everywhere: believing a forwarded
     // address nobody put there is how a rate limiter becomes decorative.

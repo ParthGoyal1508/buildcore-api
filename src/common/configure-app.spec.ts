@@ -1,4 +1,4 @@
-import { PrismaClientExceptionFilter } from 'nestjs-prisma';
+import { ApiExceptionFilter } from './filters/api-exception.filter';
 import { configureApp } from './configure-app';
 
 /**
@@ -62,11 +62,11 @@ describe('configureApp hands Express the configured proxy depth', () => {
 });
 
 /**
- * The Prisma error filter is part of the shared configuration, so the e2e app answers a unique
+ * The error filter (Prisma mapping included) is part of the shared configuration, so the e2e app answers a unique
  * violation with 409 exactly as production does (036 B10). It used to live in `main.ts` alone.
  */
-describe('configureApp registers the Prisma exception filter', () => {
-  it('adds a PrismaClientExceptionFilter', () => {
+describe('configureApp registers the API exception filter', () => {
+  it('adds the ApiExceptionFilter, which also maps Prisma errors', () => {
     const filters: unknown[] = [];
     const adapter = { getInstance: () => ({ set: () => undefined }) };
     const app = {
@@ -82,6 +82,6 @@ describe('configureApp registers the Prisma exception filter', () => {
     configureApp(app as never);
 
     expect(filters).toHaveLength(1);
-    expect(filters[0]).toBeInstanceOf(PrismaClientExceptionFilter);
+    expect(filters[0]).toBeInstanceOf(ApiExceptionFilter);
   });
 });

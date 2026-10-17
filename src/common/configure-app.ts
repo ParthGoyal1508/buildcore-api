@@ -1,8 +1,9 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { json, urlencoded } from 'express';
-import { PrismaClientExceptionFilter } from 'nestjs-prisma';
 import type { NestConfig } from './configs/config.interface';
+import { ApiExceptionFilter } from './filters/api-exception.filter';
+import { installBodyParsers } from './uploads/large-body';
+import { DEFAULT_REQUEST_BODY_LIMIT } from './uploads/upload-limits';
 
 /**
  * Request-handling configuration shared by the real server and the e2e suites.
@@ -30,12 +31,13 @@ export function configureApp(app: INestApplication): void {
    */
   app.getHttpAdapter().getInstance().set('trust proxy', nest.trustProxy);
 
-  // Photo payloads (base64 enrolment and punch images) are far larger than
-  // Express's default allows — see NestConfig.maxRequestBodySize. Read from config
-  // rather than written inline, per Principle III.
-  const bodyLimit = nest.maxRequestBodySize;
-  app.use(json({ limit: bodyLimit }));
-  app.use(urlencoded({ extended: true, limit: bodyLimit }));
+  // Two body limits (036 B8): the upload limit on the routes that carry files, derived from
+  // their DTOs, and a small default everywhere else — see `uploads/large-body.ts`. Read from
+  // config rather than written inline, per Principle III.
+  installBodyParsers(app, {
+    defaultLimit: nest.defaultRequestBodySize ?? DEFAULT_REQUEST_BODY_LIMIT,
+    uploadLimit: nest.maxRequestBodySize,
+  });
 
   // whitelist/forbidNonWhitelisted reject any unexpected field (Principle II,
   // FR-001/FR-018); transform coerces payloads to their DTO classes.
@@ -47,9 +49,8 @@ export function configureApp(app: INestApplication): void {
     }),
   );
 
-  // Maps Prisma's known-request errors (P2002 unique, P2025 not found, ...) to 409/404 instead
-  // of 500. It used to be registered in `main.ts` only, so the e2e app answered those same
-  // errors with 500 while production answered 409 — the drift this file exists to prevent
-  // (036 B10).
-  app.useGlobalFilters(new PrismaClientExceptionFilter(app.getHttpAdapter()));
+  // One error body for every refusal, and Prisma's errors mapped to the status they deserve
+  // with no schema text (036 B10) — see `filters/api-exception.filter.ts`. Registered here, not
+  // in `main.ts`, so the e2e app answers errors exactly as production does.
+  app.useGlobalFilters(new ApiExceptionFilter(app.getHttpAdapter()));
 }

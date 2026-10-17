@@ -78,6 +78,15 @@ export interface NestConfig {
    */
   maxRequestBodySize: string;
   /**
+   * The request-body ceiling for every route that does **not** carry a file (036 B8).
+   *
+   * `maxRequestBodySize` above applies only to the upload routes, which `large-body.ts` derives
+   * from their DTOs (a field validated `@IsBase64()`/`@IsBase64Payload()`, or `@LargeBody()`).
+   * Everything else is JSON a person typed, and a small ceiling bounds what one request can make
+   * the server buffer. Env `DEFAULT_REQUEST_BODY_SIZE`.
+   */
+  defaultRequestBodySize: string;
+  /**
    * How many reverse proxies sit in front of this API, or `false` for none.
    *
    * Express's `trust proxy`. Left `false`, `req.ip` is the address of whatever
