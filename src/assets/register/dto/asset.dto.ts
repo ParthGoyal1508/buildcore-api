@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { AssetStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
   IsBoolean,
   IsEnum,
@@ -194,7 +195,7 @@ export class ListAssetsDto {
     description: 'Only assets whose next inspection is already due',
   })
   @IsOptional()
-  @Type(() => Boolean)
+  @BooleanQuery()
   @IsBoolean()
   inspectionDue?: boolean;
 

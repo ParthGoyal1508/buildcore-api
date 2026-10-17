@@ -1,5 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import { IsBoolean, IsInt, IsOptional, IsString, Min } from 'class-validator';
 
 export class ListStockDto {
@@ -20,7 +21,7 @@ export class ListStockDto {
 
   @ApiPropertyOptional({ description: 'Only rows below their reorder level' })
   @IsOptional()
-  @Type(() => Boolean)
+  @BooleanQuery()
   @IsBoolean()
   belowReorderLevel?: boolean;
 

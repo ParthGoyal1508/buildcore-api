@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { ItemUnit } from '@prisma/client';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
   IsBoolean,
   IsEnum,
@@ -86,7 +87,7 @@ export class ListItemsDto {
 
   @ApiPropertyOptional({ description: 'Omit to see both active and retired' })
   @IsOptional()
-  @Type(() => Boolean)
+  @BooleanQuery()
   @IsBoolean()
   active?: boolean;
 

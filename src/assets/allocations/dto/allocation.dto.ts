@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AssetAllocationStatus } from '@prisma/client';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
   IsEnum,
   IsInt,
@@ -114,7 +115,7 @@ export class ListAllocationsDto {
     description: 'Only allocations past their return date',
   })
   @IsOptional()
-  @Type(() => Boolean)
+  @BooleanQuery()
   overdue?: boolean;
 
   @ApiPropertyOptional()

@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
   IsBoolean,
   IsDateString,
@@ -481,7 +482,7 @@ export class ListEmployeesQueryDto {
   @ApiPropertyOptional({ description: 'Defaults to active-only when omitted.' })
   @IsOptional()
   @IsBoolean()
-  @Type(() => Boolean)
+  @BooleanQuery()
   isActive?: boolean;
 
   @ApiPropertyOptional({ default: 1 })
