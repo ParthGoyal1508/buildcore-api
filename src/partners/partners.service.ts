@@ -61,7 +61,7 @@ export class PartnersService {
 
   async getVendorById(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorSummary | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({
@@ -86,7 +86,7 @@ export class PartnersService {
    */
   async getVendorParticulars(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorParticulars | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({
@@ -148,7 +148,7 @@ export class PartnersService {
 
   async getVendorTds(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorTds | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({

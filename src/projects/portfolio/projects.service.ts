@@ -957,7 +957,7 @@ export class ProjectsService {
    */
   async getSitesByProject(
     projectId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<string[]> {
     const sites = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.site.findMany({
@@ -981,7 +981,7 @@ export class ProjectsService {
    */
   async getProjectIdentityById(
     projectId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<{
     id: string;
     code: string;
@@ -1018,7 +1018,7 @@ export class ProjectsService {
    */
   async getActivityById(
     activityId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<ProjectWorkReference | null> {
     const group = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.bOQTaskGroup.findUnique({
@@ -1040,7 +1040,7 @@ export class ProjectsService {
    * `getActivityById()` above (009 FR-019). */
   async getBoqItemById(
     boqItemId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<ProjectWorkReference | null> {
     const item = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.bOQTaskItem.findUnique({
