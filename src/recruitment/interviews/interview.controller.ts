@@ -45,7 +45,6 @@ export class InterviewController {
     const { rows, total } = await this.interviews.findAll(caller, query);
     // 036 H4: the body stays the array it always was; the count rides in a header.
     response.setHeader('X-Total-Count', String(total));
-    response.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
     return rows;
   }
 

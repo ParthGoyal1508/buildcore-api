@@ -90,7 +90,6 @@ export class SalaryBankSheetController {
     // 036 F11. The body stays the array it always was; the count rides in a header so paging is
     // additive for the current screen.
     response.setHeader('X-Total-Count', String(total));
-    response.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
     return rows;
   }
 

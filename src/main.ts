@@ -81,9 +81,13 @@ async function bootstrap() {
       // Readable cross-origin only when listed. Without these a download from the web app could not
       // see the file name the server chose, nor the header fields a bill printed blank.
       // `X-Company-Id`: the company each response was served for (036 B17).
+      // `X-Total-Count`: the full count behind a paged list that is still a plain array. It used to
+      // be exposed by the two controllers that send it, whose own header replaced this list and so
+      // hid `X-Company-Id` on exactly those responses.
       exposedHeaders: [
         'Content-Disposition',
         'X-Bill-Package-Missing-Fields',
+        'X-Total-Count',
         COMPANY_HEADER,
       ],
       // No `allowedHeaders`: left unset, the cors middleware reflects whatever request headers the
