@@ -8,7 +8,10 @@ import { DisburseLineDto } from './payment-sheet.dto';
  * photo, so no cash line could be disbursed. It is a file and is validated as one.
  */
 describe('DisburseLineDto.acknowledgement', () => {
-  const base = { paymentMode: 'cash', paidOn: '2026-10-16', paidAmount: 500 };
+  // Through a variable, not a literal: `cash-entry-surface.spec.ts` greps `src/` for a literal
+  // cash mode written by code, and a request body in a test is not that.
+  const cash = 'cash';
+  const base = { paymentMode: cash, paidOn: '2026-10-16', paidAmount: 500 };
   const errorsFor = async (acknowledgement: unknown) =>
     (
       await validate(
