@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Ip,
   Param,
   Post,
   Query,
@@ -20,6 +22,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { decodeBase64Upload } from '../../common/uploads';
 import {
   StageProjectDocumentDto,
   UploadProjectDocumentDto,
@@ -76,7 +79,7 @@ export class ProjectDocumentUploadController {
       {
         documentTypeId: dto.documentTypeId,
         documentType: dto.documentType,
-        data: Buffer.from(dto.data, 'base64'),
+        data: decodeBase64Upload(dto.data, 'The document'),
         contentType: dto.contentType,
         fileName: dto.fileName,
         documentNumber: dto.documentNumber,
@@ -99,6 +102,7 @@ export class ProjectDocumentUploadController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
     @Body() dto: UploadProjectDocumentDto,
+    @Ip() ip: string,
     @Query('companyId') companyId?: string,
   ) {
     return this.documents.upload(
@@ -108,14 +112,42 @@ export class ProjectDocumentUploadController {
       {
         documentTypeId: dto.documentTypeId,
         documentType: dto.documentType,
-        data: Buffer.from(dto.data, 'base64'),
+        data: decodeBase64Upload(dto.data, 'The document'),
         contentType: dto.contentType,
         fileName: dto.fileName,
         remark: dto.remark,
         documentNumber: dto.documentNumber,
         expiresAt: dto.expiresAt,
+        supersedesDocumentId: dto.supersedesDocumentId,
       },
       caller.id,
+      ip,
+    );
+  }
+
+  @Delete('projects/:projectId/documents/:documentId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Remove a document filed against this project (036 I25)',
+    description:
+      'Scoped by project as well as id. Audited with the kind and file name. A document that ' +
+      'answers a mandatory kind may be removed: the project already exists, and readiness ' +
+      'reports the gap. To replace one, upload with `supersedesDocumentId` instead.',
+  })
+  async remove(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('projectId') projectId: string,
+    @Param('documentId') documentId: string,
+    @Ip() ip: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<void> {
+    await this.documents.remove(
+      rlsContextFor(caller),
+      resolveCompanyId(caller, companyId),
+      projectId,
+      documentId,
+      caller.id,
+      ip,
     );
   }
 

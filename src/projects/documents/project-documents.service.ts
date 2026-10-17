@@ -13,6 +13,11 @@ import { DocumentsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { describeStoredFile } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  DOCUMENT_TYPES,
+} from '../../common/uploads';
 import { REQUIRED_PROJECT_DOCUMENT_KINDS } from '../../settings/document-kinds';
 import { DocumentTypesService } from '../../settings/reference-data/document-types.service';
 import {
@@ -569,37 +574,168 @@ export class ProjectDocumentsService {
       documentNumber?: string;
       /** Required when the kind expires — see `assertExpiryGiven`. */
       expiresAt?: string;
+      /**
+       * A document on this project the new one replaces (036 I25): a renewed certificate, a
+       * corrected scan. The old row and its file go once the new one is filed, in one step, so the
+       * project is never left holding neither — nor both, answering the same kind twice.
+       */
+      supersedesDocumentId?: string;
     },
     actorUserId: string,
+    ipAddress?: string,
   ) {
     if (input.documentTypeId) {
       const type = await this.resolveType(ctx, companyId, input.documentTypeId);
       this.assertExpiryGiven(type, input.expiresAt);
     }
+    // Looked up before the bytes are stored, so a wrong id leaves no orphaned blob behind.
+    if (input.supersedesDocumentId) {
+      const old = await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.projectDocument.findFirst({
+          where: { id: input.supersedesDocumentId, projectId, companyId },
+          select: { id: true },
+        }),
+      );
+      if (!old) {
+        throw new NotFoundException(
+          'The document this replaces is not on this project.',
+        );
+      }
+    }
 
+    const file = await this.prepareFile(input);
     const fileRef = await this.storage.put(
       `project-documents/${companyId}`,
-      input.data,
-      input.contentType,
+      file.data,
+      file.contentType,
     );
 
-    return withRlsContext(this.prisma, ctx, (tx) =>
-      tx.projectDocument.create({
-        data: {
-          companyId,
-          projectId,
-          documentType: input.documentType,
-          documentTypeId: input.documentTypeId ?? null,
-          fileRef,
-          fileName: input.fileName ?? null,
-          mimeType: input.contentType,
-          remark: input.remark ?? null,
-          documentNumber: input.documentNumber ?? null,
-          expiresAt: input.expiresAt ? dayStart(input.expiresAt) : null,
-          uploadedByUserId: actorUserId,
-        },
-      }),
+    const { created, superseded } = await withRlsContext(
+      this.prisma,
+      ctx,
+      async (tx) => {
+        const created = await tx.projectDocument.create({
+          data: {
+            companyId,
+            projectId,
+            documentType: input.documentType,
+            documentTypeId: input.documentTypeId ?? null,
+            fileRef,
+            fileName: file.fileName,
+            mimeType: file.contentType,
+            remark: input.remark ?? null,
+            documentNumber: input.documentNumber ?? null,
+            expiresAt: input.expiresAt ? dayStart(input.expiresAt) : null,
+            uploadedByUserId: actorUserId,
+          },
+        });
+        if (!input.supersedesDocumentId) {
+          return { created, superseded: null };
+        }
+        // `deleteMany` with the project in the predicate: a concurrent replace of the same
+        // document deletes nothing here rather than throwing after the new row is written.
+        const old = await tx.projectDocument.findFirst({
+          where: { id: input.supersedesDocumentId, projectId, companyId },
+          select: { id: true, fileRef: true, fileName: true, documentType: true },
+        });
+        if (old) {
+          await tx.projectDocument.deleteMany({ where: { id: old.id } });
+        }
+        return { created, superseded: old };
+      },
     );
+
+    if (superseded) {
+      await this.storage.deleteMany([superseded.fileRef]);
+      await this.audit.record({
+        entityType: AuditEntityType.PROJECT_DOCUMENT,
+        action: AuditAction.DELETE,
+        entityId: superseded.id,
+        accountId: actorUserId,
+        companyId,
+        ipAddress,
+        changes: {
+          projectId,
+          documentType: superseded.documentType,
+          fileName: superseded.fileName,
+          supersededBy: created.id,
+        },
+      });
+    }
+    return created;
+  }
+
+  /**
+   * Removes a document filed against a project by mistake (036 I25).
+   *
+   * There was no way to take one back: a wrong file stayed on the project, and still answered its
+   * required kind. Removing one that answers a mandatory kind is allowed — the project already
+   * exists, and readiness reports the gap rather than the creation gate re-refusing anything.
+   * Audited, naming the kind and the file, since a document vanishing is what somebody asks about.
+   */
+  async remove(
+    ctx: RlsContext,
+    companyId: string,
+    projectId: string,
+    documentId: string,
+    actorUserId: string,
+    ipAddress?: string,
+  ): Promise<void> {
+    const removed = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const document = await tx.projectDocument.findFirst({
+        where: { id: documentId, projectId, companyId },
+        select: { id: true, fileRef: true, fileName: true, documentType: true },
+      });
+      if (!document) throw new NotFoundException('Document not found.');
+      await tx.projectDocument.delete({ where: { id: document.id } });
+      return document;
+    });
+
+    // After the transaction: a blob deleted inside one that then rolls back is gone while its
+    // row survives.
+    await this.storage.deleteMany([removed.fileRef]);
+    await this.audit.record({
+      entityType: AuditEntityType.PROJECT_DOCUMENT,
+      action: AuditAction.DELETE,
+      entityId: removed.id,
+      accountId: actorUserId,
+      companyId,
+      ipAddress,
+      changes: {
+        projectId,
+        documentType: removed.documentType,
+        fileName: removed.fileName,
+      },
+    });
+  }
+
+  /**
+   * The bytes to store, their **detected** type, and the name to file them under (036 B5, B6).
+   *
+   * The client's `contentType` was stored and served back as given, so a page declared as
+   * `application/pdf` came back as whatever the caller said. The type now comes from the bytes and
+   * must be on the document allow-list (PDF, JPEG, PNG, WebP, xlsx, docx — 415 otherwise); a photo
+   * is stored at no more than 2048 px. A PNG re-encoded as JPEG gets a matching extension, so the
+   * download opens in the right application.
+   */
+  private async prepareFile(input: {
+    data: Buffer;
+    fileName?: string;
+  }): Promise<{ data: Buffer; contentType: string; fileName: string | null }> {
+    const detected = assertAllowedFileType(
+      input.data,
+      DOCUMENT_TYPES,
+      'The document',
+    ).contentType;
+    const image = await compressImageUpload(input.data, detected);
+    const contentType = image?.main.contentType ?? detected;
+    const fileName =
+      input.fileName && image?.compressed && contentType !== detected
+        ? `${input.fileName.replace(/\.[^./\\]+$/, '') || 'document'}.${
+            contentType === 'image/webp' ? 'webp' : 'jpg'
+          }`
+        : input.fileName ?? null;
+    return { data: image?.main.data ?? input.data, contentType, fileName };
   }
 
   /**
@@ -731,10 +867,12 @@ export class ProjectDocumentsService {
       this.assertExpiryGiven(type, input.expiresAt);
     }
 
+    // 036 B5/B6: detected type on the allow-list, photos compressed — as `upload` does.
+    const file = await this.prepareFile(input);
     const fileRef = await this.storage.put(
       `project-documents-staged/${companyId}`,
-      input.data,
-      input.contentType,
+      file.data,
+      file.contentType,
     );
 
     const staged = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -744,8 +882,8 @@ export class ProjectDocumentsService {
           documentTypeId: input.documentTypeId ?? null,
           documentType: input.documentType,
           fileRef,
-          fileName: input.fileName ?? null,
-          mimeType: input.contentType,
+          fileName: file.fileName,
+          mimeType: file.contentType,
           documentNumber: input.documentNumber ?? null,
           expiresAt: input.expiresAt ? dayStart(input.expiresAt) : null,
           uploadedBy: actorUserId,

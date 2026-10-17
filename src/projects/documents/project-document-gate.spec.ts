@@ -1,5 +1,8 @@
 import { ProjectDocumentsService } from './project-documents.service';
 
+/** 036 B5: uploads must now *be* an allowed type by their bytes; the smallest honest PDF. */
+const PDF_BYTES = Buffer.from('%PDF-1.4\n%%EOF\n');
+
 /**
  * The project creation gate and the staged upload path (017 T108, T110, T122, T123a).
  *
@@ -52,6 +55,14 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
               (args?.where?.projectId === undefined ||
                 d.projectId === args?.where?.projectId),
           ) ?? null,
+        delete: async (args: { where: { id: string } }) => {
+          writes.push({ model: 'deleted', id: args.where.id });
+          return { id: args.where.id };
+        },
+        deleteMany: async (args: { where: { id: string } }) => {
+          writes.push({ model: 'deleted', id: args.where.id });
+          return { count: 1 };
+        },
       },
       user: {
         findMany: async () =>
@@ -107,7 +118,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
         'p-1',
         {
           documentType: 'Site photograph',
-          data: Buffer.from('x'),
+          data: PDF_BYTES,
           contentType: 'image/png',
         },
         'u-1',
@@ -127,7 +138,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
           {
             documentTypeId: 'dt-nope',
             documentType: 'Work Order',
-            data: Buffer.from('x'),
+            data: PDF_BYTES,
             contentType: 'application/pdf',
           },
           'u-1',
@@ -158,7 +169,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
           {
             documentTypeId: 'dt-ins',
             documentType: 'Insurance',
-            data: Buffer.from('x'),
+            data: PDF_BYTES,
             contentType: 'application/pdf',
           },
           'u-1',
@@ -187,7 +198,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
         {
           documentTypeId: 'dt-ins',
           documentType: 'Insurance',
-          data: Buffer.from('x'),
+          data: PDF_BYTES,
           contentType: 'application/pdf',
           expiresAt: '2027-03-31',
         },
@@ -212,7 +223,7 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
         {
           documentTypeId: 'dt-loi',
           documentType: 'Letter of intent',
-          data: Buffer.from('x'),
+          data: PDF_BYTES,
           contentType: 'application/pdf',
         },
         'u-1',
@@ -454,6 +465,98 @@ describe('ProjectDocumentsService — the gate and the upload path', () => {
           ),
         },
       });
+    });
+  });
+  describe('036 B5/I25 — detected type, supersede and remove', () => {
+    const existing = {
+      id: 'doc-old',
+      projectId: 'p-1',
+      companyId: CO,
+      fileRef: 'ref-old',
+      fileName: 'old.pdf',
+      documentType: 'Insurance',
+    };
+
+    it('refuses bytes that are not on the allow-list, whatever the claimed type', async () => {
+      const { service, storage } = harness({});
+      await expect(
+        service.upload(
+          ctx,
+          CO,
+          'p-1',
+          {
+            documentType: 'Page',
+            data: Buffer.from('<html>not a pdf</html>'),
+            contentType: 'application/pdf',
+          },
+          'u-1',
+        ),
+      ).rejects.toMatchObject({ status: 415 });
+      expect(storage.put).not.toHaveBeenCalled();
+    });
+
+    it('stores the detected type, not the claimed one', async () => {
+      const { service, writes } = harness({});
+      await service.upload(
+        ctx,
+        CO,
+        'p-1',
+        { documentType: 'Scan', data: PDF_BYTES, contentType: 'image/png' },
+        'u-1',
+      );
+      expect(writes.find((w) => w.model === 'document')?.mimeType).toBe(
+        'application/pdf',
+      );
+    });
+
+    it('replaces a document: files the new one, removes the old row and its file', async () => {
+      const { service, writes, storage } = harness({ documents: [existing] });
+      await service.upload(
+        ctx,
+        CO,
+        'p-1',
+        {
+          documentType: 'Insurance',
+          data: PDF_BYTES,
+          contentType: 'application/pdf',
+          supersedesDocumentId: 'doc-old',
+        },
+        'u-1',
+      );
+      expect(writes.map((w) => w.model)).toEqual(['document', 'deleted']);
+      expect(storage.deleteMany).toHaveBeenCalledWith(['ref-old']);
+    });
+
+    it('refuses to replace a document that is not on this project, before storing anything', async () => {
+      const { service, storage } = harness({
+        documents: [{ ...existing, projectId: 'p-other' }],
+      });
+      await expect(
+        service.upload(
+          ctx,
+          CO,
+          'p-1',
+          {
+            documentType: 'Insurance',
+            data: PDF_BYTES,
+            contentType: 'application/pdf',
+            supersedesDocumentId: 'doc-old',
+          },
+          'u-1',
+        ),
+      ).rejects.toMatchObject({ status: 404 });
+      expect(storage.put).not.toHaveBeenCalled();
+    });
+
+    it('removes a document and its file, scoped by project', async () => {
+      const { service, writes, storage } = harness({ documents: [existing] });
+      await service.remove(ctx, CO, 'p-1', 'doc-old', 'u-1');
+      expect(writes).toEqual([{ model: 'deleted', id: 'doc-old' }]);
+      expect(storage.deleteMany).toHaveBeenCalledWith(['ref-old']);
+
+      await expect(
+        service.remove(ctx, CO, 'p-2', 'doc-old', 'u-1'),
+      ).rejects.toMatchObject({ status: 404 });
     });
   });
 });

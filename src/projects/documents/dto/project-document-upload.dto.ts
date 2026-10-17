@@ -82,4 +82,15 @@ export class UploadProjectDocumentDto extends StageProjectDocumentDto {
   @IsString()
   @MaxLength(500)
   remark?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'A document on this project that this one replaces (036 I25) — a renewed certificate, a ' +
+      'corrected scan. The old document and its file are removed once this one is filed; 404 if ' +
+      'it is not on this project.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  supersedesDocumentId?: string;
 }
