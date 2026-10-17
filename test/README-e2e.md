@@ -37,13 +37,23 @@ environment, and there is nothing left in it to expand.
 DATABASE_URL="$SCRATCH" npx prisma migrate deploy
 DATABASE_URL="$SCRATCH" npx prisma db seed
 DATABASE_URL="$SCRATCH" npm run seed:chains
+DATABASE_URL="$SCRATCH" npm run seed:defaults
 ```
 
-**The third step is not optional.** Approval chains are installed by `CompaniesService.create`, and
+**The third and fourth steps are not optional.** Approval chains are installed by `CompaniesService.create`, and
 `prisma/seed.ts` writes its company row directly — so a database brought up by `db seed` alone has
 companies and no chains. Nothing says so until something is submitted for approval, and then it is
 seven red tests in `ra-bills.e2e-spec.ts` with a 409 that reads as a product fault. It is not; the
 database was not ready. `npm run seed:chains` is idempotent and safe to re-run.
+
+`npm run seed:defaults` (`prisma/seed-company-defaults.ts`, 036 follow-up) does the same for the rest
+of what `CompaniesService.create` installs: document types, vendor categories, item categories,
+asset categories, asset document types, condition grades, equipment categories and equipment
+document types, for every company. It calls each master's own `seedDefaultsForCompany` — the method
+company creation calls — so it cannot drift from the product's list, and each inserts with
+`skipDuplicates`, so it too is idempotent. It also creates the global `QA No Modules` role (no
+permissions) that `dashboard.e2e-spec.ts` signs in with; that is a QA fixture, which is why no
+migration makes it.
 
 ## Checking you are where you think you are
 
@@ -76,10 +86,8 @@ seven are still open, and that is what these failures are.
 `src/assets`, `src/labour`, `src/plant`, `src/partners` or `src/attendance`, and
 `src/approvals/fr-022-unmigrated-modules.spec.ts` asserts exactly that and passes.
 
-The fix is a `seed:defaults` script in the shape of `prisma/seed-approval-chains.ts` — import the
-same `DEFAULT_*` constants the services read and insert them per company, idempotently. Deliberately
-not done inside 028: three suites' worth of company defaults is its own piece of work, and doing it
-half way is worse than recording it here.
+**Fixed by `npm run seed:defaults`** (036 follow-up, 2026-10-18), described under "Provisioning it"
+above. Run it once after `db seed` and these no longer fail for want of masters.
 
 ## Two more that accumulate, rather than appear on a fresh database
 

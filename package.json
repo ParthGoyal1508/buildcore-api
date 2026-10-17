@@ -38,6 +38,7 @@
     "studio": "prisma studio",
     "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'",
     "seed:chains": "ts-node prisma/seed-approval-chains.ts",
+    "seed:defaults": "ts-node prisma/seed-company-defaults.ts",
     "seed:billing-demo": "ts-node prisma/seed-billing-demo.ts",
     "seed:demo": "ts-node prisma/seed-demo.ts",
     "seed:hr-docs": "ts-node prisma/seed-hr-docs.ts",
