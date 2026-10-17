@@ -74,6 +74,13 @@ export async function createProjectWithMandatoryDocuments(
   const post = (body: Record<string, unknown>) =>
     opts.http().post(`/projects${query}`).set(opts.headers).send(body);
 
+  // `code` dropped here rather than in each suite: as of 2026-10-15 a project's code always
+  // comes from the company series and a body carrying one is refused 400, so the five suites
+  // that still sent `code` were failing in `beforeAll` before reaching anything they test.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { code: _unsupportedCode, ...body } = opts.body;
+  opts = { ...opts, body };
+
   const first = await post(opts.body);
   if (first.status !== 400 || first.body?.code !== MANDATORY_MISSING) {
     return first;
