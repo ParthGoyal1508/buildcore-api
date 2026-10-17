@@ -274,6 +274,19 @@ export class ListHireBillsDto {
   @IsEnum(HireBillStatus)
   status?: HireBillStatus;
 
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description: '036 K9: bills whose period overlaps periodFrom..periodTo.',
+  })
+  @IsOptional()
+  @IsISO8601()
+  periodFrom?: string;
+
+  @ApiPropertyOptional({ example: '2026-10-31' })
+  @IsOptional()
+  @IsISO8601()
+  periodTo?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -295,4 +308,21 @@ export class ListHireBillsDto {
   @Min(1)
   @Max(2_147_483_647)
   pageSize?: number;
+}
+
+/** The logbook over a prospective bill's period (036 K9). */
+export class HireBillLogbookSummaryDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  equipmentId!: string;
+
+  @ApiProperty({ example: '2026-10-01' })
+  @IsISO8601()
+  from!: string;
+
+  @ApiProperty({ example: '2026-10-31' })
+  @IsISO8601()
+  to!: string;
 }

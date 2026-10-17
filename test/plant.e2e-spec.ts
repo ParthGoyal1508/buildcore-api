@@ -928,6 +928,47 @@ describe('Plant module (e2e)', () => {
       expect(row.status).toBe('pending_verification');
     });
 
+    it('previews the logbook over a period, filters by period and exports (036 K9)', async () => {
+      const summary = await http()
+        .get(
+          `/plant/hire-bills/logbook-summary?equipmentId=${hiredEquipmentId}&from=${dayOffset(
+            -10,
+          )}&to=${today()}`,
+        )
+        .set(auth())
+        .expect(200);
+      // The figure the bill above snapshotted.
+      expect(summary.body.logbookHours).toBe(4);
+      expect(summary.body.unit).toBe('h');
+
+      const inPeriod = await http()
+        .get(
+          `/plant/hire-bills?equipmentId=${hiredEquipmentId}&periodFrom=${dayOffset(
+            -3,
+          )}&periodTo=${dayOffset(-3)}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(inPeriod.body.items.map((b: { id: string }) => b.id)).toContain(
+        billId,
+      );
+      const outside = await http()
+        .get(
+          `/plant/hire-bills?equipmentId=${hiredEquipmentId}&periodFrom=${dayOffset(
+            -400,
+          )}&periodTo=${dayOffset(-300)}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(outside.body.items).toHaveLength(0);
+
+      const xlsx = await http()
+        .get(`/plant/hire-bills/export.xlsx?equipmentId=${hiredEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(xlsx.headers['content-type']).toMatch(/spreadsheetml/);
+    });
+
     it('resolves a historical period to the rate in force then (SC-006)', async () => {
       const bill = await http()
         .post('/plant/hire-bills')

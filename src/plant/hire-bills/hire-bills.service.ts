@@ -14,6 +14,7 @@ import {
   MeterType,
   Prisma,
 } from '@prisma/client';
+import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
@@ -32,15 +33,21 @@ import {
 } from '../../common/form-document';
 import {
   CreateHireBillDto,
+  HireBillLogbookSummaryDto,
   ListHireBillsDto,
   PayHireBillDto,
   UpdateHireBillDto,
 } from './dto/hire-bill.dto';
 import { buildHireBillForm } from './hire-bill-document';
 
+/** The most rows one hire-bill export writes (036 K9). */
+export const HIRE_BILL_EXPORT_LIMIT = 5000;
+
 export interface HireBillRow {
   id: string;
   companyId: string;
+  /** Who raised the bill (036 K8) — the screen hides Verify for them. Null on older bills. */
+  createdByUserId: string | null;
   equipmentId: string;
   equipmentCode: string;
   equipmentName: string;
@@ -252,6 +259,7 @@ export class HireBillsService {
       ),
       id: row.id,
       companyId: row.companyId,
+      createdByUserId: row.createdByUserId,
       equipmentId: row.equipmentId,
       equipmentCode: row.equipment.code,
       equipmentName: row.equipment.name,
@@ -293,12 +301,7 @@ export class HireBillsService {
       MAX_PAGE_SIZE,
     );
 
-    const where: Prisma.HireBillWhereInput = {
-      ...companyScope(caller, query.companyId),
-      ...(query.equipmentId ? { equipmentId: query.equipmentId } : {}),
-      ...(query.vendorId ? { vendorId: query.vendorId } : {}),
-      ...(query.status ? { status: query.status } : {}),
-    };
+    const where = this.whereOf(caller, query);
 
     const { rows, total, pending, unpaid } = await withRlsContext(
       this.prisma,
@@ -346,6 +349,179 @@ export class HireBillsService {
       pendingVerificationCount: pending,
       unpaidTotal: Number(unpaid._sum.netPayable ?? 0),
     };
+  }
+
+  /**
+   * The list filters (036 K9 adds the period): a bill is in the period when its billing period
+   * overlaps it, so "October" finds a 15 Sep – 14 Oct bill as well as one inside the month.
+   */
+  private whereOf(
+    caller: AuthenticatedUser,
+    query: Omit<ListHireBillsDto, 'page' | 'pageSize'>,
+  ): Prisma.HireBillWhereInput {
+    return {
+      ...companyScope(caller, query.companyId),
+      ...(query.equipmentId ? { equipmentId: query.equipmentId } : {}),
+      ...(query.vendorId ? { vendorId: query.vendorId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.periodTo
+        ? { billingPeriodFrom: { lte: this.refs.parseDate(query.periodTo) } }
+        : {}),
+      ...(query.periodFrom
+        ? { billingPeriodTo: { gte: this.refs.parseDate(query.periodFrom) } }
+        : {}),
+    };
+  }
+
+  /** Every bill matching the list filters, as Excel (036 K9). Capped, like every list export. */
+  async exportXlsx(
+    caller: AuthenticatedUser,
+    query: Omit<ListHireBillsDto, 'page' | 'pageSize'>,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.hireBill.findMany({
+          where: this.whereOf(caller, query),
+          orderBy: [{ billingPeriodFrom: 'desc' }, { createdAt: 'desc' }],
+          take: HIRE_BILL_EXPORT_LIMIT,
+          include: this.include,
+        }),
+    );
+    const vendorNames = await this.refs.vendorNames(
+      caller,
+      rows.map((row) => row.vendorId),
+    );
+    const items = rows.map((row) =>
+      this.toRow(row, vendorNames.get(row.vendorId) ?? 'Unknown vendor'),
+    );
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Hire bills', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+    ws.columns = [
+      { header: 'Invoice no.', key: 'invoiceNo', width: 16 },
+      { header: 'Machine', key: 'machine', width: 28 },
+      { header: 'Vendor', key: 'vendor', width: 26 },
+      { header: 'Period from', key: 'from', width: 12 },
+      { header: 'Period to', key: 'to', width: 12 },
+      { header: 'Unit', key: 'unit', width: 6 },
+      { header: 'Billed', key: 'billed', width: 10 },
+      { header: 'Logbook', key: 'logbook', width: 10 },
+      { header: 'Variance', key: 'variance', width: 10 },
+      { header: 'Rate', key: 'rate', width: 12 },
+      { header: 'Gross', key: 'gross', width: 14 },
+      { header: 'TDS', key: 'tds', width: 12 },
+      { header: 'Net payable', key: 'net', width: 14 },
+      { header: 'Status', key: 'status', width: 18 },
+      { header: 'Payment date', key: 'paymentDate', width: 12 },
+      { header: 'Payment reference', key: 'paymentReference', width: 20 },
+    ];
+    ws.getRow(1).font = { bold: true };
+    const ddmmyyyy = (d: Date | null) =>
+      d ? isoDate(d).split('-').reverse().join('-') : '';
+    for (const b of items) {
+      ws.addRow({
+        invoiceNo: b.invoiceNo ?? '',
+        machine: `${b.equipmentCode} · ${b.equipmentName}`,
+        vendor: b.vendorName,
+        from: ddmmyyyy(b.billingPeriodFrom),
+        to: ddmmyyyy(b.billingPeriodTo),
+        unit: b.meterType === 'km' ? 'km' : 'h',
+        billed: b.billedHours,
+        logbook: b.logbookHours,
+        variance: b.variance,
+        rate: b.rate,
+        gross: b.grossAmount,
+        tds: b.tdsAmount,
+        net: b.netPayable,
+        status: b.status.replace(/_/g, ' '),
+        paymentDate: ddmmyyyy(b.paymentDate),
+        paymentReference: b.paymentReference ?? '',
+      });
+    }
+    for (const key of ['billed', 'logbook', 'variance']) {
+      ws.getColumn(key).numFmt = '#,##0.###';
+    }
+    for (const key of ['rate', 'gross', 'tds', 'net']) {
+      ws.getColumn(key).numFmt = '#,##0.00';
+    }
+    return {
+      buffer: Buffer.from(await wb.xlsx.writeBuffer()),
+      filename: `Hire_bills_${isoDate(businessToday())}.xlsx`,
+    };
+  }
+
+  /**
+   * What the logbook says about a machine over a period (036 K9), for the hire bill form to
+   * show before saving: the hours (or km) logged, the entries, and the first opening and last
+   * closing readings. The same figures `create` snapshots, so what the person sees is what the
+   * bill will record.
+   */
+  async logbookSummary(
+    caller: AuthenticatedUser,
+    query: HireBillLogbookSummaryDto,
+  ): Promise<{
+    equipmentId: string;
+    meterType: string;
+    unit: 'h' | 'km';
+    from: string;
+    to: string;
+    logbookHours: number;
+    entryCount: number;
+    startReading: number | null;
+    endReading: number | null;
+    dieselGiven: number;
+  }> {
+    const from = this.refs.parseDate(query.from);
+    const to = this.refs.parseDate(query.to);
+    if (to < from) {
+      throw new BadRequestException('to cannot be earlier than from.');
+    }
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const equipment = await tx.equipment.findUnique({
+        where: { id: query.equipmentId },
+        select: { id: true, companyId: true, meterType: true },
+      });
+      if (!equipment) throw new NotFoundException('Equipment not found');
+      assertInScope(caller, equipment, 'Equipment');
+      const period = {
+        equipmentId: query.equipmentId,
+        date: { gte: from, lte: to },
+      };
+      const [logbook, first, last, fuel] = await Promise.all([
+        tx.logbookEntry.aggregate({
+          where: period,
+          _sum: { totalHours: true },
+          _count: { _all: true },
+        }),
+        tx.logbookEntry.findFirst({
+          where: period,
+          orderBy: { date: 'asc' },
+          select: { openingReading: true },
+        }),
+        tx.logbookEntry.findFirst({
+          where: period,
+          orderBy: { date: 'desc' },
+          select: { closingReading: true },
+        }),
+        tx.fuelEntry.aggregate({ where: period, _sum: { quantity: true } }),
+      ]);
+      return {
+        equipmentId: equipment.id,
+        meterType: equipment.meterType,
+        unit: equipment.meterType === 'km' ? 'km' : 'h',
+        from: isoDate(from),
+        to: isoDate(to),
+        logbookHours: Number(logbook._sum.totalHours ?? 0),
+        entryCount: logbook._count._all,
+        startReading: first ? Number(first.openingReading) : null,
+        endReading: last ? Number(last.closingReading) : null,
+        dieselGiven: Number(fuel._sum.quantity ?? 0),
+      };
+    });
   }
 
   async create(
