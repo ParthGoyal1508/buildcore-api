@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -82,7 +83,11 @@ export class DisburseLineDto {
   @IsDateString()
   paidOn!: string;
 
-  @ApiProperty({ example: 800 })
+  @ApiProperty({
+    example: 800,
+    description:
+      "At most the line's net payable (036 O4); less needs shortPaymentReason and is carried to the next sheet",
+  })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
   paidAmount!: number;
@@ -98,6 +103,15 @@ export class DisburseLineDto {
   @IsOptional()
   @IsString()
   shortPaymentReason?: string;
+}
+
+/** 036 O2: why a draft sheet is being deleted — optional, kept in the audit log. */
+export class DeletePaymentSheetDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class ReverseLineDto {

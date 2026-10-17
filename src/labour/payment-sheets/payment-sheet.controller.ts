@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Ip,
   Param,
@@ -18,6 +19,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
+  DeletePaymentSheetDto,
   DisburseLineDto,
   GeneratePaymentSheetDto,
   ListPaymentSheetsDto,
@@ -80,6 +82,38 @@ export class PaymentSheetController {
     return this.sheets.generate(caller, dto, ip);
   }
 
+  @Post(':id/regenerate')
+  @ApiOperation({
+    summary:
+      'Work a draft sheet out again from the attendance as it stands (036)',
+    description:
+      'Draft only. Picks up rates set since, advances disbursed since and shortfalls freed by a ' +
+      'deleted sheet. Refused for the same reasons generating is.',
+  })
+  async regenerate(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Ip() ip: string,
+  ) {
+    return this.sheets.regenerate(caller, id, ip);
+  }
+
+  @Delete(':id')
+  @ApiOperation({
+    summary: 'Delete a draft sheet (036)',
+    description:
+      'Draft only, soft and audited. Frees its days for correction, the advance instalments it ' +
+      'earmarked and any shortfall it carried. Reopen an approved sheet first.',
+  })
+  async remove(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: DeletePaymentSheetDto,
+    @Ip() ip: string,
+  ) {
+    return this.sheets.remove(caller, id, dto?.reason, ip);
+  }
+
   @Patch(':id/approve')
   @RequirePermissions(Permission.LABOUR_APPROVE)
   @ApiOperation({ summary: 'Approve and freeze a sheet (LABOUR_APPROVE)' })
@@ -95,7 +129,9 @@ export class PaymentSheetController {
   @RequirePermissions(Permission.LABOUR_APPROVE)
   @ApiOperation({
     summary: 'Reopen an approved sheet to draft (LABOUR_APPROVE)',
-    description: 'Blocked once any line is disbursed (FR of US5).',
+    description:
+      'Blocked once any line is disbursed (FR of US5). Since 036 the lines are worked out again ' +
+      'from the attendance as it stands, so it can fail for the reasons generating does.',
   })
   async reopen(
     @UserEntity() caller: AuthenticatedUser,

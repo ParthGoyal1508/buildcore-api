@@ -17,6 +17,7 @@ import {
   type MusterWorkerRef,
 } from '../attendance/muster-attendance.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
+import { deductionEntries } from '../payment-sheets/payment-sheet.rules';
 
 export interface SheetFile {
   buffer: Buffer;
@@ -297,11 +298,17 @@ export class LabourSheetsService {
     );
     lines.forEach((l, i) => {
       const w = byId.get(l.workerId);
-      const deductions = l.grossWage.toNumber() - l.netPayable.toNumber();
+      // 036 O4: a carry-forward line pays an earlier shortfall, so its net is above its (zero)
+      // gross; gross − net would print a negative deduction. Sum the entries instead.
+      const deductions = deductionEntries(l.deductions).reduce(
+        (sum, d) => sum + d.amount,
+        0,
+      );
+      const name = w?.fullName ?? '';
       const row = ws.addRow([
         i + 1,
         w?.labourCode ?? '',
-        w?.fullName ?? '',
+        l.carriedFromLineId ? `${name} (balance carried forward)` : name,
         w?.fatherName ?? '',
         w?.gender ? capitalise(w.gender) : '',
         l.daysWorked.toNumber(),

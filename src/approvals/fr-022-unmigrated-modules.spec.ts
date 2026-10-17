@@ -446,6 +446,16 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/labour/payment-sheets/payment-sheet.service.ts',
           ':(exclude)src/labour/workers/dto/worker.dto.ts',
           ':(exclude)src/labour/workers/labour-worker.service.ts',
+          // 036 stream 1b (labour hardening), 2026-10-17. **Verified by grep: none of these calls
+          // `ApprovalService` or `approvals.submit`.** The payment sheet gains a draft delete and a
+          // regenerate beside its own `approve()`, and the advance a maker-checker inside its own
+          // `approve()`; the per-file assertions at the top still read both.
+          ':(exclude)src/labour/payment-sheets/payment-sheet.controller.ts',
+          ':(exclude)src/labour/payment-sheets/payment-sheet.rules.ts',
+          ':(exclude)src/labour/payment-sheets/payment-sheet.rules.spec.ts',
+          ':(exclude)src/labour/advances/dto/advance.dto.ts',
+          ':(exclude)src/labour/advances/labour-advance.rules.spec.ts',
+          ':(exclude)src/labour/reports/labour-reports.service.ts',
           ':(exclude)src/plant/disposal',
           ':(exclude)src/plant/services/service-schedule.service.ts',
           // Owned by 036 B12 (query-string booleans), 2026-10-17. Each file swaps

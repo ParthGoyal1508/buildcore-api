@@ -180,6 +180,37 @@ export class LabourRefsService {
     );
   }
 
+  /**
+   * Site names by id, via `projects` (036 O8). Unknown or out-of-scope ids are left out rather
+   * than failing the read that wanted a label.
+   */
+  async siteNames(
+    caller: AuthenticatedUser,
+    ids: (string | null)[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    const sites = await Promise.all(
+      unique.map((id) =>
+        this.sites.getSiteById(rlsContextFor(caller), id).catch(() => null),
+      ),
+    );
+    return new Map(sites.filter((s) => s !== null).map((s) => [s.id, s.name]));
+  }
+
+  /** Skill category names by id, via `settings` (036 O8). */
+  async skillCategoryNames(
+    caller: AuthenticatedUser,
+    ids: (string | null)[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    const categories = await Promise.all(
+      unique.map((id) => this.skillCategories.getById(caller, id)),
+    );
+    return new Map(
+      categories.filter((c) => c !== null).map((c) => [c.id, c.name]),
+    );
+  }
+
   /** Contractor names by vendor id, via `partners` (034). */
   async contractorNames(
     caller: AuthenticatedUser,

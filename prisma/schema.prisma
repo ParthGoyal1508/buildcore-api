@@ -8236,6 +8236,11 @@ model PaymentSheetLine {
   /// Unpaid remainder (short payment) carried to the next period (FR-030).
   carriedForwardBalance Decimal            @default(0) @db.Decimal(14, 2)
 
+  /// 036 O4: set on a carry-forward line — the earlier line whose short payment this line pays.
+  /// Null on an ordinary wage line. Not a relation: the earlier line can sit on another sheet,
+  /// and a sheet's lines go with it.
+  carriedFromLineId String?
+
   status PaymentSheetLineStatus @default(pending)
 
   reversalReason String?
@@ -8246,6 +8251,7 @@ model PaymentSheetLine {
   @@index([companyId])
   @@index([sheetId])
   @@index([workerId])
+  @@index([carriedFromLineId])
   @@schema("labour")
 }
 

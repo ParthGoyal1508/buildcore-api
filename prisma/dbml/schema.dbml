@@ -4825,6 +4825,9 @@ Table PaymentSheetLine {
   shortPaymentReason String
   acknowledgementRef String [note: 'Encrypted object-storage ref, required for a cash disbursement (FR-029).']
   carriedForwardBalance Decimal [not null, default: 0, note: 'Unpaid remainder (short payment) carried to the next period (FR-030).']
+  carriedFromLineId String [note: '036 O4: set on a carry-forward line — the earlier line whose short payment this line pays.
+Null on an ordinary wage line. Not a relation: the earlier line can sit on another sheet,
+and a sheet\'s lines go with it.']
   status PaymentSheetLineStatus [not null, default: 'pending']
   reversalReason String
   createdAt DateTime [default: `now()`, not null]
