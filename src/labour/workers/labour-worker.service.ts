@@ -254,7 +254,11 @@ export class LabourWorkerService {
           'A contractor is required for a contractor-engaged worker',
         );
       }
-      await this.refs.assertActiveContractor(caller, dto.contractorId);
+      await this.refs.assertActiveContractor(
+        caller,
+        dto.contractorId,
+        companyId,
+      );
     }
     if (dto.skillCategoryId) {
       await this.refs.requireSkillCategory(caller, dto.skillCategoryId);

@@ -104,6 +104,7 @@ export class LabourRefsService {
   async assertActiveContractor(
     caller: AuthenticatedUser,
     contractorId: string,
+    companyId: string,
   ): Promise<void> {
     const vendor = await this.partners.getVendorById(
       contractorId,
@@ -111,6 +112,14 @@ export class LabourRefsService {
     );
     if (!vendor) {
       throw new BadRequestException('Contractor not found');
+    }
+    // 036 3e (2026-10-17): RLS alone stops a company-scoped caller, but a cross-company caller
+    // with nothing selected reads every company's vendors — and could name another company's
+    // contractor on this company's worker. The worker's company is compared explicitly.
+    if (vendor.companyId !== companyId) {
+      throw new BadRequestException(
+        "This contractor belongs to another company. Pick one of this company's contractors.",
+      );
     }
     if (!vendor.active) {
       throw new BadRequestException('Contractor is not active');
