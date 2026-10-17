@@ -37,6 +37,7 @@ const UPLOAD_ROUTES = [
   'POST /partners/contractors/:id/documents',
   'POST /plant/equipment/:id/dispose',
   'POST /plant/equipment/:id/documents',
+  'POST /plant/equipment/:id/photos',
   'POST /plant/equipment/import',
   'POST /projects/:id/boq/estimate-import/validate',
   'POST /projects/:id/boq/import/validate',

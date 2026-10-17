@@ -16,6 +16,7 @@ import { EquipmentDocTypesController } from './doc-types/equipment-doc-types.con
 import { EquipmentController } from './equipment/equipment.controller';
 import { EquipmentRegisterService } from './equipment/equipment-register.service';
 import { EquipmentService } from './equipment/equipment.service';
+import { EquipmentPhotosService } from './equipment/equipment-photos.service';
 import { FuelController } from './fuel/fuel.controller';
 import { FuelExceptionsController } from './fuel-exceptions/fuel-exceptions.controller';
 import { FuelExceptionsService } from './fuel-exceptions/fuel-exceptions.service';
@@ -109,6 +110,7 @@ import { EquipmentDisposalService } from './disposal/equipment-disposal.service'
     PlantService,
     PlantRefsService,
     EquipmentService,
+    EquipmentPhotosService,
     EquipmentRegisterService,
     LogbookService,
     LogbookSheetService,

@@ -4282,6 +4282,7 @@ register listing 500 machines does not run 500 aggregates.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   documents EquipmentDocument [not null]
+  photos EquipmentPhoto [not null]
   logbookEntries LogbookEntry [not null]
   fuelEntries FuelEntry [not null]
   serviceSchedules ServiceSchedule [not null]
@@ -4308,6 +4309,35 @@ at read time, the same treatment contractor and employee documents get.']
   expiresAt DateTime
   uploadedByUserId String [not null]
   uploadedAt DateTime [default: `now()`, not null]
+}
+
+Table EquipmentPhoto {
+  id String [pk]
+  companyId String [not null, note: 'Denormalised from the machine for the RLS policy, as `EquipmentDocument` does.']
+  equipmentId String [not null]
+  equipment Equipment [not null]
+  fileRef String [not null, note: 'Object-storage keys of the compressed photo and its thumbnail.']
+  thumbnailRef String [not null]
+  contentType String [not null, note: 'The stored (detected, re-encoded) type of `fileRef` and `thumbnailRef`.']
+  fileName String
+  width Int [not null]
+  height Int [not null]
+  sizeBytes Int [not null]
+  isMain Boolean [not null, default: false]
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'A photograph of a machine (036 K14): an optional main photo plus a gallery. A machine never
+needs one — the register shows a placeholder icon without.
+
+Every photo is compressed on the way in (the browser already shrank it to ~2048 px; the
+server re-encodes it to at most 2048 px JPEG and drops EXIF/GPS) and stored with a 320 px
+thumbnail, which is what the register list and the detail gallery load. Each object is
+immutable — a photo is replaced by deleting it and uploading another — so the image routes
+can be cached by id for good.
+
+At most one photo per machine is the main one, enforced by a partial unique index in the
+migration (`isMain` WHERE true), which Prisma cannot express.'
 }
 
 Table EquipmentRegistrationItem {
@@ -7077,6 +7107,8 @@ Ref: HireRate.companyId > Company.id [delete: Cascade]
 Ref: HireRate.categoryId > EquipmentCategory.id [delete: Cascade]
 
 Ref: EquipmentDocument.equipmentId > Equipment.id [delete: Cascade]
+
+Ref: EquipmentPhoto.equipmentId > Equipment.id [delete: Cascade]
 
 Ref: EquipmentRegistrationItem.equipmentId > Equipment.id [delete: Cascade]
 

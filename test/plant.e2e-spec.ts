@@ -433,12 +433,27 @@ describe('Plant module (e2e)', () => {
         .set(auth())
         .send({
           docTypeId,
-          file: Buffer.from('policy').toString('base64'),
+          file: Buffer.from('%PDF-1.4\n%policy\n').toString('base64'),
           fileName: 'insurance.pdf',
           contentType: 'application/pdf',
           expiresAt: dayOffset(15),
         })
         .expect(201);
+
+      // 036 K13: the bytes decide the type. An HTML page declared as a PDF is refused.
+      const refused = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/documents`)
+        .set(auth())
+        .send({
+          docTypeId,
+          file: Buffer.from('<html><script>alert(1)</script></html>').toString(
+            'base64',
+          ),
+          fileName: 'insurance.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(415);
+      expect(refused.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
 
       const list = await http()
         .get(`/plant/equipment?companyId=${companyId}&search=${PREFIX}`)
@@ -451,6 +466,83 @@ describe('Plant module (e2e)', () => {
       // The whole of SC-001: the register answers this without a second call.
       expect(row.expiryAlert).toBe(true);
       expect(row.alertDocumentTypes.length).toBeGreaterThan(0);
+    });
+
+    it('keeps an optional main photo and gallery, compressed with thumbnails (036 K14)', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sharp = require('sharp');
+      const png = (w: number, h: number) =>
+        sharp({ create: { width: w, height: h, channels: 3, background: '#0a6' } })
+          .png()
+          .toBuffer()
+          .then((b: Buffer) => b.toString('base64'));
+
+      const before = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(before.body.mainPhotoId).toBeNull();
+      expect(before.body.photos).toEqual([]);
+
+      const first = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: await png(3000, 2000), fileName: 'front.png' })
+        .expect(201);
+      expect(first.body.isMain).toBe(true);
+      expect(Math.max(first.body.width, first.body.height)).toBe(2048);
+
+      const second = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: await png(800, 600) })
+        .expect(201);
+      expect(second.body.isMain).toBe(false);
+
+      await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: Buffer.from('%PDF-1.4\n').toString('base64') })
+        .expect(415);
+
+      const thumb = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}/photos/${first.body.id}?size=thumb`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, done) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(thumb.headers['content-type']).toMatch(/image\/jpeg/);
+      const meta = await sharp(thumb.body).metadata();
+      expect(Math.max(meta.width, meta.height)).toBe(320);
+
+      await http()
+        .patch(`/plant/equipment/${ownedEquipmentId}/photos/${second.body.id}/main`)
+        .set(auth())
+        .expect(200);
+      const list = await http()
+        .get(`/plant/equipment?companyId=${companyId}&search=${PREFIX}`)
+        .set(auth())
+        .expect(200);
+      expect(
+        list.body.items.find((i: { id: string }) => i.id === ownedEquipmentId)
+          .mainPhotoId,
+      ).toBe(second.body.id);
+
+      // Deleting the main photo promotes the remaining one.
+      await http()
+        .delete(`/plant/equipment/${ownedEquipmentId}/photos/${second.body.id}`)
+        .set(auth())
+        .expect(204);
+      const after = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(after.body.mainPhotoId).toBe(first.body.id);
+      expect(after.body.photos).toHaveLength(1);
     });
 
     it('refuses to set status to under_maintenance directly (FR-002)', async () => {

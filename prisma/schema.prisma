@@ -7206,6 +7206,7 @@ model Equipment {
   updatedAt DateTime @updatedAt
 
   documents        EquipmentDocument[]
+  photos           EquipmentPhoto[]
   logbookEntries   LogbookEntry[]
   fuelEntries      FuelEntry[]
   serviceSchedules ServiceSchedule[]
@@ -7240,6 +7241,46 @@ model EquipmentDocument {
   mimeType String?
 
   expiresAt DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([equipmentId])
+  @@schema("plant")
+}
+
+/// A photograph of a machine (036 K14): an optional main photo plus a gallery. A machine never
+/// needs one — the register shows a placeholder icon without.
+///
+/// Every photo is compressed on the way in (the browser already shrank it to ~2048 px; the
+/// server re-encodes it to at most 2048 px JPEG and drops EXIF/GPS) and stored with a 320 px
+/// thumbnail, which is what the register list and the detail gallery load. Each object is
+/// immutable — a photo is replaced by deleting it and uploading another — so the image routes
+/// can be cached by id for good.
+///
+/// At most one photo per machine is the main one, enforced by a partial unique index in the
+/// migration (`isMain` WHERE true), which Prisma cannot express.
+model EquipmentPhoto {
+  id String @id @default(cuid())
+
+  /// Denormalised from the machine for the RLS policy, as `EquipmentDocument` does.
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  /// Object-storage keys of the compressed photo and its thumbnail.
+  fileRef      String
+  thumbnailRef String
+  /// The stored (detected, re-encoded) type of `fileRef` and `thumbnailRef`.
+  contentType  String
+  fileName     String?
+  width        Int
+  height       Int
+  sizeBytes    Int
+
+  isMain Boolean @default(false)
 
   uploadedByUserId String
   uploadedAt       DateTime @default(now())

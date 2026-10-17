@@ -10,7 +10,9 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsISO8601,
   IsNotEmpty,
@@ -344,6 +346,34 @@ export class UploadEquipmentDocumentDto {
   @IsOptional()
   @IsISO8601()
   expiresAt?: string;
+}
+
+/** A photo of the machine (036 K14). JPEG, PNG or WebP; compressed again on the server. */
+export class UploadEquipmentPhotoDto {
+  @ApiProperty({ description: 'Base64-encoded JPEG, PNG or WebP image' })
+  @IsBase64Payload()
+  file!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  fileName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Make this the machine's main photo. The first photo of a machine always is.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  makeMain?: boolean;
+}
+
+export class EquipmentPhotoFileQueryDto {
+  @ApiPropertyOptional({ enum: ['thumb', 'full'], default: 'full' })
+  @IsOptional()
+  @IsIn(['thumb', 'full'])
+  size?: 'thumb' | 'full';
 }
 
 /** The client's Equipment Master List, as a base64 `.xlsx` (2026-10-15). */

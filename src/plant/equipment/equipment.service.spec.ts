@@ -44,6 +44,7 @@ const equipmentRow = (
     ...doc,
   })),
   registration: [],
+  photos: [],
 });
 
 /**
