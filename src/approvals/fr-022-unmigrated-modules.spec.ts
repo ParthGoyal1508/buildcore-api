@@ -520,6 +520,15 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // selected company (B2/B3). **Verified by grep: none of these files calls
           // `ApprovalService` or `approvals.submit`.**
           ':(exclude)src/projects/sites',
+          // 036 stream 3d (plant and assets screens), 2026-10-18: Excel exports for the logbook
+          // and fuel lists, asset stock paging/search/filters/export, and project names in the
+          // asset summary. **Verified by grep: none of these files calls `ApprovalService` or
+          // `approvals.submit`** — they read and format lists; nothing here submits or decides.
+          ':(exclude)src/plant/list-export.ts',
+          ':(exclude)src/assets/assets-refs.service.ts',
+          ':(exclude)src/assets/stock/asset-stock.controller.ts',
+          ':(exclude)src/assets/stock/asset-stock.service.ts',
+          ':(exclude)src/assets/summary/asset-summary.service.ts',
         ],
         {
           cwd: REPO_ROOT,
