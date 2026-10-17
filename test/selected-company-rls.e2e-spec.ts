@@ -187,7 +187,7 @@ describe('approval spine under the selected company, RLS in force (036 B2)', () 
   });
 
   afterAll(async () => {
-    await app?.close();
+    if (app) await app.close();
     if (!admin) return;
     const del = (sql: string, ...args: unknown[]) =>
       admin.$executeRawUnsafe(sql, ...args).catch(() => undefined);

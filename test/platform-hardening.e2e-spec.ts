@@ -195,7 +195,7 @@ describe('Platform hardening (036 1e, e2e)', () => {
     await sys.user.deleteMany({ where: { id: { in: userIds } } });
     await sys.role.deleteMany({ where: { id: { in: roleIds } } });
     await sys.company.deleteMany({ where: { id: { in: companies } } });
-    await app?.close();
+    if (app) await app.close();
   });
 
   describe('the selected company, not the home one (B3)', () => {
