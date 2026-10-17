@@ -31,6 +31,8 @@ import { nextRaBillNumber, packageLabel } from './bill-number';
 import {
   billTotals,
   lineTotals,
+  money,
+  quantity,
   retentionBalance,
   retentionOn,
 } from './bill-totals';
@@ -447,7 +449,7 @@ export class RaBillsService {
             thisPeriodQty: 0,
             toDateQty: measured,
             // Negative where already over-measured. Reported, not clamped.
-            remainingQty: Math.round((awarded - measured) * 1000) / 1000,
+            remainingQty: quantity(awarded - measured),
             rate: item.rate.toNumber(),
             amount: 0,
           };
@@ -1230,7 +1232,7 @@ export class RaBillsService {
           awardedQty: awarded,
           thisPeriodQty: line.quantity.toNumber(),
           toDateQty,
-          remainingQty: Math.round((awarded - toDateQty) * 1000) / 1000,
+          remainingQty: quantity(awarded - toDateQty),
           rate: line.rate.toNumber(),
           amount: line.amount.toNumber(),
         };
@@ -1261,7 +1263,7 @@ export class RaBillsService {
         retentionAmount: retention,
         advanceRecovery: advance,
         otherDeductions: other,
-        deductionTotal: Math.round((retention + advance + other) * 100) / 100,
+        deductionTotal: money(retention + advance + other),
         netPayable: unsettled ? null : bill.netPayable.toNumber(),
         // Gross, never net. See the class docblock and `bill-totals.ts`.
         pnlAmount: gross,

@@ -25,12 +25,83 @@
  * make impossible to reach by accident.
  */
 
-/** Two decimal places, the rounding every money figure in this product uses. */
-export const money = (value: number): number => Math.round(value * 100) / 100;
+/**
+ * A number's exact decimal digits, as written: `1.005` is `{ digits: 1005n, scale: 3 }`.
+ *
+ * Read from the number's shortest round-trip string — the same digits a person typed and the same
+ * digits `String(n)` prints — so `1.005` is 1.005 here, not the 1.00499999999999989… the float
+ * actually holds. That gap is the whole of 036 I5.
+ */
+function decimalOf(value: number): { digits: bigint; scale: number } {
+  const [mantissa, exponent = '0'] = String(Math.abs(value)).split('e');
+  const [whole, fraction = ''] = mantissa.split('.');
+  let digits = BigInt(`${whole}${fraction}`);
+  let scale = fraction.length - Number(exponent);
+  if (scale < 0) {
+    digits *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { digits: value < 0 ? -digits : digits, scale };
+}
+
+/**
+ * Rounds exact decimal digits to `places`, half away from zero — the rounding a person does by hand
+ * and the one GST invoices use. `1.005 → 1.01`, `-1.005 → -1.01`, `2.675 → 2.68`.
+ */
+function roundDecimal(
+  { digits, scale }: { digits: bigint; scale: number },
+  places: number,
+): number {
+  if (scale <= places) {
+    return Number(`${digits}e-${scale}`);
+  }
+  const divisor = 10n ** BigInt(scale - places);
+  const negative = digits < 0n;
+  const magnitude = negative ? -digits : digits;
+  let quotient = magnitude / divisor;
+  if ((magnitude % divisor) * 2n >= divisor) quotient += 1n;
+  const rounded = Number(`${quotient}e-${places}`);
+  return negative && rounded !== 0 ? -rounded : rounded;
+}
+
+/**
+ * Half-up rounding to `places` on the number's written digits (036 I5).
+ *
+ * Replaces `Math.round(v * 100) / 100`, which rounds the *float*: `1.005 * 100` is `100.49999…`, so
+ * ₹1.005 became ₹1.00 — while the bill package, which rounds `Prisma.Decimal`, made it ₹1.01, and
+ * the two halves of one bill disagreed by a paisa a line. Pure and dependency-free on purpose: the
+ * web's `app/lib/bill-totals.ts` mirrors this file and has no decimal library, so it can copy these
+ * helpers verbatim and stay aligned.
+ */
+export function roundHalfUp(value: number, places: number): number {
+  if (!Number.isFinite(value)) return value;
+  return roundDecimal(decimalOf(value), places);
+}
+
+/**
+ * `a × b × …`, multiplied on exact decimal digits and then rounded to `places`.
+ *
+ * A float product can land just under a half-paisa that the true product sits on — `10.05 × 0.5` is
+ * `5.0249999…` as a float and 5.025 exactly — and no rounding of the float afterwards can recover the
+ * digit that was lost. Multiplying the written digits cannot lose it.
+ */
+export function productRounded(places: number, ...factors: number[]): number {
+  if (!factors.every(Number.isFinite)) return NaN;
+  let digits = 1n;
+  let scale = 0;
+  for (const factor of factors) {
+    const d = decimalOf(factor);
+    digits *= d.digits;
+    scale += d.scale;
+  }
+  return roundDecimal({ digits, scale }, places);
+}
+
+/** Two decimal places, half-up on the written digits — the rounding every money figure uses. */
+export const money = (value: number): number => roundHalfUp(value, 2);
 
 /** Three, matching the schema's quantity columns — a BOQ measures to the millimetre. */
-export const quantity = (value: number): number =>
-  Math.round(value * 1000) / 1000;
+export const quantity = (value: number): number => roundHalfUp(value, 3);
 
 /**
  * Six, for a **rate the quote derives** rather than one anybody typed.
@@ -44,8 +115,7 @@ export const quantity = (value: number): number =>
  * Not `money`, because this is not money: it is a price per unit, and only the product of it and a
  * quantity is ever paid.
  */
-export const unitRate = (value: number): number =>
-  Math.round(value * 1e6) / 1e6;
+export const unitRate = (value: number): number => roundHalfUp(value, 6);
 
 /** One line of a bill, before anything is summed. */
 export interface BillLineInput {
@@ -97,7 +167,14 @@ export function lineTotals(
   line: BillLineInput,
   quotedPercentage = 0,
 ): BillLineTotals {
-  const amount = money(line.quantity * line.rate * (1 + quotedPercentage));
+  // On exact digits (036 I5): `1 + quotedPercentage` is itself exact for any percentage a person
+  // typed (`1 + -0.1079` prints as `0.8921`), and the product is rounded once, at the end.
+  const amount = productRounded(
+    2,
+    line.quantity,
+    line.rate,
+    roundHalfUp(1 + quotedPercentage, 12),
+  );
   const cumulativeQty = quantity(
     (line.previouslyBilledQty ?? 0) + line.quantity,
   );
@@ -184,7 +261,7 @@ export function billTotals(
  * place to be right.
  */
 export function retentionOn(gross: number, fraction: number): number {
-  return money(gross * fraction);
+  return productRounded(2, gross, fraction);
 }
 
 /**

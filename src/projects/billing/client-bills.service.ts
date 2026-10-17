@@ -15,6 +15,7 @@ import {
   billTotals,
   lineTotals,
   money,
+  quantity,
   retentionOn,
   unitRate,
 } from './bill-totals';
@@ -868,7 +869,7 @@ export class ClientBillsService {
             previouslyBilledQty: billed,
             // Negative where the line is already over-measured. Reported, not clamped — the same
             // decision `bill-totals.ts` makes, for the same reason.
-            remainingQty: Math.round((scopeQty - billed) * 1000) / 1000,
+            remainingQty: quantity(scopeQty - billed),
             isVariation: item.isVariation,
             variationRef: item.variationRef,
           };
@@ -972,7 +973,7 @@ export class ClientBillsService {
           quotedRate: unitRate(line.rate.toNumber() * (1 + quoted)),
           amount: line.amount.toNumber(),
           cumulativeQty,
-          remainingQty: Math.round((scopeQty - cumulativeQty) * 1000) / 1000,
+          remainingQty: quantity(scopeQty - cumulativeQty),
           certifiedQty: line.certifiedQty?.toNumber() ?? null,
           exceedsScope: line.exceedsScope,
           overScopeReason: line.overScopeReason,
@@ -1040,7 +1041,7 @@ export class ClientBillsService {
         certificationVariance:
           certified === null
             ? null
-            : Math.round((bill.grossAmount.toNumber() - certified) * 100) / 100,
+            : money(bill.grossAmount.toNumber() - certified),
         submittedAt: bill.submittedAt,
         lines,
         exceedsScope: lines.some((line) => line.exceedsScope),
