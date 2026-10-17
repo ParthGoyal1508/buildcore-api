@@ -448,6 +448,13 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/labour/workers/labour-worker.service.ts',
           ':(exclude)src/plant/disposal',
           ':(exclude)src/plant/services/service-schedule.service.ts',
+          // Owned by 036 B12 (query-string booleans), 2026-10-17. Each file swaps
+          // `@Type(() => Boolean)` for `@BooleanQuery()` on one list filter, so `?x=false` stops
+          // reading as true. Query DTOs only: no service, no approval path. Added a commit late,
+          // for the reason the 023 note above gives — the guard diffs commits, so it could only
+          // fire on the commit that made the change.
+          ':(exclude)src/assets/allocations/dto/allocation.dto.ts',
+          ':(exclude)src/inventory/stock/dto/stock.dto.ts',
         ],
         {
           cwd: REPO_ROOT,
