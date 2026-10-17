@@ -14,6 +14,7 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
  *
  * - C1/C2: a role-set save adds a role without removing the others; an empty set is refused.
  * - C5: the Users list answers a page when asked, the bare array otherwise, and searches.
+ * - C18: the account-creation employee picker pages with a total when asked.
  * - D1: approval history date range, search and CSV export; a From after the To is refused.
  * - D6: the bell counts unread notifications; Mark all read clears the count, not the list.
  * - E2: a report range must be real and ordered.
@@ -209,6 +210,23 @@ describe('Settings, approvals, dashboard (036 3a, e2e)', () => {
       expect(bare.body.map((u: { id: string }) => u.id)).toEqual(
         expect.arrayContaining([adminId, targetId]),
       );
+    });
+  });
+
+  describe('Account creation picker (C18)', () => {
+    it('answers a page of unlinked employees with a total when asked, the bare array otherwise', async () => {
+      const paged = await http()
+        .get('/account-creation/employees/unlinked')
+        .query({ companyId, search: 'nobody', page: 1 })
+        .set(auth(adminToken))
+        .expect(200);
+      expect(paged.body).toEqual({ items: [], total: 0 });
+      const bare = await http()
+        .get('/account-creation/employees/unlinked')
+        .query({ companyId })
+        .set(auth(adminToken))
+        .expect(200);
+      expect(Array.isArray(bare.body)).toBe(true);
     });
   });
 

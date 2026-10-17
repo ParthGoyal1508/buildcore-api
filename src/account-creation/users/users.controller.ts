@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -86,14 +87,28 @@ export class UsersController {
     @UserEntity() user: AuthenticatedUser,
     @Query('companyId') companyId: string,
     @Query('search') search?: string,
+    @Query('page') page?: string,
   ) {
     const caller = rlsContextFor(user);
+    // 036 C18: `page` asks for `{ items, total }` (25 a page) for the searchable picker; without
+    // it the answer is the bare array of up to 50 it has always been. Each row now carries `name`.
+    const pageNumber = page === undefined ? null : Number(page);
+    if (
+      pageNumber !== null &&
+      (!Number.isSafeInteger(pageNumber) || pageNumber < 1)
+    ) {
+      throw new BadRequestException('page must be a whole number of 1 or more');
+    }
     // Falls back to the caller's own company: a non-cross-company admin has no
     // business naming a different one, and RLS would reject it anyway.
-    return this.employees.getUnlinkedEmployees(
+    const result = await this.employees.getUnlinkedEmployees(
       caller,
       companyId ?? effectiveCompanyId(user),
-      search,
+      search?.slice(0, 100),
+      pageNumber === null
+        ? undefined
+        : { skip: (pageNumber - 1) * 25, take: 25 },
     );
+    return pageNumber === null ? result.items : result;
   }
 }
