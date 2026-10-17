@@ -1,4 +1,9 @@
-import { computeFuelVariance } from './fuel.service';
+import { plainToInstance } from 'class-transformer';
+import { validateSync } from 'class-validator';
+
+import { createPrismaMock } from '../../settings/testing/prisma-mock';
+import { CreateFuelEntryDto } from './dto/fuel.dto';
+import { computeFuelVariance, FuelService } from './fuel.service';
 
 /**
  * FR-004's whole point is that the threshold is a *category setting*, not the `> 15`
@@ -93,5 +98,71 @@ describe('computeFuelVariance (FR-004)', () => {
         thresholdPercent: 15,
       }),
     ).toEqual({ variancePercent: null, varianceAlert: false });
+  });
+});
+
+describe('FuelService.create — what may be booked (036 K1, K10)', () => {
+  const caller = { id: 'u-1', companyId: 'co-1', permissions: [] } as never;
+  const build = () => {
+    const prisma = createPrismaMock({
+      equipment: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'eq-1',
+          companyId: 'co-1',
+          categoryId: 'cat-1',
+          status: 'active',
+          deployedSiteId: null,
+        }),
+      },
+      equipmentCategory: { findUnique: jest.fn().mockResolvedValue(null) },
+      logbookEntry: { findUnique: jest.fn().mockResolvedValue(null) },
+      fuelEntry: { create: jest.fn() },
+    });
+    const refs = {
+      parseDate: (value: string) =>
+        new Date(`${value.slice(0, 10)}T00:00:00.000Z`),
+      requireVendorName: jest.fn(),
+      requireSiteName: jest.fn(),
+    };
+    const service = new FuelService(
+      prisma as never,
+      { record: jest.fn() } as never,
+      refs as never,
+      { emit: jest.fn() } as never,
+    );
+    return { service, prisma, refs };
+  };
+  const dto = {
+    equipmentId: 'eq-1',
+    date: '2026-10-01',
+    quantity: 50,
+    rate: 90,
+  };
+
+  it('refuses a future date', async () => {
+    const { service, prisma } = build();
+    await expect(
+      service.create(caller, { ...dto, date: '2099-01-01' }, 'ip'),
+    ).rejects.toThrow(/future/);
+    expect(prisma.tx.fuelEntry.create).not.toHaveBeenCalled();
+  });
+
+  it("checks a named site against the machine's company", async () => {
+    const { service, prisma, refs } = build();
+    refs.requireSiteName.mockRejectedValue(
+      new Error('Site s-9 does not exist in this company'),
+    );
+    await expect(
+      service.create(caller, { ...dto, siteId: 's-9' }, 'ip'),
+    ).rejects.toThrow(/does not exist in this company/);
+    expect(refs.requireSiteName).toHaveBeenCalledWith(caller, 's-9', 'co-1');
+    expect(prisma.tx.fuelEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses zero litres at the DTO', () => {
+    const errors = validateSync(
+      plainToInstance(CreateFuelEntryDto, { ...dto, quantity: 0 }),
+    );
+    expect(errors.map((error) => error.property)).toEqual(['quantity']);
   });
 });

@@ -22,10 +22,11 @@ export class CreateFuelEntryDto {
   @IsISO8601()
   date!: string;
 
-  @ApiProperty({ description: 'Litres' })
+  /** More than zero (036 K10): a 0-litre "fill" is a mistake, and it divides the rate by zero. */
+  @ApiProperty({ description: 'Litres, more than zero' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
-  @Min(0)
+  @Min(0.001, { message: 'quantity must be more than zero litres' })
   quantity!: number;
 
   @ApiPropertyOptional({
