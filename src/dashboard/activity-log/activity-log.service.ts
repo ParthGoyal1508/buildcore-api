@@ -165,12 +165,13 @@ export class ActivityLogService {
     query: ActivityLogQueryDto,
   ): Prisma.AuditLogEntryWhereInput {
     const since = this.since(query.timeRange);
+    const ctx = rlsContextFor(user);
     return {
       // RLS is not enforced on the legacy audit table, so scope explicitly here:
-      // an ordinary caller sees only their own company, a Super Admin sees all.
-      ...(rlsContextFor(user).isSuperAdmin
-        ? {}
-        : { companyId: user.companyId }),
+      // an ordinary caller sees only their own company, a Super Admin sees all — or, having
+      // selected a company, that company. Not `user.companyId`: that is the **home** company,
+      // and a Super Admin who had selected another one was shown the wrong log (036 B3).
+      ...(ctx.isSuperAdmin ? {} : { companyId: ctx.companyId }),
       entityType: { in: this.permittedTypes(user, query) },
       ...(since ? { createdAt: { gte: since } } : {}),
     };

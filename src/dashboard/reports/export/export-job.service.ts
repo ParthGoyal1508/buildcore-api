@@ -17,6 +17,7 @@ import {
   withRlsContext,
 } from '../../../common/prisma/rls-context';
 import { StorageService } from '../../../common/storage/storage.service';
+import { effectiveCompanyId } from '../../../settings/company-scope';
 import type { ReportData } from '../report.types';
 import {
   formatMeta,
@@ -112,7 +113,9 @@ export class ExportJobService {
           filters,
           status: ExportJobStatus.pending,
           requestedByUserId: user.id,
-          companyId: user.companyId ?? '',
+          // The selected company (036 B3). Under the home company the insert failed the RLS
+          // check whenever a Super Admin had switched, and the export was a 500.
+          companyId: effectiveCompanyId(user) ?? '',
         },
         select: { id: true },
       }),
@@ -287,7 +290,7 @@ export class ExportJobService {
       entityId,
       changes,
       accountId: user.id,
-      companyId: user.companyId,
+      companyId: effectiveCompanyId(user),
       ipAddress,
     });
   }

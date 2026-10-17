@@ -26,6 +26,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { clientIpOf } from '../../hr/caller-context';
 import { rlsContextFor } from '../../common/prisma/rls-context';
+import { resolveCompanyId } from '../company-scope';
 import {
   CreateReimbursementCategoryDto,
   UpdateReimbursementCategoryDto,
@@ -47,14 +48,11 @@ import { ReimbursementCategoriesService } from './reimbursement-categories.servi
 export class ReimbursementCategoriesController {
   constructor(private readonly categories: ReimbursementCategoriesService) {}
 
+  /** The selected company for a Super Admin who has chosen one, else the shared rule
+   * (036 B3). `user.companyId ?? requested` read the **home** company first, so a Super
+   * Admin who had switched company created categories in the one they had left. */
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    return resolveCompanyId(user, requested);
   }
 
   private actorOf(user: AuthenticatedUser, request: Request) {

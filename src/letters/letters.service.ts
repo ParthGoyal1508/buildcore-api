@@ -21,6 +21,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
+import { effectiveCompanyId } from '../settings/company-scope';
 import { DocumentTypesService } from '../settings/reference-data/document-types.service';
 import {
   LetterFieldView,
@@ -1337,12 +1338,14 @@ export class LettersService {
     });
   }
 
+  /** The selected company before the home one (036 B3). */
   private companyOf(caller: AuthenticatedUser): string {
-    if (!caller.companyId) {
+    const companyId = effectiveCompanyId(caller);
+    if (!companyId) {
       throw new BadRequestException(
         'companyId is required for a cross-company caller.',
       );
     }
-    return caller.companyId;
+    return companyId;
   }
 }
