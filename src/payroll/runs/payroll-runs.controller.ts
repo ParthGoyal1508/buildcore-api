@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Get,
   Param,
@@ -17,7 +18,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { Permission, PayrollRunStatus } from '@prisma/client';
 import type { Request, Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -27,6 +28,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { PayrollEngineService } from '../engine/payroll-engine.service';
+import { PayrollScheduleService } from './payroll-schedule.service';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { BankSheetService } from './bank-sheet.service';
 import { SlipDeliveryService } from './slip-delivery.service';
@@ -53,6 +55,8 @@ export class PayrollRunsController {
     private readonly transactionSheet: TransactionSheetService,
     /** To match the bank's account numbers against the employees' encrypted ones. */
     private readonly pii: PiiCipherService,
+    /** Puts a run processed here into its approval chain (2026-10-17). */
+    private readonly schedule: PayrollScheduleService,
   ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
@@ -125,7 +129,48 @@ export class PayrollRunsController {
     @Param('id') id: string,
     @Body() dto: SetRunStatusDto,
   ) {
-    return this.engine.setStatus(callerFrom(user, request), id, dto.status);
+    const caller = callerFrom(user, request);
+    const result = await this.engine.setStatus(caller, id, dto.status);
+    if (result.status === PayrollRunStatus.processed) {
+      // 2026-10-17: processing puts the run into its approval chain, as the monthly sweep does —
+      // otherwise a run processed by hand never reaches an approver and its bank sheet is held for
+      // good. A missing chain does not undo the processing; the bank sheet says what is needed.
+      const run = await this.engine.getRun(caller, id);
+      await this.schedule
+        .submitIfNeverSubmitted(run.companyId, id)
+        .catch(() => undefined);
+    }
+    return result;
+  }
+
+  @Post(':id/submit-for-approval')
+  @ApiOperation({
+    summary: 'Put a processed run into its approval chain',
+    description:
+      'For a run processed before processing submitted it automatically. A run already in a ' +
+      'chain, in any state, is refused with 409.',
+  })
+  async submitForApproval(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+  ) {
+    const run = await this.engine.getRun(callerFrom(user, request), id);
+    if (run.status === PayrollRunStatus.draft) {
+      throw new ConflictException(
+        'Process this run before submitting it for approval.',
+      );
+    }
+    const outcome = await this.schedule.submitIfNeverSubmitted(
+      run.companyId,
+      id,
+    );
+    if (outcome === 'already_submitted') {
+      throw new ConflictException(
+        'This payroll run is already in its approval chain.',
+      );
+    }
+    return { runId: id, submitted: true };
   }
 
   @Get(':id/slip-deliveries')

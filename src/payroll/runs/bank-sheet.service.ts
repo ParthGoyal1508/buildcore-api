@@ -379,6 +379,19 @@ export class BankSheetService {
       run.companyId,
       run.id,
     );
+    if (outstanding && !outstanding.submitted) {
+      // 2026-10-17: a run processed by hand before processing submitted it. Said plainly, with the
+      // run named, so the screen can offer to submit it rather than leave everyone waiting on an
+      // approval nobody was ever asked for.
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          'This payroll run has not been submitted for approval yet. Submit it, and the bank ' +
+          'sheet can be produced once every level has approved.',
+        code: 'PAYROLL_RUN_NOT_SUBMITTED',
+        runId: run.id,
+      });
+    }
     if (outstanding) {
       throw new ConflictException({
         statusCode: 409,
