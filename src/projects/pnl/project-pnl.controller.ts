@@ -20,6 +20,7 @@ import {
 } from './dto/pnl-query.dto';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { rlsContextFor } from '../../common/prisma/rls-context';
 import { resolveCompanyId } from '../../settings/company-scope';
 import {
@@ -106,6 +107,9 @@ export class ProjectPnlController {
   }
 
   @Get('export')
+  // 036 B9: an export builds the whole month's position as a workbook or PDF — the heaviest read
+  // in this module — so it takes the shared export limit rather than only the app-wide one.
+  @ExportThrottle()
   @ApiOperation({
     summary:
       'The month’s position as a document that can be handed to a client (FR-011a)',
