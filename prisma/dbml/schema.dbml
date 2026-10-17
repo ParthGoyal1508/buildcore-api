@@ -2791,6 +2791,8 @@ Table SalaryAdvance {
   outstandingBalance Decimal [not null]
   exceedsLimit Boolean [not null, default: false, note: 'Above the configured multiple of monthly net; needs explicit approval.']
   status SalaryAdvanceStatus [not null, default: 'pending']
+  createdByUserId String [note: 'Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036;
+the audit log\'s CREATE entry answers for those.']
   approvedByUserId String
   disbursedOn DateTime
   createdAt DateTime [default: `now()`, not null]
@@ -2823,6 +2825,15 @@ when idle, and a suspended instance runs no schedule (research.md §4). Without 
 column, "did the 1st-of-the-month run actually fire?" can only be answered by
 inferring from timestamps. With it, an operator can see at a glance whether the
 automation is working or whether somebody has been quietly creating runs by hand.']
+  exceptions Json [note: 'Employees the run could not compute correctly — no PAN, no tax slabs (036 F7).
+
+`[{ employeeId, reason }]`, written at generation and replaced by each regeneration. Until 036
+these were in the generate response only, so the warning on run detail never appeared for
+anybody who opened the run later — which is everybody who processes it.']
+  recoveriesSettledAt DateTime [note: 'When processing applied this run\'s advance and fuel recoveries and settled its claims and
+EMIs (036 F1/F2). Set in the same transaction as the `draft → processed` move, so a run that
+has it has settled exactly once; the data-repair report reads it to tell runs processed under
+the new rule from runs whose recoveries were applied at draft.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   lineItems PayrollLineItem [not null]
@@ -2861,6 +2872,14 @@ generating it says named as a fuel recovery and not as an advance. The distincti
 employee\'s: a loan instalment is money they asked for and agreed to repay, and this is money
 taken for a loss. Folding it into either would leave somebody reading their payslip unable to
 tell why their pay fell, which FR-007 exists to prevent.']
+  advanceRecovered Decimal [not null, default: 0, note: 'Salary advance recovered on this line (036 F3). Net pay already subtracted it; until 036 it
+was not stored, so the payslip printed 0 and its deductions did not add up to gross − net.']
+  advanceRecoveryAdvanceId String [note: 'The advance `advanceRecovered` is against — applied to it when the run is processed (036 F1).']
+  fuelRecoveries Json [note: '`[{ recoveryId, amount }]` — the fuel recoveries this line\'s `fuelRecoveryDeduction` is made
+of, recorded against them when the run is processed (036 F2). Several when one carries.']
+  reimbursementClaimIds String[] [not null, note: 'The reimbursement claims folded into `specialAllowance`, and their total (036 F4). Processing
+settles exactly these, not every approved claim the employee happens to have by then.']
+  reimbursementTotal Decimal [not null, default: 0]
   netPay Decimal [not null, default: 0]
   employerPf Decimal [not null, default: 0]
   employerEps Decimal [not null, default: 0]
@@ -2898,6 +2917,7 @@ the transfer flow deliberately does not rewrite it.']
   reason String [not null]
   remarks String
   status LoanStatus [not null, default: 'pending']
+  createdByUserId String [note: 'Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036.']
   approvedByUserId String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]

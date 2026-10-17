@@ -15,6 +15,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { ApprovalService } from '../../approvals/approvals.service';
+import { ACTION_PAYROLL_RUN } from '../../approvals/default-chains';
 import { AuditLogService } from '../../auth/audit-log.service';
 import type { HrPayrollConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
@@ -65,6 +67,11 @@ export class PayrollEngineService {
     private readonly fuelRecovery: FuelRecoveryService,
     private readonly auditLog: AuditLogService,
     configService: ConfigService,
+    /**
+     * 036 F6. `processed → paid` is money having left, so it waits for the run's approval chain —
+     * the same gate the bank sheet uses, through the same single implementation.
+     */
+    private readonly approvals: ApprovalService,
   ) {
     this.hrPayroll = configService.get<HrPayrollConfig>('hrPayroll');
   }
@@ -125,7 +132,7 @@ export class PayrollEngineService {
       companyId,
       employees.map((employee) => employee.id),
     );
-    /** What each line actually took, so the balance is reduced by what was recovered, not what was
+    /** What each line takes, so the balance is later reduced by what was recovered, not what was
      * owed — the same distinction FR-055 draws for advances. */
     const fuelRecoveries: {
       employeeId: string;
@@ -136,10 +143,8 @@ export class PayrollEngineService {
     const lines: (Prisma.PayrollLineItemCreateManyInput & {
       employeeId: string;
     })[] = [];
-    // Claim ids folded into this run, settled when it is processed (FR-038).
-    const settledClaimIds: string[] = [];
-    // Advance recoveries actually applied, so the balance is reduced by what was
-    // recovered rather than what was owed (FR-055).
+    // Advance recoveries this draft takes, so the balance is reduced by what was
+    // recovered rather than what was owed (FR-055) — when the run is processed (036 F1).
     const advanceRecoveries: { advanceId: string; amount: number }[] = [];
     // Employees the run could not tax correctly — surfaced instead of silently
     // deducting zero (FR-053).
@@ -161,7 +166,6 @@ export class PayrollEngineService {
           caller,
           employee.id,
         );
-      settledClaimIds.push(...reimbursement.claimIds);
 
       // Gross for TDS purposes, before deductions — computed from the salary
       // structure scaled by attendance, which is what the engine derives below.
@@ -265,6 +269,9 @@ export class PayrollEngineService {
           amount: ceiling.applied,
         });
       }
+      const lineFuelRecoveries = fuelRecoveries
+        .filter((rec) => rec.employeeId === employee.id)
+        .map((rec) => ({ recoveryId: rec.recoveryId, amount: rec.amount }));
 
       lines.push({
         payrollRunId: '',
@@ -290,6 +297,18 @@ export class PayrollEngineService {
         tds: figures.tds,
         loanEmiDeduction: figures.loanEmiDeduction,
         fuelRecoveryDeduction: fuelRecovered,
+        // 036 F1–F4. What this line takes and from where, kept on the line so that processing —
+        // not generation — applies it, and applies exactly this. Recomputing it at processing would
+        // let a balance or a claim that changed in between produce a deduction nobody reviewed.
+        advanceRecovered,
+        advanceRecoveryAdvanceId:
+          advanceRecovered > 0 ? advanceDue.advanceId : null,
+        fuelRecoveries:
+          lineFuelRecoveries.length > 0
+            ? (lineFuelRecoveries as Prisma.InputJsonValue)
+            : Prisma.DbNull,
+        reimbursementClaimIds: reimbursement.claimIds,
+        reimbursementTotal: reimbursement.total,
         netPay: r2(
           figures.netPay +
             reimbursement.total -
@@ -307,24 +326,40 @@ export class PayrollEngineService {
     }
 
     const run = await withRlsContext(this.prisma, caller.rls, async (tx) => {
-      const created = existing
-        ? await tx.payrollRun.update({
-            where: { id: existing.id },
-            data: {
-              generatedAt: new Date(),
-              generatedByUserId: caller.userId,
-            },
-          })
-        : await tx.payrollRun.create({
-            data: {
-              companyId,
-              period,
-              isFnf: false,
-              status: PayrollRunStatus.draft,
-              generatedAt: new Date(),
-              generatedByUserId: caller.userId,
-            },
-          });
+      let created;
+      if (existing) {
+        // 036 F6. Conditional on the run *still* being a draft: the status was read before the
+        // computation above, which takes seconds, and a run processed in between must not have its
+        // frozen lines deleted and rewritten here.
+        const claimed = await tx.payrollRun.updateMany({
+          where: { id: existing.id, status: PayrollRunStatus.draft },
+          data: {
+            generatedAt: new Date(),
+            generatedByUserId: caller.userId,
+            exceptions: exceptions as Prisma.InputJsonValue,
+          },
+        });
+        if (claimed.count !== 1) {
+          throw new ConflictException(
+            `Payroll for ${period} was processed while it was being regenerated; it can no longer be regenerated.`,
+          );
+        }
+        created = await tx.payrollRun.findFirstOrThrow({
+          where: { id: existing.id },
+        });
+      } else {
+        created = await tx.payrollRun.create({
+          data: {
+            companyId,
+            period,
+            isFnf: false,
+            status: PayrollRunStatus.draft,
+            generatedAt: new Date(),
+            generatedByUserId: caller.userId,
+            exceptions: exceptions as Prisma.InputJsonValue,
+          },
+        });
+      }
 
       // Replace rather than merge: a regeneration is a fresh answer to the same
       // question, and leaving a stale line for an employee who has since been
@@ -337,41 +372,27 @@ export class PayrollEngineService {
           data: lines.map((l) => ({ ...l, payrollRunId: created.id })),
         });
       }
-      // Applied here, in the same transaction that writes the lines, so the
-      // balance can never disagree with the deduction that reduced it.
-      for (const rec of advanceRecoveries) {
-        await this.advances.applyRecovery(tx, rec.advanceId, rec.amount);
-      }
 
       /**
-       * Fuel recovery balances, reduced in the same transaction as the lines that reduced them
-       * (FR-007b).
+       * 036 F1/F2 (decision 1): **no advance or fuel balance is touched here.**
        *
-       * The line ids are read back because `createMany` returns none, and a recovery records which
-       * line took each instalment — a carried recovery touches several, and "which payslip was this
-       * deducted on" is the first question anybody asks about it.
+       * Until 036 this transaction applied each recovery to its balance as the draft was written —
+       * and a draft is regenerated whenever attendance is corrected, so each regeneration took the
+       * recovery again. An advance could close having been deducted once, or not at all. The
+       * amounts are now only *recorded on the line*; `setStatus` applies them when the run is
+       * processed, once, in the transaction that freezes it.
        */
-      if (fuelRecoveries.length > 0) {
-        const written = await tx.payrollLineItem.findMany({
-          where: { payrollRunId: created.id },
-          select: { id: true, employeeId: true },
-        });
-        const lineByEmployee = new Map(
-          written.map((line) => [line.employeeId, line.id]),
-        );
-        for (const rec of fuelRecoveries) {
-          const lineId = lineByEmployee.get(rec.employeeId);
-          if (!lineId) continue;
-          await this.fuelRecovery.recordRecovered(
-            tx,
-            rec.recoveryId,
-            rec.amount,
-            lineId,
-          );
-        }
-      }
-
       return created;
+    }).catch((error: unknown) => {
+      // 036: two people pressing Generate at once. Both pass the "is there a run?" read, and the
+      // second insert hits the one-regular-run-per-period index (or the one-line-per-employee
+      // index, when both are regenerating). The database is right; the message should say so.
+      if ((error as { code?: string })?.code === 'P2002') {
+        throw new ConflictException(
+          `Payroll for ${period} is being generated by someone else right now. Wait a moment, then reload the run.`,
+        );
+      }
+      throw error;
     });
 
     await this.auditLog.record({
@@ -390,8 +411,9 @@ export class PayrollEngineService {
       status: run.status,
       lineCount: lines.length,
       // Surfaced on the run rather than buried: an admin about to process payroll
-      // needs to see who could not be taxed correctly.
+      // needs to see who could not be taxed correctly. Also kept on the run since 036 F7.
       exceptions,
+      // What processing will recover — planned, not yet applied (036 F1). Same shape as before.
       advanceRecoveries,
     };
   }
@@ -399,9 +421,16 @@ export class PayrollEngineService {
   /**
    * Advances a run's status.
    *
-   * Draft → Processed freezes the figures (FR-015) and settles the loan schedule
-   * entries the run deducted. Processed → Paid records disbursement. Neither
-   * transition is reversible, and no other pair is permitted.
+   * Draft → Processed freezes the figures (FR-015) and settles what the run deducted: loan schedule
+   * entries, reimbursement claims, and — since 036 F1/F2 — salary advance and fuel recoveries.
+   * Processed → Paid records disbursement, and only once the run's approval chain has approved it
+   * (036 F6). Neither transition is reversible, and no other pair is permitted.
+   *
+   * **Race-safe (036 F6).** The status is read here for the message, but the move itself is an
+   * `updateMany` conditional on the status still being what was read, inside the transaction that
+   * does the settling. Two "process" requests at once used to both pass the read and both settle;
+   * now the second matches no row and gets a 409, and its transaction — settlement included — rolls
+   * back. That is also what makes settlement exactly-once if a client retries.
    */
   async setStatus(caller: Caller, runId: string, target: PayrollRunStatus) {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -420,26 +449,37 @@ export class PayrollEngineService {
       );
     }
 
+    if (target === PayrollRunStatus.paid) {
+      await this.assertApprovedForPayment(run.companyId, runId);
+    }
+
     const updated = await withRlsContext(
       this.prisma,
       caller.rls,
       async (tx) => {
-        const next = await tx.payrollRun.update({
-          where: { id: runId },
+        const now = new Date();
+        const moved = await tx.payrollRun.updateMany({
+          where: { id: runId, status: run.status },
           data: {
             status: target,
             ...(target === PayrollRunStatus.processed
-              ? { processedAt: new Date() }
-              : { paidAt: new Date() }),
+              ? { processedAt: now, recoveriesSettledAt: now }
+              : { paidAt: now }),
           },
         });
+        if (moved.count !== 1) {
+          throw new ConflictException(
+            'This payroll run was changed by someone else a moment ago. Reload it to see where it stands.',
+          );
+        }
 
         if (target === PayrollRunStatus.processed) {
-          await this.settleLoanSchedule(tx, runId, run.period);
+          await this.settleRecoveries(tx, runId);
+          await this.settleLoanSchedule(tx, run);
           await this.materialiseSalarySlips(tx, runId, run.period);
           await this.settleReimbursements(tx, runId);
         }
-        return next;
+        return tx.payrollRun.findFirstOrThrow({ where: { id: runId } });
       },
     );
 
@@ -454,6 +494,44 @@ export class PayrollEngineService {
     });
 
     return { runId, status: updated.status };
+  }
+
+  /**
+   * Refuses `processed → paid` until the run's approval chain has approved it (036 F6).
+   *
+   * `ApprovalService.mayTakeEffect` rather than a status read of our own — FR-018's rule has one
+   * implementation, and it is the one the bank sheet already obeys. A run marked paid while its
+   * approval was still pending is a payment recorded against figures nobody agreed.
+   */
+  private async assertApprovedForPayment(
+    companyId: string,
+    runId: string,
+  ): Promise<void> {
+    const gate = await this.approvals.mayTakeEffect({
+      actionType: ACTION_PAYROLL_RUN,
+      entityType: ACTION_PAYROLL_RUN,
+      entityId: runId,
+      companyId,
+    });
+    if (gate.allowed) return;
+    if (gate.state === null) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_SUBMITTED',
+        message:
+          'This payroll run has not been submitted for approval, so it cannot be marked paid yet.',
+      });
+    }
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'PAYROLL_RUN_NOT_APPROVED',
+      message:
+        gate.state === 'pending'
+          ? `This payroll run is awaiting ${
+              gate.levelLabel ?? 'approval'
+            }. It can be marked paid once every level has approved.`
+          : `This payroll run was ${gate.state} and cannot be marked paid.`,
+    });
   }
 
   /**
@@ -512,19 +590,34 @@ export class PayrollEngineService {
       }),
     );
     const byId = new Map(employees.map((e) => [e.id, e]));
+    const nameOf = (employeeId: string) => {
+      const e = byId.get(employeeId);
+      const name = e
+        ? [e.firstName, e.lastName].filter(Boolean).join(' ').trim()
+        : '';
+      return {
+        employeeCode: e?.employeeCode ?? undefined,
+        name: name || undefined,
+      };
+    };
+    // 036 F7. Kept on the run since 036; a run generated before has none recorded, which is `[]`
+    // rather than `null` so the screen has one shape to read. Each carries the employee's code and
+    // name for the same reason the lines do.
+    const exceptions = (
+      Array.isArray(run.exceptions)
+        ? (run.exceptions as { employeeId: string; reason: string }[])
+        : []
+    ).map((x) => ({ ...x, ...nameOf(x.employeeId) }));
     return {
       ...run,
-      lineItems: run.lineItems.map((line) => {
-        const e = byId.get(line.employeeId);
-        const name = e
-          ? [e.firstName, e.lastName].filter(Boolean).join(' ').trim()
-          : '';
-        return {
-          ...line,
-          employeeCode: e?.employeeCode ?? undefined,
-          name: name || undefined,
-        };
-      }),
+      exceptions,
+      lineItems: run.lineItems.map((line) => ({
+        ...line,
+        ...nameOf(line.employeeId),
+        // 036 F8. The server's own totals, so run detail stops adding columns up itself — it was
+        // missing conveyance, site, special, fuel and advance, and its totals did not match net.
+        ...lineTotals(line),
+      })),
     };
   }
 
@@ -673,9 +766,10 @@ export class PayrollEngineService {
         deductionPt: l.professionalTax,
         deductionTds: l.tds,
         deductionLoanEmi: l.loanEmiDeduction,
-        // Salary advances arrive with the 2026-09-01 amendment (US15); until then
-        // there is nothing to recover, and zero is the honest value.
-        deductionAdvanceRecovery: 0,
+        // 036 F3. Was hard-coded 0 — a placeholder from before advances existed that outlived
+        // them — while net pay had the advance taken out, so the slip's deductions did not add up
+        // to gross − net for anybody repaying one.
+        deductionAdvanceRecovery: l.advanceRecovered,
         // 020 FR-007. Its own line on the payslip, named as a fuel recovery — not folded into the
         // loan or advance line above. A deduction an employee cannot see explained is a grievance
         // waiting to happen, and "why is my pay short" is not answered by a figure under a heading
@@ -703,19 +797,33 @@ export class PayrollEngineService {
   /**
    * Marks the schedule entries this run deducted as paid, and closes any loan
    * whose final instalment that was.
+   *
+   * 036 F5. Only **this run's company and this run's employees** — those whose line actually took an
+   * EMI. The query used to be every active loan with an instalment due this month, in any company:
+   * a Super Admin processing with no company selected (RLS off) marked other companies' EMIs paid
+   * against a run that never deducted them.
    */
   private async settleLoanSchedule(
     tx: Prisma.TransactionClient,
-    runId: string,
-    period: string,
+    run: { id: string; companyId: string; period: string },
   ): Promise<void> {
+    const deducted = await tx.payrollLineItem.findMany({
+      where: { payrollRunId: run.id, loanEmiDeduction: { gt: 0 } },
+      select: { employeeId: true },
+    });
+    if (deducted.length === 0) return;
+
     const entries = await tx.loanScheduleEntry.findMany({
       where: {
-        month: period,
+        month: run.period,
         status: {
           in: [LoanScheduleStatus.upcoming, LoanScheduleStatus.overdue],
         },
-        loan: { status: LoanStatus.active },
+        loan: {
+          status: LoanStatus.active,
+          companyId: run.companyId,
+          employeeId: { in: deducted.map((l) => l.employeeId) },
+        },
       },
       select: { id: true, loanId: true },
     });
@@ -723,7 +831,7 @@ export class PayrollEngineService {
 
     await tx.loanScheduleEntry.updateMany({
       where: { id: { in: entries.map((e) => e.id) } },
-      data: { status: LoanScheduleStatus.paid, paidInPayrollRunId: runId },
+      data: { status: LoanScheduleStatus.paid, paidInPayrollRunId: run.id },
     });
 
     // A loan with nothing left outstanding is closed; leaving it Active would
@@ -743,12 +851,16 @@ export class PayrollEngineService {
   }
 
   /**
-   * Marks payroll-settled reimbursement claims paid once the run carrying them is
-   * processed.
+   * Marks the reimbursement claims this run carried as paid, once it is processed.
    *
    * Deferred to processing rather than done at generation: a draft can be
    * regenerated, and a claim marked paid against a run that was then rebuilt would
    * be paid on paper but not in fact.
+   *
+   * 036 F4. **Exactly the claim ids written on the run's lines**, not every approved payroll-mode
+   * claim the employee has by the time somebody presses Process — a claim approved after the draft
+   * was generated is not in its special allowance and was being marked paid anyway.
+   * `settleRecoveries` has already refused the run if any of these stopped being payable.
    */
   private async settleReimbursements(
     tx: Prisma.TransactionClient,
@@ -756,18 +868,109 @@ export class PayrollEngineService {
   ): Promise<void> {
     const lines = await tx.payrollLineItem.findMany({
       where: { payrollRunId: runId },
-      select: { employeeId: true },
+      select: { reimbursementClaimIds: true },
     });
-    if (lines.length === 0) return;
+    const claimIds = lines.flatMap((l) => l.reimbursementClaimIds ?? []);
+    await this.reimbursements.settlePayrollClaims(tx, claimIds, runId);
+  }
 
-    await tx.reimbursementClaim.updateMany({
-      where: {
-        employeeId: { in: lines.map((l) => l.employeeId) },
-        status: 'approved',
-        paymentMode: 'payroll',
+  /**
+   * Applies the advance and fuel recoveries the run's lines took (036 F1/F2, decision 1).
+   *
+   * Runs inside the `draft → processed` transaction, after the conditional status move, so it
+   * happens once per run: a retried or concurrent "process" matches no row and rolls back before
+   * reaching here.
+   *
+   * **Refuses a stale draft rather than settling it.** Net pay was computed from the balances and
+   * claims as they stood at generation. If, since then, an advance was recovered elsewhere (a bank
+   * sheet, an F&F, another month's run), a fuel recovery was reversed, or a claim was paid directly
+   * or withdrawn, the frozen line would deduct money that is no longer owed or pay a claim twice.
+   * Regenerating the draft fixes all of these, so the refusal says that — and because it is thrown
+   * inside the transaction, nothing is half-settled.
+   */
+  private async settleRecoveries(
+    tx: Prisma.TransactionClient,
+    runId: string,
+  ): Promise<void> {
+    const lines = await tx.payrollLineItem.findMany({
+      where: { payrollRunId: runId },
+      select: {
+        id: true,
+        employeeId: true,
+        advanceRecovered: true,
+        advanceRecoveryAdvanceId: true,
+        fuelRecoveries: true,
+        reimbursementClaimIds: true,
       },
-      data: { status: 'paid', paymentReference: `payroll:${runId}` },
     });
+
+    const advanceIds = lines
+      .map((l) => l.advanceRecoveryAdvanceId)
+      .filter((id): id is string => !!id);
+    const fuelPlans = lines.flatMap((l) =>
+      parseFuelRecoveries(l.fuelRecoveries).map((rec) => ({
+        ...rec,
+        lineId: l.id,
+      })),
+    );
+    const claimIds = lines.flatMap((l) => l.reimbursementClaimIds ?? []);
+
+    const [advances, fuel, claims] = await Promise.all([
+      advanceIds.length
+        ? tx.salaryAdvance.findMany({
+            where: { id: { in: advanceIds } },
+            select: { id: true, status: true, outstandingBalance: true },
+          })
+        : [],
+      fuelPlans.length
+        ? tx.operatorFuelRecovery.findMany({
+            where: { id: { in: fuelPlans.map((p) => p.recoveryId) } },
+            select: {
+              id: true,
+              status: true,
+              amount: true,
+              recoveredAmount: true,
+            },
+          })
+        : [],
+      claimIds.length
+        ? tx.reimbursementClaim.findMany({
+            where: { id: { in: claimIds } },
+            select: { id: true, status: true, paymentMode: true },
+          })
+        : [],
+    ]);
+
+    const stale = findStaleRecoveries(lines, { advances, fuel, claims });
+    if (stale.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_DRAFT_STALE',
+        message:
+          'Some recoveries or claims in this draft changed after it was generated, so processing it ' +
+          'would deduct or pay the wrong amount. Regenerate the draft, then process it.',
+        stale,
+      });
+    }
+
+    for (const line of lines) {
+      const amount = this.num(line.advanceRecovered);
+      if (line.advanceRecoveryAdvanceId && amount > 0) {
+        await this.advances.applyRecovery(
+          tx,
+          line.advanceRecoveryAdvanceId,
+          amount,
+        );
+      }
+    }
+    for (const plan of fuelPlans) {
+      await this.fuelRecovery.recordRecovered(
+        tx,
+        plan.recoveryId,
+        plan.amount,
+        plan.lineId,
+      );
+    }
   }
 
   /**
@@ -818,4 +1021,202 @@ export class PayrollEngineService {
     if (v === null || v === undefined) return 0;
     return typeof v === 'number' ? v : v.toNumber();
   }
+}
+
+/** Sum of decimals as a 2-dp Decimal, so it serialises exactly like the columns beside it. */
+const sumDecimal = (values: (Prisma.Decimal | number | null)[]) =>
+  new Prisma.Decimal(
+    r2(
+      values.reduce<number>(
+        (a, v) =>
+          a + (v === null ? 0 : typeof v === 'number' ? v : v.toNumber()),
+        0,
+      ),
+    ).toFixed(2),
+  );
+
+/**
+ * A line's gross and total deductions, as the server computes them (036 F8).
+ *
+ * `gross` is every earning on the line, reimbursements included (they ride in special allowance);
+ * `totalDeductions` is every employee deduction, fuel and advance included. `gross −
+ * totalDeductions = netPay` for every line whose deductions did not exceed gross (the engine floors
+ * net pay at zero there). Returned as Decimals so they serialise as the columns do.
+ */
+export function lineTotals(line: {
+  basic: Prisma.Decimal;
+  hra: Prisma.Decimal;
+  conveyanceAllowance: Prisma.Decimal;
+  siteAllowance: Prisma.Decimal;
+  specialAllowance: Prisma.Decimal;
+  otWages: Prisma.Decimal;
+  employeePf: Prisma.Decimal;
+  employeeEsic: Prisma.Decimal;
+  professionalTax: Prisma.Decimal;
+  tds: Prisma.Decimal;
+  loanEmiDeduction: Prisma.Decimal;
+  fuelRecoveryDeduction: Prisma.Decimal;
+  advanceRecovered: Prisma.Decimal;
+}): { gross: Prisma.Decimal; totalDeductions: Prisma.Decimal } {
+  return {
+    gross: sumDecimal([
+      line.basic,
+      line.hra,
+      line.conveyanceAllowance,
+      line.siteAllowance,
+      line.specialAllowance,
+      line.otWages,
+    ]),
+    totalDeductions: sumDecimal([
+      line.employeePf,
+      line.employeeEsic,
+      line.professionalTax,
+      line.tds,
+      line.loanEmiDeduction,
+      line.fuelRecoveryDeduction,
+      line.advanceRecovered,
+    ]),
+  };
+}
+
+/** `PayrollLineItem.fuelRecoveries` → typed rows, tolerating null and malformed JSON. */
+export function parseFuelRecoveries(
+  value: Prisma.JsonValue | null | undefined,
+): { recoveryId: string; amount: number }[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((v) => v as { recoveryId?: unknown; amount?: unknown })
+    .filter(
+      (v) => typeof v?.recoveryId === 'string' && typeof v?.amount === 'number',
+    )
+    .map((v) => ({
+      recoveryId: v.recoveryId as string,
+      amount: v.amount as number,
+    }));
+}
+
+/** One reason a draft can no longer be processed as it stands (036 F1/F2/F4). */
+export interface StaleRecovery {
+  employeeId: string;
+  kind: 'advance' | 'fuel_recovery' | 'reimbursement';
+  id: string;
+  reason: string;
+}
+
+/**
+ * What in a draft no longer matches the balances and claims it was computed from (036).
+ *
+ * Pure, so the rule is tested without a database. Half a paisa of tolerance on the money checks:
+ * both sides are 2-dp figures and a floating-point sum must not refuse a run over 1e-12.
+ */
+export function findStaleRecoveries(
+  lines: {
+    employeeId: string;
+    advanceRecovered: Prisma.Decimal | number;
+    advanceRecoveryAdvanceId: string | null;
+    fuelRecoveries: Prisma.JsonValue | null;
+    reimbursementClaimIds: string[];
+  }[],
+  current: {
+    advances: {
+      id: string;
+      status: string;
+      outstandingBalance: Prisma.Decimal | number;
+    }[];
+    fuel: {
+      id: string;
+      status: string;
+      amount: Prisma.Decimal | number;
+      recoveredAmount: Prisma.Decimal | number;
+    }[];
+    claims: { id: string; status: string; paymentMode: string | null }[];
+  },
+): StaleRecovery[] {
+  const num = (v: Prisma.Decimal | number) =>
+    typeof v === 'number' ? v : v.toNumber();
+  const advances = new Map(current.advances.map((a) => [a.id, a]));
+  const fuel = new Map(current.fuel.map((f) => [f.id, f]));
+  const claims = new Map(current.claims.map((c) => [c.id, c]));
+  const stale: StaleRecovery[] = [];
+
+  // Fuel is summed per recovery across lines: one recovery is one employee's, but the check must
+  // not depend on that.
+  const fuelPlanned = new Map<string, { employeeId: string; amount: number }>();
+
+  for (const line of lines) {
+    const advanceAmount = num(line.advanceRecovered);
+    if (line.advanceRecoveryAdvanceId && advanceAmount > 0) {
+      const advance = advances.get(line.advanceRecoveryAdvanceId);
+      if (!advance || advance.status !== 'disbursed') {
+        stale.push({
+          employeeId: line.employeeId,
+          kind: 'advance',
+          id: line.advanceRecoveryAdvanceId,
+          reason: 'The advance is no longer outstanding.',
+        });
+      } else if (advanceAmount > num(advance.outstandingBalance) + 0.005) {
+        stale.push({
+          employeeId: line.employeeId,
+          kind: 'advance',
+          id: advance.id,
+          reason: `The draft recovers ${advanceAmount.toFixed(
+            2,
+          )} but only ${num(advance.outstandingBalance).toFixed(
+            2,
+          )} is outstanding now.`,
+        });
+      }
+    }
+    for (const rec of parseFuelRecoveries(line.fuelRecoveries)) {
+      const prior = fuelPlanned.get(rec.recoveryId);
+      fuelPlanned.set(rec.recoveryId, {
+        employeeId: line.employeeId,
+        amount: r2((prior?.amount ?? 0) + rec.amount),
+      });
+    }
+    for (const claimId of line.reimbursementClaimIds ?? []) {
+      const claim = claims.get(claimId);
+      if (
+        !claim ||
+        claim.status !== 'approved' ||
+        claim.paymentMode !== 'payroll'
+      ) {
+        stale.push({
+          employeeId: line.employeeId,
+          kind: 'reimbursement',
+          id: claimId,
+          reason: claim
+            ? `The claim is now ${claim.status}${
+                claim.paymentMode && claim.paymentMode !== 'payroll'
+                  ? ` (${claim.paymentMode})`
+                  : ''
+              }, not awaiting payment through payroll.`
+            : 'The claim no longer exists.',
+        });
+      }
+    }
+  }
+
+  for (const [recoveryId, plan] of fuelPlanned) {
+    const row = fuel.get(recoveryId);
+    const balance = row ? r2(num(row.amount) - num(row.recoveredAmount)) : 0;
+    if (!row || row.status !== 'approved') {
+      stale.push({
+        employeeId: plan.employeeId,
+        kind: 'fuel_recovery',
+        id: recoveryId,
+        reason: 'The fuel recovery is no longer awaiting payroll.',
+      });
+    } else if (plan.amount > balance + 0.005) {
+      stale.push({
+        employeeId: plan.employeeId,
+        kind: 'fuel_recovery',
+        id: recoveryId,
+        reason: `The draft recovers ${plan.amount.toFixed(
+          2,
+        )} but only ${balance.toFixed(2)} is outstanding now.`,
+      });
+    }
+  }
+  return stale;
 }

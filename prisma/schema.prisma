@@ -4703,6 +4703,9 @@ model SalaryAdvance {
 
   status SalaryAdvanceStatus @default(pending)
 
+  /// Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036;
+  /// the audit log's CREATE entry answers for those.
+  createdByUserId  String?
   approvedByUserId String?
   disbursedOn      DateTime? @db.Date
   createdAt        DateTime  @default(now())
@@ -4744,6 +4747,19 @@ model PayrollRun {
   /// inferring from timestamps. With it, an operator can see at a glance whether the
   /// automation is working or whether somebody has been quietly creating runs by hand.
   createdBySchedule Boolean @default(false)
+
+  /// Employees the run could not compute correctly — no PAN, no tax slabs (036 F7).
+  ///
+  /// `[{ employeeId, reason }]`, written at generation and replaced by each regeneration. Until 036
+  /// these were in the generate response only, so the warning on run detail never appeared for
+  /// anybody who opened the run later — which is everybody who processes it.
+  exceptions Json?
+
+  /// When processing applied this run's advance and fuel recoveries and settled its claims and
+  /// EMIs (036 F1/F2). Set in the same transaction as the `draft → processed` move, so a run that
+  /// has it has settled exactly once; the data-repair report reads it to tell runs processed under
+  /// the new rule from runs whose recoveries were applied at draft.
+  recoveriesSettledAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4811,6 +4827,19 @@ model PayrollLineItem {
   /// tell why their pay fell, which FR-007 exists to prevent.
   fuelRecoveryDeduction Decimal @default(0) @db.Decimal(12, 2)
 
+  /// Salary advance recovered on this line (036 F3). Net pay already subtracted it; until 036 it
+  /// was not stored, so the payslip printed 0 and its deductions did not add up to gross − net.
+  advanceRecovered Decimal @default(0) @db.Decimal(12, 2)
+  /// The advance `advanceRecovered` is against — applied to it when the run is processed (036 F1).
+  advanceRecoveryAdvanceId String?
+  /// `[{ recoveryId, amount }]` — the fuel recoveries this line's `fuelRecoveryDeduction` is made
+  /// of, recorded against them when the run is processed (036 F2). Several when one carries.
+  fuelRecoveries Json?
+  /// The reimbursement claims folded into `specialAllowance`, and their total (036 F4). Processing
+  /// settles exactly these, not every approved claim the employee happens to have by then.
+  reimbursementClaimIds String[] @default([])
+  reimbursementTotal    Decimal  @default(0) @db.Decimal(12, 2)
+
   netPay Decimal @default(0) @db.Decimal(12, 2)
 
   // ── Employer contributions ────────────────────────────────────────────────
@@ -4862,6 +4891,8 @@ model Loan {
   remarks          String?
   status           LoanStatus @default(pending)
 
+  /// Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036.
+  createdByUserId  String?
   approvedByUserId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
