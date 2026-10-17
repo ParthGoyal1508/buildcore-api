@@ -305,6 +305,11 @@ export interface ApprovalHistoryEntry {
   requestedAt: Date;
   /** When the chain finished — the last state change of a closed item. Null while open. */
   closedAt: Date | null;
+  /**
+   * When anything last happened to the item (036 D2) — its decision once decided, otherwise its
+   * submission or latest step. The history is sorted, and date-filtered, by this.
+   */
+  lastActionAt: Date;
   /** The level it waits on, while pending. */
   awaitingLabel: string | null;
   /** A one-off reassignment's named person (FR-019), when there is one. */
