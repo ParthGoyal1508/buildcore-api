@@ -384,7 +384,7 @@ describe('Assets module (e2e)', () => {
         .set(auth())
         .send({
           docTypeId: insurance.id,
-          file: Buffer.from('policy').toString('base64'),
+          file: Buffer.from('%PDF-1.4\n%policy\n').toString('base64'),
           fileName: 'policy.pdf',
           contentType: 'application/pdf',
           // Inside INSURANCE's own 45-day window, and not inside a 30-day one —
@@ -398,6 +398,19 @@ describe('Assets module (e2e)', () => {
         .set(auth())
         .expect(200);
       expect(after.body.items[0].expiryAlert).toBe(true);
+
+      // 036 L3: the bytes decide the type — a text file declared as a PDF is refused.
+      const refused = await http()
+        .post(`/assets/${asset.id}/documents`)
+        .set(auth())
+        .send({
+          docTypeId: insurance.id,
+          file: Buffer.from('just text').toString('base64'),
+          fileName: 'policy.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(415);
+      expect(refused.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
       expect(after.body.items[0].alertDocumentTypes).toEqual(['INSURANCE']);
     });
 
@@ -530,6 +543,38 @@ describe('Assets module (e2e)', () => {
       // the failure this catches.
       expect(categoryTotal).toBe(summary.body.totals.count);
       expect(statusTotal).toBe(summary.body.totals.count);
+      // 036 L4: project buckets are named by the API, never a raw id.
+      for (const bucket of summary.body.byProject) {
+        expect(bucket.label).not.toBe(bucket.key === 'unallocated' ? 'unallocated' : bucket.key);
+      }
+    });
+
+    it('pages, searches and exports stock (036 L4)', async () => {
+      const all = await http()
+        .get(`/assets/stock?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      expect(Array.isArray(all.body)).toBe(true);
+
+      const paged = await http()
+        .get(`/assets/stock?companyId=${companyId}&page=1&pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(paged.body.page).toBe(1);
+      expect(paged.body.items.length).toBeLessThanOrEqual(1);
+      expect(paged.body.total).toBe(all.body.length);
+
+      const none = await http()
+        .get(`/assets/stock?companyId=${companyId}&page=1&q=zz-no-such-asset-zz`)
+        .set(auth())
+        .expect(200);
+      expect(none.body.total).toBe(0);
+
+      const xlsx = await http()
+        .get(`/assets/stock/export?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      expect(xlsx.headers['content-type']).toContain('spreadsheetml');
     });
 
     it('exports the register as a workbook', async () => {
