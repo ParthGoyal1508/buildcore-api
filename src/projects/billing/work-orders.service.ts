@@ -181,9 +181,12 @@ export class WorkOrdersService {
       viewPermission: Permission.PROJECT_FINANCIALS,
     });
 
+    // Conditional on `draft` (036): a double-click's second submit is refused by the spine's
+    // unique live-instance index, but a completion delivered before this line (a chain the
+    // originator can finish alone) would otherwise be overwritten back to pending.
     await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.workOrder.update({
-        where: { id: order.id },
+      tx.workOrder.updateMany({
+        where: { id: order.id, status: WorkOrderStatus.draft },
         data: { status: WorkOrderStatus.pending_approval },
       }),
     );
