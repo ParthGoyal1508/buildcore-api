@@ -95,4 +95,37 @@ describe('Client DTOs under the global pipe', () => {
       await refusalFor({ name: 'X', gstNumber: '27AAPFU0939F1ZV' }, create),
     ).toMatch(/should not exist/);
   });
+
+  describe('clearing a field, and leaving one blank (036 I19, I20)', () => {
+    it('accepts a client created with no email, sent as a blank string', async () => {
+      // The form sent `email: ""` and `@IsEmail` refused it, so a name-only client was a 400.
+      await expect(
+        pipe.transform({ name: 'Dummy Client Test Firm', email: '' }, create),
+      ).resolves.toMatchObject({ name: 'Dummy Client Test Firm', email: null });
+    });
+
+    it.each(['gstin', 'pan', 'state', 'email'])(
+      'accepts null for %s on edit, which is how the web clears it',
+      async (field) => {
+        await expect(
+          pipe.transform({ [field]: null }, update),
+        ).resolves.toMatchObject({ [field]: null });
+      },
+    );
+
+    it.each(['gstin', 'pan', 'state'])(
+      'reads a blank %s as null too, for clients that still send one',
+      async (field) => {
+        await expect(
+          pipe.transform({ [field]: '  ' }, update),
+        ).resolves.toMatchObject({ [field]: null });
+      },
+    );
+
+    it('still refuses a malformed GSTIN', async () => {
+      expect(await refusalFor({ gstin: '27AAPFU' }, update)).toMatch(
+        /not a valid GSTIN/,
+      );
+    });
+  });
 });
