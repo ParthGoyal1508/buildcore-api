@@ -4,6 +4,7 @@ import {
   ConflictException,
   Controller,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -269,12 +270,35 @@ export class PayrollRunsController {
     );
   }
 
-  @Get(':id/bank-sheet')
+  /**
+   * 036 F11. Generating the run's bank sheet records advance recoveries and a history entry, so it
+   * is a `POST`; the `GET` below stays until the web app switches (Wave 3).
+   */
+  @Post(':id/bank-sheet')
+  @HttpCode(200)
   @ApiOperation({
-    summary: 'Bank transfer sheet for the run (XLSX)',
+    summary: 'Generate the bank transfer sheet for the run (XLSX)',
     description:
       'One row per employee with a recorded bank account. Employees without ' +
-      'one are reported in a second sheet rather than silently dropped.',
+      'one are reported in a second sheet rather than silently dropped. Records ' +
+      'advance recoveries against the transfer and a history entry.',
+  })
+  async generateBankSheet(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Res() response: Response,
+  ): Promise<void> {
+    return this.bankSheetExport(user, request, id, response);
+  }
+
+  @Get(':id/bank-sheet')
+  @ApiOperation({
+    summary: 'Deprecated — use POST. Bank transfer sheet for the run (XLSX)',
+    description:
+      'Still generates (and so writes recoveries and history) until the web app ' +
+      'moves to POST; see 036 F11.',
+    deprecated: true,
   })
   async bankSheetExport(
     @UserEntity() user: AuthenticatedUser,

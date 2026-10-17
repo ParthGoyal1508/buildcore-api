@@ -74,4 +74,24 @@ export class BankSheetHistoryQueryDto {
   @Min(1)
   @Max(12)
   month?: number;
+
+  /**
+   * 036 F11. Paging for the history, which used to stop silently at 100. The response is still the
+   * plain array it always was; the total comes back in `X-Total-Count`. Defaults keep the old
+   * behaviour for a caller that sends neither.
+   */
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 100, maximum: 200 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(200)
+  pageSize?: number;
 }

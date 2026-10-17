@@ -1,7 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
+  HttpCode,
   Param,
+  Post,
   Query,
   Req,
   Res,
@@ -74,14 +77,21 @@ export class SalaryBankSheetController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Query() query: BankSheetHistoryQueryDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.bankSheet.history(
+    const { rows, total } = await this.bankSheet.historyPage(
       callerFrom(user, request),
       resolveCompanyId(user, query.companyId),
       query.year && query.month
         ? periodOf(query as SalaryBankSheetQueryDto)
         : undefined,
+      { page: query.page, pageSize: query.pageSize },
     );
+    // 036 F11. The body stays the array it always was; the count rides in a header so paging is
+    // additive for the current screen.
+    response.setHeader('X-Total-Count', String(total));
+    response.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+    return rows;
   }
 
   @Get('history/:id/file')
@@ -105,16 +115,53 @@ export class SalaryBankSheetController {
     response.send(buffer);
   }
 
+  /**
+   * 036 F11. Generating the sheet is a write — it records advance recoveries against the transfer
+   * and a history entry — so it is a `POST`. Same parameters as the `GET`, in the body.
+   */
+  @Post()
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Generate Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx (records recoveries and history)',
+  })
+  async generate(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Body() body: SalaryBankSheetQueryDto,
+    @Res() response: Response,
+  ): Promise<void> {
+    return this.sendSheet(user, request, body, response);
+  }
+
+  /**
+   * **Deprecated (036 F11): use `POST`.** Still generates — and so still writes recoveries and a
+   * history entry — because the web app calls it until Wave 3. It cannot simply stop writing: the
+   * file it returns shows transfers net of recoveries, and handing the bank that file without
+   * recording them would recover the same advance again next time. Once the web app posts, this
+   * route should go (re-download a past file from `history/:id/file`).
+   */
   @Get()
   @ApiOperation({
     summary:
-      'Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx in the bank format',
+      'Deprecated — use POST. Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx in the bank format',
+    deprecated: true,
   })
   async download(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Query() query: SalaryBankSheetQueryDto,
     @Res() response: Response,
+  ): Promise<void> {
+    response.setHeader('Deprecation', 'true');
+    return this.sendSheet(user, request, query, response);
+  }
+
+  private async sendSheet(
+    user: AuthenticatedUser,
+    request: Request,
+    query: SalaryBankSheetQueryDto,
+    response: Response,
   ): Promise<void> {
     const caller = callerFrom(user, request);
     const run = await this.bankSheet.findRegularRun(
