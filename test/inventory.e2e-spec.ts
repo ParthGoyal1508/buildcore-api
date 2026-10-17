@@ -283,8 +283,11 @@ describe('Inventory module (e2e)', () => {
     await sys.paymentAllocation.deleteMany({
       where: { bill: { purchase: suitePurchases } },
     });
+    // By this suite's own vendors (036). Matching on allocations, as this did, could never match:
+    // the allocations were deleted on the line above, so every payment the suite made was left
+    // behind, pointing at a vendor about to be deleted.
     await sys.payment.deleteMany({
-      where: { allocations: { some: { bill: { purchase: suitePurchases } } } },
+      where: { vendorId: { in: createdVendorIds } },
     });
     await sys.purchaseBill.deleteMany({ where: { purchase: suitePurchases } });
     await sys.goodsReceiptNote.deleteMany({
@@ -1247,6 +1250,210 @@ describe('Inventory module (e2e)', () => {
         'indentDemand',
         'reorderShortfall',
       ]);
+    });
+  });
+
+  // ───────────────────────────────────────────────────── 036 hardening (M1, M3, M4, M6, M10)
+
+  describe('036 hardening', () => {
+    let hItem = '';
+    let hVendor = '';
+
+    const post = (path: string, body: Record<string, unknown>) =>
+      http().post(`${path}?companyId=${companyId}`).set(auth()).send(body);
+    const balanceOf = async (site: string) => {
+      const res = await http()
+        .get(`/inventory/stock/${hItem}/${site}`)
+        .set(auth())
+        .expect(200);
+      return res.body;
+    };
+    const receive = (quantity: number, site = siteA) =>
+      post('/inventory/purchases', {
+        siteId: site,
+        itemId: hItem,
+        vendorId: hVendor,
+        date: today(),
+        quantity,
+        rate: 100,
+      }).expect(201);
+    const issue = (quantity: number) =>
+      post('/inventory/issues', {
+        siteId: siteA,
+        itemId: hItem,
+        date: today(),
+        quantity,
+        issuedTo: 'Gang 036',
+      }).expect(201);
+
+    beforeAll(async () => {
+      const item = await post('/inventory/items', {
+        name: unique('Hardening'),
+        categoryId,
+        unit: 'BAG',
+      }).expect(201);
+      hItem = item.body.id;
+      createdItemIds.push(hItem);
+      const vendor = await post('/partners/vendors', {
+        name: unique('HardeningSupplier'),
+        type: 'material',
+      }).expect(201);
+      hVendor = vendor.body.id;
+      createdVendorIds.push(hVendor);
+    });
+
+    it('refuses to delete a purchase whose stock has been issued (M1)', async () => {
+      const purchase = await receive(10);
+      await issue(6);
+      const refused = await http()
+        .delete(`/inventory/purchases/${purchase.body.id}`)
+        .set(auth())
+        .expect(422);
+      expect(refused.body.availableStock).toBe(4);
+      expect((await balanceOf(siteA)).inStock).toBe(4);
+    });
+
+    it('refuses an inactive vendor on a new purchase (M6)', async () => {
+      const vendor = await post('/partners/vendors', {
+        name: unique('Inactive'),
+        type: 'material',
+      }).expect(201);
+      createdVendorIds.push(vendor.body.id);
+      await sys.vendor.update({
+        where: { id: vendor.body.id },
+        data: { active: false },
+      });
+      const refused = await post('/inventory/purchases', {
+        siteId: siteA,
+        itemId: hItem,
+        vendorId: vendor.body.id,
+        date: today(),
+        quantity: 1,
+        rate: 100,
+      }).expect(400);
+      expect(refused.body.message).toMatch(/inactive/);
+    });
+
+    it('refuses over-receipt and writes a shortage off at the destination (M3)', async () => {
+      await receive(10);
+      const before = await balanceOf(siteA);
+      const transfer = await post('/inventory/transfers', {
+        fromSiteId: siteA,
+        toSiteId: siteB,
+        itemId: hItem,
+        date: today(),
+        quantity: 10,
+      }).expect(201);
+      const id = transfer.body.id;
+
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({ status: 'received', receivedQuantity: 25 })
+        .expect(400);
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({ status: 'received', receivedQuantity: 8 })
+        .expect(400);
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({
+          status: 'received',
+          receivedQuantity: 8,
+          shortageReason: 'Two bags burst',
+        })
+        .expect(200);
+
+      expect((await balanceOf(siteB)).inStock).toBe(8);
+      // The source keeps what it sent out; the loss is the destination's (decision 3).
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock - 10);
+      const loss = await sys.stockLedgerEntry.findMany({
+        where: { referenceId: id, type: 'transfer_in_reversal' },
+      });
+      expect(loss).toHaveLength(1);
+      expect(Number(loss[0].quantity)).toBe(2);
+      const row = await sys.stockTransfer.findUnique({ where: { id } });
+      expect(row.shortageReason).toBe('Two bags burst');
+    });
+
+    it('lets only one of two simultaneous returns take an issue back (M4)', async () => {
+      await receive(5);
+      const issued = await issue(5);
+      const before = await balanceOf(siteA);
+      const giveBack = () =>
+        http()
+          .patch(`/inventory/issues/${issued.body.id}/return`)
+          .set(auth())
+          .send({
+            returnedNow: 3,
+            returnedOn: today(),
+            receivedBy: 'Store',
+          });
+      const statuses = (await Promise.all([giveBack(), giveBack()]))
+        .map((res) => res.status)
+        .sort();
+      expect(statuses).toEqual([200, 400]);
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock + 3);
+
+      // The old cumulative field still works.
+      await http()
+        .patch(`/inventory/issues/${issued.body.id}/return`)
+        .set(auth())
+        .send({ returnedQuantity: 5, returnedOn: today(), receivedBy: 'Store' })
+        .expect(200);
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock + 5);
+    });
+
+    it('takes cash without a reference, and one payment per Idempotency-Key (M10)', async () => {
+      // A bill to allocate against, so the teardown (which follows allocations) finds these.
+      await receive(10);
+      const cash = await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 100,
+        date: today(),
+        paymentMode: 'cash',
+      }).expect(201);
+      expect(cash.body.referenceNumber).toBe('');
+
+      await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 100,
+        date: today(),
+        paymentMode: 'bank_transfer',
+      }).expect(400);
+
+      const key = `e2e-${Date.now()}`;
+      const pay = () =>
+        http()
+          .post(`/inventory/payments?companyId=${companyId}`)
+          .set(auth())
+          .set('Idempotency-Key', key)
+          .send({
+            vendorId: hVendor,
+            amount: 50,
+            date: today(),
+            paymentMode: 'upi',
+            referenceNumber: 'UPI-036',
+          });
+      const [first, second] = await Promise.all([pay(), pay()]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      expect(first.body.id).toBe(second.body.id);
+      const third = await pay();
+      expect(third.body).toMatchObject({ id: first.body.id, replayed: true });
+      expect(await sys.payment.count({ where: { idempotencyKey: key } })).toBe(
+        1,
+      );
+
+      const again = await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 75,
+        date: today(),
+        paymentMode: 'upi',
+        referenceNumber: 'UPI-036',
+      }).expect(201);
+      expect(again.body.warnings[0]).toMatch(/UPI-036 was already used/);
     });
   });
 });
