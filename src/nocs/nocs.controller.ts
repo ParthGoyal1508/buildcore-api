@@ -16,21 +16,29 @@ import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { contentDispositionFor } from '../common/storage/file-type';
 import { ListNocsDto, NocStatusQueryDto, UploadNocDto } from './dto/noc.dto';
-import { NocsService } from './nocs.service';
+import { NOC_PERMISSIONS, NocsService } from './nocs.service';
 
 /**
  * Uploaded No Objection Certificates (2026-10-15).
  *
- * **No `@RequirePermissions` here, as on `LettersController`, and for the same reason**: the right
- * a NOC needs is its subject's — a work order's is `PROJECTS`, a labour worker's
- * `DAILY_WORKER_REGISTRY` — knowable only from the request, so `NocsService` refuses per subject.
+ * The right a NOC needs is its subject's — a work order's is `PROJECTS`, a labour worker's
+ * `DAILY_WORKER_REGISTRY` — knowable only from the request, so `NocsService` refuses per subject
+ * and at the level the action needs.
+ *
+ * The guard is the outer gate (036 B16): a caller must hold **at least one** subject area, at the
+ * level the verb implies (read for GET, write for POST/DELETE), before the service is asked at
+ * all. It cannot be the only gate — holding `PROJECTS` must not open employee NOCs — which is why
+ * the service still checks the specific one.
  */
 @ApiTags('NOCs')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions(...NOC_PERMISSIONS)
 @Controller('nocs')
 export class NocsController {
   constructor(private readonly nocs: NocsService) {}

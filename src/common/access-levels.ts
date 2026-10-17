@@ -32,3 +32,28 @@ export const LEVEL_BY_METHOD: Readonly<Record<string, AccessLevel>> = {
 export function levelForMethod(method: string): AccessLevel {
   return LEVEL_BY_METHOD[method.toUpperCase()] ?? AccessLevel.write;
 }
+
+/**
+ * Whether a caller holds `permission` at `level` — the guard's own rule, for services that can
+ * only decide which permission applies once a record is loaded (036 B16: NOCs and letters).
+ *
+ * An area the caller has grants in must be granted at that level; an area held without grants
+ * (a legacy role, or a permission that is not read/write-shaped) counts at every level, exactly
+ * as `PermissionsGuard` treats it.
+ */
+export function holdsAtLevel(
+  caller: {
+    permissions: string[];
+    grants?: { permission: string; level: AccessLevel }[];
+  },
+  permission: string,
+  level: AccessLevel,
+): boolean {
+  const grants = (caller.grants ?? []).filter(
+    (grant) => grant.permission === permission,
+  );
+  if (grants.length > 0) {
+    return grants.some((grant) => grant.level === level);
+  }
+  return caller.permissions.includes(permission);
+}
