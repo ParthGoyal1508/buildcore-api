@@ -10,9 +10,15 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
+
+import {
+  MAX_ADVANCE_AMOUNT,
+  MAX_RECOVERY_INSTALMENTS,
+} from '../../constants/labour.constants';
 
 export class ListAdvancesDto {
   @ApiPropertyOptional()
@@ -45,6 +51,7 @@ export class CreateAdvanceDto {
   @ApiProperty({ example: 3000 })
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(MAX_ADVANCE_AMOUNT)
   amount!: number;
 
   @ApiProperty()
@@ -57,6 +64,7 @@ export class CreateAdvanceDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(MAX_RECOVERY_INSTALMENTS)
   recoveryInstalments!: number;
 
   @ApiProperty({ example: '2026-09-01' })
