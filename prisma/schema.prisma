@@ -4254,10 +4254,48 @@ model EmployeeDocument {
   uploadedByUserId String
   uploadedAt       DateTime @default(now())
 
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// The uploader's file name, the type detected from the bytes, and the stored size (036 F15).
+  /// Null on documents filed before the columns existed; the file endpoint then sniffs the type.
+  fileName  String?
+  mimeType  String?
+  sizeBytes Int?
+
+  employee Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  versions EmployeeDocumentVersion[]
 
   @@unique([employeeId, documentTypeId])
   @@index([expiresAt])
+  @@schema("hr")
+}
+
+/// A superseded upload of an employee document (036 F15).
+///
+/// Replacing a document used to delete the old file for good, so a passport renewed by mistake
+/// over the right one could not be recovered and nobody could see what was on file before. Now the
+/// current upload stays on `EmployeeDocument` (one per type, which is what the mandatory-document
+/// gate counts) and each replaced one moves here, file and all. Scoped through the employee, the
+/// same RLS rule as `EmployeeDocument`.
+model EmployeeDocumentVersion {
+  id         String @id @default(cuid())
+  documentId String
+  employeeId String
+
+  fileRef        String
+  fileName       String?
+  mimeType       String?
+  sizeBytes      Int?
+  documentNumber String?
+  expiresAt      DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime
+  replacedByUserId String
+  replacedAt       DateTime @default(now())
+
+  document EmployeeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([employeeId])
   @@schema("hr")
 }
 

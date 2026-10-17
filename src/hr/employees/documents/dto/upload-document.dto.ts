@@ -30,11 +30,25 @@ export class UploadEmployeeDocumentDto {
   @IsBase64Payload()
   file: string;
 
-  @ApiProperty({ example: 'application/pdf' })
+  @ApiPropertyOptional({
+    example: 'application/pdf',
+    description:
+      'Ignored since 036 F15: the type is detected from the bytes and that is what is stored. ' +
+      'Still accepted so existing clients keep working.',
+  })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(200)
-  contentType: string;
+  contentType?: string;
+
+  @ApiPropertyOptional({
+    example: 'passport-scan.pdf',
+    description: "The uploader's file name, kept for the download (036 F15).",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  fileName?: string;
 
   @ApiPropertyOptional({
     description: 'Required when the document type sets `needsNumber`.',

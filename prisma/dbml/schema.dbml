@@ -2499,7 +2499,12 @@ Table EmployeeDocument {
   expiresAt DateTime
   uploadedByUserId String [not null]
   uploadedAt DateTime [default: `now()`, not null]
+  fileName String [note: 'The uploader\'s file name, the type detected from the bytes, and the stored size (036 F15).
+Null on documents filed before the columns existed; the file endpoint then sniffs the type.']
+  mimeType String
+  sizeBytes Int
   employee Employee [not null]
+  versions EmployeeDocumentVersion [not null]
 
   indexes {
     (employeeId, documentTypeId) [unique]
@@ -2508,6 +2513,31 @@ Table EmployeeDocument {
   Note: 'Per-employee uploaded document, keyed to a `settings.DocumentType` (002). A
 re-upload replaces the reference for that type — historical versions are not
 retained (data-model.md §Employee Document).'
+}
+
+Table EmployeeDocumentVersion {
+  id String [pk]
+  documentId String [not null]
+  employeeId String [not null]
+  fileRef String [not null]
+  fileName String
+  mimeType String
+  sizeBytes Int
+  documentNumber String
+  expiresAt DateTime
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [not null]
+  replacedByUserId String [not null]
+  replacedAt DateTime [default: `now()`, not null]
+  document EmployeeDocument [not null]
+
+  Note: 'A superseded upload of an employee document (036 F15).
+
+Replacing a document used to delete the old file for good, so a passport renewed by mistake
+over the right one could not be recovered and nobody could see what was on file before. Now the
+current upload stays on `EmployeeDocument` (one per type, which is what the mandatory-document
+gate counts) and each replaced one moves here, file and all. Scoped through the employee, the
+same RLS rule as `EmployeeDocument`.'
 }
 
 Table EmployeeTransfer {
@@ -6921,6 +6951,8 @@ Ref: LeaveLedgerEntry.employeeId > Employee.id [delete: Cascade]
 Ref: ReimbursementClaim.employeeId > Employee.id [delete: Cascade]
 
 Ref: EmployeeDocument.employeeId > Employee.id [delete: Cascade]
+
+Ref: EmployeeDocumentVersion.documentId > EmployeeDocument.id [delete: Cascade]
 
 Ref: EmployeeTransfer.employeeId > Employee.id [delete: Cascade]
 
