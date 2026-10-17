@@ -13,6 +13,25 @@ export interface NotificationRow {
   subtitle: string;
   actionLink: string;
   occurredAt: string;
+  /**
+   * Which notification this is, stably across requests (036 D6): the inbox remembers read/unread
+   * by it. Defaults to `type` — right for a provider that yields at most one row.
+   */
+  key?: string;
+  /**
+   * Changes when there is something new to read under the same `key` (036 D6), which puts a
+   * notification the person has read back to unread. Defaults to the title and subtitle, so a
+   * count that changes ("3 claims to review" → "4") counts as new.
+   */
+  fingerprint?: string;
+}
+
+/** A notification as the bell shows it (036 D6): the computed row plus its inbox state. */
+export interface InboxNotification extends NotificationRow {
+  id: string;
+  key: string;
+  read: boolean;
+  readAt: string | null;
 }
 
 /**

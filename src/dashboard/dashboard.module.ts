@@ -16,6 +16,7 @@ import { DashboardService } from './dashboard.service';
 import { GroupController } from './group.controller';
 import { NotificationsController } from './notifications/notifications.controller';
 import { NotificationsService } from './notifications/notifications.service';
+import { NotificationStore } from './notifications/notification-store.service';
 import { ExportReadyProvider } from './notifications/export-ready.provider';
 import { LeavePendingProvider } from './notifications/leave-pending.provider';
 import { PayrollPendingProvider } from './notifications/payroll-pending.provider';
@@ -287,6 +288,7 @@ const reportRegistry: Provider = {
     StatutoryCalendarProvider,
     ActivityLogService,
     NotificationsService,
+    NotificationStore,
     ReportsService,
     ExportJobService,
 

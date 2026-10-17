@@ -1,9 +1,18 @@
-import { Controller, Get, Ip, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  Ip,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Permission } from '@prisma/client';
+import { AccessLevel, Permission } from '@prisma/client';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
+import { RequireLevel } from '../../common/decorators/access-level.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
@@ -31,9 +40,33 @@ export class NotificationsController {
 
   @Get('count')
   @ApiOperation({
-    summary: 'The active-notification count, for the bell badge',
+    summary: 'The unread-notification count, for the bell badge (036 D6)',
+    description:
+      '`count` is unread notifications; `total` is every active one, read or not.',
   })
   async count(@UserEntity() user: AuthenticatedUser, @Ip() ip: string) {
     return this.notifications.count(buildDashboardContext(user, ip));
+  }
+
+  // 036 D6 — marking read changes only the caller's own inbox, so it needs no more than reaching
+  // the bell: read level, the same as listing.
+  @Post('read-all')
+  @HttpCode(200)
+  @RequireLevel(AccessLevel.read)
+  @ApiOperation({ summary: "Mark all of the caller's notifications read" })
+  async markAllRead(@UserEntity() user: AuthenticatedUser, @Ip() ip: string) {
+    return this.notifications.markAllRead(buildDashboardContext(user, ip));
+  }
+
+  @Post(':id/read')
+  @HttpCode(200)
+  @RequireLevel(AccessLevel.read)
+  @ApiOperation({ summary: 'Mark one of the caller’s notifications read' })
+  async markRead(
+    @UserEntity() user: AuthenticatedUser,
+    @Ip() ip: string,
+    @Param('id') id: string,
+  ) {
+    return this.notifications.markRead(buildDashboardContext(user, ip), id);
   }
 }

@@ -1357,6 +1357,51 @@ model AuditLogEntry {
 /// in `shared` alongside `AuditLogEntry` — Dashboard aggregates other modules' data
 /// and owns no business schema of its own (research.md §3). `companyId`-scoped and
 /// RLS-protected (Principle IV).
+/// One notification as one person has seen it (036 D6) — the bell's inbox with read/unread state.
+///
+/// Notifications are still *computed* by the providers on every request (a pending leave queue,
+/// approvals awaiting the caller, reminders due); this table remembers, per person and per company
+/// scope, which of those they have already read, so the bell counts what is new rather than
+/// everything that is true. A row is matched to a computed notification by `key`, and goes back to
+/// unread when its `fingerprint` changes — a new item joining the queue, a reminder turning overdue.
+/// When the condition stops holding the row is marked `resolvedAt` and leaves the bell; it is kept
+/// for a while so a notification that flickers off and on does not come back unread.
+///
+/// In-app only, by product decision (036 plan §4): nothing here sends email.
+model Notification {
+  id String @id @default(cuid())
+
+  userId String
+  /// The company the notification was computed for — the selected company — or `''` for a
+  /// Super Admin with no company selected (every company). Not a foreign key, for that reason;
+  /// it is what the `tenant_isolation` policy checks.
+  companyId String
+
+  /// Which computed notification this is: the provider type plus what it is about
+  /// (`approvals_pending:ra_bill`, `reminders_due:<reminder id>`).
+  key         String
+  /// Changes when there is something new to read about the same notification.
+  fingerprint String
+  type        String
+  severity    String
+  title       String
+  subtitle    String
+  actionLink  String
+  /// When the current content first appeared (kept across re-computations whose fingerprint did
+  /// not change, so "just now" does not reset on every poll).
+  occurredAt  DateTime
+
+  readAt     DateTime?
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, companyId, key])
+  @@index([userId, companyId, resolvedAt])
+  @@schema("shared")
+}
+
 model ExportJob {
   id String @id @default(cuid())
 

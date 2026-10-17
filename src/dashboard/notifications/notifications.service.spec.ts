@@ -3,6 +3,7 @@ import { Permission } from '@prisma/client';
 import type { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { DashboardContext } from '../context';
 import type { ExportJobService } from '../reports/export/export-job.service';
+import type { NotificationStore } from './notification-store.service';
 import { NotificationsService } from './notifications.service';
 import type {
   NotificationProvider,
@@ -47,6 +48,21 @@ function noisy(
   return provider;
 }
 
+/**
+ * The inbox, passed through: every row unread (036 D6). What these tests are about is which
+ * providers run, not read state — `notification-store.service.spec.ts` covers that.
+ */
+const store = {
+  sync: async (_user: unknown, rows: NotificationRow[]) =>
+    rows.map((r, i) => ({
+      ...r,
+      id: `n-${i}`,
+      key: r.key ?? r.type,
+      read: false,
+      readAt: null,
+    })),
+} as unknown as NotificationStore;
+
 /** Nothing ready, nothing to mark — the export path is not what these tests are about. */
 const exportJobs = {
   listReadyUnnotified: async () => [],
@@ -64,7 +80,7 @@ describe('NotificationsService — who a notification is for (2026-10-10)', () =
    */
   it('withholds a notification from a caller without the permission its link needs', async () => {
     const leave = noisy('leave_pending', Permission.ATTENDANCE);
-    const service = new NotificationsService([leave], exportJobs);
+    const service = new NotificationsService([leave], exportJobs, store);
 
     const entitled = await service.list(contextFor([Permission.ATTENDANCE]));
     const engineer = await service.list(contextFor([Permission.DASHBOARD]));
@@ -86,22 +102,24 @@ describe('NotificationsService — who a notification is for (2026-10-10)', () =
         noisy('export_ready'),
       ],
       exportJobs,
+      store,
     );
 
     expect(await service.count(contextFor([Permission.DASHBOARD]))).toEqual({
       count: 1,
+      total: 1,
     });
     expect(
       await service.count(
         contextFor([Permission.DASHBOARD, Permission.EMPLOYEES]),
       ),
-    ).toEqual({ count: 2 });
+    ).toEqual({ count: 2, total: 2 });
   });
 
   /** Not run, not merely discarded: `checkActive` reads other people's leave. */
   it('does not query a queue the caller has no access to', async () => {
     const leave = noisy('leave_pending', Permission.ATTENDANCE);
-    const service = new NotificationsService([leave], exportJobs);
+    const service = new NotificationsService([leave], exportJobs, store);
 
     await service.list(contextFor([Permission.DASHBOARD]));
     await service.count(contextFor([Permission.DASHBOARD]));
@@ -114,8 +132,33 @@ describe('NotificationsService — who a notification is for (2026-10-10)', () =
     const service = new NotificationsService(
       [noisy('export_ready')],
       exportJobs,
+      store,
     );
 
     expect(await service.list(contextFor([]))).toHaveLength(1);
+  });
+});
+
+describe('NotificationsService — the badge counts unread (036 D6)', () => {
+  it('counts only unread rows, and reports the active total beside it', async () => {
+    const readStore = {
+      sync: async (_u: unknown, rows: NotificationRow[]) =>
+        rows.map((r, i) => ({
+          ...r,
+          id: `n-${i}`,
+          key: r.type,
+          read: i === 0,
+          readAt: i === 0 ? '2026-10-10T00:00:00.000Z' : null,
+        })),
+    } as unknown as NotificationStore;
+    const service = new NotificationsService(
+      [noisy('a'), noisy('b'), noisy('c')],
+      exportJobs,
+      readStore,
+    );
+    expect(await service.count(contextFor([]))).toEqual({
+      count: 2,
+      total: 3,
+    });
   });
 });

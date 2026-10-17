@@ -36,7 +36,14 @@ export class ApprovalsPendingProvider implements NotificationProvider {
         a.requestedAt < b.requestedAt ? a : b,
       );
       const one = group.length === 1;
+      const newest = group.reduce((a, b) =>
+        a.requestedAt > b.requestedAt ? a : b,
+      );
       return {
+        // 036 D6: one inbox entry per kind, unread again when a newer item of that kind arrives —
+        // not when one is decided and the count goes down.
+        key: `${this.type}:${oldest.actionType}`,
+        fingerprint: newest.requestedAt.toISOString(),
         type: this.type,
         // A day waiting is long enough to read as overdue in a queue meant to move.
         severity: oldest.ageHours >= 24 ? 'orange' : 'yellow',

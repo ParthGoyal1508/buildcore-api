@@ -2,8 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 
 import type { DashboardContext } from '../context';
 import { ExportJobService } from '../reports/export/export-job.service';
+import { NotificationStore } from './notification-store.service';
 import {
   NOTIFICATION_PROVIDERS,
+  type InboxNotification,
   type NotificationProvider,
   type NotificationRow,
 } from './notification.types';
@@ -21,6 +23,7 @@ export class NotificationsService {
     @Inject(NOTIFICATION_PROVIDERS)
     private readonly providers: NotificationProvider[],
     private readonly exports: ExportJobService,
+    private readonly store: NotificationStore,
   ) {}
 
   /**
@@ -42,8 +45,8 @@ export class NotificationsService {
     return (await Promise.all(permitted.map((p) => p.checkActive(ctx)))).flat();
   }
 
-  async list(ctx: DashboardContext): Promise<NotificationRow[]> {
-    const rows = await this.active(ctx);
+  async list(ctx: DashboardContext): Promise<InboxNotification[]> {
+    const rows = await this.store.sync(ctx.user, await this.active(ctx));
     // Announce each ready export exactly once: the row is in `rows` this time, and
     // marking it here removes it from the next fetch (research.md §6).
     const ready = await this.exports.listReadyUnnotified(ctx.user);
@@ -54,7 +57,22 @@ export class NotificationsService {
     return rows;
   }
 
-  async count(ctx: DashboardContext): Promise<{ count: number }> {
-    return { count: (await this.active(ctx)).length };
+  /**
+   * The bell badge: **unread** notifications (036 D6). `total` is everything currently active,
+   * read or not, for a caller that wants the old number.
+   */
+  async count(
+    ctx: DashboardContext,
+  ): Promise<{ count: number; total: number }> {
+    const rows = await this.store.sync(ctx.user, await this.active(ctx));
+    return { count: rows.filter((r) => !r.read).length, total: rows.length };
+  }
+
+  markRead(ctx: DashboardContext, id: string) {
+    return this.store.markRead(ctx.user, id);
+  }
+
+  markAllRead(ctx: DashboardContext) {
+    return this.store.markAllRead(ctx.user);
   }
 }
