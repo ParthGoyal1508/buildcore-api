@@ -1,7 +1,7 @@
 import { ConfigService } from '@nestjs/config';
-import { HttpAdapterHost, NestFactory } from '@nestjs/core';
+import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { PrismaClientExceptionFilter, PrismaService } from 'nestjs-prisma';
+import { PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { configureApp } from './common/configure-app';
@@ -22,7 +22,7 @@ async function bootstrap() {
   // one with the 100 KB default still applied.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
-  // Body parsers and the validation pipe — shared with the e2e suites so the app
+  // Body parsers, the validation pipe and the Prisma error filter — shared with the e2e suites so the app
   // under test is configured exactly like the one that ships.
   configureApp(app);
 
@@ -40,10 +40,6 @@ async function bootstrap() {
 
   // enable shutdown hook
   app.enableShutdownHooks();
-
-  // Prisma Client Exception Filter for unhandled exceptions
-  const { httpAdapter } = app.get(HttpAdapterHost);
-  app.useGlobalFilters(new PrismaClientExceptionFilter(httpAdapter));
 
   const configService = app.get(ConfigService);
   const nestConfig = configService.get<NestConfig>('nest');

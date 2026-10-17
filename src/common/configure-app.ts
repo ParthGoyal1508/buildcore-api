@@ -1,6 +1,7 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { json, urlencoded } from 'express';
+import { PrismaClientExceptionFilter } from 'nestjs-prisma';
 import type { NestConfig } from './configs/config.interface';
 
 /**
@@ -45,4 +46,10 @@ export function configureApp(app: INestApplication): void {
       transform: true,
     }),
   );
+
+  // Maps Prisma's known-request errors (P2002 unique, P2025 not found, ...) to 409/404 instead
+  // of 500. It used to be registered in `main.ts` only, so the e2e app answered those same
+  // errors with 500 while production answered 409 — the drift this file exists to prevent
+  // (036 B10).
+  app.useGlobalFilters(new PrismaClientExceptionFilter(app.getHttpAdapter()));
 }
