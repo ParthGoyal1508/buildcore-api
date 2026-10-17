@@ -27,6 +27,7 @@ import { callerFrom } from '../../hr/caller-context';
 import { ChallansService, type ChallanType } from './challans.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { resolveCompanyId } from '../../settings/company-scope';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 
 const TYPES: ChallanType[] = ['pf', 'esic', 'pt'];
 
@@ -86,6 +87,8 @@ export class ChallansController {
   }
 
   @Get(':type/export')
+  // Each export renders a whole run to XLSX (036 stream 3b, the B9 export limit).
+  @ExportThrottle()
   @ApiParam({ name: 'type', enum: TYPES })
   @ApiOperation({ summary: 'The same challan as an XLSX for filing' })
   async export(
