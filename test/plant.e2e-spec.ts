@@ -388,8 +388,22 @@ describe('Plant module (e2e)', () => {
       expect(serial(second)).toBe(serial(first) + 1);
     });
 
-    it('still honours a plate number the yard supplies', async () => {
-      const code = unique('PLATE');
+    // 2026-10-15 (Numbering, 7493631): machines are always coded `{letters}{NN}/{year}`; the
+    // optional hand-typed `code` was removed from the DTO. A plate goes in `registrationNo`.
+    it('refuses a hand-typed code, and keeps a plate number as the registration', async () => {
+      await http()
+        .post(`/plant/equipment?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: 'Transit Mixer',
+          categoryId,
+          ownership: 'owned',
+          powerSource: 'diesel',
+          code: unique('PLATE'),
+        })
+        .expect(400);
+
+      const plate = unique('KA01');
       const made = await http()
         .post(`/plant/equipment?companyId=${companyId}`)
         .set(auth())
@@ -398,12 +412,13 @@ describe('Plant module (e2e)', () => {
           categoryId,
           ownership: 'owned',
           powerSource: 'diesel',
-          code,
+          registrationNo: plate,
         })
         .expect(201);
       createdEquipmentIds.push(made.body.id);
 
-      expect(made.body.code).toBe(code);
+      expect(made.body.code).toMatch(/^TM\d{2,}\/\d{4}$/);
+      expect(made.body.registrationNo).toBe(plate);
     });
 
     it('copies the meter type from the category', async () => {
@@ -922,10 +937,16 @@ describe('Plant module (e2e)', () => {
       expect(bill.body.rate).toBe(1400);
       expect(bill.body.grossAmount).toBe(140000);
       expect(bill.body.tdsAmount).toBe(2800);
-      expect(bill.body.netPayable).toBe(137200);
+      // Since the vehicle hiring bill (2026-10-15) the diesel the company issued to the hired
+      // machine in the period is its "Deduction Amount" by default — the fuel tests above issued
+      // some — so net is gross less TDS less that deduction and any hold.
+      expect(bill.body.deductionAmount).toBeGreaterThan(0);
       // SC-003, as a property rather than a literal.
       expect(bill.body.netPayable).toBe(
-        bill.body.grossAmount - bill.body.tdsAmount,
+        bill.body.grossAmount -
+          bill.body.tdsAmount -
+          bill.body.deductionAmount -
+          bill.body.holdAmount,
       );
     });
 
