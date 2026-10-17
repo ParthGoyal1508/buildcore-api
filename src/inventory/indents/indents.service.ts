@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -463,6 +464,14 @@ export class IndentsService {
         if (indent.status !== IndentStatus.submitted) {
           throw new ConflictException(
             `Only a submitted indent can be approved; this one is ${indent.status}.`,
+          );
+        }
+        // Maker-checker (036 M8, decision 4): whoever raised an indent cannot approve it, and
+        // there is no company override. Approval is the check that the demand is real and the
+        // quantity right; the requester approving their own request is no check at all.
+        if (indent.requestedByUserId === caller.id) {
+          throw new ForbiddenException(
+            'You raised this indent, so someone else must approve it.',
           );
         }
 

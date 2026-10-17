@@ -1065,6 +1065,26 @@ describe('Inventory module (e2e)', () => {
       expect(created.body.lines[0].outstandingQuantity).toBeNull();
     });
 
+    it('refuses the requester approving their own indent (036 M8)', async () => {
+      const refused = await http()
+        .post(`/inventory/indents/${indentId}/approve`)
+        .set(auth())
+        .send({ lines: [{ lineId, approvedQuantity: 100 }] })
+        .expect(403);
+      expect(refused.body.message).toMatch(/someone else must approve/);
+
+      // Every approval below is made by this same admin, so the indent is handed to another
+      // requester — the API-less equivalent of a storekeeper having raised it.
+      const other = await sys.user.findFirst({
+        where: { email: { not: 'admin@buildcore.dev' } },
+        select: { id: true },
+      });
+      await sys.materialIndent.update({
+        where: { id: indentId },
+        data: { requestedByUserId: other.id },
+      });
+    });
+
     it('refuses an indent for a retired item', async () => {
       const retired = await http()
         .post(`/inventory/items?companyId=${companyId}`)
