@@ -15,6 +15,7 @@ import {
   Role,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { rlsContextFor } from '../../common/prisma/rls-context';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { UsersService } from '../../users/users.service';
@@ -42,6 +43,13 @@ export type RoleGrant = { permission: Permission; level: AccessLevel };
  */
 export type RoleWithAssignedCount = Role & {
   assignedUserCount: number;
+  /**
+   * Active accounts holding the role **in the caller's company** — the selected one, or every
+   * company for a Super Admin with none selected (036 C11). `assignedUserCount` counts every
+   * company, which is the right number for "who would deleting this role affect" and the wrong one
+   * for "can anybody here approve at a level mapped to it". Present on the list only.
+   */
+  activeHolderCount?: number;
   grants: RoleGrant[];
 };
 
@@ -60,7 +68,10 @@ export class RolesService {
    * tenant-scoped rows, so this is deliberately not company-filtered. The counts
    * come from `UsersService`, not a join into `shared.User` — Principle I.
    */
-  async findAll(): Promise<RoleWithAssignedCount[]> {
+  async findAll(caller?: AuthenticatedUser): Promise<RoleWithAssignedCount[]> {
+    const holders = caller
+      ? await this.usersService.activeHolderCounts(rlsContextFor(caller))
+      : null;
     const roles = await this.prisma.role.findMany({
       orderBy: { name: 'asc' },
       // One query for every role's levels rather than one per role. The set is small — nine seeded
@@ -74,6 +85,7 @@ export class RolesService {
       roles.map(async ({ rolePermissions, ...role }) => ({
         ...role,
         assignedUserCount: await this.usersService.countByRoleId(role.id),
+        ...(holders ? { activeHolderCount: holders.get(role.id) ?? 0 } : {}),
         grants: rolePermissions,
       })),
     );

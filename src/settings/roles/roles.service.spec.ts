@@ -138,6 +138,23 @@ describe('RolesService', () => {
       // Counted through UsersService, never a cross-schema join (Principle I).
       expect(usersService.countByRoleId).toHaveBeenCalledTimes(2);
     });
+
+    it('adds the active holders in the caller’s company when there is a caller (036 C11)', async () => {
+      const { service } = build(
+        { findMany: jest.fn().mockResolvedValue([protectedRole, customRole]) },
+        {
+          activeHolderCounts: jest
+            .fn()
+            .mockResolvedValue(new Map([['role-sa', 2]])),
+        },
+      );
+      const roles = await service.findAll({
+        id: 'u',
+        companyId: 'co',
+        permissions: [],
+      } as never);
+      expect(roles.map((r) => r.activeHolderCount)).toEqual([2, 0]);
+    });
   });
 
   describe('update', () => {

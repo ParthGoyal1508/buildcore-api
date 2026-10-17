@@ -39,8 +39,10 @@ export class RolesController {
   @ApiOperation({
     summary: 'List roles with their assigned-user counts (FR-009)',
   })
-  async findAll(): Promise<RoleWithAssignedCount[]> {
-    return this.rolesService.findAll();
+  async findAll(
+    @UserEntity() caller: AuthenticatedUser,
+  ): Promise<RoleWithAssignedCount[]> {
+    return this.rolesService.findAll(caller);
   }
 
   @Post()

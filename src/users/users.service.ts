@@ -92,6 +92,27 @@ export class UsersService {
     );
   }
 
+  /**
+   * Active accounts per role within the caller's scope (036 C11) — what the approval settings
+   * screen shows beside a level, since a level mapped to a role nobody here holds stalls every item
+   * that reaches it.
+   */
+  async activeHolderCounts(ctx: RlsContext): Promise<Map<string, number>> {
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.userRole.groupBy({
+        by: ['roleId'],
+        where: {
+          user: {
+            status: UserStatus.active,
+            ...(ctx.isSuperAdmin ? {} : { companyId: ctx.companyId ?? null }),
+          },
+        },
+        _count: { _all: true },
+      }),
+    );
+    return new Map(rows.map((r) => [r.roleId, r._count._all]));
+  }
+
   async countByRoleId(roleId: string): Promise<number> {
     return withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
       tx.userRole.count({ where: { roleId } }),
