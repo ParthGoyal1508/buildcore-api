@@ -6,6 +6,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
+import { csvCell } from '../../common/csv';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
 import {
@@ -13,11 +14,6 @@ import {
   type ActivityLogExportRow,
 } from './activity-log.service';
 import { ActivityLogQueryDto } from './dto/activity-log-query.dto';
-
-/** One CSV cell, quoted and inner-quote-doubled per RFC 4180. */
-function csvCell(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
 
 /**
  * The Activity Log (feature 004, US3) — a read/query view over the shared audit

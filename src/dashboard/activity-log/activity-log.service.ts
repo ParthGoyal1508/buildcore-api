@@ -57,6 +57,9 @@ const PAGE_SIZE = 25;
  * Super Admin cross-company exception honoured; module and time-range filters narrow
  * it further, ordered newest-first.
  */
+/** The most rows one activity-log export returns (036 B13). */
+export const ACTIVITY_EXPORT_MAX_ROWS = 50_000;
+
 @Injectable()
 export class ActivityLogService {
   constructor(private readonly prisma: PrismaService) {}
@@ -97,15 +100,22 @@ export class ActivityLogService {
     return { entries, hasMore };
   }
 
-  /** The full filtered result set, for the CSV export (spec FR-024). No pagination. */
+  /**
+   * The filtered result set, for the CSV export (spec FR-024). No pagination — but bounded
+   * (036 B13/B14): with no time range the export covers the last 90 days rather than the whole
+   * audit log, and it never returns more than {@link ACTIVITY_EXPORT_MAX_ROWS} rows (newest
+   * first). An unbounded export loaded every audit row the company had into memory per click.
+   */
   async exportRows(
     user: AuthenticatedUser,
     query: ActivityLogQueryDto,
   ): Promise<ActivityLogExportRow[]> {
+    const bounded = { ...query, timeRange: query.timeRange ?? '90d' };
     const rows = await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
       tx.auditLogEntry.findMany({
-        where: this.where(user, query),
+        where: this.where(user, bounded),
         orderBy: { createdAt: 'desc' },
+        take: ACTIVITY_EXPORT_MAX_ROWS,
       }),
     );
     const [names, labels] = await Promise.all([
