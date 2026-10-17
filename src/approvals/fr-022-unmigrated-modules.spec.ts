@@ -516,6 +516,10 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/partners/compliance/compliance.service.ts',
           ':(exclude)src/partners/contractors',
           ':(exclude)src/partners/rag',
+          // 036 stream 3c (projects, documents, letters), 2026-10-18: the site picker reads the
+          // selected company (B2/B3). **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/projects/sites',
         ],
         {
           cwd: REPO_ROOT,
