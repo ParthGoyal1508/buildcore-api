@@ -13,6 +13,7 @@ import { collectLargeBodyRoutes, largeBodyMatcher } from './large-body';
  * an upload route means adding it here.
  */
 const UPLOAD_ROUTES = [
+  'PATCH /labour/payment-sheets/lines/:lineId/disburse',
   'PATCH /my/reimbursements/:id',
   'PATCH /recruitment/onboarding/items/:id/verify',
   'POST /assets/:id/documents',
