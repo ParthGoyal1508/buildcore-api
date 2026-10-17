@@ -136,6 +136,18 @@ All six streams are merged into `036-ux-qa-hardening` locally (not pushed). Each
   - Each module stream fixes its own with `resolveCompanyId` / `effectiveCompanyId`.
 - **Exports still needing `@ExportThrottle()`:** disposals, project P&L, salary register, challans, asset register.
 
+**Wave 1+2 review decisions (accepted 17-10-2026):**
+1. Stale payroll draft refused until regenerated: keep.
+2. A punch from a phone clock more than 5 minutes behind is recorded at server time and flagged: keep.
+3. Labour carry-forward goes onto the next sheet at any site: keep.
+4. Fully paid labour sheets still can't be reversed (pre-existing): leave for later.
+5. **Separate project-unlock permission: build in 3c (migration).**
+6. Locked projects still accept payments and signed copies: keep.
+7. Unpaged billing lists capped at 500 per project: keep; screens use paging in 3c.
+8. Logbook reading gaps need a reason: keep.
+9. **Block *adding* logbook entries inside a verified or paid hire-bill period too: build in 3d.**
+10. Prose headings stay; lists, forms and exports use DD-MM-YYYY: keep.
+
 ### Wave 3: module slices (5 agents in parallel, both repos per module)
 
 Each agent owns one module in **both** repos: the remaining backend items for that module (new view endpoints, filters, names instead of UUIDs) and every screen fix. Each one also adopts the Wave 2 kit (pickers, error states, URL state, uploads, confirmations, pending locks) and wires up the Wave 1 backend changes.
