@@ -35,6 +35,8 @@ import {
   deriveLabourDay,
   type LabourDay,
   type LabourDayStatus,
+  OVERNIGHT_WINDOW_HOURS,
+  openShiftDate,
 } from './labour-day.util';
 import { labourPunchRefused } from './labour-punch-refusal';
 
@@ -47,6 +49,11 @@ export interface LabourDayRow {
   faceEnrolled: boolean;
   punchInAt: string | null;
   punchOutAt: string | null;
+  /**
+   * 036 O5: an in-punch from yesterday still open and within 16 hours — a night shift the
+   * supervisor can punch out today. Null otherwise.
+   */
+  openShiftFrom: string | null;
   /** 034: how the day counts so far, from the hours between the punches. */
   status: LabourDayStatus;
   hours: number | null;
@@ -100,6 +107,8 @@ export class LabourPunchService {
   ): Promise<{ date: string; items: LabourDayRow[] }> {
     await this.supervisorSites.assertSiteAllowed(caller, siteId);
     const date = this.todayInCompanyZone();
+    const today = parseDateOnly(date);
+    const yesterday = new Date(today.getTime() - 24 * 3_600_000);
     const { workers, punches } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -109,16 +118,23 @@ export class LabourPunchService {
           orderBy: { labourCode: 'asc' },
         }),
         punches: await tx.labourPunch.findMany({
-          where: { siteId, punchDate: parseDateOnly(date) },
+          where: { siteId, punchDate: { gte: yesterday, lte: today } },
         }),
       }),
     );
     const byWorker = new Map<string, { in?: Date; out?: Date }>();
+    const recentByWorker = new Map<string, typeof punches>();
     for (const p of punches) {
+      recentByWorker.set(p.workerId, [
+        ...(recentByWorker.get(p.workerId) ?? []),
+        p,
+      ]);
+      if (p.punchDate.getTime() !== today.getTime()) continue;
       const entry = byWorker.get(p.workerId) ?? {};
       entry[p.type] = p.punchedAt;
       byWorker.set(p.workerId, entry);
     }
+    const now = new Date();
     const rules = await this.refs.getDayRules(
       await this.refs.getSiteCompanyId(caller, siteId),
     );
@@ -126,6 +142,17 @@ export class LabourPunchService {
       date,
       items: workers.map((w) => {
         const day = byWorker.get(w.id);
+        const open = openShiftDate(recentByWorker.get(w.id) ?? [], now, date);
+        const openIn =
+          open && open !== date
+            ? recentByWorker
+                .get(w.id)
+                ?.find(
+                  (p) =>
+                    p.type === LabourPunchType.in &&
+                    p.punchDate.toISOString().slice(0, 10) === open,
+                )
+            : undefined;
         const counted = deriveLabourDay(
           day?.in ?? null,
           day?.out ?? null,
@@ -141,6 +168,7 @@ export class LabourPunchService {
           faceEnrolled: w.faceEnrolmentId !== null,
           punchInAt: day?.in?.toISOString() ?? null,
           punchOutAt: day?.out?.toISOString() ?? null,
+          openShiftFrom: openIn?.punchedAt.toISOString() ?? null,
           status: counted.status,
           hours: counted.hours,
           overtimeHours: counted.overtimeHours,
@@ -225,11 +253,18 @@ export class LabourPunchService {
     // The punch is online-only and the server's clock is the one that counts, so a phone set to
     // yesterday cannot mark yesterday.
     const now = new Date();
-    const date = zonedDateOnly(now, this.refs.timeZone);
-    const punchDate = parseDateOnly(date);
+    const today = zonedDateOnly(now, this.refs.timeZone);
 
-    // Order checks before the face work, so a repeated tap is answered at once.
-    await this.assertSequence(caller, worker.id, punchDate, dto.type);
+    // Order checks before the face work, so a repeated tap is answered at once. A punch-out may
+    // close yesterday's punch-in — a night shift (036 O5) — so the day comes from the check.
+    const date = await this.assertSequence(
+      caller,
+      worker.id,
+      today,
+      dto.type,
+      now,
+    );
+    const punchDate = parseDateOnly(date);
 
     // --- Location: the employee rule (020 FR-011 to FR-013). ---
     const geofence = await this.refs.getSiteGeofence(caller, dto.siteId);
@@ -319,6 +354,13 @@ export class LabourPunchService {
         // each creating one on the morning's first punch.
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`labour-muster:${dto.siteId}:${date}`}))`;
 
+        // 036 O3: a day already on a payment sheet is closed, whichever way the change comes —
+        // a night shift's punch-out lands on yesterday, which a sheet may already cover.
+        await this.days.assertNotOnPaymentSheet(tx, {
+          companyId: worker.companyId,
+          siteId: dto.siteId,
+          punchDate,
+        });
         await this.assertNoLegacyMuster(tx, worker.id, punchDate);
 
         await tx.labourPunch.create({
@@ -393,32 +435,44 @@ export class LabourPunchService {
     };
   }
 
-  /** Punch-in once a day; punch-out only after it, and once. */
+  /**
+   * Punch-in once a day; punch-out only after it, and once. Returns the day the punch belongs to:
+   * today for a punch-in, and for a punch-out the day of the in-punch it closes — the latest one,
+   * if it is still open and at most 16 hours old (036 O5), so a night shift ends on the day it began.
+   */
   private async assertSequence(
     caller: AuthenticatedUser,
     workerId: string,
-    punchDate: Date,
+    today: string,
     type: LabourPunchType,
-  ): Promise<void> {
+    now: Date,
+  ): Promise<string> {
+    const todayDate = parseDateOnly(today);
+    const yesterday = new Date(todayDate.getTime() - 24 * 3_600_000);
     const punches = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       (tx) =>
         tx.labourPunch.findMany({
-          where: { workerId, punchDate },
-          select: { type: true },
+          where: { workerId, punchDate: { gte: yesterday, lte: todayDate } },
+          select: { type: true, punchDate: true, punchedAt: true },
         }),
     );
-    const has = (t: LabourPunchType) => punches.some((p) => p.type === t);
-    if (has(type)) {
-      throw this.alreadyPunched(type);
+    const hasToday = (t: LabourPunchType) =>
+      punches.some(
+        (p) => p.type === t && p.punchDate.getTime() === todayDate.getTime(),
+      );
+    if (type === LabourPunchType.in) {
+      if (hasToday(LabourPunchType.in)) throw this.alreadyPunched(type);
+      return today;
     }
-    if (type === LabourPunchType.out && !has(LabourPunchType.in)) {
-      throw new ConflictException({
-        code: 'LABOUR_NOT_PUNCHED_IN',
-        message: 'Punch this labour in before punching them out.',
-      });
-    }
+    const open = openShiftDate(punches, now, today);
+    if (open) return open;
+    if (hasToday(LabourPunchType.out)) throw this.alreadyPunched(type);
+    throw new ConflictException({
+      code: 'LABOUR_NOT_PUNCHED_IN',
+      message: `Punch this labour in before punching them out. A punch-out closes a punch-in from the last ${OVERNIGHT_WINDOW_HOURS} hours.`,
+    });
   }
 
   private alreadyPunched(type: LabourPunchType, name?: string) {

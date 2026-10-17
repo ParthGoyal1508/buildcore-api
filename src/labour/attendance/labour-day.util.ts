@@ -1,4 +1,4 @@
-import { AttendanceType } from '@prisma/client';
+import { AttendanceType, LabourPunchType } from '@prisma/client';
 
 /**
  * How one labour day counts, from its punch times (034). Pure, so the punch, the correction, the
@@ -143,4 +143,40 @@ export function labourDayRulesProblem(rules: LabourDayRules): string | null {
 
 function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * How long after a punch-in a punch-out may still close it (036 O5, decision 6). Long enough for a
+ * night shift that runs past midnight, short enough that a punch-out the next evening is not read
+ * as closing yesterday morning's punch-in.
+ */
+export const OVERNIGHT_WINDOW_HOURS = 16;
+
+/**
+ * Which day a punch-out closes, from the worker's recent in-punches: the latest one, when it has no
+ * out yet and — if it began on an earlier day than `today` — is no more than 16 hours old. Today's
+ * own punch-in stays open all day, as it always has. Null when there is none to close. Pure, so
+ * the rule is tested on its own.
+ */
+export function openShiftDate(
+  punches: { punchDate: Date; type: LabourPunchType; punchedAt: Date }[],
+  now: Date,
+  today: string,
+): string | null {
+  const ins = punches
+    .filter((p) => p.type === LabourPunchType.in)
+    .sort((a, b) => b.punchedAt.getTime() - a.punchedAt.getTime());
+  const latest = ins[0];
+  if (!latest) return null;
+  const date = latest.punchDate.toISOString().slice(0, 10);
+  const closed = punches.some(
+    (p) =>
+      p.type === LabourPunchType.out &&
+      p.punchDate.toISOString().slice(0, 10) === date,
+  );
+  if (closed) return null;
+  if (date === today) return date;
+  const age = now.getTime() - latest.punchedAt.getTime();
+  if (age < 0 || age > OVERNIGHT_WINDOW_HOURS * 3_600_000) return null;
+  return date;
 }

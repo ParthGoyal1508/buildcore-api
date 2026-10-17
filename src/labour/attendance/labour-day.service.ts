@@ -3,6 +3,7 @@ import {
   LabourPunchType,
   MusterSource,
   MusterStatus,
+  PaymentSheetStatus,
   Prisma,
 } from '@prisma/client';
 
@@ -14,6 +15,8 @@ import {
   type LabourDayRules,
   musterLineFor,
 } from './labour-day.util';
+
+const siteSheetLockKey = (siteId: string) => `labour-sheet-site:${siteId}`;
 
 /**
  * Keeps a labour day's muster line in step with its punch times (034).
@@ -106,11 +109,19 @@ export class LabourDayService {
   /**
    * Refuses to change a day a payment sheet already covers: the money for it has been worked out,
    * and changing the attendance underneath would leave the sheet and the muster disagreeing.
+   *
+   * 036 O3: takes the site's sheet lock shared first, so it holds until the caller's transaction
+   * ends. A sheet being generated takes it exclusively (`lockSiteForSheet`), so either this check
+   * sees the sheet, or the sheet waits for this change and then reads it — never neither. Shared,
+   * so punches at a site do not queue behind one another.
    */
   async assertNotOnPaymentSheet(
     tx: Prisma.TransactionClient,
     input: { companyId: string; siteId: string; punchDate: Date },
   ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(hashtext(${siteSheetLockKey(
+      input.siteId,
+    )}))`;
     const sheet = await tx.labourPaymentSheet.findFirst({
       where: {
         companyId: input.companyId,
@@ -119,21 +130,40 @@ export class LabourDayService {
         periodTo: { gte: input.punchDate },
         OR: [{ siteId: input.siteId }, { siteId: null }],
       },
-      select: { periodFrom: true, periodTo: true, status: true },
+      select: { id: true, periodFrom: true, periodTo: true, status: true },
     });
     if (sheet) {
+      const range = `${sheet.periodFrom
+        .toISOString()
+        .slice(0, 10)} to ${sheet.periodTo.toISOString().slice(0, 10)}`;
+      // 036 O2: a draft can now be deleted, and an approved sheet reopened to draft first — but a
+      // sheet with a paid line can be neither, so the message says which applies.
+      const how =
+        sheet.status === PaymentSheetStatus.draft
+          ? 'Delete that draft sheet, correct the day, then generate the sheet again.'
+          : sheet.status === PaymentSheetStatus.approved
+          ? 'Reopen that sheet and delete it while it is a draft, correct the day, then generate the sheet again.'
+          : 'Part of that sheet has been paid, so the day can no longer be changed.';
       throw new ConflictException({
         code: 'LABOUR_DAY_ON_PAYMENT_SHEET',
-        message: `A payment sheet for ${sheet.periodFrom
-          .toISOString()
-          .slice(0, 10)} to ${sheet.periodTo
-          .toISOString()
-          .slice(
-            0,
-            10,
-          )} already covers this day. Delete that sheet while it is a draft, then correct the punch.`,
+        message: `A payment sheet for ${range} already covers this day. ${how}`,
+        sheetId: sheet.id,
+        sheetStatus: sheet.status,
       });
     }
+  }
+
+  /**
+   * The exclusive side of the lock `assertNotOnPaymentSheet` takes shared: held by whatever decides
+   * what a sheet for this site holds, for the length of its transaction.
+   */
+  async lockSiteForSheet(
+    tx: Prisma.TransactionClient,
+    siteId: string,
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${siteSheetLockKey(
+      siteId,
+    )}))`;
   }
 
   /**

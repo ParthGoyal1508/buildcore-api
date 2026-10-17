@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
+  IsBoolean,
   IsInt,
   IsLatitude,
   IsLongitude,
@@ -92,6 +93,14 @@ export class PunchCorrectionDto {
   @IsOptional()
   @Matches(TIME, { message: 'punchOut must be HH:mm' })
   punchOut?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'The punch out is on the day after `date` — a night shift (036). At most 16 hours after the punch in.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  punchOutNextDay?: boolean;
 
   @ApiProperty({
     description: 'Why the time is being added or changed — kept in the history',
