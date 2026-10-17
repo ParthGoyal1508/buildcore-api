@@ -1,6 +1,8 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { AssetTrackingMode } from '@prisma/client';
 import {
+  IsEnum,
   IsInt,
   IsOptional,
   IsString,
@@ -28,6 +30,17 @@ export class ListAssetStockDto {
   @IsString()
   @MaxLength(100)
   companyId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  categoryId?: string;
+
+  @ApiPropertyOptional({ enum: AssetTrackingMode })
+  @IsOptional()
+  @IsEnum(AssetTrackingMode)
+  trackingMode?: AssetTrackingMode;
 
   @ApiPropertyOptional({
     description: "The asset's code or name contains this",

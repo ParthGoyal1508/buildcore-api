@@ -545,7 +545,9 @@ describe('Assets module (e2e)', () => {
       expect(statusTotal).toBe(summary.body.totals.count);
       // 036 L4: project buckets are named by the API, never a raw id.
       for (const bucket of summary.body.byProject) {
-        expect(bucket.label).not.toBe(bucket.key === 'unallocated' ? 'unallocated' : bucket.key);
+        expect(bucket.label).not.toBe(
+          bucket.key === 'unallocated' ? 'unallocated' : bucket.key,
+        );
       }
     });
 
@@ -564,8 +566,18 @@ describe('Assets module (e2e)', () => {
       expect(paged.body.items.length).toBeLessThanOrEqual(1);
       expect(paged.body.total).toBe(all.body.length);
 
+      const bulkOnly = await http()
+        .get(`/assets/stock?companyId=${companyId}&page=1&trackingMode=bulk`)
+        .set(auth())
+        .expect(200);
+      for (const row of bulkOnly.body.items) {
+        expect(row.trackingMode).toBe('bulk');
+      }
+
       const none = await http()
-        .get(`/assets/stock?companyId=${companyId}&page=1&q=zz-no-such-asset-zz`)
+        .get(
+          `/assets/stock?companyId=${companyId}&page=1&q=zz-no-such-asset-zz`,
+        )
         .set(auth())
         .expect(200);
       expect(none.body.total).toBe(0);

@@ -1,5 +1,5 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AssetTrackingMode, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -12,6 +12,9 @@ export interface AssetStockRow {
   assetCode: string;
   assetName: string;
   categoryId: string;
+  /** 036 L4: so the stock screen can label quantities without loading the whole register. */
+  trackingMode: AssetTrackingMode;
+  unitOfMeasure: string | null;
   siteId: string;
   siteName: string;
   onHand: number;
@@ -27,6 +30,8 @@ export interface AssetStockFilters {
   companyId?: string;
   /** 036 L4: the asset's code or name contains this. */
   q?: string;
+  categoryId?: string;
+  trackingMode?: AssetTrackingMode;
   page?: number;
   pageSize?: number;
 }
@@ -188,6 +193,8 @@ export class AssetStockService {
       ...(filters.siteId ? { siteId: filters.siteId } : {}),
       asset: {
         deletedAt: null,
+        ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+        ...(filters.trackingMode ? { trackingMode: filters.trackingMode } : {}),
         ...(q
           ? {
               OR: [
@@ -211,6 +218,8 @@ export class AssetStockService {
                   assetCode: true,
                   name: true,
                   categoryId: true,
+                  trackingMode: true,
+                  unitOfMeasure: true,
                 },
               },
             },
@@ -239,6 +248,8 @@ export class AssetStockService {
         assetCode: row.asset.assetCode,
         assetName: row.asset.name,
         categoryId: row.asset.categoryId,
+        trackingMode: row.asset.trackingMode,
+        unitOfMeasure: row.asset.unitOfMeasure,
         siteId: row.siteId,
         siteName: siteNames.get(row.siteId) ?? 'Unknown site',
         onHand,
