@@ -974,26 +974,37 @@ describe('Settings module (e2e)', () => {
         .expect(200);
     });
 
+    // The last Super Admin is signed in here as itself, so since 036 C3 every attempt is refused
+    // one step earlier, as an action on the caller's own account (403). The 409 last-Super-Admin
+    // guard behind it is still asserted in users-admin.service.spec.ts, where another admin can be
+    // the caller.
     it('refuses to deactivate, reassign or delete the last Super Admin (T043, FR-016)', async () => {
       const admin = await sys.user.findUniqueOrThrow({
         where: { email: 'admin@buildcore.dev' },
       });
-      await http()
+      const deactivate = await http()
         .patch(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
         .send({ status: 'deactivated' })
-        .expect(409);
+        .expect(403);
+      expect(deactivate.body.code).toBe('OWN_ACCOUNT');
 
-      await http()
+      const reassign = await http()
         .patch(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
         .send({ roleId: viewerRoleId })
-        .expect(409);
+        .expect(403);
+      expect(reassign.body.code).toBe('OWN_ROLE_CHANGE');
 
-      await http()
+      const remove = await http()
         .delete(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
-        .expect(409);
+        .expect(403);
+      expect(remove.body.code).toBe('OWN_ACCOUNT');
+
+      // And the account is untouched.
+      const after = await sys.user.findUniqueOrThrow({ where: { id: admin.id } });
+      expect(after.status).not.toBe('deactivated');
     });
 
     it('deletes an ordinary account (T043, FR-015)', async () => {
