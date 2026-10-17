@@ -1187,6 +1187,40 @@ describe('RA bills against an award (e2e)', () => {
       expect(packages.body).toHaveProperty('items');
     });
 
+    it('lists one work order’s bills when workOrderId is given (036 follow-up)', async () => {
+      const all = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      const withOrder = (all.body as { workOrderId: string | null }[]).find(
+        (b) => b.workOrderId,
+      );
+      expect(withOrder).toBeDefined();
+      const workOrderId = withOrder!.workOrderId as string;
+      const expected = (all.body as { workOrderId: string | null }[]).filter(
+        (b) => b.workOrderId === workOrderId,
+      ).length;
+
+      const scoped = await http()
+        .get(
+          `/projects/ra-bills?projectId=${projectId}&workOrderId=${workOrderId}&pageSize=50`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(scoped.body.total).toBe(expected);
+      for (const bill of scoped.body.items) {
+        expect(bill.workOrderId).toBe(workOrderId);
+      }
+
+      const none = await http()
+        .get(
+          `/projects/ra-bills?projectId=${projectId}&workOrderId=no-such-order&pageSize=5`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(none.body.total).toBe(0);
+    });
+
     it('refuses bill writes on a locked project with 423 (036 I2)', async () => {
       await sys.project.update({
         where: { id: projectId },

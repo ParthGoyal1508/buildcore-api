@@ -65,11 +65,14 @@ export class RaBillsController {
     // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    // 036 follow-up: one work order's bills, so a work order's "Load more" pages only its own.
+    @Query('workOrderId') workOrderId?: string,
   ) {
     return this.bills.listForProject(
       rlsContextFor(caller),
       projectId,
       listPaging(page, pageSize),
+      workOrderId?.trim() || undefined,
     );
   }
 

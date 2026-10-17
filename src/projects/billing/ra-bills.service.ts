@@ -612,10 +612,12 @@ export class RaBillsService {
     ctx: RlsContext,
     projectId: string,
     paging: ListPaging = UNPAGED,
+    workOrderId?: string,
   ): Promise<RaBillView[] | Paged<RaBillView>> {
+    const where = { projectId, ...(workOrderId ? { workOrderId } : {}) };
     const bills = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findMany({
-        where: { projectId },
+        where,
         // `id` breaks ties so a page boundary between two bills of one date is stable (036 I26).
         orderBy: [{ billingDate: 'desc' }, { id: 'desc' }],
         select: { id: true },
@@ -627,7 +629,7 @@ export class RaBillsService {
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
     return shapeList(paging, out, () =>
       withRlsContext(this.prisma, ctx, (tx) =>
-        tx.rABill.count({ where: { projectId } }),
+        tx.rABill.count({ where }),
       ),
     );
   }
