@@ -27,8 +27,15 @@ export const MAX_UPLOAD_LABEL = '10 MB';
 /** The request-body ceiling on upload routes. Env `MAX_REQUEST_BODY_SIZE` overrides. */
 export const UPLOAD_REQUEST_BODY_LIMIT = '14mb';
 
-/** The request-body ceiling on every other route. Env `DEFAULT_REQUEST_BODY_SIZE` overrides. */
-export const DEFAULT_REQUEST_BODY_LIMIT = '100kb';
+/**
+ * The request-body ceiling on every other route. Env `DEFAULT_REQUEST_BODY_SIZE` overrides.
+ *
+ * 1 MB rather than Express's 100 KB: an RA bill, a bill package or a BOQ edit posts every line
+ * at once, and nobody measured the largest of those before choosing a number. A megabyte is still
+ * fourteen times below the upload ceiling, which is what this limit exists to keep off ordinary
+ * routes (036 B8).
+ */
+export const DEFAULT_REQUEST_BODY_LIMIT = '1mb';
 
 /** The stable code a too-large file is refused with, for the web to branch on. */
 export const FILE_TOO_LARGE = 'FILE_TOO_LARGE';

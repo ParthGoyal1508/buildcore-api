@@ -280,11 +280,11 @@ describe('Platform hardening (036 1e, e2e)', () => {
   });
 
   describe('body limits (B8) and error bodies (B10)', () => {
-    it('refuses a 200 KB body on an ordinary route with the JSON error body', async () => {
+    it('refuses a 2 MB body on an ordinary route with the JSON error body', async () => {
       const res = await http()
         .post('/projects/sites')
         .set(auth(crossToken))
-        .send({ name: 'x'.repeat(200 * 1024) })
+        .send({ name: 'x'.repeat(2 * 1024 * 1024) })
         .expect(413);
       expect(res.body).toMatchObject({
         statusCode: 413,

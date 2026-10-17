@@ -12,7 +12,7 @@
  *
  * // DTO — marking the field as a file is also what gives the route the upload body limit.
  * class UploadThingDto {
- *   @IsBase64Payload() file!: string;           // or @IsBase64() for bare base64 only
+ *   @IsBase64Payload() file!: string;           // never class-validator @IsBase64(): it overflows the stack on large files
  * }
  *
  * // Service
