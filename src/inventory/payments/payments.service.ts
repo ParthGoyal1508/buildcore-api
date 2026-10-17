@@ -121,7 +121,11 @@ export class PaymentsService {
     companyId?: string,
   ): Promise<PaymentView> {
     const targetCompanyId = this.refs.targetCompanyOf(caller, companyId);
-    const vendorName = await this.refs.requireVendorName(caller, dto.vendorId);
+    const vendorName = await this.refs.requireActiveVendor(
+      caller,
+      dto.vendorId,
+      targetCompanyId,
+    );
     const date = this.refs.parseDate(dto.date);
 
     const created = await withRlsContext(

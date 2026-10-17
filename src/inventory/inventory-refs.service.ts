@@ -141,6 +141,38 @@ export class InventoryRefsService {
   }
 
   /**
+   * A vendor that may be *written against* in `companyId`: one of that company's, and active
+   * (036 M6).
+   *
+   * `requireVendorName` only asks whether the caller can see the vendor, and a Super Admin can see
+   * every company's — so a purchase in one company could name another's supplier, and a vendor
+   * marked inactive (stopped trading, blacklisted) could still be bought from and paid. Kept
+   * separate from `requireVendorName` because that one also names the vendor on *existing*
+   * rows, where a vendor deactivated since must still resolve.
+   */
+  async requireActiveVendor(
+    caller: AuthenticatedUser,
+    vendorId: string,
+    companyId: string,
+  ): Promise<string> {
+    const vendor = await this.partners.getVendorById(
+      vendorId,
+      rlsContextFor(caller),
+    );
+    if (!vendor || vendor.companyId !== companyId) {
+      throw new BadRequestException(
+        `Vendor ${vendorId} does not exist in this company`,
+      );
+    }
+    if (!vendor.active) {
+      throw new BadRequestException(
+        `${vendor.name} is inactive. Reactivate the vendor before recording against them.`,
+      );
+    }
+    return vendor.name;
+  }
+
+  /**
    * Site names for a list of ids, in one pass.
    *
    * A missing or out-of-scope site resolves to a placeholder rather than throwing:

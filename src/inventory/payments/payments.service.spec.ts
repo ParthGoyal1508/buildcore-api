@@ -19,6 +19,7 @@ const refs = {
   targetCompanyOf: () => 'co-1',
   parseDate: (value: string) => new Date(`${value}T00:00:00.000Z`),
   requireVendorName: async () => 'Acme Cement',
+  requireActiveVendor: async () => 'Acme Cement',
   vendorNames: async () => new Map([['vendor-1', 'Acme Cement']]),
 } as never;
 

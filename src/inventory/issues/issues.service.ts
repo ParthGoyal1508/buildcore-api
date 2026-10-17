@@ -144,7 +144,7 @@ export class IssuesService {
           ? Promise.resolve(null)
           : this.refs.projectOfSite(caller, dto.siteId),
         dto.vendorId
-          ? this.refs.requireVendorName(caller, dto.vendorId)
+          ? this.refs.requireActiveVendor(caller, dto.vendorId, targetCompanyId)
           : Promise.resolve(null),
       ]);
 

@@ -11,6 +11,8 @@ export interface VendorSummary {
   code: string;
   type: VendorType;
   active: boolean;
+  /** Added 036 M6 so a caller can refuse another company's vendor. */
+  companyId: string;
 }
 
 export interface VendorTds {
@@ -64,7 +66,14 @@ export class PartnersService {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({
         where: { id: vendorId },
-        select: { id: true, name: true, code: true, type: true, active: true },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          type: true,
+          active: true,
+          companyId: true,
+        },
       }),
     );
     return vendor ?? null;

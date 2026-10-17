@@ -110,7 +110,7 @@ export class PurchasesService {
     const [item, siteName, vendorName] = await Promise.all([
       this.refs.requireItem(caller, dto.itemId, targetCompanyId),
       this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
-      this.refs.requireVendorName(caller, dto.vendorId),
+      this.refs.requireActiveVendor(caller, dto.vendorId, targetCompanyId),
     ]);
     if (!item.active) {
       throw new BadRequestException(
