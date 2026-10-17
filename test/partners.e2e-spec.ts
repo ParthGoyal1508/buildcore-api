@@ -260,6 +260,15 @@ describe('Partners module (e2e)', () => {
         .expect(201);
       expect(contractor.body.complianceStatus).toBe('non_compliant');
 
+      // 036 N5: the detail screen edits registrations, and clears one with `null`.
+      const edited = await http()
+        .patch(`/partners/contractors/${contractor.body.id}`)
+        .set(auth())
+        .send({ licenceNumber: null, pfRegistration: 'PF-NEW' })
+        .expect(200);
+      expect(edited.body.licenceNumber).toBeNull();
+      expect(edited.body.pfRegistration).toBe('PF-NEW');
+
       const soon = new Date();
       soon.setDate(soon.getDate() + 20);
       // Real PDF bytes since 036 N4: the type is detected from the file, so the old
