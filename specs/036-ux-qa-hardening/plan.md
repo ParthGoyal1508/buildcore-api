@@ -105,6 +105,37 @@ This is a different repo, so it doesn't conflict with Wave 1.
 
 The existing screens keep working throughout. Wave 3 switches them over to the kit.
 
+### Waves 1 + 2: outcome (17-10-2026)
+
+All six streams are merged into `036-ux-qa-hardening` locally (not pushed). Each was rebased and re-verified by the coordinator before its merge, then all were re-verified together.
+- **API:** `tsc` clean; 249/249 unit suites (2,763 tests).
+- **Combined e2e:** a fresh database with all migrations applied ran each stream's suites one at a time: 16 suites, 365 tests, all pass.
+- **Web:** `typecheck` clean; lint shows the 11 known warnings.
+- **Already-failing e2e suites:** some suites outside these streams already failed on the base commit (fixtures still send a project `code`, plus missing seed defaults; see README-e2e). They fail identically now.
+
+**Migrations, in order:**
+- `20261017140000_payroll_recovery_settlement`
+- `20261017150000_labour_payment_sheet_carry_forward`
+- `20261017160000_transfer_shortage_reason`
+- `20261017160100_payment_idempotency_key`
+- `20261017160200_logbook_reading_gap_reason`
+- `20261017160300_hire_bill_created_by`
+
+**Where it differed from the plan:**
+- **Migration ranges:** the first ranges given to the streams clashed with existing migrations, so the streams were moved to ranges after `20261017130000`.
+- **Default body limit:** 1 MB, not 100 KB. The largest bill and BOQ saves were never measured.
+- **Saved drafts:** user-keyed bill drafts survive session expiry and are cleared only on sign-out.
+- **FR-022 guard:** the guard spec now excludes `src/**/dto/**` plus each stream's files, with notes.
+- **Release requirements:** production now refuses to boot without `CORS_ORIGINS`, and `helmet` is a new dependency.
+
+**Inputs for Wave 3:**
+- **Each stream's report lists the API changes the web must adopt.** These include: bank sheet by POST; run detail server totals and exceptions; new 409/403 codes (`PAYROLL_DRAFT_STALE`, `PAYROLL_RUN_NOT_APPROVED`, `SELF_APPROVAL`, `COMPANY_CHANGED`, `RA_BILL_EXCEEDS_AWARD`, `LABOUR_SHEET_PERIOD_NOT_ENDED`, …); payment sheet delete, regenerate and carry-forward rows; `punchOutNextDay` / `openShiftFrom`; O8 names; `shortageReason`, `returnedNow`, `Idempotency-Key`, `readingGapReason`, `taxBasisWarning`; paging params; clients send `null` to clear; geofence max 5000; mirror the new `bill-totals.ts` rounding.
+- **Selected-company bugs still in module code:** platform listed about 20 places that use the home company instead of the selected one:
+  - `user.companyId ?? requested` in hr attendance (holidays, import, admin), employees, payroll (loans, reimbursements-admin, tds, salary-advances, challans, runs), and projects sites.
+  - Other reads in labour payment sheets, recruitment letters/requisitions/refs, the asset register and the salary-advances service.
+  - Each module stream fixes its own with `resolveCompanyId` / `effectiveCompanyId`.
+- **Exports still needing `@ExportThrottle()`:** disposals, project P&L, salary register, challans, asset register.
+
 ### Wave 3: module slices (5 agents in parallel, both repos per module)
 
 Each agent owns one module in **both** repos: the remaining backend items for that module (new view endpoints, filters, names instead of UUIDs) and every screen fix. Each one also adopts the Wave 2 kit (pickers, error states, URL state, uploads, confirmations, pending locks) and wires up the Wave 1 backend changes.
