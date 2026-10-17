@@ -246,6 +246,11 @@ export class RecruitmentReportsService {
         }),
     );
 
+    // Who each row is about (036 follow-up) — the screen showed a raw employee id.
+    const names = await this.refs.employeeNames(
+      caller,
+      rows.map((r) => r.employeeId),
+    );
     const items = await Promise.all(
       rows.map(async (r) => {
         const employee = await this.refs
@@ -258,6 +263,8 @@ export class RecruitmentReportsService {
           (await this.refs.isFnfProcessed(caller, r.employeeId)) === false;
         return {
           employeeId: r.employeeId,
+          employeeCode: names.get(r.employeeId)?.employeeCode ?? null,
+          employeeName: names.get(r.employeeId)?.name ?? null,
           resignationDate: r.resignationDate.toISOString().slice(0, 10),
           lastWorkingDay: lwd.toISOString().slice(0, 10),
           tenureMonths: doj ? tenureMonths(doj, lwd) : null,
