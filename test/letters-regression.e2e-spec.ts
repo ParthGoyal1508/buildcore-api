@@ -20,7 +20,7 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
  * continues unchanged" was an assertion with nothing behind it — which is exactly what
  * the migration checklist meant by asking whether the claim was testable or merely
  * stated. It is driven over HTTP with the same request bodies a client sent before the
- * move: `letterType: "appointment"`, a plain string that used to be an enum value and is
+ * move: `letterType: "confirmation"`, a plain string that used to be an enum value and is
  * now a `LetterKind` key, byte-identical either way.
  *
  * Every fixture is prefixed `E2ELR` and removed in `afterAll`.
@@ -119,7 +119,12 @@ describe('Letters after the schema move (e2e, T035)', () => {
     const role = await sys.role.create({
       data: {
         name: unique('HrRole'),
-        permissions: [Permission.RECRUITMENT, Permission.SETTINGS],
+        // HR_LETTERS since 2026-10-15: every letter to an employee is HR's (letter-permissions.ts).
+        permissions: [
+          Permission.RECRUITMENT,
+          Permission.SETTINGS,
+          Permission.HR_LETTERS,
+        ],
       },
     });
     roleIds.push(role.id);
@@ -148,9 +153,14 @@ describe('Letters after the schema move (e2e, T035)', () => {
       },
     });
     userIds.push(employeeUser.id);
+    // The confirmation letter declares the designation as required (036 follow-up).
+    const designation = await sys.designation.create({
+      data: { companyId, name: unique('Engineer') },
+    });
     const employee = await sys.employee.create({
       data: {
         userId: employeeUser.id,
+        designationId: designation.id,
         companyId,
         siteId: site.id,
         shiftId: shift.id,
@@ -158,6 +168,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
         firstName: 'Anil',
         lastName: 'Deshpande',
         dateOfJoining: new Date('2026-01-01'),
+        confirmationDate: new Date('2026-07-01'),
       },
     });
     employeeId = employee.id;
@@ -177,6 +188,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
     await sys.letterTemplate.deleteMany({ where: { companyId } });
     await sys.letterKind.deleteMany({ where: { companyId } });
     await sys.employee.deleteMany({ where: { companyId } });
+    await sys.designation.deleteMany({ where: { companyId } });
     await sys.shift.deleteMany({ where: { companyId } });
     await sys.site.deleteMany({ where: { companyId } });
     await sys.auditLogEntry.deleteMany({ where: { companyId } });
@@ -190,8 +202,35 @@ describe('Letters after the schema move (e2e, T035)', () => {
 
   it('still accepts a template keyed by the old enum value', async () => {
     // The request body is unchanged from before the restructure. `letterType:
-    // "appointment"` was an enum value; it is now a LetterKind key, and the point of
+    // "confirmation"` was an enum value; it is now a LetterKind key, and the point of
     // making them byte-identical is that no client had to learn the difference.
+    //
+    // 036 follow-up: `confirmation`, not `appointment`. Since 2026-10-14 the appointment
+    // letter's wording is the standard one (409 LETTER_TEMPLATE_STANDARD_LOCKED on any
+    // edit), and since then it also needs a signatory. Confirmation is one of the same five
+    // old enum values, is not standard-managed and carries no signature, so the request
+    // bodies this suite guards are still exercised unchanged. The lock is asserted below.
+    const res = await http()
+      .post('/recruitment/letter-templates')
+      .set(auth(token))
+      .send({
+        companyId,
+        letterType: 'confirmation',
+        name: `${PREFIX} Confirmation`,
+        bodyTemplate:
+          'Dear {{employeeName}} ({{employeeCode}}), you are confirmed as ' +
+          '{{designation}} at {{companyName}} from {{confirmationDate}}. ' +
+          'Issued {{issueDate}}.',
+        isActive: true,
+      })
+      .expect(201);
+
+    expect(res.body.letterType).toBe('confirmation');
+    // The new field is additive: the wire keeps its old name AND now names the row.
+    expect(res.body.letterKindId).toBeTruthy();
+  });
+
+  it('locks the standard appointment wording, still resolving the old key', async () => {
     const res = await http()
       .post('/recruitment/letter-templates')
       .set(auth(token))
@@ -199,17 +238,13 @@ describe('Letters after the schema move (e2e, T035)', () => {
         companyId,
         letterType: 'appointment',
         name: `${PREFIX} Appointment`,
-        bodyTemplate:
-          'Dear {{employeeName}} ({{employeeCode}}), you are appointed as ' +
-          '{{designation}} in {{department}} at {{companyName}} from {{dateOfJoining}}. ' +
-          'Issued {{issueDate}}.',
+        bodyTemplate: 'Dear {{employeeName}}, you are appointed.',
         isActive: true,
       })
-      .expect(201);
-
-    expect(res.body.letterType).toBe('appointment');
-    // The new field is additive: the wire keeps its old name AND now names the row.
-    expect(res.body.letterKindId).toBeTruthy();
+      .expect(409);
+    // Named by the kind the old enum value resolved to.
+    expect(res.body.code).toBe('LETTER_TEMPLATE_STANDARD_LOCKED');
+    expect(res.body.message).toContain('Appointment');
   });
 
   it('still rejects a template referencing tokens the kind does not document', async () => {
@@ -218,7 +253,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
       .set(auth(token))
       .send({
         companyId,
-        letterType: 'appointment',
+        letterType: 'confirmation',
         name: `${PREFIX} Bad`,
         bodyTemplate:
           'Dear {{employeeName}}, your {{favouriteColour}} is noted.',
@@ -232,7 +267,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
     const res = await http()
       .post('/recruitment/letters')
       .set(auth(token))
-      .send({ letterType: 'appointment', employeeId })
+      .send({ letterType: 'confirmation', employeeId })
       .expect(201);
 
     letterId = res.body.id;
@@ -252,7 +287,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
     expect(download.body.length).toBeGreaterThan(500);
     // The filename came from the enum value before the move and from the kind's key
     // after it. Same string, which is the whole basis of the migration.
-    expect(download.headers['content-disposition']).toContain('appointment-v1');
+    expect(download.headers['content-disposition']).toContain('confirmation-v1');
   });
 
   it('still lists the letter under its old type name', async () => {
@@ -264,7 +299,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
 
     const row = res.body.find((r: { id: string }) => r.id === letterId);
     expect(row).toBeDefined();
-    expect(row.letterType).toBe('appointment');
+    expect(row.letterType).toBe('confirmation');
     expect(row.isSuperseded).toBe(false);
   });
 
@@ -272,7 +307,7 @@ describe('Letters after the schema move (e2e, T035)', () => {
     const second = await http()
       .post('/recruitment/letters')
       .set(auth(token))
-      .send({ letterType: 'appointment', employeeId })
+      .send({ letterType: 'confirmation', employeeId })
       .expect(201);
 
     expect(second.body.version).toBe(2);
