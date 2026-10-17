@@ -175,7 +175,12 @@ export class PayrollScheduleService {
   async outstandingApproval(
     companyId: string,
     runId: string,
-  ): Promise<{ levelLabel: string | null; state: string } | null> {
+  ): Promise<{
+    levelLabel: string | null;
+    state: string;
+    /** False when the run was never put into its approval chain at all (2026-10-17). */
+    submitted: boolean;
+  } | null> {
     const gate = await this.approvals.mayTakeEffect({
       actionType: ACTION_PAYROLL_RUN,
       entityType: ACTION_PAYROLL_RUN,
@@ -190,7 +195,43 @@ export class PayrollScheduleService {
       // pass. Reported as `pending` because that is what it means to whoever is waiting:
       // the sheet is held and somebody has to approve something.
       state: gate.state ?? 'pending',
+      submitted: gate.state !== null,
     };
+  }
+
+  /**
+   * Puts a processed run into its approval chain if it has never been in one (2026-10-17).
+   *
+   * Only the monthly sweep used to submit runs, so a run generated and processed by hand sat
+   * outside any chain — and a bank sheet, which needs the chain approved, could never be produced
+   * for it. Processing now calls this, and so does the "Submit for approval" action for runs
+   * processed before the fix. A run already in a chain, in any state, is left alone: approved,
+   * rejected or abandoned is a decision, not a gap.
+   *
+   * Unlike the sweep, a missing chain is reported, because a person is waiting on the answer.
+   */
+  async submitIfNeverSubmitted(
+    companyId: string,
+    runId: string,
+  ): Promise<'submitted' | 'already_submitted'> {
+    const existing = await this.approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      runId,
+      companyId,
+    );
+    if (existing) return 'already_submitted';
+    const run = await this.findRunById(companyId, runId);
+    await this.approvals.submit({
+      companyId,
+      actionType: ACTION_PAYROLL_RUN,
+      entityType: ACTION_PAYROLL_RUN,
+      entityId: runId,
+      originatorUserId: null,
+      subject: `Payroll run ${run?.period ?? ''}`.trim(),
+      href: webRoutes.payrollRun(runId),
+      viewPermission: Permission.PAYROLL,
+    });
+    return 'submitted';
   }
 
   /**
