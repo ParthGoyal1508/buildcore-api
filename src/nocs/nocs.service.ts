@@ -11,7 +11,12 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
 import { assertInScope } from '../settings/company-scope';
-import type { ListNocsDto, NocSubject, UploadNocDto } from './dto/noc.dto';
+import {
+  MAX_STATUS_SUBJECTS,
+  type ListNocsDto,
+  type NocSubject,
+  type UploadNocDto,
+} from './dto/noc.dto';
 
 /** Ten megabytes — the ceiling every document upload in the app shares. */
 const MAX_NOC_BYTES = 10 * 1024 * 1024;
@@ -28,6 +33,33 @@ const SUBJECT_PERMISSION: Record<NocSubject, Permission> = {
   employee: Permission.EMPLOYEES,
   purchase_order: Permission.INVENTORY,
 };
+
+/**
+ * Whether a record still awaits its NOC (2026-10-17): **open** until one is uploaded, **closed**
+ * from then on. Derived from the NOCs on every read rather than stored, so it cannot drift from
+ * them — removing the only NOC reopens the record with nothing else to update.
+ *
+ * A status only: closing blocks nothing, so a late bill or correction can still be entered. It
+ * sits beside each record's own lifecycle (a work order's `completed`, an employee's exit) and
+ * changes neither.
+ */
+export type NocStatus = 'open' | 'closed';
+
+export interface NocStatusView {
+  subjectId: string;
+  status: NocStatus;
+  /** When the closing NOC was uploaded; null while open. */
+  closedAt: Date | null;
+}
+
+/**
+ * Whether a NOC closes its record. A work order takes two — one after the LOI and one after the
+ * work order — and only the second closes it; the LOI's NOC is a step on the way. A work-order NOC
+ * uploaded before stages existed (stage null) is treated as the closing one.
+ */
+export function nocCloses(row: { subjectType: string; stage: string | null }) {
+  return row.subjectType !== 'work_order' || row.stage !== 'loi';
+}
 
 export interface NocView {
   id: string;
@@ -72,6 +104,48 @@ export class NocsService {
         }),
     );
     return rows.map((row) => this.toView(row));
+  }
+
+  /** Open or closed, for each of a page of records of one type. */
+  async statuses(
+    caller: AuthenticatedUser,
+    subjectType: NocSubject,
+    subjectIds: string[],
+  ): Promise<NocStatusView[]> {
+    this.assertMay(caller, subjectType);
+    const ids = Array.from(new Set(subjectIds.filter(Boolean)));
+    if (ids.length > MAX_STATUS_SUBJECTS) {
+      throw new BadRequestException(
+        `Ask for at most ${MAX_STATUS_SUBJECTS} records at a time.`,
+      );
+    }
+    if (ids.length === 0) return [];
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.nocDocument.findMany({
+          where: { subjectType, subjectId: { in: ids } },
+          select: {
+            subjectType: true,
+            subjectId: true,
+            stage: true,
+            createdAt: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        }),
+    );
+    const closedAt = new Map<string, Date>();
+    for (const row of rows) {
+      if (nocCloses(row) && !closedAt.has(row.subjectId)) {
+        closedAt.set(row.subjectId, row.createdAt);
+      }
+    }
+    return ids.map((subjectId) => ({
+      subjectId,
+      status: closedAt.has(subjectId) ? 'closed' : 'open',
+      closedAt: closedAt.get(subjectId) ?? null,
+    }));
   }
 
   async upload(caller: AuthenticatedUser, dto: UploadNocDto): Promise<NocView> {

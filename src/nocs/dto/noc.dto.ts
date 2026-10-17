@@ -34,6 +34,24 @@ export class ListNocsDto {
   subjectId!: string;
 }
 
+/** At most this many records per status request — a page of any list in the app. */
+export const MAX_STATUS_SUBJECTS = 500;
+
+export class NocStatusQueryDto {
+  @ApiProperty({ enum: NOC_SUBJECTS })
+  @IsIn(NOC_SUBJECTS)
+  subjectType!: NocSubject;
+
+  @ApiProperty({
+    description: 'Comma-separated record ids',
+    example: 'id1,id2',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(MAX_STATUS_SUBJECTS * 40)
+  subjectIds!: string;
+}
+
 export class UploadNocDto extends ListNocsDto {
   @ApiPropertyOptional({ enum: NOC_STAGES })
   @IsOptional()
