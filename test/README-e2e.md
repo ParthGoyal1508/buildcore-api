@@ -2,7 +2,7 @@
 
 ## The database
 
-**e2e runs against `buildcore_scratch`, never `buildcore`.** The suites create and delete their own
+**e2e runs against `buildcore_scratch`, never `buildcore`.** This is now enforced: `test/refuse-shared-database.ts` runs before any suite and refuses to start when `DATABASE_URL` is unset, is an unexpanded template, or names `buildcore`. The suites create and delete their own
 fixtures, and a teardown that reaches too far takes real data with it — one has, which is why
 `de10b79 fix(test): stop three e2e teardowns deleting the whole company's data` exists.
 
