@@ -117,7 +117,28 @@ export class RecruitmentReportsService {
     };
   }
 
-  async funnel(caller: AuthenticatedUser, query: { requisitionId?: string }) {
+  async funnel(
+    caller: AuthenticatedUser,
+    query: { requisitionId?: string; from?: string; to?: string },
+  ) {
+    // Application-date range (036 H5): the funnel was all-time only. Inclusive of `to`'s whole
+    // day; a reversed range is refused for the reason `periodOf` gives.
+    const from = query.from ? parse(query.from) : undefined;
+    const to = query.to
+      ? new Date(parse(query.to).getTime() + 86_400_000)
+      : undefined;
+    if (from && to && to.getTime() <= from.getTime()) {
+      throw new BadRequestException('`to` cannot be earlier than `from`.');
+    }
+    const applied =
+      from || to
+        ? {
+            createdAt: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lt: to } : {}),
+            },
+          }
+        : {};
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -126,6 +147,7 @@ export class RecruitmentReportsService {
           where: {
             ...companyScope(caller),
             deletedAt: null,
+            ...applied,
             ...(query.requisitionId
               ? { requisitionId: query.requisitionId }
               : {}),
@@ -144,6 +166,7 @@ export class RecruitmentReportsService {
           where: {
             ...companyScope(caller),
             deletedAt: null,
+            ...applied,
             ...(query.requisitionId
               ? { requisitionId: query.requisitionId }
               : {}),
@@ -165,6 +188,7 @@ export class RecruitmentReportsService {
             ...companyScope(caller),
             stage: CandidateStage.joined,
             deletedAt: null,
+            ...applied,
             ...(query.requisitionId
               ? { requisitionId: query.requisitionId }
               : {}),

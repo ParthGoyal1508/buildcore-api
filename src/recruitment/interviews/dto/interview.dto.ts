@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import {
   InterviewMode,
   InterviewOutcome,
@@ -38,6 +39,26 @@ export class ListInterviewsDto {
   @IsOptional()
   @IsEnum(InterviewStatus)
   status?: InterviewStatus;
+
+  /**
+   * Paging (036 H4). The body stays a plain array and the total rides in `X-Total-Count`, so the
+   * old caller keeps working; without `page` the list is capped at 500 rather than unbounded.
+   */
+  @ApiPropertyOptional({ default: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(2_147_483_647)
+  page?: number;
+
+  @ApiPropertyOptional({ default: 50, maximum: 100 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize?: number;
 }
 
 export class ScheduleInterviewDto {

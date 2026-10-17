@@ -80,4 +80,16 @@ export class FunnelQueryDto {
   @IsString()
   @MaxLength(100)
   requisitionId?: string;
+
+  /** Candidates who applied on or after this date (036 H5). Optional: no range is all time. */
+  @ApiPropertyOptional({ example: '2026-04-01' })
+  @IsOptional()
+  @Matches(DATE_ONLY, { message: 'from must be YYYY-MM-DD' })
+  from?: string;
+
+  /** …and on or before this one, inclusive. */
+  @ApiPropertyOptional({ example: '2027-03-31' })
+  @IsOptional()
+  @Matches(DATE_ONLY, { message: 'to must be YYYY-MM-DD' })
+  to?: string;
 }

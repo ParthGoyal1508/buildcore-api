@@ -7,8 +7,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
@@ -35,11 +37,16 @@ export class InterviewController {
 
   @Get('interviews')
   @ApiOperation({ summary: 'Interviews with Today / Upcoming / Overdue flags' })
-  findAll(
+  async findAll(
     @UserEntity() caller: AuthenticatedUser,
     @Query() query: ListInterviewsDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.interviews.findAll(caller, query);
+    const { rows, total } = await this.interviews.findAll(caller, query);
+    // 036 H4: the body stays the array it always was; the count rides in a header.
+    response.setHeader('X-Total-Count', String(total));
+    response.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+    return rows;
   }
 
   @Post('candidates/:id/interviews')
