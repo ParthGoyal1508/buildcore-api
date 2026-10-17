@@ -178,4 +178,101 @@ describe('LogbookService (036 K2, K4, K5)', () => {
       remarks: 'Excavation',
     });
   });
+
+  it('refuses to add an entry inside a verified hire bill (review decision 9)', async () => {
+    const { service, prisma } = build({ bill: billed });
+    await expect(service.create(caller, create, 'ip')).rejects.toThrow(
+      /2026-10-06 is inside a verified hire bill \(INV-7\).*cannot be added/,
+    );
+    expect(prisma.tx.logbookEntry.create).not.toHaveBeenCalled();
+  });
+
+  it('checks every sheet day against billed periods before writing (review decision 9)', async () => {
+    const { service, prisma } = build({ bill: billed });
+    await expect(
+      service.assertDaysNotBilled(caller, 'eq-1', ['2026-10-06']),
+    ).rejects.toThrow(/cannot be added/);
+    expect(prisma.tx.logbookEntry.create).not.toHaveBeenCalled();
+  });
+
+  describe('correctReadings (K6)', () => {
+    const correction = {
+      openingReading: 100,
+      closingReading: 106,
+      reason: 'Closing reading misread from the meter',
+    };
+
+    it('changes the readings, re-derives the meter and audits before and after with the reason', async () => {
+      const { service, prisma, audit } = build();
+      prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
+      prisma.tx.logbookEntry.update.mockResolvedValue(
+        entry({
+          closingReading: decimal(106),
+          totalHours: decimal(6),
+        }),
+      );
+      await service.correctReadings(caller, 'lb-1', correction, 'ip');
+      expect(prisma.tx.logbookEntry.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            openingReading: 100,
+            closingReading: 106,
+            totalHours: 6,
+          }),
+        }),
+      );
+      // The meter is re-derived from the logbook in the same transaction.
+      expect(
+        prisma.tx.logbookEntry.findFirst.mock.calls.some(
+          ([args]: [{ where: { date?: { lte?: Date } } }]) =>
+            args.where.date?.lte,
+        ),
+      ).toBe(true);
+      const changes = audit.record.mock.calls[0][0].changes;
+      expect(changes).toMatchObject({
+        kind: 'readings_corrected',
+        reason: correction.reason,
+        before: { closingReading: 108, totalHours: 8 },
+        after: { closingReading: 106, totalHours: 6 },
+      });
+    });
+
+    it('requires a reason', async () => {
+      const { service, prisma } = build();
+      prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
+      await expect(
+        service.correctReadings(
+          caller,
+          'lb-1',
+          { ...correction, reason: '   ' },
+          'ip',
+        ),
+      ).rejects.toThrow(/reason/);
+      expect(prisma.tx.logbookEntry.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses more than 24 hours on an hour meter', async () => {
+      const { service, prisma } = build();
+      prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
+      await expect(
+        service.correctReadings(
+          caller,
+          'lb-1',
+          { ...correction, closingReading: 130 },
+          'ip',
+        ),
+      ).rejects.toThrow(/more than 24/);
+    });
+
+    it('refuses a correction inside a paid hire bill', async () => {
+      const { service, prisma } = build({
+        bill: { ...billed, status: HireBillStatus.paid },
+      });
+      prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
+      await expect(
+        service.correctReadings(caller, 'lb-1', correction, 'ip'),
+      ).rejects.toThrow(/cannot be edited/);
+      expect(prisma.tx.logbookEntry.update).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -8,6 +8,7 @@ import {
   AuditAction,
   AuditEntityType,
   HireBillStatus,
+  MeterType,
   Prisma,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -24,6 +25,7 @@ import { EquipmentService } from '../equipment/equipment.service';
 import { PlantRefsService } from '../plant-refs.service';
 import { hasReadingGap, readingProblem } from './logbook-readings';
 import {
+  CorrectLogbookReadingsDto,
   CreateLogbookEntryDto,
   ListLogbookDto,
   UpdateLogbookEntryDto,
@@ -195,6 +197,12 @@ export class LogbookService {
           );
         }
 
+        await this.assertNotBilled(
+          tx,
+          { equipmentId: dto.equipmentId, date },
+          'added',
+        );
+
         if (dto.operatorId) {
           await this.refs.requireEmployee(
             caller,
@@ -329,6 +337,127 @@ export class LogbookService {
     return this.toRow(caller, updated);
   }
 
+  /**
+   * Corrects a day's opening and closing readings in place (036 K6).
+   *
+   * The same rules as recording the day: not inside a verified or paid hire bill, closing not
+   * below opening, at most 24 h on an hour meter, and an opening that follows the previous closing
+   * reading unless a gap reason is given. The machine's meter and utilisation are re-derived in the
+   * same transaction, and the audit entry carries the reason with the readings before and after —
+   * the only record of what the figures were.
+   *
+   * The *next* day's opening reading is not re-checked: it was accepted against the old closing
+   * figure, and refusing this correction until that day is corrected too would leave a known-wrong
+   * reading in place. The screen says to check the following day.
+   */
+  async correctReadings(
+    caller: AuthenticatedUser,
+    entryId: string,
+    dto: CorrectLogbookReadingsDto,
+    ipAddress: string,
+  ): Promise<LogbookRow> {
+    const reason = dto.reason.trim();
+    if (!reason) {
+      throw new BadRequestException(
+        'Give a reason for correcting the readings.',
+      );
+    }
+    if (dto.closingReading < dto.openingReading) {
+      throw new BadRequestException(
+        'closingReading cannot be less than openingReading — a meter does not run backwards.',
+      );
+    }
+
+    const { before, updated } = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const existing = await tx.logbookEntry.findUnique({
+          where: { id: entryId },
+        });
+        if (!existing) throw new NotFoundException('Logbook entry not found');
+        assertInScope(caller, existing, 'Logbook entry');
+        await this.assertNotBilled(tx, existing, 'edited');
+
+        const equipment = await tx.equipment.findUnique({
+          where: { id: existing.equipmentId },
+          select: { meterType: true },
+        });
+        const previous = await tx.logbookEntry.findFirst({
+          where: {
+            equipmentId: existing.equipmentId,
+            date: { lt: existing.date },
+          },
+          orderBy: { date: 'desc' },
+          select: { closingReading: true },
+        });
+        const previousClosing = previous
+          ? Number(previous.closingReading)
+          : null;
+        const day = existing.date.toISOString().slice(0, 10);
+        const problem = readingProblem({
+          date: day,
+          dateValue: existing.date,
+          // The entry already exists, so its date passed the future check when it was recorded;
+          // a row from before that rule is still correctable.
+          today:
+            existing.date > businessToday() ? existing.date : businessToday(),
+          meterType: equipment?.meterType ?? MeterType.hours,
+          openingReading: dto.openingReading,
+          closingReading: dto.closingReading,
+          previousClosing,
+          readingGapReason: dto.readingGapReason ?? existing.readingGapReason,
+        });
+        if (problem) throw new BadRequestException(problem);
+
+        const gapReason = hasReadingGap(dto.openingReading, previousClosing)
+          ? (dto.readingGapReason ?? existing.readingGapReason)?.trim() ?? null
+          : null;
+
+        const row = await tx.logbookEntry.update({
+          where: { id: entryId },
+          data: {
+            openingReading: dto.openingReading,
+            closingReading: dto.closingReading,
+            totalHours: dto.closingReading - dto.openingReading,
+            readingGapReason: gapReason,
+          },
+          include: { equipment: { select: { code: true, name: true } } },
+        });
+        await this.syncEquipmentFromLogbook(tx, caller, existing.equipmentId);
+        return { before: existing, updated: row };
+      },
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.LOGBOOK_ENTRY,
+      action: AuditAction.UPDATE,
+      entityId: entryId,
+      accountId: caller.id,
+      companyId: updated.companyId,
+      ipAddress,
+      changes: {
+        kind: 'readings_corrected',
+        reason,
+        equipmentId: updated.equipmentId,
+        date: updated.date.toISOString().slice(0, 10),
+        before: {
+          openingReading: Number(before.openingReading),
+          closingReading: Number(before.closingReading),
+          totalHours: Number(before.totalHours),
+          readingGapReason: before.readingGapReason,
+        },
+        after: {
+          openingReading: Number(updated.openingReading),
+          closingReading: Number(updated.closingReading),
+          totalHours: Number(updated.totalHours),
+          readingGapReason: updated.readingGapReason,
+        },
+      },
+    });
+    return this.toRow(caller, updated);
+  }
+
   async remove(
     caller: AuthenticatedUser,
     entryId: string,
@@ -395,7 +524,8 @@ export class LogbookService {
    * move it to, and zeroing it would be worse than stale.
    */
   /**
-   * Refuses to change an entry a verified or paid hire bill was raised over (036 K5).
+   * Refuses to add, change or delete an entry a verified or paid hire bill was raised over (036 K5;
+   * adding since review decision 9).
    *
    * The bill snapshots the logbook hours when it is raised, so editing or deleting an entry inside
    * its period afterwards leaves a bill that was verified against figures that no longer exist —
@@ -403,10 +533,10 @@ export class LogbookService {
    * still awaiting verification does not block: correcting the logbook before verifying is the
    * point of verification.
    */
-  private async assertNotBilled(
+  async assertNotBilled(
     tx: Prisma.TransactionClient,
     entry: { equipmentId: string; date: Date },
-    action: 'edited' | 'deleted',
+    action: 'added' | 'edited' | 'deleted',
   ): Promise<void> {
     const bill = await tx.hireBill.findFirst({
       where: {
@@ -426,12 +556,45 @@ export class LogbookService {
       const period = `${bill.billingPeriodFrom
         .toISOString()
         .slice(0, 10)} to ${bill.billingPeriodTo.toISOString().slice(0, 10)}`;
+      const billName = `a ${bill.status} hire bill${
+        bill.invoiceNo ? ` (${bill.invoiceNo})` : ''
+      } for ${period}`;
+      // 036 review decision 9: adding is refused too. A day added to a verified period changes
+      // the hours under a bill exactly as editing one does — the bill no longer matches its
+      // logbook — and the paid bill can never account for it.
       throw new ConflictException(
-        `This entry is inside a ${bill.status} hire bill${
-          bill.invoiceNo ? ` (${bill.invoiceNo})` : ''
-        } for ${period} and cannot be ${action}.`,
+        action === 'added'
+          ? `${entry.date
+              .toISOString()
+              .slice(
+                0,
+                10,
+              )} is inside ${billName}. An entry cannot be added to a billed period.`
+          : `This entry is inside ${billName} and cannot be ${action}.`,
       );
     }
+  }
+
+  /**
+   * The sheet's pre-check for review decision 9: refuses the whole save when any typed day falls
+   * inside a verified or paid hire bill, before a single row is written. `create` checks again
+   * per row inside its transaction; this is what keeps a sheet from half-saving up to that day.
+   */
+  async assertDaysNotBilled(
+    caller: AuthenticatedUser,
+    equipmentId: string,
+    dates: string[],
+  ): Promise<void> {
+    if (dates.length === 0) return;
+    await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      for (const date of [...dates].sort()) {
+        await this.assertNotBilled(
+          tx,
+          { equipmentId, date: this.refs.parseDate(date) },
+          'added',
+        );
+      }
+    });
   }
 
   private async syncEquipmentFromLogbook(

@@ -544,6 +544,48 @@ describe('Plant module (e2e)', () => {
         .expect(200);
       expect(equipment.body.currentReading).toBe(1008);
     });
+
+    it('corrects a day\'s readings with a reason and audits before and after (036 K6)', async () => {
+      const entry = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: ownedEquipmentId,
+          date: new Date(`${dayOffset(-2)}T00:00:00.000Z`),
+        },
+      });
+      await http()
+        .patch(`/plant/logbook/${entry.id}/readings`)
+        .set(auth())
+        .send({ openingReading: 995, closingReading: 1000, reason: ' ' })
+        .expect(400);
+
+      const corrected = await http()
+        .patch(`/plant/logbook/${entry.id}/readings`)
+        .set(auth())
+        .send({
+          openingReading: 995,
+          closingReading: 1000,
+          reason: 'Closing hours misread',
+        })
+        .expect(200);
+      expect(corrected.body.totalHours).toBe(5);
+
+      const audit = await sys.auditLogEntry.findFirst({
+        where: { entityType: 'LOGBOOK_ENTRY', entityId: entry.id, action: 'UPDATE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(audit.changes).toMatchObject({
+        reason: 'Closing hours misread',
+        before: { closingReading: 995 },
+        after: { closingReading: 1000 },
+      });
+
+      // The later entry still holds the meter.
+      const equipment = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(equipment.body.currentReading).toBe(1008);
+    });
   });
 
   // ── Fuel ────────────────────────────────────────────────────────────────
@@ -885,6 +927,72 @@ describe('Plant module (e2e)', () => {
         .set(auth())
         .expect(409);
       expect(refused.body.message).toMatch(/paid hire bill/);
+    });
+
+    it('refuses correcting readings inside the paid bill (036 K6)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const inside = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: bill.equipmentId,
+          date: { gte: bill.billingPeriodFrom, lte: bill.billingPeriodTo },
+        },
+      });
+      await http()
+        .patch(`/plant/logbook/${inside.id}/readings`)
+        .set(auth())
+        .send({
+          openingReading: Number(inside.openingReading),
+          closingReading: Number(inside.closingReading),
+          reason: 'Recheck',
+        })
+        .expect(409);
+    });
+
+    it('refuses adding a logbook entry inside the paid bill (036 review decision 9)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const taken = new Set(
+        (
+          await sys.logbookEntry.findMany({
+            where: { equipmentId: bill.equipmentId },
+            select: { date: true },
+          })
+        ).map((e: { date: Date }) => e.date.toISOString().slice(0, 10)),
+      );
+      let free = '';
+      for (let d = -10; d <= 0 && !free; d++) {
+        if (!taken.has(dayOffset(d))) free = dayOffset(d);
+      }
+      expect(free).not.toBe('');
+      const refused = await http()
+        .post('/plant/logbook')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          date: free,
+          openingReading: 0,
+          closingReading: 0,
+          readingGapReason: 'e2e',
+        })
+        .expect(409);
+      expect(refused.body.message).toMatch(/cannot be added to a billed period/);
+
+      // The monthly sheet refuses the same day before writing anything.
+      const sheetRefused = await http()
+        .post('/plant/logbook/sheet')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          month: free.slice(0, 7),
+          rows: [
+            {
+              date: free,
+              openingReading: 0,
+              closingReading: 0,
+              readingGapReason: 'e2e',
+            },
+          ],
+        });
+      expect(sheetRefused.status).toBe(409);
     });
 
     it('refuses a hire bill against an owned machine (FR-022)', async () => {

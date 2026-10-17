@@ -244,7 +244,7 @@ export class LogbookSheetService {
           throw new ConflictException(
             `${shortDate(
               day.date,
-            )} already has its readings. Correct them from the Logbook.`,
+            )} already has its readings. Correct them from the Logbook (Correct readings).`,
           );
         }
       }
@@ -295,6 +295,12 @@ export class LogbookSheetService {
         previousClosing = day.closingReading;
       }
     }
+
+    // Review decision 9: a typed day inside a verified or paid hire bill refuses the whole sheet,
+    // checked here so nothing is written before the refusal.
+    await this.logbook.assertDaysNotBilled(caller, dto.equipmentId, [
+      ...typed.keys(),
+    ]);
 
     // Readings first, so the fuel entries that follow find the day's logbook entry and their
     // variance is computed against it.

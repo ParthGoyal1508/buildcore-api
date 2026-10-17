@@ -27,6 +27,7 @@ import { formFormatOf, sendForm } from '../../common/form-document';
 import { SaveLogbookSheetDto } from './dto/logbook-sheet.dto';
 import { LogbookSheetService } from './logbook-sheet.service';
 import {
+  CorrectLogbookReadingsDto,
   CreateLogbookEntryDto,
   ListLogbookDto,
   UpdateLogbookEntryDto,
@@ -124,8 +125,8 @@ export class LogbookController {
   @ApiOperation({
     summary: 'Correct fuel, operator or remarks',
     description:
-      'Readings are immutable once recorded — every derived figure depends on ' +
-      'them. Delete and re-record to correct one.',
+      'Readings are not changed here — every derived figure depends on them. ' +
+      'Use PATCH :id/readings, which requires a reason (036 K6).',
   })
   async update(
     @UserEntity() caller: AuthenticatedUser,
@@ -134,6 +135,23 @@ export class LogbookController {
     @Ip() ipAddress: string,
   ) {
     return this.logbook.update(caller, id, dto, ipAddress);
+  }
+
+  @Patch(':id/readings')
+  @ApiOperation({
+    summary: 'Correct the readings, with a reason (036 K6)',
+    description:
+      'Same rules as recording the day (closing ≥ opening, ≤ 24 h on an hour meter, a gap needs ' +
+      "readingGapReason). 409 inside a verified or paid hire bill. The machine's reading and " +
+      'utilisation are re-derived; the audit entry keeps the reason and the readings before and after.',
+  })
+  async correctReadings(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: CorrectLogbookReadingsDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.logbook.correctReadings(caller, id, dto, ipAddress);
   }
 
   @Delete(':id')
