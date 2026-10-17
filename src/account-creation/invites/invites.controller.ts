@@ -7,10 +7,11 @@ import {
   Param,
   Post,
   Req,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { InvitesService } from './invites.service';
 
@@ -21,8 +22,13 @@ import { InvitesService } from './invites.service';
  * authenticate with yet. The invite token is the credential, which is why both
  * routes are rate-limited — without a throttle these are an oracle for guessing
  * tokens, and unlike a login there is no account to lock after failures.
+ *
+ * `@Throttle` only sets the numbers; `ThrottlerGuard` is what enforces them, and there is no global
+ * one. Without the guard both limits were decoration and the token could be guessed at any rate
+ * (036 B1, reproduced: 25 of 25 requests answered).
  */
 @ApiTags('Account Creation')
+@UseGuards(ThrottlerGuard)
 @Controller('account-creation/invites')
 export class InvitesController {
   constructor(private readonly invites: InvitesService) {}
