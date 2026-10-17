@@ -55,7 +55,7 @@ export class SubmitPunchDto {
 
   @ApiProperty({
     description:
-      'When the punch was taken, ISO 8601. May precede the request time for a punch queued while offline (research.md §4).',
+      'When the punch was taken, ISO 8601. Used only within ±5 minutes of the server time (036 G1); further behind, the server time is recorded instead, and further ahead is refused with 400.',
     example: '2026-08-30T09:01:00.000Z',
   })
   @IsISO8601()

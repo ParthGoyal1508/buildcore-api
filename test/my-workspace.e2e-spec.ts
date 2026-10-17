@@ -633,60 +633,42 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       biometrics.nextValue = 0.5;
     });
 
-    it('flags an offline-queued punch (research.md §4)', async () => {
-      // Its own employee, so the queued punch-in lands on an untouched day. The
-      // punch-out bracketing this test previously existed only to free the old
-      // one-open-punch-in slot, and under FR-008 would now be refused.
+    it('stamps the server time on a backdated punch and flags it (036 G1)', async () => {
+      // Its own employee, so the punch-in lands on an untouched day.
       const worker = await enrolledWorker('queued');
 
-      // Three hours old: well past the clock-skew tolerance, well inside the
-      // offline-queue window.
-      const queued = new Date(Date.now() - 3 * 3_600_000).toISOString();
+      // Three hours behind: the phone's clock is not believed past ±5 minutes.
+      const backdated = new Date(Date.now() - 3 * 3_600_000).toISOString();
       const res = await http()
         .post('/my/punch')
         .set(auth(worker.token))
-        .send(punchBody({ capturedAt: queued }))
+        .send(punchBody({ capturedAt: backdated }))
         .expect(201);
       expect(res.body.isOfflineSync).toBe(true);
+      expect(
+        Math.abs(new Date(res.body.capturedAt).getTime() - Date.now()),
+      ).toBeLessThan(60_000);
 
-      // And the day's punch-out still closes it. Dated a minute after the
-      // punch-in rather than at `now`: FR-008 pairs punches by calendar day, and
-      // a run started just after midnight IST would otherwise put the two on
-      // different days and get a 409 for the wrong reason.
+      // And the day's punch-out still closes it.
       await http()
         .post('/my/punch')
         .set(auth(worker.token))
-        .send(
-          punchBody({
-            type: 'out',
-            capturedAt: new Date(Date.parse(queued) + 60_000).toISOString(),
-          }),
-        )
+        .send(punchBody({ type: 'out', capturedAt: new Date().toISOString() }))
         .expect(201);
     });
 
-    it('returns 423 for a punch in an already-locked payroll period (T031, FR-010)', async () => {
-      // Two months back is locked whatever the lock day.
-      const old = new Date();
-      old.setUTCMonth(old.getUTCMonth() - 2);
+    it('refuses a punch stamped ahead of the server by more than 5 minutes (036 G1)', async () => {
+      // Replaces "423 for a punch two months back" and "400 beyond the 72-hour offline window":
+      // neither is reachable now that a backdated time is replaced by the server's.
       await http()
         .post('/my/punch')
         .set(auth(employeeToken))
-        .send(punchBody({ capturedAt: old.toISOString() }))
-        .expect(423);
-    });
-
-    it('rejects a punch older than the offline-sync window (FR-012)', async () => {
-      // Stale but inside the current, unlocked month.
-      const now = new Date();
-      const stale = new Date(now.getTime() - 80 * 3_600_000);
-      if (stale.getUTCMonth() === now.getUTCMonth()) {
-        await http()
-          .post('/my/punch')
-          .set(auth(employeeToken))
-          .send(punchBody({ capturedAt: stale.toISOString() }))
-          .expect(400);
-      }
+        .send(
+          punchBody({
+            capturedAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+          }),
+        )
+        .expect(400);
     });
   });
 
@@ -1348,7 +1330,8 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
       queued = new Date(Date.now() - 4 * 3_600_000);
     });
 
-    it('preserves the declared capture time and tags the punch (T061)', async () => {
+    // 036 G1: the offline queue is gone and the phone's clock is believed only within ±5 minutes.
+    it('records a stale capture at the server time, keeping the flag (T061, 036 G1)', async () => {
       biometrics.nextValue = 0.5;
       const res = await http()
         .post('/my/punch')
@@ -1357,37 +1340,21 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
         .expect(201);
 
       expect(res.body.isOfflineSync).toBe(true);
-      expect(new Date(res.body.capturedAt).getTime()).toBe(queued.getTime());
+      expect(new Date(res.body.capturedAt).getTime()).toBeGreaterThan(
+        queued.getTime() + 3 * 3_600_000,
+      );
 
       const row = await sys.punchRecord.findFirst({
         where: { id: res.body.id },
       });
-      // Both timestamps are retained — flattening them would hide that the punch
-      // was written retroactively (FR-012).
-      expect(row.receivedAt.getTime()).toBeGreaterThan(
-        row.capturedAt.getTime(),
-      );
+      expect(row.capturedAt.getTime()).toBe(row.receivedAt.getTime());
     });
 
-    it('rejects a capture older than the offline window with 400 (T062)', async () => {
-      const ancient = new Date(Date.now() - 200 * 3_600_000);
+    it('closes the pair so the next punch-in is possible', async () => {
       await http()
         .post('/my/punch')
         .set(auth(offlineWorker.token))
-        .send(punchBody({ type: 'out', capturedAt: ancient.toISOString() }))
-        .expect(400);
-    });
-
-    it('closes the offline pair so the next punch-in is possible', async () => {
-      await http()
-        .post('/my/punch')
-        .set(auth(offlineWorker.token))
-        .send(
-          punchBody({
-            type: 'out',
-            capturedAt: new Date(queued.getTime() + 60_000).toISOString(),
-          }),
-        )
+        .send(punchBody({ type: 'out', capturedAt: new Date().toISOString() }))
         .expect(201);
     });
   });

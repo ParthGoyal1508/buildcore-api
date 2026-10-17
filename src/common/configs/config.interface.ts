@@ -608,14 +608,19 @@ export interface WorkspaceConfig {
   offlineQueue: {
     /**
      * How stale a client-declared `capturedAt` may be before a synced punch is
-     * rejected outright (FR-012). Bounds how far back an offline device can
-     * retroactively write attendance.
+     * rejected outright (FR-012). **No longer read by the employee punch** (036 G1),
+     * which believes the phone only within `clockSkewToleranceMinutes`; still read by
+     * labour attendance.
      */
     maxAgeHours: number;
     /**
      * Client and server clocks are never exactly aligned; a punch whose
      * `capturedAt` trails `receivedAt` by less than this is treated as a normal
      * online punch rather than being mislabelled an offline sync (research.md §4).
+     *
+     * 036 G1: for the employee punch this is also the whole window in which the
+     * phone's clock is believed, in either direction. Further ahead is refused;
+     * further behind is recorded at the server's receive time.
      */
     clockSkewToleranceMinutes: number;
   };
