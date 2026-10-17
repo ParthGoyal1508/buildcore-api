@@ -105,7 +105,57 @@ export class ItemsService {
       MAX_PAGE_SIZE,
     );
 
-    const where = {
+    const where = this.whereFor(caller, query);
+
+    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const [rows, total] = await Promise.all([
+        tx.item.findMany({
+          where,
+          include: { category: { select: { name: true } } },
+          orderBy: { name: 'asc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        tx.item.count({ where }),
+      ]);
+      return {
+        items: rows.map((row) => this.toView(row)),
+        total,
+        page,
+        pageSize,
+      };
+    });
+  }
+
+  /**
+   * The ids of every item matching a search or category, unpaginated (036 M5).
+   *
+   * For another module filtering its own rows by item attributes — the stock list's search and
+   * category filter. It used to go through `findAll` at `MAX_PAGE_SIZE`, which silently dropped
+   * every match past the 200th: an item beyond it vanished from a filtered stock list and the
+   * category total came out short. Ids only, so the unbounded read stays one narrow column.
+   */
+  async getItemIdsMatching(
+    caller: AuthenticatedUser,
+    query: Pick<ListItemsDto, 'search' | 'categoryId' | 'companyId' | 'active'>,
+  ): Promise<string[]> {
+    const rows = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.item.findMany({
+          where: this.whereFor(caller, query),
+          select: { id: true },
+        }),
+    );
+    return rows.map((row) => row.id);
+  }
+
+  private whereFor(
+    caller: AuthenticatedUser,
+    query: Pick<ListItemsDto, 'search' | 'categoryId' | 'companyId' | 'active'>,
+  ) {
+    return {
       ...companyScope(caller, query.companyId),
       ...(query.categoryId ? { categoryId: query.categoryId } : {}),
       ...(query.active !== undefined ? { active: query.active } : {}),
@@ -128,25 +178,6 @@ export class ItemsService {
           }
         : {}),
     };
-
-    return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
-      const [rows, total] = await Promise.all([
-        tx.item.findMany({
-          where,
-          include: { category: { select: { name: true } } },
-          orderBy: { name: 'asc' },
-          skip: (page - 1) * pageSize,
-          take: pageSize,
-        }),
-        tx.item.count({ where }),
-      ]);
-      return {
-        items: rows.map((row) => this.toView(row)),
-        total,
-        page,
-        pageSize,
-      };
-    });
   }
 
   async findOne(caller: AuthenticatedUser, id: string): Promise<ItemView> {

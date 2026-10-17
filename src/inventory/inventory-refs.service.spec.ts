@@ -56,3 +56,19 @@ describe('InventoryRefsService.requireActiveVendor (036 M6)', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 });
+
+describe('InventoryRefsService.itemIdsMatching (036 M5)', () => {
+  it('asks the item master for ids only, with no page size to truncate at', async () => {
+    const { service, items } = build(null);
+    const ids = Array.from({ length: 250 }, (_, i) => `item-${i}`);
+    items.getItemIdsMatching.mockResolvedValue(ids);
+    await expect(
+      service.itemIdsMatching(caller, { categoryId: 'cat-1' }),
+    ).resolves.toHaveLength(250);
+    expect(items.getItemIdsMatching).toHaveBeenCalledWith(caller, {
+      search: undefined,
+      categoryId: 'cat-1',
+      companyId: undefined,
+    });
+  });
+});
