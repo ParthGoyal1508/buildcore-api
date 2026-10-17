@@ -1029,6 +1029,25 @@ export class ProjectsService {
   }
 
   /**
+   * Names for a set of project ids, for another module labelling a list (036 follow-up: wage rates
+   * named their project only through a client-side list of the first 200). Unknown ids are absent.
+   */
+  async getProjectNamesByIds(
+    projectIds: string[],
+    ctx: RlsContext,
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(projectIds)];
+    if (ids.length === 0) return new Map();
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+      }),
+    );
+    return new Map(rows.map((row) => [row.id, row.name]));
+  }
+
+  /**
    * A BOQ task group — what the master PRD calls an "Activity" — for another
    * module validating a reference to one (009 FR-019, research.md §13).
    *
