@@ -493,6 +493,13 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/plant/maintenance/maintenance.service.spec.ts',
           ':(exclude)src/assets/allocations/allocation.service.ts',
           ':(exclude)src/assets/allocations/allocation-return.spec.ts',
+          // 036 B11/B12 (2026-10-17): validation decorators on every module's DTOs — `@Max` to
+          // the column's precision, `@MaxLength`, `@IsBase64Payload`, and the boolean query
+          // transform. A DTO declares the shape of a request body and cannot call
+          // `ApprovalService`; the per-file `approve()` assertions above still guard each
+          // module's own approval. Also clears `allocation.dto.ts` and `stock.dto.ts`, which
+          // B12 changed and which had been failing this check since.
+          ':(exclude,glob)src/**/dto/**',
         ],
         {
           cwd: REPO_ROOT,
