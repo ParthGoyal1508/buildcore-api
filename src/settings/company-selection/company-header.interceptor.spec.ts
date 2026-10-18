@@ -52,11 +52,26 @@ describe('CompanyHeaderInterceptor (036 B17)', () => {
   it.each([
     ['a company-scoped caller', scoped, 'co-A'],
     ['a cross-company caller who selected B', crossSelectedB, 'co-B'],
-    ['a cross-company caller with no selection', crossNoSelection, ''],
+    // The home company, as the switcher shows it — not '' for "all companies" (2026-10-18).
+    ['a cross-company caller with no selection', crossNoSelection, 'co-A'],
+    [
+      'a cross-company caller with no selection and no home company',
+      { ...crossNoSelection, companyId: null },
+      '',
+    ],
   ])('names the company for %s', async (_label, user, expected) => {
     const { result, setHeader } = run(user, 'GET');
     await result;
     expect(setHeader).toHaveBeenCalledWith('X-Company-Id', expected);
+  });
+
+  it('lets a Super Admin who never picked a company save (the tab asserts the home company)', async () => {
+    // Regression: the switcher shows the home company as selected and the tab sends it; the
+    // server reported '' and refused every save as COMPANY_CHANGED.
+    const { result } = run(crossNoSelection, 'POST', {
+      'x-expected-company-id': 'co-A',
+    });
+    expect(await result).toBe('ok');
   });
 
   it('sets nothing for an unauthenticated request', async () => {
