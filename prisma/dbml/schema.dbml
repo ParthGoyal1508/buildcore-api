@@ -1038,6 +1038,7 @@ the project *is* the contract. A bill to a subcontractor still reads
   debitNotes BillPackageDebitNote [not null]
   budgets ProjectBudget [not null]
   documents ProjectDocument [not null]
+  bgTenders BgTender [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
 
@@ -5889,6 +5890,91 @@ Table EquipmentEvent {
 its reversal today; any other lifecycle event can add a `kind` without a schema change.'
 }
 
+Table BgTender {
+  id String [pk]
+  companyId String [not null]
+  serialNo Int [not null, note: 'The register\'s Sr. No — a running number per company, allocated on create.']
+  workName String [not null]
+  departmentName String [not null]
+  tenderAmount Decimal
+  projectId String [note: 'Optional: a tender may never become a project (an EMD on a bid that was lost).']
+  project Project
+  remarks String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  guarantees BankGuarantee [not null]
+
+  indexes {
+    (companyId, serialNo) [unique]
+  }
+
+  Note: 'One tender the company holds guarantees against (037).'
+}
+
+Table BankGuarantee {
+  id String [pk]
+  companyId String [not null, note: 'Denormalised from the tender for the RLS policy.']
+  tenderId String [not null]
+  tender BgTender [not null]
+  type BankGuaranteeType [not null]
+  bgNumber String [note: 'Blank while the guarantee is applied for and not yet issued (row 39 of the client\'s
+sheet). Unique per company when present — a partial index in the migration.']
+  amount Decimal [not null]
+  issueDate DateTime
+  expiryDate DateTime
+  claimPeriodEndDate DateTime [note: 'Some guarantees can still be claimed for a period after expiry; alerts run to this date.']
+  issuingBank String
+  issuingBranch String
+  marginAmount Decimal
+  fdReference String
+  status BankGuaranteeStatus [not null, default: 'RUNNING']
+  releasedOn DateTime
+  encashedOn DateTime
+  encashedAmount Decimal
+  remarks String
+  createdByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  documents BankGuaranteeDocument [not null]
+  events BankGuaranteeEvent [not null]
+
+  Note: 'One bank guarantee — EMD or PBG — under a tender (037).'
+}
+
+Table BankGuaranteeDocument {
+  id String [pk]
+  companyId String [not null]
+  bankGuaranteeId String [not null]
+  bankGuarantee BankGuarantee [not null]
+  title String [not null, note: 'What the document is, as the uploader names it: "BG copy", "Extension letter".']
+  fileRef String [not null]
+  fileName String
+  contentType String [not null]
+  sizeBytes Int [not null]
+  uploadedByUserId String [not null]
+  uploadedAt DateTime [default: `now()`, not null]
+
+  Note: 'A scanned copy, amendment or release letter filed against a guarantee (037).'
+}
+
+Table BankGuaranteeEvent {
+  id String [pk]
+  companyId String [not null]
+  bankGuaranteeId String [not null]
+  bankGuarantee BankGuarantee [not null]
+  kind String [not null, note: '`created`, `edited`, `extended`, `released`, `encashed`, `reopened`.']
+  fromDate DateTime [note: 'For `extended`: the expiry before and after.']
+  toDate DateTime
+  note String
+  actorUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: 'The history of a guarantee: created, extended, released, encashed, edited (037).
+An extension keeps the expiry it replaced here, which is how "extended from 30.11.2026"
+can still be answered after the row says 31.03.2027.'
+}
+
 Enum CredentialOrigin {
   invite
   admin_direct
@@ -5943,6 +6029,7 @@ Enum Permission {
   ASSETS_APPROVE
   CASH_ENTRY
   PROJECT_LOCK
+  BANK_GUARANTEES
 }
 
 Enum CompanyStatus {
@@ -6055,6 +6142,7 @@ Enum AuditEntityType {
   WORK_ORDER
   PROJECT_BUDGET
   PROJECT_DOCUMENT
+  BANK_GUARANTEE
   REMINDER
   SKILL_CATEGORY
   WAGE_RATE
@@ -6884,6 +6972,17 @@ Enum EquipmentScrapReason {
   other
 }
 
+Enum BankGuaranteeType {
+  EMD
+  PBG
+}
+
+Enum BankGuaranteeStatus {
+  RUNNING
+  RELEASED
+  ENCASHED
+}
+
 Ref: Role.companyId > Company.id [delete: Cascade]
 
 Ref: UserCompanySelection.companyId > Company.id [delete: Cascade]
@@ -7237,3 +7336,11 @@ Ref: IssuedLetter.companyId > Company.id [delete: Cascade]
 Ref: IssuedLetter.letterKindId > LetterKind.id [delete: Restrict]
 
 Ref: IssuedLetter.signatoryId > Signatory.id [delete: Set Null]
+
+Ref: BgTender.projectId > Project.id [delete: Set Null]
+
+Ref: BankGuarantee.tenderId > BgTender.id [delete: Cascade]
+
+Ref: BankGuaranteeDocument.bankGuaranteeId > BankGuarantee.id [delete: Cascade]
+
+Ref: BankGuaranteeEvent.bankGuaranteeId > BankGuarantee.id [delete: Cascade]

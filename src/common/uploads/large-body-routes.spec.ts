@@ -42,6 +42,7 @@ const UPLOAD_ROUTES = [
   'POST /projects/:id/boq/estimate-import/validate',
   'POST /projects/:id/boq/import/validate',
   'POST /projects/:projectId/documents',
+  'POST /projects/bank-guarantees/guarantees/:id/documents',
   'POST /projects/bill-package-debits/:debitId/signed-copy',
   'POST /projects/bill-packages/:packageId/certified-copy/read',
   'POST /projects/bill-packages/:packageId/certify',

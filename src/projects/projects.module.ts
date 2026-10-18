@@ -8,6 +8,9 @@ import { ClientsController } from './clients/clients.controller';
 import { ClientsService } from './clients/clients.service';
 import { ProjectDocumentsController } from './documents/project-documents.controller';
 import { ProjectDocumentExpiryRule } from './documents/project-document.reminder-rule';
+import { BankGuaranteeExpiryRule } from './bank-guarantees/bank-guarantee.reminder-rule';
+import { BankGuaranteesController } from './bank-guarantees/bank-guarantees.controller';
+import { BankGuaranteesService } from './bank-guarantees/bank-guarantees.service';
 import { ProjectDocumentsService } from './documents/project-documents.service';
 import { ProjectLockGuard } from './guards/project-lock.guard';
 import { BoqImportService } from './boq/boq-import.service';
@@ -87,6 +90,11 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
   // looks like a data problem rather than a routing one. `test/project-documents.e2e-spec.ts`
   // asserts the order holds rather than trusting this comment to be read.
   controllers: [
+    // 037. **First.** Every path is a literal under `projects/bank-guarantees/`, and
+    // `ProjectDocumentUploadController`'s `DELETE projects/:projectId/documents/:documentId`
+    // answered `DELETE projects/bank-guarantees/documents/:id` when this came later —
+    // `route-shadowing.spec.ts` caught it.
+    BankGuaranteesController,
     WorkOrdersController,
     // 018 US1 (`bugs.md` item 11). Bills measured against the BOQ, which is what makes Note 12's
     // "reconciliation against BOQ amounts and quantities" answerable at all.
@@ -149,6 +157,9 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
     ProjectsService,
     ProjectDocumentsService,
     ProjectDocumentExpiryRule,
+    // 037: the register and its 30-day expiry alert.
+    BankGuaranteesService,
+    BankGuaranteeExpiryRule,
     ClientBillsService,
     RaBillsService,
     // 018 US2. Feature 008 US6's surface, delivered in the smallest form that makes an RA bill

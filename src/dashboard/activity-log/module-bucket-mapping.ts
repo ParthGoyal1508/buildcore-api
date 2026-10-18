@@ -116,6 +116,8 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
     AuditEntityType.WORK_ORDER,
     AuditEntityType.PROJECT_BUDGET,
     AuditEntityType.PROJECT_DOCUMENT,
+    // 037: tenders, their guarantees and documents, as one entity type.
+    AuditEntityType.BANK_GUARANTEE,
   ],
   inventory: [
     AuditEntityType.ITEM_CATEGORY,
@@ -212,6 +214,7 @@ export const MODULE_PERMISSIONS: Record<ActivityModule, Permission[]> = {
     Permission.PROJECT_LOCK,
     Permission.DWR,
     Permission.PROJECT_FINANCIALS,
+    Permission.BANK_GUARANTEES,
   ],
   inventory: [Permission.INVENTORY],
   partners: [Permission.PARTNERS],
