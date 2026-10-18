@@ -7,6 +7,7 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { Permission } from '@prisma/client';
 import type { Request, Response } from 'express';
 import { PrismaService } from 'nestjs-prisma';
 import { from, type Observable, switchMap } from 'rxjs';
@@ -55,10 +56,22 @@ export const CompanyCheckExempt = () =>
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
-/** The company a caller's request runs under, or '' for every company. */
+/**
+ * The company the header's switcher shows as selected — what a tab compares against.
+ *
+ * The same rule as `selectableFor` (`selected ?? caller.companyId`), not the RLS context's. A
+ * cross-company caller who has chosen nothing runs with the bypass, but the switcher still shows
+ * their home company as selected and the tab asserts it; reporting '' ("all companies") here made
+ * those two disagree on every request, so every save a Super Admin made before first picking a
+ * company was refused as COMPANY_CHANGED (found 2026-10-18 on a freshly seeded database). The
+ * header exists to detect *another tab switching*, and comparing the displayed selection with the
+ * displayed selection is exactly that.
+ */
 export function servedCompanyId(user: AuthenticatedUser): string {
-  const ctx = rlsContextFor(user);
-  return ctx.isSuperAdmin ? '' : ctx.companyId ?? '';
+  if (user.permissions.includes(Permission.CROSS_COMPANY_ACCESS)) {
+    return user.selectedCompanyId ?? user.companyId ?? '';
+  }
+  return rlsContextFor(user).companyId ?? '';
 }
 
 @Injectable()
