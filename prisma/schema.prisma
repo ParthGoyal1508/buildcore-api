@@ -413,6 +413,9 @@ enum Permission {
   /// levels, so nobody who could lock or unlock yesterday silently cannot today. Narrowing it is
   /// a Settings → Roles decision the client makes deliberately.
   PROJECT_LOCK
+  /// 037: the Bank Guarantees register under Projects — tenders, their EMD and PBG
+  /// guarantees, documents and the 30-day expiry alert.
+  BANK_GUARANTEES
 
   @@schema("settings")
 }
@@ -558,8 +561,8 @@ model Company {
   /// punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
   /// paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
   /// × `otMultiplier`. Set by the HR office under Labour → Muster attendance.
-  labourFullDayHours Decimal @default(8) @db.Decimal(4, 2)
-  labourHalfDayHours Decimal @default(4) @db.Decimal(4, 2)
+  labourFullDayHours  Decimal @default(8) @db.Decimal(4, 2)
+  labourHalfDayHours  Decimal @default(4) @db.Decimal(4, 2)
   labourStandardHours Decimal @default(8) @db.Decimal(4, 2)
 
   /// The company's own account the payroll transfer is debited from (021 FR-008a).
@@ -1383,7 +1386,7 @@ model AuditLogEntry {
 model Notification {
   id String @id @default(cuid())
 
-  userId String
+  userId    String
   /// The company the notification was computed for — the selected company — or `''` for a
   /// Super Admin with no company selected (every company). Not a foreign key, for that reason;
   /// it is what the `tenant_isolation` policy checks.
@@ -1553,6 +1556,8 @@ enum AuditEntityType {
   WORK_ORDER
   PROJECT_BUDGET
   PROJECT_DOCUMENT
+  /// 037: a tender in the Bank Guarantees register, its guarantees and their documents.
+  BANK_GUARANTEE
 
   /// Feature 004's reminders engine. Only the snooze is audited (FR-034): evaluation
   /// itself is a read, and emitting a notification is already recorded by the
@@ -1983,6 +1988,7 @@ model Project {
   debitNotes        BillPackageDebitNote[]
   budgets           ProjectBudget[]
   documents         ProjectDocument[]
+  bgTenders         BgTender[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4938,16 +4944,16 @@ model PayrollLineItem {
 
   /// Salary advance recovered on this line (036 F3). Net pay already subtracted it; until 036 it
   /// was not stored, so the payslip printed 0 and its deductions did not add up to gross − net.
-  advanceRecovered Decimal @default(0) @db.Decimal(12, 2)
+  advanceRecovered         Decimal  @default(0) @db.Decimal(12, 2)
   /// The advance `advanceRecovered` is against — applied to it when the run is processed (036 F1).
   advanceRecoveryAdvanceId String?
   /// `[{ recoveryId, amount }]` — the fuel recoveries this line's `fuelRecoveryDeduction` is made
   /// of, recorded against them when the run is processed (036 F2). Several when one carries.
-  fuelRecoveries Json?
+  fuelRecoveries           Json?
   /// The reimbursement claims folded into `specialAllowance`, and their total (036 F4). Processing
   /// settles exactly these, not every approved claim the employee happens to have by then.
-  reimbursementClaimIds String[] @default([])
-  reimbursementTotal    Decimal  @default(0) @db.Decimal(12, 2)
+  reimbursementClaimIds    String[] @default([])
+  reimbursementTotal       Decimal  @default(0) @db.Decimal(12, 2)
 
   netPay Decimal @default(0) @db.Decimal(12, 2)
 
@@ -6847,7 +6853,7 @@ model Payment {
   /// the same key twice; the unique index below makes the second insert impossible, and the
   /// service answers it with the payment the first one created. Null for payments recorded
   /// without a key — Postgres treats NULLs as distinct, so they never collide.
-  idempotencyKey  String?
+  idempotencyKey String?
 
   deleted   Boolean   @default(false)
   deletedAt DateTime?
@@ -6858,7 +6864,6 @@ model Payment {
   allocations PaymentAllocation[]
 
   @@unique([companyId, idempotencyKey])
-
   @@index([companyId])
   @@index([companyId, vendorId])
   /// FR-021: which payments lack a proof, answered by an index rather than by reading
@@ -9781,7 +9786,7 @@ model LabourPunch {
   supervisorId String
 
   /// 034: a punch added by correction has no photo, face match or location.
-  source LabourPunchSource @default(face)
+  source      LabourPunchSource @default(face)
   /// 034: set when the time was changed after it was recorded; the edits are in
   /// `LabourPunchCorrection`.
   correctedAt DateTime?
@@ -9965,4 +9970,155 @@ model EquipmentEvent {
   @@index([companyId])
   @@index([equipmentId, createdAt])
   @@schema("plant")
+}
+
+// ============================================================================
+// projects schema — 037 Bank Guarantees (specs/037-bank-guarantees/spec.md).
+//
+// A tender is entered once; its EMD and PBG bank guarantees sit under it, because the
+// client's register ("TENDER BG DETAILS") pairs them on one row per tender.
+// ============================================================================
+
+/// What a bank guarantee secures.
+enum BankGuaranteeType {
+  /// Earnest money — submitted with the bid.
+  EMD
+  /// Performance guarantee — submitted on award.
+  PBG
+
+  @@schema("projects")
+}
+
+/// The stored state of a bank guarantee. "Expired" is never stored: it is a Running
+/// guarantee whose expiry (or claim period end) has passed, and a stored copy of that would
+/// be wrong the morning after it was written.
+enum BankGuaranteeStatus {
+  RUNNING
+  RELEASED
+  ENCASHED
+
+  @@schema("projects")
+}
+
+/// One tender the company holds guarantees against (037).
+model BgTender {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// The register's Sr. No — a running number per company, allocated on create.
+  serialNo Int
+
+  workName       String
+  departmentName String
+  tenderAmount   Decimal? @db.Decimal(16, 2)
+
+  /// Optional: a tender may never become a project (an EMD on a bid that was lost).
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  remarks String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  guarantees BankGuarantee[]
+
+  @@unique([companyId, serialNo])
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// One bank guarantee — EMD or PBG — under a tender (037).
+model BankGuarantee {
+  id        String @id @default(cuid())
+  /// Denormalised from the tender for the RLS policy.
+  companyId String
+
+  tenderId String
+  tender   BgTender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  type BankGuaranteeType
+
+  /// Blank while the guarantee is applied for and not yet issued (row 39 of the client's
+  /// sheet). Unique per company when present — a partial index in the migration.
+  bgNumber           String?
+  amount             Decimal   @db.Decimal(16, 2)
+  issueDate          DateTime? @db.Date
+  expiryDate         DateTime? @db.Date
+  /// Some guarantees can still be claimed for a period after expiry; alerts run to this date.
+  claimPeriodEndDate DateTime? @db.Date
+
+  issuingBank   String?
+  issuingBranch String?
+  marginAmount  Decimal? @db.Decimal(16, 2)
+  fdReference   String?
+
+  status         BankGuaranteeStatus @default(RUNNING)
+  releasedOn     DateTime?           @db.Date
+  encashedOn     DateTime?           @db.Date
+  encashedAmount Decimal?            @db.Decimal(16, 2)
+
+  remarks String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  documents BankGuaranteeDocument[]
+  events    BankGuaranteeEvent[]
+
+  @@index([companyId])
+  @@index([tenderId])
+  @@index([companyId, status, expiryDate])
+  @@schema("projects")
+}
+
+/// A scanned copy, amendment or release letter filed against a guarantee (037).
+model BankGuaranteeDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  bankGuaranteeId String
+  bankGuarantee   BankGuarantee @relation(fields: [bankGuaranteeId], references: [id], onDelete: Cascade)
+
+  /// What the document is, as the uploader names it: "BG copy", "Extension letter".
+  title       String
+  fileRef     String
+  fileName    String?
+  contentType String
+  sizeBytes   Int
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([bankGuaranteeId])
+  @@schema("projects")
+}
+
+/// The history of a guarantee: created, extended, released, encashed, edited (037).
+/// An extension keeps the expiry it replaced here, which is how "extended from 30.11.2026"
+/// can still be answered after the row says 31.03.2027.
+model BankGuaranteeEvent {
+  id        String @id @default(cuid())
+  companyId String
+
+  bankGuaranteeId String
+  bankGuarantee   BankGuarantee @relation(fields: [bankGuaranteeId], references: [id], onDelete: Cascade)
+
+  /// `created`, `edited`, `extended`, `released`, `encashed`, `reopened`.
+  kind     String
+  /// For `extended`: the expiry before and after.
+  fromDate DateTime? @db.Date
+  toDate   DateTime? @db.Date
+  note     String?
+
+  actorUserId String
+  createdAt   DateTime @default(now())
+
+  @@index([bankGuaranteeId])
+  @@index([companyId])
+  @@schema("projects")
 }
