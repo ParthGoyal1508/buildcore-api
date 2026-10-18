@@ -58,7 +58,8 @@ DECLARE
   -- query against them failed on permissions after a clean deploy.
   --
   -- Add a schema here when a migration introduces one, and re-run this script.
-  owned_schemas text[] := ARRAY['shared','settings','hr','projects','payroll'];
+  owned_schemas text[] := ARRAY['shared','settings','hr','projects','payroll','partners',
+                                'inventory','plant','labour','assets','recruitment'];
 
   -- `public` is granted and its tables are re-owned (for `_prisma_migrations`), but
   -- the schema itself is deliberately NOT reassigned: some hosts keep their own
