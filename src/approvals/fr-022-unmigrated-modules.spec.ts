@@ -533,6 +533,11 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // **Verified by grep: neither file calls `ApprovalService` or `approvals.submit`.**
           ':(exclude)src/labour/wage-rates/wage-rate.service.ts',
           ':(exclude)src/labour/wage-rates/wage-rate.service.spec.ts',
+          // 037 (Bank Guarantees register), merged 2026-10-18: a new module — tenders with their
+          // EMD/PBG guarantees, documents, the 30-day expiry reminder and the register export.
+          // **Verified by grep: nothing under it calls `ApprovalService` or `approvals.submit`** —
+          // a guarantee is recorded and tracked, never submitted for approval.
+          ':(exclude)src/projects/bank-guarantees',
         ],
         {
           cwd: REPO_ROOT,
