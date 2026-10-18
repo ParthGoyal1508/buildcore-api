@@ -36,8 +36,12 @@ import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-projec
  *
  * Every fixture is prefixed `E2E` and removed in `afterAll`.
  */
+// The type is named on its own line so the statement below stays one line long: the lint
+// script runs Prettier, which would otherwise wrap it and push `require` out from under the
+// disable comment — the CI failure of 2026-10-18.
+type SharpFn = (input?: Buffer, options?: SharpOptions) => Sharp;
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const sharp: (input?: Buffer, options?: SharpOptions) => Sharp = require('sharp');
+const sharp: SharpFn = require('sharp');
 
 const stamp = `${Date.now() % 100000}`;
 const unique = (s: string) => `E2E${s}${stamp}`;
