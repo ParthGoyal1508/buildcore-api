@@ -160,6 +160,18 @@ describe('validating a template against its own kind (T136, T138)', () => {
     ).rejects.toThrow(/offeredCtc/);
   });
 
+  it('admits the tokens the render supplies itself (036 follow-up)', async () => {
+    const service = build([{ token: 'vendorName' }]);
+    await expect(
+      service.assertTemplateFieldsDeclared(
+        ctx,
+        'kind-1',
+        'Ref {{referenceNo}} dated {{issueDate}} to {{vendorName}}: {{lineItemsTable}} {{totalAmountInWords}}',
+        'save',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
   it('refuses every token for a kind that declares none', async () => {
     // The opposite of what `unknownTokens` did, and deliberately: the permissive version is what
     // shipped a broken feature. A kind with no fields and a template full of them renders a page of
@@ -227,6 +239,14 @@ describe('a kind cannot declare its way past the PII gate (T141)', () => {
 
   it('permits an ordinary path', () => {
     expect(() => service.assertPathPermitted('designation.name')).not.toThrow();
+  });
+
+  it('matches "pan" as a word, so company paths are permitted (036 follow-up)', () => {
+    expect(() => service.assertPathPermitted('company.name')).not.toThrow();
+    expect(() => service.assertPathPermitted('companyShortCode')).not.toThrow();
+    expect(() => service.assertPathPermitted('employee.panNumber')).toThrow(/regulated/);
+    expect(() => service.assertPathPermitted('employee.PANNumber')).toThrow(/regulated/);
+    expect(() => service.assertPathPermitted('pan_encrypted')).toThrow(/regulated/);
   });
 
   it('permits a null path, which is what manual fields have', () => {

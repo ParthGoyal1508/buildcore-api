@@ -247,6 +247,17 @@ Both agents are merged and pushed.
 
 **Manual checklist:** `manual-checklist.md`.
 
+### User review after Wave 5 (18-10-2026)
+
+Found by the user, not by the crawl, which checked for crashes, failed requests and overflow but never whether text was readable or a flow made sense. All fixed and checked in the browser:
+
+- **Pickers inherited the banner's white text.** On the Site Dashboard's navy banner the site list rendered white on white. `AsyncSelect` and `SearchableSelect` now set their own text colour.
+- **HR attendance calendar went into future months, and showed future days as Absent.** Next stops at the current month; days after today read "Upcoming" unless they are a holiday, weekly off or approved leave. My Workspace attendance no longer lists the rest of the month as Absent. The server's day rule is unchanged, because payroll reads it.
+- **Bank sheet and monthly attendance asked for a company the header already names.** The company now comes from the header and is shown as read-only text.
+- **Every letter template reported undeclared variables.** The editor hid any field whose name contained "pan", which matched "com**pan**y"; it also hid typed-in vendor PAN, IFSC and account number fields the server allows, and did not know the tokens the render fills itself (`SUPPLIED_TOKENS`). The server's save check didn't know them either. Both sides now match "pan" as a whole word, and both accept `SUPPLIED_TOKENS`.
+- **"In force today: Director required" was not understood.** The badge now reads "Now: Needs Director approval / No Director approval needed / Not set — default applies", and the checkbox reads "Require Director approval".
+- **Still open:** an employee profile from another company opens under the header's company, but its attendance tab answers 404. Either the profile should refuse too, or the tab should read the employee's own company.
+
 ### Remaining for the final pass (written 18-10-2026, while Wave 4 runs)
 
 Wave 4 runs two agents: **design system + accessibility** (A21–A23, A29, A16, lint rules) and **follow-ups** (the Wave 3 list plus company-scoped roles and the e2e environment). Everything below is outside both.

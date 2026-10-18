@@ -8,6 +8,7 @@ import { PrismaService } from 'nestjs-prisma';
 
 import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
+import { SUPPLIED_TOKENS } from '../../letters/standard-letter-templates';
 import { extractTokens } from '../../recruitment/letters/letter-tokens.util';
 import { LETTER_KIND_KEY_RESERVED } from './letter-kind-error-codes';
 import { LetterKindsService } from './letter-kinds.service';
@@ -43,6 +44,36 @@ export const FORBIDDEN_FIELD_PATH_FRAGMENTS: readonly string[] = [
   'faceEmbedding',
   'biometric',
 ];
+
+/**
+ * Fragments too short to match inside a word (036 follow-up, 2026-10-18). "pan" is inside
+ * "com**pan**y", so a substring test refused `company.name` and — in the web editor, which applies
+ * the same list to tokens — hid every company field, leaving each standard template reporting
+ * `{{companyName}}` as undeclared. These match a whole word of the path only: `pan`, `panNumber`,
+ * `employee.PAN`, never `companyName`.
+ */
+const WHOLE_WORD_FRAGMENTS = new Set(['pan']);
+
+/** A path's words: split on punctuation and camelCase, lowercased. `employee.PANNumber` → employee, pan, number. */
+function pathWords(path: string): string[] {
+  return path
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+}
+
+/** The forbidden fragment a path names, if any. */
+export function forbiddenFragmentIn(path: string): string | undefined {
+  const lowered = path.toLowerCase();
+  const words = pathWords(path);
+  return FORBIDDEN_FIELD_PATH_FRAGMENTS.find((fragment) =>
+    WHOLE_WORD_FRAGMENTS.has(fragment)
+      ? words.includes(fragment)
+      : lowered.includes(fragment.toLowerCase()),
+  );
+}
 
 /**
  * What a letter kind's templates may reference (017 FR-011b, FR-011c) — `bugs.md` item 18.
@@ -304,7 +335,12 @@ export class LetterKindFieldsService {
     context: 'save' | 'render',
   ): Promise<void> {
     const declared = await this.declaredFields(ctx, letterKindId);
-    const allowed = new Set(declared.map((field) => field.token));
+    // The render fills `SUPPLIED_TOKENS` itself (issue date, reference, item table and totals), so
+    // no kind declares them; refusing them refused the shipped LOI, PO, work order and F&F bodies.
+    const allowed = new Set([
+      ...declared.map((field) => field.token),
+      ...SUPPLIED_TOKENS,
+    ]);
     const used = extractTokens(body);
     const undeclared = used.filter((token) => !allowed.has(token));
     if (undeclared.length === 0) return;
@@ -344,10 +380,7 @@ export class LetterKindFieldsService {
    */
   assertPathPermitted(sourcePath: string | null): void {
     if (!sourcePath) return;
-    const lowered = sourcePath.toLowerCase();
-    const hit = FORBIDDEN_FIELD_PATH_FRAGMENTS.find((fragment) =>
-      lowered.includes(fragment.toLowerCase()),
-    );
+    const hit = forbiddenFragmentIn(sourcePath);
     if (!hit) return;
 
     throw new BadRequestException({
