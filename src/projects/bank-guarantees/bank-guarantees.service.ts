@@ -201,7 +201,9 @@ export class BankGuaranteesService {
   ): Prisma.BgTenderWhereInput {
     const search = query.search?.trim();
     return {
-      ...companyScope(caller, query.companyId),
+      // The company the header serves, as the employee list does: a Super Admin who has not
+      // chosen one sees their own company's register, not every company's tenders numbered 1, 1, 2, 2.
+      companyId: this.targetCompanyOf(caller, query.companyId),
       ...(query.projectId ? { projectId: query.projectId } : {}),
       ...(query.status
         ? { guarantees: { some: this.statusWhere(query.status, today) } }
