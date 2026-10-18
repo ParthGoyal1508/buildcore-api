@@ -24,4 +24,11 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run build
-      - run: npm test
+      # Five suites build the whole Nest application (the route audits), and each needs ~1.2 GB of
+      # heap. On the runner's default heap, a worker that had already run other suites ran out of
+      # memory loading one and crashed — "Jest worker encountered 4 child process exceptions"
+      # (2026-10-18). Two workers with 3 GB each fit the runner; `workerIdleMemoryLimit` in
+      # package.json recycles a worker before memory piles up.
+      - run: npm test -- --maxWorkers=2
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
