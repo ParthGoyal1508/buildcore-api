@@ -69,10 +69,14 @@ Requested 18-10-2026, with the client's sheet "TIRUPATI ENTERPRISES TENDER BG DE
 
 ## Export format
 
-The title row reads "<COMPANY NAME IN CAPITALS> TENDER BG DETAILS". The columns are:
+**Excel** follows the client's sheet:
+- The title row reads "<COMPANY NAME IN CAPITALS> TENDER BG DETAILS", on yellow.
+- One header row with a filter on every column:
+  - Sr. No, Work Name, Department Name, Tender Amount
+  - EMD: BG Amount, BG Number, Issue Date, Expiry Date, Status
+  - PBG: Amount, BG Number, Issue Date, Expiry Date, Status
+- Amounts are numbers with Indian grouping. Dates are DD.MM.YYYY, as in the sheet.
+- A tender with more than one BG of a type gets one row per pair. Each row repeats the tender's cells, so filtering keeps the tender beside every BG.
+- A status inside the 30-day window is amber. An expired BG that hasn't been released is red.
 
-- Sr. No, Work Name, Department Name, Tender Amount
-- EMD: BG Amount, BG Number, Issue Date, Expiry Date, Status
-- PBG: Amount, BG Number, Issue Date, Expiry Date, Status
-
-Dates are DD.MM.YYYY, as in the sheet. A tender with more than one BG of a type gets one row per pair; only the first row repeats the tender columns.
+**PDF** has the same columns, with the tender's cells spanning its rows.

@@ -19,7 +19,10 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { actorNamesFor } from '../../common/actor-name';
 import type { SettingsConfig } from '../../common/configs/config.interface';
+import * as ExcelJS from 'exceljs';
+
 import {
+  FORM_CONTENT_TYPES,
   FormCell,
   FormFormat,
   FormRow,
@@ -1141,8 +1144,11 @@ export class BankGuaranteesService {
 
   /**
    * "<COMPANY> TENDER BG DETAILS", in the client's columns: the tender, then its EMD and its PBG
-   * side by side. A tender with more than one guarantee of a type takes one row per pair, the
-   * tender's own cells spanning them, so nothing is dropped and nothing is repeated.
+   * side by side. A tender with more than one guarantee of a type takes one row per pair.
+   *
+   * Excel is laid out by hand (`registerWorkbook`), one column per field with a filter on every
+   * header, because the client's sheet is filtered and sorted — the shared form renderer's merged
+   * grid cannot be. The PDF keeps the form renderer, the tender's cells spanning its rows.
    */
   async export(
     caller: AuthenticatedUser,
@@ -1161,6 +1167,14 @@ export class BankGuaranteesService {
       ),
       this.companies.getDocumentIdentity(companyId),
     ]);
+
+    if (format === 'xlsx') {
+      return {
+        bytes: await registerWorkbook(identity.name, tenders, today),
+        contentType: FORM_CONTENT_TYPES.xlsx,
+        filename: `Tender BG Details ${dotted(dateOnly(today))}.xlsx`,
+      };
+    }
 
     const RED = 'FFC7CE';
     const AMBER = 'FFEB9C';
@@ -1272,4 +1286,160 @@ export class BankGuaranteesService {
       stem,
     );
   }
+}
+
+/**
+ * The client's "TENDER BG DETAILS" sheet (037): a yellow title row, then one header row with a
+ * filter on every column — Sr. No, Work Name, Department Name, Tender Amount, then EMD and PBG
+ * (amount, BG number, issue date, expiry date, status) side by side.
+ *
+ * Each row repeats its tender's cells rather than merging them, so filtering by department or
+ * status keeps every guarantee's tender beside it. Amounts are numbers (Indian grouping), dates
+ * are DD.MM.YYYY text as the client writes them. A status within the 30-day window is amber; an
+ * expired one, not yet released, is red.
+ */
+async function registerWorkbook(
+  companyName: string,
+  tenders: Prisma.BgTenderGetPayload<{ include: { guarantees: true } }>[],
+  today: string,
+): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Tender BG Details', {
+    views: [{ state: 'frozen', ySplit: 2 }],
+    pageSetup: {
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+    },
+  });
+  const columns: {
+    header: string;
+    width: number;
+    money?: boolean;
+    center?: boolean;
+  }[] = [
+    { header: 'Sr. No', width: 7, center: true },
+    { header: 'Work Name', width: 48 },
+    { header: 'Department Name', width: 18, center: true },
+    { header: 'Tender Amount', width: 16, money: true },
+    { header: 'EMD BG Amount', width: 15, money: true },
+    { header: 'BG Number', width: 20, center: true },
+    { header: 'Issue Date', width: 12, center: true },
+    { header: 'Expiry Date', width: 12, center: true },
+    { header: 'Status', width: 11, center: true },
+    { header: 'PBG Amount', width: 15, money: true },
+    { header: 'BG Number', width: 20, center: true },
+    { header: 'Issue Date', width: 12, center: true },
+    { header: 'Expiry Date', width: 12, center: true },
+    { header: 'Status', width: 11, center: true },
+  ];
+  sheet.columns = columns.map((c) => ({ width: c.width }));
+
+  const thin = { style: 'thin' as const, color: { argb: 'FF7F7F7F' } };
+  const border = { top: thin, left: thin, bottom: thin, right: thin };
+
+  sheet.mergeCells(1, 1, 1, columns.length);
+  const title = sheet.getCell(1, 1);
+  title.value = `${companyName.toUpperCase()} TENDER BG DETAILS`;
+  title.font = { bold: true, size: 14 };
+  title.alignment = { horizontal: 'center', vertical: 'middle' };
+  title.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FFFFFF00' },
+  };
+  sheet.getRow(1).height = 24;
+
+  const header = sheet.getRow(2);
+  columns.forEach((c, i) => {
+    const cell = header.getCell(i + 1);
+    cell.value = c.header;
+    cell.font = { bold: true };
+    cell.alignment = {
+      horizontal: 'center',
+      vertical: 'middle',
+      wrapText: true,
+    };
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFD966' },
+    };
+    cell.border = border;
+  });
+  header.height = 30;
+  sheet.autoFilter = {
+    from: { row: 2, column: 1 },
+    to: { row: 2, column: columns.length },
+  };
+
+  const half = (bg: BankGuarantee | undefined): (string | number | null)[] =>
+    bg
+      ? [
+          Number(bg.amount),
+          bg.bgNumber ?? '',
+          dotted(bg.issueDate),
+          dotted(bg.expiryDate),
+          BG_STATUS_LABEL[displayStatus(bg, today)],
+        ]
+      : [null, '', '', '', ''];
+  const tone = (bg: BankGuarantee | undefined): string | null => {
+    if (!bg) return null;
+    const shown = displayStatus(bg, today);
+    if (shown === 'EXPIRED') return 'FFFFC7CE';
+    const days = shown === 'RUNNING' ? daysToExpiry(bg, today) : null;
+    return days !== null && days <= BG_EXPIRY_WINDOW_DAYS ? 'FFFFEB9C' : null;
+  };
+
+  for (const tender of tenders) {
+    const emd = tender.guarantees.filter(
+      (g) => g.type === BankGuaranteeType.EMD,
+    );
+    const pbg = tender.guarantees.filter(
+      (g) => g.type === BankGuaranteeType.PBG,
+    );
+    const height = Math.max(1, emd.length, pbg.length);
+    for (let i = 0; i < height; i++) {
+      const row = sheet.addRow([
+        tender.serialNo,
+        tender.workName,
+        tender.departmentName,
+        tender.tenderAmount ? Number(tender.tenderAmount) : null,
+        ...half(emd[i]),
+        ...half(pbg[i]),
+      ]);
+      columns.forEach((c, index) => {
+        const cell = row.getCell(index + 1);
+        cell.border = border;
+        cell.alignment = {
+          vertical: 'middle',
+          wrapText: true,
+          horizontal: c.money ? 'right' : c.center ? 'center' : 'left',
+        };
+        if (c.money)
+          cell.numFmt =
+            '[>=10000000]##\\,##\\,##\\,##0.00;[>=100000]##\\,##\\,##0.00;##,##0.00';
+      });
+      for (const [column, bg] of [
+        [9, emd[i]],
+        [14, pbg[i]],
+      ] as const) {
+        const fill = tone(bg);
+        if (fill) {
+          row.getCell(column).fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: fill },
+          };
+        }
+      }
+    }
+  }
+  if (tenders.length === 0) {
+    const row = sheet.addRow(['No bank guarantees recorded.']);
+    sheet.mergeCells(row.number, 1, row.number, columns.length);
+  }
+
+  return Buffer.from(await workbook.xlsx.writeBuffer());
 }
