@@ -994,6 +994,27 @@ export class ProjectsService {
   }
 
   /**
+   * When work on a project began — the earlier of its contract start and its site start — for a
+   * time-based cost (machinery depreciation) that must not run from before the project existed.
+   * `null` for an unknown id.
+   */
+  async getProjectStartDate(
+    projectId: string,
+    ctx: RlsContext,
+  ): Promise<Date | null> {
+    const project = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findFirst({
+        where: { id: projectId },
+        select: { startDate: true, siteStartDate: true },
+      }),
+    );
+    if (!project) return null;
+    return project.siteStartDate && project.siteStartDate < project.startDate
+      ? project.siteStartDate
+      : project.startDate;
+  }
+
+  /**
    * A project's identity — code and name — for another module labelling a report or an export
    * (018 FR-010a, FR-011a).
    *

@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { employeeNameOf } from '../hr/employee-name';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor } from '../common/prisma/rls-context';
@@ -279,7 +280,11 @@ export class AssetsRefsService {
         `Employee ${employeeId} does not exist in this company`,
       );
     }
-    return { id: employee.id, name: employee.name, siteId: employee.siteId };
+    return {
+      id: employee.id,
+      name: employeeNameOf(employee) ?? employee.employeeCode,
+      siteId: employee.siteId,
+    };
   }
 
   /** Custodian names for a list of employee ids, with the same missing-row
@@ -295,7 +300,14 @@ export class AssetsRefsService {
         const employee = await this.employees
           .getById(ctx, employeeId)
           .catch(() => null);
-        return [employeeId, employee?.name ?? 'Unknown employee'] as const;
+        return [
+          employeeId,
+          // Employees carry first and last names; there is no `name` column (an asset listing read
+          // `employee.name`, got undefined, and showed every custodian as "Unknown employee").
+          employee
+            ? employeeNameOf(employee) ?? employee.employeeCode
+            : 'Unknown employee',
+        ] as const;
       }),
     );
     return new Map(entries);
