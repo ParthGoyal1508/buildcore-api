@@ -24,11 +24,10 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run build
-      # `large-body-routes.spec.ts` builds the whole Nest application (~1.8 GB resident). Run beside
-      # another worker, the pair outgrew the runner and the worker was killed — "Jest worker
-      # encountered 4 child process exceptions" (2026-10-18, twice, the second time with 3 GB heaps
-      # and worker recycling already in place). It now runs alone, after everything else.
-      - run: npm test -- --maxWorkers=2 --testPathIgnorePatterns large-body-routes
-      - run: npm test -- --runInBand large-body-routes
+      # `large-body-routes.spec.ts` builds the whole Nest application (~1.8 GB). The 2026-10-18
+      # "Jest worker encountered 4 child process exceptions" failures were that suite crashing on
+      # secrets CI does not have, not memory; the suite now supplies placeholders. The heap and
+      # worker limits stay as headroom for it.
+      - run: npm test -- --maxWorkers=2
         env:
           NODE_OPTIONS: --max-old-space-size=3072

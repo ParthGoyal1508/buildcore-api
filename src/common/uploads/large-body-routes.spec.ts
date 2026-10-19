@@ -1,7 +1,6 @@
 import { ModulesContainer } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 
-import { AppModule } from '../../app.module';
 import { collectLargeBodyRoutes, largeBodyMatcher } from './large-body';
 
 /**
@@ -64,6 +63,15 @@ describe('large body routes, from the real controllers (036 B8)', () => {
   let isLarge: (method: string, path: string) => boolean;
 
   beforeAll(async () => {
+    // Building the whole application constructs services that refuse to start without their
+    // secrets (the blob store's key, the JWT secrets). CI has no .env, and this suite stores and
+    // signs nothing, so placeholders do. Set before the application is imported, because its
+    // configuration is read at import.
+    process.env.STORAGE_ENCRYPTION_KEY ||= '0'.repeat(64);
+    process.env.JWT_ACCESS_SECRET ||= 'large-body-routes-spec-access';
+    process.env.JWT_REFRESH_SECRET ||= 'large-body-routes-spec-refresh';
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { AppModule } = require('../../app.module');
     const module = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
