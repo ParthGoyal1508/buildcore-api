@@ -2943,7 +2943,8 @@ async function main() {
   // (`is_local = false`) because this whole script is one short-lived connection.
   await prisma.$executeRaw`SELECT set_config('app.is_super_admin', 'true', false)`;
 
-  const fy = '2026-2027';
+  // The app's financial-year label ('2026-27'), which is what leave balances are read by.
+  const fy = '2026-27';
   const today = dateOnly(new Date());
 
   // ── The four roles (Roles and Approvals, 2026-10-18) ────────────────────────
