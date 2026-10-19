@@ -24,11 +24,11 @@ jobs:
       - run: npm install
       - run: npm run lint
       - run: npm run build
-      # Five suites build the whole Nest application (the route audits), and each needs ~1.2 GB of
-      # heap. On the runner's default heap, a worker that had already run other suites ran out of
-      # memory loading one and crashed — "Jest worker encountered 4 child process exceptions"
-      # (2026-10-18). Two workers with 3 GB each fit the runner; `workerIdleMemoryLimit` in
-      # package.json recycles a worker before memory piles up.
-      - run: npm test -- --maxWorkers=2
+      # `large-body-routes.spec.ts` builds the whole Nest application (~1.8 GB resident). Run beside
+      # another worker, the pair outgrew the runner and the worker was killed — "Jest worker
+      # encountered 4 child process exceptions" (2026-10-18, twice, the second time with 3 GB heaps
+      # and worker recycling already in place). It now runs alone, after everything else.
+      - run: npm test -- --maxWorkers=2 --testPathIgnorePatterns large-body-routes
+      - run: npm test -- --runInBand large-body-routes
         env:
           NODE_OPTIONS: --max-old-space-size=3072
