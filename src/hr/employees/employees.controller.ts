@@ -26,6 +26,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { callerFrom } from '../caller-context';
 import {
+  BulkShiftDto,
   CreateEmployeeDto,
   ListEmployeesQueryDto,
   RevealPiiDto,
@@ -88,6 +89,50 @@ export class EmployeesController {
       callerFrom(user, request),
       this.companyOf(user, companyId),
       query,
+    );
+  }
+
+  /** Declared before `:id`, which would otherwise read `shift-roster` as an employee id. */
+  @Get('shift-roster')
+  @ApiOperation({
+    summary: 'Every active employee, for the bulk shift screen',
+    description:
+      'Code, name, department, designation, site and shift only — no PII. ' +
+      'Unpaged, so the screen can search, filter and select all on the client.',
+  })
+  async shiftRoster(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.employees.shiftRoster(
+      callerFrom(user, request),
+      this.companyOf(user, companyId),
+    );
+  }
+
+  @Post('bulk-shift')
+  @ApiOperation({
+    summary: 'Move many employees onto one shift',
+    description:
+      'All or nothing — every id must be an active employee of the company. ' +
+      'Writes one activity-log entry naming the shift and the employees moved.',
+  })
+  @ApiResponse({ status: 404, description: 'No such shift in this company.' })
+  @ApiResponse({
+    status: 400,
+    description: 'An id is not an active employee of this company.',
+  })
+  async bulkShift(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Body() dto: BulkShiftDto,
+    @Query('companyId') companyId?: string,
+  ): Promise<{ updated: number; shiftId: string }> {
+    return this.employees.bulkSetShift(
+      callerFrom(user, request),
+      this.companyOf(user, companyId),
+      dto,
     );
   }
 

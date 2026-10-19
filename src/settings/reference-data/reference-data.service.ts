@@ -317,20 +317,34 @@ export class ReferenceDataService {
    * late-coming report (005 US17) needs the window itself, which is what 002 has
    * been storing all along with nothing reading it.
    */
-  async getShift(
-    shiftId: string,
-  ): Promise<{ inTime: string; outTime: string; graceMinutes: number } | null> {
+  async getShift(shiftId: string): Promise<{
+    companyId: string;
+    name: string;
+    inTime: string;
+    outTime: string;
+    graceMinutes: number;
+  } | null> {
     const shift = await withRlsContext(
       this.prisma,
       { isSuperAdmin: true },
       (tx) =>
         tx.shift.findUnique({
           where: { id: shiftId },
-          select: { inTime: true, outTime: true, graceMinutes: true },
+          select: {
+            companyId: true,
+            name: true,
+            inTime: true,
+            outTime: true,
+            graceMinutes: true,
+          },
         }),
     );
     if (!shift) return null;
     return {
+      // The owner and name, for `hr`'s bulk shift change (036), which must refuse another
+      // company's shift and records the name in its audit entry.
+      companyId: shift.companyId,
+      name: shift.name,
       // Postgres `time` values surface as Dates on an arbitrary epoch day, so only
       // the time-of-day component is meaningful — the same caveat
       // `shiftDurationHours` documents below. Rendered as `HH:mm` in UTC, which is

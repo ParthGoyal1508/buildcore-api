@@ -11,7 +11,9 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { EmployeeCodeService } from '../../settings/employee-code/employee-code.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
+import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
 import type {
+  BulkShiftDto,
   CreateEmployeeDto,
   ListEmployeesQueryDto,
   RevealPiiDto,
@@ -64,6 +66,7 @@ export class EmployeesService {
     private readonly employeeCode: EmployeeCodeService,
     private readonly auditLog: AuditLogService,
     private readonly salaryRevisions: SalaryRevisionsService,
+    private readonly referenceData: ReferenceDataService,
   ) {}
 
   /** The employee record for an account, or null if the account has none. */
@@ -179,7 +182,9 @@ export class EmployeesService {
       ...(term
         ? {
             OR: [
-              { employeeCode: { contains: term, mode: 'insensitive' as const } },
+              {
+                employeeCode: { contains: term, mode: 'insensitive' as const },
+              },
               { firstName: { contains: term, mode: 'insensitive' as const } },
               { lastName: { contains: term, mode: 'insensitive' as const } },
             ],
@@ -724,6 +729,7 @@ export class EmployeesService {
       isActive: query.isActive ?? true,
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.siteId ? { siteId: query.siteId } : {}),
+      ...(query.shiftId ? { shiftId: query.shiftId } : {}),
       ...(term
         ? {
             OR: [
@@ -753,6 +759,109 @@ export class EmployeesService {
     );
 
     return { items: items.map((e) => this.toMasked(e)), total, page, pageSize };
+  }
+
+  /**
+   * Every active employee in the company, as the bulk shift screen needs them (036).
+   *
+   * The whole roster in one read, so that screen's search, filters and "select all" work on
+   * the client without paging — a company's staff runs to hundreds, not tens of thousands
+   * (site labour is a separate register). Names and placement only: no PII column is selected.
+   */
+  async shiftRoster(
+    caller: Caller,
+    companyId: string,
+  ): Promise<
+    {
+      id: string;
+      employeeCode: string;
+      firstName: string | null;
+      lastName: string | null;
+      departmentId: string | null;
+      designationId: string | null;
+      siteId: string;
+      shiftId: string;
+    }[]
+  > {
+    return withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findMany({
+        where: { companyId, isActive: true },
+        select: {
+          id: true,
+          employeeCode: true,
+          firstName: true,
+          lastName: true,
+          departmentId: true,
+          designationId: true,
+          siteId: true,
+          shiftId: true,
+        },
+        orderBy: { employeeCode: 'asc' },
+      }),
+    );
+  }
+
+  /**
+   * Moves many employees onto one shift in one action (036).
+   *
+   * All or nothing: every id must be an active employee of this company, or none moves — a
+   * partial rotation would leave half a crew on the wrong shift with nobody told which half.
+   * Employees already on the shift are counted as moved, so re-applying is harmless. Only
+   * `shiftId` changes; attendance and overtime already recorded keep the shift they were
+   * worked on, since neither is recomputed from the employee record after the fact.
+   */
+  async bulkSetShift(
+    caller: Caller,
+    companyId: string,
+    dto: BulkShiftDto,
+  ): Promise<{ updated: number; shiftId: string }> {
+    const shift = await this.referenceData.getShift(dto.shiftId);
+    if (!shift || shift.companyId !== companyId) {
+      throw new NotFoundException('Shift not found');
+    }
+    const ids = [...new Set(dto.employeeIds)];
+
+    const updated = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const found = await tx.employee.count({
+          where: { id: { in: ids }, companyId, isActive: true },
+        });
+        if (found !== ids.length) {
+          throw new BadRequestException(
+            `${
+              ids.length - found
+            } of the selected employees are not active employees of this company — refresh the list and try again`,
+          );
+        }
+        const result = await tx.employee.updateMany({
+          where: { id: { in: ids }, companyId },
+          data: { shiftId: dto.shiftId },
+        });
+        return result.count;
+      },
+    );
+
+    await this.auditLog.record({
+      // Filed as an employee update, so the Activity Log shows it under HR beside the
+      // per-employee edits it replaces; the shift is named in `changes`.
+      entityType: AuditEntityType.EMPLOYEE,
+      action: AuditAction.UPDATE,
+      entityId: null,
+      changes: {
+        event: 'bulk_shift_change',
+        shiftId: dto.shiftId,
+        shiftName: shift.name,
+        count: updated,
+        employeeIds: ids,
+      },
+      accountId: caller.userId,
+      companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    return { updated, shiftId: dto.shiftId };
   }
 
   /** Single employee, masked. Composition of the detail tabs is US1 T019. */

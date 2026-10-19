@@ -54,6 +54,12 @@ export function describeEvent(row: Row): string | null {
       ? 'Hid cash amounts'
       : 'Showed cash amounts';
   }
+  if (changes.event === 'bulk_shift_change') {
+    const n = Number(changes.count);
+    return `Moved ${n} employee${n === 1 ? '' : 's'} to the ${String(
+      changes.shiftName,
+    )} shift`;
+  }
   return null;
 }
 
