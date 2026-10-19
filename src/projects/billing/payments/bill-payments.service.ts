@@ -147,6 +147,15 @@ export class BillPaymentsService {
       this.prisma,
       ctx,
       async (tx) => {
+        // 036 I4. The bill row is locked before the paid-to-date sum is read, and held until the
+        // payment is inserted. Without it the check was aggregate-then-insert, and two payments
+        // submitted together each read the same paid figure, each passed, and together paid past
+        // what was certified. Locking the bill (not the payments) serialises exactly the payments
+        // against one bill, the way inventory payments lock their purchase bills. Under RLS, so a
+        // bill in another company locks nothing and is reported as not found below.
+        await tx.$queryRaw`
+          SELECT "id" FROM "projects"."RABill" WHERE "id" = ${raBillId} FOR UPDATE
+        `;
         const bill = await tx.rABill.findFirst({
           where: { id: raBillId },
           select: {

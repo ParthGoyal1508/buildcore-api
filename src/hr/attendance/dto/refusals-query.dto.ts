@@ -1,6 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { PunchRefusalReason } from '@prisma/client';
-import { IsEnum, IsISO8601, IsOptional, IsString } from 'class-validator';
+import {
+  IsEnum,
+  IsISO8601,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 /** Filters for the punch refusal log (020 FR-013c). */
 export class RefusalsQueryDto {
@@ -10,6 +16,7 @@ export class RefusalsQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({

@@ -13,6 +13,7 @@ export class LoginDto {
   @ApiProperty({ description: "The account's email or username" })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   identifier: string;
 
   @ApiProperty()

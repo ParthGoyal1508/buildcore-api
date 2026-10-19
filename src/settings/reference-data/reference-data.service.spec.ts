@@ -63,6 +63,26 @@ describe.each<[ReferenceResource, string]>([
     });
   });
 
+  it('creates in the selected company for a Super Admin who has switched (036 B3)', async () => {
+    const create = jest
+      .fn()
+      .mockResolvedValue({ id: 'r1', companyId: 'selected-B' });
+    const { service } = build(resource, {
+      findFirst: jest.fn().mockResolvedValue(null),
+      create,
+    });
+    const switched = callerFor('home-A', {
+      permissions: ['CROSS_COMPANY_ACCESS'],
+      selectedCompanyId: 'selected-B',
+    });
+
+    await service.create(resource, switched, { name: 'Civil' }, '127.0.0.1');
+
+    expect(create).toHaveBeenCalledWith({
+      data: { companyId: 'selected-B', name: 'Civil' },
+    });
+  });
+
   it('409s on a duplicate name within the same company', async () => {
     const { service } = build(resource, {
       findFirst: jest.fn().mockResolvedValue({ id: 'existing' }),

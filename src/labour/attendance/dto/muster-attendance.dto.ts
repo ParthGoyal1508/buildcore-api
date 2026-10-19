@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsIn,
+  IsBoolean,
   IsInt,
   IsLatitude,
   IsLongitude,
@@ -15,6 +16,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 import type { MusterFilter } from '../muster-attendance.service';
 
@@ -40,6 +42,7 @@ export class MusterDailyQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ enum: FILTERS })
@@ -66,6 +69,7 @@ export class MusterMonthlyQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }
 
@@ -73,6 +77,7 @@ export class PunchCorrectionDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   workerId!: string;
 
   @ApiProperty({ description: 'The day being corrected, YYYY-MM-DD' })
@@ -93,6 +98,14 @@ export class PunchCorrectionDto {
   @Matches(TIME, { message: 'punchOut must be HH:mm' })
   punchOut?: string;
 
+  @ApiPropertyOptional({
+    description:
+      'The punch out is on the day after `date` — a night shift (036). At most 16 hours after the punch in.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  punchOutNextDay?: boolean;
+
   @ApiProperty({
     description: 'Why the time is being added or changed — kept in the history',
   })
@@ -106,6 +119,7 @@ export class PunchHistoryQueryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   workerId!: string;
 
   @ApiProperty()
@@ -117,6 +131,7 @@ export class LabourDayRulesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -127,6 +142,7 @@ export class LabourDayRulesDto {
   })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Max(99.99)
   fullDayHours!: number;
 
   @ApiProperty({
@@ -135,11 +151,13 @@ export class LabourDayRulesDto {
   })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Max(99.99)
   halfDayHours!: number;
 
   @ApiProperty({ example: 8, description: 'Hours beyond this are overtime' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
+  @Max(99.99)
   standardHours!: number;
 }
 
@@ -147,6 +165,7 @@ export class SitePhotoDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({
@@ -154,6 +173,7 @@ export class SitePhotoDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   photo!: string;
 
   @ApiPropertyOptional()
@@ -177,6 +197,7 @@ export class SitePhotoQueryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiPropertyOptional()

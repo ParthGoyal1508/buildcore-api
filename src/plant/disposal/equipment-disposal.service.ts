@@ -17,6 +17,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { bookValue as depreciatedBookValue } from '../../assets/depreciation';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { businessToday } from '../../common/business-date';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -126,7 +127,9 @@ export class EquipmentDisposalService {
     }
 
     const disposalDate = dateOnly(dto.disposalDate);
-    const today = dateOnly(new Date().toISOString());
+    // Today in the business timezone (036 K18). The UTC date is yesterday until 05:30 IST, so
+    // the old comparison refused a machine disposed of "today" for the first hours of every day.
+    const today = businessToday();
     if (disposalDate > today) {
       throw new BadRequestException(
         'The disposal date cannot be in the future.',

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { ArrayMaxSize, IsArray, IsString } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsString, MaxLength } from 'class-validator';
 
 export class SetSupervisorSitesDto {
   @ApiProperty({
@@ -9,5 +9,6 @@ export class SetSupervisorSitesDto {
   @IsArray()
   @ArrayMaxSize(500)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   siteIds!: string[];
 }

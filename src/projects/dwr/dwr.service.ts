@@ -38,6 +38,7 @@ import {
   detectContentType,
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import { compressImageUpload } from '../../common/uploads';
 import { DWR_ERRORS, DWR_WARNINGS, DwrWarningCode } from './dwr-error-codes';
 import { formatChainage } from './chainage';
 import type {
@@ -553,6 +554,8 @@ export class DwrService {
     mimeType: string;
     sizeBytes: number;
     taskId: string | null;
+    /** 036 I8: whether a 320 px copy was made (photos only). */
+    hasThumbnail: boolean;
   }> {
     const exists = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dailyWorkReport.findFirst({
@@ -608,14 +611,37 @@ export class DwrService {
     // From the **bytes**, not from the client's `Content-Type` — which is a guess made from a file
     // extension, and which a browser then honours by offering a download instead of opening the
     // photograph somebody wants to look at.
-    const mimeType =
+    const detected =
       detectContentType(file.data)?.contentType ?? 'application/octet-stream';
+
+    // 036 B6/I8: a photo is stored at no more than 2048 px, with a 320 px thumbnail for the
+    // report's photo strip. A 12-megapixel site photo was kept at full size and downloaded in
+    // full for every glance at the report — and embedded at full size in its workbook. PDFs and
+    // anything else are stored untouched (`compressImageUpload` answers null for them).
+    const image = await compressImageUpload(file.data, detected);
+    const stored = image?.main.data ?? file.data;
+    const mimeType = image?.main.contentType ?? detected;
+    // A PNG re-encoded as JPEG keeps its name's stem but not a now-wrong extension, so the
+    // download opens in the right application.
+    const fileName =
+      image && image.compressed && mimeType !== detected
+        ? `${file.fileName.replace(/\.[^./\\]+$/, '') || 'photo'}.${
+            mimeType === 'image/webp' ? 'webp' : 'jpg'
+          }`
+        : file.fileName;
 
     const fileRef = await this.storage.put(
       `dwr-attachments/${companyId}`,
-      file.data,
+      stored,
       mimeType,
     );
+    const thumbnailRef = image
+      ? await this.storage.put(
+          `dwr-attachments/${companyId}/thumbnails`,
+          image.thumbnail.data,
+          image.thumbnail.contentType,
+        )
+      : null;
 
     const created = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dWRAttachment.create({
@@ -624,9 +650,10 @@ export class DwrService {
           dwrId,
           taskId: taskId ?? null,
           fileRef,
-          fileName: file.fileName,
+          thumbnailRef,
+          fileName,
           mimeType,
-          sizeBytes: file.data.length,
+          sizeBytes: stored.length,
           uploadedByUserId: actor.userId,
         },
         select: {
@@ -648,13 +675,93 @@ export class DwrService {
       ipAddress: actor.ipAddress,
     });
 
-    return created;
+    return { ...created, hasThumbnail: thumbnailRef !== null };
   }
 
-  /** Reads a file back, named and typed so a browser can open it (FR-009). */
+  /**
+   * Removes a file filed by mistake, while the report is still being written (036 I9).
+   *
+   * There was no way to take back a wrong photo at all: it stayed on the report through approval
+   * and into the workbook. Only a draft or a returned report — the two its author may still edit —
+   * lets a file go; once submitted, the approver is looking at the evidence as it stands, and an
+   * approved report's evidence is part of what was certified (the same line `addAttachment`
+   * draws). Audited on the report, naming the file, because evidence disappearing is exactly what
+   * someone will later ask about.
+   */
+  async removeAttachment(
+    ctx: RlsContext,
+    dwrId: string,
+    attachmentId: string,
+    companyId: string,
+    actor: { userId: string; ipAddress?: string },
+  ): Promise<void> {
+    const removed = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const report = await tx.dailyWorkReport.findFirst({
+        where: { id: dwrId },
+        select: { id: true, status: true },
+      });
+      if (!report) throw new NotFoundException('Daily work report not found');
+      const attachment = await tx.dWRAttachment.findFirst({
+        where: { id: attachmentId, dwrId },
+        select: {
+          id: true,
+          fileName: true,
+          fileRef: true,
+          thumbnailRef: true,
+          taskId: true,
+        },
+      });
+      if (!attachment) throw new NotFoundException('Attachment not found');
+
+      if (!EDITABLE_STATUSES.includes(report.status)) {
+        throw new ConflictException({
+          code: DWR_ERRORS.wrongStatus,
+          message:
+            `This report is ${report.status}. A file can be removed only while the report is a ` +
+            'draft or has been returned to its author.',
+        });
+      }
+
+      await tx.dWRAttachment.delete({ where: { id: attachment.id } });
+      return attachment;
+    });
+
+    // After the transaction, as `remove` does: a blob deleted inside one that then rolls back is
+    // gone while its row survives.
+    await this.storage.deleteMany(
+      [removed.fileRef, removed.thumbnailRef].filter(
+        (ref): ref is string => ref !== null,
+      ),
+    );
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.DWR,
+      action: AuditAction.UPDATE,
+      entityId: dwrId,
+      accountId: actor.userId,
+      companyId,
+      ipAddress: actor.ipAddress,
+      changes: {
+        attachmentRemoved: {
+          id: removed.id,
+          fileName: removed.fileName,
+          taskId: removed.taskId,
+        },
+      },
+    });
+  }
+
+  /**
+   * Reads a file back, named and typed so a browser can open it (FR-009).
+   *
+   * `thumbnail` (036 I8) serves the 320 px copy where one was made, and the file itself otherwise
+   * — a photo filed before thumbnails existed still shows, at full size, rather than as a broken
+   * image.
+   */
   async readAttachment(
     ctx: RlsContext,
     attachmentId: string,
+    { thumbnail = false }: { thumbnail?: boolean } = {},
   ): Promise<{
     data: Buffer;
     mimeType: string;
@@ -663,10 +770,26 @@ export class DwrService {
     const attachment = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.dWRAttachment.findFirst({
         where: { id: attachmentId },
-        select: { fileRef: true, fileName: true, mimeType: true },
+        select: {
+          fileRef: true,
+          thumbnailRef: true,
+          fileName: true,
+          mimeType: true,
+        },
       }),
     );
     if (!attachment) throw new NotFoundException('Attachment not found');
+
+    if (thumbnail && attachment.thumbnailRef) {
+      const data = await this.storage.get(attachment.thumbnailRef);
+      // Thumbnails are written by `compressImageUpload`, whose default format is JPEG.
+      const type = detectContentType(data)?.contentType ?? 'image/jpeg';
+      return {
+        data,
+        mimeType: type,
+        contentDisposition: contentDispositionFor(attachment.fileName),
+      };
+    }
 
     const data = await this.storage.get(attachment.fileRef);
 
@@ -831,6 +954,9 @@ export class DwrService {
               // renders one list under the report and a thumbnail on each line, and a
               // pre-grouped shape would make the first of those a second request.
               taskId: true,
+              // 036 I8: read only to say whether a thumbnail exists; the reference itself is
+              // stripped below and never leaves the service.
+              thumbnailRef: true,
             },
           },
           tasks: {
@@ -893,7 +1019,14 @@ export class DwrService {
     // response two arrays of the same thing with different shapes. The contract only ever named
     // `lines`; `tasks` arrived by accident, and the detail screen picked the accidental one and
     // showed "BOQ —" against every line in the product.
-    const { tasks, ...header } = report;
+    const { tasks, attachments, ...rest } = report;
+    const header = {
+      ...rest,
+      attachments: attachments.map(({ thumbnailRef, ...attachment }) => ({
+        ...attachment,
+        hasThumbnail: thumbnailRef !== null,
+      })),
+    };
 
     // FR-024, and **both** identities. They are already stored and already returned as ids, which
     // answers half the question a reader asked: a report attributed to "cmuoe9b7l00q5v8…" names
@@ -1774,7 +1907,7 @@ export class DwrService {
         select: {
           id: true,
           status: true,
-          attachments: { select: { fileRef: true } },
+          attachments: { select: { fileRef: true, thumbnailRef: true } },
         },
       });
       if (!report) throw new NotFoundException('Daily work report not found');
@@ -1791,7 +1924,9 @@ export class DwrService {
       }
 
       await tx.dailyWorkReport.delete({ where: { id: dwrId } });
-      return report.attachments.map((a) => a.fileRef);
+      return report.attachments.flatMap((a) =>
+        a.thumbnailRef ? [a.fileRef, a.thumbnailRef] : [a.fileRef],
+      );
     });
 
     // After the transaction, deliberately: a blob deleted inside one that then rolls back is gone

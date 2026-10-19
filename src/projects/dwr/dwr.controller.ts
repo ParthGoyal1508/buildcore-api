@@ -40,6 +40,7 @@ import {
 import { DwrPeriodDto, ListDwrDto } from './dto/dwr-query.dto';
 import { UpdateDwrDto } from './dto/update-dwr.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { decodeBase64Upload } from '../../common/uploads';
 
 /**
  * Daily work reports (022 — 008 User Story 5, built two months late).
@@ -146,10 +147,63 @@ export class DwrController {
       rlsContextFor(caller),
       dwrId,
       resolveCompanyId(caller, companyId),
-      { data: Buffer.from(dto.data, 'base64'), fileName: dto.fileName },
+      // 036 B4: the shared decoder — refuses an empty payload (400) and one over the shared
+      // limit (413 FILE_TOO_LARGE) before anything is stored.
+      {
+        data: decodeBase64Upload(dto.data, 'The attachment'),
+        fileName: dto.fileName,
+      },
       { userId: caller.id, ipAddress: ip },
       dto.taskId,
     );
+  }
+
+  @Delete('projects/dwr/:dwrId/attachments/:attachmentId')
+  @UseGuards(ProjectLockGuard)
+  @ApiOperation({
+    summary: 'Remove a file from a draft or returned report (036 I9)',
+    description:
+      'Only while the report can still be edited by its author (draft or returned); a submitted ' +
+      'or approved report is refused with 409 `DWR_WRONG_STATUS`. Audited on the report with the ' +
+      'file name. `:dwrId` in the path is what lets the project lock guard find the project.',
+  })
+  async removeAttachment(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('dwrId') dwrId: string,
+    @Param('attachmentId') attachmentId: string,
+    @Ip() ip: string,
+    @Query('companyId') companyId?: string,
+  ): Promise<void> {
+    await this.dwr.removeAttachment(
+      rlsContextFor(caller),
+      dwrId,
+      attachmentId,
+      resolveCompanyId(caller, companyId),
+      { userId: caller.id, ipAddress: ip },
+    );
+  }
+
+  @Get('projects/dwr/attachments/:attachmentId/thumbnail')
+  @ApiOperation({
+    summary: 'A photo attachment’s 320 px thumbnail (036 I8)',
+    description:
+      'The full file when no thumbnail was made (a PDF, or a photo filed before 2026-10-18), so ' +
+      'a caller can always use this for an image preview.',
+  })
+  async downloadThumbnail(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('attachmentId') attachmentId: string,
+    @Res() res: Response,
+  ) {
+    const { data, mimeType, contentDisposition } =
+      await this.dwr.readAttachment(rlsContextFor(caller), attachmentId, {
+        thumbnail: true,
+      });
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', contentDisposition);
+    // A thumbnail's bytes never change for its id; the browser may keep it for the session.
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(data);
   }
 
   @Get('projects/dwr/:dwrId/report.xlsx')

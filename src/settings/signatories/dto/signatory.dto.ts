@@ -1,12 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsBoolean,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * A named signatory and their signature graphic (017 FR-016).
@@ -35,7 +35,7 @@ export class CreateSignatoryDto {
   @ApiProperty({
     description: 'The signature graphic, base64-encoded (PNG or JPEG).',
   })
-  @IsBase64()
+  @IsBase64Payload()
   signature: string;
 
   @ApiPropertyOptional({ example: 'image/png' })
@@ -64,7 +64,7 @@ export class UpdateSignatoryDto {
       'keep the image applied at the time — see `IssuedLetter.appliedSignatureRef`.',
   })
   @IsOptional()
-  @IsBase64()
+  @IsBase64Payload()
   signature?: string;
 
   @ApiPropertyOptional()

@@ -11,18 +11,22 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class LabourPunchDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   workerId!: string;
 
   @ApiProperty({ enum: LabourPunchType })
@@ -34,6 +38,7 @@ export class LabourPunchDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   photo!: string;
 
   @ApiProperty({ example: 19.076 })
@@ -59,6 +64,7 @@ export class LabourDayQueryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 }
 
@@ -66,6 +72,7 @@ export class LabourRefusalsQueryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiPropertyOptional({ description: 'Days back from today, default 7' })

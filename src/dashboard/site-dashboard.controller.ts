@@ -16,6 +16,7 @@ import { UserEntity } from '../common/decorators/user.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { SitesService } from '../projects/sites/sites.service';
+import { effectiveCompanyId } from '../settings/company-scope';
 import { buildDashboardContext } from './context';
 import { DashboardService } from './dashboard.service';
 import { SiteWidgetsQueryDto } from './dto/site-widgets-query.dto';
@@ -38,7 +39,12 @@ export class SiteDashboardController {
   @Get('sites')
   @ApiOperation({ summary: "The caller's company's sites, for the selector" })
   async listSites(@UserEntity() user: AuthenticatedUser) {
-    return this.sites.listForCompany(rlsContextFor(user), user.companyId ?? '');
+    // The selected company, not the home one (036 B3): a Super Admin who had switched company
+    // was told "No sites yet".
+    return this.sites.listForCompany(
+      rlsContextFor(user),
+      effectiveCompanyId(user) ?? '',
+    );
   }
 
   @Get('widgets')

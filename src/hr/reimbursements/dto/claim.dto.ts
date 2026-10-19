@@ -9,8 +9,10 @@ import {
   IsPositive,
   IsString,
   Matches,
+  Max,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -18,6 +20,7 @@ export class CreateClaimDto {
   @ApiProperty({ description: 'A `settings.ReimbursementCategory` id.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId: string;
 
   @ApiProperty({ example: 2450.5 })
@@ -26,6 +29,7 @@ export class CreateClaimDto {
   // caller submit an amount the database then silently rounds to something else.
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   amount: number;
 
   @ApiProperty({ example: '2026-08-14' })
@@ -39,21 +43,26 @@ export class CreateClaimDto {
   description: string;
 
   @ApiPropertyOptional({
+    nullable: true,
     description:
-      'Storage reference for the uploaded receipt. Required above the category’s configured threshold (FR-030).',
+      'Deprecated (036 F18): a client-sent storage reference no longer counts as a receipt — ' +
+      'upload one in `receipt`. On an edit, `null` removes the receipt on file; any string is ' +
+      'ignored and the receipt on file is kept.',
   })
   @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  receiptRef?: string;
+  @MaxLength(2_000)
+  receiptRef?: string | null;
 
   @ApiPropertyOptional({
     description:
-      'A base64-encoded receipt image (optionally a data URL), stored server-side in the same request and turned into `receiptRef`. Supply this or `receiptRef`, not both — this wins if both are sent.',
+      'The receipt: a photo (JPEG, PNG, WebP) or, since 036 G5, a PDF — base64, optionally a data URL. ' +
+      'Required above the category’s configured threshold (FR-030). Photos are normalised to JPEG.',
   })
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   receipt?: string;
 
   @ApiPropertyOptional({

@@ -11,6 +11,8 @@ export interface VendorSummary {
   code: string;
   type: VendorType;
   active: boolean;
+  /** Added 036 M6 so a caller can refuse another company's vendor. */
+  companyId: string;
 }
 
 export interface VendorTds {
@@ -59,12 +61,19 @@ export class PartnersService {
 
   async getVendorById(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorSummary | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({
         where: { id: vendorId },
-        select: { id: true, name: true, code: true, type: true, active: true },
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          type: true,
+          active: true,
+          companyId: true,
+        },
       }),
     );
     return vendor ?? null;
@@ -77,7 +86,7 @@ export class PartnersService {
    */
   async getVendorParticulars(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorParticulars | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({
@@ -139,7 +148,7 @@ export class PartnersService {
 
   async getVendorTds(
     vendorId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<VendorTds | null> {
     const vendor = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.vendor.findUnique({

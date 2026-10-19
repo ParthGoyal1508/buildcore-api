@@ -40,6 +40,8 @@ export class LeavePendingProvider implements NotificationProvider {
         } awaiting your decision`,
         actionLink: '/dashboard/hr/leave',
         occurredAt: new Date(occurredAt).toISOString(),
+        // 036 D6: unread again when a newer request arrives, not when one is dealt with.
+        fingerprint: new Date(occurredAt).toISOString(),
       },
     ];
   }

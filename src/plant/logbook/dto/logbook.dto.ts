@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -15,6 +16,7 @@ export class CreateLogbookEntryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -25,6 +27,7 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   openingReading!: number;
 
   @ApiProperty({
@@ -35,6 +38,7 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   closingReading!: number;
 
   @ApiPropertyOptional({
@@ -44,11 +48,13 @@ export class CreateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   fuelConsumed?: number;
 
   @ApiPropertyOptional({ description: 'The operating employee' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   operatorId?: string;
 
   @ApiPropertyOptional({
@@ -59,6 +65,7 @@ export class CreateLogbookEntryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
@@ -66,13 +73,23 @@ export class CreateLogbookEntryDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "036. Required when openingReading differs from the previous entry's closing reading — " +
+      'why the meter jumped (meter replaced, machine moved on a trailer). Ignored otherwise.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  readingGapReason?: string;
 }
 
 /**
  * Readings are absent by design: they are what `currentReading`, utilisation and
  * every hire bill's logbook snapshot are computed from, and editing them after the
- * fact would silently restate all three. Correct a wrong reading by deleting the
- * entry and re-recording it.
+ * fact would silently restate all three. A wrong reading is corrected through
+ * `CorrectLogbookReadingsDto` (036 K6), which demands a reason and audits the change.
  */
 export class UpdateLogbookEntryDto {
   @ApiPropertyOptional()
@@ -80,6 +97,7 @@ export class UpdateLogbookEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   fuelConsumed?: number;
 
   @ApiPropertyOptional()
@@ -91,18 +109,60 @@ export class UpdateLogbookEntryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   operatorId?: string;
+}
+
+/**
+ * Correcting a day's readings (036 K6). The logbook sheet told people to "correct them from the
+ * Logbook", and the Logbook offered only Delete — deleting and re-recording loses the operator,
+ * project and remarks, and leaves no trace of what the figures were. This changes the two readings
+ * in place, with a **required** reason, and the audit entry keeps the before and after.
+ */
+export class CorrectLogbookReadingsDto {
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  @Max(999_999_999_999_999)
+  openingReading!: number;
+
+  @ApiProperty()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
+  @Max(999_999_999_999_999)
+  closingReading!: number;
+
+  @ApiProperty({
+    description: 'Why the readings are being corrected. Kept in the audit log.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  reason!: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Required when the corrected opening reading differs from the previous entry's closing one.",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  readingGapReason?: string;
 }
 
 export class ListLogbookDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
@@ -118,6 +178,7 @@ export class ListLogbookDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -125,6 +186,7 @@ export class ListLogbookDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -132,5 +194,6 @@ export class ListLogbookDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

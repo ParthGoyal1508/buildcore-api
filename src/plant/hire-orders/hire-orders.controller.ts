@@ -23,7 +23,11 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { formFormatOf, sendForm } from '../../common/form-document';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { CreateHireOrderDto, UpdateHireOrderDto } from './dto/hire-order.dto';
+import {
+  CreateHireOrderDto,
+  ListHireOrdersDto,
+  UpdateHireOrderDto,
+} from './dto/hire-order.dto';
 import { HireOrdersService } from './hire-orders.service';
 
 /** Vehicle work/hire orders (2026-10-15), under the machinery permission. */
@@ -39,11 +43,9 @@ export class HireOrdersController {
   @ApiOperation({ summary: 'Hire orders, newest first' })
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('companyId') companyId?: string,
-    @Query('vendorId') vendorId?: string,
-    @Query('projectId') projectId?: string,
+    @Query() query: ListHireOrdersDto,
   ) {
-    return this.orders.findAll(caller, { companyId, vendorId, projectId });
+    return this.orders.findAll(caller, query);
   }
 
   @Get(':id/document.:format')

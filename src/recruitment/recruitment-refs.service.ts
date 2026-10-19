@@ -6,6 +6,7 @@ import { AuthenticatedUser } from '../auth/authenticated-user';
 import type { RecruitmentConfig } from '../common/configs/config.interface';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { CompaniesService } from '../settings/companies/companies.service';
+import { effectiveCompanyId } from '../settings/company-scope';
 import { DocumentTypesService } from '../settings/reference-data/document-types.service';
 import { ReferenceDataService } from '../settings/reference-data/reference-data.service';
 import { KitItemsService } from '../settings/kit-items/kit-items.service';
@@ -55,7 +56,8 @@ export class RecruitmentRefsService {
   callerFor(caller: AuthenticatedUser, ipAddress: string): Caller {
     return {
       userId: caller.id,
-      companyId: caller.companyId,
+      // The company the caller is working in — the switcher's selection first (036 stream 3b).
+      companyId: effectiveCompanyId(caller),
       ipAddress,
       rls: rlsContextFor(caller),
       roleIds: caller.roleIds ?? [],

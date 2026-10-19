@@ -11,23 +11,30 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
 } from 'class-validator';
+
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class ListPaymentSheetsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ enum: EngagementType })
@@ -45,11 +52,13 @@ export class GeneratePaymentSheetDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ description: 'The site whose labour the sheet pays (031)' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ example: '2026-09-01' })
@@ -70,6 +79,7 @@ export class ReopenPaymentSheetDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   reason!: string;
 }
 
@@ -82,14 +92,26 @@ export class DisburseLineDto {
   @IsDateString()
   paidOn!: string;
 
-  @ApiProperty({ example: 800 })
+  @ApiProperty({
+    example: 800,
+    description:
+      "At most the line's net payable (036 O4); less needs shortPaymentReason and is carried to the next sheet",
+  })
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999.99)
   paidAmount!: number;
 
-  @ApiPropertyOptional({ description: 'Required for a cash disbursement' })
+  // 036 3e (2026-10-17): this was `@MaxLength(2_000)` (B11), which refused every real photo — a
+  // cash disbursement could not be recorded at all — and kept the route on the default body limit.
+  // It is a file, so it is validated as one, which also routes it to the upload limit.
+  @ApiPropertyOptional({
+    description:
+      'Required for a cash disbursement. Base64 image (data-URL prefix optional).',
+  })
   @IsOptional()
   @IsString()
+  @IsBase64Payload()
   acknowledgement?: string;
 
   @ApiPropertyOptional({
@@ -97,12 +119,23 @@ export class DisburseLineDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   shortPaymentReason?: string;
+}
+
+/** 036 O2: why a draft sheet is being deleted — optional, kept in the audit log. */
+export class DeletePaymentSheetDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  reason?: string;
 }
 
 export class ReverseLineDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   reason!: string;
 }

@@ -1,6 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 
-import { currentMonth, financialYearMonths } from './rag.service';
+import * as ExcelJS from 'exceljs';
+
+import { createPrismaMock } from '../../settings/testing/prisma-mock';
+import { RagService, currentMonth, financialYearMonths } from './rag.service';
 
 describe('financialYearMonths', () => {
   it('runs April to March', () => {
@@ -59,5 +62,40 @@ describe('RAG cell colouring rule', () => {
     expect('2026-09' > thisMonth).toBe(false);
     expect('2026-08' > thisMonth).toBe(false);
     expect('2026-04' > thisMonth).toBe(false);
+  });
+});
+
+describe('RagService.exportXlsx (036 N6)', () => {
+  it('writes one row per contractor with each month as a word', async () => {
+    const prisma = createPrismaMock({
+      contractorProfile: {
+        findMany: jest.fn(async () => [
+          { id: 'cp-1', vendor: { name: 'Dummy Labour Test Firm' } },
+        ]),
+      },
+      monthlyCompliance: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'mc-1',
+            contractorProfileId: 'cp-1',
+            month: '2025-04',
+            status: 'verified',
+          },
+        ]),
+      },
+    });
+    const service = new RagService(prisma as never);
+    const caller = { id: 'u1', companyId: 'c1', permissions: [] } as never;
+    const { buffer, filename } = await service.exportXlsx(caller, '2025-26');
+    expect(filename).toBe('RAG_Matrix_2025-26.xlsx');
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as never);
+    const ws = wb.worksheets[0];
+    expect(ws.getRow(1).getCell(1).value).toBe('Contractor');
+    expect(ws.getRow(1).getCell(2).value).toBe('April 2025');
+    expect(ws.getRow(2).getCell(1).value).toBe('Dummy Labour Test Firm');
+    expect(ws.getRow(2).getCell(2).value).toBe('Verified');
+    // May 2025 is in the past and has no filing.
+    expect(ws.getRow(2).getCell(3).value).toBe('Missing');
   });
 });

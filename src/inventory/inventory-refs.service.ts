@@ -3,7 +3,6 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { parseDateOnly } from '../hr/leave/leave-days';
-import { MAX_PAGE_SIZE } from './constants/inventory.constants';
 import { PartnersService } from '../partners/partners.service';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
@@ -141,6 +140,38 @@ export class InventoryRefsService {
   }
 
   /**
+   * A vendor that may be *written against* in `companyId`: one of that company's, and active
+   * (036 M6).
+   *
+   * `requireVendorName` only asks whether the caller can see the vendor, and a Super Admin can see
+   * every company's — so a purchase in one company could name another's supplier, and a vendor
+   * marked inactive (stopped trading, blacklisted) could still be bought from and paid. Kept
+   * separate from `requireVendorName` because that one also names the vendor on *existing*
+   * rows, where a vendor deactivated since must still resolve.
+   */
+  async requireActiveVendor(
+    caller: AuthenticatedUser,
+    vendorId: string,
+    companyId: string,
+  ): Promise<string> {
+    const vendor = await this.partners.getVendorById(
+      vendorId,
+      rlsContextFor(caller),
+    );
+    if (!vendor || vendor.companyId !== companyId) {
+      throw new BadRequestException(
+        `Vendor ${vendorId} does not exist in this company`,
+      );
+    }
+    if (!vendor.active) {
+      throw new BadRequestException(
+        `${vendor.name} is inactive. Reactivate the vendor before recording against them.`,
+      );
+    }
+    return vendor.name;
+  }
+
+  /**
    * Site names for a list of ids, in one pass.
    *
    * A missing or out-of-scope site resolves to a placeholder rather than throwing:
@@ -210,12 +241,12 @@ export class InventoryRefsService {
     caller: AuthenticatedUser,
     filters: { search?: string; categoryId?: string; companyId?: string },
   ): Promise<string[]> {
-    const matches = await this.items.findAll(caller, {
+    // Ids only and unpaginated (036 M5): this used to be `findAll` at `MAX_PAGE_SIZE`, which cut
+    // the match list at 200 and so dropped items from a filtered stock list without saying so.
+    return this.items.getItemIdsMatching(caller, {
       search: filters.search,
       categoryId: filters.categoryId,
       companyId: filters.companyId,
-      pageSize: MAX_PAGE_SIZE,
     });
-    return matches.items.map((item) => item.id);
   }
 }

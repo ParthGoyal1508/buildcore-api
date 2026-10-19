@@ -9,11 +9,16 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { AccessLevel } from '@prisma/client';
 import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RequireLevel } from '../common/decorators/access-level.decorator';
+import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
+import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { LETTER_READ_PERMISSIONS } from './letter-permissions';
 import {
   ComposeLetterDto,
   CountersignedLetterDto,
@@ -26,16 +31,18 @@ import { contentDispositionFor } from '../common/storage/file-type';
 /**
  * Letters (017 US3, US4, US6).
  *
- * **There is no `@RequirePermissions` on this controller, and that is the design.** The
- * contract calls the guard "per kind" for the same reason 016 has no `APPROVALS`
- * permission: a work order and a relieving letter are not the same authority. The
- * required permission is a property of the kind being acted on, which is knowable only
- * after the kind is loaded — so `LettersService` refuses with `LETTER_KIND_FORBIDDEN`,
- * and a class-level guard would have to be either too broad or wrong.
+ * The required permission is a property of the kind being acted on, which is knowable only after
+ * the kind is loaded — a work order and a relieving letter are not the same authority — so
+ * `LettersService` refuses per kind with `LETTER_KIND_FORBIDDEN`, at the level the action needs.
+ *
+ * The guard is the outer gate (036 B16): a caller must hold **some** letter permission at the
+ * level the verb implies before the service is asked. It cannot be the only gate, for the reason
+ * above.
  */
 @ApiTags('Letters')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions(...LETTER_READ_PERMISSIONS)
 @Controller('letters')
 export class LettersController {
   constructor(private readonly letters: LettersService) {}
@@ -177,6 +184,8 @@ export class LettersController {
   }
 
   @Post('preview')
+  // A POST that reads: it renders a draft and writes nothing.
+  @RequireLevel(AccessLevel.read)
   @ApiOperation({
     summary: 'Preview a letter before composing it',
     description:

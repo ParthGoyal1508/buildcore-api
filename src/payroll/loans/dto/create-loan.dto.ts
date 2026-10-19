@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -17,16 +18,26 @@ export class CreateLoanDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   employeeId: string;
 
-  @ApiProperty({ description: 'Principal advanced to the employee.' })
-  @IsNumber()
+  @ApiProperty({
+    description: 'Principal advanced to the employee.',
+    maximum: 10_000_000,
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  // 036 F19. One crore: above any employee loan this business makes, below a typo's reach.
+  @Max(10_000_000, { message: 'A loan cannot exceed 1,00,00,000.' })
   amount: number;
 
-  @ApiProperty({ description: 'Monthly instalment recovered through payroll.' })
-  @IsNumber()
+  @ApiProperty({
+    description: 'Monthly instalment recovered through payroll.',
+    maximum: 10_000_000,
+  })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  @Max(10_000_000, { message: 'An EMI cannot exceed 1,00,00,000.' })
   emiAmount: number;
 
   @ApiProperty({ example: '2026-09-15' })
@@ -65,6 +76,7 @@ export class ListLoansQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ enum: LoanStatus })
@@ -77,6 +89,7 @@ export class ListLoansQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -84,5 +97,6 @@ export class ListLoansQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

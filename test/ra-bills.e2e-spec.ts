@@ -1048,6 +1048,221 @@ describe('RA bills against an award (e2e)', () => {
     });
   });
 
+  /**
+   * 036 I3. Drafts do not count toward measured-to-date, so two drafts could each take the whole
+   * remaining award and both pass composition — and then both went for approval. Submission is
+   * where a draft starts to count, so it is where the ceiling is now checked again.
+   *
+   * PCC has 40 awarded and 10 measured above, so 30 remain: each draft of 20 fits on its own and
+   * the pair does not.
+   */
+  describe('two drafts that each fit the award, but not together (036 I3)', () => {
+    it('submits the first and refuses the second at submission', async () => {
+      const pcc = awarded['PCC 1:4:8'].id;
+      const a = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: pcc, quantity: 20 }],
+      });
+      const b = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: pcc, quantity: 20 }],
+      });
+
+      await submit(a.body.id);
+      const refused = await submit(b.body.id, 400);
+      expect(refused.body.code).toBe('RA_BILL_EXCEEDS_AWARD');
+
+      // Refused before anything was written: still a draft, and nothing waiting on anybody.
+      const still = await http()
+        .get(`/projects/ra-bills/${b.body.id}`)
+        .set(auth())
+        .expect(200);
+      expect(still.body.status).toBe('draft');
+      expect(
+        await sys.approvalInstance.count({
+          where: { entityType: ACTION_RA_BILL, entityId: b.body.id },
+        }),
+      ).toBe(0);
+
+      await http()
+        .delete(`/projects/ra-bills/${b.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+    });
+
+    let doubleSubmittedId = '';
+
+    it('opens one approval when the same bill is submitted twice at once', async () => {
+      const bill = await compose({
+        billNumber: billNumber(),
+        lines: [{ workOrderBoqItemId: awarded['PCC 1:4:8'].id, quantity: 5 }],
+      });
+
+      const statuses = (
+        await Promise.all([
+          http().post(`/projects/ra-bills/${bill.body.id}/submit`).set(auth()),
+          http().post(`/projects/ra-bills/${bill.body.id}/submit`).set(auth()),
+        ])
+      )
+        .map((res) => res.status)
+        .sort();
+      doubleSubmittedId = bill.body.id;
+      expect(statuses).toEqual([201, 409]);
+      expect(
+        await sys.approvalInstance.count({
+          where: { entityType: ACTION_RA_BILL, entityId: bill.body.id },
+        }),
+      ).toBe(1);
+    });
+
+    /**
+     * 036 I4. Two payments that each fit but together exceed the certified figure, sent at once.
+     * The check was aggregate-then-insert with no lock, so both could read "nothing paid yet".
+     */
+    it('pays only one of two payments that together exceed what was certified', async () => {
+      // Certified directly: the chain is not what this test is about, and the bill reaching
+      // `approved` is the precondition the payment route checks.
+      const bill = await sys.rABill.update({
+        where: { id: doubleSubmittedId },
+        data: { status: 'approved', approvedAt: new Date() },
+        select: { netPayable: true },
+      });
+      const share = (Number(bill.netPayable) * 0.6).toFixed(2);
+      const pay = () =>
+        http()
+          .post(
+            `/projects/ra-bills/${doubleSubmittedId}/payments?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({
+            paidOn: '2026-09-28',
+            amount: share,
+            instrument: 'bank_transfer',
+          });
+
+      try {
+        const statuses = (await Promise.all([pay(), pay()]))
+          .map((res) => res.status)
+          .sort();
+        expect(statuses).toEqual([201, 409]);
+        expect(
+          await sys.rABillPayment.count({
+            where: { raBillId: doubleSubmittedId },
+          }),
+        ).toBe(1);
+      } finally {
+        // Payments restrict the bill's deletion, which `afterAll` relies on.
+        await sys.rABillPayment.deleteMany({
+          where: { raBillId: doubleSubmittedId },
+        });
+      }
+    });
+
+    it('pages the list only when asked, keeping the bare array otherwise (036 I26)', async () => {
+      const plain = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      expect(Array.isArray(plain.body)).toBe(true);
+
+      const paged = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}&pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(paged.body.items).toHaveLength(1);
+      expect(paged.body.total).toBe(plain.body.length);
+      expect(paged.body).toMatchObject({ page: 1, pageSize: 1 });
+
+      for (const route of ['client-bills', 'work-orders']) {
+        const res = await http()
+          .get(`/projects/${route}?projectId=${projectId}&page=1`)
+          .set(auth())
+          .expect(200);
+        expect(res.body).toHaveProperty('total');
+      }
+      const packages = await http()
+        .get(`/projects/${projectId}/bill-packages?pageSize=5`)
+        .set(auth())
+        .expect(200);
+      expect(packages.body).toHaveProperty('items');
+    });
+
+    it('lists one work order’s bills when workOrderId is given (036 follow-up)', async () => {
+      const all = await http()
+        .get(`/projects/ra-bills?projectId=${projectId}`)
+        .set(auth())
+        .expect(200);
+      const withOrder = (all.body as { workOrderId: string | null }[]).find(
+        (b) => b.workOrderId,
+      );
+      expect(withOrder).toBeDefined();
+      const workOrderId = withOrder!.workOrderId as string;
+      const expected = (all.body as { workOrderId: string | null }[]).filter(
+        (b) => b.workOrderId === workOrderId,
+      ).length;
+
+      const scoped = await http()
+        .get(
+          `/projects/ra-bills?projectId=${projectId}&workOrderId=${workOrderId}&pageSize=50`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(scoped.body.total).toBe(expected);
+      for (const bill of scoped.body.items) {
+        expect(bill.workOrderId).toBe(workOrderId);
+      }
+
+      const none = await http()
+        .get(
+          `/projects/ra-bills?projectId=${projectId}&workOrderId=no-such-order&pageSize=5`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(none.body.total).toBe(0);
+    });
+
+    it('refuses bill writes on a locked project with 423 (036 I2)', async () => {
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: true },
+      });
+      try {
+        const composed = await http()
+          .post(`/projects/ra-bills?companyId=${companyId}`)
+          .set(auth())
+          .send({
+            projectId,
+            workOrderId,
+            billingDate: '2026-08-21',
+            billNumber: billNumber(),
+            lines: [
+              { workOrderBoqItemId: awarded['PCC 1:4:8'].id, quantity: 1 },
+            ],
+          });
+        expect(composed.status).toBe(423);
+
+        const award = await http()
+          .put(
+            `/projects/ra-bills/awards/${workOrderId}?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({ lines: [] });
+        expect(award.status).toBe(423);
+
+        const order = await http()
+          .patch(`/projects/work-orders/${workOrderId}`)
+          .set(auth())
+          .send({ workDetail: 'edited while locked' });
+        expect(order.status).toBe(423);
+      } finally {
+        await sys.project.update({
+          where: { id: projectId },
+          data: { isLocked: false },
+        });
+      }
+    });
+  });
+
   describe('approve, then revise (T024, FR-009)', () => {
     // `RaBillStatus` is `draft | submitted | approved` — there is no `certified` state on an RA
     // bill, and the first draft of this suite asserted one. The client-side bill has `certified`

@@ -6,17 +6,17 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
+import { csvCell } from '../../common/csv';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import {
   ActivityLogService,
   type ActivityLogExportRow,
 } from './activity-log.service';
-import { ActivityLogQueryDto } from './dto/activity-log-query.dto';
-
-/** One CSV cell, quoted and inner-quote-doubled per RFC 4180. */
-function csvCell(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
+import {
+  ActivityLogQueryDto,
+  ActivityLogUsersQueryDto,
+} from './dto/activity-log-query.dto';
 
 /**
  * The Activity Log (feature 004, US3) — a read/query view over the shared audit
@@ -43,7 +43,20 @@ export class ActivityLogController {
     return this.activityLog.feed(user, query);
   }
 
+  @Get('users')
+  @ApiOperation({
+    summary: 'Accounts for the User filter, searched by name or email (036 E3)',
+  })
+  async users(
+    @UserEntity() user: AuthenticatedUser,
+    @Query() query: ActivityLogUsersQueryDto,
+  ) {
+    return this.activityLog.actors(user, query);
+  }
+
   @Get('export')
+  // A full scan of the audit log per call (036 B9).
+  @ExportThrottle()
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @Header('Content-Disposition', 'attachment; filename="activity-log.csv"')
   @ApiOperation({

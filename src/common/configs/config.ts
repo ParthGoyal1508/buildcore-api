@@ -1,3 +1,7 @@
+import {
+  DEFAULT_REQUEST_BODY_LIMIT,
+  UPLOAD_REQUEST_BODY_LIMIT,
+} from '../uploads/upload-limits';
 import type { Config } from './config.interface';
 
 /** Parses a numeric env override, falling back when unset or non-numeric. */
@@ -125,22 +129,47 @@ export function trustedProxyHops(raw: string | undefined): number | false {
   return Number.isInteger(hops) && hops > 0 ? hops : false;
 }
 
+/**
+ * Refuses to start a production server whose CORS would admit any origin (036 B9).
+ *
+ * Unset `CORS_ORIGINS` means "allow every origin, with credentials" — right for local development
+ * and wrong anywhere real, and nothing at runtime would say so. Set it to the frontend's
+ * origin(s), or to `none` when every client calls same-origin through the frontend's proxy.
+ */
+export function assertCorsConfigured(
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  if (env.NODE_ENV !== 'production') return;
+  if (env.CORS_ORIGINS && env.CORS_ORIGINS.trim() !== '') return;
+  throw new Error(
+    'CORS_ORIGINS is not set. In production it must list the allowed frontend origin(s), ' +
+      'comma-separated, or be `none` to disable cross-origin access. Refusing to start ' +
+      'rather than allow every origin with credentials.',
+  );
+}
+
 const config: Config = {
   nest: {
     port: 3000,
     // See NestConfig.maxRequestBodySize for why the Express default is unusable
     // here. Env-overridable so a fleet capturing larger frames can be accommodated
     // without a code release.
-    maxRequestBodySize: process.env.MAX_REQUEST_BODY_SIZE || '10mb',
+    maxRequestBodySize:
+      process.env.MAX_REQUEST_BODY_SIZE || UPLOAD_REQUEST_BODY_LIMIT,
+    // 036 B8: every route that does not carry a file. See NestConfig.defaultRequestBodySize.
+    defaultRequestBodySize:
+      process.env.DEFAULT_REQUEST_BODY_SIZE || DEFAULT_REQUEST_BODY_LIMIT,
     // See NestConfig.trustProxy. Unset means "no proxy", which is the honest default
     // for local development and the safe one everywhere: believing a forwarded
     // address nobody put there is how a rate limiter becomes decorative.
     trustProxy: trustedProxyHops(process.env.TRUST_PROXY),
   },
   cors: {
-    enabled: true,
     // CORS_ORIGINS: comma-separated allowed origins for prod (e.g. the deployed
-    // frontend's URL). Unset → allow all, matching prior local-dev behavior.
+    // frontend's URL). Unset → allow all, matching prior local-dev behavior — and refused at
+    // boot in production (036 B9, `assertCorsConfigured`). `none` turns CORS off, for a
+    // deployment whose only client calls same-origin through the frontend's proxy.
+    enabled: process.env.CORS_ORIGINS?.trim().toLowerCase() !== 'none',
     origin: process.env.CORS_ORIGINS
       ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
       : true,
@@ -225,6 +254,14 @@ const config: Config = {
       // Env-overridable like every other operational number here, because the right
       // ceiling depends on how many people sit behind one address.
       refreshLimit: numberFromEnv(process.env.AUTH_REFRESH_THROTTLE_LIMIT, 120),
+      // 036 B9. See SecurityConfig.throttle.appLimit.
+      appLimit: numberFromEnv(process.env.APP_THROTTLE_LIMIT, 1000),
+      appTtlSeconds: numberFromEnv(process.env.APP_THROTTLE_TTL_SECONDS, 60),
+      exportLimit: numberFromEnv(process.env.EXPORT_THROTTLE_LIMIT, 10),
+      exportTtlSeconds: numberFromEnv(
+        process.env.EXPORT_THROTTLE_TTL_SECONDS,
+        60,
+      ),
     },
   },
   settings: {

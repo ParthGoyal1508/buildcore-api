@@ -48,6 +48,10 @@ export class RemindersDueProvider implements NotificationProvider {
             } (${r.dueDate})`,
       actionLink: r.actionLink ?? '/dashboard/reminders',
       occurredAt: now,
+      // 036 D6: one inbox entry per reminder, unread again when it turns overdue — not every day
+      // its "due in N days" ticks down.
+      key: `${this.type}:${r.id}`,
+      fingerprint: r.severity,
     }));
     if (urgent.length > SHOWN) {
       const more = urgent.length - SHOWN;
@@ -58,6 +62,7 @@ export class RemindersDueProvider implements NotificationProvider {
         subtitle: 'Overdue or due soon — see them all on Reminders',
         actionLink: '/dashboard/reminders',
         occurredAt: now,
+        key: `${this.type}:more`,
       });
     }
     return rows;

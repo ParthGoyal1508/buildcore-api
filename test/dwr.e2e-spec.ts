@@ -8,6 +8,7 @@ import { ACTION_DWR } from '../src/approvals/default-chains';
 import { ensureApprovalChain } from './fixtures/ensure-approval-chain';
 import * as ExcelJS from 'exceljs';
 import * as request from 'supertest';
+import type { Sharp, SharpOptions } from 'sharp';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
@@ -35,6 +36,13 @@ import { createProjectWithMandatoryDocuments } from './fixtures/mandatory-projec
  *
  * Every fixture is prefixed `E2E` and removed in `afterAll`.
  */
+// The type is named on its own line so the statement below stays one line long: the lint
+// script runs Prettier, which would otherwise wrap it and push `require` out from under the
+// disable comment — the CI failure of 2026-10-18.
+type SharpFn = (input?: Buffer, options?: SharpOptions) => Sharp;
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const sharp: SharpFn = require('sharp');
+
 const stamp = `${Date.now() % 100000}`;
 const unique = (s: string) => `E2E${s}${stamp}`;
 
@@ -687,6 +695,118 @@ describe('Daily work reports (e2e)', () => {
       expect(
         view.body.attachments.map((a: { fileName: string }) => a.fileName),
       ).toEqual(['Late evidence.png']);
+    });
+  });
+
+  /**
+   * 036 B6/I8/I9: photos are compressed with a thumbnail, and a wrong file can be taken back while
+   * the report is still a draft.
+   */
+  describe('photos are compressed, and a draft’s file can be removed (036)', () => {
+    it('stores a large photo at ≤ 2048 px with a thumbnail, and serves both', async () => {
+      // A 3000 × 2000 noisy JPEG: large enough to be resized, noisy enough not to compress to
+      // nothing at the source.
+      const raw = Buffer.alloc(3000 * 2000 * 3);
+      for (let i = 0; i < raw.length; i++) raw[i] = (i * 2654435761) >>> 24;
+      const big = await sharp(raw, { raw: { width: 3000, height: 2000, channels: 3 } })
+        .jpeg({ quality: 95 })
+        .toBuffer();
+
+      const report = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemB, servedQty: '1' },
+      ]);
+      expect(report.status).toBe(201);
+      const dwrId = report.body.id;
+
+      const added = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send({ data: big.toString('base64'), fileName: 'Site view.jpg' })
+        .expect(201);
+      expect(added.body.hasThumbnail).toBe(true);
+      expect(added.body.sizeBytes).toBeLessThan(big.length);
+
+      const full = await http()
+        .get(`/projects/dwr/attachments/${added.body.id}`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const fullMeta = await sharp(full.body as Buffer).metadata();
+      expect(Math.max(fullMeta.width ?? 0, fullMeta.height ?? 0)).toBeLessThanOrEqual(2048);
+
+      const thumb = await http()
+        .get(`/projects/dwr/attachments/${added.body.id}/thumbnail`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      const thumbMeta = await sharp(thumb.body as Buffer).metadata();
+      expect(Math.max(thumbMeta.width ?? 0, thumbMeta.height ?? 0)).toBeLessThanOrEqual(320);
+
+      const view = await http().get(`/projects/dwr/${dwrId}`).set(auth()).expect(200);
+      const filed = view.body.attachments.find((a: { id: string }) => a.id === added.body.id);
+      expect(filed.hasThumbnail).toBe(true);
+      // The storage reference never leaves the service.
+      expect(filed.thumbnailRef).toBeUndefined();
+    });
+
+    it('removes a draft’s file, audited, and refuses once submitted', async () => {
+      const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const report = await createReport([
+        { paymentMode: 'work_basis', boqItemId: itemB, length: '2' },
+      ]);
+      expect(report.status).toBe(201);
+      const dwrId = report.body.id;
+      const file = (name: string) => ({ data: PNG.toString('base64'), fileName: name });
+
+      const wrong = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(file('Wrong site.png'))
+        .expect(201);
+      const kept = await http()
+        .post(`/projects/dwr/${dwrId}/attachments?companyId=${companyId}`)
+        .set(auth())
+        .send(file('Right site.png'))
+        .expect(201);
+
+      await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${wrong.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(200);
+      // An id from another report does not resolve under this one.
+      await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${wrong.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(404);
+
+      const view = await http().get(`/projects/dwr/${dwrId}`).set(auth()).expect(200);
+      expect(view.body.attachments.map((a: { id: string }) => a.id)).toEqual([kept.body.id]);
+
+      const entry = await sys.auditLogEntry.findFirst({
+        where: { entityType: 'DWR', entityId: dwrId, action: 'UPDATE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(entry.changes.attachmentRemoved.fileName).toBe('Wrong site.png');
+
+      await http()
+        .post(`/projects/dwr/${dwrId}/submit?companyId=${companyId}`)
+        .set(auth())
+        .expect(201);
+      const refused = await http()
+        .delete(`/projects/dwr/${dwrId}/attachments/${kept.body.id}?companyId=${companyId}`)
+        .set(auth())
+        .expect(409);
+      expect(refused.body.code).toBe('DWR_WRONG_STATUS');
     });
   });
 
@@ -1444,6 +1564,52 @@ describe('Daily work reports (e2e)', () => {
         where: { id: projectId },
         data: { isLocked: false },
       });
+    });
+
+    it('refuses an edit keyed by the report, not the project, on a locked project (036 I1)', async () => {
+      // `PATCH /projects/dwr/:dwrId` carries no project in its path, and the guard used to
+      // admit it for exactly that reason — so a locked project still took edits.
+      const created = await createReport([
+        { paymentMode: 'day_basis', boqItemId: itemA, servedQty: '1' },
+      ]);
+      expect(created.status).toBe(201);
+      const dwrId = created.body.id as string;
+
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: true },
+      });
+      try {
+        const edit = await http()
+          .patch(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+          .set(auth())
+          .send({ workerCount: 15 });
+        expect(edit.status).toBe(423);
+
+        const removal = await http()
+          .delete(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+          .set(auth());
+        expect(removal.status).toBe(423);
+
+        // An unknown report is still the handler's 404, not the guard's.
+        const unknown = await http()
+          .patch(
+            `/projects/dwr/clnonexistent000000000000?companyId=${companyId}`,
+          )
+          .set(auth())
+          .send({ workerCount: 15 });
+        expect(unknown.status).toBe(404);
+      } finally {
+        await sys.project.update({
+          where: { id: projectId },
+          data: { isLocked: false },
+        });
+      }
+
+      await http()
+        .delete(`/projects/dwr/${dwrId}?companyId=${companyId}`)
+        .set(auth())
+        .expect((res) => expect([200, 204]).toContain(res.status));
     });
 
     it('reports an unknown report as 404 rather than 403', async () => {

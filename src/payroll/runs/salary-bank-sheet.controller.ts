@@ -1,7 +1,10 @@
 import {
+  Body,
   Controller,
   Get,
+  HttpCode,
   Param,
+  Post,
   Query,
   Req,
   Res,
@@ -74,14 +77,20 @@ export class SalaryBankSheetController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Query() query: BankSheetHistoryQueryDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
-    return this.bankSheet.history(
+    const { rows, total } = await this.bankSheet.historyPage(
       callerFrom(user, request),
       resolveCompanyId(user, query.companyId),
       query.year && query.month
         ? periodOf(query as SalaryBankSheetQueryDto)
         : undefined,
+      { page: query.page, pageSize: query.pageSize },
     );
+    // 036 F11. The body stays the array it always was; the count rides in a header so paging is
+    // additive for the current screen.
+    response.setHeader('X-Total-Count', String(total));
+    return rows;
   }
 
   @Get('history/:id/file')
@@ -105,16 +114,34 @@ export class SalaryBankSheetController {
     response.send(buffer);
   }
 
-  @Get()
+  /**
+   * 036 F11. Generating the sheet is a write — it records advance recoveries against the transfer
+   * and a history entry — so it is a `POST`. Same parameters as the `GET`, in the body.
+   */
+  @Post()
+  @HttpCode(200)
   @ApiOperation({
     summary:
-      'Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx in the bank format',
+      'Generate Salary_Bank_Sheet_<Company>_<Month>_<Year>.xlsx (records recoveries and history)',
   })
-  async download(
+  async generate(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
-    @Query() query: SalaryBankSheetQueryDto,
+    @Body() body: SalaryBankSheetQueryDto,
     @Res() response: Response,
+  ): Promise<void> {
+    return this.sendSheet(user, request, body, response);
+  }
+
+  // The deprecated mutating `GET` (036 F11) was removed in Wave 3, stream 3b, once the web app
+  // posted. It still generated — writing recoveries and a history entry — on a verb that promises
+  // to change nothing. Re-download a past file from `history/:id/file`.
+
+  private async sendSheet(
+    user: AuthenticatedUser,
+    request: Request,
+    query: SalaryBankSheetQueryDto,
+    response: Response,
   ): Promise<void> {
     const caller = callerFrom(user, request);
     const run = await this.bankSheet.findRegularRun(

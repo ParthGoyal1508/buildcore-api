@@ -63,6 +63,7 @@ export class CreateDwrWorkLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   boqItemId?: string;
 
   // ── The six factors. Omitted means 1; 0 is refused by name (FR-004). ──────
@@ -142,6 +143,7 @@ export class CreateDwrPresenceLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   boqItemId?: string;
 
   /**
@@ -157,6 +159,7 @@ export class CreateDwrPresenceLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId?: string;
 
   // ── Position (FR-005). ───────────────────────────────────────────────────
@@ -219,6 +222,7 @@ export class CreateDwrLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   boqItemId?: string;
 
   @ApiPropertyOptional()
@@ -254,6 +258,7 @@ export class CreateDwrLineDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
@@ -312,6 +317,7 @@ export class CreateDwrDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   supervisorEmployeeId?: string;
 
   // **`weather` was here and is deliberately gone** (028 FR-023). Removed from entry at the
@@ -330,12 +336,14 @@ export class CreateDwrDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2_147_483_647)
   workerCount?: number;
 
   @ApiPropertyOptional({ default: 0 })
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2_147_483_647)
   machineryCount?: number;
 
   /**

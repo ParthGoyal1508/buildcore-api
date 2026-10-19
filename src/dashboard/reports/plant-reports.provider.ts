@@ -114,8 +114,8 @@ export class EquipmentUtilizationReportProvider implements ReportProvider {
         { key: 'code', label: 'Code' },
         { key: 'name', label: 'Machine' },
         { key: 'site', label: 'Deployed at' },
-        { key: 'utilizationPercent', label: 'Utilisation %' },
-        { key: 'currentReading', label: 'Meter reading' },
+        { key: 'utilizationPercent', label: 'Utilisation %', type: 'percent' },
+        { key: 'currentReading', label: 'Meter reading', type: 'quantity' },
         { key: 'meterType', label: 'Meter' },
         { key: 'status', label: 'Status' },
       ],
@@ -156,14 +156,14 @@ export class FuelReportProvider implements ReportProvider {
     const rows = await this.plant.listFuelForReport(ctx.user, runRange(params));
     return {
       columns: [
-        { key: 'date', label: 'Date' },
+        { key: 'date', label: 'Date', type: 'date' },
         { key: 'code', label: 'Code' },
         { key: 'machine', label: 'Machine' },
         { key: 'site', label: 'Drawn at' },
-        { key: 'litres', label: 'Litres' },
-        { key: 'rate', label: 'Rate' },
-        { key: 'amount', label: 'Amount' },
-        { key: 'flagged', label: 'Over benchmark' },
+        { key: 'litres', label: 'Litres', type: 'quantity' },
+        { key: 'rate', label: 'Rate', type: 'money' },
+        { key: 'amount', label: 'Amount', type: 'money' },
+        { key: 'flagged', label: 'Over benchmark', type: 'boolean' },
       ],
       rows: rows.map((row) => ({ ...row })),
     };

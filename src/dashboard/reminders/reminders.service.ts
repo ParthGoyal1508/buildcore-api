@@ -19,6 +19,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { SettingsConfig } from '../../common/configs/config.interface';
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
+import { effectiveCompanyId } from '../../settings/company-scope';
 import { MAX_REMINDERS_PER_RESPONSE } from '../constants/dashboard.constants';
 import { ListRemindersDto } from './dto/list-reminders.dto';
 import { SnoozeReminderDto } from './dto/snooze-reminder.dto';
@@ -142,7 +143,9 @@ export class RemindersService {
       // not named a scope at all. Returning every company would silently grant what
       // `scope=all` exists to request explicitly, so this is the one case that
       // widens — and it widens only for someone who already holds the bypass.
-      const companyId = query.companyId ?? caller.companyId ?? null;
+      // The selected company before the home one (036 B3) — the screen is showing the
+      // selection, so its reminders must be the selection's.
+      const companyId = query.companyId ?? effectiveCompanyId(caller) ?? null;
       return { ctx: { isSuperAdmin: true }, companyId };
     }
 

@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -39,6 +40,7 @@ export class CreateSparePartDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   reorderLevel?: number;
 
   @ApiPropertyOptional({
@@ -50,6 +52,7 @@ export class CreateSparePartDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   compatibleCategoryIds?: string[];
 
   @ApiPropertyOptional({
@@ -59,6 +62,7 @@ export class CreateSparePartDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   linkedInventoryItemId?: string;
 }
 
@@ -76,12 +80,14 @@ export class ReceiveSparePartDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0.001)
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiProperty({ description: 'Rupees per unit on this receipt' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 6 })
   @Min(0)
+  @Max(9_999_999_999.99)
   rate!: number;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -91,6 +97,7 @@ export class ReceiveSparePartDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({ example: 'INV-2291' })
@@ -104,12 +111,14 @@ export class ConsumeSparePartDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   sparePartId!: string;
 
   @ApiProperty()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0.001)
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiPropertyOptional({ description: 'Defaults to today' })
@@ -132,6 +141,7 @@ export class ListSparePartsDto {
   @ApiPropertyOptional({ description: 'Matches part number or name' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional({
@@ -139,6 +149,7 @@ export class ListSparePartsDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional({
@@ -146,11 +157,13 @@ export class ListSparePartsDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   belowReorder?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -158,6 +171,7 @@ export class ListSparePartsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -165,5 +179,6 @@ export class ListSparePartsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

@@ -1,3 +1,5 @@
+import * as ExcelJS from 'exceljs';
+
 import { BOCWService, deriveStatus } from './bocw.service';
 
 describe('deriveStatus (FR-008)', () => {
@@ -113,6 +115,24 @@ describe('BOCWService.list', () => {
     const result = await service.list(caller);
     expect(result.rows).toEqual([]);
     expect(result.unavailableModules).toEqual(['projects']);
+  });
+
+  it('exports the same rows as Excel, with a total row (036 N6)', async () => {
+    const { service, caller } = build(
+      [{ projectId: 'p1', name: 'Metro Depot', contractValue: 10_000_000 }],
+      true,
+      40_000,
+    );
+    const { buffer, filename } = await service.exportXlsx(caller);
+    expect(filename).toMatch(/^BOCW_Cess_\d{4}-\d{2}-\d{2}\.xlsx$/);
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer as never);
+    const ws = wb.worksheets[0];
+    expect(ws.getRow(1).getCell(1).value).toBe('Project');
+    expect(ws.getRow(2).values).toEqual(
+      expect.arrayContaining(['Metro Depot', 10_000_000, 1, 100_000, 40_000, 60_000, 'Part paid']),
+    );
+    expect(ws.getRow(3).getCell(1).value).toBe('Total');
   });
 
   it('reports nothing unavailable once the portfolio exists', async () => {

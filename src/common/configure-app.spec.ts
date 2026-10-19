@@ -1,3 +1,4 @@
+import { ApiExceptionFilter } from './filters/api-exception.filter';
 import { configureApp } from './configure-app';
 
 /**
@@ -16,6 +17,7 @@ import { configureApp } from './configure-app';
 describe('configureApp hands Express the configured proxy depth', () => {
   function fakeApp(trustProxy: number | false) {
     const settings: Record<string, unknown> = {};
+    const filters: unknown[] = [];
     return {
       app: {
         get: () => ({
@@ -30,7 +32,11 @@ describe('configureApp hands Express the configured proxy depth', () => {
         }),
         use: () => undefined,
         useGlobalPipes: () => undefined,
+        useGlobalFilters: (...added: unknown[]) => {
+          filters.push(...added);
+        },
       },
+      filters,
       settings,
     };
   }
@@ -52,5 +58,30 @@ describe('configureApp hands Express the configured proxy depth', () => {
 
     expect(settings).toHaveProperty('trust proxy');
     expect(settings['trust proxy']).toBe(false);
+  });
+});
+
+/**
+ * The error filter (Prisma mapping included) is part of the shared configuration, so the e2e app answers a unique
+ * violation with 409 exactly as production does (036 B10). It used to live in `main.ts` alone.
+ */
+describe('configureApp registers the API exception filter', () => {
+  it('adds the ApiExceptionFilter, which also maps Prisma errors', () => {
+    const filters: unknown[] = [];
+    const adapter = { getInstance: () => ({ set: () => undefined }) };
+    const app = {
+      get: () => ({
+        get: () => ({ maxRequestBodySize: '10mb', trustProxy: false }),
+      }),
+      getHttpAdapter: () => adapter,
+      use: () => undefined,
+      useGlobalPipes: () => undefined,
+      useGlobalFilters: (...added: unknown[]) => filters.push(...added),
+    };
+
+    configureApp(app as never);
+
+    expect(filters).toHaveLength(1);
+    expect(filters[0]).toBeInstanceOf(ApiExceptionFilter);
   });
 });

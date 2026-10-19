@@ -24,6 +24,8 @@ function build(opts: {
   measuredByOthers?: number;
   submitThrows?: boolean;
   writeThrows?: boolean;
+  /** How many rows a conditional draft → submitted update matches (036 I3). */
+  flipCount?: number;
   latestDeciderId?: string | null;
 }) {
   const updates: Record<string, unknown>[] = [];
@@ -64,8 +66,13 @@ function build(opts: {
     ],
   };
 
+  const rawQueries: string[] = [];
   const tx = {
     $executeRaw: async () => 0,
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      rawQueries.push(strings.join('?'));
+      return [];
+    },
     workOrder: {
       // `status: 'active'` from 028 FR-009 — an unapproved award cannot be billed against.
       findFirst: async () => ({
@@ -113,7 +120,7 @@ function build(opts: {
       },
       updateMany: async (args: Record<string, unknown>) => {
         updateManyCalls.push(args);
-        return { count: 1 };
+        return { count: opts.flipCount ?? 1 };
       },
     },
   };
@@ -153,6 +160,7 @@ function build(opts: {
     updates,
     updateManyCalls,
     groupByCalls,
+    rawQueries,
     linesDeleted: () => linesDeleted,
   };
 }
@@ -324,27 +332,73 @@ describe('a bill raised before 018 has no award to re-measure against', () => {
 });
 
 describe('submitting for certification', () => {
-  it('asks the spine before writing the status', async () => {
+  it('moves the status conditionally before opening the approval (036 I3)', async () => {
     const t = build({ status: 'draft' });
+    t.approvals.submit.mockImplementation(async () => {
+      // The status must already be written when the spine is asked, so a second click finds
+      // the bill out of draft instead of reaching the spine too.
+      expect(t.updateManyCalls).toHaveLength(1);
+      return { id: 'ai-2' };
+    });
 
     await t.service.submitForCertification(ctx, caller, 'ra-1');
 
     expect(t.approvals.submit).toHaveBeenCalledTimes(1);
-    expect(t.updates[0]).toEqual(
-      expect.objectContaining({ status: 'submitted' }),
+    expect(t.updateManyCalls[0]).toEqual({
+      where: { id: 'ra-1', status: 'draft' },
+      data: expect.objectContaining({ status: 'submitted' }),
+    });
+  });
+
+  it('opens no approval when another submit won the row', async () => {
+    const t = build({ status: 'draft', flipCount: 0 });
+
+    await expect(
+      t.service.submitForCertification(ctx, caller, 'ra-1'),
+    ).rejects.toThrow(/already submitted/);
+    expect(t.approvals.submit).not.toHaveBeenCalled();
+  });
+
+  it('re-measures against the award under a lock on the work order', async () => {
+    // Two drafts of 40 against an award of 70 each passed composition, because drafts do not
+    // count. Submission is where this one starts to count, so the ceiling is checked here: the
+    // other 40 is already out of draft, and 40 + 40 > 70.
+    const t = build({ status: 'draft', awardedQty: 70, measuredByOthers: 40 });
+
+    await expect(
+      t.service.submitForCertification(ctx, caller, 'ra-1'),
+    ).rejects.toThrow(/measure more than the work order awarded/);
+    expect(t.rawQueries.join()).toMatch(/"WorkOrder".*FOR UPDATE/s);
+    expect(t.updateManyCalls).toEqual([]);
+    expect(t.approvals.submit).not.toHaveBeenCalled();
+    // Measured-to-date leaves this bill out, then adds its own lines: no double count.
+    expect(t.groupByCalls[0]).toEqual(
+      expect.objectContaining({
+        where: expect.objectContaining({ raBillId: { not: 'ra-1' } }),
+      }),
     );
   });
 
-  it('leaves the bill in draft when the chain is not configured', async () => {
+  it('submits a bill that fits inside what is left of the award', async () => {
+    const t = build({ status: 'draft', awardedQty: 80, measuredByOthers: 40 });
+
+    await t.service.submitForCertification(ctx, caller, 'ra-1');
+    expect(t.approvals.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the bill back in draft when the chain is not configured', async () => {
     const t = build({ status: 'draft', submitThrows: true });
 
     await expect(
       t.service.submitForCertification(ctx, caller, 'ra-1'),
     ).rejects.toThrow('no active approval chain');
 
-    // A bill flipped to submitted with no instance behind it waits on nobody, sits in no queue,
-    // and looks to its author exactly like one that was submitted.
-    expect(t.updates).toEqual([]);
+    // A bill left submitted with no instance behind it waits on nobody, sits in no queue, and
+    // looks to its author exactly like one that was submitted.
+    expect(t.updateManyCalls[1]).toEqual({
+      where: { id: 'ra-1', status: 'submitted' },
+      data: { status: 'draft', submittedAt: null },
+    });
   });
 
   it('refuses a bill that has already left draft', async () => {

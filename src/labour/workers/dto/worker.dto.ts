@@ -14,9 +14,11 @@ import {
   IsPositive,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 import { ENROLMENT_PHOTOS } from '../../constants/labour.constants';
 
@@ -27,16 +29,19 @@ export class ListWorkersDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   skillCategoryId?: string;
 
   @ApiPropertyOptional({ enum: WorkerStatus })
@@ -47,6 +52,7 @@ export class ListWorkersDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
@@ -54,6 +60,7 @@ export class ListWorkersDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional()
@@ -61,6 +68,7 @@ export class ListWorkersDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }
 
@@ -68,6 +76,7 @@ export class CreateWorkerDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty()
@@ -92,11 +101,13 @@ export class CreateWorkerDto {
   @Matches(PHONE_PATTERN, {
     message: 'Mobile number should be 10 digits, optionally starting with +91',
   })
+  @MaxLength(200)
   phone?: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiPropertyOptional({
@@ -110,6 +121,7 @@ export class CreateWorkerDto {
   @ArrayMinSize(ENROLMENT_PHOTOS.min)
   @ArrayMaxSize(ENROLMENT_PHOTOS.max)
   @IsString({ each: true })
+  @IsBase64Payload({ each: true })
   photos?: string[];
 
   // Optional since 031 — kept for the office, which may know them.
@@ -121,6 +133,7 @@ export class CreateWorkerDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   skillCategoryId?: string;
 
   @ApiPropertyOptional({ enum: EngagementType, default: EngagementType.direct })
@@ -133,6 +146,7 @@ export class CreateWorkerDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   contractorId?: string;
 
   @ApiPropertyOptional()
@@ -151,6 +165,7 @@ export class CreateWorkerDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   rateOverride?: number;
 }
 
@@ -175,5 +190,6 @@ export class EnrolWorkerFaceDto {
   @ArrayMinSize(ENROLMENT_PHOTOS.min)
   @ArrayMaxSize(ENROLMENT_PHOTOS.max)
   @IsString({ each: true })
+  @IsBase64Payload({ each: true })
   photos!: string[];
 }

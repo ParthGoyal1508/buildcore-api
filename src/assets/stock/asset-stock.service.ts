@@ -1,5 +1,5 @@
 import { Injectable, UnprocessableEntityException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { AssetTrackingMode, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -12,6 +12,9 @@ export interface AssetStockRow {
   assetCode: string;
   assetName: string;
   categoryId: string;
+  /** 036 L4: so the stock screen can label quantities without loading the whole register. */
+  trackingMode: AssetTrackingMode;
+  unitOfMeasure: string | null;
   siteId: string;
   siteName: string;
   onHand: number;
@@ -19,6 +22,18 @@ export interface AssetStockRow {
   inTransit: number;
   /** The sum of the three — the asset's whole registered pool at this site. */
   total: number;
+}
+
+export interface AssetStockFilters {
+  assetId?: string;
+  siteId?: string;
+  companyId?: string;
+  /** 036 L4: the asset's code or name contains this. */
+  q?: string;
+  categoryId?: string;
+  trackingMode?: AssetTrackingMode;
+  page?: number;
+  pageSize?: number;
 }
 
 /**
@@ -134,33 +149,89 @@ export class AssetStockService {
     });
   }
 
-  /** The stock screen: every asset/site balance in scope. */
+  /**
+   * The stock screen: asset/site balances in scope.
+   *
+   * 036 L4: `q` searches the asset's code and name, and `page`/`pageSize` page it — a company
+   * with a few hundred bulk assets across a dozen sites had every row on one screen. Without
+   * `page` the whole list comes back as an array, as before, for the callers that need it all.
+   */
   async findAll(
     caller: AuthenticatedUser,
-    filters: { assetId?: string; siteId?: string; companyId?: string } = {},
+    filters: AssetStockFilters = {},
   ): Promise<AssetStockRow[]> {
-    const rows = await withRlsContext(
+    return (await this.query(caller, filters)).items;
+  }
+
+  async findPage(
+    caller: AuthenticatedUser,
+    filters: AssetStockFilters,
+  ): Promise<{
+    items: AssetStockRow[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    const page = Math.max(1, filters.page ?? 1);
+    const pageSize = Math.min(Math.max(1, filters.pageSize ?? 25), 200);
+    const { items, total } = await this.query(caller, filters, {
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    });
+    return { items, total, page, pageSize };
+  }
+
+  private async query(
+    caller: AuthenticatedUser,
+    filters: AssetStockFilters,
+    paging?: { skip: number; take: number },
+  ): Promise<{ items: AssetStockRow[]; total: number }> {
+    const q = filters.q?.trim();
+    const where: Prisma.AssetStockWhereInput = {
+      ...companyScope(caller, filters.companyId),
+      ...(filters.assetId ? { assetId: filters.assetId } : {}),
+      ...(filters.siteId ? { siteId: filters.siteId } : {}),
+      asset: {
+        deletedAt: null,
+        ...(filters.categoryId ? { categoryId: filters.categoryId } : {}),
+        ...(filters.trackingMode ? { trackingMode: filters.trackingMode } : {}),
+        ...(q
+          ? {
+              OR: [
+                { assetCode: { contains: q, mode: 'insensitive' } },
+                { name: { contains: q, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
+    };
+    const { rows, total } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.assetStock.findMany({
-          where: {
-            ...companyScope(caller, filters.companyId),
-            ...(filters.assetId ? { assetId: filters.assetId } : {}),
-            ...(filters.siteId ? { siteId: filters.siteId } : {}),
-            asset: { deletedAt: null },
-          },
-          include: {
-            asset: {
-              select: {
-                assetCode: true,
-                name: true,
-                categoryId: true,
+      async (tx) => {
+        const [rows, total] = await Promise.all([
+          tx.assetStock.findMany({
+            where,
+            include: {
+              asset: {
+                select: {
+                  assetCode: true,
+                  name: true,
+                  categoryId: true,
+                  trackingMode: true,
+                  unitOfMeasure: true,
+                },
               },
             },
-          },
-          orderBy: [{ assetId: 'asc' }, { siteId: 'asc' }],
-        }),
+            orderBy: paging
+              ? [{ asset: { assetCode: 'asc' } }, { siteId: 'asc' }]
+              : [{ assetId: 'asc' }, { siteId: 'asc' }],
+            ...(paging ?? {}),
+          }),
+          paging ? tx.assetStock.count({ where }) : Promise.resolve(0),
+        ]);
+        return { rows, total: paging ? total : rows.length };
+      },
     );
 
     const siteNames = await this.refs.siteNames(
@@ -168,7 +239,7 @@ export class AssetStockService {
       rows.map((row) => row.siteId),
     );
 
-    return rows.map((row) => {
+    const items = rows.map((row) => {
       const onHand = Number(row.quantityOnHand);
       const allocated = Number(row.quantityAllocated);
       const inTransit = Number(row.quantityInTransit);
@@ -177,6 +248,8 @@ export class AssetStockService {
         assetCode: row.asset.assetCode,
         assetName: row.asset.name,
         categoryId: row.asset.categoryId,
+        trackingMode: row.asset.trackingMode,
+        unitOfMeasure: row.asset.unitOfMeasure,
         siteId: row.siteId,
         siteName: siteNames.get(row.siteId) ?? 'Unknown site',
         onHand,
@@ -185,5 +258,6 @@ export class AssetStockService {
         total: onHand + allocated + inTransit,
       };
     });
+    return { items, total };
   }
 }

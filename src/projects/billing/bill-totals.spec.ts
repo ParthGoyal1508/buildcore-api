@@ -1,4 +1,14 @@
-import { billTotals, lineTotals, money, retentionOn } from './bill-totals';
+import { Prisma } from '@prisma/client';
+
+import {
+  billTotals,
+  lineTotals,
+  money,
+  productRounded,
+  quantity,
+  retentionOn,
+  roundHalfUp,
+} from './bill-totals';
 
 /**
  * The arithmetic every bill and the P&L share (018 FR-002, FR-003, FR-008 — tasks T003, T011, T019).
@@ -182,5 +192,57 @@ describe('retentionOn', () => {
 
   it('is zero at a zero fraction', () => {
     expect(retentionOn(100000, 0)).toBe(0);
+  });
+});
+
+describe('half-up on the written digits, not the float (036 I5)', () => {
+  // Every case here came out a paisa low under `Math.round(v * 100) / 100`, which rounds the
+  // float: `1.005 * 100` is `100.49999…`. The bill package rounds `Prisma.Decimal` and got them
+  // right, so one bill's two halves disagreed.
+  it.each([
+    [1.005, 1.01],
+    [2.675, 2.68],
+    [0.575, 0.58],
+    [-1.005, -1.01],
+    [0.004, 0],
+    [1e-7, 0],
+    [123456789.125, 123456789.13],
+  ])('money(%p) is %p', (value, expected) => {
+    expect(money(value)).toBe(expected);
+  });
+
+  it('rounds quantities to three places the same way', () => {
+    expect(quantity(1.0005)).toBe(1.001);
+  });
+
+  it('prices a line on its exact product, not a float one', () => {
+    // 1.15 × 0.5 is 0.575 exactly and 0.57499999… as a float.
+    expect(lineTotals({ quantity: 1.15, rate: 0.5 }).amount).toBe(0.58);
+    // With a quote below: 100 × 178 × 0.8921 = 15879.38.
+    expect(lineTotals({ quantity: 100, rate: 178 }, -0.1079).amount).toBe(
+      15879.38,
+    );
+  });
+
+  it('agrees with Prisma.Decimal half-up, the rounding the bill package uses', () => {
+    for (const value of [0.005, 0.015, 0.025, 1.005, 10.045, 99.995, 5.015]) {
+      expect(money(value)).toBe(
+        new Prisma.Decimal(value)
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+          .toNumber(),
+      );
+    }
+  });
+
+  it('exposes the same arithmetic as plain helpers for the web to mirror', () => {
+    expect(roundHalfUp(2.5, 0)).toBe(3);
+    expect(productRounded(2, 10.05, 0.5)).toBe(5.03);
+  });
+});
+
+describe('retention on exact digits (036 I5)', () => {
+  it('takes 5% of 100.10 as 5.01 and of 3.30 as 0.17', () => {
+    expect(retentionOn(100.1, 0.05)).toBe(5.01);
+    expect(retentionOn(3.3, 0.05)).toBe(0.17);
   });
 });

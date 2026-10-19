@@ -22,7 +22,7 @@ import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
-import { zonedDayBounds } from '../../hr/leave/leave-days';
+import { zonedDateOnly, zonedDayBounds } from '../../hr/leave/leave-days';
 import { assertInScope, resolveCompanyId } from '../../settings/company-scope';
 import { LABOUR_SITE_PHOTO_NAMESPACE } from '../constants/labour.constants';
 import { LabourRefsService } from '../labour-refs.service';
@@ -38,6 +38,7 @@ import {
   type LabourDayRules,
   type LabourDayStatus,
   labourDayRulesProblem,
+  OVERNIGHT_WINDOW_HOURS,
 } from './labour-day.util';
 
 export interface PunchFact {
@@ -392,6 +393,8 @@ export class MusterAttendanceService {
       date: string;
       punchIn?: string;
       punchOut?: string;
+      /** 036 O5: the punch out is on the next calendar day — a night shift. */
+      punchOutNextDay?: boolean;
       reason: string;
     },
     ipAddress: string,
@@ -430,14 +433,30 @@ export class MusterAttendanceService {
     const siteId = existing[0]?.siteId ?? worker.siteId;
     await this.supervisorSites.assertSiteAllowed(caller, siteId);
 
+    if (dto.punchOutNextDay && !dto.punchOut) {
+      throw new BadRequestException(
+        'Enter the punch out time to mark it as on the next day.',
+      );
+    }
+    // Times are read in the company's zone (IST), whatever the browser's, and a next-day punch out
+    // on the following calendar day there (036 O5).
     const { start } = zonedDayBounds(dto.date, this.refs.timeZone);
-    const toInstant = (hhmm: string) => {
+    const nextDay = zonedDayBounds(
+      nextDate(dto.date),
+      this.refs.timeZone,
+    ).start;
+    const toInstant = (hhmm: string, from: Date = start) => {
       const [h, m] = hhmm.split(':').map(Number);
-      return new Date(start.getTime() + (h * 60 + m) * 60_000);
+      return new Date(from.getTime() + (h * 60 + m) * 60_000);
     };
     const wanted: Partial<Record<LabourPunchType, Date>> = {};
     if (dto.punchIn) wanted.in = toInstant(dto.punchIn);
-    if (dto.punchOut) wanted.out = toInstant(dto.punchOut);
+    if (dto.punchOut) {
+      wanted.out = toInstant(
+        dto.punchOut,
+        dto.punchOutNextDay ? nextDay : start,
+      );
+    }
     const now = new Date();
     for (const t of Object.values(wanted)) {
       if (t.getTime() > now.getTime()) {
@@ -539,7 +558,21 @@ export class MusterAttendanceService {
       if (pin && pout && pout.punchedAt.getTime() <= pin.punchedAt.getTime()) {
         throw new BadRequestException({
           code: 'LABOUR_PUNCH_OUT_BEFORE_IN',
-          message: 'The punch out must be after the punch in.',
+          message:
+            'The punch out must be after the punch in. For a night shift, mark the punch out as on the next day.',
+        });
+      }
+      // 036 O5: a shift into the next day is held to the same 16 hours a live punch-out is.
+      if (
+        pin &&
+        pout &&
+        pout.punchedAt.getTime() - pin.punchedAt.getTime() >
+          OVERNIGHT_WINDOW_HOURS * 3_600_000 &&
+        zonedDateOnly(pout.punchedAt, this.refs.timeZone) !== dto.date
+      ) {
+        throw new BadRequestException({
+          code: 'LABOUR_SHIFT_TOO_LONG',
+          message: `A shift that ends the next day can be at most ${OVERNIGHT_WINDOW_HOURS} hours long.`,
         });
       }
 
@@ -917,4 +950,11 @@ function sum(values: number[]): number {
 
 function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/** The calendar day after `YYYY-MM-DD`. */
+function nextDate(date: string): string {
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
 }

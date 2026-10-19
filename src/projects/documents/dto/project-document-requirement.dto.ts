@@ -6,6 +6,7 @@ import {
   IsBoolean,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
   ValidateNested,
 } from 'class-validator';
@@ -20,6 +21,7 @@ export class ProjectDocumentRequirementDto {
   })
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   documentTypeId: string;
 
   @ApiPropertyOptional({

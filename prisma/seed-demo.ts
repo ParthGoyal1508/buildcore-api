@@ -2261,11 +2261,16 @@ async function main() {
    * Deliberately not in the default-roles migration: it is a QA fixture, and shipping
    * it to production would put a role in the Settings list that no one should assign.
    */
-  await prisma.role.upsert({
-    where: { name: 'QA No Modules' },
-    update: {},
-    create: { name: 'QA No Modules', permissions: [] },
-  });
+  // Global (companyId null), found by name among the global roles (036 C10).
+  if (
+    !(await prisma.role.findFirst({
+      where: { name: 'QA No Modules', companyId: null },
+    }))
+  ) {
+    await prisma.role.create({
+      data: { name: 'QA No Modules', permissions: [] },
+    });
+  }
 
   // Roles come from migration 20260830090000_seed_default_roles, which `migrate reset`
   // has already applied — re-seeding them here would fight it.

@@ -6,6 +6,8 @@ import {
 } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -17,8 +19,6 @@ import {
   Max,
   MaxLength,
   Min,
-  IsArray,
-  ArrayMaxSize,
 } from 'class-validator';
 
 /**
@@ -53,6 +53,7 @@ export class CreateProjectDto {
   @IsArray()
   @ArrayMaxSize(50)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   stagedDocumentIds?: string[];
 
   @ApiProperty({ maxLength: 200 })
@@ -64,17 +65,20 @@ export class CreateProjectDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   clientId!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   location?: string;
 
   @ApiProperty({ minimum: 0, description: 'Contract value in INR.' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   contractValue!: number;
 
   @ApiProperty({ format: 'date' })
@@ -96,6 +100,7 @@ export class CreateProjectDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectManagerEmployeeId?: string;
 
   @ApiPropertyOptional({
@@ -109,11 +114,13 @@ export class CreateProjectDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   departmentType?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   projectType?: string;
 
   @ApiPropertyOptional({
@@ -139,11 +146,13 @@ export class CreateProjectDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   purchaseLimit?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   orderNumber?: string;
 
   @ApiPropertyOptional({ default: false })
@@ -179,6 +188,7 @@ export class CreateProjectDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(5_000)
   description?: string;
 }
 
@@ -208,6 +218,7 @@ export class ListProjectsDto {
   @ApiPropertyOptional({ description: 'Matches project name or code' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional({
@@ -221,6 +232,7 @@ export class ListProjectsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   clientId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -228,6 +240,7 @@ export class ListProjectsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -235,11 +248,13 @@ export class ListProjectsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({
@@ -252,5 +267,6 @@ export class ListProjectsDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   include?: string;
 }

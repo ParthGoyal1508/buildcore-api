@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -19,12 +20,14 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { contentDispositionFor } from '../../common/storage/file-type';
 import { ContractorsService } from './contractors.service';
 import {
   CreateContractorDocumentDto,
@@ -100,6 +103,25 @@ export class ContractorsController {
     @Ip() ipAddress: string,
   ) {
     return this.contractors.uploadDocument(caller, id, dto, ipAddress);
+  }
+
+  // Three segments, so it never collides with `GET :id` (036 N4, 2026-10-17).
+  @Get('documents/:documentId/file')
+  @ApiOperation({
+    summary: 'The stored file of a contractor document',
+    description:
+      'Served with its detected content type and the uploader’s file name. 404 for a ' +
+      'document outside the caller’s company, the same as one that does not exist.',
+  })
+  async documentFile(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('documentId') documentId: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.contractors.documentFile(caller, documentId);
+    res.setHeader('Content-Type', file.contentType);
+    res.setHeader('Content-Disposition', contentDispositionFor(file.filename));
+    res.send(file.buffer);
   }
 
   @Delete('documents/:documentId')

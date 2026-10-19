@@ -1,4 +1,11 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+
+import { parseDateOnly } from '../../hr/leave/leave-days';
 import type { Permission } from '@prisma/client';
 
 import type { DashboardContext } from '../context';
@@ -70,6 +77,7 @@ export class ReportsService {
     params: ReportRunParams,
   ): Promise<ReportResult> {
     const provider = this.find(id, ctx.user.permissions);
+    assertReportRange(params);
     if (!provider.isAvailable()) {
       return {
         unavailable: {
@@ -79,5 +87,42 @@ export class ReportsService {
       };
     }
     return provider.run(ctx, params);
+  }
+}
+
+/** The longest range one report run covers (036 E2) — the attendance report reads one day per day. */
+export const REPORT_MAX_RANGE_DAYS = 366;
+
+/**
+ * A report's range must be real dates, From not after To, and at most a year (036 E2). The DTO only
+ * checks the shape: `2026-02-30` matches it and rolled silently into March, and a From after the To
+ * produced an empty report that read as "no data" rather than as a mistake.
+ */
+export function assertReportRange(params: ReportRunParams): void {
+  const parse = (value: string, label: string): Date => {
+    try {
+      return parseDateOnly(value);
+    } catch {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: `${label} is not a real calendar date.`,
+      });
+    }
+  };
+  const from = params.fromDate ? parse(params.fromDate, 'From') : null;
+  const to = params.toDate ? parse(params.toDate, 'To') : null;
+  if (from && to) {
+    if (from > to) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'The From date must not be after the To date.',
+      });
+    }
+    if ((to.getTime() - from.getTime()) / 86_400_000 >= REPORT_MAX_RANGE_DAYS) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: `A report covers at most ${REPORT_MAX_RANGE_DAYS} days. Choose a shorter range.`,
+      });
+    }
   }
 }

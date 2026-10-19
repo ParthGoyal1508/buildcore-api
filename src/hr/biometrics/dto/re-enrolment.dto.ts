@@ -12,6 +12,7 @@ import {
   MaxLength,
   ValidateIf,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /** An employee asking for their face template to be replaced (FR-013). */
 export class RequestReEnrolmentDto {
@@ -65,6 +66,7 @@ export class CompleteReEnrolmentDto {
   @ArrayMinSize(3, { message: 'At least 3 photos are required to re-enrol.' })
   @ArrayMaxSize(5, { message: 'At most 5 photos may be submitted.' })
   @IsString({ each: true })
+  @IsBase64Payload({ each: true })
   photos: string[];
 
   @ApiProperty({ description: 'Must be exactly true.' })

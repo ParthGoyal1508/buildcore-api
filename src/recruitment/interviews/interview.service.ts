@@ -33,28 +33,59 @@ export class InterviewService {
       companyId?: string;
       candidateId?: string;
       status?: InterviewStatus;
+      page?: number;
+      pageSize?: number;
+      order?: 'asc' | 'desc';
     },
   ) {
-    const rows = await withRlsContext(
+    const where: Prisma.InterviewWhereInput = {
+      ...companyScope(caller, query.companyId),
+      ...(query.candidateId ? { candidateId: query.candidateId } : {}),
+      ...(query.status ? { status: query.status } : {}),
+    };
+    // Paged when asked (036 H4); otherwise capped, where it used to be unbounded.
+    const take = query.page ? Math.min(query.pageSize ?? 50, 100) : 500;
+    const skip = query.page ? (query.page - 1) * take : 0;
+    const [rows, total] = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       (tx) =>
-        tx.interview.findMany({
-          where: {
-            ...companyScope(caller, query.companyId),
-            ...(query.candidateId ? { candidateId: query.candidateId } : {}),
-            ...(query.status ? { status: query.status } : {}),
-          },
-          orderBy: { scheduledAt: 'asc' },
-          include: {
-            interviewers: true,
-            feedback: true,
-            candidate: { select: { fullName: true, requisitionId: true } },
-          },
-        }),
+        Promise.all([
+          tx.interview.findMany({
+            where,
+            orderBy: { scheduledAt: query.order === 'desc' ? 'desc' : 'asc' },
+            skip,
+            take,
+            include: {
+              interviewers: true,
+              feedback: true,
+              candidate: { select: { fullName: true, requisitionId: true } },
+            },
+          }),
+          tx.interview.count({ where }),
+        ]),
+    );
+    // Interviewer names from the server (036 H4): the screen resolved ids against the first page
+    // of employees and showed raw ids for anyone else — including everyone who has since left.
+    const interviewerIds = [
+      ...new Set(rows.flatMap((r) => r.interviewers.map((i) => i.employeeId))),
+    ];
+    const people = interviewerIds.length
+      ? await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+          tx.employee.findMany({
+            where: { id: { in: interviewerIds } },
+            select: { id: true, firstName: true, lastName: true },
+          }),
+        )
+      : [];
+    const nameOf = new Map(
+      people.map((p) => [
+        p.id,
+        [p.firstName, p.lastName].filter(Boolean).join(' ').trim(),
+      ]),
     );
     const now = Date.now();
-    return rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       id: r.id,
       candidateId: r.candidateId,
       candidateName: r.candidate.fullName,
@@ -69,6 +100,10 @@ export class InterviewService {
       overdue:
         r.status === InterviewStatus.scheduled && r.scheduledAt.getTime() < now,
       interviewerEmployeeIds: r.interviewers.map((i) => i.employeeId),
+      interviewers: r.interviewers.map((i) => ({
+        employeeId: i.employeeId,
+        name: nameOf.get(i.employeeId) || 'Former employee',
+      })),
       feedback: r.feedback.map((f) => ({
         interviewerEmployeeId: f.interviewerEmployeeId,
         outcome: f.outcome,
@@ -76,6 +111,7 @@ export class InterviewService {
         comments: f.comments,
       })),
     }));
+    return { rows: mapped, total };
   }
 
   async schedule(

@@ -1,15 +1,18 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   forwardRef,
   Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  AccessLevel,
   AuditAction,
   AuditEntityType,
   CodeSeriesType,
+  Permission,
   Prisma,
   Project,
   ProjectStatus,
@@ -25,6 +28,7 @@ import {
 } from '../../common/prisma/rls-context';
 import { EmployeesService } from '../../hr/employees/employees.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
+import { holdsAtLevel } from '../../common/access-levels';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { BillPaymentsService } from '../billing/payments/bill-payments.service';
 import {
@@ -35,6 +39,7 @@ import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
   PROJECT_CODE_INFIX,
+  PROJECT_LOCK_PERMISSION_REQUIRED,
 } from '../constants/projects.constants';
 import { ProjectWorkReference } from '../interfaces/pnl-sources.interface';
 import { ProjectSourcesRegistry } from './project-sources.registry';
@@ -690,6 +695,25 @@ export class ProjectsService {
         }
         assertInScope(caller, existing, `Project ${id}`);
 
+        // 036 review decision 5: changing the lock takes `PROJECT_LOCK`, not merely `PROJECTS`.
+        // Only a real transition is checked — a form that sends `isLocked` back unchanged with an
+        // edit to the name is not an attempt to unlock, and refusing it would break every editor
+        // who lacks the permission. Checked against the stored value inside the transaction so
+        // the comparison and the write see the same row.
+        if (
+          dto.isLocked !== undefined &&
+          dto.isLocked !== existing.isLocked &&
+          !holdsAtLevel(caller, Permission.PROJECT_LOCK, AccessLevel.write)
+        ) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            code: PROJECT_LOCK_PERMISSION_REQUIRED,
+            message: existing.isLocked
+              ? 'Unlocking a project needs the Lock / unlock projects permission.'
+              : 'Locking a project needs the Lock / unlock projects permission.',
+          });
+        }
+
         if (dto.clientId !== undefined) {
           const client = await tx.client.findFirst({
             where: { id: dto.clientId, companyId: existing.companyId },
@@ -957,7 +981,7 @@ export class ProjectsService {
    */
   async getSitesByProject(
     projectId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<string[]> {
     const sites = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.site.findMany({
@@ -981,7 +1005,7 @@ export class ProjectsService {
    */
   async getProjectIdentityById(
     projectId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<{
     id: string;
     code: string;
@@ -1005,6 +1029,25 @@ export class ProjectsService {
   }
 
   /**
+   * Names for a set of project ids, for another module labelling a list (036 follow-up: wage rates
+   * named their project only through a client-side list of the first 200). Unknown ids are absent.
+   */
+  async getProjectNamesByIds(
+    projectIds: string[],
+    ctx: RlsContext,
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(projectIds)];
+    if (ids.length === 0) return new Map();
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.project.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, name: true },
+      }),
+    );
+    return new Map(rows.map((row) => [row.id, row.name]));
+  }
+
+  /**
    * A BOQ task group — what the master PRD calls an "Activity" — for another
    * module validating a reference to one (009 FR-019, research.md §13).
    *
@@ -1018,7 +1061,7 @@ export class ProjectsService {
    */
   async getActivityById(
     activityId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<ProjectWorkReference | null> {
     const group = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.bOQTaskGroup.findUnique({
@@ -1040,7 +1083,7 @@ export class ProjectsService {
    * `getActivityById()` above (009 FR-019). */
   async getBoqItemById(
     boqItemId: string,
-    ctx: RlsContext = { isSuperAdmin: true },
+    ctx: RlsContext,
   ): Promise<ProjectWorkReference | null> {
     const item = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.bOQTaskItem.findUnique({

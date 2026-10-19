@@ -7,7 +7,7 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { ListStockDto } from './dto/stock.dto';
+import { ListStockDto, StockLedgerQueryDto } from './dto/stock.dto';
 import { StockQueryService } from './stock-query.service';
 
 @ApiTags('Inventory')
@@ -31,6 +31,23 @@ export class StockController {
     @Query() query: ListStockDto,
   ) {
     return this.stock.list(caller, query);
+  }
+
+  @Get(':itemId/:siteId/ledger')
+  @ApiOperation({
+    summary: 'One item at one store, movement by movement (036 M13)',
+    description:
+      'Opening balance at `dateFrom`, every receipt, issue, return and transfer with the ' +
+      'balance after it, the closing balance, and its value at the current average rate. ' +
+      'Download: GET /inventory/exports/stock-ledger.xlsx.',
+  })
+  async ledger(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('itemId') itemId: string,
+    @Param('siteId') siteId: string,
+    @Query() query: StockLedgerQueryDto,
+  ) {
+    return this.stock.ledger(caller, itemId, siteId, query);
   }
 
   @Get(':itemId/:siteId')

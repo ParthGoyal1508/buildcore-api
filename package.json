@@ -38,8 +38,10 @@
     "studio": "prisma studio",
     "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'",
     "seed:chains": "ts-node prisma/seed-approval-chains.ts",
+    "seed:defaults": "ts-node prisma/seed-company-defaults.ts",
     "seed:billing-demo": "ts-node prisma/seed-billing-demo.ts",
     "seed:demo": "ts-node prisma/seed-demo.ts",
+    "seed:dev": "ts-node prisma/seed-dev.ts",
     "seed:hr-docs": "ts-node prisma/seed-hr-docs.ts",
     "seed:demo:remote": "./scripts/seed-remote-demo.sh",
     "db:demo": "prisma migrate reset --force --skip-seed && ts-node prisma/seed-demo.ts"
@@ -66,6 +68,7 @@
     "cookie-parser": "^1.4.7",
     "docx": "9.0.2",
     "exceljs": "^4.4.0",
+    "helmet": "7.1.0",
     "nestjs-prisma": "0.22.0-dev.0",
     "passport": "0.6.0",
     "passport-jwt": "4.0.1",
@@ -119,7 +122,8 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "workerIdleMemoryLimit": "1GB"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

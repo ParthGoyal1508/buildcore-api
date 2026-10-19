@@ -6,6 +6,7 @@ import { EmployeesService } from '../hr/employees/employees.service';
 import { parseDateOnly } from '../hr/leave/leave-days';
 import { InventoryService } from '../inventory/inventory.service';
 import { PartnersService } from '../partners/partners.service';
+import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
 import {
   AssetCategoriesService,
@@ -50,6 +51,7 @@ export class AssetsRefsService {
     private readonly partners: PartnersService,
     private readonly employees: EmployeesService,
     private readonly inventory: InventoryService,
+    private readonly projects: ProjectsService,
   ) {}
 
   /**
@@ -193,6 +195,28 @@ export class AssetsRefsService {
           .getSiteById(ctx, siteId)
           .catch(() => null);
         return [siteId, site?.name ?? 'Unknown site'] as const;
+      }),
+    );
+    return new Map(entries);
+  }
+
+  /**
+   * Project names for a list of ids, in one pass (036 L4) — for the summary's project buckets,
+   * which the screen used to name from a 200-project dropdown list, so project 201 onward read
+   * "Unknown project". Unknown or out-of-scope ids resolve to a placeholder.
+   */
+  async projectNames(
+    caller: AuthenticatedUser,
+    projectIds: string[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(projectIds)];
+    const ctx = rlsContextFor(caller);
+    const entries = await Promise.all(
+      unique.map(async (projectId) => {
+        const project = await this.projects
+          .getProjectIdentityById(projectId, ctx)
+          .catch(() => null);
+        return [projectId, project?.name ?? 'Unknown project'] as const;
       }),
     );
     return new Map(entries);

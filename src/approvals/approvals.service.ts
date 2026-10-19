@@ -20,7 +20,11 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../auth/audit-log.service';
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import type { ApprovalsConfig } from '../common/configs/config.interface';
-import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../common/prisma/rls-context';
 import { effectiveCompanyId } from '../settings/company-scope';
 import { UsersService } from '../users/users.service';
 import {
@@ -568,10 +572,10 @@ export class ApprovalService {
     entityId: string,
     viewer: AuthenticatedUser,
   ): Promise<ApprovalInstanceView | null> {
-    const ctx: RlsContext = {
-      isSuperAdmin: false,
-      companyId: viewer.companyId,
-    };
+    // The **selected** company, not the home one (036 B2). A Super Admin whose home is A and
+    // who has selected B is looking at B's items; reading the spine under A found nothing, so
+    // Approve/Reject never appeared and the history was empty.
+    const ctx: RlsContext = rlsContextFor(viewer);
     const instance = await this.loadByEntity(ctx, entityType, entityId);
     return instance ? this.toView(instance, viewer) : null;
   }
@@ -614,10 +618,10 @@ export class ApprovalService {
     const result = new Map<string, ApprovalInstanceView>();
     if (entityIds.length === 0) return result;
 
-    const ctx: RlsContext = {
-      isSuperAdmin: false,
-      companyId: viewer.companyId,
-    };
+    // The **selected** company, not the home one (036 B2). A Super Admin whose home is A and
+    // who has selected B is looking at B's items; reading the spine under A found nothing, so
+    // Approve/Reject never appeared and the history was empty.
+    const ctx: RlsContext = rlsContextFor(viewer);
 
     const instances = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.approvalInstance.findMany({
@@ -660,10 +664,10 @@ export class ApprovalService {
     entityId: string,
     viewer: AuthenticatedUser,
   ): Promise<ApprovalDecisionView[]> {
-    const ctx: RlsContext = {
-      isSuperAdmin: false,
-      companyId: viewer.companyId,
-    };
+    // The **selected** company, not the home one (036 B2). A Super Admin whose home is A and
+    // who has selected B is looking at B's items; reading the spine under A found nothing, so
+    // Approve/Reject never appeared and the history was empty.
+    const ctx: RlsContext = rlsContextFor(viewer);
     const instance = await this.loadByEntity(ctx, entityType, entityId);
     // An empty list rather than a 404, and deliberately *before* the permission check:
     // "this item has never been in a chain" is not a secret, and 404-vs-403 on an id the
@@ -1112,6 +1116,7 @@ export class ApprovalService {
           levelLabel: level
             ? labelForSlot(level.slotKey, level.label)
             : `Level ${instance.currentPosition}`,
+          isFinalAuthority: level?.isFinalAuthority ?? false,
         };
       }),
       nextCursor: rows.length > limit ? page[page.length - 1].id : null,
@@ -1251,6 +1256,7 @@ export class ApprovalService {
         levelLabel: level
           ? labelForSlot(level.slotKey, level.label)
           : `Level ${instance.currentPosition}`,
+        isFinalAuthority: level?.isFinalAuthority ?? false,
         yourPosition,
         yourLevelLabel: yours
           ? labelForSlot(yours.slotKey, yours.label)
@@ -1730,6 +1736,7 @@ export class ApprovalService {
         : 'The system',
       levelLabel:
         finished || !level ? null : labelForSlot(level.slotKey, level.label),
+      isFinalAuthority: !finished && (level?.isFinalAuthority ?? false),
       awaitingRoleName,
       // A reassignment names one person, so it answers this precisely. Otherwise only a
       // sole holder can be named without guessing.

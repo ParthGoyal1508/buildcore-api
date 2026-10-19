@@ -388,8 +388,22 @@ describe('Plant module (e2e)', () => {
       expect(serial(second)).toBe(serial(first) + 1);
     });
 
-    it('still honours a plate number the yard supplies', async () => {
-      const code = unique('PLATE');
+    // 2026-10-15 (Numbering, 7493631): machines are always coded `{letters}{NN}/{year}`; the
+    // optional hand-typed `code` was removed from the DTO. A plate goes in `registrationNo`.
+    it('refuses a hand-typed code, and keeps a plate number as the registration', async () => {
+      await http()
+        .post(`/plant/equipment?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          name: 'Transit Mixer',
+          categoryId,
+          ownership: 'owned',
+          powerSource: 'diesel',
+          code: unique('PLATE'),
+        })
+        .expect(400);
+
+      const plate = unique('KA01');
       const made = await http()
         .post(`/plant/equipment?companyId=${companyId}`)
         .set(auth())
@@ -398,12 +412,13 @@ describe('Plant module (e2e)', () => {
           categoryId,
           ownership: 'owned',
           powerSource: 'diesel',
-          code,
+          registrationNo: plate,
         })
         .expect(201);
       createdEquipmentIds.push(made.body.id);
 
-      expect(made.body.code).toBe(code);
+      expect(made.body.code).toMatch(/^TM\d{2,}\/\d{4}$/);
+      expect(made.body.registrationNo).toBe(plate);
     });
 
     it('copies the meter type from the category', async () => {
@@ -433,12 +448,27 @@ describe('Plant module (e2e)', () => {
         .set(auth())
         .send({
           docTypeId,
-          file: Buffer.from('policy').toString('base64'),
+          file: Buffer.from('%PDF-1.4\n%policy\n').toString('base64'),
           fileName: 'insurance.pdf',
           contentType: 'application/pdf',
           expiresAt: dayOffset(15),
         })
         .expect(201);
+
+      // 036 K13: the bytes decide the type. An HTML page declared as a PDF is refused.
+      const refused = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/documents`)
+        .set(auth())
+        .send({
+          docTypeId,
+          file: Buffer.from('<html><script>alert(1)</script></html>').toString(
+            'base64',
+          ),
+          fileName: 'insurance.pdf',
+          contentType: 'application/pdf',
+        })
+        .expect(415);
+      expect(refused.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
 
       const list = await http()
         .get(`/plant/equipment?companyId=${companyId}&search=${PREFIX}`)
@@ -451,6 +481,83 @@ describe('Plant module (e2e)', () => {
       // The whole of SC-001: the register answers this without a second call.
       expect(row.expiryAlert).toBe(true);
       expect(row.alertDocumentTypes.length).toBeGreaterThan(0);
+    });
+
+    it('keeps an optional main photo and gallery, compressed with thumbnails (036 K14)', async () => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sharp = require('sharp');
+      const png = (w: number, h: number) =>
+        sharp({ create: { width: w, height: h, channels: 3, background: '#0a6' } })
+          .png()
+          .toBuffer()
+          .then((b: Buffer) => b.toString('base64'));
+
+      const before = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(before.body.mainPhotoId).toBeNull();
+      expect(before.body.photos).toEqual([]);
+
+      const first = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: await png(3000, 2000), fileName: 'front.png' })
+        .expect(201);
+      expect(first.body.isMain).toBe(true);
+      expect(Math.max(first.body.width, first.body.height)).toBe(2048);
+
+      const second = await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: await png(800, 600) })
+        .expect(201);
+      expect(second.body.isMain).toBe(false);
+
+      await http()
+        .post(`/plant/equipment/${ownedEquipmentId}/photos`)
+        .set(auth())
+        .send({ file: Buffer.from('%PDF-1.4\n').toString('base64') })
+        .expect(415);
+
+      const thumb = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}/photos/${first.body.id}?size=thumb`)
+        .set(auth())
+        .buffer(true)
+        .parse((res, done) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(thumb.headers['content-type']).toMatch(/image\/jpeg/);
+      const meta = await sharp(thumb.body).metadata();
+      expect(Math.max(meta.width, meta.height)).toBe(320);
+
+      await http()
+        .patch(`/plant/equipment/${ownedEquipmentId}/photos/${second.body.id}/main`)
+        .set(auth())
+        .expect(200);
+      const list = await http()
+        .get(`/plant/equipment?companyId=${companyId}&search=${PREFIX}`)
+        .set(auth())
+        .expect(200);
+      expect(
+        list.body.items.find((i: { id: string }) => i.id === ownedEquipmentId)
+          .mainPhotoId,
+      ).toBe(second.body.id);
+
+      // Deleting the main photo promotes the remaining one.
+      await http()
+        .delete(`/plant/equipment/${ownedEquipmentId}/photos/${second.body.id}`)
+        .set(auth())
+        .expect(204);
+      const after = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(after.body.mainPhotoId).toBe(first.body.id);
+      expect(after.body.photos).toHaveLength(1);
     });
 
     it('refuses to set status to under_maintenance directly (FR-002)', async () => {
@@ -544,6 +651,61 @@ describe('Plant module (e2e)', () => {
         .expect(200);
       expect(equipment.body.currentReading).toBe(1008);
     });
+
+    it('corrects a day\'s readings with a reason and audits before and after (036 K6)', async () => {
+      const entry = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: ownedEquipmentId,
+          date: new Date(`${dayOffset(-2)}T00:00:00.000Z`),
+        },
+      });
+      await http()
+        .patch(`/plant/logbook/${entry.id}/readings`)
+        .set(auth())
+        .send({ openingReading: 995, closingReading: 1000, reason: ' ' })
+        .expect(400);
+
+      const corrected = await http()
+        .patch(`/plant/logbook/${entry.id}/readings`)
+        .set(auth())
+        .send({
+          openingReading: 995,
+          closingReading: 1000,
+          reason: 'Closing hours misread',
+        })
+        .expect(200);
+      expect(corrected.body.totalHours).toBe(5);
+
+      const audit = await sys.auditLogEntry.findFirst({
+        where: { entityType: 'LOGBOOK_ENTRY', entityId: entry.id, action: 'UPDATE' },
+        orderBy: { createdAt: 'desc' },
+      });
+      expect(audit.changes).toMatchObject({
+        reason: 'Closing hours misread',
+        before: { closingReading: 995 },
+        after: { closingReading: 1000 },
+      });
+
+      // The later entry still holds the meter.
+      const equipment = await http()
+        .get(`/plant/equipment/${ownedEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(equipment.body.currentReading).toBe(1008);
+    });
+  });
+
+  describe('List exports (036 K16)', () => {
+    it.each(['/plant/logbook/export.xlsx', '/plant/fuel/export.xlsx'])(
+      '%s downloads the filtered list as Excel',
+      async (path) => {
+        const res = await http()
+          .get(`${path}?equipmentId=${ownedEquipmentId}`)
+          .set(auth())
+          .expect(200);
+        expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+      },
+    );
   });
 
   // ── Fuel ────────────────────────────────────────────────────────────────
@@ -775,10 +937,16 @@ describe('Plant module (e2e)', () => {
       expect(bill.body.rate).toBe(1400);
       expect(bill.body.grossAmount).toBe(140000);
       expect(bill.body.tdsAmount).toBe(2800);
-      expect(bill.body.netPayable).toBe(137200);
+      // Since the vehicle hiring bill (2026-10-15) the diesel the company issued to the hired
+      // machine in the period is its "Deduction Amount" by default — the fuel tests above issued
+      // some — so net is gross less TDS less that deduction and any hold.
+      expect(bill.body.deductionAmount).toBeGreaterThan(0);
       // SC-003, as a property rather than a literal.
       expect(bill.body.netPayable).toBe(
-        bill.body.grossAmount - bill.body.tdsAmount,
+        bill.body.grossAmount -
+          bill.body.tdsAmount -
+          bill.body.deductionAmount -
+          bill.body.holdAmount,
       );
     });
 
@@ -792,6 +960,47 @@ describe('Plant module (e2e)', () => {
       expect(row.logbookHours).toBe(4);
       expect(row.variance).toBe(96);
       expect(row.status).toBe('pending_verification');
+    });
+
+    it('previews the logbook over a period, filters by period and exports (036 K9)', async () => {
+      const summary = await http()
+        .get(
+          `/plant/hire-bills/logbook-summary?equipmentId=${hiredEquipmentId}&from=${dayOffset(
+            -10,
+          )}&to=${today()}`,
+        )
+        .set(auth())
+        .expect(200);
+      // The figure the bill above snapshotted.
+      expect(summary.body.logbookHours).toBe(4);
+      expect(summary.body.unit).toBe('h');
+
+      const inPeriod = await http()
+        .get(
+          `/plant/hire-bills?equipmentId=${hiredEquipmentId}&periodFrom=${dayOffset(
+            -3,
+          )}&periodTo=${dayOffset(-3)}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(inPeriod.body.items.map((b: { id: string }) => b.id)).toContain(
+        billId,
+      );
+      const outside = await http()
+        .get(
+          `/plant/hire-bills?equipmentId=${hiredEquipmentId}&periodFrom=${dayOffset(
+            -400,
+          )}&periodTo=${dayOffset(-300)}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(outside.body.items).toHaveLength(0);
+
+      const xlsx = await http()
+        .get(`/plant/hire-bills/export.xlsx?equipmentId=${hiredEquipmentId}`)
+        .set(auth())
+        .expect(200);
+      expect(xlsx.headers['content-type']).toMatch(/spreadsheetml/);
     });
 
     it('resolves a historical period to the rate in force then (SC-006)', async () => {
@@ -820,6 +1029,42 @@ describe('Plant module (e2e)', () => {
         .expect(409);
     });
 
+    it('refuses a second bill overlapping this one (036 K3)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const refused = await http()
+        .post('/plant/hire-bills')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          vendorId: bill.vendorId,
+          billedHours: 1,
+          rate: 100,
+          billingPeriodFrom: bill.billingPeriodTo.toISOString().slice(0, 10),
+          billingPeriodTo: bill.billingPeriodTo.toISOString().slice(0, 10),
+        })
+        .expect(409);
+      expect(refused.body.message).toMatch(/overlaps this period/);
+    });
+
+    it('refuses verification by the person who raised the bill (036 K8)', async () => {
+      const refused = await http()
+        .patch(`/plant/hire-bills/${billId}/verify`)
+        .set(auth())
+        .expect(403);
+      expect(refused.body.message).toMatch(/someone else must verify/);
+
+      // The rest of this suite verifies as the same admin, so the bill is handed to another
+      // creator — the API-less equivalent of a site clerk having raised it.
+      const other = await sys.user.findFirst({
+        where: { email: { not: 'admin@buildcore.dev' } },
+        select: { id: true },
+      });
+      await sys.hireBill.update({
+        where: { id: billId },
+        data: { createdByUserId: other.id },
+      });
+    });
+
     it('verifies then pays', async () => {
       const verified = await http()
         .patch(`/plant/hire-bills/${billId}/verify`)
@@ -833,6 +1078,88 @@ describe('Plant module (e2e)', () => {
         .send({ paymentDate: today(), paymentReference: 'NEFT/2026/0912' })
         .expect(200);
       expect(paid.body.status).toBe('paid');
+    });
+
+    it('refuses deleting a logbook entry inside the paid bill (036 K5)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const inside = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: bill.equipmentId,
+          date: { gte: bill.billingPeriodFrom, lte: bill.billingPeriodTo },
+        },
+      });
+      expect(inside).toBeTruthy();
+      const refused = await http()
+        .delete(`/plant/logbook/${inside.id}`)
+        .set(auth())
+        .expect(409);
+      expect(refused.body.message).toMatch(/paid hire bill/);
+    });
+
+    it('refuses correcting readings inside the paid bill (036 K6)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const inside = await sys.logbookEntry.findFirst({
+        where: {
+          equipmentId: bill.equipmentId,
+          date: { gte: bill.billingPeriodFrom, lte: bill.billingPeriodTo },
+        },
+      });
+      await http()
+        .patch(`/plant/logbook/${inside.id}/readings`)
+        .set(auth())
+        .send({
+          openingReading: Number(inside.openingReading),
+          closingReading: Number(inside.closingReading),
+          reason: 'Recheck',
+        })
+        .expect(409);
+    });
+
+    it('refuses adding a logbook entry inside the paid bill (036 review decision 9)', async () => {
+      const bill = await sys.hireBill.findUnique({ where: { id: billId } });
+      const taken = new Set(
+        (
+          await sys.logbookEntry.findMany({
+            where: { equipmentId: bill.equipmentId },
+            select: { date: true },
+          })
+        ).map((e: { date: Date }) => e.date.toISOString().slice(0, 10)),
+      );
+      let free = '';
+      for (let d = -10; d <= 0 && !free; d++) {
+        if (!taken.has(dayOffset(d))) free = dayOffset(d);
+      }
+      expect(free).not.toBe('');
+      const refused = await http()
+        .post('/plant/logbook')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          date: free,
+          openingReading: 0,
+          closingReading: 0,
+          readingGapReason: 'e2e',
+        })
+        .expect(409);
+      expect(refused.body.message).toMatch(/cannot be added to a billed period/);
+
+      // The monthly sheet refuses the same day before writing anything.
+      const sheetRefused = await http()
+        .post('/plant/logbook/sheet')
+        .set(auth())
+        .send({
+          equipmentId: bill.equipmentId,
+          month: free.slice(0, 7),
+          rows: [
+            {
+              date: free,
+              openingReading: 0,
+              closingReading: 0,
+              readingGapReason: 'e2e',
+            },
+          ],
+        });
+      expect(sheetRefused.status).toBe(409);
     });
 
     it('refuses a hire bill against an owned machine (FR-022)', async () => {

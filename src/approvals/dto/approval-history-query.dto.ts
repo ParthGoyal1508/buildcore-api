@@ -1,6 +1,15 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 import { APPROVAL_MODULE_KEYS } from '../approval-modules';
 
@@ -49,11 +58,43 @@ export class ApprovalHistoryQueryDto {
   @IsIn(APPROVAL_MODULE_KEYS)
   module?: string;
 
+  /**
+   * 036 D1: a date range, as business-timezone calendar days, inclusive at both ends. Matched
+   * against the item's **latest action** — the decision for a decided item, the submission or
+   * last step for one still open — which is also what the list is sorted by (D2). Omit both for
+   * every date, as before.
+   */
+  @ApiPropertyOptional({ description: 'From this day (YYYY-MM-DD), inclusive.' })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'from must be a YYYY-MM-DD date' })
+  from?: string;
+
+  @ApiPropertyOptional({ description: 'To this day (YYYY-MM-DD), inclusive.' })
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'to must be a YYYY-MM-DD date' })
+  to?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Search: the subject, or the name of whoever raised or decided the item.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  q?: string;
+
+  @ApiPropertyOptional({ description: 'Only items raised by this user id.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  requestedBy?: string;
+
   @ApiPropertyOptional({ minimum: 1, default: 1 })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ minimum: 1, maximum: 100, default: 20 })

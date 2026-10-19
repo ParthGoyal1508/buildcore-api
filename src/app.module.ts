@@ -6,7 +6,11 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule, loggingMiddleware } from 'nestjs-prisma';
 import { PrismaShutdownService } from './common/prisma/prisma-shutdown.service';
 import { AppController } from './app.controller';
-import { APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import {
+  AppThrottlerGuard,
+  throttlersFor,
+} from './common/throttle/app-throttle';
 import { AppService } from './app.service';
 import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
@@ -17,6 +21,7 @@ import { NocsModule } from './nocs/nocs.module';
 import { SearchModule } from './search/search.module';
 import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
+import { CompanyHeaderInterceptor } from './settings/company-selection/company-header.interceptor';
 import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
@@ -40,23 +45,26 @@ import type { SecurityConfig } from './common/configs/config.interface';
   imports: [
     ConfigModule.forRoot({ isGlobal: true, load: [config] }),
     ThrottlerModule.forRootAsync({
-      useFactory: (configService: ConfigService) => {
-        const { ttlSeconds, limit } =
-          configService.get<SecurityConfig>('security').throttle;
-        return [{ ttl: ttlSeconds * 1000, limit }];
-      },
+      // `default` (the auth limit), `app` (app-wide) and `export` — see common/throttle (036 B9).
+      useFactory: (configService: ConfigService) =>
+        throttlersFor(configService.get<SecurityConfig>('security').throttle),
       inject: [ConfigService],
     }),
     PrismaModule.forRoot({
       isGlobal: true,
       prismaServiceOptions: {
-        middlewares: [
-          // configure your prisma middleware
-          loggingMiddleware({
-            logger: new Logger('PrismaMiddleware'),
-            logLevel: 'log',
-          }),
-        ],
+        // Query timing at `debug`, and not at all in production (036 B18). At `log` every
+        // query of every request was written to the production log — noise that buried the
+        // lines that mattered and cost a write per query.
+        middlewares:
+          process.env.NODE_ENV === 'production'
+            ? []
+            : [
+                loggingMiddleware({
+                  logger: new Logger('PrismaMiddleware'),
+                  logLevel: 'debug',
+                }),
+              ],
       },
     }),
 
@@ -112,6 +120,12 @@ import type { SecurityConfig } from './common/configs/config.interface';
     PrismaShutdownService,
     AppService,
     {
+      // 036 B9: the app-wide rate limit. Applies the `app` and `export` throttlers only, so
+      // the stricter auth limits stay where they are declared.
+      provide: APP_GUARD,
+      useClass: AppThrottlerGuard,
+    },
+    {
       // 019 FR-014, FR-015. Global, because "across the application" is the requirement: a
       // per-controller interceptor would be right on the modules somebody remembered and
       // silently absent on the rest, and the failure mode is a figure appearing on a screen
@@ -127,6 +141,12 @@ import type { SecurityConfig } from './common/configs/config.interface';
       // `request.user` and allow everything.
       provide: APP_INTERCEPTOR,
       useClass: PasswordChangeInterceptor,
+    },
+    {
+      // 036 B17. Names the company on every authenticated response and refuses a save from a
+      // tab that thinks it is in another one. Global for the reason the two above are.
+      provide: APP_INTERCEPTOR,
+      useClass: CompanyHeaderInterceptor,
     },
     {
       // 019 FR-017a, FR-017b. Global for the same reason as the visibility interceptor above —

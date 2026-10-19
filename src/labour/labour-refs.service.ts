@@ -104,6 +104,7 @@ export class LabourRefsService {
   async assertActiveContractor(
     caller: AuthenticatedUser,
     contractorId: string,
+    companyId: string,
   ): Promise<void> {
     const vendor = await this.partners.getVendorById(
       contractorId,
@@ -111,6 +112,14 @@ export class LabourRefsService {
     );
     if (!vendor) {
       throw new BadRequestException('Contractor not found');
+    }
+    // 036 3e (2026-10-17): RLS alone stops a company-scoped caller, but a cross-company caller
+    // with nothing selected reads every company's vendors — and could name another company's
+    // contractor on this company's worker. The worker's company is compared explicitly.
+    if (vendor.companyId !== companyId) {
+      throw new BadRequestException(
+        "This contractor belongs to another company. Pick one of this company's contractors.",
+      );
     }
     if (!vendor.active) {
       throw new BadRequestException('Contractor is not active');
@@ -177,6 +186,37 @@ export class LabourRefsService {
           [u.firstname, u.lastname].filter(Boolean).join(' ').trim() ||
           u.username,
       ]),
+    );
+  }
+
+  /**
+   * Site names by id, via `projects` (036 O8). Unknown or out-of-scope ids are left out rather
+   * than failing the read that wanted a label.
+   */
+  async siteNames(
+    caller: AuthenticatedUser,
+    ids: (string | null)[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    const sites = await Promise.all(
+      unique.map((id) =>
+        this.sites.getSiteById(rlsContextFor(caller), id).catch(() => null),
+      ),
+    );
+    return new Map(sites.filter((s) => s !== null).map((s) => [s.id, s.name]));
+  }
+
+  /** Skill category names by id, via `settings` (036 O8). */
+  async skillCategoryNames(
+    caller: AuthenticatedUser,
+    ids: (string | null)[],
+  ): Promise<Map<string, string>> {
+    const unique = [...new Set(ids.filter((id): id is string => !!id))];
+    const categories = await Promise.all(
+      unique.map((id) => this.skillCategories.getById(caller, id)),
+    );
+    return new Map(
+      categories.filter((c) => c !== null).map((c) => [c.id, c.name]),
     );
   }
 

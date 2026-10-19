@@ -65,6 +65,11 @@ const ISSUE_SLIP_INFIX = 'MIS';
 
 export interface PaginatedIssues {
   issues: IssueView[];
+  /**
+   * Across every page of the filter (036 M12). The quantity only when one item is filtered: a sum
+   * of bags and kilograms is not a number anybody can use.
+   */
+  totals: { quantity: number | null };
   total: number;
   page: number;
   pageSize: number;
@@ -144,7 +149,7 @@ export class IssuesService {
           ? Promise.resolve(null)
           : this.refs.projectOfSite(caller, dto.siteId),
         dto.vendorId
-          ? this.refs.requireVendorName(caller, dto.vendorId)
+          ? this.refs.requireActiveVendor(caller, dto.vendorId, targetCompanyId)
           : Promise.resolve(null),
       ]);
 
@@ -232,6 +237,8 @@ export class IssuesService {
             companyId: targetCompanyId,
             indentLineId: dto.indentLineId,
             quantity: dto.quantity,
+            itemId: dto.itemId,
+            siteId: dto.siteId,
           });
         }
 
@@ -301,6 +308,11 @@ export class IssuesService {
       deleted: false,
       ...(query.siteId ? { siteId: query.siteId } : {}),
       ...(query.itemId ? { itemId: query.itemId } : {}),
+      ...(query.projectId ? { projectId: query.projectId } : {}),
+      ...(query.vendorId ? { vendorId: query.vendorId } : {}),
+      ...(query.slipNo
+        ? { slipNo: { contains: query.slipNo.trim(), mode: 'insensitive' } }
+        : {}),
       ...(query.dateFrom || query.dateTo
         ? {
             date: {
@@ -315,11 +327,11 @@ export class IssuesService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const [rows, total] = await Promise.all([
+        const [rows, total, sum] = await Promise.all([
           tx.issue.findMany({
             where,
             orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
@@ -327,8 +339,11 @@ export class IssuesService {
             take: pageSize,
           }),
           tx.issue.count({ where }),
+          query.itemId
+            ? tx.issue.aggregate({ where, _sum: { quantity: true } })
+            : Promise.resolve(null),
         ]);
-        return { rows, total };
+        return { rows, total, sum };
       },
     );
 
@@ -394,6 +409,7 @@ export class IssuesService {
           receivedBy: row.receivedBy,
         };
       }),
+      totals: { quantity: sum ? toNumber(sum._sum.quantity) : null },
       total,
       page,
       pageSize,
@@ -412,10 +428,21 @@ export class IssuesService {
     dto: ReturnIssueDto,
     ipAddress: string,
   ): Promise<void> {
+    if (dto.returnedNow === undefined && dto.returnedQuantity === undefined) {
+      throw new BadRequestException(
+        'Give the quantity coming back now (returnedNow).',
+      );
+    }
     const updated = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // 036 M4: the issue row is locked before its returned total is read. Two simultaneous
+        // returns used to read the same total, each compute a delta from it, and both credit the
+        // store — stock that never came back. The second now waits and reads the first's total.
+        await tx.$queryRaw`
+          SELECT "id" FROM "inventory"."Issue" WHERE "id" = ${id} FOR UPDATE
+        `;
         const existing = await tx.issue.findUnique({ where: { id } });
         if (!existing || existing.deleted) {
           throw new NotFoundException(`Issue ${id} not found`);
@@ -426,17 +453,33 @@ export class IssuesService {
           existing.returnedQuantity === null
             ? 0
             : toNumber(existing.returnedQuantity);
-        if (dto.returnedQuantity > issued) {
+        const thousandths = (value: number) => Math.round(value * 1000) / 1000;
+        const total =
+          dto.returnedNow !== undefined
+            ? thousandths(before + dto.returnedNow)
+            : (dto.returnedQuantity as number);
+        if (
+          dto.returnedNow !== undefined &&
+          dto.returnedQuantity !== undefined &&
+          thousandths(dto.returnedQuantity) !== total
+        ) {
           throw new BadRequestException(
-            `Only ${issued} was issued; more cannot come back.`,
+            `${before} has already been returned, so returning ${dto.returnedNow} now makes ${total}, not ${dto.returnedQuantity}. Send just returnedNow.`,
           );
         }
-        if (dto.returnedQuantity < before) {
+        if (total > issued) {
+          throw new BadRequestException(
+            `Only ${issued} was issued and ${before} has already come back; at most ${thousandths(
+              issued - before,
+            )} more can be returned.`,
+          );
+        }
+        if (total < before) {
           throw new BadRequestException(
             `${before} has already been returned. Enter the total returned so far.`,
           );
         }
-        const delta = Math.round((dto.returnedQuantity - before) * 1000) / 1000;
+        const delta = thousandths(total - before);
         const returnedOn = this.refs.parseDate(dto.returnedOn);
         if (delta > 0) {
           await this.stock.appendLedgerEntry(tx, {
@@ -452,11 +495,20 @@ export class IssuesService {
             where: { itemId: existing.itemId, siteId: existing.siteId },
             data: { issued: { decrement: delta } },
           });
+          // 036 M2: material that came back was not consumed against the indent, so the line is
+          // owed it again. Without this, deleting the issue later reversed only the part still
+          // out and the line stayed overstated by everything that had been returned.
+          if (existing.indentLineId) {
+            await this.indentFulfilment.reverseFulfilment(tx, {
+              indentLineId: existing.indentLineId,
+              quantity: delta,
+            });
+          }
         }
         return tx.issue.update({
           where: { id },
           data: {
-            returnedQuantity: dto.returnedQuantity,
+            returnedQuantity: total,
             returnedOn,
             receivedBy: dto.receivedBy.trim(),
           },
@@ -469,7 +521,7 @@ export class IssuesService {
       entityId: id,
       changes: {
         after: {
-          returnedQuantity: dto.returnedQuantity,
+          returnedQuantity: toNumber(updated.returnedQuantity),
           receivedBy: dto.receivedBy,
         },
       },
@@ -496,6 +548,11 @@ export class IssuesService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // The same row lock a return takes (036 M4), so a delete and a return racing on one issue
+        // cannot both put the same material back.
+        await tx.$queryRaw`
+          SELECT "id" FROM "inventory"."Issue" WHERE "id" = ${id} FOR UPDATE
+        `;
         const existing = await tx.issue.findUnique({ where: { id } });
         if (!existing || existing.deleted) {
           throw new NotFoundException(`Issue ${id} not found`);

@@ -15,6 +15,7 @@ import {
   Role,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { rlsContextFor } from '../../common/prisma/rls-context';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { UsersService } from '../../users/users.service';
@@ -42,8 +43,23 @@ export type RoleGrant = { permission: Permission; level: AccessLevel };
  */
 export type RoleWithAssignedCount = Role & {
   assignedUserCount: number;
+  /**
+   * Active accounts holding the role **in the caller's company** — the selected one, or every
+   * company for a Super Admin with none selected (036 C11). `assignedUserCount` counts every
+   * company, which is the right number for "who would deleting this role affect" and the wrong one
+   * for "can anybody here approve at a level mapped to it". Present on the list only.
+   */
+  activeHolderCount?: number;
+  /**
+   * The owning company's name for a company role, null for a global one (036 C10). On the list
+   * only, where a group administrator with no company selected sees every company's roles.
+   */
+  companyName?: string | null;
   grants: RoleGrant[];
 };
+
+/** A role's name is already taken where the new one would live (036 C10). */
+const ROLE_NAME_TAKEN = 'ROLE_NAME_TAKEN';
 
 @Injectable()
 export class RolesService {
@@ -54,28 +70,92 @@ export class RolesService {
   ) {}
 
   /**
-   * Every role with its assigned-user count.
-   *
-   * Role *definitions* are global reference data shared across companies, not
-   * tenant-scoped rows, so this is deliberately not company-filtered. The counts
-   * come from `UsersService`, not a join into `shared.User` — Principle I.
+   * The company a caller's role reads and writes are scoped to (036 C10): their own company, or the
+   * one a group administrator has selected. Null for a group administrator with none selected, who
+   * sees every company's roles and creates global ones.
    */
-  async findAll(): Promise<RoleWithAssignedCount[]> {
+  private scopeOf(caller: AuthenticatedUser): string | null {
+    const ctx = rlsContextFor(caller);
+    return ctx.isSuperAdmin ? null : ctx.companyId ?? null;
+  }
+
+  /** The roles visible in a scope: the global ones plus that company's own. */
+  private visibleIn(scope: string | null): Prisma.RoleWhereInput {
+    return scope === null
+      ? {}
+      : { OR: [{ companyId: null }, { companyId: scope }] };
+  }
+
+  /**
+   * Every role the caller may see, with its assigned-user count.
+   *
+   * The system roles are global reference data every company shares; a custom role belongs to the
+   * company it was made in (036 C10) and is listed only there — or everywhere, with its company
+   * named, for a group administrator with no company selected. The counts come from
+   * `UsersService`, not a join into `shared.User` — Principle I.
+   */
+  async findAll(caller?: AuthenticatedUser): Promise<RoleWithAssignedCount[]> {
+    const holders = caller
+      ? await this.usersService.activeHolderCounts(rlsContextFor(caller))
+      : null;
+    const scope = caller ? this.scopeOf(caller) : null;
     const roles = await this.prisma.role.findMany({
+      where: this.visibleIn(scope),
       orderBy: { name: 'asc' },
       // One query for every role's levels rather than one per role. The set is small — nine seeded
       // roles plus whatever a company has added — but a per-role round trip here is a pattern that
       // gets copied.
       include: {
         rolePermissions: { select: { permission: true, level: true } },
+        company: { select: { name: true } },
       },
     });
     return Promise.all(
-      roles.map(async ({ rolePermissions, ...role }) => ({
+      roles.map(async ({ rolePermissions, company, ...role }) => ({
         ...role,
         assignedUserCount: await this.usersService.countByRoleId(role.id),
+        ...(holders ? { activeHolderCount: holders.get(role.id) ?? 0 } : {}),
+        companyName: company?.name ?? null,
         grants: rolePermissions,
       })),
+    );
+  }
+
+  /**
+   * Refuses a name already used where a role in `companyId` would sit (036 C10): among the global
+   * roles and that company's own. A global role's name must be free everywhere, since every company
+   * would see it beside its own. Other companies' role names are never consulted for a company
+   * role, so the refusal cannot tell one company what another has called its roles.
+   */
+  private async assertNameFree(
+    name: string,
+    companyId: string | null,
+    exceptId?: string,
+  ): Promise<void> {
+    const clash = await this.prisma.role.findFirst({
+      where: {
+        name,
+        ...(companyId === null ? {} : this.visibleIn(companyId)),
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+      },
+      select: { id: true },
+    });
+    if (clash) this.nameTaken(name);
+  }
+
+  private nameTaken(name: string): never {
+    throw new ConflictException({
+      statusCode: 409,
+      code: ROLE_NAME_TAKEN,
+      message: `A role named "${name}" already exists`,
+    });
+  }
+
+  /** The unique indexes are the last word on a race between two creates of one name. */
+  private isNameClash(err: unknown): boolean {
+    return (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === 'P2002'
     );
   }
 
@@ -174,29 +254,34 @@ export class RolesService {
     ipAddress: string,
   ): Promise<RoleWithAssignedCount> {
     const name = dto.name.trim();
-    const existing = await this.prisma.role.findUnique({ where: { name } });
-    if (existing) {
-      throw new ConflictException(`A role named "${name}" already exists`);
-    }
+    // The caller's company, or global for a group administrator with none selected (036 C10).
+    const companyId = this.scopeOf(caller);
+    await this.assertNameFree(name, companyId);
 
     const grantRows = this.grantRowsFor(dto);
     // 2026-10-16 audit, C3: a role grants no more than its author holds.
     assertMayGrant(caller, grantRows, 'create that role');
 
     // Custom roles are never protected — only the seeded Super Admin row is.
-    const created = await this.prisma.role.create({
-      data: {
-        name,
-        permissions: dto.permissions,
-        isProtected: false,
-        homeModule: dto.homeModule ?? null,
-        // Both shapes written together, in one statement. `Role.permissions` is on its way
-        // out (019 Phase 1) but is still what the rest of the codebase reads, so the two must
-        // never be written apart — a role whose array and rows disagreed would grant one thing
-        // to the guard and another to every service-level check.
-        rolePermissions: { create: grantRows },
-      },
-    });
+    const created = await this.prisma.role
+      .create({
+        data: {
+          name,
+          companyId,
+          permissions: dto.permissions,
+          isProtected: false,
+          homeModule: dto.homeModule ?? null,
+          // Both shapes written together, in one statement. `Role.permissions` is on its way
+          // out (019 Phase 1) but is still what the rest of the codebase reads, so the two must
+          // never be written apart — a role whose array and rows disagreed would grant one thing
+          // to the guard and another to every service-level check.
+          rolePermissions: { create: grantRows },
+        },
+      })
+      .catch((err: unknown) => {
+        if (this.isNameClash(err)) this.nameTaken(name);
+        throw err;
+      });
 
     await this.auditLog.record({
       entityType: AuditEntityType.ROLE,
@@ -223,7 +308,7 @@ export class RolesService {
     dto: UpdateRoleDto,
     ipAddress: string,
   ): Promise<RoleWithAssignedCount> {
-    const existing = await this.requireRole(id);
+    const existing = await this.requireRole(id, caller);
     // Checked before touching the database, and regardless of who is asking — the
     // Super Admin role's name and permission set are immutable (FR-008). Its landing page is
     // not part of that (029 FR-020): where an administrator starts their day grants nothing.
@@ -239,10 +324,7 @@ export class RolesService {
 
     const name = dto.name?.trim();
     if (name && name !== existing.name) {
-      const clash = await this.prisma.role.findUnique({ where: { name } });
-      if (clash) {
-        throw new ConflictException(`A role named "${name}" already exists`);
-      }
+      await this.assertNameFree(name, existing.companyId, id);
     }
 
     // Read before the replace, so the cash-entry audit entry below can say what changed. One
@@ -262,17 +344,24 @@ export class RolesService {
     if (grantRows)
       assertMayGrant(caller, grantRows, 'give that role these permissions');
 
-    const updated = await this.prisma.role.update({
-      where: { id },
-      data: {
-        ...(name ? { name } : {}),
-        ...(dto.permissions ? { permissions: dto.permissions } : {}),
-        ...(dto.homeModule !== undefined ? { homeModule: dto.homeModule } : {}),
-        ...(grantRows
-          ? { rolePermissions: { deleteMany: {}, create: grantRows } }
-          : {}),
-      },
-    });
+    const updated = await this.prisma.role
+      .update({
+        where: { id },
+        data: {
+          ...(name ? { name } : {}),
+          ...(dto.permissions ? { permissions: dto.permissions } : {}),
+          ...(dto.homeModule !== undefined
+            ? { homeModule: dto.homeModule }
+            : {}),
+          ...(grantRows
+            ? { rolePermissions: { deleteMany: {}, create: grantRows } }
+            : {}),
+        },
+      })
+      .catch((err: unknown) => {
+        if (name && this.isNameClash(err)) this.nameTaken(name);
+        throw err;
+      });
 
     await this.auditLog.record({
       entityType: AuditEntityType.ROLE,
@@ -367,7 +456,7 @@ export class RolesService {
     id: string,
     ipAddress: string,
   ): Promise<{ clearedAssignments: number }> {
-    const existing = await this.requireRole(id);
+    const existing = await this.requireRole(id, caller);
     this.assertNotProtected(existing, 'deleted');
     await this.assertOnlyCallersCompany(caller, id, 'delete');
     // New accounts are given this role when the creator names none (029 FR-001); deleting it
@@ -396,8 +485,17 @@ export class RolesService {
     return { clearedAssignments };
   }
 
-  private async requireRole(id: string): Promise<Role> {
-    const role = await this.prisma.role.findUnique({ where: { id } });
+  /**
+   * The role, if the caller may see it (036 C10): another company's role is as absent as one that
+   * does not exist, so its id confirms nothing.
+   */
+  private async requireRole(
+    id: string,
+    caller: AuthenticatedUser,
+  ): Promise<Role> {
+    const role = await this.prisma.role.findFirst({
+      where: { id, ...this.visibleIn(this.scopeOf(caller)) },
+    });
     if (!role) {
       throw new NotFoundException(`Role ${id} not found`);
     }
@@ -405,8 +503,9 @@ export class RolesService {
   }
 
   /**
-   * Roles are global — one "Site Admin" serves every company — so a change made from one company
-   * lands on every other company's accounts holding it (2026-10-16 audit, C3). A company-scoped
+   * A global role — one "Site Admin" serves every company — changed from one company lands on every
+   * other company's accounts holding it (2026-10-16 audit, C3). A company's own role (036 C10) is
+   * held only there, so this passes for it unless an older assignment says otherwise. A company-scoped
    * administrator may therefore change only a role nobody outside their company holds; a role in
    * wider use is a group administrator's to change.
    */

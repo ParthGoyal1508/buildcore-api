@@ -62,6 +62,9 @@ type JobWithRelations = Prisma.MaintenanceJobGetPayload<{
   };
 }>;
 
+/** How far ahead of the server's clock a client's "closed at" may be (036 K11). */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+
 /**
  * Maintenance jobs (006 US5).
  *
@@ -348,11 +351,41 @@ export class MaintenanceService {
           );
         }
 
+        // 036 K11. A job cannot have closed in the future — a little clock skew is allowed for a
+        // phone a minute fast.
+        const closedAt = dto.closedAt ? new Date(dto.closedAt) : new Date();
+        if (closedAt.getTime() > Date.now() + CLOCK_SKEW_MS) {
+          throw new BadRequestException(
+            'The closing time cannot be in the future.',
+          );
+        }
+
+        // 036 K11: a closing reading below the machine's meter is refused outright. It used to be
+        // kept off the meter but still written to the linked schedule, so the schedule's next due
+        // reading became typo + interval — un-dueing a service the meter said was due. A machine
+        // under maintenance does not run, so its meter has not moved past the job.
+        const equipment = await tx.equipment.findUnique({
+          where: { id: existing.equipmentId },
+          select: { currentReading: true },
+        });
+        if (
+          equipment !== null &&
+          Math.round(dto.closingReading * 1000) <
+            Math.round(Number(equipment.currentReading) * 1000)
+        ) {
+          throw new BadRequestException(
+            `The closing reading (${dto.closingReading}) is below the machine's meter ` +
+              `(${Number(
+                equipment.currentReading,
+              )}). A meter does not run backwards — check the figure.`,
+          );
+        }
+
         const job = await tx.maintenanceJob.update({
           where: { id: jobId },
           data: {
             status: MaintenanceStatus.closed,
-            closedAt: dto.closedAt ? new Date(dto.closedAt) : new Date(),
+            closedAt,
             closingReading: dto.closingReading,
             ...(dto.partsDescription !== undefined
               ? { partsDescription: dto.partsDescription }
@@ -364,10 +397,6 @@ export class MaintenanceService {
           include: this.include,
         });
 
-        const equipment = await tx.equipment.findUnique({
-          where: { id: existing.equipmentId },
-          select: { currentReading: true },
-        });
         // The closing reading is the machine's meter now — it typically moved while
         // the work was done (test runs, a road move to the workshop). Only ever
         // taken forward: a closing reading below the current one is a typo, not a

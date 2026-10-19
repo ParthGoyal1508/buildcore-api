@@ -357,9 +357,12 @@ export class DocumentTypesService {
       }
       return companyId;
     }
-    if (!caller.companyId) {
+    // `ctx.companyId`, not `caller.companyId` (036 B3). For a Super Admin who has selected a
+    // company they differ — the first is the selection, the second the home company — and
+    // writing the home company under the selection's RLS context was a 500 on every create.
+    if (!ctx.companyId) {
       throw new NotFoundException('Caller has no company assigned');
     }
-    return caller.companyId;
+    return ctx.companyId;
   }
 }

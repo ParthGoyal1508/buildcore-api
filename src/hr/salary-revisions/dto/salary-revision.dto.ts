@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -36,30 +37,35 @@ export class CreateSalaryRevisionDto {
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   basic?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   hra?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   conveyance?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   siteAllowance?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   specialAllowance?: number;
 
   @ApiPropertyOptional({

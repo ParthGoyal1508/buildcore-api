@@ -81,6 +81,7 @@ export class VendorHireDetailInput {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   requiredAvg?: number;
 
   @ApiPropertyOptional({ enum: ChargesBase })
@@ -92,6 +93,7 @@ export class VendorHireDetailInput {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   rate?: number;
 
   @ApiPropertyOptional()
@@ -115,34 +117,40 @@ export class VendorHireDetailInput {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   operatorCharges?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   helperCharges?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   maintenanceCharges?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   fuelCharges?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100_000)
   termsAndConditions?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   requirements?: string;
 }
 
@@ -258,6 +266,7 @@ export class CreateVendorDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(999_999.999999)
   exchangeRate?: number;
 
   @ApiPropertyOptional({ type: [VendorContactInput] })
@@ -275,6 +284,7 @@ export class CreateVendorDto {
   @IsArray()
   @ArrayUnique()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   categoryIds?: string[];
 
   @ApiPropertyOptional({ type: VendorHireDetailInput })

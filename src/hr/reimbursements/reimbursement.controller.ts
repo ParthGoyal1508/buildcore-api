@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -18,7 +19,8 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { contentDispositionFor } from '../../common/storage/file-type';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { UserEntity } from '../../common/decorators/user.decorator';
@@ -71,6 +73,26 @@ export class ReimbursementController {
     @Req() request: Request,
   ) {
     return this.reimbursements.listCategories(callerFrom(user, request));
+  }
+
+  @Get(':id/receipt')
+  @ApiOperation({
+    summary: "Open the caller's own receipt (036 G5)",
+    description:
+      'A photo or a PDF, served with its detected type. 404 when none.',
+  })
+  async receipt(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { data, filename, contentType } =
+      await this.reimbursements.ownReceipt(callerFrom(user, request), id);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+    res.send(data);
   }
 
   @Post()

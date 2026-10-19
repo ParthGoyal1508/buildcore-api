@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsBase64, IsString, MaxLength } from 'class-validator';
+import { IsString, MaxLength } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * The bank's returned transaction sheet (021 FR-008) — `bugs.md` item 8.
@@ -14,7 +15,7 @@ export class UploadTransactionSheetDto {
       'The .xlsx the bank returned, base64-encoded. **Not** the sheet this product generated — ' +
       'the one that came back with the transfers confirmed.',
   })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({

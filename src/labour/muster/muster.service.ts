@@ -17,6 +17,7 @@ import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { LabourRefsService } from '../labour-refs.service';
 import { SiteWageRateService } from '../site-rates/site-wage-rate.service';
+import { LabourDayService } from '../attendance/labour-day.service';
 
 /**
  * Muster rolls: since 031 they are written by face punches (`LabourPunchService`) and only read
@@ -30,6 +31,7 @@ export class MusterService {
     private readonly auditLog: AuditLogService,
     private readonly refs: LabourRefsService,
     private readonly siteRates: SiteWageRateService,
+    private readonly days: LabourDayService,
   ) {}
 
   // ── Approval (US4) ──────────────────────────────────────────────────────────
@@ -67,11 +69,19 @@ export class MusterService {
         }),
     );
 
+    // 036 O8: names beside the ids. Additive.
+    const siteNames = await this.refs.siteNames(
+      caller,
+      rows.map((r) => r.siteId),
+    );
+    const people = await this.refs.userNames(rows.map((r) => r.supervisorId));
     return rows.map((row) => ({
       id: row.id,
       siteId: row.siteId,
+      siteName: siteNames.get(row.siteId) ?? null,
       date: row.date.toISOString().slice(0, 10),
       supervisorId: row.supervisorId,
+      supervisorName: people.get(row.supervisorId) ?? null,
       source: row.source,
       status: row.status,
       lineCount: row._count.lines,
@@ -105,7 +115,13 @@ export class MusterService {
           (tx) =>
             tx.labourWorker.findUnique({
               where: { id: line.workerId },
-              select: { rateOverride: true, gender: true },
+              select: {
+                rateOverride: true,
+                gender: true,
+                fullName: true,
+                labourCode: true,
+                contractorId: true,
+              },
             }),
         );
         const resolved = await withRlsContext(
@@ -127,6 +143,9 @@ export class MusterService {
         return {
           id: line.id,
           workerId: line.workerId,
+          workerName: worker?.fullName ?? null,
+          labourCode: worker?.labourCode ?? null,
+          contractorId: worker?.contractorId ?? null,
           attendanceType: line.attendanceType,
           overtimeHours: line.overtimeHours
             ? line.overtimeHours.toNumber()
@@ -142,13 +161,32 @@ export class MusterService {
       }),
     );
 
+    // 036 O8: names beside the ids. Additive.
+    const [siteNames, people, contractors, skills] = await Promise.all([
+      this.refs.siteNames(caller, [row.siteId]),
+      this.refs.userNames([row.supervisorId, row.approvedBy]),
+      this.refs.contractorNames(
+        caller,
+        lines.map((l) => l.contractorId),
+      ),
+      this.refs.skillCategoryNames(
+        caller,
+        lines.map((l) => l.skillCategoryIdOnDay),
+      ),
+    ]);
+
     return {
       id: row.id,
       companyId: row.companyId,
       siteId: row.siteId,
+      siteName: siteNames.get(row.siteId) ?? null,
       projectId,
       date: row.date.toISOString().slice(0, 10),
       supervisorId: row.supervisorId,
+      supervisorName: people.get(row.supervisorId) ?? null,
+      approvedByName: row.approvedBy
+        ? people.get(row.approvedBy) ?? null
+        : null,
       latitude: row.latitude.toNumber(),
       longitude: row.longitude.toNumber(),
       accuracyMetres: row.accuracyMetres.toNumber(),
@@ -162,20 +200,39 @@ export class MusterService {
       status: row.status,
       approvedBy: row.approvedBy,
       returnReason: row.returnReason,
-      lines,
+      lines: lines.map((l) => ({
+        ...l,
+        contractorName: l.contractorId
+          ? contractors.get(l.contractorId) ?? null
+          : null,
+        skillCategoryName: l.skillCategoryIdOnDay
+          ? skills.get(l.skillCategoryIdOnDay) ?? null
+          : null,
+      })),
     };
   }
 
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
+    // The muster's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const muster = await tx.musterRoll.findUnique({ where: { id } });
       if (!muster || muster.deletedAt) {
         throw new NotFoundException(`Muster ${id} not found`);
       }
       assertInScope(caller, muster, `Muster ${id}`);
+      companyId = muster.companyId;
       if (muster.status !== MusterStatus.submitted) {
         throw new ConflictException('Only a submitted muster can be approved');
       }
+      // 036 O4: a sheet covering the date has already been priced without this muster, and no
+      // later sheet may overlap it — approving now would leave the day never paid.
+      await this.days.assertNotOnPaymentSheet(tx, {
+        companyId: muster.companyId,
+        siteId: muster.siteId,
+        punchDate: muster.date,
+      });
       await tx.musterRoll.update({
         where: { id },
         data: {
@@ -188,7 +245,7 @@ export class MusterService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -201,12 +258,16 @@ export class MusterService {
     reason: string,
     ipAddress: string,
   ) {
+    // The muster's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const muster = await tx.musterRoll.findUnique({ where: { id } });
       if (!muster || muster.deletedAt) {
         throw new NotFoundException(`Muster ${id} not found`);
       }
       assertInScope(caller, muster, `Muster ${id}`);
+      companyId = muster.companyId;
       if (muster.status !== MusterStatus.submitted) {
         throw new ConflictException('Only a submitted muster can be returned');
       }
@@ -218,7 +279,7 @@ export class MusterService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );

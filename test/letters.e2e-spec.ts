@@ -64,6 +64,17 @@ describe('Letters (e2e)', () => {
   let signatoryId: string;
   const userIds: string[] = [];
   const roleIds: string[] = [];
+  /**
+   * A value for every field the work-order kind declares as required. The kind gained its full
+   * field list with the client's Work Order format (2026-10-14), and composing one with a field
+   * left unresolved is refused with LETTER_REQUIRED_FIELD_UNRESOLVED — correctly. What this suite
+   * tests is the chain and the versions, not the field list, so it fills every one.
+   */
+  let workOrderFields: Record<string, string> = {};
+  const workOrderVariables = (own: Record<string, string>) => ({
+    ...workOrderFields,
+    ...own,
+  });
 
   const makeUser = async (label: string, permissions: Permission[]) => {
     const user = await sys.user.create({
@@ -170,6 +181,25 @@ describe('Letters (e2e)', () => {
       actor,
     );
 
+    const workOrderKind = await sys.letterKind.findFirst({
+      where: {
+        key: 'letter_work_order',
+        OR: [{ companyId }, { companyId: null }],
+      },
+    });
+    const required = await sys.letterKindField.findMany({
+      where: { letterKindId: workOrderKind.id, isRequired: true },
+      select: { token: true },
+    });
+    workOrderFields = {
+      ...Object.fromEntries(
+        required.map((f: { token: string }) => [f.token, `Dummy ${f.token}`]),
+      ),
+      // The two the letter computes from, in the shapes it reads.
+      lineItems: 'Dummy steel | MT | 10 | 45000',
+      gstRate: '18',
+    };
+
     await templateFor(
       'letter_work_order',
       'Work order to {{vendorName}} for {{amount}}. Dated {{issueDate}}.',
@@ -232,11 +262,11 @@ describe('Letters (e2e)', () => {
         subjectType: 'vendor',
         subjectId: 'vendor-shree',
         signatoryId,
-        variables: {
+        variables: workOrderVariables({
           vendorName: 'Shree Constructions',
           amount: '4,50,000',
           issueDate: '2026-09-16',
-        },
+        }),
       })
       .expect(201);
 
@@ -256,7 +286,9 @@ describe('Letters (e2e)', () => {
     const res = await http()
       .post(`/letters/${workOrderLetterId}/issue`)
       .set(auth(financeToken))
-      .send({ variables: { vendorName: 'Shree Constructions' } })
+      .send({
+        variables: workOrderVariables({ vendorName: 'Shree Constructions' }),
+      })
       .expect(409);
 
     // `APPROVAL_NOT_COMPLETE` comes from 016 and is not re-declared here. Two constants
@@ -284,11 +316,11 @@ describe('Letters (e2e)', () => {
       .post(`/letters/${workOrderLetterId}/issue`)
       .set(auth(financeToken))
       .send({
-        variables: {
+        variables: workOrderVariables({
           vendorName: 'Shree Constructions',
           amount: '4,50,000',
           issueDate: '2026-09-16',
-        },
+        }),
       })
       .expect(201);
 
@@ -330,9 +362,13 @@ describe('Letters (e2e)', () => {
 
     expect(res.body).toHaveLength(1);
     expect(res.body[0].subjectId).toBe('vendor-shree');
-    // No vendor name anywhere in the response — this module does not know what a vendor
-    // is, which is what let the table leave `recruitment`.
-    expect(JSON.stringify(res.body)).not.toContain('Shree Constructions');
+    // No vendor name the module looked up — it does not know what a vendor is, which is what let
+    // the table leave `recruitment`. The one place the name appears is `composedVariables`, the
+    // values the composer typed, echoed back since 271487c so a letter can be reissued from them;
+    // that is the caller's own input, not a resolution of the subject.
+    const { composedVariables, ...rest } = res.body[0];
+    expect(composedVariables.vendorName).toBe('Shree Constructions');
+    expect(JSON.stringify(rest)).not.toContain('Shree Constructions');
   });
 
   it('defines a BRAND-NEW kind with no code change, and refuses Aadhaar in it (T051, Pass 5)', async () => {
@@ -408,11 +444,11 @@ describe('Letters (e2e)', () => {
       .post(`/letters/${workOrderLetterId}/reissue`)
       .set(auth(financeToken))
       .send({
-        variables: {
+        variables: workOrderVariables({
           vendorName: 'Shree Constructions',
           amount: '5,10,000',
           issueDate: '2026-09-16',
-        },
+        }),
       })
       .expect(201);
 

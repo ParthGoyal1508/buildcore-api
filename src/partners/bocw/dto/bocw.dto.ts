@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
 } from 'class-validator';
 
@@ -13,6 +14,7 @@ export class CreateBocwPaymentDto {
   @ApiProperty({ description: 'Must be greater than zero' })
   @IsNumber()
   @IsPositive()
+  @Max(999_999_999_999.99)
   amountPaid: number;
 
   @ApiProperty({ description: 'ISO date' })

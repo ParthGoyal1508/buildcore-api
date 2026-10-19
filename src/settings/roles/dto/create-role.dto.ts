@@ -9,6 +9,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
@@ -31,6 +32,7 @@ export class CreateRoleDto {
   @ApiProperty({ description: 'Unique across roles' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   name: string;
 
   @ApiProperty({

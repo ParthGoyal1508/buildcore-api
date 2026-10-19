@@ -28,6 +28,7 @@ export class ExportReadyProvider implements NotificationProvider {
       subtitle: `Your ${job.reportType} export is ready to download`,
       actionLink: `/reports/exports/${job.id}/download`,
       occurredAt: (job.completedAt ?? new Date()).toISOString(),
+      key: `${this.type}:${job.id}`,
     }));
   }
 }

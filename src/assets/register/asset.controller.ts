@@ -33,6 +33,7 @@ import {
 } from './dto/asset.dto';
 import { AssetService } from './asset.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 
 /** The asset register (spec US2), gated by `ASSETS`. */
 @ApiTags('Assets')
@@ -70,6 +71,8 @@ export class AssetController {
 
   @Get('export')
   @Header('Cache-Control', 'no-store')
+  // 036: the whole register in one workbook — held to the export limit.
+  @ExportThrottle()
   @ApiOperation({
     summary: 'The register as an XLSX workbook',
     description:

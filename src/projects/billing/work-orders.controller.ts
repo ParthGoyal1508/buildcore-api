@@ -32,6 +32,11 @@ import {
   UpdateWorkOrderDto,
 } from './dto/work-order.dto';
 import { WorkOrdersService } from './work-orders.service';
+import {
+  ProjectLockFrom,
+  ProjectLockGuard,
+} from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Work orders, in the minimal form 018 needs (018 US2).
@@ -64,11 +69,20 @@ export class WorkOrdersController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('projectId') projectId: string,
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    return this.workOrders.listForProject(rlsContextFor(caller), projectId);
+    return this.workOrders.listForProject(
+      rlsContextFor(caller),
+      projectId,
+      listPaging(page, pageSize),
+    );
   }
 
   @Post()
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('body')
   @ApiOperation({ summary: 'Raise a work order' })
   async create(
     @UserEntity() caller: AuthenticatedUser,
@@ -102,6 +116,8 @@ export class WorkOrdersController {
   }
 
   @Patch(':id')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('workOrder')
   @ApiOperation({
     summary: 'Edit a work order’s details, retention or status',
     description:
@@ -119,6 +135,8 @@ export class WorkOrdersController {
   }
 
   @Post(':id/submit')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('workOrder')
   @ApiOperation({
     summary: 'Send the award for approval',
     description:
@@ -144,6 +162,8 @@ export class WorkOrdersController {
   }
 
   @Post(':id/reopen')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('workOrder')
   @ApiOperation({
     summary: 'Reopen an approved award so it can be corrected',
     description:

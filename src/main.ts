@@ -1,10 +1,12 @@
 import { ConfigService } from '@nestjs/config';
-import { HttpAdapterHost, NestFactory } from '@nestjs/core';
+import { NestFactory } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { PrismaClientExceptionFilter, PrismaService } from 'nestjs-prisma';
+import { PrismaService } from 'nestjs-prisma';
 import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 import { configureApp } from './common/configure-app';
+import { assertCorsConfigured } from './common/configs/config';
+import { COMPANY_HEADER } from './settings/company-selection/company-header.interceptor';
 import { assertRlsEnforceable } from './common/prisma/rls-preflight';
 import { logRefreshCookieConfig } from './auth/refresh-cookie-preflight';
 import type {
@@ -15,6 +17,9 @@ import type {
 } from './common/configs/config.interface';
 
 async function bootstrap() {
+  // Before anything else: a production server that would allow every origin does not start.
+  assertCorsConfigured();
+
   // `bodyParser: false` disables Nest's built-in parsers so the ones registered
   // below — with an explicit size limit — are the only ones handling a body.
   // Raising the limit on Nest's defaults after the fact is not reliable: they are
@@ -22,7 +27,7 @@ async function bootstrap() {
   // one with the 100 KB default still applied.
   const app = await NestFactory.create(AppModule, { bodyParser: false });
 
-  // Body parsers and the validation pipe — shared with the e2e suites so the app
+  // Body parsers, the validation pipe and the Prisma error filter — shared with the e2e suites so the app
   // under test is configured exactly like the one that ships.
   configureApp(app);
 
@@ -40,10 +45,6 @@ async function bootstrap() {
 
   // enable shutdown hook
   app.enableShutdownHooks();
-
-  // Prisma Client Exception Filter for unhandled exceptions
-  const { httpAdapter } = app.get(HttpAdapterHost);
-  app.useGlobalFilters(new PrismaClientExceptionFilter(httpAdapter));
 
   const configService = app.get(ConfigService);
   const nestConfig = configService.get<NestConfig>('nest');
@@ -79,7 +80,20 @@ async function bootstrap() {
       credentials: true,
       // Readable cross-origin only when listed. Without these a download from the web app could not
       // see the file name the server chose, nor the header fields a bill printed blank.
-      exposedHeaders: ['Content-Disposition', 'X-Bill-Package-Missing-Fields'],
+      // `X-Company-Id`: the company each response was served for (036 B17).
+      // `X-Total-Count`: the full count behind a paged list that is still a plain array. It used to
+      // be exposed by the two controllers that send it, whose own header replaced this list and so
+      // hid `X-Company-Id` on exactly those responses.
+      exposedHeaders: [
+        'Content-Disposition',
+        'X-Bill-Package-Missing-Fields',
+        'X-Total-Count',
+        COMPANY_HEADER,
+      ],
+      // No `allowedHeaders`: left unset, the cors middleware reflects whatever request headers the
+      // preflight asks for, which already admits `X-Expected-Company-Id` (036 B17) alongside
+      // `X-Confirmation-Token` and the rest. An explicit list would have to be kept in step with
+      // every header the web sends, and the one forgotten would fail only cross-origin.
     });
   }
 

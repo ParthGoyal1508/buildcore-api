@@ -24,6 +24,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { PayrollRegisterService } from './payroll-register.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 
 /**
  * The salary register and deduction report (005 amendment US16).
@@ -79,6 +80,8 @@ export class PayrollRegisterController {
   }
 
   @Get('salary-register/export')
+  // Each export renders a whole run to XLSX (036 stream 3b, the B9 export limit).
+  @ExportThrottle()
   @ApiOperation({ summary: 'The salary register as an XLSX' })
   async exportRegister(
     @UserEntity() user: AuthenticatedUser,

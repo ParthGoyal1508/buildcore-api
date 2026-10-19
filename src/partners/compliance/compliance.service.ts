@@ -58,6 +58,7 @@ export class ComplianceService {
               ? { contractorProfileId: query.contractorProfileId }
               : {}),
             ...(query.month ? { month: query.month } : {}),
+            ...(query.status ? { status: query.status } : {}),
           },
           orderBy: [{ month: 'desc' }],
           include: {

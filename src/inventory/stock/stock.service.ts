@@ -50,22 +50,39 @@ export class StockService {
   ): Promise<void> {
     const { companyId, itemId, siteId, quantity, rate } = params;
 
-    const existing = await tx.stockBalance.findUnique({
-      where: { itemId_siteId: { itemId, siteId } },
-    });
+    // Insert-if-absent, then lock, then read (036 M14). The old read-then-create let two
+    // concurrent *first* receipts at a site both see no row: one won the insert and the other
+    // failed on the unique index with a 500, or — when the row did exist — both read the same
+    // balance and the second write silently discarded the first's weighted-average update.
+    //
+    // `ON CONFLICT DO NOTHING` in SQL rather than Prisma's `upsert`, because Prisma only issues a
+    // native upsert under conditions it decides for itself and otherwise falls back to exactly
+    // the find-then-create race this replaces. The row's `id` and `updatedAt` are filled here
+    // because both are client-side defaults Prisma would normally supply.
+    await tx.$executeRaw`
+      INSERT INTO "inventory"."StockBalance" ("id", "companyId", "itemId", "siteId", "updatedAt")
+      VALUES (gen_random_uuid()::text, ${companyId}, ${itemId}, ${siteId}, NOW())
+      ON CONFLICT ("itemId", "siteId") DO NOTHING
+    `;
 
-    if (!existing) {
-      await tx.stockBalance.create({
-        data: {
-          companyId,
-          itemId,
-          siteId,
-          received: quantity,
-          avgRate: rate,
-        },
-      });
-      return;
-    }
+    // The row now certainly exists, so the lock always has something to hold: a second
+    // purchase of the same pair blocks here until this transaction commits, then reads the
+    // balance it actually left behind.
+    const [existing] = await tx.$queryRaw<
+      {
+        id: string;
+        received: Prisma.Decimal;
+        issued: Prisma.Decimal;
+        transferIn: Prisma.Decimal;
+        transferOut: Prisma.Decimal;
+        avgRate: Prisma.Decimal;
+      }[]
+    >`
+      SELECT "id", "received", "issued", "transferIn", "transferOut", "avgRate"
+      FROM "inventory"."StockBalance"
+      WHERE "itemId" = ${itemId} AND "siteId" = ${siteId}
+      FOR UPDATE
+    `;
 
     const existingStock = inStockOf(this.totalsOf(existing));
     const denominator = existingStock + quantity;
@@ -197,22 +214,7 @@ export class StockService {
   ): Promise<number> {
     const { itemId, siteId, quantity, label = 'this site' } = params;
 
-    const rows = await tx.$queryRaw<
-      {
-        received: Prisma.Decimal;
-        issued: Prisma.Decimal;
-        transferIn: Prisma.Decimal;
-        transferOut: Prisma.Decimal;
-        avgRate: Prisma.Decimal;
-      }[]
-    >`
-      SELECT "received", "issued", "transferIn", "transferOut", "avgRate"
-      FROM "inventory"."StockBalance"
-      WHERE "itemId" = ${itemId} AND "siteId" = ${siteId}
-      FOR UPDATE
-    `;
-
-    const available = rows.length === 0 ? 0 : inStockOf(this.totalsOf(rows[0]));
+    const available = await this.lockAvailable(tx, { itemId, siteId });
 
     if (quantity > available) {
       // 422 rather than 400: the request is well-formed and the quantity is a
@@ -225,6 +227,38 @@ export class StockService {
       });
     }
     return available;
+  }
+
+  /**
+   * Locks the item-site balance with `SELECT ... FOR UPDATE` and returns what is in stock
+   * there, without judging it.
+   *
+   * `validateAndLockStock` is this plus the over-issue refusal. Split out for callers whose
+   * refusal says something different (036 M1: deleting a purchase whose material has already
+   * been issued is not "insufficient stock requested", it is "this receipt has been consumed"),
+   * so they hold the same lock rather than each writing their own query.
+   *
+   * A missing row reads as zero, for the reason `validateAndLockStock` gives.
+   */
+  async lockAvailable(
+    tx: Prisma.TransactionClient,
+    params: { itemId: string; siteId: string },
+  ): Promise<number> {
+    const rows = await tx.$queryRaw<
+      {
+        received: Prisma.Decimal;
+        issued: Prisma.Decimal;
+        transferIn: Prisma.Decimal;
+        transferOut: Prisma.Decimal;
+        avgRate: Prisma.Decimal;
+      }[]
+    >`
+      SELECT "received", "issued", "transferIn", "transferOut", "avgRate"
+      FROM "inventory"."StockBalance"
+      WHERE "itemId" = ${params.itemId} AND "siteId" = ${params.siteId}
+      FOR UPDATE
+    `;
+    return rows.length === 0 ? 0 : inStockOf(this.totalsOf(rows[0]));
   }
 
   /** Appends one ledger row. The only way this module writes to the ledger. */

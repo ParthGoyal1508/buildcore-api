@@ -6,6 +6,7 @@ import {
   IsString,
   Matches,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -17,11 +18,13 @@ export class CreateShiftDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ description: 'Unique per company' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   name: string;
 
   @ApiProperty({ example: '09:00' })

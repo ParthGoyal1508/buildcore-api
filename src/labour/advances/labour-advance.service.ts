@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -23,6 +24,39 @@ import { SiteWageRateService } from '../site-rates/site-wage-rate.service';
 import { zonedDateOnly } from '../../hr/leave/leave-days';
 import { roundMoney } from '../payment-sheets/wage-calc.util';
 import { parseDateOnly } from '../wage-rates/wage-rate.service';
+import {
+  MAX_ADVANCE_AMOUNT,
+  MAX_RECOVERY_INSTALMENTS,
+} from '../constants/labour.constants';
+import {
+  deductionEntries,
+  restoreFor,
+} from '../payment-sheets/payment-sheet.rules';
+
+/**
+ * Why an advance's amount or instalments cannot be accepted, or null. The DTO checks the same, but
+ * the service is also called from places no DTO guards, and 2.5 instalments would price a fraction
+ * of an instalment nobody can deduct (036 O12).
+ */
+export function advanceTermsProblem(
+  amount: number,
+  recoveryInstalments: number,
+): string | null {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return 'The advance amount must be more than 0.';
+  }
+  if (amount > MAX_ADVANCE_AMOUNT) {
+    return `The advance amount can be at most ${MAX_ADVANCE_AMOUNT}.`;
+  }
+  if (
+    !Number.isInteger(recoveryInstalments) ||
+    recoveryInstalments < 1 ||
+    recoveryInstalments > MAX_RECOVERY_INSTALMENTS
+  ) {
+    return `Recovery instalments must be a whole number from 1 to ${MAX_RECOVERY_INSTALMENTS}.`;
+  }
+  return null;
+}
 
 export interface AdvanceView {
   id: string;
@@ -36,7 +70,21 @@ export interface AdvanceView {
   exceedsLimit: boolean;
   status: AdvanceStatus;
   recoveryAtRisk: boolean;
+  /** 036 O8: names alongside the ids, so the list need not show raw ids. Additive. */
+  workerName: string | null;
+  labourCode: string | null;
+  createdBy: string | null;
+  createdByName: string | null;
+  approvedBy: string | null;
+  approvedByName: string | null;
 }
+
+type WorkerSummary = {
+  id: string;
+  status: WorkerStatus;
+  fullName: string;
+  labourCode: string;
+};
 
 @Injectable()
 export class LabourAdvanceService {
@@ -67,15 +115,15 @@ export class LabourAdvanceService {
         }),
     );
 
-    const workerStatuses = await this.workerStatuses(
+    const workers = await this.workerSummaries(
       caller,
       rows.map((r) => r.workerId),
     );
+    const people = await this.refs.userNames(
+      rows.flatMap((r) => [r.createdBy, r.approvedBy]),
+    );
     return rows.map((row) =>
-      this.toView(
-        row,
-        workerStatuses.get(row.workerId) === WorkerStatus.inactive,
-      ),
+      this.toView(row, workers.get(row.workerId), people),
     );
   }
 
@@ -88,7 +136,8 @@ export class LabourAdvanceService {
     }
     assertInScope(caller, row, `Advance ${id}`);
 
-    const statuses = await this.workerStatuses(caller, [row.workerId]);
+    const workers = await this.workerSummaries(caller, [row.workerId]);
+    const people = await this.refs.userNames([row.createdBy, row.approvedBy]);
     // Recovery history: disbursed sheet lines whose deductions recovered this advance.
     const disbursedLines = await withRlsContext(
       this.prisma,
@@ -99,22 +148,22 @@ export class LabourAdvanceService {
           select: { id: true, sheetId: true, deductions: true, paidOn: true },
         }),
     );
-    const recoveryHistory = disbursedLines.flatMap((line) => {
-      const deductions = Array.isArray(line.deductions)
-        ? (line.deductions as unknown as DeductionEntry[])
-        : [];
-      return deductions
+    const recoveryHistory = disbursedLines.flatMap((line) =>
+      deductionEntries(line.deductions)
         .filter((d) => d.type === 'advance' && d.advanceId === id)
         .map((d) => ({
           sheetId: line.sheetId,
           lineId: line.id,
           amount: d.amount,
+          // 036 O1: what the disbursement actually took off the balance — less than `amount`
+          // only where the balance was already lower.
+          recovered: restoreFor(d),
           paidOn: line.paidOn ? line.paidOn.toISOString().slice(0, 10) : null,
-        }));
-    });
+        })),
+    );
 
     return {
-      ...this.toView(row, statuses.get(row.workerId) === WorkerStatus.inactive),
+      ...this.toView(row, workers.get(row.workerId), people),
       recoveryHistory,
     };
   }
@@ -135,11 +184,19 @@ export class LabourAdvanceService {
     if (!companyId) {
       throw new NotFoundException('Company not found');
     }
-    if (dto.recoveryInstalments < 1) {
-      throw new BadRequestException('Recovery instalments must be at least 1');
+    const termsProblem = advanceTermsProblem(
+      dto.amount,
+      dto.recoveryInstalments,
+    );
+    if (termsProblem) {
+      throw new BadRequestException(termsProblem);
     }
 
-    const dailyRate = await this.workerDailyRate(caller, dto.workerId);
+    const dailyRate = await this.workerDailyRate(
+      caller,
+      dto.workerId,
+      companyId,
+    );
     const exceedsLimit =
       dailyRate !== null &&
       dto.amount > dailyRate * this.refs.advanceLimitMultiple;
@@ -174,7 +231,7 @@ export class LabourAdvanceService {
       caller,
       ipAddress,
     );
-    return this.toView(created, false);
+    return this.viewOf(caller, created);
   }
 
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
@@ -189,6 +246,15 @@ export class LabourAdvanceService {
         assertInScope(caller, existing, `Advance ${id}`);
         if (existing.status !== AdvanceStatus.pending) {
           throw new ConflictException('Only a pending advance can be approved');
+        }
+        // Maker-checker (036 O12, decision 4): whoever raised the advance cannot approve it, with
+        // no override — otherwise one person holding both permissions pays themselves a loan.
+        if (existing.createdBy && existing.createdBy === caller.id) {
+          throw new ForbiddenException({
+            code: 'SELF_APPROVAL',
+            message:
+              'You raised this advance, so you cannot approve it. Another approver must.',
+          });
         }
         return tx.labourAdvance.update({
           where: { id },
@@ -207,7 +273,7 @@ export class LabourAdvanceService {
       caller,
       ipAddress,
     );
-    return this.toView(updated, false);
+    return this.viewOf(caller, updated);
   }
 
   /** Disburses an approved advance: its outstanding balance becomes the full amount
@@ -244,7 +310,17 @@ export class LabourAdvanceService {
       caller,
       ipAddress,
     );
-    return this.toView(updated, false);
+    return this.viewOf(caller, updated);
+  }
+
+  /** One advance's view with its names, for the responses to a single change. */
+  private async viewOf(
+    caller: AuthenticatedUser,
+    row: Parameters<LabourAdvanceService['toView']>[0] & { workerId: string },
+  ): Promise<AdvanceView> {
+    const workers = await this.workerSummaries(caller, [row.workerId]);
+    const people = await this.refs.userNames([row.createdBy, row.approvedBy]);
+    return this.toView(row, workers.get(row.workerId), people);
   }
 
   private toView(
@@ -259,8 +335,11 @@ export class LabourAdvanceService {
       outstandingBalance: Prisma.Decimal;
       exceedsLimit: boolean;
       status: AdvanceStatus;
+      createdBy: string | null;
+      approvedBy: string | null;
     },
-    recoveryAtRisk: boolean,
+    worker: WorkerSummary | undefined,
+    people: Map<string, string>,
   ): AdvanceView {
     return {
       id: row.id,
@@ -273,7 +352,15 @@ export class LabourAdvanceService {
       outstandingBalance: row.outstandingBalance.toNumber(),
       exceedsLimit: row.exceedsLimit,
       status: row.status,
-      recoveryAtRisk,
+      recoveryAtRisk: worker?.status === WorkerStatus.inactive,
+      workerName: worker?.fullName ?? null,
+      labourCode: worker?.labourCode ?? null,
+      createdBy: row.createdBy,
+      createdByName: row.createdBy ? people.get(row.createdBy) ?? null : null,
+      approvedBy: row.approvedBy,
+      approvedByName: row.approvedBy
+        ? people.get(row.approvedBy) ?? null
+        : null,
     };
   }
 
@@ -284,6 +371,7 @@ export class LabourAdvanceService {
   private async workerDailyRate(
     caller: AuthenticatedUser,
     workerId: string,
+    companyId: string,
   ): Promise<number | null> {
     const worker = await withRlsContext(
       this.prisma,
@@ -297,10 +385,13 @@ export class LabourAdvanceService {
             siteId: true,
             gender: true,
             deletedAt: true,
+            companyId: true,
           },
         }),
     );
-    if (!worker || worker.deletedAt) {
+    // 036 O14: a cross-company caller sees every company's workers, so the worker is compared with
+    // the company the advance is for, not merely found.
+    if (!worker || worker.deletedAt || worker.companyId !== companyId) {
       throw new BadRequestException(`Worker ${workerId} not found`);
     }
     if (worker.rateOverride) return worker.rateOverride.toNumber();
@@ -328,21 +419,21 @@ export class LabourAdvanceService {
     return category?.defaultDailyRate ?? null;
   }
 
-  private async workerStatuses(
+  private async workerSummaries(
     caller: AuthenticatedUser,
     workerIds: string[],
-  ): Promise<Map<string, WorkerStatus>> {
+  ): Promise<Map<string, WorkerSummary>> {
     if (workerIds.length === 0) return new Map();
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       (tx) =>
         tx.labourWorker.findMany({
-          where: { id: { in: workerIds } },
-          select: { id: true, status: true },
+          where: { id: { in: [...new Set(workerIds)] } },
+          select: { id: true, status: true, fullName: true, labourCode: true },
         }),
     );
-    return new Map(rows.map((r) => [r.id, r.status]));
+    return new Map(rows.map((r) => [r.id, r]));
   }
 
   private async audit(
@@ -361,11 +452,4 @@ export class LabourAdvanceService {
       ipAddress,
     });
   }
-}
-
-interface DeductionEntry {
-  type: 'advance' | 'fine';
-  advanceId?: string;
-  amount: number;
-  label: string;
 }

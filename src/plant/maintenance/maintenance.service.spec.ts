@@ -143,14 +143,32 @@ describe('MaintenanceService — equipment status is job-owned (FR-002)', () => 
 });
 
 describe('MaintenanceService.close — meter and schedule effects', () => {
-  it('never winds the meter backwards', async () => {
-    const { service, equipmentUpdates } = build({ currentReading: 1400 });
+  it('refuses a closing reading below the meter, touching neither meter nor schedule (036 K11)', async () => {
+    const { service, equipmentUpdates, scheduleUpdates } = build({
+      currentReading: 1400,
+      job: { linkedServiceScheduleId: 'sched-1' },
+    });
 
-    // A closing reading below the current one is a typo, not a rewound meter —
-    // accepting it would silently un-due every service schedule on the machine.
-    await service.close(caller, 'job-1', { closingReading: 900 }, '10.0.0.1');
+    // A closing reading below the current one is a typo, not a rewound meter. It used to be kept
+    // off the meter but written to the schedule, whose next due reading became typo + interval.
+    await expect(
+      service.close(caller, 'job-1', { closingReading: 900 }, '10.0.0.1'),
+    ).rejects.toThrow(/below the machine's meter \(1400\)/);
 
-    expect(equipmentUpdates[0]).toEqual({ status: EquipmentStatus.active });
+    expect(equipmentUpdates).toHaveLength(0);
+    expect(scheduleUpdates).toHaveLength(0);
+  });
+
+  it('refuses a closing time in the future (036 K11)', async () => {
+    const { service } = build();
+    await expect(
+      service.close(
+        caller,
+        'job-1',
+        { closingReading: 1250, closedAt: '2099-01-01T10:00:00.000Z' },
+        '10.0.0.1',
+      ),
+    ).rejects.toThrow(/cannot be in the future/);
   });
 
   it('discharges a linked schedule and moves its next due reading forward', async () => {

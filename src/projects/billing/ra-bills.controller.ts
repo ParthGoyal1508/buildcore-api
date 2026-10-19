@@ -33,6 +33,11 @@ import {
   ReviseRaBillDto,
   SetAwardDto,
 } from './dto/ra-bill.dto';
+import {
+  ProjectLockFrom,
+  ProjectLockGuard,
+} from '../guards/project-lock.guard';
+import { listPaging } from '../list-paging';
 
 /**
  * Subcontractor bills measured against the award (018 US2) — `bugs.md` item 12.
@@ -57,8 +62,18 @@ export class RaBillsController {
   async list(
     @UserEntity() caller: AuthenticatedUser,
     @Query('projectId') projectId: string,
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    // 036 follow-up: one work order's bills, so a work order's "Load more" pages only its own.
+    @Query('workOrderId') workOrderId?: string,
   ) {
-    return this.bills.listForProject(rlsContextFor(caller), projectId);
+    return this.bills.listForProject(
+      rlsContextFor(caller),
+      projectId,
+      listPaging(page, pageSize),
+      workOrderId?.trim() || undefined,
+    );
   }
 
   /**
@@ -109,6 +124,7 @@ export class RaBillsController {
   }
 
   @Post('retention/:workOrderId/release')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'Record retention going back to the subcontractor (FR-016a)',
     description:
@@ -134,6 +150,8 @@ export class RaBillsController {
   }
 
   @Delete(':id')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary: 'Discard a draft bill that should not exist',
     description:
@@ -167,12 +185,15 @@ export class RaBillsController {
   }
 
   @Post(':id/submit')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary: 'Send a measured bill for certification (FR-009’s precondition)',
     description:
       'The bill enters the `ra_bill` approval chain and becomes `submitted`. **Nothing is certified ' +
       'here** — the 016 spine decides, and the bill becomes `approved` when the chain completes.\n\n' +
-      'The spine is asked **before** the bill’s status is written. A bill flipped to submitted with ' +
+      'The status moves to submitted **conditionally** first, so a double-click opens one approval ' +
+      '(036 I3), and is put back if the spine refuses: a bill left submitted with ' +
       'no instance behind it waits on nobody, sits in no queue, and looks to its author exactly like ' +
       'one that was submitted.',
   })
@@ -193,6 +214,8 @@ export class RaBillsController {
   }
 
   @Patch(':id/lines')
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('raBill')
   @ApiOperation({
     summary:
       'Revise the measured quantities, invalidating any approval (FR-009)',
@@ -225,6 +248,7 @@ export class RaBillsController {
   }
 
   @Put('awards/:workOrderId')
+  @UseGuards(ProjectLockGuard)
   @ApiOperation({
     summary: 'Capture the award — the subcontractor’s own rates (FR-006)',
     description:
@@ -266,6 +290,8 @@ export class RaBillsController {
   }
 
   @Post()
+  @UseGuards(ProjectLockGuard)
+  @ProjectLockFrom('body')
   @ApiOperation({
     summary: 'Measure a bill against the award (FR-007, FR-008)',
     description:

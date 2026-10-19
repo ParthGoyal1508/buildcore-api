@@ -32,6 +32,8 @@ interface BillFixture {
 
 function harness(bills: BillFixture[]) {
   const created: Record<string, unknown>[] = [];
+  /** The order the transaction does things in — the lock has to come before the sum (036 I4). */
+  const steps: string[] = [];
 
   const hydrate = (bill: BillFixture) => ({
     id: bill.id,
@@ -60,6 +62,10 @@ function harness(bills: BillFixture[]) {
 
   const tx = {
     $executeRaw: async () => 0,
+    $queryRaw: async (strings: TemplateStringsArray) => {
+      steps.push(`raw:${strings.join('?').replace(/\s+/g, ' ').trim()}`);
+      return [];
+    },
     rABill: {
       findFirst: async (args: { where: { id: string } }) => {
         const found = bills.find((bill) => bill.id === args.where.id);
@@ -69,6 +75,7 @@ function harness(bills: BillFixture[]) {
     },
     rABillPayment: {
       aggregate: async (args: { where: { raBillId: string } }) => {
+        steps.push('aggregate');
         const bill = bills.find((b) => b.id === args.where.raBillId);
         const sum = (bill?.payments ?? []).reduce(
           (total, payment) => total.plus(new Prisma.Decimal(payment.amount)),
@@ -101,7 +108,11 @@ function harness(bills: BillFixture[]) {
     $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
   };
 
-  return { service: new BillPaymentsService(prisma as never), created };
+  return {
+    service: new BillPaymentsService(prisma as never),
+    created,
+    steps,
+  };
 }
 
 const CTX = { isSuperAdmin: false, companyId: 'company-1' };
@@ -341,5 +352,35 @@ describe('a project\u2019s subcontractor billing position', () => {
       // The part payment, which is the case that tells a subtraction from either figure alone.
       outstandingAmount: '40000.00',
     });
+  });
+});
+
+describe('two payments submitted together (036 I4)', () => {
+  it('locks the bill row before reading what has been paid', async () => {
+    // Aggregate-then-insert with no lock let two concurrent payments each read the same paid
+    // figure and together pay past the certified amount. The lock has to precede the sum, or the
+    // second payment still reads a figure the first is about to change.
+    const { service, steps } = harness([
+      {
+        id: 'bill-1',
+        billNumber: 'RA-03',
+        status: RaBillStatus.approved,
+        netPayable: '100000.00',
+      },
+    ]);
+
+    await service.record(
+      CTX,
+      'company-1',
+      'bill-1',
+      { paidOn: '2026-09-28', amount: '1.00', instrument: 'bank_transfer' },
+      { userId: 'user-1' },
+    );
+
+    const lock = steps.findIndex((step) =>
+      /FROM "projects"\."RABill" WHERE "id" = \? FOR UPDATE/.test(step),
+    );
+    expect(lock).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeLessThan(steps.indexOf('aggregate'));
   });
 });

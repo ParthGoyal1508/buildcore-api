@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import {
   AuditAction,
@@ -17,7 +18,18 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { detectContentType } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  IMAGE_TYPES,
+  JPEG,
+  PDF,
+  PNG,
+  WEBP,
+} from '../../common/uploads';
 import { VendorItemRateService } from '../rates/vendor-item-rate.service';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -28,6 +40,7 @@ import {
 } from '../constants/inventory.constants';
 import { IndentFulfilmentService } from '../indents/indent-fulfilment.service';
 import { InventoryRefsService } from '../inventory-refs.service';
+import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 import { StockService } from '../stock/stock.service';
 import { toNumber } from '../stock/stock.types';
 import {
@@ -38,6 +51,9 @@ import {
 
 /** Where bill uploads are stored. */
 const BILL_NAMESPACE = 'purchase-bills';
+
+/** What a bill may be: the vendor's PDF, or a photo of the paper bill (036 M11). */
+const BILL_TYPES: readonly string[] = [PDF, JPEG, PNG, WEBP];
 
 export interface PurchaseView {
   id: string;
@@ -59,15 +75,45 @@ export interface PurchaseView {
   paymentStatus: PurchaseBillStatus | null;
   paidAmount: number;
   indentLineId: string | null;
+  /** The PO line received against, and the PO's reference and row, for the list (036 M9). */
+  purchaseOrderLineId: string | null;
+  purchaseOrderRef: string | null;
+  purchaseOrderLineNo: number | null;
+  /** Whether a delivery photograph is stored (036 M11) — `GET :id/photo`. */
+  hasPhoto: boolean;
   remarks: string | null;
   createdAt: Date;
 }
 
 export interface PaginatedPurchases {
   purchases: PurchaseView[];
+  /**
+   * Across every page of the filter (036 M12): billed and paid, and the quantity only when one
+   * item is filtered.
+   */
+  totals: { amount: number; paidAmount: number; quantity: number | null };
   total: number;
   page: number;
   pageSize: number;
+}
+
+/** The PO a purchase was received against, as the purchase list shows it (036 M9). */
+function poRefOf(purchase: {
+  purchaseOrderLineId: string | null;
+  purchaseOrderLine?: {
+    lineNo: number;
+    purchaseOrder: { referenceNo: string | null };
+  } | null;
+}): Pick<
+  PurchaseView,
+  'purchaseOrderLineId' | 'purchaseOrderRef' | 'purchaseOrderLineNo'
+> {
+  return {
+    purchaseOrderLineId: purchase.purchaseOrderLineId,
+    purchaseOrderRef:
+      purchase.purchaseOrderLine?.purchaseOrder.referenceNo ?? null,
+    purchaseOrderLineNo: purchase.purchaseOrderLine?.lineNo ?? null,
+  };
 }
 
 /**
@@ -92,6 +138,7 @@ export class PurchasesService {
     private readonly storage: StorageService,
     private readonly indentFulfilment: IndentFulfilmentService,
     private readonly rates: VendorItemRateService,
+    private readonly purchaseOrders: PurchaseOrdersService,
   ) {}
 
   async create(
@@ -109,7 +156,7 @@ export class PurchasesService {
     const [item, siteName, vendorName] = await Promise.all([
       this.refs.requireItem(caller, dto.itemId, targetCompanyId),
       this.refs.requireSiteName(caller, dto.siteId, targetCompanyId),
-      this.refs.requireVendorName(caller, dto.vendorId),
+      this.refs.requireActiveVendor(caller, dto.vendorId, targetCompanyId),
     ]);
     if (!item.active) {
       throw new BadRequestException(
@@ -121,40 +168,23 @@ export class PurchasesService {
     // network round trip, and a failed upload should not have opened a transaction
     // at all.
     //
+    // 036 M11/B4-B6: through the shared upload helpers — the 10 MB limit, the type read from
+    // the bytes (the declared `billContentType` is no longer trusted: an HTML page declared as
+    // a PDF was stored and served as whatever was claimed), and photos compressed. The bill may
+    // be a PDF or a photo of the paper bill; the delivery photo must be a photo.
+    //
     // TODO(VIRUS_SCAN): uploads are stored unscanned, the same gap 005's employee
     // documents and 007's contractor documents carry. The scan belongs between
     // decoding and `storage.put`, and is left explicit rather than faked.
-    let billFileRef: string | null = null;
-    if (dto.billFile) {
-      const buffer = Buffer.from(dto.billFile, 'base64');
-      if (buffer.length === 0) {
-        throw new BadRequestException(
-          'billFile must be non-empty base64 content.',
-        );
-      }
-      billFileRef = await this.storage.put(
-        BILL_NAMESPACE,
-        buffer,
-        dto.billContentType ?? 'application/octet-stream',
-      );
-    }
+    const billFileRef = dto.billFile
+      ? await this.storeUpload(dto.billFile, BILL_TYPES, 'The bill')
+      : null;
 
     // The delivery photograph (028 FR-017), stored exactly as the bill beside it. Optional today
     // because a purchase has no approval step to make it compulsory *before* — see the DTO's note.
-    let photoFileRef: string | null = null;
-    if (dto.photoFile) {
-      const buffer = Buffer.from(dto.photoFile, 'base64');
-      if (buffer.length === 0) {
-        throw new BadRequestException(
-          'photoFile must be non-empty base64 content.',
-        );
-      }
-      photoFileRef = await this.storage.put(
-        BILL_NAMESPACE,
-        buffer,
-        'image/jpeg',
-      );
-    }
+    const photoFileRef = dto.photoFile
+      ? await this.storeUpload(dto.photoFile, IMAGE_TYPES, 'The delivery photo')
+      : null;
 
     const date = this.refs.parseDate(dto.date);
     // Rounded once, here, and stored: this is what the vendor billed, and
@@ -179,6 +209,19 @@ export class PurchasesService {
         );
         this.rates.assertMatchesAgreed(agreed, dto.rate);
 
+        // 036 M9: received against a PO line, the line caps it — same item, the PO's vendor, and
+        // no more than is left of what was ordered. Locked inside this transaction, so two
+        // deliveries racing for the last of a line cannot both pass.
+        if (dto.purchaseOrderLineId) {
+          await this.purchaseOrders.assertReceivable(tx, {
+            companyId: targetCompanyId,
+            purchaseOrderLineId: dto.purchaseOrderLineId,
+            itemId: dto.itemId,
+            vendorId: dto.vendorId,
+            quantity: dto.quantity,
+          });
+        }
+
         const purchase = await tx.purchase.create({
           data: {
             companyId: targetCompanyId,
@@ -193,6 +236,10 @@ export class PurchasesService {
             photoFileRef,
             remarks: dto.remarks?.trim() || null,
             indentLineId: dto.indentLineId ?? null,
+            purchaseOrderLineId: dto.purchaseOrderLineId ?? null,
+          },
+          include: {
+            purchaseOrderLine: { include: { purchaseOrder: true } },
           },
         });
 
@@ -270,6 +317,8 @@ export class PurchasesService {
             companyId: targetCompanyId,
             indentLineId: dto.indentLineId,
             quantity: dto.quantity,
+            itemId: dto.itemId,
+            siteId: dto.siteId,
           });
         }
 
@@ -323,6 +372,8 @@ export class PurchasesService {
       paymentStatus: PurchaseBillStatus.unpaid,
       paidAmount: 0,
       indentLineId: dto.indentLineId ?? null,
+      ...poRefOf(created.purchase),
+      hasPhoto: photoFileRef !== null,
       remarks: created.purchase.remarks,
       createdAt: created.purchase.createdAt,
     };
@@ -363,21 +414,35 @@ export class PurchasesService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum, paid } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
         const [rows, total] = await Promise.all([
           tx.purchase.findMany({
             where,
-            include: { bill: true, grn: true },
+            include: {
+              bill: true,
+              grn: true,
+              purchaseOrderLine: { include: { purchaseOrder: true } },
+            },
             orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
             skip: (page - 1) * pageSize,
             take: pageSize,
           }),
           tx.purchase.count({ where }),
         ]);
-        return { rows, total };
+        const [sum, paid] = await Promise.all([
+          tx.purchase.aggregate({
+            where,
+            _sum: { amount: true, quantity: true },
+          }),
+          tx.purchaseBill.aggregate({
+            where: { purchase: where },
+            _sum: { paidAmount: true },
+          }),
+        ]);
+        return { rows, total, sum, paid };
       },
     );
 
@@ -419,21 +484,47 @@ export class PurchasesService {
           paymentStatus: row.bill?.paymentStatus ?? null,
           paidAmount: row.bill ? toNumber(row.bill.paidAmount) : 0,
           indentLineId: row.indentLineId,
+          ...poRefOf(row),
+          hasPhoto: row.photoFileRef !== null,
           remarks: row.remarks,
           createdAt: row.createdAt,
         };
       }),
+      totals: {
+        amount: toNumber(sum._sum.amount),
+        paidAmount: toNumber(paid._sum.paidAmount),
+        quantity: query.itemId ? toNumber(sum._sum.quantity) : null,
+      },
       total,
       page,
       pageSize,
     };
   }
 
-  /** The stored bill, for download. */
+  /** The stored bill, for download, with the type read from its bytes (036 M11). */
   async getBillFile(
     caller: AuthenticatedUser,
     id: string,
-  ): Promise<{ buffer: Buffer; purchaseId: string }> {
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
+    return this.storedFile(caller, id, 'bill');
+  }
+
+  /**
+   * The delivery photograph (036 M11). It was stored from 028 on and could never be opened —
+   * there was no route — so a photo taken at the gate as evidence was evidence nobody could see.
+   */
+  async getPhotoFile(
+    caller: AuthenticatedUser,
+    id: string,
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
+    return this.storedFile(caller, id, 'photo');
+  }
+
+  private async storedFile(
+    caller: AuthenticatedUser,
+    id: string,
+    which: 'bill' | 'photo',
+  ): Promise<{ buffer: Buffer; contentType: string; purchaseId: string }> {
     const purchase = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -443,13 +534,39 @@ export class PurchasesService {
       throw new NotFoundException(`Purchase ${id} not found`);
     }
     assertInScope(caller, purchase, `Purchase ${id}`);
-    if (!purchase.billFileRef) {
-      throw new NotFoundException(`Purchase ${id} has no bill attached`);
+    const ref = which === 'bill' ? purchase.billFileRef : purchase.photoFileRef;
+    if (!ref) {
+      throw new NotFoundException(
+        which === 'bill'
+          ? `Purchase ${id} has no bill attached`
+          : `Purchase ${id} has no delivery photo`,
+      );
     }
+    const buffer = await this.storage.get(ref);
     return {
-      buffer: await this.storage.get(purchase.billFileRef),
+      buffer,
+      // Served as what the bytes are, never as `application/octet-stream`: the browser then
+      // shows a PDF or a photo inline instead of downloading an unnamed file.
+      contentType:
+        detectContentType(buffer)?.contentType ?? 'application/octet-stream',
       purchaseId: purchase.id,
     };
+  }
+
+  /** Decode, check, compress and store one upload; returns its storage ref (036 B4-B6). */
+  private async storeUpload(
+    payload: string,
+    allowed: readonly string[],
+    label: string,
+  ): Promise<string> {
+    const bytes = decodeBase64Upload(payload, label);
+    const type = assertAllowedFileType(bytes, allowed, label);
+    const image = await compressImageUpload(bytes, type.contentType);
+    return this.storage.put(
+      BILL_NAMESPACE,
+      image?.main.data ?? bytes,
+      image?.main.contentType ?? type.contentType,
+    );
   }
 
   async update(
@@ -504,7 +621,11 @@ export class PurchasesService {
               ? { remarks: dto.remarks?.trim() || null }
               : {}),
           },
-          include: { bill: true, grn: true },
+          include: {
+            bill: true,
+            grn: true,
+            purchaseOrderLine: { include: { purchaseOrder: true } },
+          },
         });
       },
     );
@@ -545,6 +666,8 @@ export class PurchasesService {
       paymentStatus: updated.bill?.paymentStatus ?? null,
       paidAmount: updated.bill ? toNumber(updated.bill.paidAmount) : 0,
       indentLineId: updated.indentLineId,
+      ...poRefOf(updated),
+      hasPhoto: updated.photoFileRef !== null,
       remarks: updated.remarks,
       createdAt: updated.createdAt,
     };
@@ -582,10 +705,37 @@ export class PurchasesService {
           );
         }
 
-        await tx.purchase.update({
-          where: { id },
+        // 036 M1: the received units must still be in the store to un-receive them. Without
+        // this, deleting a purchase whose material had already been issued or transferred took
+        // the balance negative — stock nobody could find, valued at a rate nobody paid. Locked
+        // rather than read, so an issue racing this delete cannot consume the same units between
+        // the check and the decrement.
+        const quantity = toNumber(existing.quantity);
+        const available = await this.stock.lockAvailable(tx, {
+          itemId: existing.itemId,
+          siteId: existing.siteId,
+        });
+        // Compared in thousandths — the column's own precision — so a float sum such as
+        // 0.1 + 0.2 cannot refuse a delete that is exactly covered.
+        if (Math.round(quantity * 1000) > Math.round(available * 1000)) {
+          throw new UnprocessableEntityException({
+            message:
+              `This purchase cannot be deleted: ${quantity} was received but only ${available} ` +
+              'is still in stock at this store — the rest has been issued or transferred. ' +
+              'Return or reverse those movements first.',
+            availableStock: available,
+          });
+        }
+
+        // Conditional, so two simultaneous deletes cannot both reverse the same purchase: the
+        // second waits on the balance lock above, then finds the row already deleted.
+        const marked = await tx.purchase.updateMany({
+          where: { id, deleted: false },
           data: { deleted: true, deletedAt: new Date() },
         });
+        if (marked.count === 0) {
+          throw new NotFoundException(`Purchase ${id} not found`);
+        }
 
         await this.stock.appendLedgerEntry(tx, {
           companyId: existing.companyId,
@@ -641,6 +791,17 @@ export class PurchasesService {
       companyId: removed.companyId,
       ipAddress,
     });
+
+    // 036 M11: the delivery photo goes with the purchase, after the delete has committed. It was
+    // left behind in storage — an orphan nothing pointed at. Best effort: a storage hiccup must not
+    // turn a completed delete into an error. The bill is kept, deliberately: it is the vendor's
+    // document of a transaction that happened and was then reversed, and the soft-deleted row
+    // still points at it for whoever audits the reversal.
+    if (removed.photoFileRef) {
+      await this.storage
+        .deleteMany([removed.photoFileRef])
+        .catch(() => undefined);
+    }
   }
 
   /**

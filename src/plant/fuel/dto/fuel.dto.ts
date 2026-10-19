@@ -8,6 +8,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -16,16 +17,19 @@ export class CreateFuelEntryDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
   @IsISO8601()
   date!: string;
 
-  @ApiProperty({ description: 'Litres' })
+  /** More than zero (036 K10): a 0-litre "fill" is a mistake, and it divides the rate by zero. */
+  @ApiProperty({ description: 'Litres, more than zero' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
-  @Min(0)
+  @Min(0.001, { message: 'quantity must be more than zero litres' })
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiPropertyOptional({
@@ -35,6 +39,7 @@ export class CreateFuelEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   rate?: number;
 
   @ApiPropertyOptional({
@@ -46,6 +51,7 @@ export class CreateFuelEntryDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   amount?: number;
 
   @ApiPropertyOptional({ description: 'The fuel card it was drawn on' })
@@ -59,6 +65,7 @@ export class CreateFuelEntryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -69,6 +76,7 @@ export class CreateFuelEntryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }
 
@@ -76,6 +84,7 @@ export class ListFuelDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional()
@@ -93,11 +102,13 @@ export class ListFuelDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   varianceOnly?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -105,6 +116,7 @@ export class ListFuelDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -112,6 +124,7 @@ export class ListFuelDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }
 
@@ -123,5 +136,6 @@ export class FuelSummaryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

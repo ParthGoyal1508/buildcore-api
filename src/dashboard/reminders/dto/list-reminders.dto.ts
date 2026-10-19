@@ -1,6 +1,6 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { ReminderSeverity } from '@prisma/client';
-import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 /**
  * Scope selector from spec US9 acceptance scenario 2's
@@ -30,6 +30,7 @@ export class ListRemindersDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   type?: string;
 
   @ApiPropertyOptional({
@@ -45,6 +46,7 @@ export class ListRemindersDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   module?: string;
 
   @ApiPropertyOptional({
@@ -61,5 +63,6 @@ export class ListRemindersDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

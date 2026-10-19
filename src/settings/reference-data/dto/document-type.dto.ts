@@ -6,6 +6,8 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -15,6 +17,7 @@ export class CreateDocumentTypeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty({ description: 'Unique per company; normalized to uppercase' })
@@ -23,11 +26,13 @@ export class CreateDocumentTypeDto {
   @Matches(/^[A-Za-z0-9_]{2,40}$/, {
     message: 'code must be 2-40 letters, digits or underscores',
   })
+  @MaxLength(200)
   code: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   name: string;
 
   @ApiPropertyOptional({ description: 'Gates attendance marking (FR-021)' })
@@ -49,6 +54,7 @@ export class CreateDocumentTypeDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(2_147_483_647)
   sortOrder?: number;
 
   @ApiPropertyOptional()

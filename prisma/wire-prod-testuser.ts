@@ -155,8 +155,8 @@ async function main() {
   if (hasWorkspace) {
     console.log('role: already carries MY_WORKSPACE, left alone');
   } else {
-    const siteUser = await prisma.role.findUnique({
-      where: { name: 'General User' },
+    const siteUser = await prisma.role.findFirst({
+      where: { name: 'General User', companyId: null },
     });
     if (!siteUser) {
       throw new Error(

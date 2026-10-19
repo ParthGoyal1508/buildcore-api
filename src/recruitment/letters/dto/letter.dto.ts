@@ -5,11 +5,18 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   MinLength,
 } from 'class-validator';
 
 export class CreateLetterTemplateDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() companyId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  companyId?: string;
   @ApiProperty({
     description:
       "The letter kind's key — `offer`, `appointment`, `relieving`. A plain string " +
@@ -19,20 +26,52 @@ export class CreateLetterTemplateDto {
   })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   letterType!: string;
-  @ApiProperty() @IsString() @IsNotEmpty() name!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(200)
+  name!: string;
   @ApiProperty({ description: 'Body with {{token}} substitutions' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100_000)
   bodyTemplate!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() letterheadAssetId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  letterheadAssetId?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 export class UpdateLetterTemplateDto {
-  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() bodyTemplate?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() letterheadAssetId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(200)
+  name?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100_000)
+  bodyTemplate?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  letterheadAssetId?: string;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
@@ -46,8 +85,15 @@ export class GenerateLetterDto {
   })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   letterType!: string;
-  @ApiProperty() @IsString() @IsNotEmpty() employeeId!: string;
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @ApiProperty()
+  @IsString()
+  @MaxLength(100)
+  employeeId!: string;
 
   @ApiPropertyOptional({
     description:
@@ -68,6 +114,7 @@ export class GenerateLetterDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   signatoryId?: string;
 }
 
@@ -89,5 +136,6 @@ export class GenerateOfferLetterDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   signatoryId?: string;
 }

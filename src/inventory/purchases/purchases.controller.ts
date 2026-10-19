@@ -3,7 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  Header,
   HttpCode,
   HttpStatus,
   Ip,
@@ -66,14 +65,32 @@ export class PurchasesController {
   }
 
   @Get(':id/bill')
-  @Header('Content-Type', 'application/octet-stream')
   @ApiOperation({ summary: 'Download the uploaded bill' })
   async bill(
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
   ): Promise<StreamableFile> {
-    const { buffer } = await this.purchases.getBillFile(caller, id);
-    return new StreamableFile(buffer);
+    // Typed from the bytes (036 M11), so a PDF or photo opens inline rather than downloading.
+    const { buffer, contentType } = await this.purchases.getBillFile(
+      caller,
+      id,
+    );
+    return new StreamableFile(buffer, { type: contentType });
+  }
+
+  @Get(':id/photo')
+  @ApiOperation({
+    summary: 'The delivery photograph taken at the gate (036 M11)',
+  })
+  async photo(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ): Promise<StreamableFile> {
+    const { buffer, contentType } = await this.purchases.getPhotoFile(
+      caller,
+      id,
+    );
+    return new StreamableFile(buffer, { type: contentType });
   }
 
   @Patch(':id')

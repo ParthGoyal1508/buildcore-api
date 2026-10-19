@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -25,6 +26,7 @@ export class LogbookSheetRowDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   openingReading?: number;
 
   @ApiPropertyOptional({ description: 'Closing reading' })
@@ -32,6 +34,7 @@ export class LogbookSheetRowDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   closingReading?: number;
 
   @ApiPropertyOptional({ description: 'Fuel card number' })
@@ -45,6 +48,7 @@ export class LogbookSheetRowDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   dieselAmount?: number;
 
   @ApiPropertyOptional({ description: 'Diesel quantity, in litres' })
@@ -52,13 +56,25 @@ export class LogbookSheetRowDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   dieselQuantity?: number;
+
+  @ApiPropertyOptional({
+    description:
+      "036. Why the starting reading differs from the previous day's closing one; required " +
+      'when it does.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  readingGapReason?: string;
 }
 
 export class SaveLogbookSheetDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ example: '2026-08' })

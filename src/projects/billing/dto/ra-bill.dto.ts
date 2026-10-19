@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
   MinLength,
@@ -35,6 +36,7 @@ export class AwardLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   awardedQty: number;
 
   @ApiProperty({
@@ -45,6 +47,7 @@ export class AwardLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(9_999_999_999.99)
   rate: number;
 
   @ApiPropertyOptional({
@@ -55,6 +58,7 @@ export class AwardLineDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   boqTaskItemId?: string;
 }
 
@@ -70,6 +74,7 @@ export class MeasureLineDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   workOrderBoqItemId: string;
 
   @ApiProperty({
@@ -78,6 +83,7 @@ export class MeasureLineDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity: number;
 }
 
@@ -85,11 +91,13 @@ export class ComposeRaBillDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   projectId: string;
 
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   workOrderId: string;
 
   /**
@@ -203,6 +211,7 @@ export class ReleaseRetentionDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(9_999_999_999.99)
   amount: number;
 
   @ApiProperty({

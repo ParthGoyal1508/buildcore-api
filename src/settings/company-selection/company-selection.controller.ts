@@ -5,6 +5,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CompanyCheckExempt } from './company-header.interceptor';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
@@ -27,6 +28,8 @@ import { SelectCompanyDto } from './dto/select-company.dto';
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @SelfService()
+// Switching company is how a stale tab is meant to change company (036 B17).
+@CompanyCheckExempt()
 @Controller()
 export class CompanySelectionController {
   constructor(private readonly selection: CompanySelectionService) {}

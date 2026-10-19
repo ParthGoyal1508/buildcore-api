@@ -1,12 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsDateString,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /** Staging a document before its project exists (017 FR-009b). */
 export class StageProjectDocumentDto {
@@ -19,6 +19,7 @@ export class StageProjectDocumentDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   documentTypeId?: string;
 
   @ApiProperty({
@@ -32,7 +33,7 @@ export class StageProjectDocumentDto {
   documentType: string;
 
   @ApiProperty({ description: 'The file, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })
@@ -81,4 +82,15 @@ export class UploadProjectDocumentDto extends StageProjectDocumentDto {
   @IsString()
   @MaxLength(500)
   remark?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'A document on this project that this one replaces (036 I25) — a renewed certificate, a ' +
+      'corrected scan. The old document and its file are removed once this one is filed; 404 if ' +
+      'it is not on this project.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  supersedesDocumentId?: string;
 }

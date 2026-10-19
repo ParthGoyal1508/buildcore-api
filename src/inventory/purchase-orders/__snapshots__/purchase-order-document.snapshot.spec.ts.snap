@@ -1,0 +1,87 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`purchase order document (036 M9 format fence) prints the same body 1`] = `
+"| Vendor's Name & Address | Dummy Cement Supplier Test Firm, 12 Industrial Area, Jaipur, Rajasthan - 302001 |
+| Vendor Code | VEN-0007 |
+| Kind Attn. | R. Sharma, 9800000000 |
+| PO Number / Date | DBT/2026-27/0042 / 17-10-2026 |
+| Contact | Dummy Buyer / 9811111111 |
+| E-mail | buyer@example.com |
+| GST No. | 08ABCDE1234F1Z5 |
+
+Please deliver to: Site store, Plot 4, Sitapura, Jaipur
+
+Please arrange to supply the following item(s)/services against this PO in accordance with the terms and conditions stipulated in this order and the "GENERAL TERMS & CONDITIONS OF PURCHASE" appearing below.
+Please do not round off discounted "Net Rate" while creating the invoice.
+Please mention your PAN on the invoice.
+
+Payment Terms: 30 days from receipt of material
+Terms of Delivery: FOR site
+
+## Project / Delivery Notes
+Project: Dummy Tower Project
+Delivery: Within 1–2 weeks of order confirmation. Any earlier delivery to meet the project schedule shall be mutually discussed and agreed.
+
+Product Warranty: Products are warranted for 18 months from dispatch or 12 months from commissioning, whichever comes earlier, against manufacturing defects, faulty workmanship or sub-standard material. Faulty equipment will be repaired/replaced at the supplier's discretion. Prompt after-sales service is also provided during the post-warranty period as required.
+Please attach a tag carrying material-code number and quantity on each container.
+
+| SR No. | Material No. / Description | Order Qty | Unit | Net Rate (INR) | Net Value (INR) |
+| --- | --- | --- | --- | --- | --- |
+| 1 | CEM-001 - Cement OPC 53 | 100 | BAG | 410.00 | 41,000.00 |
+| 2 | STL-012 - TMT Bar 12 mm | 2,500.5 | KG | 62.75 | 1,56,906.38 |
+| 3 | SND-001 - River sand | 12 | CUM | 1,850.00 | 22,200.00 |
+|  | Gross Price |  |  |  | 2,20,106.38 |
+|  | GST @ 18% |  |  |  | 39,619.15 |
+|  | Total Order Value |  |  |  | 2,59,725.53 |
+
+Amount in words: Rupees Two Lakh Fifty Nine Thousand Seven Hundred Twenty Five and Fifty Three Paise Only
+
+## GENERAL TERMS & CONDITIONS OF PURCHASE
+1. Any special conditions issued under this Purchase Order shall be read together with the General Terms & Conditions of Purchase (GTC). In case of conflict, the PO terms shall prevail.
+2. The Supplier shall acknowledge the PO within seven (7) days of mailing and confirm acceptance in its entirety. Failure to acknowledge within seven days shall be deemed unequivocal acceptance.
+3. The PO terms constitute the entire agreement between the parties. Changes are binding only when made in writing and signed by authorized representatives of company and the Supplier.
+4. DELIVERY TERMS:
+4.1 Delivery Date: Time of delivery stated in the PO is essential to the contract. Variations are not permitted without prior written authorization from buyer.
+4.2 Place of Delivery: Goods shall be delivered/despatched strictly according to PO instructions or written modifications by company, at the designated delivery place and within the time stipulated by receiving stores.
+4.3 Delayed Delivery: The delivery date is essential. If delivery is delayed, buyer may (i) accept delayed deliveries at a reduced price by the percentage stated in the PO for each week or part thereof, or (ii) cancel the order in part or full and purchase cancelled quantities elsewhere at the Supplier's risk and cost, without prejudice to buyer other rights.
+4.4 Force Majeure: Where force majeure occurs within the agreed delivery terms, buyer may extend the delivery date on the Supplier's request and subject to conditions decided by company. Qualifying events include natural calamities, civil wars and national strikes lasting more than seven consecutive calendar days. The Supplier must promptly advise buyer by registered letter certified by the local Chamber of Commerce or statutory authorities, no later than four days from the beginning/end of each cause.
+4.5 Quality / Inspection: Goods must match the description, samples and specifications and be delivered within the stipulated time. Otherwise, buyer may purchase goods from another source at the Supplier's cost and recover the difference or claim damages for non-delivery.
+4.6 Packing: Goods must be suitably and properly packed. Package declarations must comply with the Legal Metrology Act and Legal Metrology (Packaged Commodities) Rules and any special PO requirements, to ensure safe transport by road or rail.
+5. Examination of Goods: All goods are subject to detailed inspection upon receipt at buyer Works or another destination specified in the PO. Until acceptance, buyer is not deemed to have accepted the goods. Rejected goods will be treated as not delivered in accordance with the PO.
+6. Rejection / Removal / Replacement: Buyer may inspect goods at any stage of manufacture and reject goods within 15 days of receipt if they do not conform to PO specifications. The Supplier must remove rejected goods at its own cost within 15 days of notification. The goods remain entirely at the Supplier's risk; reasonable storage charges may apply after 15 days.
+7. Supplier Stock Reconciliation: For subcontracted POs or where buyer supplies input material free of charge, the Supplier must maintain stock and consumption records as required by the operating procedure. Stock variance shall be reconciled for each transacted PO.
+Stock Reconciliation (continued): (a) Surplus shall be returned to buyer. (b) Shortage shall be recovered by buyer at the Supplier's cost.
+8. Bill & Invoice: Challan/invoice/tax invoice shall be in triplicate and include: (1) Vendor Code, (2) PAN, (3) GST No., (4) PO No. and date, (5) PO line item number, (6) material code and description, (7) quantity, (8) rate, (9) excise duty and education cess, if applicable, calculated separately and rounded off at each line item, (10) manufacturing/shelf-life date, (11) job-worker challan number where applicable, (12) ECC number, and (13) indication of return of COMPANY material, non-invoiceable goods, defective goods or rejection.
+Invoice Copies: On receipt of goods, buyer will retain two copies and return the third copy to the Supplier duly endorsed. If the challan and invoice differ, the Supplier shall submit the invoice to the concerned Accounts Department for verification; a duplicate excise invoice should accompany the materials to stores.
+9. Taxation — 9.1: For products under this Agreement/PO, the Supplier is solely responsible for payment/discharge of all State service tax, central excise/customs duties, cesses, surcharges and other taxes, duties and new levies if applicable including GST as applicable from time to time is must Compulsory.
+9.2 Changes in Tax Law: If amendments to Central/State law or tax-authority interpretations affect taxes or duties, the Supplier shall study and understand the new tax regime and its responsibilities/liabilities and indemnify and keep buyer indemnified against related liabilities.
+9.3 Tax Claims: If the Supplier receives a notice or assessment claiming that the Supplier or buyer is liable for a tax the Supplier agreed to pay, the Supplier must notify buyer in writing within ten (10) days. If the Supplier contests the tax in good faith, at its own expense. If Supplier has Fail to Return their GST of Purchasing Goods of Buyer on timely Basis and Government have taken recovery from that then Supplier has totally liable for clear this liability at their own cost and risk.
+10. Warranty: The Supplier warrants that materials and workmanship are first-class quality and suitable for the intended purpose, and comply with agreed specifications. Defective materials/goods shall be repaired or replaced at the Supplier's expense within 12 months after being put into use or 20 months from buyer acceptance, whichever is earlier.
+11. Right of Buyer to Set Off: buyer may recover sums due for damages or otherwise relating to supplies under any PO by deducting such sums from amounts due to the Supplier under earlier or subsequent POs.
+12. Cancellation: Company may cancel the PO in whole or part by written notice if the Supplier fails to comply with PO terms, becomes bankrupt or goes into liquidation, fails to deliver on time or replace rejected goods promptly, or makes a general assignment of its property. buyer may also cancel the order as permitted by the PO terms.
+
+For Dummy Builders Test Firm
+[[signature]]
+
+We acknowledge and accept this Purchase Order, subject to the terms expressly agreed herein.
+
+For Dummy Cement Supplier Test Firm
+
+
+Authorized Signatory:"
+`;
+
+exports[`purchase order document (036 M9 format fence) prints under the same layout 1`] = `
+{
+  "acceptanceLabel": null,
+  "brandHeader": true,
+  "pageFooter": null,
+  "referenceInBody": null,
+  "referenceLabel": "PO No.",
+  "signatureLines": null,
+  "title": "PURCHASE ORDER",
+  "titleFirst": null,
+}
+`;
+
+exports[`purchase order document (036 M9 format fence) renders the same PDF 1`] = `"ad220b190b2cd02390ef9dab51bb2587b5b5354a65cbee8641708aa2a4170935"`;

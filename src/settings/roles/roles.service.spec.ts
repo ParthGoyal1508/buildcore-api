@@ -32,6 +32,7 @@ function build(
   const auditLog = { record: jest.fn() };
   const usersService = {
     countByRoleId: jest.fn().mockResolvedValue(0),
+    activeHolderCounts: jest.fn().mockResolvedValue(new Map()),
     countRoleHoldersOutside: jest.fn().mockResolvedValue(0),
     clearRoleAssignment: jest.fn().mockResolvedValue(0),
     ...users,
@@ -138,13 +139,30 @@ describe('RolesService', () => {
       // Counted through UsersService, never a cross-schema join (Principle I).
       expect(usersService.countByRoleId).toHaveBeenCalledTimes(2);
     });
+
+    it('adds the active holders in the caller’s company when there is a caller (036 C11)', async () => {
+      const { service } = build(
+        { findMany: jest.fn().mockResolvedValue([protectedRole, customRole]) },
+        {
+          activeHolderCounts: jest
+            .fn()
+            .mockResolvedValue(new Map([['role-sa', 2]])),
+        },
+      );
+      const roles = await service.findAll({
+        id: 'u',
+        companyId: 'co',
+        permissions: [],
+      } as never);
+      expect(roles.map((r) => r.activeHolderCount)).toEqual([2, 0]);
+    });
   });
 
   describe('update', () => {
     it('refuses to edit the protected Super Admin role (FR-008)', async () => {
       const update = jest.fn();
       const { service } = build({
-        findUnique: jest.fn().mockResolvedValue(protectedRole),
+        findFirst: jest.fn().mockResolvedValue(protectedRole),
         update,
       });
 
@@ -157,7 +175,7 @@ describe('RolesService', () => {
 
     it('rejects a rename onto an existing role name', async () => {
       const { service } = build({
-        findUnique: jest
+        findFirst: jest
           .fn()
           .mockResolvedValueOnce(customRole)
           .mockResolvedValueOnce({ id: 'other', name: 'Viewer' }),
@@ -177,7 +195,7 @@ describe('RolesService', () => {
      */
     it('records a separate audit entry when cash entry is granted', async () => {
       const { service, auditLog } = build({
-        findUnique: jest.fn().mockResolvedValue(customRole),
+        findFirst: jest.fn().mockResolvedValue(customRole),
         update: jest.fn().mockResolvedValue(customRole),
       });
 
@@ -209,7 +227,7 @@ describe('RolesService', () => {
       // An audit entry on every role edit that merely *mentions* cash entry would bury the
       // handful that changed it.
       const { service, auditLog } = build({
-        findUnique: jest.fn().mockResolvedValue(customRole),
+        findFirst: jest.fn().mockResolvedValue(customRole),
         update: jest.fn().mockResolvedValue(customRole),
       });
 
@@ -234,7 +252,7 @@ describe('RolesService', () => {
         permissions: [Permission.DASHBOARD],
       });
       const { service, auditLog } = build({
-        findUnique: jest.fn().mockResolvedValue(customRole),
+        findFirst: jest.fn().mockResolvedValue(customRole),
         update,
       });
 
@@ -261,7 +279,7 @@ describe('RolesService', () => {
     it('refuses to delete the protected role (FR-008)', async () => {
       const del = jest.fn();
       const { service, usersService } = build({
-        findUnique: jest.fn().mockResolvedValue(protectedRole),
+        findFirst: jest.fn().mockResolvedValue(protectedRole),
         delete: del,
       });
 
@@ -275,7 +293,7 @@ describe('RolesService', () => {
     it('clears the role from its holders before deleting it (FR-010)', async () => {
       const del = jest.fn();
       const { service, usersService } = build(
-        { findUnique: jest.fn().mockResolvedValue(customRole), delete: del },
+        { findFirst: jest.fn().mockResolvedValue(customRole), delete: del },
         { clearRoleAssignment: jest.fn().mockResolvedValue(4) },
       );
 
@@ -288,7 +306,7 @@ describe('RolesService', () => {
 
     it('404s on a role that does not exist', async () => {
       const { service } = build({
-        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
       });
       await expect(
         service.remove(admin, 'nope', '127.0.0.1'),
@@ -298,7 +316,7 @@ describe('RolesService', () => {
     it('refuses to delete the default role for new accounts (029 FR-001)', async () => {
       const del = jest.fn();
       const { service, usersService } = build({
-        findUnique: jest.fn().mockResolvedValue({
+        findFirst: jest.fn().mockResolvedValue({
           ...customRole,
           name: 'General User',
           isDefault: true,
@@ -319,7 +337,7 @@ describe('RolesService', () => {
         .fn()
         .mockResolvedValue({ ...protectedRole, homeModule: 'dashboard' });
       const { service } = build({
-        findUnique: jest.fn().mockResolvedValue(protectedRole),
+        findFirst: jest.fn().mockResolvedValue(protectedRole),
         update,
       });
       await service.update(
@@ -346,7 +364,7 @@ describe('RolesService', () => {
     it('clears the home page when sent null', async () => {
       const update = jest.fn().mockResolvedValue(customRole);
       const { service } = build({
-        findUnique: jest.fn().mockResolvedValue(customRole),
+        findFirst: jest.fn().mockResolvedValue(customRole),
         update,
       });
       await service.update(
@@ -359,6 +377,113 @@ describe('RolesService', () => {
         where: { id: 'role-x' },
         data: { homeModule: null },
       });
+    });
+  });
+});
+
+describe('RolesService — company-scoped custom roles (036 C10)', () => {
+  const companyAdmin = callerFor('company-1', {
+    permissions: [Permission.USER_MANAGEMENT, Permission.DASHBOARD],
+  });
+  const groupAdmin = (selectedCompanyId: string | null) =>
+    callerFor(null, {
+      permissions: Object.values(Permission),
+      selectedCompanyId,
+    });
+  const listDelegate = () => ({
+    findMany: jest.fn().mockResolvedValue([]),
+  });
+
+  it('lists the global roles and the caller’s company’s own', async () => {
+    const role = listDelegate();
+    const { service } = build(role);
+    await service.findAll(companyAdmin);
+    expect(role.findMany.mock.calls[0][0].where).toEqual({
+      OR: [{ companyId: null }, { companyId: 'company-1' }],
+    });
+  });
+
+  it('lists every company’s roles, with the company named, for a group admin with none selected', async () => {
+    const role = {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          ...customRole,
+          companyId: 'company-2',
+          company: { name: 'Dummy Two Test Firm' },
+          rolePermissions: [],
+        },
+      ]),
+    };
+    const { service } = build(role);
+    const [listed] = await service.findAll(groupAdmin(null));
+    expect(role.findMany.mock.calls[0][0].where).toEqual({});
+    expect(listed.companyName).toBe('Dummy Two Test Firm');
+  });
+
+  it('scopes a group admin who has selected a company to it', async () => {
+    const role = listDelegate();
+    const { service } = build(role);
+    await service.findAll(groupAdmin('company-2'));
+    expect(role.findMany.mock.calls[0][0].where).toEqual({
+      OR: [{ companyId: null }, { companyId: 'company-2' }],
+    });
+  });
+
+  it('creates the role in the caller’s company, checking names only there and globally', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'r-new' });
+    const { service } = build({ findFirst, create });
+    await service.create(
+      companyAdmin,
+      { name: 'Site Clerk', permissions: [Permission.DASHBOARD] },
+      '127.0.0.1',
+    );
+    expect(findFirst.mock.calls[0][0].where).toEqual({
+      name: 'Site Clerk',
+      OR: [{ companyId: null }, { companyId: 'company-1' }],
+    });
+    expect(create.mock.calls[0][0].data.companyId).toBe('company-1');
+  });
+
+  it('creates a global role for a group admin with no company selected', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'r-new' });
+    const { service } = build({ findFirst, create });
+    await service.create(
+      groupAdmin(null),
+      { name: 'Group Auditor', permissions: [Permission.DASHBOARD] },
+      '127.0.0.1',
+    );
+    // A global name must be free everywhere.
+    expect(findFirst.mock.calls[0][0].where).toEqual({ name: 'Group Auditor' });
+    expect(create.mock.calls[0][0].data.companyId).toBeNull();
+  });
+
+  it('refuses a duplicate with 409 ROLE_NAME_TAKEN', async () => {
+    const { service } = build({
+      findFirst: jest.fn().mockResolvedValue({ id: 'r-other' }),
+      create: jest.fn(),
+    });
+    await expect(
+      service.create(
+        companyAdmin,
+        { name: 'Viewer', permissions: [Permission.DASHBOARD] },
+        '127.0.0.1',
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'ROLE_NAME_TAKEN' }),
+    });
+  });
+
+  it('treats another company’s role as not found', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const { service } = build({ findFirst, update: jest.fn() });
+    await expect(
+      service.update(companyAdmin, 'role-of-company-2', { name: 'X' }, 'ip'),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(findFirst.mock.calls[0][0].where).toEqual({
+      id: 'role-of-company-2',
+      OR: [{ companyId: null }, { companyId: 'company-1' }],
     });
   });
 });
@@ -423,7 +548,7 @@ describe('CreateRoleDto validation (FR-007)', () => {
 
     it('refuses to create a role granting more than its author holds', async () => {
       const { service } = build({
-        findUnique: jest.fn().mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn(),
       });
       await expect(
@@ -438,7 +563,7 @@ describe('CreateRoleDto validation (FR-007)', () => {
     it('refuses a company administrator editing a role held in other companies', async () => {
       const { service } = build(
         {
-          findUnique: jest.fn().mockResolvedValue(customRole),
+          findFirst: jest.fn().mockResolvedValue(customRole),
           update: jest.fn(),
         },
         { countRoleHoldersOutside: jest.fn().mockResolvedValue(3) },

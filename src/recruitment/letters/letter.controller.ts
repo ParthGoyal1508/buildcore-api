@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -30,6 +29,7 @@ import {
   UpdateLetterTemplateDto,
 } from './dto/letter.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 @ApiTags('Recruitment')
 @ApiBearerAuth()
@@ -119,12 +119,9 @@ export class LetterController {
     @Body() dto: CreateLetterTemplateDto,
     @Ip() ip: string,
   ) {
-    const companyId = dto.companyId ?? caller.companyId;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
+    // `resolveCompanyId` (036 stream 3b): honours the switcher's selected company, and a
+    // company-scoped caller cannot widen to another company by naming one in the body.
+    const companyId = resolveCompanyId(caller, dto.companyId);
     const kind = await this.kinds.requireByKey(
       rlsContextFor(caller),
       companyId,

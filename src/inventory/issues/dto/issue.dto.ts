@@ -9,6 +9,7 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -17,11 +18,13 @@ export class CreateIssueDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   itemId!: string;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -32,6 +35,7 @@ export class CreateIssueDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   quantity!: number;
 
   @ApiPropertyOptional({
@@ -50,6 +54,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   projectId?: string;
 
   @ApiPropertyOptional({
@@ -57,6 +62,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -66,6 +72,7 @@ export class CreateIssueDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   activityId?: string;
 
   @ApiPropertyOptional({
@@ -81,11 +88,13 @@ export class CreateIssueDto {
   @ApiPropertyOptional({ description: 'The BOQ task item, if known' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   boqItemId?: string;
 
   @ApiPropertyOptional({ description: 'The approved indent line this fulfils' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   indentLineId?: string;
 
   @ApiPropertyOptional()
@@ -96,14 +105,35 @@ export class CreateIssueDto {
 }
 
 export class ListIssuesDto {
+  /** 036 M12: the project, vendor and slip number the register is searched by. */
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  projectId?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  vendorId?: string;
+
+  @ApiPropertyOptional({ description: 'Slip number, partial match' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  slipNo?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   itemId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
@@ -121,6 +151,7 @@ export class ListIssuesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -128,11 +159,13 @@ export class ListIssuesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -142,11 +175,32 @@ export class ListIssuesDto {
  * far, so a second return is entered as the new total.
  */
 export class ReturnIssueDto {
-  @ApiProperty({ description: 'Total returned against this issue so far' })
+  /**
+   * 036 M4: the quantity coming back *now*. Preferred over `returnedQuantity`, whose "total so far"
+   * meaning confused people into entering what they were holding — and which, read by two
+   * simultaneous requests, could not say whether they described one return or two.
+   */
+  @ApiPropertyOptional({
+    description:
+      'The quantity coming back now (036). Give this or `returnedQuantity`; when both are ' +
+      'given they must agree.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsPositive()
+  returnedNow?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Total returned against this issue so far. Kept for older clients; prefer `returnedNow`.',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
-  returnedQuantity!: number;
+  @Max(999_999_999_999_999)
+  returnedQuantity?: number;
 
   @ApiProperty({ example: '2026-10-15' })
   @IsISO8601()

@@ -9,6 +9,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
   ValidateNested,
@@ -20,6 +21,7 @@ export class CreateMaintenanceJobDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ enum: MaintenanceType })
@@ -38,6 +40,7 @@ export class CreateMaintenanceJobDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   linkedServiceScheduleId?: string;
 
   @ApiPropertyOptional({
@@ -72,11 +75,13 @@ export class UpdateMaintenanceJobDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   labourCost?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   linkedServiceScheduleId?: string;
 }
 
@@ -90,6 +95,7 @@ export class CloseMaintenanceJobDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   closingReading!: number;
 
   @ApiPropertyOptional()
@@ -103,6 +109,7 @@ export class CloseMaintenanceJobDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   labourCost?: number;
 }
 
@@ -110,6 +117,7 @@ export class ListMaintenanceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional({ enum: MaintenanceStatus })
@@ -125,6 +133,7 @@ export class ListMaintenanceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -132,6 +141,7 @@ export class ListMaintenanceDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -139,5 +149,6 @@ export class ListMaintenanceDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

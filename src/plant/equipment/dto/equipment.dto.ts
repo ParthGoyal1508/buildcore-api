@@ -10,8 +10,9 @@ import { Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
-  IsBase64,
+  IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsISO8601,
   IsNotEmpty,
@@ -23,6 +24,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 import {
   EQUIPMENT_YEAR_MAX,
@@ -66,6 +68,7 @@ export class CreateEquipmentDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   categoryId!: string;
 
   @ApiProperty({ enum: EquipmentOwnership })
@@ -77,6 +80,7 @@ export class CreateEquipmentDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiProperty({ enum: PowerSource })
@@ -109,6 +113,7 @@ export class CreateEquipmentDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0)
+  @Max(999_999_999_999_999)
   purchaseCost?: number;
 
   @ApiPropertyOptional({ description: 'Straight-line, % per annum' })
@@ -122,6 +127,7 @@ export class CreateEquipmentDto {
   @ApiPropertyOptional({ description: 'Where the machine currently works' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   deployedSiteId?: string;
 
   @ApiPropertyOptional({
@@ -131,6 +137,7 @@ export class CreateEquipmentDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   currentReading?: number;
 
   // ── Registration details (2026-10-15), from the Equipment Master List ──
@@ -221,6 +228,7 @@ export class CreateEquipmentDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 0 })
   @Min(1)
+  @Max(2_147_483_647)
   serviceInterval?: number;
 }
 
@@ -248,16 +256,19 @@ export class ListEquipmentDto {
   @ApiPropertyOptional({ description: 'Matches name or code' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ enum: EquipmentStatus })
@@ -273,6 +284,7 @@ export class ListEquipmentDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -280,6 +292,7 @@ export class ListEquipmentDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -287,6 +300,7 @@ export class ListEquipmentDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }
 
@@ -305,10 +319,11 @@ export class UploadEquipmentDocumentDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   docTypeId!: string;
 
   @ApiProperty({ description: 'Base64-encoded file content' })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()
@@ -333,10 +348,38 @@ export class UploadEquipmentDocumentDto {
   expiresAt?: string;
 }
 
+/** A photo of the machine (036 K14). JPEG, PNG or WebP; compressed again on the server. */
+export class UploadEquipmentPhotoDto {
+  @ApiProperty({ description: 'Base64-encoded JPEG, PNG or WebP image' })
+  @IsBase64Payload()
+  file!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  fileName?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Make this the machine's main photo. The first photo of a machine always is.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  makeMain?: boolean;
+}
+
+export class EquipmentPhotoFileQueryDto {
+  @ApiPropertyOptional({ enum: ['thumb', 'full'], default: 'full' })
+  @IsOptional()
+  @IsIn(['thumb', 'full'])
+  size?: 'thumb' | 'full';
+}
+
 /** The client's Equipment Master List, as a base64 `.xlsx` (2026-10-15). */
 export class ImportEquipmentDto {
   @ApiProperty({ description: 'Base64-encoded .xlsx workbook' })
-  @IsBase64()
+  @IsBase64Payload()
   file!: string;
 
   @ApiPropertyOptional()
@@ -351,11 +394,13 @@ export class EquipmentRegisterQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   categoryId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ enum: EquipmentStatus })
@@ -371,5 +416,6 @@ export class EquipmentRegisterQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

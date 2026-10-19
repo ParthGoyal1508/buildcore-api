@@ -22,11 +22,16 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  DOCUMENT_TYPES,
+} from '../../common/uploads';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import {
   DEFAULT_PAGE_SIZE,
   DEFAULT_TARGET_HOURS_PER_MONTH,
-  MAX_DOCUMENT_BYTES,
   MAX_PAGE_SIZE,
   REGISTRATION_PAPERS,
   SERVICE_DUE_SOON_MARGIN,
@@ -123,11 +128,27 @@ export interface EquipmentRow {
    * response as the list, with no second call. */
   expiryAlert: boolean;
   alertDocumentTypes: string[];
+  /** The main photo (036 K14), or null for the placeholder. Its thumbnail is
+   * `GET :id/photos/:mainPhotoId?size=thumb`. */
+  mainPhotoId: string | null;
   createdAt: Date;
+}
+
+/** One photo in a machine's gallery (036 K14). */
+export interface EquipmentPhotoView {
+  id: string;
+  isMain: boolean;
+  fileName: string | null;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  uploadedAt: Date;
 }
 
 export interface EquipmentDetail extends EquipmentRow {
   documents: EquipmentDocumentView[];
+  /** Main photo first, then newest first. */
+  photos: EquipmentPhotoView[];
   serviceSchedules: {
     id: string;
     serviceType: string;
@@ -141,13 +162,42 @@ export interface EquipmentDetail extends EquipmentRow {
 }
 
 type EquipmentWithDocs = Prisma.EquipmentGetPayload<{
-  include: { documents: true; registration: true };
+  include: {
+    documents: true;
+    registration: true;
+    photos: { where: { isMain: true }; select: { id: true } };
+  };
 }>;
 
-const WITH_DOCS = { documents: true, registration: true } as const;
+/** The main photo rides along as an id only (036 K14) — the list loads its thumbnail by id. */
+const WITH_DOCS = {
+  documents: true,
+  registration: true,
+  photos: { where: { isMain: true }, select: { id: true } },
+} as const;
 
 /** How far ahead a registration paper's expiry alerts — the register's amber window. */
 const PAPER_ALERT_DAYS = 30;
+
+export function toPhotoView(photo: {
+  id: string;
+  isMain: boolean;
+  fileName: string | null;
+  width: number;
+  height: number;
+  sizeBytes: number;
+  uploadedAt: Date;
+}): EquipmentPhotoView {
+  return {
+    id: photo.id,
+    isMain: photo.isMain,
+    fileName: photo.fileName,
+    width: photo.width,
+    height: photo.height,
+    sizeBytes: photo.sizeBytes,
+    uploadedAt: photo.uploadedAt,
+  };
+}
 
 /** Midnight today, in the server's own zone — the reference point every expiry
  * comparison uses. */
@@ -290,7 +340,7 @@ export class EquipmentService {
         if (!equipment) throw new NotFoundException('Equipment not found');
         assertInScope(caller, equipment, 'Equipment');
 
-        const [schedules, openJob] = await Promise.all([
+        const [schedules, openJob, photos] = await Promise.all([
           tx.serviceSchedule.findMany({
             where: { equipmentId },
             orderBy: { nextDueReading: 'asc' },
@@ -299,8 +349,12 @@ export class EquipmentService {
             where: { equipmentId, status: 'open' },
             select: { id: true },
           }),
+          tx.equipmentPhoto.findMany({
+            where: { equipmentId },
+            orderBy: [{ isMain: 'desc' }, { uploadedAt: 'desc' }],
+          }),
         ]);
-        return { equipment, schedules, openJob };
+        return { equipment, schedules, openJob, photos };
       },
     );
 
@@ -331,6 +385,7 @@ export class EquipmentService {
           uploadedAt: document.uploadedAt,
         };
       }),
+      photos: found.photos.map(toPhotoView),
       serviceSchedules: found.schedules.map((schedule) => ({
         id: schedule.id,
         serviceType: schedule.serviceType,
@@ -467,6 +522,7 @@ export class EquipmentService {
             ...lapsingPapers,
           ]),
         ],
+        mainPhotoId: row.photos[0]?.id ?? null,
         createdAt: row.createdAt,
       };
     });
@@ -893,20 +949,24 @@ export class EquipmentService {
     // and 007's contractor documents carry. The scan belongs between decoding and
     // `storage.put`, and is left explicit rather than faked — a no-op scanner reads
     // as protection that is not there.
-    const buffer = Buffer.from(dto.file, 'base64');
-    if (buffer.length === 0) {
-      throw new BadRequestException('file must be non-empty base64 content.');
-    }
-    if (buffer.length > MAX_DOCUMENT_BYTES) {
-      throw new BadRequestException(
-        `file exceeds the ${MAX_DOCUMENT_BYTES / (1024 * 1024)}MB limit.`,
-      );
-    }
+    //
+    // 036 K13: the file's own bytes decide its type, from the document allow-list (PDF, photos,
+    // xlsx/docx), and the **detected** type is what is stored and served back. The client's
+    // `contentType` used to be stored as given, so an HTML page declared as a PDF came back as
+    // HTML. A photographed paper is compressed on the way in (036 B6).
+    const bytes = decodeBase64Upload(dto.file, 'The document');
+    const detected = assertAllowedFileType(
+      bytes,
+      DOCUMENT_TYPES,
+      'The document',
+    );
+    const image = await compressImageUpload(bytes, detected.contentType);
+    const storedType = image?.main.contentType ?? detected.contentType;
 
     const fileRef = await this.storage.put(
       'equipment-documents',
-      buffer,
-      dto.contentType ?? 'application/octet-stream',
+      image?.main.data ?? bytes,
+      storedType,
     );
 
     const created = await withRlsContext(
@@ -920,7 +980,7 @@ export class EquipmentService {
             docTypeId: dto.docTypeId,
             fileRef,
             fileName: dto.fileName ?? null,
-            mimeType: dto.contentType ?? null,
+            mimeType: storedType,
             expiresAt: dto.expiresAt
               ? this.refs.parseDate(dto.expiresAt)
               : null,

@@ -13,11 +13,13 @@ export class ListGangsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }
 
@@ -25,6 +27,7 @@ export class CreateGangDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiProperty()
@@ -36,11 +39,13 @@ export class CreateGangDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   gangLeaderWorkerId!: string;
 
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId!: string;
 
   @ApiProperty({ type: [String] })
@@ -48,5 +53,6 @@ export class CreateGangDto {
   @ArrayNotEmpty()
   @IsString({ each: true })
   @Type(() => String)
+  @MaxLength(100, { each: true })
   memberWorkerIds!: string[];
 }

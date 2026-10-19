@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -35,6 +34,7 @@ import { TransferEmployeeDto } from './dto/transfer-employee.dto';
 import { UpdateEmployeeDto } from './dto/update-employee.dto';
 import { EmployeesService, MaskedEmployee } from './employees.service';
 import { PiiMaskingInterceptor, RevealsPii } from './pii-masking.interceptor';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /**
  * The HR admin employee master (005 US1).
@@ -64,13 +64,11 @@ export class EmployeesController {
    * must name one explicitly rather than having one guessed for them.
    */
   private companyOf(user: AuthenticatedUser, queryCompanyId?: string): string {
-    const companyId = user.companyId ?? queryCompanyId;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, queryCompanyId);
   }
 
   @Get()

@@ -17,6 +17,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { CompanyCheckExempt } from '../settings/company-selection/company-header.interceptor';
 import type { Request, Response } from 'express';
 import { Permission } from '@prisma/client';
 import { PasswordChangeExempt } from '../common/decorators/password-change-exempt.decorator';
@@ -77,6 +78,8 @@ const REFRESH_THROTTLE = (() => {
 
 @ApiTags('auth')
 @UseGuards(ThrottlerGuard)
+// Signing in and out never depends on which company a tab thought it was in (036 B17).
+@CompanyCheckExempt()
 @Controller('auth')
 export class AuthController {
   private readonly logger = new Logger(AuthController.name);

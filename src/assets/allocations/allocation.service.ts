@@ -534,14 +534,30 @@ export class AllocationService implements OnModuleInit {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const allocation = await tx.assetAllocation.update({
-          where: { id: allocationId },
+        // 036 L1: closed only if it is still open, decided by the database inside this
+        // transaction. The status check above runs before the transaction, so two simultaneous
+        // returns both passed it and both credited the units back to stock. Postgres re-checks
+        // this WHERE after the competing update commits, so exactly one return matches a row.
+        const closed = await tx.assetAllocation.updateMany({
+          where: {
+            id: allocationId,
+            status: AssetAllocationStatus.open,
+            deletedAt: null,
+          },
           data: {
             actualReturnDate,
             conditionOnReturnId: dto.conditionOnReturnId,
             remarks: dto.remarks ?? existing.remarks,
             status: AssetAllocationStatus.closed,
           },
+        });
+        if (closed.count === 0) {
+          throw new ConflictException(
+            'This allocation has already been returned.',
+          );
+        }
+        const allocation = await tx.assetAllocation.findUniqueOrThrow({
+          where: { id: allocationId },
           include: { asset: { select: { assetCode: true, name: true } } },
         });
 

@@ -446,8 +446,98 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           ':(exclude)src/labour/payment-sheets/payment-sheet.service.ts',
           ':(exclude)src/labour/workers/dto/worker.dto.ts',
           ':(exclude)src/labour/workers/labour-worker.service.ts',
+          // 036 stream 1b (labour hardening), 2026-10-17. **Verified by grep: none of these calls
+          // `ApprovalService` or `approvals.submit`.** The payment sheet gains a draft delete and a
+          // regenerate beside its own `approve()`, and the advance a maker-checker inside its own
+          // `approve()`; the per-file assertions at the top still read both.
+          ':(exclude)src/labour/payment-sheets/payment-sheet.controller.ts',
+          ':(exclude)src/labour/payment-sheets/payment-sheet.rules.ts',
+          ':(exclude)src/labour/payment-sheets/payment-sheet.rules.spec.ts',
+          ':(exclude)src/labour/advances/dto/advance.dto.ts',
+          ':(exclude)src/labour/advances/labour-advance.rules.spec.ts',
+          ':(exclude)src/labour/reports/labour-reports.service.ts',
           ':(exclude)src/plant/disposal',
           ':(exclude)src/plant/services/service-schedule.service.ts',
+          // Owned by 036 B12 (query-string booleans), 2026-10-17. Each file swaps
+          // `@Type(() => Boolean)` for `@BooleanQuery()` on one list filter, so `?x=false` stops
+          // reading as true. Query DTOs only: no service, no approval path. Added a commit late,
+          // for the reason the 023 note above gives — the guard diffs commits, so it could only
+          // fire on the commit that made the change.
+          ':(exclude)src/assets/allocations/dto/allocation.dto.ts',
+          ':(exclude)src/inventory/stock/dto/stock.dto.ts',
+          // Owned by 036 I1/I2/I24/I26 (project lock coverage, list paging, geofence cap),
+          // 2026-10-17. **Verified by grep: none of these files calls `ApprovalService` or
+          // `approvals.submit`.** The lock guard only refuses writes to locked projects, the paging
+          // helper shapes list responses, and the site DTO gains a radius maximum.
+          ':(exclude)src/projects/guards',
+          ':(exclude)src/projects/list-paging.ts',
+          ':(exclude)src/projects/list-paging.spec.ts',
+          ':(exclude)src/projects/sites/dto/site.dto.ts',
+          ':(exclude)src/projects/sites/dto/site.dto.spec.ts',
+          // 036 stream 1d (inventory, plant, assets hardening), 2026-10-17: row locks, stock and
+          // vendor checks, payment idempotency, fuel and maintenance validation, and the asset
+          // allocation return made atomic. **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.** The one approval-adjacent change — the
+          // indent requester may not approve their own indent (M8) — is in `indents.service.ts`,
+          // already excluded above, and the per-file assertion at the top still requires its
+          // own `approve()`.
+          ':(exclude)src/inventory/stock/stock.service.ts',
+          ':(exclude)src/inventory/stock/stock.service.spec.ts',
+          ':(exclude)src/inventory/indents/indent-fulfilment.service.ts',
+          ':(exclude)src/inventory/indents/indent-fulfilment.service.spec.ts',
+          ':(exclude)src/inventory/indents/indents.service.spec.ts',
+          ':(exclude)src/inventory/inventory-refs.service.spec.ts',
+          ':(exclude)src/inventory/payments',
+          ':(exclude)src/inventory/purchases',
+          ':(exclude)src/plant/fuel',
+          ':(exclude)src/plant/maintenance/maintenance.service.spec.ts',
+          ':(exclude)src/assets/allocations/allocation.service.ts',
+          ':(exclude)src/assets/allocations/allocation-return.spec.ts',
+          // 036 B11/B12 (2026-10-17): validation decorators on every module's DTOs — `@Max` to
+          // the column's precision, `@MaxLength`, `@IsBase64Payload`, and the boolean query
+          // transform. A DTO declares the shape of a request body and cannot call
+          // `ApprovalService`; the per-file `approve()` assertions above still guard each
+          // module's own approval. Also clears `allocation.dto.ts` and `stock.dto.ts`, which
+          // B12 changed and which had been failing this check since.
+          ':(exclude,glob)src/**/dto/**',
+          // 036 stream 3e (inventory, partners, labour), 2026-10-17: structured purchase orders
+          // behind the unchanged PO letter (M9), the stock ledger and valuation (M13), the register
+          // exports (M12), contractor document view and the RAG/BOCW exports (N4, N6), and the
+          // labour contractor company check. **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.** The PO's approval is still the letter's own
+          // 016 chain, untouched; the indent, muster, payment sheet and advance approvals keep
+          // their per-file `approve()` assertions above.
+          ':(exclude)src/inventory/exports',
+          ':(exclude)src/inventory/purchase-orders',
+          ':(exclude)src/inventory/stock/stock-query.service.ts',
+          ':(exclude)src/inventory/stock/stock.controller.ts',
+          ':(exclude)src/labour/labour-refs.service.spec.ts',
+          ':(exclude)src/partners/bocw',
+          ':(exclude)src/partners/compliance/compliance.service.ts',
+          ':(exclude)src/partners/contractors',
+          ':(exclude)src/partners/rag',
+          // 036 stream 3c (projects, documents, letters), 2026-10-18: the site picker reads the
+          // selected company (B2/B3). **Verified by grep: none of these files calls
+          // `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/projects/sites',
+          // 036 stream 3d (plant and assets screens), 2026-10-18: Excel exports for the logbook
+          // and fuel lists, asset stock paging/search/filters/export, and project names in the
+          // asset summary. **Verified by grep: none of these files calls `ApprovalService` or
+          // `approvals.submit`** — they read and format lists; nothing here submits or decides.
+          ':(exclude)src/plant/list-export.ts',
+          ':(exclude)src/assets/assets-refs.service.ts',
+          ':(exclude)src/assets/stock/asset-stock.controller.ts',
+          ':(exclude)src/assets/stock/asset-stock.service.ts',
+          ':(exclude)src/assets/summary/asset-summary.service.ts',
+          // 036 follow-ups (Wave 4), 2026-10-18: the wage-rate list names each row's project.
+          // **Verified by grep: neither file calls `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/labour/wage-rates/wage-rate.service.ts',
+          ':(exclude)src/labour/wage-rates/wage-rate.service.spec.ts',
+          // 037 (Bank Guarantees register), merged 2026-10-18: a new module — tenders with their
+          // EMD/PBG guarantees, documents, the 30-day expiry reminder and the register export.
+          // **Verified by grep: nothing under it calls `ApprovalService` or `approvals.submit`** —
+          // a guarantee is recorded and tracked, never submitted for approval.
+          ':(exclude)src/projects/bank-guarantees',
         ],
         {
           cwd: REPO_ROOT,

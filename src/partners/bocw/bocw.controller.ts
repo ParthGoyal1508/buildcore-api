@@ -6,16 +6,20 @@ import {
   Param,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
+import type { Response } from 'express';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { contentDispositionFor } from '../../common/storage/file-type';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { BOCWService } from './bocw.service';
 import { CreateBocwPaymentDto } from './dto/bocw.dto';
 
@@ -40,6 +44,24 @@ export class BOCWController {
     @Query('companyId') companyId?: string,
   ) {
     return this.bocw.list(caller, companyId);
+  }
+
+  @Get('export')
+  // Every project's liability and payments, rendered to a workbook (036 N6, B9).
+  @ExportThrottle()
+  @ApiOperation({ summary: 'Cess liability and balance per project, as Excel' })
+  async export(
+    @UserEntity() caller: AuthenticatedUser,
+    @Res() res: Response,
+    @Query('companyId') companyId?: string,
+  ) {
+    const { buffer, filename } = await this.bocw.exportXlsx(caller, companyId);
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    res.setHeader('Content-Disposition', contentDispositionFor(filename));
+    res.send(buffer);
   }
 
   @Get(':projectId/payments')

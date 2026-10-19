@@ -283,8 +283,11 @@ describe('Inventory module (e2e)', () => {
     await sys.paymentAllocation.deleteMany({
       where: { bill: { purchase: suitePurchases } },
     });
+    // By this suite's own vendors (036). Matching on allocations, as this did, could never match:
+    // the allocations were deleted on the line above, so every payment the suite made was left
+    // behind, pointing at a vendor about to be deleted.
     await sys.payment.deleteMany({
-      where: { allocations: { some: { bill: { purchase: suitePurchases } } } },
+      where: { vendorId: { in: createdVendorIds } },
     });
     await sys.purchaseBill.deleteMany({ where: { purchase: suitePurchases } });
     await sys.goodsReceiptNote.deleteMany({
@@ -1065,6 +1068,26 @@ describe('Inventory module (e2e)', () => {
       expect(created.body.lines[0].outstandingQuantity).toBeNull();
     });
 
+    it('refuses the requester approving their own indent (036 M8)', async () => {
+      const refused = await http()
+        .post(`/inventory/indents/${indentId}/approve`)
+        .set(auth())
+        .send({ lines: [{ lineId, approvedQuantity: 100 }] })
+        .expect(403);
+      expect(refused.body.message).toMatch(/someone else must approve/);
+
+      // Every approval below is made by this same admin, so the indent is handed to another
+      // requester — the API-less equivalent of a storekeeper having raised it.
+      const other = await sys.user.findFirst({
+        where: { email: { not: 'admin@buildcore.dev' } },
+        select: { id: true },
+      });
+      await sys.materialIndent.update({
+        where: { id: indentId },
+        data: { requestedByUserId: other.id },
+      });
+    });
+
     it('refuses an indent for a retired item', async () => {
       const retired = await http()
         .post(`/inventory/items?companyId=${companyId}`)
@@ -1226,6 +1249,506 @@ describe('Inventory module (e2e)', () => {
       expect(Object.keys(report.body).sort()).toEqual([
         'indentDemand',
         'reorderShortfall',
+      ]);
+    });
+  });
+
+  // ───────────────────────────────────────────────────── 036 hardening (M1, M3, M4, M6, M10)
+
+  describe('036 hardening', () => {
+    let hItem = '';
+    let hVendor = '';
+
+    const post = (path: string, body: Record<string, unknown>) =>
+      http().post(`${path}?companyId=${companyId}`).set(auth()).send(body);
+    const balanceOf = async (site: string) => {
+      const res = await http()
+        .get(`/inventory/stock/${hItem}/${site}`)
+        .set(auth())
+        .expect(200);
+      return res.body;
+    };
+    const receive = (quantity: number, site = siteA) =>
+      post('/inventory/purchases', {
+        siteId: site,
+        itemId: hItem,
+        vendorId: hVendor,
+        date: today(),
+        quantity,
+        rate: 100,
+      }).expect(201);
+    const issue = (quantity: number) =>
+      post('/inventory/issues', {
+        siteId: siteA,
+        itemId: hItem,
+        date: today(),
+        quantity,
+        issuedTo: 'Gang 036',
+      }).expect(201);
+
+    beforeAll(async () => {
+      const item = await post('/inventory/items', {
+        name: unique('Hardening'),
+        categoryId,
+        unit: 'BAG',
+      }).expect(201);
+      hItem = item.body.id;
+      createdItemIds.push(hItem);
+      const vendor = await post('/partners/vendors', {
+        name: unique('HardeningSupplier'),
+        type: 'material',
+      }).expect(201);
+      hVendor = vendor.body.id;
+      createdVendorIds.push(hVendor);
+    });
+
+    it('refuses to delete a purchase whose stock has been issued (M1)', async () => {
+      const purchase = await receive(10);
+      await issue(6);
+      const refused = await http()
+        .delete(`/inventory/purchases/${purchase.body.id}`)
+        .set(auth())
+        .expect(422);
+      expect(refused.body.availableStock).toBe(4);
+      expect((await balanceOf(siteA)).inStock).toBe(4);
+    });
+
+    it('refuses an inactive vendor on a new purchase (M6)', async () => {
+      const vendor = await post('/partners/vendors', {
+        name: unique('Inactive'),
+        type: 'material',
+      }).expect(201);
+      createdVendorIds.push(vendor.body.id);
+      await sys.vendor.update({
+        where: { id: vendor.body.id },
+        data: { active: false },
+      });
+      const refused = await post('/inventory/purchases', {
+        siteId: siteA,
+        itemId: hItem,
+        vendorId: vendor.body.id,
+        date: today(),
+        quantity: 1,
+        rate: 100,
+      }).expect(400);
+      expect(refused.body.message).toMatch(/inactive/);
+    });
+
+    it('refuses over-receipt and writes a shortage off at the destination (M3)', async () => {
+      await receive(10);
+      const before = await balanceOf(siteA);
+      const transfer = await post('/inventory/transfers', {
+        fromSiteId: siteA,
+        toSiteId: siteB,
+        itemId: hItem,
+        date: today(),
+        quantity: 10,
+      }).expect(201);
+      const id = transfer.body.id;
+
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({ status: 'received', receivedQuantity: 25 })
+        .expect(400);
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({ status: 'received', receivedQuantity: 8 })
+        .expect(400);
+      await http()
+        .patch(`/inventory/transfers/${id}`)
+        .set(auth())
+        .send({
+          status: 'received',
+          receivedQuantity: 8,
+          shortageReason: 'Two bags burst',
+        })
+        .expect(200);
+
+      expect((await balanceOf(siteB)).inStock).toBe(8);
+      // The source keeps what it sent out; the loss is the destination's (decision 3).
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock - 10);
+      const loss = await sys.stockLedgerEntry.findMany({
+        where: { referenceId: id, type: 'transfer_in_reversal' },
+      });
+      expect(loss).toHaveLength(1);
+      expect(Number(loss[0].quantity)).toBe(2);
+      const row = await sys.stockTransfer.findUnique({ where: { id } });
+      expect(row.shortageReason).toBe('Two bags burst');
+    });
+
+    it('lets only one of two simultaneous returns take an issue back (M4)', async () => {
+      await receive(5);
+      const issued = await issue(5);
+      const before = await balanceOf(siteA);
+      const giveBack = () =>
+        http()
+          .patch(`/inventory/issues/${issued.body.id}/return`)
+          .set(auth())
+          .send({
+            returnedNow: 3,
+            returnedOn: today(),
+            receivedBy: 'Store',
+          });
+      const statuses = (await Promise.all([giveBack(), giveBack()]))
+        .map((res) => res.status)
+        .sort();
+      expect(statuses).toEqual([200, 400]);
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock + 3);
+
+      // The old cumulative field still works.
+      await http()
+        .patch(`/inventory/issues/${issued.body.id}/return`)
+        .set(auth())
+        .send({ returnedQuantity: 5, returnedOn: today(), receivedBy: 'Store' })
+        .expect(200);
+      expect((await balanceOf(siteA)).inStock).toBe(before.inStock + 5);
+    });
+
+    it('takes cash without a reference, and one payment per Idempotency-Key (M10)', async () => {
+      // A bill to allocate against, so the teardown (which follows allocations) finds these.
+      await receive(10);
+      const cash = await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 100,
+        date: today(),
+        paymentMode: 'cash',
+      }).expect(201);
+      expect(cash.body.referenceNumber).toBe('');
+
+      await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 100,
+        date: today(),
+        paymentMode: 'bank_transfer',
+      }).expect(400);
+
+      const key = `e2e-${Date.now()}`;
+      const pay = () =>
+        http()
+          .post(`/inventory/payments?companyId=${companyId}`)
+          .set(auth())
+          .set('Idempotency-Key', key)
+          .send({
+            vendorId: hVendor,
+            amount: 50,
+            date: today(),
+            paymentMode: 'upi',
+            referenceNumber: 'UPI-036',
+          });
+      const [first, second] = await Promise.all([pay(), pay()]);
+      expect([first.status, second.status]).toEqual([201, 201]);
+      expect(first.body.id).toBe(second.body.id);
+      const third = await pay();
+      expect(third.body).toMatchObject({ id: first.body.id, replayed: true });
+      expect(await sys.payment.count({ where: { idempotencyKey: key } })).toBe(
+        1,
+      );
+
+      const again = await post('/inventory/payments', {
+        vendorId: hVendor,
+        amount: 75,
+        date: today(),
+        paymentMode: 'upi',
+        referenceNumber: 'UPI-036',
+      }).expect(201);
+      expect(again.body.warnings[0]).toMatch(/UPI-036 was already used/);
+    });
+  });
+
+  describe('036 M12/M13 registers: totals, filters, ledger, exports', () => {
+    let lItem = '';
+    let slipNo = '';
+
+    beforeAll(async () => {
+      const item = await http()
+        .post(`/inventory/items?companyId=${companyId}`)
+        .set(auth())
+        .send({ name: unique('Ledger'), categoryId, unit: 'BAG' })
+        .expect(201);
+      lItem = item.body.id;
+      createdItemIds.push(lItem);
+    });
+
+    it('walks one item at one store from an opening balance to the closing one', async () => {
+      await purchase({
+        itemId: lItem,
+        quantity: 30,
+        rate: 100,
+        date: '2026-01-05',
+      }).expect(201);
+      await purchase({
+        itemId: lItem,
+        quantity: 20,
+        rate: 100,
+        date: today(),
+      }).expect(201);
+      const issued = await http()
+        .post(`/inventory/issues?companyId=${companyId}`)
+        .set(auth())
+        .send({
+          siteId: siteA,
+          itemId: lItem,
+          date: today(),
+          quantity: 5,
+          issuedTo: 'Gang M13',
+        })
+        .expect(201);
+      slipNo = issued.body.slipNo;
+
+      const res = await http()
+        .get(`/inventory/stock/${lItem}/${siteA}/ledger?dateFrom=2026-02-01`)
+        .set(auth())
+        .expect(200);
+      expect(res.body).toMatchObject({
+        openingQuantity: 30,
+        inQuantity: 20,
+        outQuantity: 5,
+        closingQuantity: 45,
+        closingValue: 4500,
+      });
+      expect(
+        res.body.entries.map((e: { balance: number }) => e.balance),
+      ).toEqual([50, 45]);
+      expect(res.body.entries[1]).toMatchObject({
+        reference: slipNo,
+        counterparty: 'Gang M13',
+      });
+    });
+
+    it('totals every page of a filter and finds an issue by its slip number', async () => {
+      const purchases = await http()
+        .get(`/inventory/purchases?itemId=${lItem}&pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(purchases.body.totals).toMatchObject({
+        amount: 5000,
+        quantity: 50,
+      });
+      const issues = await http()
+        .get(`/inventory/issues?slipNo=${slipNo.toLowerCase()}`)
+        .set(auth())
+        .expect(200);
+      expect(
+        issues.body.issues.map((i: { itemId: string }) => i.itemId),
+      ).toContain(lItem);
+      const stock = await http()
+        .get(`/inventory/stock?pageSize=1`)
+        .set(auth())
+        .expect(200);
+      expect(typeof stock.body.totals.stockValue).toBe('number');
+    });
+
+    it('downloads the registers and the ledger as Excel', async () => {
+      for (const path of [
+        `purchases.xlsx?itemId=${lItem}`,
+        'payments.xlsx',
+        `issues.xlsx?itemId=${lItem}`,
+        'stock.xlsx',
+        `stock-ledger.xlsx?itemId=${lItem}&siteId=${siteA}`,
+      ]) {
+        const res = await http()
+          .get(`/inventory/exports/${path}`)
+          .set(auth())
+          .buffer(true)
+          .expect(200);
+        expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+      }
+    });
+  });
+
+  describe('036 M11 purchase files', () => {
+    const PNG_1PX =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+    it('serves the delivery photo and the bill typed from their bytes', async () => {
+      const res = await purchase({
+        photoFile: PNG_1PX,
+        billFile: Buffer.from('%PDF-1.4 bill').toString('base64'),
+        billContentType: 'text/html',
+      }).expect(201);
+      expect(res.body.hasPhoto).toBe(true);
+      const photo = await http()
+        .get(`/inventory/purchases/${res.body.id}/photo`)
+        .set(auth())
+        .expect(200);
+      expect(photo.headers['content-type']).toMatch(/^image\//);
+      const bill = await http()
+        .get(`/inventory/purchases/${res.body.id}/bill`)
+        .set(auth())
+        .expect(200);
+      // The declared `text/html` is ignored: what is served is what the bytes are.
+      expect(bill.headers['content-type']).toMatch(/application\/pdf/);
+    });
+
+    it('refuses a bill that is not a PDF or a photo', async () => {
+      const res = await purchase({
+        billFile: Buffer.from('<html>not a bill</html>').toString('base64'),
+      }).expect(415);
+      expect(res.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
+    });
+  });
+
+  /**
+   * 036 M9: purchase orders structured behind the unchanged PO letter.
+   *
+   * The PO letter is planted already issued — composing one runs it through its approval chain,
+   * which is the letters suites' business, not this one's. What is asserted is what inventory
+   * builds from it: the lines it printed, a delivery received against a line, the refusal past
+   * what was ordered, and the trace from the PO to the GRN and its bill.
+   */
+  describe('036 M9 structured purchase orders', () => {
+    let poItem = '';
+    let poItemCode = '';
+    let poVendor = '';
+    let letterId = '';
+
+    const post = (path: string, body: Record<string, unknown>) =>
+      http().post(`${path}?companyId=${companyId}`).set(auth()).send(body);
+
+    beforeAll(async () => {
+      const item = await post('/inventory/items', {
+        name: unique('POCement'),
+        categoryId,
+        unit: 'BAG',
+      }).expect(201);
+      poItem = item.body.id;
+      poItemCode = item.body.code;
+      createdItemIds.push(poItem);
+      const vendor = await post('/partners/vendors', {
+        name: unique('POSupplier'),
+        type: 'material',
+      }).expect(201);
+      poVendor = vendor.body.id;
+      createdVendorIds.push(poVendor);
+
+      const kind = await sys.letterKind.findFirst({
+        where: { key: 'letter_purchase_order' },
+        include: { templates: true },
+      });
+      const letter = await sys.issuedLetter.create({
+        data: {
+          companyId,
+          letterKindId: kind.id,
+          templateId: kind.templates[0].id,
+          subjectType: 'vendor',
+          subjectId: poVendor,
+          referenceNo: unique('PO/'),
+          composedVariables: {
+            lineItems: `${poItemCode} - Cement | BAG | 100 | 410\nFreight | LS | 1 | 2500`,
+            gstRate: '18',
+          },
+          renderedRef: 'e2e-not-rendered',
+          issuedAt: new Date(),
+          issuedBy: 'e2e',
+        },
+      });
+      letterId = letter.id;
+    });
+
+    afterAll(async () => {
+      await sys.purchaseOrder.deleteMany({ where: { letterId } });
+      await sys.issuedLetter.deleteMany({ where: { id: letterId } });
+    });
+
+    it('structures the issued PO from the lines it printed', async () => {
+      const res = await http()
+        .get(`/inventory/purchase-orders/${letterId}`)
+        .set(auth())
+        .expect(200);
+      expect(res.body).toMatchObject({
+        letterId,
+        vendorId: poVendor,
+        gstPercent: 18,
+        orderedValue: 43500,
+        orderedTotal: 51330,
+        status: 'not_received',
+      });
+      expect(res.body.lines).toEqual([
+        expect.objectContaining({
+          lineNo: 1,
+          itemId: poItem,
+          quantity: 100,
+          rate: 410,
+          remainingQuantity: 100,
+        }),
+        expect.objectContaining({ lineNo: 2, itemId: null, amount: 2500 }),
+      ]);
+    });
+
+    it('receives against a line, refuses past what was ordered, and traces PO → GRN → bill', async () => {
+      const open = await http()
+        .get(
+          `/inventory/purchase-orders/open-lines?vendorId=${poVendor}&itemId=${poItem}`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(open.body.lines).toHaveLength(1);
+      const lineId = open.body.lines[0].id;
+
+      const delivery = {
+        siteId: siteA,
+        itemId: poItem,
+        vendorId: poVendor,
+        date: today(),
+        rate: 410,
+        purchaseOrderLineId: lineId,
+      };
+      const first = await post('/inventory/purchases', {
+        ...delivery,
+        quantity: 60,
+      }).expect(201);
+      expect(first.body).toMatchObject({
+        purchaseOrderLineId: lineId,
+        purchaseOrderLineNo: 1,
+      });
+
+      const over = await post('/inventory/purchases', {
+        ...delivery,
+        quantity: 40.5,
+      }).expect(400);
+      expect(over.body).toMatchObject({
+        code: 'PO_LINE_OVER_RECEIPT',
+        remainingQuantity: 40,
+      });
+
+      // Another vendor cannot deliver against this PO.
+      await post('/inventory/purchases', {
+        ...delivery,
+        vendorId: vendorId,
+        quantity: 1,
+      }).expect(400);
+
+      const traced = await http()
+        .get(`/inventory/purchase-orders/${letterId}`)
+        .set(auth())
+        .expect(200);
+      expect(traced.body).toMatchObject({
+        status: 'partly_received',
+        receivedValue: 24600,
+        billedAmount: 24600,
+        paidAmount: 0,
+      });
+      expect(traced.body.lines[0]).toMatchObject({
+        receivedQuantity: 60,
+        remainingQuantity: 40,
+      });
+      expect(traced.body.lines[0].deliveries).toEqual([
+        expect.objectContaining({
+          purchaseId: first.body.id,
+          grnNumber: first.body.grnNumber,
+          quantity: 60,
+          billedAmount: 24600,
+        }),
+      ]);
+
+      const list = await http()
+        .get(`/inventory/purchase-orders?vendorId=${poVendor}`)
+        .set(auth())
+        .expect(200);
+      expect(list.body.purchaseOrders).toEqual([
+        expect.objectContaining({ letterId, receivedValue: 24600 }),
       ]);
     });
   });

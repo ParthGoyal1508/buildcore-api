@@ -24,6 +24,7 @@ import { callerFrom } from '../caller-context';
 import {
   CreateLeaveApplicationDto,
   LeaveBalanceQueryDto,
+  LeaveDayCountQueryDto,
 } from './dto/leave-application.dto';
 import { LeaveService } from './leave.service';
 import { SelfService } from '../../common/decorators/route-access.decorator';
@@ -65,6 +66,26 @@ export class LeaveController {
     return this.leave.getBalance(
       callerFrom(user, request),
       query.financialYear,
+    );
+  }
+
+  @Get('day-count')
+  @ApiOperation({
+    summary: 'How many leave days a range would charge (036 G3)',
+    description:
+      "Counted exactly as an application is: the employee's own site weekly off and holidays " +
+      'are excluded. The apply form used to skip Saturday and Sunday itself, so on a six-day ' +
+      'week it allowed applications the server then refused. Lists the excluded dates too.',
+  })
+  async dayCount(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Query() query: LeaveDayCountQueryDto,
+  ) {
+    return this.leave.previewDayCount(
+      callerFrom(user, request),
+      query.fromDate,
+      query.toDate,
     );
   }
 

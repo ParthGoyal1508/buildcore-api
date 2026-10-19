@@ -78,6 +78,15 @@ export interface NestConfig {
    */
   maxRequestBodySize: string;
   /**
+   * The request-body ceiling for every route that does **not** carry a file (036 B8).
+   *
+   * `maxRequestBodySize` above applies only to the upload routes, which `large-body.ts` derives
+   * from their DTOs (a field validated `@IsBase64()`/`@IsBase64Payload()`, or `@LargeBody()`).
+   * Everything else is JSON a person typed, and a small ceiling bounds what one request can make
+   * the server buffer. Env `DEFAULT_REQUEST_BODY_SIZE`.
+   */
+  defaultRequestBodySize: string;
+  /**
    * How many reverse proxies sit in front of this API, or `false` for none.
    *
    * Express's `trust proxy`. Left `false`, `req.ip` is the address of whatever
@@ -246,6 +255,19 @@ export interface SecurityConfig {
      * Both are worth deciding on; neither belongs in a defect fix.
      */
     refreshLimit: number;
+    /**
+     * The app-wide ceiling (036 B9): requests per `appTtlSeconds` per source address, across
+     * **every** route, as its own named throttler (`app`) so the auth limits above are unchanged.
+     *
+     * Generous on purpose. One page load fires a dozen requests, widgets poll, and behind an
+     * office NAT every person shares one address — the same reason `refreshLimit` is high. This
+     * is a backstop against a runaway client or a scripted flood, not a per-user quota.
+     */
+    appLimit: number;
+    appTtlSeconds: number;
+    /** Exports (activity CSV, report export) per window per address — each one is a full scan. */
+    exportLimit: number;
+    exportTtlSeconds: number;
   };
 }
 
@@ -608,14 +630,19 @@ export interface WorkspaceConfig {
   offlineQueue: {
     /**
      * How stale a client-declared `capturedAt` may be before a synced punch is
-     * rejected outright (FR-012). Bounds how far back an offline device can
-     * retroactively write attendance.
+     * rejected outright (FR-012). **No longer read by the employee punch** (036 G1),
+     * which believes the phone only within `clockSkewToleranceMinutes`; still read by
+     * labour attendance.
      */
     maxAgeHours: number;
     /**
      * Client and server clocks are never exactly aligned; a punch whose
      * `capturedAt` trails `receivedAt` by less than this is treated as a normal
      * online punch rather than being mislabelled an offline sync (research.md §4).
+     *
+     * 036 G1: for the employee punch this is also the whole window in which the
+     * phone's clock is believed, in either direction. Further ahead is refused;
+     * further behind is recorded at the server's receive time.
      */
     clockSkewToleranceMinutes: number;
   };

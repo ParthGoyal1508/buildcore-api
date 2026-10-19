@@ -1,6 +1,13 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /**
  * Paging for `GET /approvals/queue` (016 FR-010, T044).
@@ -32,5 +39,6 @@ export class ApprovalQueueQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   cursor?: string;
 }

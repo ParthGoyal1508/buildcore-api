@@ -312,3 +312,76 @@ describe('ApprovalHistoryService.historyFor', () => {
     expect(tx.approvalInstance.findMany).not.toHaveBeenCalled();
   });
 });
+
+// 036 D1/D2: date range, search, requester and the CSV export.
+describe('ApprovalHistoryService filters (036 D1)', () => {
+  it('adds nothing when no filter is given — the listing is as before', async () => {
+    const { service, tx } = harness();
+    await service.historyFor(caller('me', [Permission.PAYROLL]), {});
+    const { where } = tx.approvalInstance.findMany.mock.calls[0][0];
+    expect(where.AND).toBeUndefined();
+  });
+
+  it('turns from/to into business-day instants on the latest action', async () => {
+    const { service, tx } = harness();
+    await service.historyFor(caller('me', [Permission.PAYROLL]), {
+      from: '2026-10-01',
+      to: '2026-10-31',
+    });
+    const { where } = tx.approvalInstance.findMany.mock.calls[0][0];
+    // Asia/Kolkata: the 1st starts at 18:30 UTC the day before; the 31st ends at 18:30 UTC on it.
+    expect(where.AND).toContainEqual({
+      updatedAt: {
+        gte: new Date('2026-09-30T18:30:00.000Z'),
+        lt: new Date('2026-10-31T18:30:00.000Z'),
+      },
+    });
+    // The visibility rule is untouched.
+    expect(where.OR).toHaveLength(4);
+  });
+
+  it('refuses a From after the To', async () => {
+    const { service } = harness();
+    await expect(
+      service.historyFor(caller('me'), { from: '2026-10-05', to: '2026-10-01' }),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('searches the subject and the people who raised or decided', async () => {
+    const { service, tx } = harness();
+    await service.historyFor(caller('me'), { q: 'ravi', requestedBy: 'raiser' });
+    const { where } = tx.approvalInstance.findMany.mock.calls[0][0];
+    expect(where.AND).toContainEqual({ originatorUserId: 'raiser' });
+    expect(where.AND).toContainEqual({
+      OR: [
+        { subject: { contains: 'ravi', mode: 'insensitive' } },
+        { originatorUserId: { in: ['raiser', 'site-1', 'hr-1'] } },
+        {
+          decisions: {
+            some: { actorUserId: { in: ['raiser', 'site-1', 'hr-1'] } },
+          },
+        },
+      ],
+    });
+  });
+
+  it('exposes the latest action as lastActionAt', async () => {
+    const { service } = harness();
+    const page = await service.historyFor(caller('me', [Permission.PAYROLL]));
+    expect(page.items[0].lastActionAt).toEqual(
+      new Date('2026-10-02T09:00:00Z'),
+    );
+  });
+
+  it('exports one CSV row per item under the same filters', async () => {
+    const { service, tx } = harness();
+    const rows = await service.exportRows(caller('me', [Permission.PAYROLL]), {
+      status: 'all',
+    });
+    expect(rows[0][0]).toBe('Subject');
+    expect(rows[1]).toEqual(
+      expect.arrayContaining(['RA bill RA-03', 'pending', 'Ravi Raiser']),
+    );
+    expect(tx.approvalInstance.findMany.mock.calls[0][0].take).toBe(5_000);
+  });
+});

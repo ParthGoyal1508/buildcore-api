@@ -36,6 +36,7 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   roleId?: string;
 
   @ApiPropertyOptional({
@@ -44,6 +45,7 @@ export class CreateUserDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({
@@ -52,6 +54,7 @@ export class CreateUserDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({
@@ -73,5 +76,6 @@ export class CreateUserDto {
   // The invitee's own rule, reused rather than restated — the two paths must not
   // be able to drift apart on what counts as an acceptable password (FR-016).
   @IsNewPassword()
+  @MaxLength(200)
   password?: string;
 }

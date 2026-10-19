@@ -403,7 +403,10 @@ describe('Payroll approval chain (e2e)', () => {
     await sys.auditLogEntry.deleteMany({ where: { companyId } });
     await sys.attendanceModification.deleteMany({ where: { employeeId } });
     await sys.punchRecord.deleteMany({ where: { employeeId } });
-    await sys.payrollLineItem.deleteMany({ where: {} }).catch(() => undefined);
+    // 036: scoped to this company's runs — `where: {}` deleted every line item in the database.
+    await sys.payrollLineItem
+      .deleteMany({ where: { payrollRun: { companyId } } })
+      .catch(() => undefined);
     await sys.bankSheetExport.deleteMany({ where: { companyId } });
     await sys.payrollRun.deleteMany({ where: { companyId } });
     await sys.employee.deleteMany({ where: { companyId } });

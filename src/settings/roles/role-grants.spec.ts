@@ -14,7 +14,7 @@ describe('RolesService — grant rows', () => {
     const created: Record<string, unknown>[] = [];
     const prisma = {
       role: {
-        findUnique: async () => null,
+        findFirst: async () => null,
         create: async (args: { data: Record<string, unknown> }) => {
           created.push(args.data);
           return { id: 'r-1', ...args.data };

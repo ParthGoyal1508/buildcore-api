@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -33,6 +34,7 @@ export class CreateReimbursementCategoryDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   receiptRequiredAbove?: number;
 
   @ApiPropertyOptional({ default: true })
@@ -45,6 +47,7 @@ export class CreateReimbursementCategoryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 

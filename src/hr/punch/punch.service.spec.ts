@@ -103,6 +103,8 @@ describe('PunchService', () => {
        * it on, so the flag must never be what decides whether these tests exercise it.
        */
       enforced?: boolean;
+      /** The company's payroll lock day; 7 unless a test needs the lock to bite (036 G1). */
+      lockDay?: number;
     } = {},
   ) => {
     const {
@@ -111,6 +113,7 @@ describe('PunchService', () => {
       enrolmentStatus = FaceEnrolmentStatus.enrolled,
       assignment,
       enforced = false,
+      lockDay = 7,
     } = opts;
     biometrics = new FakeBiometrics();
 
@@ -175,7 +178,7 @@ describe('PunchService', () => {
       } as never,
       sites as never,
       {
-        getPayrollLockDay: jest.fn().mockResolvedValue(7),
+        getPayrollLockDay: jest.fn().mockResolvedValue(lockDay),
         // 020 FR-012b. 50 is the product default; these tests send no `accuracyMeters`, so the
         // threshold is not reached and their verdicts are unchanged by its arrival.
         getPunchAccuracyMaxMetres: jest.fn().mockResolvedValue(50),
@@ -270,9 +273,8 @@ describe('PunchService', () => {
     it('stamps the calendar day and marks the punch employee-sourced', async () => {
       const { service, created } = build({ dayPunches: [] });
       // The clock is pinned two minutes after the capture. A fixed `capturedAt`
-      // against the real clock is a time bomb: the offline-age gate (FR-012)
-      // rejects anything over 72 hours old, so this test passed for three days
-      // after the date was written and then failed for good.
+      // against the real clock is a time bomb: since 036 G1 a capture more than five
+      // minutes old is replaced by the server's time, which would move the day.
       jest.useFakeTimers().setSystemTime(new Date('2026-08-31T18:39:00.000Z'));
       await service.submitPunch(
         caller,
@@ -533,14 +535,17 @@ describe('PunchService', () => {
         // checklists/refusal.md CHK037. The lock is checked first and deliberately stays first:
         // "that period is closed" is permanent and actionable, where a refusal invites a retry that
         // will never succeed. A 423 here rather than a 422.
-        const { service, refusals } = build({ enforced: true });
-        const lastPeriod = new Date();
-        lastPeriod.setUTCMonth(lastPeriod.getUTCMonth() - 2);
+        // 036 G1: a self-punch can no longer be backdated, so the lock is reached only at a period
+        // boundary — 23:58 IST on the last day, received at 00:02 IST on the 1st, with lock day 1.
+        const { service, refusals } = build({ enforced: true, lockDay: 1 });
+        jest
+          .useFakeTimers()
+          .setSystemTime(new Date('2026-08-31T18:32:00.000Z'));
 
         await expect(
           service.submitPunch(
             caller,
-            punchDto({ ...FAR, capturedAt: lastPeriod.toISOString() }),
+            punchDto({ ...FAR, capturedAt: '2026-08-31T18:28:00.000Z' }),
           ),
         ).rejects.toMatchObject({ status: 423 });
 
@@ -725,30 +730,16 @@ describe('PunchService', () => {
       expect(result.faceMatchResult).toBe(FaceMatchResult.matched);
     });
 
-    it('rejects a punch older than the offline-queue window', async () => {
-      const { service } = build();
-      // Stale, but still inside the current (unlocked) month, so the offline-age
-      // gate is the one that must fire.
-      const now = new Date();
-      const stale = new Date(now.getTime() - 80 * 3_600_000);
-      if (stale.getUTCMonth() !== now.getUTCMonth()) {
-        // Near a month boundary this fixture would trip the payroll lock instead;
-        // pin "now" to mid-month so the test asserts the gate it means to.
-        jest.useFakeTimers().setSystemTime(new Date(Date.UTC(2026, 7, 20)));
-      }
-      const capturedAt = new Date(Date.now() - 80 * 3_600_000).toISOString();
-      await expect(
-        service.submitPunch(caller, punchDto({ capturedAt })),
-      ).rejects.toThrow(/offline sync window/);
-    });
-
-    it('returns 423 for a punch inside a locked payroll period', async () => {
-      const { service } = build();
-      // Two months back is locked regardless of the lock day.
-      const old = new Date();
-      old.setUTCMonth(old.getUTCMonth() - 2);
+    it('returns 423 for a punch at a period boundary once the lock day has passed', async () => {
+      // 036 G1: two months back is no longer reachable — the time is resolved to within five
+      // minutes of the server's — so the lock bites only across midnight on the 1st.
+      const { service } = build({ lockDay: 1 });
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-31T18:32:00.000Z'));
       const error = await service
-        .submitPunch(caller, punchDto({ capturedAt: old.toISOString() }))
+        .submitPunch(
+          caller,
+          punchDto({ capturedAt: '2026-08-31T18:28:00.000Z' }),
+        )
         .catch((e) => e);
 
       expect(error).toBeInstanceOf(HttpException);
@@ -756,55 +747,25 @@ describe('PunchService', () => {
     });
   });
 
-  describe('offline sync detection', () => {
-    it('does not flag ordinary clock drift as an offline sync', async () => {
-      const { service } = build();
-      const slightlyStale = new Date(Date.now() - 60_000).toISOString();
+  /**
+   * 036 G1 (decision 5). The server's receive time is authoritative; the phone's clock is believed
+   * only within ±5 minutes, and a time ahead of the server by more than that is refused.
+   */
+  describe('punch time', () => {
+    it('keeps the phone time within the skew tolerance', async () => {
+      const { service, created } = build();
+      const claimed = new Date(Date.now() - 4 * 60_000);
       const result = await service.submitPunch(
         caller,
-        punchDto({ capturedAt: slightlyStale }),
+        punchDto({ capturedAt: claimed.toISOString() }),
       );
       expect(result.isOfflineSync).toBe(false);
-    });
-
-    it('flags a punch queued well before it arrived', async () => {
-      const { service } = build();
-      const queued = new Date(Date.now() - 3 * 3_600_000).toISOString();
-      const result = await service.submitPunch(
-        caller,
-        punchDto({ capturedAt: queued }),
+      expect((created[0].capturedAt as Date).toISOString()).toBe(
+        claimed.toISOString(),
       );
-      expect(result.isOfflineSync).toBe(true);
     });
 
-    it('does not flag a punch just inside the skew tolerance', async () => {
-      // The tolerance is configured at 5 minutes; 4 is ordinary drift, and
-      // labelling it an offline sync would mark almost every normal punch.
-      const { service } = build();
-      const result = await service.submitPunch(
-        caller,
-        punchDto({
-          capturedAt: new Date(Date.now() - 4 * 60_000).toISOString(),
-        }),
-      );
-      expect(result.isOfflineSync).toBe(false);
-    });
-
-    it('flags a punch just outside the skew tolerance', async () => {
-      const { service } = build();
-      const result = await service.submitPunch(
-        caller,
-        punchDto({
-          capturedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
-        }),
-      );
-      expect(result.isOfflineSync).toBe(true);
-    });
-
-    it('does not flag a punch whose clock runs ahead of the server', async () => {
-      // A client clock a little fast produces a future capturedAt. That is drift
-      // in the other direction, not a queued punch, and treating it as offline
-      // would misreport a perfectly ordinary punch.
+    it('accepts a phone clock a little ahead of the server', async () => {
       const { service } = build();
       const result = await service.submitPunch(
         caller,
@@ -813,41 +774,63 @@ describe('PunchService', () => {
       expect(result.isOfflineSync).toBe(false);
     });
 
-    it('records the declared capture time and the receipt time separately', async () => {
-      // FR-012 requires both: flattening them into one timestamp would hide that
-      // the punch was written retroactively.
-      const queued = new Date(Date.now() - 2 * 3_600_000);
+    it('refuses a time ahead of the server by more than the tolerance', async () => {
       const { service, created } = build();
-      await service.submitPunch(
-        caller,
-        punchDto({ capturedAt: queued.toISOString() }),
-      );
-
-      const row = created[0] as {
-        capturedAt: Date;
-        receivedAt: Date;
-        isOfflineSync: boolean;
-      };
-      expect(row.capturedAt.toISOString()).toBe(queued.toISOString());
-      expect(row.receivedAt.getTime()).toBeGreaterThan(
-        row.capturedAt.getTime(),
-      );
-      expect(row.isOfflineSync).toBe(true);
-    });
-
-    it('validates a synced punch against its declared date, not the arrival time', async () => {
-      // The whole point of honouring capturedAt: a punch queued inside a locked
-      // period stays locked even though it arrives while the current period is
-      // open.
-      const { service } = build();
-      const lastPeriod = new Date();
-      lastPeriod.setUTCMonth(lastPeriod.getUTCMonth() - 2);
       await expect(
         service.submitPunch(
           caller,
-          punchDto({ capturedAt: lastPeriod.toISOString() }),
+          punchDto({
+            capturedAt: new Date(Date.now() + 6 * 60_000).toISOString(),
+          }),
         ),
-      ).rejects.toBeInstanceOf(HttpException);
+      ).rejects.toThrow(/later than the server time/);
+      expect(created).toHaveLength(0);
+    });
+
+    it('stamps the server time on a backdated punch rather than the phone time', async () => {
+      // The bug: a phone clock set back three hours used to put the punch three hours earlier.
+      const { service, created } = build();
+      const backdated = new Date(Date.now() - 3 * 3_600_000);
+      const result = await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: backdated.toISOString() }),
+      );
+
+      const row = created[0] as { capturedAt: Date; receivedAt: Date };
+      expect(row.capturedAt.getTime()).toBe(row.receivedAt.getTime());
+      expect(row.capturedAt.getTime()).toBeGreaterThan(
+        backdated.getTime() + 2 * 3_600_000,
+      );
+      // Flagged, so an admin can see the phone's clock was not used.
+      expect(result.isOfflineSync).toBe(true);
+    });
+
+    it('accepts a capture just outside the tolerance at the server time', async () => {
+      const { service, created } = build();
+      const result = await service.submitPunch(
+        caller,
+        punchDto({
+          capturedAt: new Date(Date.now() - 6 * 60_000).toISOString(),
+        }),
+      );
+      expect(result.isOfflineSync).toBe(true);
+      const row = created[0] as { capturedAt: Date; receivedAt: Date };
+      expect(row.capturedAt.getTime()).toBe(row.receivedAt.getTime());
+    });
+
+    it('cannot reach a locked period by backdating the phone', async () => {
+      // Used to be "validates a synced punch against its declared date": a punch dated two
+      // months back was refused 423. It is now simply recorded today, which is the point.
+      const { service, created } = build();
+      const lastPeriod = new Date();
+      lastPeriod.setUTCMonth(lastPeriod.getUTCMonth() - 2);
+      await service.submitPunch(
+        caller,
+        punchDto({ capturedAt: lastPeriod.toISOString() }),
+      );
+      expect((created[0].capturedAt as Date).getUTCMonth()).toBe(
+        new Date().getUTCMonth(),
+      );
     });
   });
 

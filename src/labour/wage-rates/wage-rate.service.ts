@@ -41,6 +41,8 @@ export interface WageRateView {
   effectiveFrom: string;
   effectiveTo: string | null;
   isCurrent: boolean;
+  /** On the list only (036 follow-up), so a screen need not hold every project to name the row. */
+  projectName?: string | null;
 }
 
 export interface ResolvedRate {
@@ -116,7 +118,14 @@ export class WageRateService {
           orderBy: [{ effectiveFrom: 'desc' }],
         }),
     );
-    return rows.map((row) => this.toView(row));
+    const names = await this.projects.getProjectNamesByIds(
+      rows.map((row) => row.projectId),
+      rlsContextFor(caller),
+    );
+    return rows.map((row) => ({
+      ...this.toView(row),
+      projectName: names.get(row.projectId) ?? null,
+    }));
   }
 
   /**

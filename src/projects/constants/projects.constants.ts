@@ -48,3 +48,11 @@ export const PROJECT_CODE_INFIX = 'PRJ';
  * Principle III.
  */
 export const HTTP_STATUS_LOCKED = 423;
+
+/**
+ * The refusal when a caller holding `PROJECTS` but not `PROJECT_LOCK` tries to lock or unlock a
+ * project (036 review decision 5). Its own code so the screen can say which permission is missing
+ * rather than showing a generic 403.
+ */
+export const PROJECT_LOCK_PERMISSION_REQUIRED =
+  'PROJECT_LOCK_PERMISSION_REQUIRED';

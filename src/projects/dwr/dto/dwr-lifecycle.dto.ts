@@ -9,6 +9,7 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * Reversing an approval (022 FR-019).
@@ -68,6 +69,7 @@ export class RepairDoneQtyDto {
   @ArrayNotEmpty()
   @ArrayMaxSize(1000)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   boqItemIds!: string[];
 
   @ApiProperty({
@@ -97,6 +99,7 @@ export class AddDwrAttachmentDto {
   @ApiProperty({ description: 'The file, base64-encoded.' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   data!: string;
 
   @ApiProperty({
@@ -119,5 +122,6 @@ export class AddDwrAttachmentDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   taskId?: string;
 }

@@ -31,10 +31,13 @@ import { nextRaBillNumber, packageLabel } from './bill-number';
 import {
   billTotals,
   lineTotals,
+  money,
+  quantity,
   retentionBalance,
   retentionOn,
 } from './bill-totals';
 import { webRoutes } from '../../common/web-routes';
+import { ListPaging, Paged, UNPAGED, shapeList } from '../list-paging';
 
 /** One award line as the work order captures it. */
 export interface AwardLineInput {
@@ -447,7 +450,7 @@ export class RaBillsService {
             thisPeriodQty: 0,
             toDateQty: measured,
             // Negative where already over-measured. Reported, not clamped.
-            remainingQty: Math.round((awarded - measured) * 1000) / 1000,
+            remainingQty: quantity(awarded - measured),
             rate: item.rate.toNumber(),
             amount: 0,
           };
@@ -608,17 +611,27 @@ export class RaBillsService {
   async listForProject(
     ctx: RlsContext,
     projectId: string,
-  ): Promise<RaBillView[]> {
+    paging: ListPaging = UNPAGED,
+    workOrderId?: string,
+  ): Promise<RaBillView[] | Paged<RaBillView>> {
+    const where = { projectId, ...(workOrderId ? { workOrderId } : {}) };
     const bills = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.rABill.findMany({
-        where: { projectId },
-        orderBy: { billingDate: 'desc' },
+        where,
+        // `id` breaks ties so a page boundary between two bills of one date is stable (036 I26).
+        orderBy: [{ billingDate: 'desc' }, { id: 'desc' }],
         select: { id: true },
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
     const out: RaBillView[] = [];
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
-    return out;
+    return shapeList(paging, out, () =>
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.rABill.count({ where }),
+      ),
+    );
   }
 
   /**
@@ -627,10 +640,11 @@ export class RaBillsService {
    * The bill becomes `submitted` and enters the `ra_bill` chain. **Nothing is approved here** — the
    * spine decides, and `onApprovalCompleted` below is what marks the bill certified.
    *
-   * Order matters: the spine is asked **first**, and the bill's own status is written only once the
-   * instance exists. A bill flipped to `submitted` with no instance behind it is a bill waiting on
-   * nobody, sitting in no queue, that looks to its author as though it were submitted — the exact
-   * silent failure T022 is about, arriving on the happy path instead of the error path.
+   * Order (036 I3): the status moves draft → submitted **conditionally**, then the spine is asked,
+   * and a spine failure puts the bill back to draft. The spine used to be asked first, which kept a
+   * bill from ever sitting `submitted` with no instance — and let a double-click reach the spine
+   * twice. The compensating revert keeps the first property; the conditional update adds the
+   * second. See `submitForCertification`.
    */
   /**
    * Throws away a draft bill that should not exist (2026-10-08).
@@ -757,8 +771,21 @@ export class RaBillsService {
     billId: string,
   ): Promise<RaBillView> {
     await this.refuseIfPackaged(ctx, billId, 'sent for approval');
-    const bill = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.rABill.findFirst({
+
+    // 036 I3. Two things happen in one transaction, under a lock on the work order:
+    //
+    //  1. **The bill is re-measured against the award.** Drafts are left out of measured-to-date
+    //     (see `measuredToDate`), so two drafts could each take the whole remaining award and both
+    //     pass composition. Submission is where a draft starts to count, so it is where the ceiling
+    //     has to be checked again — against every bill already out of draft, plus this one.
+    //  2. **The status moves draft → submitted conditionally**, and only the caller whose update
+    //     matched goes on to open an approval. A double-click used to open the approval first and
+    //     write the status after, so both clicks could reach the spine.
+    //
+    // The work-order lock serialises submissions on one award: the second waits, then reads the
+    // first as submitted and is measured against it. `revise` takes the same lock in `priceLines`.
+    const bill = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const found = await tx.rABill.findFirst({
         where: { id: billId },
         select: {
           id: true,
@@ -766,41 +793,73 @@ export class RaBillsService {
           status: true,
           billNumber: true,
           projectId: true,
+          workOrderId: true,
+          lines: { select: { workOrderBoqItemId: true, quantity: true } },
         },
-      }),
-    );
-    if (!bill) throw new NotFoundException('RA bill not found');
-    if (bill.status !== RaBillStatus.draft) {
-      throw new ConflictException({
-        statusCode: 409,
-        code: BILLING_ERRORS.notDraft,
-        message:
-          `This bill is already ${bill.status}. A bill out of draft is either waiting on somebody ` +
-          `or certified; revising its quantities is the way to change it.`,
       });
-    }
+      if (!found) throw new NotFoundException('RA bill not found');
+      if (found.status !== RaBillStatus.draft) {
+        throw this.notDraft(found.status);
+      }
 
-    await this.approvals.submit({
-      companyId: bill.companyId,
-      actionType: ACTION_RA_BILL,
-      entityType: ACTION_RA_BILL,
-      entityId: bill.id,
-      originatorUserId: caller.id,
-      subject: `RA bill ${bill.billNumber}`,
-      href: webRoutes.projectRaBills(bill.projectId),
-      viewPermission: Permission.PROJECT_FINANCIALS,
+      if (found.workOrderId) {
+        // `priceLines` takes the work-order lock and refuses `RA_BILL_EXCEEDS_AWARD`; its
+        // figures are discarded, because the bill's frozen rates are what was composed.
+        await this.priceLines(tx, found.workOrderId, {
+          lines: found.lines.map((line) => ({
+            workOrderBoqItemId: line.workOrderBoqItemId,
+            quantity: line.quantity.toNumber(),
+          })),
+          excludeBillId: found.id,
+        });
+      }
+
+      const flipped = await tx.rABill.updateMany({
+        where: { id: found.id, status: RaBillStatus.draft },
+        data: { status: RaBillStatus.submitted, submittedAt: new Date() },
+      });
+      if (flipped.count !== 1) {
+        // Somebody else's submit (or a discard) won the row between the read and the write.
+        throw this.notDraft(RaBillStatus.submitted);
+      }
+      return found;
     });
 
-    await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.rABill.update({
-        where: { id: bill.id },
-        data: {
-          status: RaBillStatus.submitted,
-          submittedAt: new Date(),
-        },
-      }),
-    );
+    try {
+      await this.approvals.submit({
+        companyId: bill.companyId,
+        actionType: ACTION_RA_BILL,
+        entityType: ACTION_RA_BILL,
+        entityId: bill.id,
+        originatorUserId: caller.id,
+        subject: `RA bill ${bill.billNumber}`,
+        href: webRoutes.projectRaBills(bill.projectId),
+        viewPermission: Permission.PROJECT_FINANCIALS,
+      });
+    } catch (error) {
+      // Put it back. A bill left `submitted` with no instance behind it waits on nobody, sits in
+      // no queue, and looks to its author exactly like one that was submitted — the reason the old
+      // order asked the spine first. Conditional on `submitted`, so a completion that somehow
+      // landed in between is never undone.
+      await withRlsContext(this.prisma, ctx, (tx) =>
+        tx.rABill.updateMany({
+          where: { id: bill.id, status: RaBillStatus.submitted },
+          data: { status: RaBillStatus.draft, submittedAt: null },
+        }),
+      );
+      throw error;
+    }
     return this.view(ctx, bill.id);
+  }
+
+  private notDraft(status: string): ConflictException {
+    return new ConflictException({
+      statusCode: 409,
+      code: BILLING_ERRORS.notDraft,
+      message:
+        `This bill is already ${status}. A bill out of draft is either waiting on somebody ` +
+        `or certified; revising its quantities is the way to change it.`,
+    });
   }
 
   /**
@@ -1046,6 +1105,12 @@ export class RaBillsService {
       excludeBillId?: string;
     },
   ) {
+    // 036 I3. Held to the end of the caller's transaction, so a submission or a revision of a
+    // decided bill measures against a to-date figure nobody else can move underneath it. Composing
+    // a draft takes it too — harmless, since drafts do not count, and simpler than a flag.
+    await tx.$queryRaw`
+      SELECT "id" FROM "projects"."WorkOrder" WHERE "id" = ${workOrderId} FOR UPDATE
+    `;
     const workOrder = await tx.workOrder.findFirst({
       where: { id: workOrderId },
       select: { id: true, retentionPercent: true, status: true },
@@ -1179,7 +1244,7 @@ export class RaBillsService {
           awardedQty: awarded,
           thisPeriodQty: line.quantity.toNumber(),
           toDateQty,
-          remainingQty: Math.round((awarded - toDateQty) * 1000) / 1000,
+          remainingQty: quantity(awarded - toDateQty),
           rate: line.rate.toNumber(),
           amount: line.amount.toNumber(),
         };
@@ -1210,7 +1275,7 @@ export class RaBillsService {
         retentionAmount: retention,
         advanceRecovery: advance,
         otherDeductions: other,
-        deductionTotal: Math.round((retention + advance + other) * 100) / 100,
+        deductionTotal: money(retention + advance + other),
         netPayable: unsettled ? null : bill.netPayable.toNumber(),
         // Gross, never net. See the class docblock and `bill-totals.ts`.
         pnlAmount: gross,

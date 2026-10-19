@@ -178,8 +178,43 @@ export class PunchService {
       caller.userId,
     );
 
-    const capturedAt = new Date(dto.capturedAt);
     const receivedAt = new Date();
+    /**
+     * 036 G1 (decision 5). **The server's receive time is authoritative; the phone's clock is
+     * believed only within the skew tolerance (±5 minutes by default).**
+     *
+     * Until 036 the server took `capturedAt` at its word for anything up to 72 hours old, for the
+     * offline queue the app used to have. The queue is gone, and what was left was a back door:
+     * set the phone's clock back to 08:55 and the punch is on time. A future time was not refused
+     * at all.
+     *
+     * So, three cases:
+     *   * **Ahead of the server by more than the tolerance** — refused. There is no honest way
+     *     for a punch to arrive before it was taken, and the employee can fix it by correcting
+     *     the phone's clock.
+     *   * **Within the tolerance either way** — the phone's time is kept. That is ordinary drift
+     *     plus upload time, and keeping it means the punch shows the minute the photo was taken.
+     *   * **Behind by more than the tolerance** — recorded at the **server's** time, not refused.
+     *     A slow upload on a weak site connection or a cheap phone with a wrong clock should
+     *     still put the worker on the register; it just cannot choose the time. The punch is
+     *     flagged `isOfflineSync` (kept as the column's name for compatibility; it now means
+     *     "the phone's time was not used") and the claimed time goes into the audit entry.
+     *
+     * Every check below — payroll lock, the calendar day, the stored row — uses the resolved time,
+     * so none of them can be steered by the phone's clock either.
+     */
+    const claimedAt = new Date(dto.capturedAt);
+    const skewMs =
+      this.workspace.offlineQueue.clockSkewToleranceMinutes * 60_000;
+    const drift = claimedAt.getTime() - receivedAt.getTime();
+    if (drift > skewMs) {
+      throw new BadRequestException(
+        'This punch is stamped later than the server time. Check the date and time on your ' +
+          'phone (set it to automatic) and punch again.',
+      );
+    }
+    const clientClockUsed = Math.abs(drift) <= skewMs;
+    const capturedAt = clientClockUsed ? claimedAt : receivedAt;
 
     // --- Gate 0: mandatory documents must be on file (005 FR-005, 002 FR-021). ---
     //
@@ -219,13 +254,10 @@ export class PunchService {
 
     // --- Gate 2: payroll lock (FR-010) → 423. ---
     //
-    // Checked BEFORE the offline-age bound below, though both can apply to one
-    // stale punch. Two reasons. "That period is closed" is the more actionable
-    // answer — it tells the client the punch will never be accepted, where "too
-    // old" reads as though a faster sync would have worked. And ordering it the
-    // other way makes this response unreachable in practice: a punch old enough to
-    // fall in a locked period is almost always older than the offline window too,
-    // so the 423 the contract specifies would never actually be returned.
+    // Checked against the *resolved* time (036 G1), which is never more than the skew tolerance
+    // from now. Since 036 this refuses only a punch right at a period boundary on a company whose
+    // lock day has already passed; it used to be how a backdated offline punch was stopped, and
+    // backdating is now stopped above instead.
     const payrollLockDay = await this.companies.getPayrollLockDay(
       employee.companyId,
     );
@@ -243,23 +275,9 @@ export class PunchService {
       );
     }
 
-    // --- Gate 3: offline-queue age (FR-012). ---
-    const ageHours = (receivedAt.getTime() - capturedAt.getTime()) / 3_600_000;
-    if (ageHours > this.workspace.offlineQueue.maxAgeHours) {
-      throw new BadRequestException(
-        `This punch was captured ${Math.floor(
-          ageHours,
-        )} hours ago, beyond the ${
-          this.workspace.offlineQueue.maxAgeHours
-        }-hour offline sync window.`,
-      );
-    }
-
-    // A punch trailing the server clock by more than the tolerance was queued
-    // offline; anything inside the tolerance is ordinary clock drift.
-    const isOfflineSync =
-      receivedAt.getTime() - capturedAt.getTime() >
-      this.workspace.offlineQueue.clockSkewToleranceMinutes * 60_000;
+    // Gate 3 (the 72-hour offline-queue age, FR-012) is gone with 036 G1: a punch can no longer be
+    // dated more than the skew tolerance into the past, so there is no age left to bound.
+    const isOfflineSync = !clientClockUsed;
 
     // --- Verification. Either check can refuse the punch outright, where the company has
     //     switched the block on; otherwise either can flag it (020 FR-013).
@@ -556,6 +574,11 @@ export class PunchService {
         type: dto.type,
         capturedAt: capturedAt.toISOString(),
         isOfflineSync,
+        // 036 G1: what the phone claimed, kept only when it was not believed — the evidence for a
+        // conversation about a phone clock that keeps drifting.
+        ...(clientClockUsed
+          ? {}
+          : { clientCapturedAt: claimedAt.toISOString() }),
         faceMatchResult,
         geofenceResult,
         geofenceDistanceMeters: Number(distanceMeters.toFixed(2)),

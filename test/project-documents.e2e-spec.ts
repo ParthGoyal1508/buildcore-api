@@ -366,6 +366,74 @@ describe('Project documents (e2e)', () => {
     expect(String(filed.expiresAt).slice(0, 10)).toBe(EXPIRES);
   });
 
+  /** 036 B5/I25: the detected type is what is stored; a document can be replaced or removed. */
+  it('refuses a non-document, replaces a document, and removes one (036 I25)', async () => {
+    const created = await http()
+      .post('/projects')
+      .set(auth(adminToken))
+      .send({
+        name: `${PREFIX} Replace and remove`,
+        clientId,
+        contractValue: 1000000,
+        startDate: '2026-04-01',
+      });
+    expect(created.status).toBe(201);
+    projectIds.push(created.body.id);
+    const base = `/projects/${created.body.id}/documents`;
+
+    await http()
+      .post(base)
+      .set(auth(adminToken))
+      .send({
+        documentType: 'Page',
+        data: Buffer.from('<html><script>x</script></html>').toString('base64'),
+        contentType: 'application/pdf',
+        fileName: 'page.pdf',
+      })
+      .expect(415);
+
+    const first = await http()
+      .post(base)
+      .set(auth(adminToken))
+      .send({
+        documentType: 'Site photo',
+        data: Buffer.from('%PDF-1.4 first').toString('base64'),
+        // Claimed as an image; stored as what the bytes are.
+        contentType: 'image/png',
+        fileName: 'first.pdf',
+      })
+      .expect(201);
+    expect(first.body.mimeType).toBe('application/pdf');
+
+    const second = await http()
+      .post(base)
+      .set(auth(adminToken))
+      .send({
+        documentType: 'Site photo',
+        data: Buffer.from('%PDF-1.4 second').toString('base64'),
+        contentType: 'application/pdf',
+        fileName: 'second.pdf',
+        supersedesDocumentId: first.body.id,
+      })
+      .expect(201);
+
+    const afterReplace = await http().get(base).set(auth(adminToken)).expect(200);
+    const ids = (rows: { id: string }[]) => rows.map((d) => d.id);
+    expect(ids(afterReplace.body)).toContain(second.body.id);
+    expect(ids(afterReplace.body)).not.toContain(first.body.id);
+
+    await http()
+      .delete(`${base}/${second.body.id}`)
+      .set(auth(adminToken))
+      .expect(200);
+    await http()
+      .delete(`${base}/${second.body.id}`)
+      .set(auth(adminToken))
+      .expect(404);
+    const afterRemove = await http().get(base).set(auth(adminToken)).expect(200);
+    expect(ids(afterRemove.body)).not.toContain(second.body.id);
+  });
+
   /**
    * The refusal that makes the field necessary.
    *

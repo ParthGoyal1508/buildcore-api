@@ -61,6 +61,8 @@ describe('Settings module (e2e)', () => {
   let companyId: string;
   let otherCompanyId: string;
   let viewerRoleId: string;
+  /** Accounts made by later blocks, removed with the others in `afterAll`. */
+  const extraUserIds: string[] = [];
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
@@ -138,8 +140,8 @@ describe('Settings module (e2e)', () => {
 
     // A second account holding only the Viewer role — the "any other role" case
     // FR-014 requires to be rejected.
-    const viewer = await sys.role.findUniqueOrThrow({
-      where: { name: 'Viewer' },
+    const viewer = await sys.role.findFirstOrThrow({
+      where: { name: 'Viewer', companyId: null },
     });
     viewerRoleId = viewer.id;
     const limited = await sys.user.create({
@@ -224,7 +226,9 @@ describe('Settings module (e2e)', () => {
       await sys.userRole.deleteMany({ where: { roleId: { in: roleIds } } });
       await sys.role.deleteMany({ where: { id: { in: roleIds } } });
     }
-    for (const id of [limitedUserId, scopedUserId].filter(Boolean)) {
+    for (const id of [limitedUserId, scopedUserId, ...extraUserIds].filter(
+      Boolean,
+    )) {
       await sys.userRole.deleteMany({ where: { userId: id } });
       await sys.refreshToken.deleteMany({ where: { accountId: id } });
       await sys.auditLogEntry.updateMany({
@@ -642,8 +646,8 @@ describe('Settings module (e2e)', () => {
       // Project Manager grants EMPLOYEES (so these endpoints are reachable) but not
       // CROSS_COMPANY_ACCESS — unlike every other caller in this suite, which is why
       // it is the only one that actually exercises the isolation path.
-      const projectManager = await sys.role.findUniqueOrThrow({
-        where: { name: 'Project Manager' },
+      const projectManager = await sys.role.findFirstOrThrow({
+        where: { name: 'Project Manager', companyId: null },
       });
       const scoped = await sys.user.create({
         data: {
@@ -827,8 +831,8 @@ describe('Settings module (e2e)', () => {
     });
 
     it('refuses to rename, re-permission or delete Super Admin with 403 (T032, FR-008)', async () => {
-      const superAdmin = await sys.role.findUniqueOrThrow({
-        where: { name: 'Super Admin' },
+      const superAdmin = await sys.role.findFirstOrThrow({
+        where: { name: 'Super Admin', companyId: null },
       });
 
       await http()
@@ -907,6 +911,153 @@ describe('Settings module (e2e)', () => {
     });
   });
 
+  // ------------------------------------------------- 036 C10: company-scoped custom roles
+  describe('Company-scoped custom roles (036 C10)', () => {
+    let tokenA: string;
+    let tokenB: string;
+    let userBId: string;
+    let roleA: string;
+    const shared = unique('Shared');
+
+    beforeAll(async () => {
+      // A company administrator: user management, no cross-company access.
+      const adminRole = await sys.role.create({
+        data: {
+          name: unique('CoAdmin'),
+          permissions: ['USER_MANAGEMENT', 'DASHBOARD'],
+          rolePermissions: {
+            create: ['USER_MANAGEMENT', 'DASHBOARD'].flatMap((permission) => [
+              { permission, level: 'read' },
+              { permission, level: 'write' },
+            ]),
+          },
+        },
+      });
+      const login = async (company: string, tag: string) => {
+        const user = await sys.user.create({
+          data: {
+            email: `${unique(tag)}@example.test`,
+            username: unique(tag),
+            password: await hash('secret42'),
+            companyId: company,
+          },
+        });
+        extraUserIds.push(user.id);
+        await sys.userRole.create({
+          data: { userId: user.id, roleId: adminRole.id, companyId: company },
+        });
+        const res = await http()
+          .post('/auth/login')
+          .send({
+            identifier: user.email,
+            password: 'secret42',
+            rememberMe: false,
+          })
+          .expect(201);
+        return { id: user.id as string, token: res.body.accessToken as string };
+      };
+      tokenA = (await login(companyId, 'coA')).token;
+      const b = await login(otherCompanyId, 'coB');
+      tokenB = b.token;
+      userBId = b.id;
+    });
+
+    it('creates a custom role in the caller’s company', async () => {
+      const res = await http()
+        .post('/settings/roles')
+        .set(auth(tokenA))
+        .send({ name: shared, permissions: ['DASHBOARD'] })
+        .expect(201);
+      roleA = res.body.id;
+      expect(res.body.companyId).toBe(companyId);
+    });
+
+    it('lists it only in its own company, beside the global roles', async () => {
+      const inA = await http()
+        .get('/settings/roles')
+        .set(auth(tokenA))
+        .expect(200);
+      const inB = await http()
+        .get('/settings/roles')
+        .set(auth(tokenB))
+        .expect(200);
+      const names = (body: { name: string }[]) => body.map((r) => r.name);
+      expect(names(inA.body)).toContain(shared);
+      expect(names(inB.body)).not.toContain(shared);
+      // The system roles stay global and are listed everywhere.
+      expect(names(inB.body)).toEqual(
+        expect.arrayContaining(['Super Admin', 'Viewer']),
+      );
+      expect(
+        inB.body.every(
+          (r: { companyId: string | null }) =>
+            r.companyId === null || r.companyId === otherCompanyId,
+        ),
+      ).toBe(true);
+    });
+
+    it('checks names per company, so another company may use the same one', async () => {
+      // Company B is not told that A has a role of this name.
+      const res = await http()
+        .post('/settings/roles')
+        .set(auth(tokenB))
+        .send({ name: shared, permissions: ['DASHBOARD'] })
+        .expect(201);
+      expect(res.body.companyId).toBe(otherCompanyId);
+
+      // A second one in A, or one named like a global role, is refused.
+      const again = await http()
+        .post('/settings/roles')
+        .set(auth(tokenA))
+        .send({ name: shared, permissions: ['DASHBOARD'] })
+        .expect(409);
+      expect(again.body.code).toBe('ROLE_NAME_TAKEN');
+      await http()
+        .post('/settings/roles')
+        .set(auth(tokenA))
+        .send({ name: 'Viewer', permissions: ['DASHBOARD'] })
+        .expect(409);
+    });
+
+    it('treats another company’s role as not found', async () => {
+      await http()
+        .patch(`/settings/roles/${roleA}`)
+        .set(auth(tokenB))
+        .send({ name: unique('Hijacked') })
+        .expect(404);
+      await http()
+        .delete(`/settings/roles/${roleA}`)
+        .set(auth(tokenB))
+        .expect(404);
+    });
+
+    it('shows a group admin with no company selected every company’s roles, each named', async () => {
+      const res = await http()
+        .get('/settings/roles')
+        .set(auth(superAdminToken))
+        .expect(200);
+      const mine = res.body.filter((r: { name: string }) => r.name === shared);
+      expect(mine).toHaveLength(2);
+      expect(
+        mine.map((r: { companyName: string | null }) => r.companyName),
+      ).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(
+        mine.every((r: { companyName: string | null }) => r.companyName),
+      ).toBeTruthy();
+      const viewer = res.body.find((r: { name: string }) => r.name === 'Viewer');
+      expect(viewer.companyName).toBeNull();
+    });
+
+    it('refuses to give one company’s role to another company’s account', async () => {
+      const res = await http()
+        .patch(`/settings/users/${userBId}`)
+        .set(auth(superAdminToken))
+        .send({ roleId: roleA })
+        .expect(400);
+      expect(res.body.code).toBe('ROLE_OF_ANOTHER_COMPANY');
+    });
+  });
+
   // ---------------------------------------------------------------- User Story 3
   describe('User administration (US3)', () => {
     it('lists accounts for a permitted caller (T042)', async () => {
@@ -930,8 +1081,8 @@ describe('Settings module (e2e)', () => {
     });
 
     it('changes a role and enforces it on the next request (T042)', async () => {
-      const storeKeeper = await sys.role.findUniqueOrThrow({
-        where: { name: 'Store Keeper' },
+      const storeKeeper = await sys.role.findFirstOrThrow({
+        where: { name: 'Store Keeper', companyId: null },
       });
 
       await http()
@@ -974,26 +1125,37 @@ describe('Settings module (e2e)', () => {
         .expect(200);
     });
 
+    // The last Super Admin is signed in here as itself, so since 036 C3 every attempt is refused
+    // one step earlier, as an action on the caller's own account (403). The 409 last-Super-Admin
+    // guard behind it is still asserted in users-admin.service.spec.ts, where another admin can be
+    // the caller.
     it('refuses to deactivate, reassign or delete the last Super Admin (T043, FR-016)', async () => {
       const admin = await sys.user.findUniqueOrThrow({
         where: { email: 'admin@buildcore.dev' },
       });
-      await http()
+      const deactivate = await http()
         .patch(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
         .send({ status: 'deactivated' })
-        .expect(409);
+        .expect(403);
+      expect(deactivate.body.code).toBe('OWN_ACCOUNT');
 
-      await http()
+      const reassign = await http()
         .patch(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
         .send({ roleId: viewerRoleId })
-        .expect(409);
+        .expect(403);
+      expect(reassign.body.code).toBe('OWN_ROLE_CHANGE');
 
-      await http()
+      const remove = await http()
         .delete(`/settings/users/${admin.id}`)
         .set(auth(superAdminToken))
-        .expect(409);
+        .expect(403);
+      expect(remove.body.code).toBe('OWN_ACCOUNT');
+
+      // And the account is untouched.
+      const after = await sys.user.findUniqueOrThrow({ where: { id: admin.id } });
+      expect(after.status).not.toBe('deactivated');
     });
 
     it('deletes an ordinary account (T043, FR-015)', async () => {

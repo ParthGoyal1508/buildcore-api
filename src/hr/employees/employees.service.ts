@@ -163,24 +163,54 @@ export class EmployeesService {
     ctx: RlsContext,
     companyId: string,
     search?: string,
-  ): Promise<{ id: string; employeeCode: string }[]> {
+    page?: { skip: number; take: number },
+  ): Promise<{
+    items: { id: string; employeeCode: string; name: string }[];
+    total: number;
+  }> {
     const term = search?.trim();
-    return withRlsContext(this.prisma, ctx, (tx) =>
-      tx.employee.findMany({
-        where: {
-          companyId,
-          userId: null,
-          ...(term
-            ? { employeeCode: { contains: term, mode: 'insensitive' as const } }
-            : {}),
-        },
-        select: { id: true, employeeCode: true },
-        orderBy: { employeeCode: 'asc' },
-        // Bounded because this backs a type-ahead: an unbounded list would ship
-        // every unlinked employee in the company on the first keystroke.
-        take: 50,
-      }),
+    // 036 C18: the picker showed only the code and searched only the code, so an administrator
+    // inviting "Ravi" had to know his employee number. The name is listed and searched too, and
+    // people who have left are not offered an account.
+    const where = {
+      companyId,
+      userId: null,
+      isActive: true,
+      ...(term
+        ? {
+            OR: [
+              { employeeCode: { contains: term, mode: 'insensitive' as const } },
+              { firstName: { contains: term, mode: 'insensitive' as const } },
+              { lastName: { contains: term, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    };
+    const [rows, total] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.employee.findMany({
+          where,
+          select: {
+            id: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+          orderBy: [{ employeeCode: 'asc' }, { id: 'asc' }],
+          // Bounded because this backs a type-ahead: an unbounded list would ship
+          // every unlinked employee in the company on the first keystroke.
+          skip: page?.skip ?? 0,
+          take: page?.take ?? 50,
+        }),
+        page ? tx.employee.count({ where }) : Promise.resolve(-1),
+      ]),
     );
+    const items = rows.map((r) => ({
+      id: r.id,
+      employeeCode: r.employeeCode,
+      name: [r.firstName, r.lastName].filter(Boolean).join(' ').trim(),
+    }));
+    return { items, total: total < 0 ? items.length : total };
   }
 
   /**
@@ -714,7 +744,7 @@ export class EmployeesService {
         Promise.all([
           tx.employee.findMany({
             where,
-            orderBy: { employeeCode: 'asc' },
+            orderBy: employeeOrder(query.sort),
             skip: (page - 1) * pageSize,
             take: pageSize,
           }),
@@ -878,5 +908,27 @@ export class EmployeesService {
     const value = column === 'uan' ? stored ?? null : this.pii.decrypt(stored);
 
     return { field: dto.field, value };
+  }
+}
+
+/**
+ * The employee list's `sort` (036 F12) as a Prisma order. Code is always the last key, so rows that
+ * tie — two people with the same first name — keep a stable order from page to page.
+ */
+function employeeOrder(
+  sort: string | undefined,
+): Prisma.EmployeeOrderByWithRelationInput[] {
+  const [key, raw] = (sort ?? 'code:asc').split(':');
+  const dir: Prisma.SortOrder = raw === 'desc' ? 'desc' : 'asc';
+  switch (key) {
+    case 'name':
+      return [{ firstName: dir }, { lastName: dir }, { employeeCode: 'asc' }];
+    case 'joining':
+      return [
+        { dateOfJoining: { sort: dir, nulls: 'last' } },
+        { employeeCode: 'asc' },
+      ];
+    default:
+      return [{ employeeCode: dir }];
   }
 }

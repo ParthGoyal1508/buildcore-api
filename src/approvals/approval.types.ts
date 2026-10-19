@@ -84,6 +84,11 @@ export interface ApprovalInstanceView {
   /** "The system" when a scheduled job raised it — never a fabricated person. */
   originatorName: string;
 
+  /**
+   * Whether the level deciding now is the chain's final authority (036 D4) — the screen asks
+   * for confirmation before an Approve there, since nothing after it can catch a mistake.
+   */
+  isFinalAuthority?: boolean;
   /** The label of the level that decides now — null once the chain is finished. */
   levelLabel: string | null;
   /** The role that level resolves to for this company; null when the slot is unmapped. */
@@ -183,6 +188,8 @@ export interface ApprovalQueueEntry {
   ageHours: number;
   currentPosition: number;
   levelLabel: string;
+  /** The caller's level is the chain's final authority (036 D4). */
+  isFinalAuthority: boolean;
 }
 
 /**
@@ -305,6 +312,11 @@ export interface ApprovalHistoryEntry {
   requestedAt: Date;
   /** When the chain finished — the last state change of a closed item. Null while open. */
   closedAt: Date | null;
+  /**
+   * When anything last happened to the item (036 D2) — its decision once decided, otherwise its
+   * submission or latest step. The history is sorted, and date-filtered, by this.
+   */
+  lastActionAt: Date;
   /** The level it waits on, while pending. */
   awaitingLabel: string | null;
   /** A one-off reassignment's named person (FR-019), when there is one. */

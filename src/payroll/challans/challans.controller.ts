@@ -26,6 +26,8 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { ChallansService, type ChallanType } from './challans.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
+import { resolveCompanyId } from '../../settings/company-scope';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 
 const TYPES: ChallanType[] = ['pf', 'esic', 'pt'];
 
@@ -44,13 +46,11 @@ export class ChallansController {
   constructor(private readonly challans: ChallansService) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, requested);
   }
 
   private assertType(type: string): ChallanType {
@@ -87,6 +87,8 @@ export class ChallansController {
   }
 
   @Get(':type/export')
+  // Each export renders a whole run to XLSX (036 stream 3b, the B9 export limit).
+  @ExportThrottle()
   @ApiParam({ name: 'type', enum: TYPES })
   @ApiOperation({ summary: 'The same challan as an XLSX for filing' })
   async export(

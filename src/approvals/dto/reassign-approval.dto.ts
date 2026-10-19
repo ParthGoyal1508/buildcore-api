@@ -21,6 +21,7 @@ export class ReassignApprovalDto {
   })
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   toUserId: string;
 
   @ApiProperty({

@@ -377,48 +377,31 @@ describe('The running-account bill package (e2e)', () => {
 
   // ── Pass 6 — debits, and the register's two halves ───────────────────────
 
-  let debitId = '';
+  // Since the client's debit note format (2026-10), a debit is a numbered *debit note* raised
+  // against a subcontractor's work order (`POST /projects/:projectId/debit-notes`) and recovered on
+  // a bill **to that subcontractor**. The project-level `bill-package-debits` routes these tests
+  // used are gone, and a bill to the client carries no debit notes at all. The note itself — its
+  // numbering, GST split and single recovery — is covered by `debit-note.service.spec.ts`; this
+  // suite's package is a bill to the client, so what it can assert end to end is that boundary.
 
-  it('records a debit and recovers it on one bill, refusing a second application', async () => {
-    const recorded = await http()
-      .post(`/projects/${projectId}/bill-package-debits`)
-      .set(auth())
-      .send({
-        groupHeading: 'Debit against the ATMS Equipment Missing at site',
-        description: 'PTZ camera missing',
-        location: 'KM.226 LHS',
-        nos: '1',
-        rate: '125000.00',
-        amount: '125000.00',
-        amountWithTax: '147500.00',
-      })
-      .expect(201);
-    debitId = recorded.body.id;
-
-    await http()
-      .post(`/projects/bill-package-debits/${debitId}/apply/${packageId}`)
-      .set(auth())
-      .expect(201);
-
-    // A debit recovered twice is money taken twice.
-    const refused = await http()
-      .post(`/projects/bill-package-debits/${debitId}/apply/${packageId}`)
-      .set(auth())
-      .expect(409);
-    expect(refused.body.code).toBe('DEBIT_ALREADY_RECOVERED');
-  });
-
-  it('shows a draft’s register live, grouped under its heading', async () => {
+  it('shows a bill to the client no debit notes, and refuses to recover one on it', async () => {
     const register = await http()
       .get(`/projects/bill-packages/${packageId}/debits`)
       .set(auth())
       .expect(200);
 
-    expect(register.body.asAtIssue).toBe(false);
-    expect(register.body.groups[0].heading).toBe(
-      'Debit against the ATMS Equipment Missing at site',
-    );
-    expect(register.body.recoveredOnThisPackage).toBe('147500.00');
+    expect(register.body).toMatchObject({
+      applicable: false,
+      asAtIssue: false,
+      notes: [],
+      recoveredOnThisPackage: '0.00',
+    });
+
+    // Refused on the bill's direction before any note is looked up.
+    await http()
+      .post(`/projects/debit-notes/no-such-note/apply/${packageId}`)
+      .set(auth())
+      .expect(400);
   });
 
   // ── Pass 4 — issue, and the frozen header ────────────────────────────────
@@ -567,11 +550,39 @@ describe('The running-account bill package (e2e)', () => {
 
   it('issues the bill, reporting the header gaps rather than refusing', async () => {
     await approve(packageId);
+
+    // 036 I1: `/issue` names the package, not the project, and the guard used to admit it for
+    // that reason — so a locked project could still freeze a bill's figures for ever.
+    await sys.project.update({
+      where: { id: projectId },
+      data: { isLocked: true },
+    });
+    try {
+      const refused = await http()
+        .post(`/projects/bill-packages/${packageId}/issue`)
+        .set(auth());
+      expect(refused.status).toBe(423);
+    } finally {
+      await sys.project.update({
+        where: { id: projectId },
+        data: { isLocked: false },
+      });
+    }
+
+    // 036 I16: the confirmation names the gaps before issuing, from the same lookup.
+    const preview = await http()
+      .get(`/projects/bill-packages/${packageId}/header-preview`)
+      .set(auth())
+      .expect(200);
+
     const issued = await http()
       .post(`/projects/bill-packages/${packageId}/issue`)
       .set(auth())
       .expect(201);
 
+    expect([...preview.body.missingHeaderFields].sort()).toEqual(
+      [...issued.body.missingHeaderFields].sort(),
+    );
     expect(issued.body.package.status).toBe('issued');
     // FR-027a. This client carries no PAN and no state — the columns exist as of 025 FR-039 and
     // this fixture leaves them unset, which is the ordinary case for a client recorded before they
@@ -677,43 +688,15 @@ describe('The running-account bill package (e2e)', () => {
       .expect(409);
   });
 
-  it('refuses a debit applied to a bill that has been issued', async () => {
-    const another = await http()
-      .post(`/projects/${projectId}/bill-package-debits`)
-      .set(auth())
-      .send({
-        description: 'Recorded after the bill went out',
-        rate: '1000.00',
-        amount: '1000.00',
-        amountWithTax: '1180.00',
-      })
-      .expect(201);
-
-    const refused = await http()
-      .post(
-        `/projects/bill-package-debits/${another.body.id}/apply/${packageId}`,
-      )
-      .set(auth())
-      .expect(409);
-
-    expect(refused.body.code).toBe('BILL_PACKAGE_ISSUED');
-  });
-
-  it('keeps an issued bill’s register as at issue', async () => {
-    // FR-039a. The debit recorded in the test above exists on the project, and must not appear on
-    // a bill that was signed before it.
+  it('keeps an issued bill to the client free of debit notes, as at issue', async () => {
     const register = await http()
       .get(`/projects/bill-packages/${packageId}/debits`)
       .set(auth())
       .expect(200);
 
-    const descriptions = register.body.groups.flatMap(
-      (group: { rows: { description: string }[] }) =>
-        group.rows.map((row) => row.description),
-    );
-
+    expect(register.body.applicable).toBe(false);
     expect(register.body.asAtIssue).toBe(true);
-    expect(descriptions).not.toContain('Recorded after the bill went out');
+    expect(register.body.notes).toEqual([]);
   });
 
   // ── Pass 7 — the workbook ────────────────────────────────────────────────
@@ -925,10 +908,20 @@ describe('The running-account bill package (e2e)', () => {
       .expect(201);
 
     await approve(second.body.id);
-    const issued = await http()
-      .post(`/projects/bill-packages/${second.body.id}/issue`)
-      .set(auth())
-      .expect(201);
+    // 036: two Issue clicks at once. Both used to read `approved` and both froze the figures;
+    // the status update is now conditional, so exactly one goes through.
+    const both = await Promise.all([
+      http()
+        .post(`/projects/bill-packages/${second.body.id}/issue`)
+        .set(auth()),
+      http()
+        .post(`/projects/bill-packages/${second.body.id}/issue`)
+        .set(auth()),
+    ]);
+    expect(both.map((res) => res.status).sort()).toEqual([201, 409]);
+    const issued = both.find((res) => res.status === 201) as request.Response;
+    // Additive (036 I5): present on every issue, null when the registrations agree with the basis.
+    expect(issued.body).toHaveProperty('taxBasisWarning');
 
     expect(issued.body.missingHeaderFields).not.toContain('issuerPan');
     expect(issued.body.missingHeaderFields).not.toContain('issuerState');

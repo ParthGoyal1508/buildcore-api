@@ -45,7 +45,10 @@ const makeTx = (existing: ReturnType<typeof balance> | null) => {
         }),
       },
       stockLedgerEntry: { findMany: jest.fn().mockResolvedValue([]) },
-      $queryRaw: jest.fn().mockResolvedValue([]),
+      // 036 M14: the purchase path inserts-if-absent and then locks, so the locked read
+      // always returns a row — a fresh one at zero when this is the first receipt.
+      $executeRaw: jest.fn().mockResolvedValue(1),
+      $queryRaw: jest.fn().mockResolvedValue([existing ?? balance()]),
     } as never,
   };
 };
@@ -55,7 +58,7 @@ describe('StockService', () => {
 
   describe('weighted average rate on purchase (FR-008)', () => {
     it('sets the rate outright on the first receipt at a site', async () => {
-      const { tx, creates } = makeTx(null);
+      const { tx, updates } = makeTx(null);
       await service.upsertBalanceForPurchase(tx, {
         companyId: 'co-1',
         itemId: 'item-1',
@@ -63,7 +66,37 @@ describe('StockService', () => {
         quantity: 100,
         rate: 350,
       });
-      expect(creates[0]).toMatchObject({ received: 100, avgRate: 350 });
+      expect(updates[0]).toMatchObject({
+        received: { increment: 100 },
+        avgRate: 350,
+      });
+    });
+
+    it('inserts-if-absent and then locks, never read-then-create (036 M14)', async () => {
+      // The old find-then-create let two concurrent first receipts both see no row: one
+      // failed on the unique index (a 500) and the other's WAR update could be lost.
+      const { tx } = makeTx(null);
+      const raw = tx as unknown as {
+        $executeRaw: jest.Mock;
+        $queryRaw: jest.Mock;
+        stockBalance: { create: jest.Mock; findUnique: jest.Mock };
+      };
+      await service.upsertBalanceForPurchase(tx, {
+        companyId: 'co-1',
+        itemId: 'item-1',
+        siteId: 'site-1',
+        quantity: 5,
+        rate: 10,
+      });
+      expect(raw.$executeRaw.mock.calls[0][0].join('?')).toMatch(
+        /ON CONFLICT \("itemId", "siteId"\) DO NOTHING/,
+      );
+      expect(raw.$queryRaw.mock.calls[0][0].join('?')).toMatch(/FOR UPDATE/);
+      expect(raw.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+        raw.$queryRaw.mock.invocationCallOrder[0],
+      );
+      expect(raw.stockBalance.create).not.toHaveBeenCalled();
+      expect(raw.stockBalance.findUnique).not.toHaveBeenCalled();
     });
 
     it('weights the new rate by the quantity already in stock', async () => {

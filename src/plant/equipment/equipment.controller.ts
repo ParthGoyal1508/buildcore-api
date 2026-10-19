@@ -28,12 +28,15 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { formFormatOf, sendForm } from '../../common/form-document';
 import {
   CreateEquipmentDto,
+  EquipmentPhotoFileQueryDto,
   EquipmentRegisterQueryDto,
   ImportEquipmentDto,
   ListEquipmentDto,
   UpdateEquipmentDto,
   UploadEquipmentDocumentDto,
+  UploadEquipmentPhotoDto,
 } from './dto/equipment.dto';
+import { EquipmentPhotosService } from './equipment-photos.service';
 import { EquipmentRegisterService } from './equipment-register.service';
 import { EquipmentService } from './equipment.service';
 import { contentDispositionFor } from '../../common/storage/file-type';
@@ -54,6 +57,7 @@ export class EquipmentController {
   constructor(
     private readonly equipment: EquipmentService,
     private readonly register: EquipmentRegisterService,
+    private readonly photos: EquipmentPhotosService,
   ) {}
 
   @Get()
@@ -219,6 +223,79 @@ export class EquipmentController {
       contentDispositionFor(file.fileName),
     );
     return new StreamableFile(file.buffer);
+  }
+
+  // ── Photos (036 K14) ──────────────────────────────────────────────────────
+
+  @Post(':id/photos')
+  @ApiOperation({
+    summary: 'Add a photo, base64-encoded (036 K14)',
+    description:
+      'JPEG, PNG or WebP, up to 10 MB; anything else 415. Re-encoded to at most 2048 px with a ' +
+      "320 px thumbnail. The machine's first photo becomes its main one, or pass makeMain. " +
+      'At most 20 per machine (409).',
+  })
+  async uploadPhoto(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UploadEquipmentPhotoDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.photos.upload(caller, id, dto, ipAddress);
+  }
+
+  @Get(':id/photos/:photoId')
+  // A photo is immutable — replaced only by deleting it and adding another — so its id is a
+  // version, and the browser may keep it. Private: it is still a tenant's file.
+  @Header('Cache-Control', 'private, max-age=31536000, immutable')
+  @ApiOperation({
+    summary: 'A photo, or its thumbnail with ?size=thumb (036 K14)',
+  })
+  async photoFile(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('photoId') photoId: string,
+    @Query() query: EquipmentPhotoFileQueryDto,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<StreamableFile> {
+    const file = await this.photos.file(
+      caller,
+      id,
+      photoId,
+      query.size ?? 'full',
+    );
+    response.setHeader('Content-Type', file.contentType);
+    response.setHeader(
+      'Content-Disposition',
+      contentDispositionFor(file.fileName),
+    );
+    return new StreamableFile(file.buffer);
+  }
+
+  @Patch(':id/photos/:photoId/main')
+  @ApiOperation({ summary: "Make a photo the machine's main one (036 K14)" })
+  async setMainPhoto(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('photoId') photoId: string,
+    @Ip() ipAddress: string,
+  ) {
+    return this.photos.setMain(caller, id, photoId, ipAddress);
+  }
+
+  @Delete(':id/photos/:photoId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary:
+      'Delete a photo (036 K14). Deleting the main one promotes the newest remaining photo.',
+  })
+  async deletePhoto(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('photoId') photoId: string,
+    @Ip() ipAddress: string,
+  ) {
+    await this.photos.remove(caller, id, photoId, ipAddress);
   }
 
   @Delete(':id/documents/:docId')

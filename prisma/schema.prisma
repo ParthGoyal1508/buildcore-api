@@ -132,7 +132,16 @@ enum UserStatus {
 /// actually *holds* a role) is the tenant-scoped side, and is RLS-protected.
 model Role {
   id   String @id @default(cuid())
-  name String @unique
+  /// Unique among the global roles, and within each company's own (036 C10) — two partial unique
+  /// indexes in `20261019100000_company_scoped_roles`, since Prisma cannot express either.
+  name String
+
+  /// The company a custom role belongs to (036 C10). Null for the system roles every company
+  /// shares — Super Admin, General User and the other seeded defaults — and for a role a group
+  /// administrator created with no company selected. A company role is listed, assignable and
+  /// mappable to approval slots only in its own company.
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   /// **Retiring.** Replaced by `rolePermissions` below, which adds the read/write level
   /// the client's Note 22 needs (019 FR-001). Still the source of truth until 019 Phase 2
@@ -169,6 +178,7 @@ model Role {
   /// since the alternative is a level that resolves to nothing.
   roleSlotMappings RoleSlotMapping[]
 
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -395,6 +405,18 @@ enum Permission {
   /// deployed, which is the exact failure the two-control design existed to avoid.
   CASH_ENTRY
 
+  /// Locking and unlocking a project (036 review decision 5, 2026-10-18). Its own permission
+  /// rather than `PROJECTS`, because a lock is the declaration that a project's figures are
+  /// final — billing, DWRs and documents all stop — and every project editor could reverse it.
+  ///
+  /// Granted, in the migration that adds it, to every role that held `PROJECTS` at the same
+  /// levels, so nobody who could lock or unlock yesterday silently cannot today. Narrowing it is
+  /// a Settings → Roles decision the client makes deliberately.
+  PROJECT_LOCK
+  /// 037: the Bank Guarantees register under Projects — tenders, their EMD and PBG
+  /// guarantees, documents and the 30-day expiry alert.
+  BANK_GUARANTEES
+
   @@schema("settings")
 }
 
@@ -539,8 +561,8 @@ model Company {
   /// punch in and out is a full day, at least `labourHalfDayHours` a half day, less is short (not
   /// paid). Hours beyond `labourStandardHours` are overtime, paid at the daily rate ÷ standard hours
   /// × `otMultiplier`. Set by the HR office under Labour → Muster attendance.
-  labourFullDayHours Decimal @default(8) @db.Decimal(4, 2)
-  labourHalfDayHours Decimal @default(4) @db.Decimal(4, 2)
+  labourFullDayHours  Decimal @default(8) @db.Decimal(4, 2)
+  labourHalfDayHours  Decimal @default(4) @db.Decimal(4, 2)
   labourStandardHours Decimal @default(8) @db.Decimal(4, 2)
 
   /// The company's own account the payroll transfer is debited from (021 FR-008a).
@@ -659,6 +681,8 @@ model Company {
   approvalChains    ApprovalChain[]
   approvalLevels    ApprovalLevel[]
   roleSlotMappings  RoleSlotMapping[]
+  /// 036 C10 — custom roles this company created.
+  roles             Role[]
   approvalInstances ApprovalInstance[]
   approvalDecisions ApprovalDecision[]
   /// 017 US1 — the certificates behind this company's registration numbers.
@@ -1348,6 +1372,51 @@ model AuditLogEntry {
 /// in `shared` alongside `AuditLogEntry` — Dashboard aggregates other modules' data
 /// and owns no business schema of its own (research.md §3). `companyId`-scoped and
 /// RLS-protected (Principle IV).
+/// One notification as one person has seen it (036 D6) — the bell's inbox with read/unread state.
+///
+/// Notifications are still *computed* by the providers on every request (a pending leave queue,
+/// approvals awaiting the caller, reminders due); this table remembers, per person and per company
+/// scope, which of those they have already read, so the bell counts what is new rather than
+/// everything that is true. A row is matched to a computed notification by `key`, and goes back to
+/// unread when its `fingerprint` changes — a new item joining the queue, a reminder turning overdue.
+/// When the condition stops holding the row is marked `resolvedAt` and leaves the bell; it is kept
+/// for a while so a notification that flickers off and on does not come back unread.
+///
+/// In-app only, by product decision (036 plan §4): nothing here sends email.
+model Notification {
+  id String @id @default(cuid())
+
+  userId    String
+  /// The company the notification was computed for — the selected company — or `''` for a
+  /// Super Admin with no company selected (every company). Not a foreign key, for that reason;
+  /// it is what the `tenant_isolation` policy checks.
+  companyId String
+
+  /// Which computed notification this is: the provider type plus what it is about
+  /// (`approvals_pending:ra_bill`, `reminders_due:<reminder id>`).
+  key         String
+  /// Changes when there is something new to read about the same notification.
+  fingerprint String
+  type        String
+  severity    String
+  title       String
+  subtitle    String
+  actionLink  String
+  /// When the current content first appeared (kept across re-computations whose fingerprint did
+  /// not change, so "just now" does not reset on every poll).
+  occurredAt  DateTime
+
+  readAt     DateTime?
+  resolvedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, companyId, key])
+  @@index([userId, companyId, resolvedAt])
+  @@schema("shared")
+}
+
 model ExportJob {
   id String @id @default(cuid())
 
@@ -1487,6 +1556,8 @@ enum AuditEntityType {
   WORK_ORDER
   PROJECT_BUDGET
   PROJECT_DOCUMENT
+  /// 037: a tender in the Bank Guarantees register, its guarantees and their documents.
+  BANK_GUARANTEE
 
   /// Feature 004's reminders engine. Only the snooze is audited (FR-034): evaluation
   /// itself is a read, and emitting a notification is already recorded by the
@@ -1917,6 +1988,7 @@ model Project {
   debitNotes        BillPackageDebitNote[]
   budgets           ProjectBudget[]
   documents         ProjectDocument[]
+  bgTenders         BgTender[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2277,6 +2349,11 @@ model DWRAttachment {
   /// Detected from the bytes by `detectContentType`, not taken from the client's claim.
   mimeType  String
   sizeBytes Int
+
+  /// A 320 px copy of a photo, for the report's thumbnails (036 B6/I8). Null for a PDF or any
+  /// other non-image, and for every photo filed before 2026-10-18 — the thumbnail route serves
+  /// the full image then, so old rows need no backfill.
+  thumbnailRef String?
 
   /// `shared.User.id`. Bare id — see the schema-level note above.
   uploadedByUserId String?
@@ -4240,10 +4317,48 @@ model EmployeeDocument {
   uploadedByUserId String
   uploadedAt       DateTime @default(now())
 
-  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  /// The uploader's file name, the type detected from the bytes, and the stored size (036 F15).
+  /// Null on documents filed before the columns existed; the file endpoint then sniffs the type.
+  fileName  String?
+  mimeType  String?
+  sizeBytes Int?
+
+  employee Employee                  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  versions EmployeeDocumentVersion[]
 
   @@unique([employeeId, documentTypeId])
   @@index([expiresAt])
+  @@schema("hr")
+}
+
+/// A superseded upload of an employee document (036 F15).
+///
+/// Replacing a document used to delete the old file for good, so a passport renewed by mistake
+/// over the right one could not be recovered and nobody could see what was on file before. Now the
+/// current upload stays on `EmployeeDocument` (one per type, which is what the mandatory-document
+/// gate counts) and each replaced one moves here, file and all. Scoped through the employee, the
+/// same RLS rule as `EmployeeDocument`.
+model EmployeeDocumentVersion {
+  id         String @id @default(cuid())
+  documentId String
+  employeeId String
+
+  fileRef        String
+  fileName       String?
+  mimeType       String?
+  sizeBytes      Int?
+  documentNumber String?
+  expiresAt      DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime
+  replacedByUserId String
+  replacedAt       DateTime @default(now())
+
+  document EmployeeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
+  @@index([employeeId])
   @@schema("hr")
 }
 
@@ -4703,6 +4818,9 @@ model SalaryAdvance {
 
   status SalaryAdvanceStatus @default(pending)
 
+  /// Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036;
+  /// the audit log's CREATE entry answers for those.
+  createdByUserId  String?
   approvedByUserId String?
   disbursedOn      DateTime? @db.Date
   createdAt        DateTime  @default(now())
@@ -4744,6 +4862,19 @@ model PayrollRun {
   /// inferring from timestamps. With it, an operator can see at a glance whether the
   /// automation is working or whether somebody has been quietly creating runs by hand.
   createdBySchedule Boolean @default(false)
+
+  /// Employees the run could not compute correctly — no PAN, no tax slabs (036 F7).
+  ///
+  /// `[{ employeeId, reason }]`, written at generation and replaced by each regeneration. Until 036
+  /// these were in the generate response only, so the warning on run detail never appeared for
+  /// anybody who opened the run later — which is everybody who processes it.
+  exceptions Json?
+
+  /// When processing applied this run's advance and fuel recoveries and settled its claims and
+  /// EMIs (036 F1/F2). Set in the same transaction as the `draft → processed` move, so a run that
+  /// has it has settled exactly once; the data-repair report reads it to tell runs processed under
+  /// the new rule from runs whose recoveries were applied at draft.
+  recoveriesSettledAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4811,6 +4942,19 @@ model PayrollLineItem {
   /// tell why their pay fell, which FR-007 exists to prevent.
   fuelRecoveryDeduction Decimal @default(0) @db.Decimal(12, 2)
 
+  /// Salary advance recovered on this line (036 F3). Net pay already subtracted it; until 036 it
+  /// was not stored, so the payslip printed 0 and its deductions did not add up to gross − net.
+  advanceRecovered         Decimal  @default(0) @db.Decimal(12, 2)
+  /// The advance `advanceRecovered` is against — applied to it when the run is processed (036 F1).
+  advanceRecoveryAdvanceId String?
+  /// `[{ recoveryId, amount }]` — the fuel recoveries this line's `fuelRecoveryDeduction` is made
+  /// of, recorded against them when the run is processed (036 F2). Several when one carries.
+  fuelRecoveries           Json?
+  /// The reimbursement claims folded into `specialAllowance`, and their total (036 F4). Processing
+  /// settles exactly these, not every approved claim the employee happens to have by then.
+  reimbursementClaimIds    String[] @default([])
+  reimbursementTotal       Decimal  @default(0) @db.Decimal(12, 2)
+
   netPay Decimal @default(0) @db.Decimal(12, 2)
 
   // ── Employer contributions ────────────────────────────────────────────────
@@ -4862,6 +5006,8 @@ model Loan {
   remarks          String?
   status           LoanStatus @default(pending)
 
+  /// Who recorded it, so the same person cannot approve it (036 F19). Null on rows from before 036.
+  createdByUserId  String?
   approvedByUserId String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -6341,6 +6487,12 @@ model Purchase {
   indentLineId String?
   indentLine   MaterialIndentLine? @relation(fields: [indentLineId], references: [id])
 
+  /// The purchase order line this delivery is received against (036 M9, 2026-10-17). Optional:
+  /// purchases made without a PO — and every purchase recorded before POs were structured — have
+  /// none. Set, the line's ordered quantity caps what may be received against it.
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id])
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -6355,6 +6507,88 @@ model Purchase {
   @@index([companyId, vendorId])
   @@index([companyId, itemId, siteId])
   @@index([indentLineId])
+  @@index([purchaseOrderLineId])
+  @@schema("inventory")
+}
+
+/// A purchase order, structured (036 M9, 2026-10-17).
+///
+/// The client: "keep the same format which is there as of now, just make it structured so that we
+/// can trace everything. DO NOT CHANGE the PO format." The PO itself stays what it was — a letter
+/// (`shared.IssuedLetter`, kind `letter_purchase_order`) composed, approved and issued as the
+/// client's PDF. This row and its lines are the structure *behind* it: the lines that letter
+/// printed, read back out of what it was composed with, so deliveries (purchases and their GRNs)
+/// can be received against a line and the PO traced to its bills and payments.
+///
+/// **Read from the letter, never typed twice.** The lines come from the issued letter's own
+/// `lineItems` through the same parser that drew its table (`letters/line-items.ts`), so the
+/// structure cannot disagree with the document. They are materialised when an issued PO is first
+/// read here, through `LettersService.listForSubject` — this module never queries
+/// `shared.IssuedLetter` (Principle I, `letters-boundary.spec.ts`), and `letterId` is a plain id.
+///
+/// One row per PO, not per version: a reissue keeps the reference number (letters FR-014), so the
+/// row follows the reference to the newest version and its lines are refreshed in place, keeping
+/// the deliveries already received against them.
+model PurchaseOrder {
+  id String @id @default(cuid())
+
+  companyId   String
+  /// The current (newest, not superseded) issued version of the letter.
+  letterId    String   @unique
+  /// The letter's reference — `PRPL/2026-27/0042` — as printed. Null only for a letter issued
+  /// before references existed.
+  referenceNo String?
+  version     Int      @default(1)
+  /// The vendor the letter is addressed to (`subjectType: 'vendor'`). Null if it was composed
+  /// against no vendor.
+  vendorId    String?
+  issuedAt    DateTime
+  /// The GST rate the letter's totals were worked at — its `gstRate`, 18 when left blank, exactly as
+  /// `expandLineItems` reads it.
+  gstPercent  Decimal  @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines PurchaseOrderLine[]
+
+  @@unique([companyId, referenceNo])
+  @@index([companyId])
+  @@index([companyId, vendorId])
+  @@schema("inventory")
+}
+
+/// One line of a purchase order: exactly what the PO prints on that row (036 M9).
+model PurchaseOrderLine {
+  id String @id @default(cuid())
+
+  companyId String
+
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  /// 1-based, in the PO's row order — the "SR No." it prints.
+  lineNo Int
+
+  /// The item-master item the row was picked from, matched on the code the row prints
+  /// (`CODE - Name`). Null for a row typed by hand, which can be traced but not received against.
+  itemId      String?
+  description String
+  unit        String
+  quantity    Decimal @db.Decimal(18, 3)
+  rate        Decimal @db.Decimal(18, 2)
+  /// `quantity × rate`, to the paisa, as the PO prints "Net Value".
+  amount      Decimal @db.Decimal(18, 2)
+  gstPercent  Decimal @db.Decimal(5, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases Purchase[]
+
+  @@unique([purchaseOrderId, lineNo])
+  @@index([companyId])
+  @@index([companyId, itemId])
   @@schema("inventory")
 }
 
@@ -6565,6 +6799,10 @@ model StockTransfer {
   /// Counted at the receiving store; the slip prints the difference from what was sent.
   receivedQuantity  Decimal?  @db.Decimal(18, 3)
   reason            String?
+  /// Why fewer arrived than were sent (036 M3). Required whenever `receivedQuantity` is below
+  /// `quantity`; the difference is written off at the destination as a `transfer_in_reversal`
+  /// ledger row — a loss there, not a return to the source.
+  shortageReason    String?
 
   /// Physical-movement tracking only. Both balances move at creation regardless of
   /// this value: the material has left the source store the moment the transfer is
@@ -6611,6 +6849,12 @@ model Payment {
   proofRef        String?
   proofUploadedAt DateTime?
 
+  /// The client's `Idempotency-Key` header (036 M10). A double-clicked "Record payment" sends
+  /// the same key twice; the unique index below makes the second insert impossible, and the
+  /// service answers it with the payment the first one created. Null for payments recorded
+  /// without a key — Postgres treats NULLs as distinct, so they never collide.
+  idempotencyKey String?
+
   deleted   Boolean   @default(false)
   deletedAt DateTime?
 
@@ -6619,6 +6863,7 @@ model Payment {
 
   allocations PaymentAllocation[]
 
+  @@unique([companyId, idempotencyKey])
   @@index([companyId])
   @@index([companyId, vendorId])
   /// FR-021: which payments lack a proof, answered by an index rather than by reading
@@ -7023,6 +7268,7 @@ model Equipment {
   updatedAt DateTime @updatedAt
 
   documents        EquipmentDocument[]
+  photos           EquipmentPhoto[]
   logbookEntries   LogbookEntry[]
   fuelEntries      FuelEntry[]
   serviceSchedules ServiceSchedule[]
@@ -7057,6 +7303,46 @@ model EquipmentDocument {
   mimeType String?
 
   expiresAt DateTime? @db.Date
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([equipmentId])
+  @@schema("plant")
+}
+
+/// A photograph of a machine (036 K14): an optional main photo plus a gallery. A machine never
+/// needs one — the register shows a placeholder icon without.
+///
+/// Every photo is compressed on the way in (the browser already shrank it to ~2048 px; the
+/// server re-encodes it to at most 2048 px JPEG and drops EXIF/GPS) and stored with a 320 px
+/// thumbnail, which is what the register list and the detail gallery load. Each object is
+/// immutable — a photo is replaced by deleting it and uploading another — so the image routes
+/// can be cached by id for good.
+///
+/// At most one photo per machine is the main one, enforced by a partial unique index in the
+/// migration (`isMain` WHERE true), which Prisma cannot express.
+model EquipmentPhoto {
+  id String @id @default(cuid())
+
+  /// Denormalised from the machine for the RLS policy, as `EquipmentDocument` does.
+  companyId String
+
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  /// Object-storage keys of the compressed photo and its thumbnail.
+  fileRef      String
+  thumbnailRef String
+  /// The stored (detected, re-encoded) type of `fileRef` and `thumbnailRef`.
+  contentType  String
+  fileName     String?
+  width        Int
+  height       Int
+  sizeBytes    Int
+
+  isMain Boolean @default(false)
 
   uploadedByUserId String
   uploadedAt       DateTime @default(now())
@@ -7206,6 +7492,11 @@ model LogbookEntry {
   projectId  String?
 
   remarks String?
+
+  /// Why this entry's opening reading is not the previous entry's closing one (036 K4). A gap is
+  /// refused unless it is explained — a machine moved on a trailer, a meter replaced — because an
+  /// unexplained one is usually a typo that silently adds or loses hours on a hire bill.
+  readingGapReason String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -7595,6 +7886,10 @@ model HireBill {
   /// "Debit / Hold Amount".
   holdAmount      Decimal       @default(0) @db.Decimal(18, 2)
 
+  /// Who raised the bill (036 K8), so the same person cannot also verify it. Backfilled from the
+  /// audit log's CREATE entry; null only where no such entry exists, and such a bill can be
+  /// verified by anyone, as before.
+  createdByUserId  String?
   verifiedByUserId String?
   verifiedAt       DateTime?
 
@@ -8205,6 +8500,11 @@ model PaymentSheetLine {
   /// Unpaid remainder (short payment) carried to the next period (FR-030).
   carriedForwardBalance Decimal            @default(0) @db.Decimal(14, 2)
 
+  /// 036 O4: set on a carry-forward line — the earlier line whose short payment this line pays.
+  /// Null on an ordinary wage line. Not a relation: the earlier line can sit on another sheet,
+  /// and a sheet's lines go with it.
+  carriedFromLineId String?
+
   status PaymentSheetLineStatus @default(pending)
 
   reversalReason String?
@@ -8215,6 +8515,7 @@ model PaymentSheetLine {
   @@index([companyId])
   @@index([sheetId])
   @@index([workerId])
+  @@index([carriedFromLineId])
   @@schema("labour")
 }
 
@@ -9485,7 +9786,7 @@ model LabourPunch {
   supervisorId String
 
   /// 034: a punch added by correction has no photo, face match or location.
-  source LabourPunchSource @default(face)
+  source      LabourPunchSource @default(face)
   /// 034: set when the time was changed after it was recorded; the edits are in
   /// `LabourPunchCorrection`.
   correctedAt DateTime?
@@ -9669,4 +9970,155 @@ model EquipmentEvent {
   @@index([companyId])
   @@index([equipmentId, createdAt])
   @@schema("plant")
+}
+
+// ============================================================================
+// projects schema — 037 Bank Guarantees (specs/037-bank-guarantees/spec.md).
+//
+// A tender is entered once; its EMD and PBG bank guarantees sit under it, because the
+// client's register ("TENDER BG DETAILS") pairs them on one row per tender.
+// ============================================================================
+
+/// What a bank guarantee secures.
+enum BankGuaranteeType {
+  /// Earnest money — submitted with the bid.
+  EMD
+  /// Performance guarantee — submitted on award.
+  PBG
+
+  @@schema("projects")
+}
+
+/// The stored state of a bank guarantee. "Expired" is never stored: it is a Running
+/// guarantee whose expiry (or claim period end) has passed, and a stored copy of that would
+/// be wrong the morning after it was written.
+enum BankGuaranteeStatus {
+  RUNNING
+  RELEASED
+  ENCASHED
+
+  @@schema("projects")
+}
+
+/// One tender the company holds guarantees against (037).
+model BgTender {
+  id        String @id @default(cuid())
+  companyId String
+
+  /// The register's Sr. No — a running number per company, allocated on create.
+  serialNo Int
+
+  workName       String
+  departmentName String
+  tenderAmount   Decimal? @db.Decimal(16, 2)
+
+  /// Optional: a tender may never become a project (an EMD on a bid that was lost).
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  remarks String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  guarantees BankGuarantee[]
+
+  @@unique([companyId, serialNo])
+  @@index([companyId])
+  @@index([projectId])
+  @@schema("projects")
+}
+
+/// One bank guarantee — EMD or PBG — under a tender (037).
+model BankGuarantee {
+  id        String @id @default(cuid())
+  /// Denormalised from the tender for the RLS policy.
+  companyId String
+
+  tenderId String
+  tender   BgTender @relation(fields: [tenderId], references: [id], onDelete: Cascade)
+
+  type BankGuaranteeType
+
+  /// Blank while the guarantee is applied for and not yet issued (row 39 of the client's
+  /// sheet). Unique per company when present — a partial index in the migration.
+  bgNumber           String?
+  amount             Decimal   @db.Decimal(16, 2)
+  issueDate          DateTime? @db.Date
+  expiryDate         DateTime? @db.Date
+  /// Some guarantees can still be claimed for a period after expiry; alerts run to this date.
+  claimPeriodEndDate DateTime? @db.Date
+
+  issuingBank   String?
+  issuingBranch String?
+  marginAmount  Decimal? @db.Decimal(16, 2)
+  fdReference   String?
+
+  status         BankGuaranteeStatus @default(RUNNING)
+  releasedOn     DateTime?           @db.Date
+  encashedOn     DateTime?           @db.Date
+  encashedAmount Decimal?            @db.Decimal(16, 2)
+
+  remarks String?
+
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  documents BankGuaranteeDocument[]
+  events    BankGuaranteeEvent[]
+
+  @@index([companyId])
+  @@index([tenderId])
+  @@index([companyId, status, expiryDate])
+  @@schema("projects")
+}
+
+/// A scanned copy, amendment or release letter filed against a guarantee (037).
+model BankGuaranteeDocument {
+  id        String @id @default(cuid())
+  companyId String
+
+  bankGuaranteeId String
+  bankGuarantee   BankGuarantee @relation(fields: [bankGuaranteeId], references: [id], onDelete: Cascade)
+
+  /// What the document is, as the uploader names it: "BG copy", "Extension letter".
+  title       String
+  fileRef     String
+  fileName    String?
+  contentType String
+  sizeBytes   Int
+
+  uploadedByUserId String
+  uploadedAt       DateTime @default(now())
+
+  @@index([companyId])
+  @@index([bankGuaranteeId])
+  @@schema("projects")
+}
+
+/// The history of a guarantee: created, extended, released, encashed, edited (037).
+/// An extension keeps the expiry it replaced here, which is how "extended from 30.11.2026"
+/// can still be answered after the row says 31.03.2027.
+model BankGuaranteeEvent {
+  id        String @id @default(cuid())
+  companyId String
+
+  bankGuaranteeId String
+  bankGuarantee   BankGuarantee @relation(fields: [bankGuaranteeId], references: [id], onDelete: Cascade)
+
+  /// `created`, `edited`, `extended`, `released`, `encashed`, `reopened`.
+  kind     String
+  /// For `extended`: the expiry before and after.
+  fromDate DateTime? @db.Date
+  toDate   DateTime? @db.Date
+  note     String?
+
+  actorUserId String
+  createdAt   DateTime @default(now())
+
+  @@index([bankGuaranteeId])
+  @@index([companyId])
+  @@schema("projects")
 }

@@ -1,9 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { ApprovalState, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { actorNamesFor } from '../common/actor-name';
+import config from '../common/configs/config';
+import { zonedDateOnly, zonedDayBounds } from '../hr/leave/leave-days';
 import { repairStoredApprovalHref } from '../common/web-routes';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
 import { effectiveCompanyId } from '../settings/company-scope';
@@ -48,9 +50,20 @@ export interface ApprovalHistoryQuery {
   status?: ApprovalHistoryStatus;
   scope?: ApprovalHistoryScope;
   module?: string;
+  /** 036 D1 — business-timezone days, inclusive, matched against the latest action. */
+  from?: string;
+  to?: string;
+  q?: string;
+  requestedBy?: string;
   page?: number;
   pageSize?: number;
 }
+
+/** The most rows one history CSV carries (036 D1) — the same order of bound as the other exports. */
+export const APPROVAL_HISTORY_EXPORT_MAX_ROWS = 5_000;
+
+/** How many matching accounts a name search expands to (036 D1). */
+const NAME_SEARCH_LIMIT = 200;
 
 /**
  * The approval history: past and in-flight items, not only the caller's queue
@@ -101,32 +114,7 @@ export class ApprovalHistoryService {
     }
 
     const ctx: RlsContext = { isSuperAdmin: false, companyId };
-    const states = STATES_FOR[query.status ?? 'decided'];
-
-    const tookPart: Prisma.ApprovalInstanceWhereInput[] = [
-      { originatorUserId: caller.id },
-      { delegatedToUserId: caller.id },
-      { decisions: { some: { actorUserId: caller.id } } },
-    ];
-    const visible: Prisma.ApprovalInstanceWhereInput[] =
-      query.scope === 'mine'
-        ? tookPart
-        : [
-            ...(caller.permissions.length
-              ? [{ viewPermission: { in: caller.permissions } }]
-              : []),
-            ...tookPart,
-          ];
-
-    const base: Prisma.ApprovalInstanceWhereInput = {
-      companyId,
-      ...(states ? { state: { in: states } } : {}),
-      OR: visible,
-    };
-    const where: Prisma.ApprovalInstanceWhereInput = query.module
-      ? { ...base, chain: chainWhereForModule(query.module) }
-      : base;
-
+    const { base, where } = await this.whereFor(caller, query, companyId);
     const { rows, modules } = await withRlsContext(
       this.prisma,
       ctx,
@@ -140,6 +128,9 @@ export class ApprovalHistoryService {
           tx.approvalInstance.findMany({
             where,
             include: { chain: { include: { levels: true } }, decisions: true },
+            // 036 D2: newest *latest action* first — for a decided item that is its decision —
+            // and the screen says so. `updatedAt` moves on every step, return, reassignment and
+            // withdrawal, and on nothing else (the subject and link are written once at submit).
             orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
             skip: (page - 1) * pageSize,
             take: pageSize,
@@ -175,6 +166,193 @@ export class ApprovalHistoryService {
       pageSize,
       modules,
     };
+  }
+
+  /**
+   * The rows the caller may read under the filters (036 D1), and the same without the module
+   * filter — the per-module counts are taken over that, so the module chips keep their numbers
+   * while one of them is selected.
+   */
+  private async whereFor(
+    caller: AuthenticatedUser,
+    query: ApprovalHistoryQuery,
+    companyId: string,
+  ): Promise<{
+    base: Prisma.ApprovalInstanceWhereInput;
+    where: Prisma.ApprovalInstanceWhereInput;
+  }> {
+    const states = STATES_FOR[query.status ?? 'decided'];
+
+    const tookPart: Prisma.ApprovalInstanceWhereInput[] = [
+      { originatorUserId: caller.id },
+      { delegatedToUserId: caller.id },
+      { decisions: { some: { actorUserId: caller.id } } },
+    ];
+    const visible: Prisma.ApprovalInstanceWhereInput[] =
+      query.scope === 'mine'
+        ? tookPart
+        : [
+            ...(caller.permissions.length
+              ? [{ viewPermission: { in: caller.permissions } }]
+              : []),
+            ...tookPart,
+          ];
+
+    const filters: Prisma.ApprovalInstanceWhereInput[] = [];
+    const range = this.rangeOf(query.from, query.to);
+    if (range) filters.push({ updatedAt: range });
+    if (query.requestedBy) {
+      filters.push({ originatorUserId: query.requestedBy });
+    }
+    const q = query.q?.trim();
+    if (q) {
+      // A name matches whoever raised the item or decided at any level. The accounts are looked
+      // up first and bounded: the search only narrows rows the caller can already read, so the
+      // lookup itself discloses nothing.
+      const people = await withRlsContext(
+        this.prisma,
+        { isSuperAdmin: true },
+        (tx) =>
+          tx.user.findMany({
+            where: {
+              OR: [
+                { displayName: { contains: q, mode: 'insensitive' } },
+                { firstname: { contains: q, mode: 'insensitive' } },
+                { lastname: { contains: q, mode: 'insensitive' } },
+                { username: { contains: q, mode: 'insensitive' } },
+                { email: { contains: q, mode: 'insensitive' } },
+              ],
+            },
+            select: { id: true },
+            take: NAME_SEARCH_LIMIT,
+          }),
+      );
+      const ids = people.map((p) => p.id);
+      filters.push({
+        OR: [
+          { subject: { contains: q, mode: 'insensitive' } },
+          ...(ids.length
+            ? [
+                { originatorUserId: { in: ids } },
+                { decisions: { some: { actorUserId: { in: ids } } } },
+              ]
+            : []),
+        ],
+      });
+    }
+
+    const base: Prisma.ApprovalInstanceWhereInput = {
+      companyId,
+      ...(states ? { state: { in: states } } : {}),
+      // The visibility rule stays the top-level `OR`, exactly as wide as `mayViewHistory`; the
+      // 036 D1 filters only ever AND onto it.
+      OR: visible,
+      ...(filters.length ? { AND: filters } : {}),
+    };
+    const where: Prisma.ApprovalInstanceWhereInput = query.module
+      ? { ...base, chain: chainWhereForModule(query.module) }
+      : base;
+    return { base, where };
+  }
+
+  /** `from`..`to` as instants: the start of `from` to the end of `to`, in the business zone. */
+  private rangeOf(
+    from: string | undefined,
+    to: string | undefined,
+  ): Prisma.DateTimeFilter | null {
+    if (!from && !to) return null;
+    const zone = config().settings.timezone;
+    try {
+      const range: Prisma.DateTimeFilter = {};
+      if (from) range.gte = zonedDayBounds(from, zone).start;
+      if (to) range.lt = zonedDayBounds(to, zone).end;
+      if (range.gte && range.lt && range.gte >= range.lt) {
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'The From date must not be after the To date.',
+        });
+      }
+      return range;
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw new BadRequestException({
+          code: 'VALIDATION_FAILED',
+          message: 'That is not a real calendar date.',
+        });
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The filtered history as CSV rows (036 D1), newest latest-action first, at most
+   * {@link APPROVAL_HISTORY_EXPORT_MAX_ROWS}. One row per item; the levels are joined into one
+   * "who decided what" cell so the sheet stays one line per approval.
+   */
+  async exportRows(
+    caller: AuthenticatedUser,
+    query: ApprovalHistoryQuery,
+  ): Promise<string[][]> {
+    const companyId = effectiveCompanyId(caller);
+    const header = [
+      'Subject',
+      'Module',
+      'Status',
+      'Raised by',
+      'Raised on',
+      'Latest action',
+      'Awaiting',
+      'Decisions',
+    ];
+    if (!companyId) return [header];
+    const ctx: RlsContext = { isSuperAdmin: false, companyId };
+    const { where } = await this.whereFor(caller, query, companyId);
+    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.approvalInstance.findMany({
+        where,
+        include: { chain: { include: { levels: true } }, decisions: true },
+        orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+        take: APPROVAL_HISTORY_EXPORT_MAX_ROWS,
+      }),
+    );
+    const names = await actorNamesFor(
+      this.prisma,
+      rows.flatMap((r) => [
+        r.originatorUserId,
+        r.delegatedToUserId,
+        ...r.decisions.map((d) => d.actorUserId),
+      ]),
+    );
+    const zone = config().settings.timezone;
+    const day = (d: Date) => {
+      const [y, m, dd] = zonedDateOnly(d, zone).split('-');
+      return `${dd}-${m}-${y}`;
+    };
+    return [
+      header,
+      ...rows.map((r) => {
+        const entry = this.toEntry(r, caller, names);
+        const decisions = entry.steps
+          .filter((step) => step.actorName)
+          .map(
+            (step) =>
+              `${step.label}: ${step.status} by ${step.actorName}${
+                step.decidedAt ? ` on ${day(step.decidedAt)}` : ''
+              }${step.reason ? ` (${step.reason})` : ''}`,
+          )
+          .join('; ');
+        return [
+          entry.subject,
+          entry.moduleLabel,
+          entry.state,
+          entry.requestedByName,
+          day(entry.requestedAt),
+          day(entry.lastActionAt),
+          entry.awaitingLabel ?? '',
+          decisions,
+        ];
+      }),
+    ];
   }
 
   /** Per-module counts, in `APPROVAL_MODULES` order with `other` last. */
@@ -286,6 +464,7 @@ export class ApprovalHistoryService {
         : 'The system',
       requestedAt: r.createdAt,
       closedAt: live ? null : r.updatedAt,
+      lastActionAt: r.updatedAt,
       awaitingLabel:
         r.state === 'pending' && current
           ? labelForSlot(current.slotKey, current.label)

@@ -14,6 +14,13 @@ import {
   StorageService,
   newStorageRef,
 } from '../../../common/storage/storage.service';
+import { describeStoredFile } from '../../../common/storage/file-type';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  DOCUMENT_TYPES,
+} from '../../../common/uploads';
 import { DocumentTypesService } from '../../../settings/reference-data/document-types.service';
 import type { Caller } from '../../biometrics/face-enrolment.service';
 import type { UploadEmployeeDocumentDto } from './dto/upload-document.dto';
@@ -31,6 +38,24 @@ export interface EmployeeDocumentView {
   expiryState: DocumentExpiryState | null;
   daysToExpiry: number | null;
   uploadedAt: Date;
+  /** What the file is (036 F15) — null for documents filed before these were recorded. */
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** Earlier uploads this one replaced, newest first (036 F15). */
+  previousVersions: EmployeeDocumentVersionView[];
+}
+
+/** A superseded upload, kept rather than deleted (036 F15). */
+export interface EmployeeDocumentVersionView {
+  id: string;
+  documentNumber: string | null;
+  expiresAt: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  uploadedAt: Date;
+  replacedAt: Date;
 }
 
 /**
@@ -85,10 +110,15 @@ export class EmployeeDocumentsService {
   /**
    * Stores a document against an employee.
    *
-   * Re-uploading the same type replaces the reference rather than versioning it —
-   * data-model.md is explicit that historical replacement is not tracked. The old
-   * blob is deleted after the row is updated, so a storage failure cannot leave the
-   * row pointing at a deleted file.
+   * Re-uploading the same type replaces the current document, and since 036 F15 the one it
+   * replaces is **kept** as an `EmployeeDocumentVersion`, file and all. It used to be deleted for
+   * good (data-model.md said historical replacement was not tracked), so a passport renewed over
+   * the wrong one could not be recovered. The move and the update are one transaction, so a
+   * failure cannot lose the old version or leave two current ones.
+   *
+   * The file goes through the shared upload helpers (036 B4/B5): 413 over the size limit, 415 for
+   * anything not a PDF, photo or Office file, decided by its bytes; photos are compressed; and the
+   * **detected** type is stored, not the one the browser declared.
    */
   async upload(
     caller: Caller,
@@ -122,64 +152,101 @@ export class EmployeeDocumentsService {
     // belongs between decoding and `storage.put`, and is deferred rather than
     // faked — a no-op "scanner" would be worse than an explicit gap, because it
     // reads as protection that is not there.
-    const buffer = Buffer.from(dto.file, 'base64');
-    if (buffer.length === 0) {
-      throw new BadRequestException('file must be non-empty base64 content.');
-    }
+    const bytes = decodeBase64Upload(dto.file, type.name);
+    const detected = assertAllowedFileType(bytes, DOCUMENT_TYPES, type.name);
+    const image = await compressImageUpload(bytes, detected.contentType);
+    const stored = image?.main.data ?? bytes;
+    const mimeType = image?.main.contentType ?? detected.contentType;
     const fileRef = await this.storage.put(
       newStorageRef('employee-documents'),
-      buffer,
-      dto.contentType,
+      stored,
+      mimeType,
     );
+    const metadata = {
+      fileRef,
+      fileName: cleanFileName(dto.fileName),
+      mimeType,
+      sizeBytes: stored.length,
+      documentNumber: dto.documentNumber?.trim() || null,
+      expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
+      uploadedByUserId: caller.userId,
+    };
 
-    const existing = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employeeDocument.findUnique({
-        where: {
-          employeeId_documentTypeId: {
-            employeeId,
-            documentTypeId: dto.documentTypeId,
+    // A restricted type (Aadhaar) is regulated personal data, and 017 FR-006a says superseded
+    // copies of it are not retained: its replaced file is still deleted, as before 036.
+    const keepPrevious = !type.isRestricted;
+    const { saved, replaced, discardRef } = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const existing = await tx.employeeDocument.findUnique({
+          where: {
+            employeeId_documentTypeId: {
+              employeeId,
+              documentTypeId: dto.documentTypeId,
+            },
           },
-        },
-        select: { id: true, fileRef: true },
-      }),
-    );
-
-    const saved = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employeeDocument.upsert({
-        where: {
-          employeeId_documentTypeId: {
+        });
+        if (!existing) {
+          const created = await tx.employeeDocument.create({
+            data: {
+              employeeId,
+              documentTypeId: dto.documentTypeId,
+              ...metadata,
+            },
+            include: { versions: { orderBy: { replacedAt: 'desc' } } },
+          });
+          return { saved: created, replaced: false, discardRef: null };
+        }
+        if (!keepPrevious) {
+          const updated = await tx.employeeDocument.update({
+            where: { id: existing.id },
+            data: { ...metadata, uploadedAt: new Date() },
+            include: { versions: { orderBy: { replacedAt: 'desc' } } },
+          });
+          return {
+            saved: updated,
+            replaced: true,
+            discardRef: existing.fileRef,
+          };
+        }
+        await tx.employeeDocumentVersion.create({
+          data: {
+            documentId: existing.id,
             employeeId,
-            documentTypeId: dto.documentTypeId,
+            fileRef: existing.fileRef,
+            fileName: existing.fileName,
+            mimeType: existing.mimeType,
+            sizeBytes: existing.sizeBytes,
+            documentNumber: existing.documentNumber,
+            expiresAt: existing.expiresAt,
+            uploadedByUserId: existing.uploadedByUserId,
+            uploadedAt: existing.uploadedAt,
+            replacedByUserId: caller.userId,
           },
-        },
-        create: {
-          employeeId,
-          documentTypeId: dto.documentTypeId,
-          fileRef,
-          documentNumber: dto.documentNumber?.trim() ?? null,
-          expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-          uploadedByUserId: caller.userId,
-        },
-        update: {
-          fileRef,
-          documentNumber: dto.documentNumber?.trim() ?? null,
-          expiresAt: dto.expiresAt ? new Date(dto.expiresAt) : null,
-          uploadedByUserId: caller.userId,
-          uploadedAt: new Date(),
-        },
-      }),
+        });
+        const updated = await tx.employeeDocument.update({
+          where: { id: existing.id },
+          data: { ...metadata, uploadedAt: new Date() },
+          include: { versions: { orderBy: { replacedAt: 'desc' } } },
+        });
+        return { saved: updated, replaced: true, discardRef: null };
+      },
     );
 
     // Only once the row certainly points at the new blob.
-    if (existing?.fileRef && existing.fileRef !== fileRef) {
-      await this.storage.delete(existing.fileRef);
+    if (discardRef && discardRef !== fileRef) {
+      await this.storage.delete(discardRef);
     }
 
     await this.auditLog.record({
       entityType: AuditEntityType.EMPLOYEE_DOCUMENT,
-      action: existing ? AuditAction.UPDATE : AuditAction.CREATE,
+      action: replaced ? AuditAction.UPDATE : AuditAction.CREATE,
       entityId: saved.id,
-      changes: { documentTypeId: dto.documentTypeId },
+      changes: {
+        documentTypeId: dto.documentTypeId,
+        ...(replaced ? { previousVersionKept: keepPrevious } : {}),
+      },
       accountId: caller.userId,
       companyId: employee.companyId,
       ipAddress: caller.ipAddress,
@@ -213,6 +280,7 @@ export class EmployeeDocumentsService {
       tx.employeeDocument.findMany({
         where: { employeeId },
         orderBy: { uploadedAt: 'desc' },
+        include: { versions: { orderBy: { replacedAt: 'desc' } } },
       }),
     );
 
@@ -233,6 +301,70 @@ export class EmployeeDocumentsService {
       mandatoryTotal,
       mandatoryHeld: mandatoryTotal - missing.length,
     };
+  }
+
+  /**
+   * The bytes of a document — its current upload, or one it replaced when `versionId` is given
+   * (036 F15). There was no way to open an uploaded document at all before this.
+   *
+   * Every retrieval is audited **before** the bytes are returned, as company documents do: an
+   * identity document is personal data, and the attempt is the thing worth knowing about.
+   */
+  async file(
+    caller: Caller,
+    employeeId: string,
+    documentId: string,
+    versionId?: string,
+  ): Promise<{ data: Buffer; filename: string; contentType: string }> {
+    const doc = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employeeDocument.findFirst({
+        where: { id: documentId, employeeId },
+        include: {
+          employee: { select: { companyId: true, employeeCode: true } },
+        },
+      }),
+    );
+    if (!doc) throw new NotFoundException('Document not found');
+    let source: {
+      fileRef: string;
+      fileName: string | null;
+      mimeType: string | null;
+    } = doc;
+    if (versionId) {
+      const version = await withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.employeeDocumentVersion.findFirst({
+          where: { id: versionId, documentId },
+        }),
+      );
+      if (!version) throw new NotFoundException('Document version not found');
+      source = version;
+    }
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.EMPLOYEE_DOCUMENT,
+      action: AuditAction.READ,
+      entityId: doc.id,
+      changes: versionId ? { versionId } : {},
+      accountId: caller.userId,
+      companyId: doc.employee.companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    const data = await this.storage.get(source.fileRef);
+    const types = await this.documentTypes.listForCompany(
+      doc.employee.companyId,
+    );
+    const typeName =
+      types.find((t) => t.id === doc.documentTypeId)?.name ?? 'Document';
+    const { filename, contentType } = describeStoredFile({
+      bytes: data,
+      storedName: source.fileName,
+      storedType: source.mimeType,
+      fallbackName: `${doc.employee.employeeCode} ${typeName}`
+        .replace(/[^A-Za-z0-9 _.-]/g, '')
+        .trim(),
+    });
+    return { data, filename, contentType };
   }
 
   /**
@@ -287,6 +419,19 @@ export class EmployeeDocumentsService {
       documentNumber: string | null;
       expiresAt: Date | null;
       uploadedAt: Date;
+      fileName?: string | null;
+      mimeType?: string | null;
+      sizeBytes?: number | null;
+      versions?: {
+        id: string;
+        documentNumber: string | null;
+        expiresAt: Date | null;
+        fileName: string | null;
+        mimeType: string | null;
+        sizeBytes: number | null;
+        uploadedAt: Date;
+        replacedAt: Date;
+      }[];
     },
     type?: DocumentType,
   ): EmployeeDocumentView {
@@ -307,6 +452,32 @@ export class EmployeeDocumentsService {
       expiryState: state,
       daysToExpiry,
       uploadedAt: row.uploadedAt,
+      fileName: row.fileName ?? null,
+      mimeType: row.mimeType ?? null,
+      sizeBytes: row.sizeBytes ?? null,
+      previousVersions: (row.versions ?? []).map((v) => ({
+        id: v.id,
+        documentNumber: v.documentNumber,
+        expiresAt: v.expiresAt ? v.expiresAt.toISOString().slice(0, 10) : null,
+        fileName: v.fileName,
+        mimeType: v.mimeType,
+        sizeBytes: v.sizeBytes,
+        uploadedAt: v.uploadedAt,
+        replacedAt: v.replacedAt,
+      })),
     };
   }
+}
+
+/**
+ * The uploader's file name, as something safe to keep and later serve: path parts dropped
+ * (a browser on Windows can send `C:\fakepath\scan.pdf`), control characters removed, capped.
+ * `contentDispositionFor` does the header-safety at serve time; this only keeps the column sane.
+ */
+function cleanFileName(name: string | undefined): string | null {
+  if (!name) return null;
+  const base = name.split(/[\\/]/).pop() ?? '';
+  // eslint-disable-next-line no-control-regex
+  const cleaned = base.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  return cleaned ? cleaned.slice(0, 255) : null;
 }

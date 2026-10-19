@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -15,6 +16,7 @@ export class CreateServiceScheduleDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   equipmentId!: string;
 
   @ApiProperty({ example: 'Engine oil and filter' })
@@ -31,6 +33,7 @@ export class CreateServiceScheduleDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(1)
+  @Max(999_999_999_999_999)
   intervalHours?: number;
 
   @ApiPropertyOptional({ description: 'For a km-metered machine' })
@@ -38,6 +41,7 @@ export class CreateServiceScheduleDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(1)
+  @Max(999_999_999_999_999)
   intervalKm?: number;
 
   @ApiProperty({
@@ -46,6 +50,7 @@ export class CreateServiceScheduleDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @Min(0)
+  @Max(999_999_999_999_999)
   lastDoneReading!: number;
 }
 
@@ -57,6 +62,7 @@ export class ListServiceSchedulesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   equipmentId?: string;
 
   @ApiPropertyOptional({ enum: ['ok', 'due_soon', 'overdue'] })
@@ -67,6 +73,7 @@ export class ListServiceSchedulesDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ default: 1 })
@@ -74,6 +81,7 @@ export class ListServiceSchedulesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -81,5 +89,6 @@ export class ListServiceSchedulesDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 }

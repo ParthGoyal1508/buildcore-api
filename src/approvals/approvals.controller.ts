@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   Ip,
   NotFoundException,
@@ -27,7 +28,9 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { SelfService } from '../common/decorators/route-access.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
+import { csvCell } from '../common/csv';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
+import { ExportThrottle } from '../common/throttle/app-throttle';
 import { rlsContextFor } from '../common/prisma/rls-context';
 import { DEFAULT_SLOT_ORDER, SLOT_LABELS } from './approval-slots';
 import { ApprovalHistoryService } from './approval-history.service';
@@ -149,6 +152,26 @@ export class ApprovalsController {
     @Query() query: ApprovalHistoryQueryDto,
   ) {
     return this.historyList.historyFor(caller, query);
+  }
+
+  @Get('history/export')
+  @SelfService()
+  // A filtered scan of the history per call (036 D1, B9).
+  @ExportThrottle()
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @Header('Content-Disposition', 'attachment; filename="approval-history.csv"')
+  @ApiOperation({
+    summary: 'The approval history under the same filters, as CSV (036 D1)',
+    description:
+      'Same visibility rule and filters as `GET /approvals/history` (status, scope, module, ' +
+      'from/to, q, requestedBy), no paging, at most 5,000 rows, newest latest action first.',
+  })
+  async approvalHistoryExport(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: ApprovalHistoryQueryDto,
+  ): Promise<string> {
+    const rows = await this.historyList.exportRows(caller, query);
+    return rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
   }
 
   // ───────────────────────────────────────────────────────────────────────────

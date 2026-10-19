@@ -25,6 +25,18 @@ export class JoinDto {
   @IsNotEmpty()
   @MaxLength(120)
   emergencyContact!: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() siteId?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() shiftId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  siteId?: string;
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @ApiPropertyOptional()
+  @IsOptional()
+  @MaxLength(100)
+  shiftId?: string;
 }

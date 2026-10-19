@@ -28,6 +28,7 @@ import type { RlsContext } from '../../common/prisma/rls-context';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
 import { TermsTemplatesService } from '../../settings/terms-templates/terms-templates.service';
+import { ListPaging, Paged, UNPAGED, shapeList } from '../list-paging';
 
 /**
  * The infix slot every series in this product fills the same way.
@@ -180,9 +181,12 @@ export class WorkOrdersService {
       viewPermission: Permission.PROJECT_FINANCIALS,
     });
 
+    // Conditional on `draft` (036): a double-click's second submit is refused by the spine's
+    // unique live-instance index, but a completion delivered before this line (a chain the
+    // originator can finish alone) would otherwise be overwritten back to pending.
     await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.workOrder.update({
-        where: { id: order.id },
+      tx.workOrder.updateMany({
+        where: { id: order.id, status: WorkOrderStatus.draft },
         data: { status: WorkOrderStatus.pending_approval },
       }),
     );
@@ -321,17 +325,24 @@ export class WorkOrdersService {
   async listForProject(
     ctx: RlsContext,
     projectId: string,
-  ): Promise<WorkOrderView[]> {
+    paging: ListPaging = UNPAGED,
+  ): Promise<WorkOrderView[] | Paged<WorkOrderView>> {
     const rows = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.workOrder.findMany({
         where: { projectId },
-        orderBy: { createdAt: 'desc' },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: {
           _count: { select: { awardLines: true, raBills: true } },
         },
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
-    return rows.map(shape);
+    return shapeList(paging, rows.map(shape), () =>
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.workOrder.count({ where: { projectId } }),
+      ),
+    );
   }
 
   async view(ctx: RlsContext, id: string): Promise<WorkOrderView> {

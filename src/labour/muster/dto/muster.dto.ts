@@ -7,12 +7,14 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  MaxLength,
 } from 'class-validator';
 
 export class ReturnMusterDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(2_000)
   reason!: string;
 }
 
@@ -20,6 +22,7 @@ export class ListMustersDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 
   @ApiPropertyOptional({ enum: MusterStatus })
@@ -30,6 +33,7 @@ export class ListMustersDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional()

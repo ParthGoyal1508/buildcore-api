@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * The company's logo — the mark shown wherever the product's own otherwise is
@@ -18,5 +19,6 @@ export class SetLogoDto {
   })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   data!: string;
 }

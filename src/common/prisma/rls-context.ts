@@ -93,5 +93,20 @@ export function withRlsContext<T>(
       isSuperAdmin ? 'true' : 'false'
     }, true), set_config('app.current_company_id', ${companyId}, true), set_config('TimeZone', 'UTC', true)`;
     return fn(tx);
-  });
+  }, RLS_TRANSACTION_OPTIONS);
 }
+
+/**
+ * Prisma's interactive-transaction limits, raised only where `PRISMA_TRANSACTION_TIMEOUT_MS` is set.
+ * A laptop talking to the shared develop database in us-east-2 pays ~250 ms a round trip, so
+ * the 5 s default expires mid-way through work that takes 200 ms next to the database.
+ * Deployments sit beside their database and leave it unset.
+ */
+const RLS_TRANSACTION_OPTIONS = (():
+  | { timeout: number; maxWait: number }
+  | undefined => {
+  const ms = Number(process.env.PRISMA_TRANSACTION_TIMEOUT_MS);
+  return Number.isFinite(ms) && ms > 0
+    ? { timeout: ms, maxWait: ms }
+    : undefined;
+})();

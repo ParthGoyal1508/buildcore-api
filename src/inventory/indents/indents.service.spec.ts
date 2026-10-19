@@ -146,3 +146,50 @@ describe('IndentsService.procurementNeeded (FR-027)', () => {
     expect(where.indent.deleted).toBe(false);
   });
 });
+
+describe('IndentsService.approve — maker-checker (036 M8)', () => {
+  const indent = (requestedByUserId: string) => ({
+    id: 'indent-1',
+    companyId: 'co-1',
+    siteId: 'site-1',
+    status: IndentStatus.submitted,
+    deleted: false,
+    requestedByUserId,
+    lines: [],
+  });
+
+  const buildApprove = (requestedByUserId: string) => {
+    const prisma = createPrismaMock({
+      materialIndent: {
+        findUnique: jest.fn().mockResolvedValue(indent(requestedByUserId)),
+        update: jest.fn(),
+      },
+      materialIndentLine: { update: jest.fn(), updateMany: jest.fn() },
+    });
+    const service = new IndentsService(
+      prisma as never,
+      { record: jest.fn() } as never,
+      refs,
+      {} as never,
+    );
+    return { service, prisma };
+  };
+
+  it('refuses the requester approving their own indent', async () => {
+    // `callerFor` is account `caller-1`.
+    const { service, prisma } = buildApprove('caller-1');
+    await expect(
+      service.approve(caller, 'indent-1', { lines: [] }, 'ip'),
+    ).rejects.toThrow(/someone else must approve/);
+    expect(prisma.tx.materialIndent.update).not.toHaveBeenCalled();
+  });
+
+  it('lets anyone else with the permission approve it', async () => {
+    const { service, prisma } = buildApprove('someone-else');
+    // The view assembly after the write is not what this test is about.
+    await service
+      .approve(caller, 'indent-1', { lines: [] }, 'ip')
+      .catch(() => undefined);
+    expect(prisma.tx.materialIndent.update).toHaveBeenCalled();
+  });
+});

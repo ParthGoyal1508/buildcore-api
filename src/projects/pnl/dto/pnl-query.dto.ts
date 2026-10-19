@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 /**
  * The query every P&L read takes, as a DTO rather than bare `@Query` parameters.
@@ -29,6 +35,7 @@ export class PnlQueryDto {
   @ApiProperty()
   @IsString()
   @MinLength(1)
+  @MaxLength(100)
   projectId!: string;
 
   @ApiProperty({ example: '2026-10' })
@@ -38,6 +45,7 @@ export class PnlQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -46,6 +54,7 @@ export class PnlExportQueryDto extends PnlQueryDto {
   @ApiPropertyOptional({ enum: ['pdf', 'excel'], default: 'pdf' })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   format?: string;
 }
 
@@ -57,6 +66,9 @@ export class PnlGroupQueryDto {
   })
   @IsString()
   @MinLength(1)
+  // Room for 200 ids (25-character cuids plus commas). 036 B11 capped this at 100 characters,
+  // which is three ids, and the group P&L refused every company with a fourth project (Wave 5).
+  @MaxLength(5400)
   projectIds!: string;
 
   @ApiProperty({ example: '2026-10' })
@@ -66,5 +78,6 @@ export class PnlGroupQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

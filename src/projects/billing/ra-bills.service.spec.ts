@@ -52,6 +52,8 @@ function build(opts: {
   });
 
   const tx = {
+    // The work-order row lock `priceLines` takes (036 I3).
+    $queryRaw: async () => [],
     $executeRaw: async () => 0,
     workOrder: {
       // `active` from 028 FR-009: an award is approved before it can be billed against, so a

@@ -9,7 +9,9 @@ import { callerFor } from '../testing/prisma-mock';
 // last-Super-Admin guard still reasons about which role an account holds.
 const superAdmin = callerFor('company-1', {
   roleNames: ['Super Admin'],
-  permissions: [Permission.USER_MANAGEMENT],
+  // A real Super Admin holds cross-company access, which is what lets them act on another
+  // protected-role holder (036 C3).
+  permissions: [Permission.USER_MANAGEMENT, Permission.CROSS_COMPANY_ACCESS],
 });
 const hoUser = callerFor('company-1', {
   roleNames: ['HO User'],
@@ -30,6 +32,7 @@ const customAdmin = callerFor('company-1', {
 function build(users: Record<string, jest.Mock> = {}) {
   const usersService = {
     findAllForCompany: jest.fn().mockResolvedValue([]),
+    listForCompany: jest.fn().mockResolvedValue({ items: [], total: 0 }),
     updateRoleOrStatus: jest.fn().mockResolvedValue({ companyId: 'company-1' }),
     deleteAccount: jest.fn().mockResolvedValue(undefined),
     holdsProtectedRole: jest.fn().mockResolvedValue(false),
@@ -40,6 +43,12 @@ function build(users: Record<string, jest.Mock> = {}) {
     }),
     // The viewer role these fixtures assign grants nothing beyond what every caller holds.
     grantsOfRole: jest.fn().mockResolvedValue([]),
+    // 036 C1: the account's current roles, diffed against the requested set. None by default,
+    // so a `roleId` adds and removes nothing.
+    roleIdsOf: jest.fn().mockResolvedValue([]),
+    protectedRoleIds: jest.fn(async (ids: string[]) =>
+      ids.filter((id) => id.startsWith('role-super')),
+    ),
     ...users,
   };
   const auditLog = { record: jest.fn() };
@@ -115,6 +124,7 @@ describe('UsersAdminService', () => {
       const { service, usersService } = build({
         holdsProtectedRole: jest.fn().mockResolvedValue(true),
         countActiveSuperAdmins: jest.fn().mockResolvedValue(1),
+        roleIdsOf: jest.fn().mockResolvedValue(['role-super']),
       });
 
       await expect(
@@ -289,5 +299,154 @@ describe('UsersAdminService', () => {
       );
       expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
     });
+  });
+});
+
+describe('who an administrator may act on (036 C3)', () => {
+  it.each([
+    ['delete', (s: UsersAdminService) => s.remove(hoUser, 'caller-1', 'ip')],
+    [
+      'deactivate',
+      (s: UsersAdminService) =>
+        s.update(hoUser, 'caller-1', { status: UserStatus.deactivated }, 'ip'),
+    ],
+  ])(
+    'refuses to let an administrator %s their own account',
+    async (_l, act) => {
+      const { service, usersService } = build();
+      const error = await act(service).catch((e) => e);
+      expect(error).toBeInstanceOf(ForbiddenException);
+      expect(error.response.code).toBe('OWN_ACCOUNT');
+      expect(usersService.deleteAccount).not.toHaveBeenCalled();
+      expect(usersService.updateRoleOrStatus).not.toHaveBeenCalled();
+    },
+  );
+
+  it('refuses a company administrator acting on a Super Admin', async () => {
+    const { service, usersService } = build({
+      holdsProtectedRole: jest.fn().mockResolvedValue(true),
+    });
+    const error = await service.remove(hoUser, 'super-1', 'ip').catch((e) => e);
+    expect(error).toBeInstanceOf(ForbiddenException);
+    expect(error.response.code).toBe('PROTECTED_ACCOUNT');
+    expect(usersService.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it('lets a group administrator act on another Super Admin', async () => {
+    const { service, usersService } = build({
+      holdsProtectedRole: jest.fn().mockResolvedValue(true),
+    });
+    await service.remove(superAdmin, 'super-2', 'ip');
+    expect(usersService.deleteAccount).toHaveBeenCalled();
+  });
+});
+
+// 036 C1/C2: the Users form edits the whole role set, and the server diffs it.
+describe('role set changes (036 C1)', () => {
+  it('adds a role without removing the ones already held', async () => {
+    const { service, usersService, auditLog } = build({
+      roleIdsOf: jest.fn().mockResolvedValue(['role-a']),
+    });
+    await service.update(
+      hoUser,
+      'user-2',
+      { roleIds: ['role-a', 'role-b'] },
+      'ip',
+    );
+    expect(usersService.updateRoleOrStatus).toHaveBeenCalledWith(
+      'user-2',
+      { roleIds: ['role-a', 'role-b'], status: undefined },
+      expect.anything(),
+    );
+    // Only the added role is checked against the caller's ceiling.
+    expect(usersService.grantsOfRole).toHaveBeenCalledTimes(1);
+    expect(usersService.grantsOfRole).toHaveBeenCalledWith('role-b');
+    expect(auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changes: expect.objectContaining({
+          rolesAdded: ['role-b'],
+          rolesRemoved: [],
+        }),
+      }),
+    );
+  });
+
+  it('does not re-check a wide role the account already holds', async () => {
+    const { service, usersService } = build({
+      roleIdsOf: jest.fn().mockResolvedValue(['role-wide']),
+      grantsOfRole: jest.fn(async (id: string) =>
+        id === 'role-wide'
+          ? [{ permission: Permission.CROSS_COMPANY_ACCESS, level: 'read' }]
+          : [],
+      ),
+    });
+    await service.update(
+      hoUser,
+      'user-2',
+      { roleIds: ['role-wide', 'role-small'] },
+      'ip',
+    );
+    expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
+  });
+
+  it('writes nothing about roles when the set is unchanged, even for the caller', async () => {
+    const { service, usersService } = build({
+      roleIdsOf: jest.fn().mockResolvedValue(['role-a']),
+    });
+    await service.update(
+      hoUser,
+      'caller-1',
+      { roleIds: ['role-a'], status: UserStatus.active },
+      'ip',
+    );
+    expect(usersService.updateRoleOrStatus).toHaveBeenCalledWith(
+      'caller-1',
+      { roleIds: undefined, status: UserStatus.active },
+      expect.anything(),
+    );
+  });
+
+  it('keeps a Super Admin who gains a second role out of the last-admin guard', async () => {
+    const { service, usersService } = build({
+      roleIdsOf: jest.fn().mockResolvedValue(['role-super']),
+      holdsProtectedRole: jest.fn().mockResolvedValue(true),
+      countActiveSuperAdmins: jest.fn().mockResolvedValue(1),
+    });
+    await service.update(
+      superAdmin,
+      'user-1',
+      { roleIds: ['role-super', 'role-a'] },
+      'ip',
+    );
+    expect(usersService.countActiveSuperAdmins).not.toHaveBeenCalled();
+    expect(usersService.updateRoleOrStatus).toHaveBeenCalled();
+  });
+});
+
+describe('listing accounts (036 C5)', () => {
+  it('answers the bare array when no page is asked for', async () => {
+    const { service, usersService } = build();
+    await expect(service.findAll(hoUser, { q: 'ravi' })).resolves.toEqual([]);
+    expect(usersService.listForCompany).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.not.objectContaining({ take: expect.anything() }),
+    );
+  });
+
+  it('answers a page with its total when one is asked for', async () => {
+    const { service, usersService } = build({
+      listForCompany: jest.fn().mockResolvedValue({ items: [], total: 42 }),
+    });
+    await expect(
+      service.findAll(hoUser, { page: 2, pageSize: 10, sort: 'name:desc' }),
+    ).resolves.toEqual({ items: [], total: 42, page: 2, pageSize: 10 });
+    expect(usersService.listForCompany).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        skip: 10,
+        take: 10,
+        sort: { key: 'name', dir: 'desc' },
+      }),
+    );
   });
 });

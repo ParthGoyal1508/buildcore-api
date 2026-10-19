@@ -51,6 +51,8 @@ export const DEFAULT_ROLES: {
       Permission.EMPLOYEES,
       Permission.ATTENDANCE,
       Permission.PROJECTS,
+      // 036 review decision 5: every role that held PROJECTS keeps the right to lock/unlock.
+      Permission.PROJECT_LOCK,
       Permission.DWR,
       Permission.MACHINERY,
       Permission.REPORTS,
@@ -64,6 +66,7 @@ export const DEFAULT_ROLES: {
       Permission.EMPLOYEES,
       Permission.ATTENDANCE,
       Permission.PROJECTS,
+      Permission.PROJECT_LOCK,
       Permission.DWR,
       Permission.PROJECT_FINANCIALS,
       Permission.MACHINERY,
@@ -138,14 +141,25 @@ export const DEFAULT_ROLES: {
  */
 export async function seedDefaultRoles(prisma: PrismaClient): Promise<void> {
   for (const role of DEFAULT_ROLES) {
-    await prisma.role.upsert({
-      where: { name: role.name },
-      update: { permissions: role.permissions, isProtected: role.isProtected },
-      create: {
-        name: role.name,
-        permissions: role.permissions,
-        isProtected: role.isProtected,
-      },
+    // By name among the global roles: a company's own role may share a name (036 C10), and
+    // Prisma has no unique key to upsert on since the name stopped being unique on its own.
+    const existing = await prisma.role.findFirst({
+      where: { name: role.name, companyId: null },
+      select: { id: true },
     });
+    if (existing) {
+      await prisma.role.update({
+        where: { id: existing.id },
+        data: { permissions: role.permissions, isProtected: role.isProtected },
+      });
+    } else {
+      await prisma.role.create({
+        data: {
+          name: role.name,
+          permissions: role.permissions,
+          isProtected: role.isProtected,
+        },
+      });
+    }
   }
 }

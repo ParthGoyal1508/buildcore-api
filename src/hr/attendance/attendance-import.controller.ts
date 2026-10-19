@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -28,6 +27,7 @@ import { AttendanceImportService } from './attendance-import.service';
 import { AttendanceImportDto } from './dto/import-row.dto';
 import { AccessLevel } from '@prisma/client';
 import { RequireLevel } from '../../common/decorators/access-level.decorator';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /**
  * Bulk attendance import (005 US13).
@@ -45,13 +45,11 @@ export class AttendanceImportController {
   constructor(private readonly imports: AttendanceImportService) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, requested);
   }
 
   @Get('template')

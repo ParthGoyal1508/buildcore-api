@@ -1,17 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { CompanyStatus, PayCycle } from '@prisma/client';
 import {
+  IsEmail,
   IsEnum,
   IsInt,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
-  MaxLength,
   Matches,
   Max,
+  MaxLength,
   Min,
-  IsEmail,
 } from 'class-validator';
 
 /**
@@ -27,6 +27,7 @@ export class CreateCompanyDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(200)
   name: string;
 
   /** Normalized to trimmed uppercase by the service; uniqueness is case-insensitive (FR-004). */
@@ -38,11 +39,13 @@ export class CreateCompanyDto {
   @Matches(/^[A-Za-z0-9-]{2,10}$/, {
     message: 'shortCode must be 2-10 letters, digits or hyphens',
   })
+  @MaxLength(200)
   shortCode: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   logoUrl?: string;
 
   @ApiPropertyOptional({ enum: CompanyStatus })
@@ -63,26 +66,31 @@ export class CreateCompanyDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   cin?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   tan?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   address?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   city?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   state?: string;
 
   @ApiPropertyOptional()
@@ -94,6 +102,7 @@ export class CreateCompanyDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   phone?: string;
 
   @ApiPropertyOptional()
@@ -104,26 +113,31 @@ export class CreateCompanyDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   website?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   pfEstablishmentCode?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   esicCode?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   professionalTaxRegNumber?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   bocwRegNumber?: string;
 
   @ApiPropertyOptional({ enum: PayCycle })

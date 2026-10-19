@@ -8,6 +8,7 @@ import { assertInService } from '../disposal/in-service';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { businessToday } from '../../common/business-date';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants/plant.constants';
 import { PlantRefsService } from '../plant-refs.service';
@@ -262,6 +263,11 @@ export class FuelService {
     ipAddress: string,
   ): Promise<FuelRow> {
     const date = this.refs.parseDate(dto.date);
+    // 036 K10: fuel cannot have been drawn on a day that has not happened yet. Compared with
+    // today in the business timezone, not UTC, so a fill entered at 01:00 IST is not refused.
+    if (date > businessToday()) {
+      throw new BadRequestException('The fuel date cannot be in the future.');
+    }
     if (dto.vendorId) await this.refs.requireVendorName(caller, dto.vendorId);
     // The amount paid, when given, is the record (2026-10-15): the log book is kept in rupees
     // advanced and litres drawn, and a rate rounded to the paisa would not multiply back to it.
@@ -295,6 +301,17 @@ export class FuelService {
         }
         assertInScope(caller, equipment, 'Equipment');
         assertInService(equipment);
+
+        // 036 K1: a named site must be one of the machine's company's. Unchecked, a Super Admin
+        // (who can see every company's sites) could book this company's diesel to another
+        // company's site, where it would turn up in that site's costs.
+        if (dto.siteId) {
+          await this.refs.requireSiteName(
+            caller,
+            dto.siteId,
+            equipment.companyId,
+          );
+        }
 
         const category = await tx.equipmentCategory.findUnique({
           where: { id: equipment.categoryId },

@@ -1,10 +1,11 @@
-import { AttendanceType } from '@prisma/client';
+import { AttendanceType, LabourPunchType } from '@prisma/client';
 
 import {
   DEFAULT_LABOUR_DAY_RULES,
   deriveLabourDay,
   labourDayRulesProblem,
   musterLineFor,
+  openShiftDate,
 } from './labour-day.util';
 
 const at = (hhmm: string, day = '2026-10-10') =>
@@ -94,5 +95,75 @@ describe('labourDayRulesProblem', () => {
         standardHours: 8,
       }),
     ).toMatch(/at most 24/);
+  });
+});
+
+describe('openShiftDate (036 O5)', () => {
+  const utc = (iso: string) => new Date(iso);
+  const day = (d: string) => new Date(`${d}T00:00:00.000Z`);
+  // 20:00 IST on 16 Oct is 14:30 UTC.
+  const nightIn = {
+    punchDate: day('2026-10-16'),
+    type: LabourPunchType.in,
+    punchedAt: utc('2026-10-16T14:30:00.000Z'),
+  };
+
+  it("closes yesterday's punch-in within 16 hours — a night shift", () => {
+    // 04:00 IST on 17 Oct.
+    expect(
+      openShiftDate([nightIn], utc('2026-10-16T22:30:00.000Z'), '2026-10-17'),
+    ).toBe('2026-10-16');
+  });
+
+  it("will not close yesterday's punch-in after 16 hours", () => {
+    expect(
+      openShiftDate([nightIn], utc('2026-10-17T07:00:00.000Z'), '2026-10-17'),
+    ).toBeNull();
+  });
+
+  it('will not close a punch-in that already has its punch-out', () => {
+    const out = {
+      punchDate: day('2026-10-16'),
+      type: LabourPunchType.out,
+      punchedAt: utc('2026-10-16T20:00:00.000Z'),
+    };
+    expect(
+      openShiftDate(
+        [nightIn, out],
+        utc('2026-10-16T22:00:00.000Z'),
+        '2026-10-17',
+      ),
+    ).toBeNull();
+  });
+
+  it('only ever closes the latest punch-in', () => {
+    const todayIn = {
+      punchDate: day('2026-10-17'),
+      type: LabourPunchType.in,
+      punchedAt: utc('2026-10-17T00:30:00.000Z'),
+    };
+    const todayOut = {
+      punchDate: day('2026-10-17'),
+      type: LabourPunchType.out,
+      punchedAt: utc('2026-10-17T01:30:00.000Z'),
+    };
+    expect(
+      openShiftDate(
+        [nightIn, todayIn, todayOut],
+        utc('2026-10-17T02:30:00.000Z'),
+        '2026-10-17',
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps today's own punch-in open however long ago it was", () => {
+    const earlyIn = {
+      punchDate: day('2026-10-17'),
+      type: LabourPunchType.in,
+      punchedAt: utc('2026-10-16T19:00:00.000Z'),
+    };
+    expect(
+      openShiftDate([earlyIn], utc('2026-10-17T18:00:00.000Z'), '2026-10-17'),
+    ).toBe('2026-10-17');
   });
 });

@@ -11,6 +11,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../../common/uploads/base64-payload';
 
 /** The modes a payment advice names. Each maps onto an `instrument` for the ledger. */
 export const PAYMENT_MODES = [
@@ -150,6 +151,7 @@ export class UploadSignedCopyDto {
   @ApiProperty({ description: 'The file, base64-encoded.' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   data!: string;
 
   @ApiProperty({

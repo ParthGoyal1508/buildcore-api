@@ -57,7 +57,7 @@ export class EmployeeReportProvider implements ReportProvider {
         { key: 'name', label: 'Name' },
         { key: 'department', label: 'Department' },
         { key: 'designation', label: 'Designation' },
-        { key: 'dateOfJoining', label: 'Joining Date' },
+        { key: 'dateOfJoining', label: 'Joining Date', type: 'date' },
       ],
       rows: rows.map((r) => ({
         employeeCode: r.employeeCode,

@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -15,11 +16,15 @@ export class CreateSalaryAdvanceDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   employeeId: string;
 
-  @ApiProperty()
-  @IsNumber()
+  @ApiProperty({ maximum: 1_000_000 })
+  @IsNumber({ maxDecimalPlaces: 2 })
   @Min(1)
+  // 036 F19. A cap on what one keystroke can disburse: ten lakh is far above any salary advance
+  // this business gives, and well below what a stray extra zero or two would produce.
+  @Max(1_000_000, { message: 'An advance cannot exceed 10,00,000.' })
   amount: number;
 
   @ApiProperty()
@@ -40,6 +45,7 @@ export class CreateSalaryAdvanceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -47,6 +53,7 @@ export class ListAdvancesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ enum: SalaryAdvanceStatus })
@@ -57,5 +64,6 @@ export class ListAdvancesQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

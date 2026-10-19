@@ -30,18 +30,42 @@ export class IndentFulfilmentService {
    */
   async applyFulfilment(
     tx: Prisma.TransactionClient,
-    params: { companyId: string; indentLineId: string; quantity: number },
+    params: {
+      companyId: string;
+      indentLineId: string;
+      quantity: number;
+      /** The movement's item and store, which must be the line's (036 M2). */
+      itemId: string;
+      siteId: string;
+    },
   ): Promise<void> {
+    await this.lockLine(tx, params.indentLineId);
     const line = await tx.materialIndentLine.findUnique({
       where: { id: params.indentLineId },
       include: {
-        indent: { select: { id: true, status: true, companyId: true } },
+        indent: {
+          select: { id: true, status: true, companyId: true, siteId: true },
+        },
       },
     });
 
     if (!line || line.companyId !== params.companyId) {
       throw new BadRequestException(
         `Indent line ${params.indentLineId} not found`,
+      );
+    }
+    // 036 M2: a movement can only fulfil the line it actually delivers. Without these two a
+    // purchase of steel could close an indent line for cement, or an issue from store A could
+    // satisfy an indent raised by store B — and the indent would report the site supplied when
+    // it was not.
+    if (line.itemId !== params.itemId) {
+      throw new BadRequestException(
+        `Indent line ${params.indentLineId} is for a different item.`,
+      );
+    }
+    if (line.indent.siteId !== params.siteId) {
+      throw new BadRequestException(
+        `Indent line ${params.indentLineId} was raised by a different store.`,
       );
     }
     if (
@@ -75,11 +99,15 @@ export class IndentFulfilmentService {
     await this.refreshIndentStatus(tx, line.indentId);
   }
 
-  /** Gives quantity back when an issue or purchase is reversed (FR-004, FR-028). */
+  /**
+   * Gives quantity back when an issue or purchase is reversed (FR-004, FR-028), or when
+   * material issued against the line comes back to the store (036 M2).
+   */
   async reverseFulfilment(
     tx: Prisma.TransactionClient,
     params: { indentLineId: string; quantity: number },
   ): Promise<void> {
+    await this.lockLine(tx, params.indentLineId);
     const line = await tx.materialIndentLine.findUnique({
       where: { id: params.indentLineId },
       select: { id: true, indentId: true, fulfilledQuantity: true },
@@ -100,6 +128,26 @@ export class IndentFulfilmentService {
     });
 
     await this.refreshIndentStatus(tx, line.indentId);
+  }
+
+  /**
+   * Row-locks an indent line for the rest of the caller's transaction (036 M2).
+   *
+   * The outstanding check reads `fulfilledQuantity` and the update increments it; two issues
+   * against the same line both used to read the same figure, both pass, and together book more
+   * than was approved. With the lock the second waits, and its read — a fresh statement under
+   * READ COMMITTED — sees what the first committed. The same reasoning, and the same shape, as
+   * `StockService.validateAndLockStock`.
+   */
+  private async lockLine(
+    tx: Prisma.TransactionClient,
+    indentLineId: string,
+  ): Promise<void> {
+    await tx.$queryRaw`
+      SELECT "id" FROM "inventory"."MaterialIndentLine"
+      WHERE "id" = ${indentLineId}
+      FOR UPDATE
+    `;
   }
 
   /**

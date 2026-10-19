@@ -2,7 +2,6 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentMode, PurchaseBillStatus } from '@prisma/client';
 import { Transform, Type } from 'class-transformer';
 import {
-  IsBase64,
   IsBoolean,
   IsDateString,
   IsEnum,
@@ -12,9 +11,12 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 /**
  * No `allocations` array by design (research.md §7). Allocation is automatic and
@@ -26,12 +28,14 @@ export class CreatePaymentDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId!: string;
 
   @ApiProperty({ description: 'In rupees' })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
+  @Max(999_999_999_999_999)
   amount!: number;
 
   @ApiProperty({ example: '2026-09-04' })
@@ -42,11 +46,32 @@ export class CreatePaymentDto {
   @IsEnum(PaymentMode)
   paymentMode!: PaymentMode;
 
-  @ApiProperty({ description: 'UTR, cheque number or UPI reference' })
+  /**
+   * Required for every mode except cash (036 M10): a cash payment has no UTR or cheque to quote,
+   * and requiring one made people type "cash" or "-" into a field that is meant to be traceable.
+   */
+  @ApiPropertyOptional({
+    description:
+      'UTR, cheque number or UPI reference. Required unless paymentMode is cash.',
+  })
+  // Skipped for cash with nothing typed (absent, null or blank). Cash *with* a reference is still
+  // validated, so it cannot exceed the column or arrive as a non-string.
+  @ValidateIf(
+    (dto: CreatePaymentDto) =>
+      dto.paymentMode !== PaymentMode.cash ||
+      !(
+        dto.referenceNumber === undefined ||
+        dto.referenceNumber === null ||
+        (typeof dto.referenceNumber === 'string' &&
+          dto.referenceNumber.trim() === '')
+      ),
+  )
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({
+    message: 'referenceNumber is required unless the payment is in cash',
+  })
   @MaxLength(60)
-  referenceNumber!: string;
+  referenceNumber?: string;
 }
 
 export class ListPaymentsDto {
@@ -65,6 +90,7 @@ export class ListPaymentsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({ enum: PaymentMode })
@@ -87,6 +113,7 @@ export class ListPaymentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -94,11 +121,13 @@ export class ListPaymentsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -106,6 +135,7 @@ export class ListBillsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   vendorId?: string;
 
   @ApiPropertyOptional({
@@ -119,6 +149,7 @@ export class ListBillsDto {
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 
@@ -131,7 +162,7 @@ export class ListBillsDto {
  */
 export class AttachPaymentProofDto {
   @ApiProperty({ description: 'The advice, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })

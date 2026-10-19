@@ -561,7 +561,7 @@ describe('Labour face attendance (031, e2e)', () => {
       const res = await http()
         .post('/labour/payment-sheets')
         .set(auth(hr.token))
-        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: TODAY })
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: YESTERDAY })
         .expect(409);
       expect(res.body.code).toBe('LABOUR_UNRESOLVED_PUNCHES');
       expect(res.body.unresolved).toEqual([
@@ -699,7 +699,7 @@ describe('Labour face attendance (031, e2e)', () => {
       const res = await http()
         .post('/labour/payment-sheets')
         .set(auth(hr.token))
-        .send({ siteId: siteA, periodFrom: TODAY, periodTo: TODAY })
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: YESTERDAY })
         .expect(409);
       expect(res.body.code).toBe('LABOUR_SITE_RATE_MISSING');
     });
@@ -718,11 +718,11 @@ describe('Labour face attendance (031, e2e)', () => {
       const res = await http()
         .post('/labour/payment-sheets')
         .set(auth(hr.token))
-        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: TODAY })
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: YESTERDAY })
         .expect(201);
       expect(res.body.siteId).toBe(siteA);
-      // Male: a full day at 600 plus 2.5 h overtime at 600 / 8 × 2; today short, unpaid.
-      // Female: a half day at 500 (5.5 h); today still on site, not counted.
+      // Male: a full day at 600 plus 2.5 h overtime at 600 / 8 × 2.
+      // Female: a half day at 500 (5.5 h). Today is not over, so no sheet may cover it (036 O3).
       expect(res.body.grossTotal).toBe(600 + 375 + 250);
       const byRate = res.body.lines
         .map((l: any) => [
@@ -773,8 +773,17 @@ describe('Labour face attendance (031, e2e)', () => {
       await http()
         .post('/labour/payment-sheets')
         .set(auth(hr.token))
-        .send({ siteId: siteA, periodFrom: TODAY, periodTo: TODAY })
+        .send({ siteId: siteA, periodFrom: YESTERDAY, periodTo: YESTERDAY })
         .expect(409);
+    });
+
+    it('refuses a sheet that ends today, whose attendance is not final (036 O3)', async () => {
+      const res = await http()
+        .post('/labour/payment-sheets')
+        .set(auth(hr.token))
+        .send({ siteId: siteB, periodFrom: YESTERDAY, periodTo: TODAY })
+        .expect(400);
+      expect(res.body.code).toBe('LABOUR_SHEET_PERIOD_NOT_ENDED');
     });
   });
 

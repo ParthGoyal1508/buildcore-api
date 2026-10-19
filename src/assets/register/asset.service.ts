@@ -18,19 +18,28 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  DOCUMENT_TYPES,
+} from '../../common/uploads';
+import {
   namedCode,
   namedPrefixFor,
   namedSerialOf,
 } from '../../settings/code-series/code-series.formats';
 import { CodeSeriesService } from '../../settings/code-series/code-series.service';
-import { assertInScope, companyScope } from '../../settings/company-scope';
+import {
+  assertInScope,
+  companyScope,
+  effectiveCompanyId,
+} from '../../settings/company-scope';
 import { assertTransition } from '../asset-status';
 import { AssetsRefsService } from '../assets-refs.service';
 import { todayUtc } from '../dates';
 import {
   ASSET_DOCUMENT_PREFIX,
   DEFAULT_PAGE_SIZE,
-  MAX_DOCUMENT_BYTES,
   MAX_PAGE_SIZE,
   MS_PER_DAY,
 } from '../constants/assets.constants';
@@ -567,7 +576,9 @@ export class AssetService {
     nextMode: AssetTrackingMode,
   ): Promise<void> {
     const category = await this.refs
-      .requireCategory(caller, categoryId, caller.companyId ?? '')
+      // The selected company, not the caller's home one (036): a cross-company caller editing a
+      // category in the company they switched to was checked against the wrong company's masters.
+      .requireCategory(caller, categoryId, effectiveCompanyId(caller) ?? '')
       .catch(() => null);
     if (category && category.trackingMode === nextMode) return;
 
@@ -1082,20 +1093,23 @@ export class AssetService {
     // 006's equipment and 007's contractor documents carry. The scan belongs
     // between decoding and `storage.put`, and is left explicit rather than faked —
     // a no-op scanner reads as protection that is not there.
-    const buffer = Buffer.from(dto.file, 'base64');
-    if (buffer.length === 0) {
-      throw new BadRequestException('file must be non-empty base64 content.');
-    }
-    if (buffer.length > MAX_DOCUMENT_BYTES) {
-      throw new BadRequestException(
-        `file exceeds the ${MAX_DOCUMENT_BYTES / (1024 * 1024)}MB limit.`,
-      );
-    }
+    //
+    // 036 L3: decoded with the shared helper (a real 10 MB limit, refused as 413), checked against
+    // the document allow-list by the file's own bytes (415), compressed when it is a photo, and
+    // stored with the **detected** type rather than whatever the client declared.
+    const bytes = decodeBase64Upload(dto.file, 'The document');
+    const detected = assertAllowedFileType(
+      bytes,
+      DOCUMENT_TYPES,
+      'The document',
+    );
+    const image = await compressImageUpload(bytes, detected.contentType);
+    const storedType = image?.main.contentType ?? detected.contentType;
 
     const fileRef = await this.storage.put(
       ASSET_DOCUMENT_PREFIX,
-      buffer,
-      dto.contentType ?? 'application/octet-stream',
+      image?.main.data ?? bytes,
+      storedType,
     );
 
     const created = await withRlsContext(
@@ -1109,7 +1123,7 @@ export class AssetService {
             docTypeId: dto.docTypeId,
             fileRef,
             fileName: dto.fileName ?? null,
-            mimeType: dto.contentType ?? null,
+            mimeType: storedType,
             documentNumber: dto.documentNumber ?? null,
             issueDate: dto.issueDate
               ? this.refs.parseDate(dto.issueDate)

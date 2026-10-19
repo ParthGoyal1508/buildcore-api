@@ -1,8 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { AuditAction, AuditEntityType, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
-import { actorNamesFor } from '../../common/actor-name';
+import {
+  ACTOR_NAME_SELECT,
+  actorNameOf,
+  actorNamesFor,
+} from '../../common/actor-name';
+import config from '../../common/configs/config';
+import { zonedDateOnly, zonedDayBounds } from '../../hr/leave/leave-days';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import type {
@@ -47,6 +53,8 @@ export interface ActivityLogExportRow {
 }
 
 const PAGE_SIZE = 25;
+/** One page of the User filter's picker (036 E3). */
+const ACTOR_PAGE_SIZE = 25;
 
 /**
  * Reads the shared audit trail as the Activity Log (spec FR-007/FR-008, US3).
@@ -57,6 +65,9 @@ const PAGE_SIZE = 25;
  * Super Admin cross-company exception honoured; module and time-range filters narrow
  * it further, ordered newest-first.
  */
+/** The most rows one activity-log export returns (036 B13). */
+export const ACTIVITY_EXPORT_MAX_ROWS = 50_000;
+
 @Injectable()
 export class ActivityLogService {
   constructor(private readonly prisma: PrismaService) {}
@@ -67,9 +78,10 @@ export class ActivityLogService {
     query: ActivityLogQueryDto,
   ): Promise<{ entries: ActivityLogEntry[]; hasMore: boolean }> {
     const page = query.page ?? 1;
+    const where = await this.where(user, query);
     const rows = await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
       tx.auditLogEntry.findMany({
-        where: this.where(user, query),
+        where,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * PAGE_SIZE,
         take: PAGE_SIZE + 1,
@@ -97,15 +109,27 @@ export class ActivityLogService {
     return { entries, hasMore };
   }
 
-  /** The full filtered result set, for the CSV export (spec FR-024). No pagination. */
+  /**
+   * The filtered result set, for the CSV export (spec FR-024). No pagination — but bounded
+   * (036 B13/B14): with no time range the export covers the last 90 days rather than the whole
+   * audit log, and it never returns more than {@link ACTIVITY_EXPORT_MAX_ROWS} rows (newest
+   * first). An unbounded export loaded every audit row the company had into memory per click.
+   */
   async exportRows(
     user: AuthenticatedUser,
     query: ActivityLogQueryDto,
   ): Promise<ActivityLogExportRow[]> {
+    // A custom range bounds the export itself; only a request with no range at all falls back.
+    const bounded =
+      query.from || query.to
+        ? query
+        : { ...query, timeRange: query.timeRange ?? '90d' };
+    const where = await this.where(user, bounded);
     const rows = await withRlsContext(this.prisma, rlsContextFor(user), (tx) =>
       tx.auditLogEntry.findMany({
-        where: this.where(user, query),
+        where,
         orderBy: { createdAt: 'desc' },
+        take: ACTIVITY_EXPORT_MAX_ROWS,
       }),
     );
     const [names, labels] = await Promise.all([
@@ -136,6 +160,52 @@ export class ActivityLogService {
   }
 
   /**
+   * Accounts the User filter can pick from (036 E3): the caller's company (or the selected one;
+   * every company for an unscoped Super Admin), searched by name or address, a page at a time.
+   * The Activity Log already names these people on every row it shows, so listing them for the
+   * picker discloses nothing new; `/settings/users` was not usable here, being gated on
+   * `USER_MANAGEMENT`.
+   */
+  async actors(
+    user: AuthenticatedUser,
+    query: { q?: string; page?: number },
+  ): Promise<{ items: { id: string; name: string }[]; total: number }> {
+    const ctx = rlsContextFor(user);
+    const q = query.q?.trim();
+    const where: Prisma.UserWhereInput = {
+      ...(ctx.isSuperAdmin ? {} : { companyId: ctx.companyId ?? null }),
+      ...(q
+        ? {
+            OR: [
+              { displayName: { contains: q, mode: 'insensitive' } },
+              { firstname: { contains: q, mode: 'insensitive' } },
+              { lastname: { contains: q, mode: 'insensitive' } },
+              { username: { contains: q, mode: 'insensitive' } },
+              { email: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+    const page = Math.max(query.page ?? 1, 1);
+    const [rows, total] = await withRlsContext(this.prisma, ctx, (tx) =>
+      Promise.all([
+        tx.user.findMany({
+          where,
+          select: ACTOR_NAME_SELECT,
+          orderBy: [{ displayName: 'asc' }, { username: 'asc' }, { id: 'asc' }],
+          skip: (page - 1) * ACTOR_PAGE_SIZE,
+          take: ACTOR_PAGE_SIZE,
+        }),
+        tx.user.count({ where }),
+      ]),
+    );
+    return {
+      items: rows.map((row) => ({ id: row.id, name: actorNameOf(row) })),
+      total,
+    };
+  }
+
+  /**
    * Who did it, as a person's name.
    *
    * `accountId` is a cuid, and both surfaces used to render it directly — so the Activity
@@ -160,20 +230,85 @@ export class ActivityLogService {
     );
   }
 
-  private where(
+  private async where(
     user: AuthenticatedUser,
     query: ActivityLogQueryDto,
-  ): Prisma.AuditLogEntryWhereInput {
-    const since = this.since(query.timeRange);
+  ): Promise<Prisma.AuditLogEntryWhereInput> {
+    const createdAt = this.rangeOf(query);
+    const ctx = rlsContextFor(user);
+    const q = query.q?.trim();
+    let search: Prisma.AuditLogEntryWhereInput | null = null;
+    if (q) {
+      // 036 E3: who acted, by name or address, or the record's id. Accounts are looked up first
+      // and bounded; the search only narrows rows the caller may already read.
+      const people = await withRlsContext(
+        this.prisma,
+        { isSuperAdmin: true },
+        (tx) =>
+          tx.user.findMany({
+            where: {
+              OR: [
+                { displayName: { contains: q, mode: 'insensitive' } },
+                { firstname: { contains: q, mode: 'insensitive' } },
+                { lastname: { contains: q, mode: 'insensitive' } },
+                { username: { contains: q, mode: 'insensitive' } },
+                { email: { contains: q, mode: 'insensitive' } },
+              ],
+            },
+            select: { id: true },
+            take: 200,
+          }),
+      );
+      search = {
+        OR: [
+          { attemptedEmail: { contains: q, mode: 'insensitive' } },
+          { entityId: q },
+          ...(people.length
+            ? [{ accountId: { in: people.map((p) => p.id) } }]
+            : []),
+        ],
+      };
+    }
     return {
       // RLS is not enforced on the legacy audit table, so scope explicitly here:
-      // an ordinary caller sees only their own company, a Super Admin sees all.
-      ...(rlsContextFor(user).isSuperAdmin
-        ? {}
-        : { companyId: user.companyId }),
+      // an ordinary caller sees only their own company, a Super Admin sees all — or, having
+      // selected a company, that company. Not `user.companyId`: that is the **home** company,
+      // and a Super Admin who had selected another one was shown the wrong log (036 B3).
+      ...(ctx.isSuperAdmin ? {} : { companyId: ctx.companyId }),
       entityType: { in: this.permittedTypes(user, query) },
-      ...(since ? { createdAt: { gte: since } } : {}),
+      ...(createdAt ? { createdAt } : {}),
+      ...(query.userId ? { accountId: query.userId } : {}),
+      ...(search ? { AND: [search] } : {}),
     };
+  }
+
+  /** A custom `from`/`to` (business-timezone days, inclusive) or the preset (036 E3). */
+  private rangeOf(query: ActivityLogQueryDto): Prisma.DateTimeFilter | null {
+    if (query.from || query.to) {
+      const zone = config().settings.timezone;
+      try {
+        const range: Prisma.DateTimeFilter = {};
+        if (query.from) range.gte = zonedDayBounds(query.from, zone).start;
+        if (query.to) range.lt = zonedDayBounds(query.to, zone).end;
+        if (range.gte && range.lt && range.gte >= range.lt) {
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'The From date must not be after the To date.',
+          });
+        }
+        return range;
+      } catch (error) {
+        if (error instanceof RangeError) {
+          throw new BadRequestException({
+            code: 'VALIDATION_FAILED',
+            message: 'That is not a real calendar date.',
+          });
+        }
+        throw error;
+      }
+    }
+    const since = this.since(query.timeRange);
+    return since ? { gte: since } : null;
   }
 
   /**
@@ -211,11 +346,13 @@ export class ActivityLogService {
     if (!range) return null;
     const now = new Date();
     switch (range) {
-      case 'today': {
-        const start = new Date(now);
-        start.setHours(0, 0, 0, 0);
-        return start;
-      }
+      case 'today':
+        // The business day, not the server's: on a UTC host `setHours(0)` started "today" at
+        // 05:30 IST and hid the first five and a half hours of every day (036 E3).
+        return zonedDayBounds(
+          zonedDateOnly(now, config().settings.timezone),
+          config().settings.timezone,
+        ).start;
       case '7d':
         return new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       case '30d':

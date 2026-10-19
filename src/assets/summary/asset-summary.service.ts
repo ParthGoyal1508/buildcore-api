@@ -153,6 +153,18 @@ export class AssetSummaryService {
       add(byProject, projectId, projectId, figures);
     }
 
+    // 036 L4: project buckets carry the project's name, so the screen needs no project list.
+    const projectNames = await this.refs.projectNames(
+      caller,
+      [...byProject.keys()].filter((key) => key !== 'unallocated'),
+    );
+    for (const [key, entry] of byProject) {
+      entry.label =
+        key === 'unallocated'
+          ? 'Not allocated'
+          : projectNames.get(key) ?? 'Unknown project';
+    }
+
     const finish = (bucket: Map<string, SummaryBucket>): SummaryBucket[] =>
       [...bucket.values()]
         .map((entry) => ({

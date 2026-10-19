@@ -260,14 +260,26 @@ describe('Partners module (e2e)', () => {
         .expect(201);
       expect(contractor.body.complianceStatus).toBe('non_compliant');
 
+      // 036 N5: the detail screen edits registrations, and clears one with `null`.
+      const edited = await http()
+        .patch(`/partners/contractors/${contractor.body.id}`)
+        .set(auth())
+        .send({ licenceNumber: null, pfRegistration: 'PF-NEW' })
+        .expect(200);
+      expect(edited.body.licenceNumber).toBeNull();
+      expect(edited.body.pfRegistration).toBe('PF-NEW');
+
       const soon = new Date();
       soon.setDate(soon.getDate() + 20);
+      // Real PDF bytes since 036 N4: the type is detected from the file, so the old
+      // `Buffer.from('licence')` is refused as an unsupported type.
+      const pdf = Buffer.from('%PDF-1.4\n%âãÏÓ\n1 0 obj\n<<>>\nendobj\n');
       await http()
         .post(`/partners/contractors/${contractor.body.id}/documents`)
         .set(auth())
         .send({
           documentType: 'labour_license',
-          file: Buffer.from('licence').toString('base64'),
+          file: pdf.toString('base64'),
           fileName: 'licence.pdf',
           expiresAt: soon.toISOString().slice(0, 10),
         })
@@ -279,6 +291,50 @@ describe('Partners module (e2e)', () => {
         .expect(200);
       expect(detail.body.documents).toHaveLength(1);
       expect(detail.body.documents[0].expiryWarning).toBe(true);
+
+      // 036 N4: the uploaded file can be opened again, with its detected type.
+      const file = await http()
+        .get(
+          `/partners/contractors/documents/${detail.body.documents[0].id}/file`,
+        )
+        .set(auth())
+        .buffer(true)
+        .parse((res, cb) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => cb(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+      expect(file.headers['content-type']).toContain('application/pdf');
+      expect(file.headers['content-disposition']).toContain('licence.pdf');
+      expect((file.body as Buffer).equals(pdf)).toBe(true);
+
+      await http()
+        .get('/partners/contractors/documents/no-such-document/file')
+        .set(auth())
+        .expect(404);
+    });
+
+    it('refuses a document that is not a PDF, photo or Office file (036 N4)', async () => {
+      const vendor = await createVendor({
+        name: unique('LabourBad'),
+        type: 'labour_contractor',
+      });
+      const contractor = await http()
+        .post('/partners/contractors')
+        .set(auth())
+        .send({ vendorId: vendor.id })
+        .expect(201);
+      const res = await http()
+        .post(`/partners/contractors/${contractor.body.id}/documents`)
+        .set(auth())
+        .send({
+          documentType: 'labour_license',
+          file: Buffer.from('just some text').toString('base64'),
+          fileName: 'licence.txt',
+        })
+        .expect(415);
+      expect(res.body.code).toBe('FILE_TYPE_NOT_ALLOWED');
     });
   });
 
@@ -374,6 +430,24 @@ describe('Partners module (e2e)', () => {
         .patch(`/partners/compliance/${created.body.id}/verify`)
         .set(auth())
         .expect(409);
+
+      // 036 N6: the status filter the compliance screen offers.
+      const partials = await http()
+        .get(
+          `/partners/compliance?contractorProfileId=${contractor.body.id}&status=partial`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(partials.body.map((r: { id: string }) => r.id)).toEqual([
+        created.body.id,
+      ]);
+      const verified = await http()
+        .get(
+          `/partners/compliance?contractorProfileId=${contractor.body.id}&status=verified`,
+        )
+        .set(auth())
+        .expect(200);
+      expect(verified.body).toEqual([]);
     });
   });
 
@@ -401,6 +475,17 @@ describe('Partners module (e2e)', () => {
 
     it('rejects a financial year label spanning more than one year', async () => {
       await http().get('/partners/rag?fy=2025-27').set(auth()).expect(400);
+    });
+
+    it('exports the matrix as an Excel workbook (036 N6)', async () => {
+      const res = await http()
+        .get('/partners/rag/export?fy=2025-26')
+        .set(auth())
+        .expect(200);
+      expect(res.headers['content-type']).toContain('spreadsheetml.sheet');
+      expect(res.headers['content-disposition']).toContain(
+        'RAG_Matrix_2025-26.xlsx',
+      );
     });
   });
 
@@ -476,6 +561,15 @@ describe('Partners module (e2e)', () => {
         .expect(200);
       expect(list.body).toHaveLength(1);
       expect(list.body[0].amountPaid).toBe(50000);
+    });
+
+    it('exports the cess list as an Excel workbook (036 N6)', async () => {
+      const res = await http()
+        .get('/partners/bocw/export')
+        .set(auth())
+        .expect(200);
+      expect(res.headers['content-type']).toContain('spreadsheetml.sheet');
+      expect(res.headers['content-disposition']).toContain('BOCW_Cess_');
     });
 
     it('rejects a non-positive payment', async () => {

@@ -11,6 +11,7 @@ import {
   IsString,
   MaxLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../../common/uploads/base64-payload';
 
 export class CreateContractorDto {
   @ApiProperty({
@@ -18,6 +19,7 @@ export class CreateContractorDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   vendorId: string;
 
   @ApiPropertyOptional()
@@ -99,6 +101,7 @@ export class CreateContractorDocumentDto {
   @ApiProperty({ description: 'Base64-encoded file content' })
   @IsString()
   @IsNotEmpty()
+  @IsBase64Payload()
   file: string;
 
   @ApiPropertyOptional()
@@ -107,7 +110,11 @@ export class CreateContractorDocumentDto {
   @MaxLength(200)
   fileName?: string;
 
-  @ApiPropertyOptional({ description: 'MIME type of the decoded content' })
+  // Accepted for older clients and ignored: the stored type is detected from the bytes
+  // (036 N4, 2026-10-17).
+  @ApiPropertyOptional({
+    description: 'Ignored — the type is detected from the file itself',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(100)
@@ -128,5 +135,6 @@ export class ListContractorsDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

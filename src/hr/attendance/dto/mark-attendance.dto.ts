@@ -24,6 +24,7 @@ export class MarkAttendanceDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   employeeId: string;
 
   @ApiProperty({ example: '2026-09-02' })
@@ -66,6 +67,7 @@ export class DailyAttendanceQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 }
 
@@ -74,6 +76,7 @@ export class ModificationsQueryDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   /**
@@ -87,6 +90,7 @@ export class ModificationsQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   actorUserId?: string;
 
   @ApiPropertyOptional({ example: '2026-09-01' })

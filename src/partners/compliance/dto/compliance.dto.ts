@@ -1,11 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { MonthlyComplianceStatus } from '@prisma/client';
 import {
   IsDateString,
+  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -18,6 +21,7 @@ export class CreateComplianceDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   contractorProfileId: string;
 
   @ApiProperty({ example: '2026-08' })
@@ -34,6 +38,7 @@ export class CreateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   pfAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -51,6 +56,7 @@ export class CreateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   esicAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -73,6 +79,7 @@ export class UpdateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   pfAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -90,6 +97,7 @@ export class UpdateComplianceDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   esicAmount?: number;
 
   @ApiPropertyOptional({ description: 'ISO date' })
@@ -102,6 +110,7 @@ export class ListComplianceDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   contractorProfileId?: string;
 
   @ApiPropertyOptional({ example: '2026-08' })
@@ -109,8 +118,15 @@ export class ListComplianceDto {
   @Matches(MONTH_REGEX, { message: 'month must be in YYYY-MM format' })
   month?: string;
 
+  // The compliance screen's status filter (036 N6, 2026-10-17).
+  @ApiPropertyOptional({ enum: MonthlyComplianceStatus })
+  @IsOptional()
+  @IsEnum(MonthlyComplianceStatus)
+  status?: MonthlyComplianceStatus;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

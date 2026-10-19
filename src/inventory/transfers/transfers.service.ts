@@ -17,6 +17,7 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import { businessToday } from '../../common/business-date';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import {
   DEFAULT_PAGE_SIZE,
@@ -58,6 +59,8 @@ export interface TransferView {
   expectedArrival: Date | null;
   receivedQuantity: number | null;
   reason: string | null;
+  /** Why fewer arrived than were sent (036 M3); null on a full receipt. */
+  shortageReason: string | null;
 }
 
 /** The slip and challan fields of a transfer row, as the view carries them. */
@@ -71,6 +74,7 @@ function slipFields(row: {
   expectedArrival: Date | null;
   receivedQuantity: Prisma.Decimal | null;
   reason: string | null;
+  shortageReason: string | null;
 }) {
   return {
     transferNo: row.transferNo,
@@ -83,6 +87,7 @@ function slipFields(row: {
     receivedQuantity:
       row.receivedQuantity === null ? null : toNumber(row.receivedQuantity),
     reason: row.reason,
+    shortageReason: row.shortageReason,
   };
 }
 
@@ -365,16 +370,31 @@ export class TransfersService {
     };
   }
 
+  /**
+   * Moves a transfer along `pending → in_transit → received`, and on receipt reconciles what
+   * arrived against what was sent (036 M3).
+   *
+   * Both balances moved in full at creation, so a full receipt changes no stock. A short one
+   * writes the missing quantity off **at the destination** — a `transfer_in_reversal` for the
+   * difference, with the reason recorded on the transfer. Decision 3 of 036's plan: a loss in
+   * transit is the receiving store's to explain, and it does not go back to the source, which
+   * really did send it. More received than sent is refused outright: that is a counting error,
+   * and accepting it would create stock from nothing.
+   */
   async updateStatus(
     caller: AuthenticatedUser,
     id: string,
     dto: UpdateTransferDto,
     ipAddress: string,
   ): Promise<{ id: string; status: TransferStatus }> {
-    const updated = await withRlsContext(
+    const { updated, shortage } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // Locked so two "mark received" requests cannot both write the shortage off.
+        await tx.$queryRaw`
+          SELECT "id" FROM "inventory"."StockTransfer" WHERE "id" = ${id} FOR UPDATE
+        `;
         const existing = await tx.stockTransfer.findUnique({ where: { id } });
         if (!existing || existing.deleted) {
           throw new NotFoundException(`Transfer ${id} not found`);
@@ -388,22 +408,70 @@ export class TransfersService {
         }
 
         if (
-          dto.receivedQuantity !== undefined &&
+          (dto.receivedQuantity !== undefined ||
+            dto.shortageReason !== undefined) &&
           dto.status !== TransferStatus.received
         ) {
           throw new BadRequestException(
             'The received quantity is recorded when the transfer is marked received.',
           );
         }
-        return tx.stockTransfer.update({
+
+        const sent = toNumber(existing.quantity);
+        const thousandths = (value: number) => Math.round(value * 1000);
+        let shortage = 0;
+        if (dto.receivedQuantity !== undefined) {
+          if (thousandths(dto.receivedQuantity) > thousandths(sent)) {
+            throw new BadRequestException(
+              `${dto.receivedQuantity} cannot have been received: only ${sent} was sent.`,
+            );
+          }
+          shortage =
+            (thousandths(sent) - thousandths(dto.receivedQuantity)) / 1000;
+        }
+        const shortageReason = dto.shortageReason?.trim() || null;
+        if (shortage > 0 && !shortageReason) {
+          throw new BadRequestException(
+            `${shortage} short of the ${sent} sent. Say why (shortageReason) — the difference is written off at the receiving store.`,
+          );
+        }
+
+        if (shortage > 0) {
+          // The destination must still hold the units being written off. It normally does —
+          // they were credited at creation — but if the store issued them before marking the
+          // transfer received, writing them off would take its balance negative.
+          await this.stock.validateAndLockStock(tx, {
+            itemId: existing.itemId,
+            siteId: existing.toSiteId,
+            quantity: shortage,
+            label: 'the receiving store',
+          });
+          await this.stock.appendLedgerEntry(tx, {
+            companyId: existing.companyId,
+            itemId: existing.itemId,
+            siteId: existing.toSiteId,
+            type: StockLedgerType.transfer_in_reversal,
+            quantity: shortage,
+            referenceId: existing.id,
+            date: businessToday(),
+          });
+          await tx.stockBalance.updateMany({
+            where: { itemId: existing.itemId, siteId: existing.toSiteId },
+            data: { transferIn: { decrement: shortage } },
+          });
+        }
+
+        const updated = await tx.stockTransfer.update({
           where: { id },
           data: {
             status: dto.status,
             ...(dto.receivedQuantity !== undefined
               ? { receivedQuantity: dto.receivedQuantity }
               : {}),
+            ...(shortage > 0 ? { shortageReason } : {}),
           },
         });
+        return { updated, shortage };
       },
     );
 
@@ -411,7 +479,20 @@ export class TransfersService {
       entityType: AuditEntityType.STOCK_TRANSFER,
       action: AuditAction.UPDATE,
       entityId: id,
-      changes: { after: { status: updated.status } },
+      changes: {
+        after: {
+          status: updated.status,
+          ...(updated.receivedQuantity !== null
+            ? { receivedQuantity: toNumber(updated.receivedQuantity) }
+            : {}),
+          ...(shortage > 0
+            ? {
+                shortageWrittenOff: shortage,
+                shortageReason: updated.shortageReason,
+              }
+            : {}),
+        },
+      },
       accountId: caller.id,
       companyId: updated.companyId,
       ipAddress,

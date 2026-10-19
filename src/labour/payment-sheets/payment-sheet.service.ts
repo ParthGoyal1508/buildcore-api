@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { Site } from '@prisma/client';
 import {
   AdvanceStatus,
   AuditAction,
@@ -33,12 +34,28 @@ import { computeWage, roundMoney, WorkedDay } from './wage-calc.util';
 import { computeDenominationBreakup, WorkerNet } from './denomination.util';
 import { decodePhotoPayload } from '../../hr/biometrics/photo-payload';
 import { ImageProcessingService } from '../../hr/biometrics/image-processing.service';
+import {
+  type DeductionEntry,
+  deductionEntries,
+  paidAmountProblem,
+  periodEndProblem,
+  planAdvanceDeductions,
+  recoveryFor,
+  reservedByAdvance,
+  restoreFor,
+} from './payment-sheet.rules';
 
-export interface DeductionEntry {
-  type: 'advance' | 'fine';
-  advanceId?: string;
-  amount: number;
-  label: string;
+export type { DeductionEntry } from './payment-sheet.rules';
+
+/** What a sheet's lines are built from: the sheet row and the site it pays. */
+interface SheetForLines {
+  id: string;
+  companyId: string;
+  projectId: string | null;
+  siteId: string;
+  periodFrom: Date;
+  periodTo: Date;
+  engagementType: EngagementType;
 }
 
 @Injectable()
@@ -63,6 +80,9 @@ export class PaymentSheetService {
    * the worker, gender and date, and a past day with a missing punch fails until it is corrected.
    * A sheet overlapping this one for the same site, or a pre-031 project sheet covering the site,
    * is rejected (FR-023).
+   *
+   * 036: the period must have ended (O3) — the last day is before today in the company's zone —
+   * and a worker short-paid on an earlier sheet gets the shortfall as a line of its own (O4).
    */
   async generate(
     caller: AuthenticatedUser,
@@ -82,6 +102,16 @@ export class PaymentSheetService {
         'The "to" date must be on or after the "from" date',
       );
     }
+    const endProblem = periodEndProblem(
+      dto.periodTo.slice(0, 10),
+      this.days.today(),
+    );
+    if (endProblem) {
+      throw new BadRequestException({
+        code: 'LABOUR_SHEET_PERIOD_NOT_ENDED',
+        message: endProblem,
+      });
+    }
     const engagementType = dto.engagementType ?? EngagementType.direct;
 
     await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
@@ -94,17 +124,15 @@ export class PaymentSheetService {
     const companyId = site.companyId;
     const projectId = site.projectId ?? null;
 
-    // 034: overtime is priced on the company's labour shift, the one it is counted beyond.
-    const { otMultiplier, standardHours } = await this.refs.getLabourSettings(
-      companyId,
-    );
-
     const sheetId = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        await this.lockForSheet(tx, companyId, dto.siteId);
+
         // Overlap guard (FR-023): this site's sheets, and any pre-031 sheet for its project,
-        // which priced this site's musters too.
+        // which priced this site's musters too. Read under the lock, so two generates for the
+        // same dates cannot both find nothing and both write a sheet (036 O3).
         const overlap = await tx.labourPaymentSheet.findFirst({
           where: {
             companyId,
@@ -129,70 +157,6 @@ export class PaymentSheetService {
           });
         }
 
-        // 034: a day with a missing punch is not counted until it is corrected, and once a sheet
-        // covers it, it can no longer be corrected — so the sheet waits for the corrections.
-        const unresolved = await this.days.unresolvedDays(
-          tx,
-          dto.siteId,
-          periodFrom,
-          periodTo,
-        );
-        if (unresolved.length > 0) {
-          throw new ConflictException({
-            code: 'LABOUR_UNRESOLVED_PUNCHES',
-            message: `${unresolved.length} labour day${
-              unresolved.length === 1 ? ' has' : 's have'
-            } a missing or wrong punch between these dates (first on ${
-              unresolved[0].date
-            }). Correct them under Labour → Muster attendance, then generate again.`,
-            unresolved,
-          });
-        }
-
-        const musterLines = await tx.musterLine.findMany({
-          where: {
-            muster: {
-              siteId: dto.siteId,
-              date: { gte: periodFrom, lte: periodTo },
-              status: MusterStatus.approved,
-              deletedAt: null,
-            },
-          },
-          include: { muster: { select: { date: true } } },
-        });
-
-        if (musterLines.length === 0) {
-          throw new ConflictException(
-            'No attendance was marked at this site between these dates',
-          );
-        }
-
-        const workerIds = Array.from(
-          new Set(musterLines.map((l) => l.workerId)),
-        );
-        const workers = await tx.labourWorker.findMany({
-          where: { id: { in: workerIds } },
-        });
-        const workerById = new Map(workers.map((w) => [w.id, w]));
-
-        // Group lines per worker, filtered to the requested engagement type.
-        const perWorker = new Map<string, typeof musterLines>();
-        for (const line of musterLines) {
-          const worker = workerById.get(line.workerId);
-          if (!worker || worker.engagementType !== engagementType) continue;
-          const list = perWorker.get(line.workerId) ?? [];
-          list.push(line);
-          perWorker.set(line.workerId, list);
-        }
-
-        if (perWorker.size === 0) {
-          throw new ConflictException(
-            engagementType === EngagementType.direct
-              ? 'No directly engaged labour worked at this site between these dates'
-              : 'No contractor labour worked at this site between these dates',
-          );
-        }
-
         const created = await tx.labourPaymentSheet.create({
           data: {
             companyId,
@@ -205,106 +169,328 @@ export class PaymentSheetService {
             createdBy: caller.id,
           },
         });
-
-        let grossTotal = 0;
-        let deductionTotal = 0;
-        let netTotal = 0;
-
-        for (const [workerId, lines] of perWorker) {
-          const worker = workerById.get(workerId);
-          if (!worker) continue;
-          const rateOverride = worker.rateOverride
-            ? worker.rateOverride.toNumber()
-            : null;
-
-          const workedDays: WorkedDay[] = [];
-          let resolvedRateForLine = rateOverride ?? 0;
-          let rateSource: RateSource = RateSource.site_rate;
-          for (const line of lines) {
-            const resolved = await this.siteRates.resolveDayRate(caller, tx, {
-              rateOverride,
-              gender: worker.gender,
-              siteId: dto.siteId,
-              projectId,
-              skillCategoryIdOnDay: line.skillCategoryIdOnDay,
-              date: line.muster.date,
-            });
-            if (!resolved) {
-              const date = line.muster.date.toISOString().slice(0, 10);
-              throw new ConflictException({
-                code: worker.gender
-                  ? 'LABOUR_SITE_RATE_MISSING'
-                  : 'LABOUR_GENDER_MISSING',
-                message: worker.gender
-                  ? `No ${worker.gender} daily rate is set for ${site.name} on ${date}. Set it under Labour → Site rates, then generate again.`
-                  : `${worker.fullName} (${worker.labourCode}) has no gender recorded, so no rate applies. Set it on their labour record, then generate again.`,
-                workerId,
-                siteId: dto.siteId,
-                gender: worker.gender,
-                date,
-              });
-            }
-            resolvedRateForLine = resolved.rate;
-            rateSource = resolved.source;
-            workedDays.push({
-              attendanceType: line.attendanceType,
-              overtimeHours: line.overtimeHours
-                ? line.overtimeHours.toNumber()
-                : 0,
-              dailyRate: resolved.rate,
-            });
-          }
-
-          const wage = computeWage(workedDays, standardHours, otMultiplier);
-
-          const { deductions, deductionAmount } = await this.buildDeductions(
-            tx,
-            workerId,
-            periodFrom,
-            wage.grossWage,
-          );
-
-          const netPayable = roundMoney(
-            Math.max(wage.grossWage - deductionAmount, 0),
-          );
-
-          await tx.paymentSheetLine.create({
-            data: {
-              companyId,
-              sheetId: created.id,
-              workerId,
-              daysWorked: wage.daysWorked,
-              overtimeHours: wage.overtimeHours,
-              resolvedRate: resolvedRateForLine,
-              rateSource,
-              grossWage: wage.grossWage,
-              deductions: deductions as unknown as Prisma.InputJsonValue,
-              netPayable,
-              carriedForwardBalance: 0,
-              status: PaymentSheetLineStatus.pending,
-            },
-          });
-
-          grossTotal += wage.grossWage;
-          deductionTotal += deductionAmount;
-          netTotal += netPayable;
-        }
-
-        await tx.labourPaymentSheet.update({
-          where: { id: created.id },
-          data: {
-            grossTotal: roundMoney(grossTotal),
-            deductionTotal: roundMoney(deductionTotal),
-            netTotal: roundMoney(netTotal),
-          },
-        });
-
+        await this.buildLines(
+          tx,
+          caller,
+          { ...created, siteId: dto.siteId },
+          site,
+        );
         return created.id;
       },
     );
 
     await this.audit(AuditAction.CREATE, sheetId, companyId, caller, ipAddress);
     return this.findOne(caller, sheetId);
+  }
+
+  /**
+   * Serialises everything that decides what a sheet holds (036 O1, O3).
+   *
+   * The company lock makes generates, regenerates and reopens take turns, so an advance instalment
+   * one of them earmarks is visible to the next — two sheets at different sites can carry the same
+   * worker. The site lock is the exclusive side of the one `assertNotOnPaymentSheet` takes shared:
+   * a punch or correction already past its check finishes before the sheet reads the attendance,
+   * and one that starts afterwards finds the sheet.
+   */
+  private async lockForSheet(
+    tx: Prisma.TransactionClient,
+    companyId: string,
+    siteId: string,
+  ) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`labour-sheet-company:${companyId}`}))`;
+    await this.days.lockSiteForSheet(tx, siteId);
+  }
+
+  /**
+   * Writes a draft sheet's lines from the attendance as it stands and sets its totals. The sheet
+   * must have no lines when this runs: `generate` has just created it, and `regenerate` and
+   * `reopen` delete the old ones first. Every refusal throws, so the caller's transaction rolls the
+   * whole change back.
+   */
+  private async buildLines(
+    tx: Prisma.TransactionClient,
+    caller: AuthenticatedUser,
+    sheet: SheetForLines,
+    site: Pick<Site, 'name'>,
+  ): Promise<void> {
+    const { periodFrom, periodTo, engagementType, companyId, projectId } =
+      sheet;
+    const siteId = sheet.siteId;
+
+    // 034: overtime is priced on the company's labour shift, the one it is counted beyond.
+    const { otMultiplier, standardHours } = await this.refs.getLabourSettings(
+      companyId,
+    );
+
+    // 034: a day with a missing punch is not counted until it is corrected, and once a sheet
+    // covers it, it can no longer be corrected — so the sheet waits for the corrections.
+    const unresolved = await this.days.unresolvedDays(
+      tx,
+      siteId,
+      periodFrom,
+      periodTo,
+    );
+    if (unresolved.length > 0) {
+      throw new ConflictException({
+        code: 'LABOUR_UNRESOLVED_PUNCHES',
+        message: `${unresolved.length} labour day${
+          unresolved.length === 1 ? ' has' : 's have'
+        } a missing or wrong punch between these dates (first on ${
+          unresolved[0].date
+        }). Correct them under Labour → Muster attendance, then generate again.`,
+        unresolved,
+      });
+    }
+
+    // 036 O4: a muster entered before 031 and still waiting for approval is not counted, and once
+    // a sheet covers its date it can no longer be approved — so it would never be paid.
+    const awaiting = await tx.musterRoll.findFirst({
+      where: {
+        siteId,
+        date: { gte: periodFrom, lte: periodTo },
+        status: MusterStatus.submitted,
+        deletedAt: null,
+      },
+      orderBy: { date: 'asc' },
+      select: { id: true, date: true },
+    });
+    if (awaiting) {
+      const date = awaiting.date.toISOString().slice(0, 10);
+      throw new ConflictException({
+        code: 'LABOUR_MUSTER_AWAITING_APPROVAL',
+        message: `The muster for ${date} at this site is still waiting for approval. Approve or return it under Labour → Musters, then generate again.`,
+        musterId: awaiting.id,
+        date,
+      });
+    }
+
+    const musterLines = await tx.musterLine.findMany({
+      where: {
+        muster: {
+          siteId,
+          date: { gte: periodFrom, lte: periodTo },
+          status: MusterStatus.approved,
+          deletedAt: null,
+        },
+      },
+      include: { muster: { select: { date: true } } },
+    });
+
+    if (musterLines.length === 0) {
+      throw new ConflictException(
+        'No attendance was marked at this site between these dates',
+      );
+    }
+
+    const workerIds = Array.from(new Set(musterLines.map((l) => l.workerId)));
+    const workers = await tx.labourWorker.findMany({
+      where: { id: { in: workerIds } },
+    });
+    const workerById = new Map(workers.map((w) => [w.id, w]));
+
+    // Group lines per worker, filtered to the requested engagement type.
+    const perWorker = new Map<string, typeof musterLines>();
+    for (const line of musterLines) {
+      const worker = workerById.get(line.workerId);
+      if (!worker || worker.engagementType !== engagementType) continue;
+      const list = perWorker.get(line.workerId) ?? [];
+      list.push(line);
+      perWorker.set(line.workerId, list);
+    }
+
+    if (perWorker.size === 0) {
+      throw new ConflictException(
+        engagementType === EngagementType.direct
+          ? 'No directly engaged labour worked at this site between these dates'
+          : 'No contractor labour worked at this site between these dates',
+      );
+    }
+
+    const paidWorkerIds = Array.from(perWorker.keys());
+    const reserved = await this.reservedAdvances(tx, paidWorkerIds, sheet.id);
+    const carries = await this.carriesFor(tx, paidWorkerIds, sheet.id);
+
+    let grossTotal = 0;
+    let deductionTotal = 0;
+    let netTotal = 0;
+
+    for (const [workerId, lines] of perWorker) {
+      const worker = workerById.get(workerId);
+      if (!worker) continue;
+      const rateOverride = worker.rateOverride
+        ? worker.rateOverride.toNumber()
+        : null;
+
+      const workedDays: WorkedDay[] = [];
+      let resolvedRateForLine = rateOverride ?? 0;
+      let rateSource: RateSource = RateSource.site_rate;
+      for (const line of lines) {
+        const resolved = await this.siteRates.resolveDayRate(caller, tx, {
+          rateOverride,
+          gender: worker.gender,
+          siteId,
+          projectId,
+          skillCategoryIdOnDay: line.skillCategoryIdOnDay,
+          date: line.muster.date,
+        });
+        if (!resolved) {
+          const date = line.muster.date.toISOString().slice(0, 10);
+          throw new ConflictException({
+            code: worker.gender
+              ? 'LABOUR_SITE_RATE_MISSING'
+              : 'LABOUR_GENDER_MISSING',
+            message: worker.gender
+              ? `No ${worker.gender} daily rate is set for ${site.name} on ${date}. Set it under Labour → Site rates, then generate again.`
+              : `${worker.fullName} (${worker.labourCode}) has no gender recorded, so no rate applies. Set it on their labour record, then generate again.`,
+            workerId,
+            siteId,
+            gender: worker.gender,
+            date,
+          });
+        }
+        resolvedRateForLine = resolved.rate;
+        rateSource = resolved.source;
+        workedDays.push({
+          attendanceType: line.attendanceType,
+          overtimeHours: line.overtimeHours ? line.overtimeHours.toNumber() : 0,
+          dailyRate: resolved.rate,
+        });
+      }
+
+      const wage = computeWage(workedDays, standardHours, otMultiplier);
+
+      const { deductions, deductionAmount } = await this.buildDeductions(
+        tx,
+        workerId,
+        periodFrom,
+        wage.grossWage,
+        reserved,
+      );
+
+      const netPayable = roundMoney(
+        Math.max(wage.grossWage - deductionAmount, 0),
+      );
+
+      await tx.paymentSheetLine.create({
+        data: {
+          companyId,
+          sheetId: sheet.id,
+          workerId,
+          daysWorked: wage.daysWorked,
+          overtimeHours: wage.overtimeHours,
+          resolvedRate: resolvedRateForLine,
+          rateSource,
+          grossWage: wage.grossWage,
+          deductions: deductions as unknown as Prisma.InputJsonValue,
+          netPayable,
+          carriedForwardBalance: 0,
+          status: PaymentSheetLineStatus.pending,
+        },
+      });
+
+      grossTotal += wage.grossWage;
+      deductionTotal += deductionAmount;
+      netTotal += netPayable;
+
+      // 036 O4 (decision 2): each earlier shortfall is a line of its own, so the sheet shows what
+      // is this period's wage and what is owed from before. Its gross is zero — the wage was
+      // earned, and costed to the project, on the sheet that first priced it.
+      for (const carry of carries.get(workerId) ?? []) {
+        await tx.paymentSheetLine.create({
+          data: {
+            companyId,
+            sheetId: sheet.id,
+            workerId,
+            daysWorked: 0,
+            overtimeHours: 0,
+            resolvedRate: 0,
+            rateSource,
+            grossWage: 0,
+            deductions: [] as unknown as Prisma.InputJsonValue,
+            netPayable: carry.amount,
+            carriedForwardBalance: 0,
+            carriedFromLineId: carry.lineId,
+            status: PaymentSheetLineStatus.pending,
+          },
+        });
+        netTotal += carry.amount;
+      }
+    }
+
+    await tx.labourPaymentSheet.update({
+      where: { id: sheet.id },
+      data: {
+        grossTotal: roundMoney(grossTotal),
+        deductionTotal: roundMoney(deductionTotal),
+        netTotal: roundMoney(netTotal),
+      },
+    });
+  }
+
+  /**
+   * Advance instalments already earmarked by lines not yet disbursed on other live sheets (036
+   * O1). The balance falls only at disbursement, so these are taken out of what this sheet may
+   * deduct.
+   */
+  private async reservedAdvances(
+    tx: Prisma.TransactionClient,
+    workerIds: string[],
+    sheetId: string,
+  ): Promise<Map<string, number>> {
+    const pending = await tx.paymentSheetLine.findMany({
+      where: {
+        workerId: { in: workerIds },
+        status: PaymentSheetLineStatus.pending,
+        sheetId: { not: sheetId },
+        sheet: { deletedAt: null },
+      },
+      select: { deductions: true },
+    });
+    return reservedByAdvance(pending);
+  }
+
+  /**
+   * Shortfalls still owed to these workers (036 O4): disbursed lines on live sheets paid below
+   * their net, whose remainder no line on a live sheet pays yet. Deleting the sheet that carried
+   * one frees it for the next.
+   */
+  private async carriesFor(
+    tx: Prisma.TransactionClient,
+    workerIds: string[],
+    sheetId: string,
+  ): Promise<Map<string, { lineId: string; amount: number }[]>> {
+    const shortPaid = await tx.paymentSheetLine.findMany({
+      where: {
+        workerId: { in: workerIds },
+        status: PaymentSheetLineStatus.disbursed,
+        carriedForwardBalance: { gt: 0 },
+        sheetId: { not: sheetId },
+        sheet: { deletedAt: null },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, workerId: true, carriedForwardBalance: true },
+    });
+    if (shortPaid.length === 0) return new Map();
+    const carried = await tx.paymentSheetLine.findMany({
+      where: {
+        carriedFromLineId: { in: shortPaid.map((l) => l.id) },
+        sheetId: { not: sheetId },
+        sheet: { deletedAt: null },
+      },
+      select: { carriedFromLineId: true },
+    });
+    const taken = new Set(carried.map((c) => c.carriedFromLineId));
+    const out = new Map<string, { lineId: string; amount: number }[]>();
+    for (const line of shortPaid) {
+      if (taken.has(line.id)) continue;
+      const list = out.get(line.workerId) ?? [];
+      list.push({
+        lineId: line.id,
+        amount: line.carriedForwardBalance.toNumber(),
+      });
+      out.set(line.workerId, list);
+    }
+    return out;
   }
 
   async findAll(
@@ -367,6 +553,22 @@ export class PaymentSheetService {
     const pending = row.lines.filter(
       (l) => l.status === PaymentSheetLineStatus.pending,
     );
+    // 036 O8: names beside the ids. Additive.
+    const workers = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.labourWorker.findMany({
+          where: { id: { in: [...new Set(row.lines.map((l) => l.workerId))] } },
+          select: { id: true, fullName: true, labourCode: true },
+        }),
+    );
+    const workerById = new Map(workers.map((w) => [w.id, w]));
+    const siteName = row.siteId
+      ? (await this.refs.siteNames(caller, [row.siteId])).get(row.siteId) ??
+        null
+      : null;
+
     const disbursedAmount = roundMoney(
       disbursed.reduce((s, l) => s + (l.paidAmount?.toNumber() ?? 0), 0),
     );
@@ -378,6 +580,7 @@ export class PaymentSheetService {
       id: row.id,
       projectId: row.projectId,
       siteId: row.siteId,
+      siteName,
       periodFrom: row.periodFrom.toISOString().slice(0, 10),
       periodTo: row.periodTo.toISOString().slice(0, 10),
       engagementType: row.engagementType,
@@ -393,10 +596,17 @@ export class PaymentSheetService {
         pendingCount: pending.length,
         disbursedAmount,
         outstandingAmount,
+        carriedForwardAmount: roundMoney(
+          row.lines
+            .filter((l) => l.carriedFromLineId)
+            .reduce((s, l) => s + l.netPayable.toNumber(), 0),
+        ),
       },
       lines: row.lines.map((l) => ({
         id: l.id,
         workerId: l.workerId,
+        workerName: workerById.get(l.workerId)?.fullName ?? null,
+        labourCode: workerById.get(l.workerId)?.labourCode ?? null,
         daysWorked: l.daysWorked.toNumber(),
         overtimeHours: l.overtimeHours.toNumber(),
         resolvedRate: l.resolvedRate.toNumber(),
@@ -410,6 +620,9 @@ export class PaymentSheetService {
         shortPaymentReason: l.shortPaymentReason,
         carriedForwardBalance: l.carriedForwardBalance.toNumber(),
         status: l.status,
+        // 036 O4: a carry-forward line pays an earlier line's shortfall; it has no days of its own.
+        kind: l.carriedFromLineId ? 'carry_forward' : 'wage',
+        carriedFromLineId: l.carriedFromLineId,
       })),
     };
   }
@@ -418,7 +631,9 @@ export class PaymentSheetService {
    * gains its cash denomination breakup at this point (FR-027); a contractor sheet
    * does not (FR-028). */
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
-    const companyId = caller.companyId;
+    // The sheet's own company for the audit row, not the caller's home company: a Super Admin
+    // working in a selected company would otherwise file it under the wrong one (036 3e, 2026-10-17).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const sheet = await tx.labourPaymentSheet.findUnique({
         where: { id },
@@ -428,6 +643,7 @@ export class PaymentSheetService {
         throw new NotFoundException(`Payment sheet ${id} not found`);
       }
       assertInScope(caller, sheet, `Payment sheet ${id}`);
+      companyId = sheet.companyId;
       if (sheet.status !== PaymentSheetStatus.draft) {
         throw new ConflictException('Only a draft sheet can be approved');
       }
@@ -460,7 +676,7 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       id,
-      companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -483,22 +699,29 @@ export class PaymentSheetService {
     return sheet.denominationBreakup;
   }
 
-  /** Reopens an approved sheet to draft, blocked once any line is disbursed. */
+  /**
+   * Reopens an approved sheet to draft, blocked once any line is disbursed. 036 O2: the lines are
+   * worked out again from the attendance, rates, advances and shortfalls as they stand now, so a
+   * reopened sheet never keeps figures nothing supports any more.
+   */
   async reopen(
     caller: AuthenticatedUser,
     id: string,
     reason: string,
     ipAddress: string,
   ) {
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
-      const sheet = await tx.labourPaymentSheet.findUnique({
-        where: { id },
-        include: { lines: true },
-      });
-      if (!sheet || sheet.deletedAt) {
-        throw new NotFoundException(`Payment sheet ${id} not found`);
+      const sheet = await this.sheetForRebuild(tx, caller, id);
+      companyId = sheet.companyId;
+      if (
+        sheet.status !== PaymentSheetStatus.approved &&
+        sheet.status !== PaymentSheetStatus.draft
+      ) {
+        throw new ConflictException(
+          'This sheet has a disbursed line and cannot be reopened',
+        );
       }
-      assertInScope(caller, sheet, `Payment sheet ${id}`);
       const anyDisbursed = sheet.lines.some(
         (l) => l.status === PaymentSheetLineStatus.disbursed,
       );
@@ -517,15 +740,128 @@ export class PaymentSheetService {
           approvedAt: null,
         },
       });
+      await this.rebuild(tx, caller, sheet);
     });
+    await this.audit(AuditAction.UPDATE, id, companyId, caller, ipAddress, {
+      reopened: true,
+      reason,
+    });
+    return this.findOne(caller, id);
+  }
+
+  /**
+   * Works a draft sheet's lines out again from the attendance as it stands (036 O2) — after a rate
+   * is set or changed, an advance disbursed, or a sheet holding a shortfall deleted.
+   */
+  async regenerate(caller: AuthenticatedUser, id: string, ipAddress: string) {
+    let companyId: string | null = null;
+    await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
+      const sheet = await this.sheetForRebuild(tx, caller, id);
+      companyId = sheet.companyId;
+      if (sheet.status !== PaymentSheetStatus.draft) {
+        throw new ConflictException(
+          'Only a draft sheet can be regenerated. Reopen an approved sheet first.',
+        );
+      }
+      await this.rebuild(tx, caller, sheet);
+    });
+    await this.audit(AuditAction.UPDATE, id, companyId, caller, ipAddress, {
+      regenerated: true,
+    });
+    return this.findOne(caller, id);
+  }
+
+  /**
+   * Deletes a draft sheet (036 O2). Soft: the row and its lines stay for the audit trail, but every
+   * read skips it, so its days can be corrected again, the advance instalments it earmarked are
+   * free, and any shortfall it carried goes onto the next sheet instead.
+   */
+  async remove(
+    caller: AuthenticatedUser,
+    id: string,
+    reason: string | undefined,
+    ipAddress: string,
+  ) {
+    const sheet = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      async (tx) => {
+        const row = await tx.labourPaymentSheet.findUnique({ where: { id } });
+        if (!row || row.deletedAt) {
+          throw new NotFoundException(`Payment sheet ${id} not found`);
+        }
+        assertInScope(caller, row, `Payment sheet ${id}`);
+        if (row.siteId) {
+          await this.supervisorSites.assertSiteAllowed(caller, row.siteId);
+        }
+        // Conditional on the status, so an approval racing this delete cannot be undone by it.
+        const { count } = await tx.labourPaymentSheet.updateMany({
+          where: { id, status: PaymentSheetStatus.draft, deletedAt: null },
+          data: { deletedAt: new Date(), deletedBy: caller.id },
+        });
+        if (count === 0) {
+          throw new ConflictException(
+            'Only a draft sheet can be deleted. Reopen an approved sheet first; a sheet with a paid line cannot be deleted.',
+          );
+        }
+        return row;
+      },
+    );
     await this.audit(
-      AuditAction.UPDATE,
+      AuditAction.DELETE,
       id,
-      caller.companyId ?? null,
+      sheet.companyId,
       caller,
       ipAddress,
+      {
+        siteId: sheet.siteId,
+        periodFrom: sheet.periodFrom.toISOString().slice(0, 10),
+        periodTo: sheet.periodTo.toISOString().slice(0, 10),
+        ...(reason ? { reason } : {}),
+      },
     );
-    return this.findOne(caller, id);
+    return { id, deleted: true };
+  }
+
+  /** A live site sheet, in scope, with the locks a rebuild needs already held. */
+  private async sheetForRebuild(
+    tx: Prisma.TransactionClient,
+    caller: AuthenticatedUser,
+    id: string,
+  ) {
+    const found = await tx.labourPaymentSheet.findUnique({ where: { id } });
+    if (!found || found.deletedAt) {
+      throw new NotFoundException(`Payment sheet ${id} not found`);
+    }
+    assertInScope(caller, found, `Payment sheet ${id}`);
+    if (found.siteId) {
+      await this.lockForSheet(tx, found.companyId, found.siteId);
+    }
+    // Read again under the lock: the status may have moved while we waited for it.
+    const sheet = await tx.labourPaymentSheet.findUnique({
+      where: { id },
+      include: { lines: true },
+    });
+    if (!sheet || sheet.deletedAt) {
+      throw new NotFoundException(`Payment sheet ${id} not found`);
+    }
+    return sheet;
+  }
+
+  /** Replaces a sheet's lines with freshly built ones. Pre-031 project sheets have no site to
+   * rebuild from and keep their lines. */
+  private async rebuild(
+    tx: Prisma.TransactionClient,
+    caller: AuthenticatedUser,
+    sheet: Awaited<ReturnType<PaymentSheetService['sheetForRebuild']>>,
+  ) {
+    if (!sheet.siteId) return;
+    const site = await this.sites.getSiteById(
+      rlsContextFor(caller),
+      sheet.siteId,
+    );
+    await tx.paymentSheetLine.deleteMany({ where: { sheetId: sheet.id } });
+    await this.buildLines(tx, caller, { ...sheet, siteId: sheet.siteId }, site);
   }
 
   private async buildDeductions(
@@ -533,6 +869,7 @@ export class PaymentSheetService {
     workerId: string,
     periodFrom: Date,
     grossWage: number,
+    reserved: Map<string, number>,
   ): Promise<{ deductions: DeductionEntry[]; deductionAmount: number }> {
     const advances = await tx.labourAdvance.findMany({
       where: {
@@ -544,31 +881,17 @@ export class PaymentSheetService {
       },
       orderBy: { createdAt: 'asc' },
     });
-
-    const deductions: DeductionEntry[] = [];
-    let remainingGross = grossWage;
-    let deductionAmount = 0;
-
-    for (const advance of advances) {
-      if (remainingGross <= 0) break;
-      const instalment = advance.instalmentAmount.toNumber();
-      const outstanding = advance.outstandingBalance.toNumber();
-      // Capped so net never goes negative (FR-024); remainder carries forward.
-      const amount = roundMoney(
-        Math.min(instalment, outstanding, remainingGross),
-      );
-      if (amount <= 0) continue;
-      deductions.push({
-        type: 'advance',
-        advanceId: advance.id,
-        amount,
-        label: 'Advance recovery',
-      });
-      deductionAmount += amount;
-      remainingGross -= amount;
-    }
-
-    return { deductions, deductionAmount: roundMoney(deductionAmount) };
+    // Capped so net never goes negative (FR-024), and short of what other sheets have earmarked
+    // (036 O1); the remainder is recovered on a later sheet.
+    return planAdvanceDeductions(
+      advances.map((a) => ({
+        id: a.id,
+        instalmentAmount: a.instalmentAmount.toNumber(),
+        outstandingBalance: a.outstandingBalance.toNumber(),
+      })),
+      reserved,
+      grossWage,
+    );
   }
 
   private async audit(
@@ -577,6 +900,7 @@ export class PaymentSheetService {
     companyId: string | null,
     caller: AuthenticatedUser,
     ipAddress: string,
+    changes?: Prisma.InputJsonObject,
   ) {
     await this.auditLog.record({
       entityType: AuditEntityType.LABOUR_PAYMENT_SHEET,
@@ -585,6 +909,7 @@ export class PaymentSheetService {
       accountId: caller.id,
       companyId,
       ipAddress,
+      ...(changes ? { changes } : {}),
     });
   }
 
@@ -603,6 +928,8 @@ export class PaymentSheetService {
     ipAddress: string,
   ) {
     let sheetId = '';
+    // The line's own company for the audit row, not the caller's home company (036 3e).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const line = await tx.paymentSheetLine.findUnique({
         where: { id: lineId },
@@ -613,6 +940,7 @@ export class PaymentSheetService {
       }
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
+      companyId = line.sheet.companyId;
 
       if (
         line.sheet.status !== PaymentSheetStatus.approved &&
@@ -654,6 +982,14 @@ export class PaymentSheetService {
       }
 
       const netPayable = line.netPayable.toNumber();
+      // 036 O4: no overpayment — there is nowhere to carry a negative balance.
+      const overpaid = paidAmountProblem(dto.paidAmount, netPayable);
+      if (overpaid) {
+        throw new BadRequestException({
+          code: 'LABOUR_PAID_ABOVE_NET',
+          message: overpaid,
+        });
+      }
       let carriedForward = 0;
       if (dto.paidAmount !== netPayable) {
         if (!dto.shortPaymentReason) {
@@ -661,16 +997,16 @@ export class PaymentSheetService {
             'A paid amount differing from net payable requires a reason',
           );
         }
+        // Paid on the worker's next sheet, as a line of its own (036 O4).
         carriedForward = roundMoney(netPayable - dto.paidAmount);
       }
 
-      // Apply advance recovery (FR-025): outstanding reduced only now.
-      const deductions = Array.isArray(line.deductions)
-        ? (line.deductions as unknown as DeductionEntry[])
-        : [];
+      // Apply advance recovery (FR-025): outstanding reduced only now. What each deduction
+      // actually took is written back on the line, so a reversal returns exactly that (036 O1).
+      const deductions = deductionEntries(line.deductions);
       for (const d of deductions) {
         if (d.type === 'advance' && d.advanceId) {
-          await this.applyRecovery(tx, d.advanceId, d.amount);
+          d.recovered = await this.applyRecovery(tx, d.advanceId, d.amount);
         }
       }
 
@@ -683,6 +1019,7 @@ export class PaymentSheetService {
           acknowledgementRef,
           shortPaymentReason: dto.shortPaymentReason ?? null,
           carriedForwardBalance: carriedForward,
+          deductions: deductions as unknown as Prisma.InputJsonValue,
           status: PaymentSheetLineStatus.disbursed,
         },
       });
@@ -693,7 +1030,7 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
@@ -707,6 +1044,8 @@ export class PaymentSheetService {
     ipAddress: string,
   ) {
     let sheetId = '';
+    // The line's own company for the audit row, not the caller's home company (036 3e).
+    let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const line = await tx.paymentSheetLine.findUnique({
         where: { id: lineId },
@@ -717,6 +1056,7 @@ export class PaymentSheetService {
       }
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
+      companyId = line.sheet.companyId;
 
       if (line.status !== PaymentSheetLineStatus.disbursed) {
         throw new ConflictException('Only a disbursed line can be reversed');
@@ -727,12 +1067,37 @@ export class PaymentSheetService {
         );
       }
 
-      const deductions = Array.isArray(line.deductions)
-        ? (line.deductions as unknown as DeductionEntry[])
-        : [];
+      // 036 O4: a shortfall already on a live sheet would be paid twice if this line went back to
+      // pending — it would be paid in full here, and the carry-forward line would pay it again.
+      if (line.carriedForwardBalance.toNumber() > 0) {
+        const carriedOn = await tx.paymentSheetLine.findFirst({
+          where: { carriedFromLineId: line.id, sheet: { deletedAt: null } },
+          select: {
+            sheet: { select: { periodFrom: true, periodTo: true } },
+          },
+        });
+        if (carriedOn) {
+          throw new ConflictException({
+            code: 'LABOUR_SHORTFALL_CARRIED',
+            message: `The unpaid part of this line is on the payment sheet for ${carriedOn.sheet.periodFrom
+              .toISOString()
+              .slice(0, 10)} to ${carriedOn.sheet.periodTo
+              .toISOString()
+              .slice(
+                0,
+                10,
+              )}. Delete that sheet while it is a draft, then reverse this line.`,
+          });
+        }
+      }
+
+      // Give back what the disbursement recovered — not the deduction, which can be more when the
+      // balance was already lower (036 O1).
+      const deductions = deductionEntries(line.deductions);
       for (const d of deductions) {
         if (d.type === 'advance' && d.advanceId) {
-          await this.applyRecovery(tx, d.advanceId, -d.amount);
+          await this.applyRecovery(tx, d.advanceId, -restoreFor(d));
+          delete d.recovered;
         }
       }
 
@@ -746,6 +1111,7 @@ export class PaymentSheetService {
           acknowledgementRef: null,
           shortPaymentReason: null,
           carriedForwardBalance: 0,
+          deductions: deductions as unknown as Prisma.InputJsonValue,
           reversalReason: reason,
         },
       });
@@ -756,27 +1122,32 @@ export class PaymentSheetService {
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
-      caller.companyId ?? null,
+      companyId,
       caller,
       ipAddress,
     );
     return this.findOne(caller, sheetId);
   }
 
-  /** Reduces an advance's outstanding balance by `amount` (negative reverses),
-   * closing it at zero (US7 AC7). */
+  /**
+   * Reduces an advance's outstanding balance by `amount` (negative gives back), closing it at zero
+   * (US7 AC7) and reopening it when a reversal gives some back. Returns what actually moved, which
+   * a recovery caps at the balance. The row is locked first, so two lines disbursed at once cannot
+   * both read the same balance.
+   */
   private async applyRecovery(
     tx: Prisma.TransactionClient,
     advanceId: string,
     amount: number,
-  ) {
+  ): Promise<number> {
+    await tx.$queryRaw`SELECT 1 FROM "labour"."LabourAdvance" WHERE "id" = ${advanceId} FOR UPDATE`;
     const advance = await tx.labourAdvance.findUnique({
       where: { id: advanceId },
     });
-    if (!advance) return;
-    const next = roundMoney(
-      Math.max(advance.outstandingBalance.toNumber() - amount, 0),
-    );
+    if (!advance) return 0;
+    const outstanding = advance.outstandingBalance.toNumber();
+    const moved = amount >= 0 ? recoveryFor(outstanding, amount) : amount;
+    const next = roundMoney(outstanding - moved);
     await tx.labourAdvance.update({
       where: { id: advanceId },
       data: {
@@ -784,6 +1155,7 @@ export class PaymentSheetService {
         status: next <= 0 ? AdvanceStatus.closed : AdvanceStatus.disbursed,
       },
     });
+    return moved;
   }
 
   private async recomputeSheetStatus(

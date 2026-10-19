@@ -4,13 +4,21 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Permission } from '@prisma/client';
+import { AccessLevel, Permission, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
+import { holdsAtLevel } from '../common/access-levels';
 import { rlsContextFor, withRlsContext } from '../common/prisma/rls-context';
 import { StorageService } from '../common/storage/storage.service';
-import { assertInScope } from '../settings/company-scope';
+import { LettersService } from '../letters/letters.service';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  DOCUMENT_TYPES,
+} from '../common/uploads';
+import { assertInScope, effectiveCompanyId } from '../settings/company-scope';
 import {
   MAX_STATUS_SUBJECTS,
   type ListNocsDto,
@@ -18,8 +26,32 @@ import {
   type UploadNocDto,
 } from './dto/noc.dto';
 
-/** Ten megabytes — the ceiling every document upload in the app shares. */
-const MAX_NOC_BYTES = 10 * 1024 * 1024;
+/**
+ * Where each subject lives, so an upload can be refused for a record that does not exist in the
+ * caller's company (036 B16). Before this, any string was accepted as `subjectId`, and a NOC could
+ * be filed against nothing — or against another company's record id.
+ */
+const SUBJECT_TABLE: Record<
+  NocSubject,
+  | ((
+      tx: Prisma.TransactionClient,
+      where: { id: string; companyId: string },
+    ) => Promise<{ id: string } | null>)
+  | null
+> = {
+  work_order: (tx, where) =>
+    tx.workOrder.findFirst({ where, select: { id: true } }),
+  hire_order: (tx, where) =>
+    tx.hireOrder.findFirst({ where, select: { id: true } }),
+  labour_worker: (tx, where) =>
+    tx.labourWorker.findFirst({ where, select: { id: true } }),
+  vendor: (tx, where) => tx.vendor.findFirst({ where, select: { id: true } }),
+  employee: (tx, where) =>
+    tx.employee.findFirst({ where, select: { id: true } }),
+  // A purchase order is a letter; letters own their table (Principle I), so it is asked of
+  // `LettersService` in `upload` instead.
+  purchase_order: null,
+};
 
 /**
  * The permission a NOC's subject is managed under. Reading or uploading a NOC needs the same
@@ -33,6 +65,11 @@ const SUBJECT_PERMISSION: Record<NocSubject, Permission> = {
   employee: Permission.EMPLOYEES,
   purchase_order: Permission.INVENTORY,
 };
+
+/** Every subject area — the controller's outer gate. */
+export const NOC_PERMISSIONS: Permission[] = [
+  ...new Set(Object.values(SUBJECT_PERMISSION)),
+];
 
 /**
  * Whether a record still awaits its NOC (2026-10-17): **open** until one is uploaded, **closed**
@@ -87,13 +124,14 @@ export class NocsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly letters: LettersService,
   ) {}
 
   async list(
     caller: AuthenticatedUser,
     query: ListNocsDto,
   ): Promise<NocView[]> {
-    this.assertMay(caller, query.subjectType);
+    this.assertMay(caller, query.subjectType, AccessLevel.read);
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -112,7 +150,7 @@ export class NocsService {
     subjectType: NocSubject,
     subjectIds: string[],
   ): Promise<NocStatusView[]> {
-    this.assertMay(caller, subjectType);
+    this.assertMay(caller, subjectType, AccessLevel.read);
     const ids = Array.from(new Set(subjectIds.filter(Boolean)));
     if (ids.length > MAX_STATUS_SUBJECTS) {
       throw new BadRequestException(
@@ -149,27 +187,40 @@ export class NocsService {
   }
 
   async upload(caller: AuthenticatedUser, dto: UploadNocDto): Promise<NocView> {
-    this.assertMay(caller, dto.subjectType);
-    const companyId = rlsContextFor(caller).companyId ?? caller.companyId;
+    this.assertMay(caller, dto.subjectType, AccessLevel.write);
+    const companyId = effectiveCompanyId(caller);
     if (!companyId) {
       throw new BadRequestException('Choose a company before uploading a NOC.');
     }
     if (dto.stage && dto.subjectType !== 'work_order') {
       throw new BadRequestException('Only a work order NOC names a stage.');
     }
+    const lookup = SUBJECT_TABLE[dto.subjectType];
+    const exists = lookup
+      ? (await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+          lookup(tx, { id: dto.subjectId, companyId }),
+        )) !== null
+      : await this.letters.letterExists(caller, dto.subjectId, companyId);
+    if (!exists) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'NOC_SUBJECT_NOT_FOUND',
+        message: 'The record this NOC is for was not found in this company.',
+      });
+    }
+
+    // The reference implementation of the shared upload pipeline (036 B4, B5, B6): size checked
+    // on the decoded file, type decided by the bytes rather than the client's `contentType`, and
+    // a photographed certificate compressed before it is stored.
     // TODO(VIRUS_SCAN): stored unscanned, the same gap every document upload here carries.
-    const buffer = Buffer.from(dto.file, 'base64');
-    if (buffer.length === 0) {
-      throw new BadRequestException('The file is empty.');
-    }
-    if (buffer.length > MAX_NOC_BYTES) {
-      throw new BadRequestException('The file is over 10 MB.');
-    }
-    const fileRef = await this.storage.put(
-      'noc-documents',
-      buffer,
-      dto.contentType ?? 'application/octet-stream',
-    );
+    const raw = decodeBase64Upload(dto.file, 'The NOC file');
+    const detected = assertAllowedFileType(raw, DOCUMENT_TYPES, 'The NOC file');
+    const image = await compressImageUpload(raw, detected.contentType);
+    const buffer = image?.main.data ?? raw;
+    const mimeType = image?.main.contentType ?? detected.contentType;
+    // No thumbnail is stored: `NocDocument` has no column for one, and a NOC list shows names,
+    // not pictures. A module whose list shows images stores `image.thumbnail` too.
+    const fileRef = await this.storage.put('noc-documents', buffer, mimeType);
     const created = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
@@ -182,7 +233,7 @@ export class NocsService {
             stage: dto.stage ?? null,
             fileRef,
             fileName: dto.fileName?.trim() || null,
-            mimeType: dto.contentType ?? null,
+            mimeType,
             issuedBy: dto.issuedBy?.trim() || null,
             referenceNo: dto.referenceNo?.trim() || null,
             issuedOn: dto.issuedOn
@@ -209,7 +260,7 @@ export class NocsService {
   }
 
   async remove(caller: AuthenticatedUser, id: string): Promise<void> {
-    const row = await this.load(caller, id);
+    const row = await this.load(caller, id, AccessLevel.write);
     await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.nocDocument.delete({ where: { id: row.id } }),
     );
@@ -217,24 +268,42 @@ export class NocsService {
     await this.storage.delete(row.fileRef).catch(() => undefined);
   }
 
-  private async load(caller: AuthenticatedUser, id: string) {
+  private async load(
+    caller: AuthenticatedUser,
+    id: string,
+    level: AccessLevel = AccessLevel.read,
+  ) {
     const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.nocDocument.findUnique({ where: { id } }),
     );
     if (!row) throw new NotFoundException('NOC not found');
     assertInScope(caller, row, 'NOC');
-    this.assertMay(caller, row.subjectType as NocSubject);
+    this.assertMay(caller, row.subjectType as NocSubject, level);
     return row;
   }
 
-  private assertMay(caller: AuthenticatedUser, subject: NocSubject) {
+  /**
+   * The subject's permission **at the level the action needs** (036 B16). It used to check the
+   * area alone, so a read-only holder could upload and delete NOCs.
+   */
+  private assertMay(
+    caller: AuthenticatedUser,
+    subject: NocSubject,
+    level: AccessLevel,
+  ) {
     const needed = SUBJECT_PERMISSION[subject];
     if (!needed)
       throw new BadRequestException(`Unknown NOC subject ${subject}`);
-    if (!caller.permissions.includes(needed)) {
-      throw new ForbiddenException(
-        'You do not have access to the record this NOC belongs to.',
-      );
+    if (!holdsAtLevel(caller, needed, level)) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code:
+          level === AccessLevel.write ? 'NOC_WRITE_FORBIDDEN' : 'NOC_FORBIDDEN',
+        message:
+          level === AccessLevel.write
+            ? 'You can view this record but not change its NOCs.'
+            : 'You do not have access to the record this NOC belongs to.',
+      });
     }
   }
 

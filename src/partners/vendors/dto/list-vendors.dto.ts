@@ -7,6 +7,8 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -24,6 +26,7 @@ export class ListVendorsDto {
   @ApiPropertyOptional({ description: 'Matches name, code or GSTIN' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional({ enum: VendorType })
@@ -46,6 +49,7 @@ export class ListVendorsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25 })
@@ -53,10 +57,12 @@ export class ListVendorsDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
+  @Max(2_147_483_647)
   pageSize?: number;
 
   @ApiPropertyOptional({ description: 'Cross-company callers only' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }

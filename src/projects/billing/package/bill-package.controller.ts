@@ -55,6 +55,7 @@ import {
   unreadableCopy,
 } from './certified-copy.reader';
 import { contentDispositionFor } from '../../../common/storage/file-type';
+import { listPaging, shapeList } from '../../list-paging';
 
 const CONTENT_TYPES = {
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -327,8 +328,16 @@ export class BillPackageController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('projectId') projectId: string,
     @Query('companyId') companyId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
   ) {
-    const rows = await this.packages.list(rlsContextFor(caller), projectId);
+    // 036 I26: no page params → the bare array as before (capped); either → `{ items, total, … }`.
+    const paging = listPaging(page, pageSize);
+    const rows = await this.packages.list(
+      rlsContextFor(caller),
+      projectId,
+      paging,
+    );
     const names = await this.packages.counterpartyNames(
       rlsContextFor(caller),
       resolveCompanyId(caller, companyId),
@@ -339,12 +348,36 @@ export class BillPackageController {
       rows.map((row) => row.id),
       caller,
     );
-    return rows.map((row, index) => ({
+    const items = rows.map((row, index) => ({
       ...row,
       counterpartyName: names[index],
       // Whether the caller is the one this bill is waiting on, so the list can say so.
       awaitingMe: approvals.get(row.id)?.canActNow ?? false,
     }));
+    return shapeList(paging, items, () =>
+      this.packages.countForProject(rlsContextFor(caller), projectId),
+    );
+  }
+
+  @Get('projects/bill-packages/:packageId/header-preview')
+  @ApiOperation({
+    summary: 'The party identifiers issuing now would leave blank (036 I16)',
+    description:
+      'For the issue confirmation: `{ missingHeaderFields: string[] }`, the same names the issue ' +
+      'response and the `X-Bill-Package-Missing-Fields` header carry. Read-only.',
+  })
+  async headerPreview(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('packageId') packageId: string,
+  ): Promise<{ missingHeaderFields: string[] }> {
+    const missing = await this.packages.previewMissingHeaderFields(
+      rlsContextFor(caller),
+      packageId,
+    );
+    if (missing === null) {
+      throw new NotFoundException('Bill package not found');
+    }
+    return { missingHeaderFields: missing };
   }
 
   @Get('projects/bill-packages/:packageId/abstract')

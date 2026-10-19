@@ -26,6 +26,7 @@ import {
   ReverseDisposalDto,
 } from './dto/disposal.dto';
 import { EquipmentDisposalService } from './equipment-disposal.service';
+import { ExportThrottle } from '../../common/throttle/app-throttle';
 
 /**
  * Scrapping and selling machines (2026-10-17). Reading needs `MACHINERY`, like the rest of the
@@ -112,6 +113,8 @@ export class EquipmentDisposalController {
   }
 
   @Get('disposals/export')
+  // 036: a full scan of the company's disposals, held to the export limit.
+  @ExportThrottle()
   @ApiOperation({ summary: 'The filtered disposals as Excel' })
   async export(
     @UserEntity() caller: AuthenticatedUser,

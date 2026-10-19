@@ -15,6 +15,7 @@ import {
   billTotals,
   lineTotals,
   money,
+  quantity,
   retentionOn,
   unitRate,
 } from './bill-totals';
@@ -26,6 +27,7 @@ import {
   detectContentType,
 } from '../../common/storage/file-type';
 import { StorageService } from '../../common/storage/storage.service';
+import { ListPaging, Paged, UNPAGED, shapeList } from '../list-paging';
 
 /** What a certification carries (2026-10-11). */
 export interface CertifyBillInput {
@@ -790,19 +792,27 @@ export class ClientBillsService {
   async listForProject(
     ctx: RlsContext,
     projectId: string,
-  ): Promise<ClientBillView[]> {
+    paging: ListPaging = UNPAGED,
+  ): Promise<ClientBillView[] | Paged<ClientBillView>> {
     const bills = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.clientBill.findMany({
         where: { projectId },
-        orderBy: { billingDate: 'desc' },
+        // `id` breaks ties so a page boundary between two bills of one date is stable (036 I26).
+        orderBy: [{ billingDate: 'desc' }, { id: 'desc' }],
         select: { id: true },
+        skip: paging.skip,
+        take: paging.take,
       }),
     );
     // Sequential rather than `Promise.all`: each `view` opens its own RLS transaction, and a hundred
     // concurrent ones would exhaust the pool on a project with a long billing history.
     const out: ClientBillView[] = [];
     for (const bill of bills) out.push(await this.view(ctx, bill.id));
-    return out;
+    return shapeList(paging, out, () =>
+      withRlsContext(this.prisma, ctx, (tx) =>
+        tx.clientBill.count({ where: { projectId } }),
+      ),
+    );
   }
 
   /**
@@ -868,7 +878,7 @@ export class ClientBillsService {
             previouslyBilledQty: billed,
             // Negative where the line is already over-measured. Reported, not clamped — the same
             // decision `bill-totals.ts` makes, for the same reason.
-            remainingQty: Math.round((scopeQty - billed) * 1000) / 1000,
+            remainingQty: quantity(scopeQty - billed),
             isVariation: item.isVariation,
             variationRef: item.variationRef,
           };
@@ -972,7 +982,7 @@ export class ClientBillsService {
           quotedRate: unitRate(line.rate.toNumber() * (1 + quoted)),
           amount: line.amount.toNumber(),
           cumulativeQty,
-          remainingQty: Math.round((scopeQty - cumulativeQty) * 1000) / 1000,
+          remainingQty: quantity(scopeQty - cumulativeQty),
           certifiedQty: line.certifiedQty?.toNumber() ?? null,
           exceedsScope: line.exceedsScope,
           overScopeReason: line.overScopeReason,
@@ -1040,7 +1050,7 @@ export class ClientBillsService {
         certificationVariance:
           certified === null
             ? null
-            : Math.round((bill.grossAmount.toNumber() - certified) * 100) / 100,
+            : money(bill.grossAmount.toNumber() - certified),
         submittedAt: bill.submittedAt,
         lines,
         exceedsScope: lines.some((line) => line.exceedsScope),

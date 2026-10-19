@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Get,
@@ -25,8 +24,10 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
+import { CloseLoanDto } from './dto/close-loan.dto';
 import { CreateLoanDto, ListLoansQueryDto } from './dto/create-loan.dto';
 import { LoansService } from './loans.service';
+import { resolveCompanyId } from '../../settings/company-scope';
 
 /** Employee loans and their EMI schedules (005 US7). */
 @ApiTags('HR — Payroll')
@@ -38,13 +39,11 @@ export class LoansController {
   constructor(private readonly loans: LoansService) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
-    const companyId = user.companyId ?? requested;
-    if (!companyId) {
-      throw new BadRequestException(
-        'companyId is required for a cross-company caller.',
-      );
-    }
-    return companyId;
+    // 036 stream 3b (17-10-2026): `resolveCompanyId`, not `user.companyId ?? requested`. The old
+    // order let a Super Admin's *home* company win over the one they asked for, and ignored the
+    // company selected in the switcher (which arrives on the RLS context, not on `user`), so a
+    // Super Admin working in company B read and wrote company A's rows.
+    return resolveCompanyId(user, requested);
   }
 
   @Get()
@@ -123,8 +122,8 @@ export class LoansController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('id') id: string,
-    @Body('reason') reason: string,
+    @Body() dto: CloseLoanDto,
   ) {
-    return this.loans.close(callerFrom(user, request), id, reason ?? '');
+    return this.loans.close(callerFrom(user, request), id, dto.reason ?? '');
   }
 }

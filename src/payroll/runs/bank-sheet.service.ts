@@ -401,14 +401,39 @@ export class BankSheetService {
     caller: Caller,
     companyId: string,
     period?: string,
+    // 036 F11. Defaults are the old fixed `take: 100`, so an unpaged caller sees no change.
+    paging: { page?: number; pageSize?: number } = {},
   ): Promise<BankSheetExportView[]> {
-    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.bankSheetExport.findMany({
-        where: { companyId, ...(period ? { period } : {}) },
-        orderBy: { createdAt: 'desc' },
-        take: 100,
-      }),
+    return (await this.historyPage(caller, companyId, period, paging)).rows;
+  }
+
+  /** `history`, with the total across every page (036 F11). */
+  async historyPage(
+    caller: Caller,
+    companyId: string,
+    period?: string,
+    paging: { page?: number; pageSize?: number } = {},
+  ): Promise<{ rows: BankSheetExportView[]; total: number }> {
+    const pageSize = Math.min(Math.max(paging.pageSize ?? 100, 1), 200);
+    const page = Math.max(paging.page ?? 1, 1);
+    const where = { companyId, ...(period ? { period } : {}) };
+    const [rows, total] = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      Promise.all([
+        tx.bankSheetExport.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: (page - 1) * pageSize,
+          take: pageSize,
+        }),
+        tx.bankSheetExport.count({ where }),
+      ]),
     );
+    return { rows: await this.toHistoryViews(rows), total };
+  }
+
+  private async toHistoryViews(
+    rows: Awaited<ReturnType<PrismaService['bankSheetExport']['findMany']>>,
+  ): Promise<BankSheetExportView[]> {
     const ids = [
       ...new Set(
         rows.map((r) => r.generatedById).filter((id): id is string => !!id),

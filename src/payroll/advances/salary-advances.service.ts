@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import { AuditLogService } from '../../auth/audit-log.service';
 import type { HrPayrollConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
+import { assertNotMakerOrPayee } from '../maker-checker';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -101,6 +103,8 @@ export class SalaryAdvancesService {
           outstandingBalance: dto.amount,
           exceedsLimit,
           status: SalaryAdvanceStatus.pending,
+          // 036 F19: the maker, so the checker can be required to be somebody else.
+          createdByUserId: caller.userId,
         },
       }),
     );
@@ -114,7 +118,17 @@ export class SalaryAdvancesService {
     return this.toView(advance, exceedsLimit ? limit : null);
   }
 
-  /** Approves and disburses in one step — the money leaves when it is approved. */
+  /**
+   * Approves and disburses in one step — the money leaves when it is approved.
+   *
+   * 036 F19 (decision 4: block, no override). **Maker-checker**: whoever recorded the advance
+   * cannot approve it, and nor can the employee it is for. Both used to be able to, which made
+   * "approved" mean only that somebody with the permission pressed a button — possibly the person
+   * receiving the money.
+   *
+   * The move is conditional on the advance still being pending, so two approvals at once disburse
+   * once; the second gets a 409.
+   */
   async approve(caller: Caller, advanceId: string) {
     const advance = await this.require(caller, advanceId);
     if (advance.status !== SalaryAdvanceStatus.pending) {
@@ -122,21 +136,45 @@ export class SalaryAdvancesService {
         `A ${advance.status} advance cannot be approved.`,
       );
     }
+    await assertNotMakerOrPayee(this.prisma, caller, {
+      createdByUserId: advance.createdByUserId,
+      employeeId: advance.employeeId,
+      noun: 'advance',
+    });
 
-    const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.salaryAdvance.update({
-        where: { id: advanceId },
-        data: {
-          status: SalaryAdvanceStatus.disbursed,
-          approvedByUserId: caller.userId,
-          disbursedOn: new Date(),
-        },
-      }),
+    const updated = await withRlsContext(
+      this.prisma,
+      caller.rls,
+      async (tx) => {
+        const moved = await tx.salaryAdvance.updateMany({
+          where: { id: advanceId, status: SalaryAdvanceStatus.pending },
+          data: {
+            status: SalaryAdvanceStatus.disbursed,
+            approvedByUserId: caller.userId,
+            disbursedOn: new Date(),
+          },
+        });
+        if (moved.count !== 1) {
+          throw new ConflictException(
+            'This advance was decided by someone else a moment ago. Reload to see where it stands.',
+          );
+        }
+        return tx.salaryAdvance.findFirstOrThrow({ where: { id: advanceId } });
+      },
     );
 
+    // The audit row names the advance's own company — its employee's (036 stream 3b). It used to
+    // be `caller.companyId ?? ''`: the account's home company, wrong for a Super Admin working in
+    // another company, and an empty string for one with no home company at all.
+    const owner = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.employee.findFirst({
+        where: { id: advance.employeeId },
+        select: { companyId: true },
+      }),
+    );
     await this.audit(
       caller,
-      caller.companyId ?? '',
+      owner?.companyId ?? caller.companyId ?? '',
       advanceId,
       AuditAction.UPDATE,
       { approved: true },
@@ -282,6 +320,7 @@ export class SalaryAdvancesService {
       exceedsLimit: boolean;
       status: SalaryAdvanceStatus;
       disbursedOn: Date | null;
+      createdByUserId?: string | null;
     },
     limit: number | null,
   ) {
@@ -297,6 +336,8 @@ export class SalaryAdvancesService {
       ...(limit !== null ? { limit } : {}),
       status: a.status,
       disbursedOn: a.disbursedOn?.toISOString().slice(0, 10) ?? null,
+      // 036 F19: so the screen can say "someone else must approve this" before the 403 does.
+      createdByUserId: a.createdByUserId ?? null,
     };
   }
 

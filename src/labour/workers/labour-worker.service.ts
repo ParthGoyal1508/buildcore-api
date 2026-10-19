@@ -237,6 +237,15 @@ export class LabourWorkerService {
   ): Promise<WorkerListItem> {
     const companyId = resolveCompanyId(caller, dto.companyId);
     await this.supervisorSites.assertSiteAllowed(caller, dto.siteId);
+    // 036 O14: the HR office and cross-company callers pass `assertSiteAllowed` for any id, and
+    // `LabourWorker.siteId` has no foreign key — so the site is looked up and its company compared,
+    // or a worker could be registered at another company's site, or at no site at all.
+    const siteCompanyId = await this.refs
+      .getSiteCompanyId(caller, dto.siteId)
+      .catch(() => null);
+    if (siteCompanyId !== companyId) {
+      throw new BadRequestException('Site not found in this company');
+    }
 
     const engagementType = dto.engagementType ?? EngagementType.direct;
     if (engagementType === EngagementType.contractor) {
@@ -245,7 +254,11 @@ export class LabourWorkerService {
           'A contractor is required for a contractor-engaged worker',
         );
       }
-      await this.refs.assertActiveContractor(caller, dto.contractorId);
+      await this.refs.assertActiveContractor(
+        caller,
+        dto.contractorId,
+        companyId,
+      );
     }
     if (dto.skillCategoryId) {
       await this.refs.requireSkillCategory(caller, dto.skillCategoryId);

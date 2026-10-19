@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   HttpCode,
+  Headers,
   HttpStatus,
   Ip,
   Param,
@@ -12,7 +14,12 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiHeader,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 import type { Response } from 'express';
 
@@ -75,13 +82,28 @@ export class PaymentsController {
       'outstanding is accepted and the remainder recorded as `unallocatedBalance` ' +
       '— paying a vendor in advance is ordinary.',
   })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      '036 M10. A client-generated key (a UUID per form submission). Repeating a request with ' +
+      'the same key returns the payment the first one created instead of recording a second; ' +
+      'reusing a key for a different vendor or amount is refused with 409.',
+  })
   async create(
     @UserEntity() caller: AuthenticatedUser,
     @Body() dto: CreatePaymentDto,
     @Ip() ipAddress: string,
     @Query('companyId') companyId?: string,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.payments.create(caller, dto, ipAddress, companyId);
+    const key = idempotencyKey?.trim() || undefined;
+    if (key && key.length > 100) {
+      throw new BadRequestException(
+        'Idempotency-Key must be at most 100 characters.',
+      );
+    }
+    return this.payments.create(caller, dto, ipAddress, companyId, key);
   }
 
   @Post('payments/:id/proof')
@@ -102,10 +124,9 @@ export class PaymentsController {
     return this.payments.attachProof(
       caller,
       id,
-      {
-        data: Buffer.from(dto.data, 'base64'),
-        contentType: dto.contentType,
-      },
+      // Decoded and type-checked in the service with the shared helpers (036 M11); the
+      // declared `contentType` is accepted for compatibility and ignored.
+      { data: dto.data },
       ipAddress,
     );
   }

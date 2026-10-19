@@ -542,3 +542,70 @@ describe('BankSheetService — salary bank sheet by month (2026-10-17)', () => {
     expect(main.rowCount).toBe(3);
   });
 });
+
+describe('BankSheetService — history paging (036 F11)', () => {
+  function withHistory(total: number) {
+    const findMany = jest.fn(
+      async ({ skip, take }: { skip: number; take: number }) =>
+        Array.from(
+          { length: Math.max(0, Math.min(take, total - skip)) },
+          (_, i) => ({
+            id: `x${skip + i}`,
+            period: '2026-09',
+            debitAccount: '09310400000819',
+            employeeCount: 1,
+            transferTotal: { toNumber: () => 100 },
+            leftOffCount: 0,
+            fileName: 'f.xlsx',
+            generatedById: null,
+            createdAt: new Date('2026-10-01T00:00:00Z'),
+          }),
+        ),
+    );
+    const count = jest.fn(async () => total);
+    const tx = {
+      $executeRaw: async () => 0,
+      bankSheetExport: { findMany, count },
+    };
+    const prisma = {
+      $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    };
+    const service = new BankSheetService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { get: () => ({}) } as never,
+      {} as never,
+    );
+    return { service, findMany, count };
+  }
+
+  it('keeps the old first-100 behaviour when no paging is asked for', async () => {
+    const { service, findMany } = withHistory(150);
+    const rows = await service.history(caller, 'co-1');
+    expect(rows).toHaveLength(100);
+    expect(findMany.mock.calls[0][0]).toMatchObject({ skip: 0, take: 100 });
+  });
+
+  it('pages and reports the total across pages', async () => {
+    const { service, findMany } = withHistory(150);
+    const page = await service.historyPage(caller, 'co-1', '2026-09', {
+      page: 2,
+      pageSize: 100,
+    });
+    expect(page.rows).toHaveLength(50);
+    expect(page.total).toBe(150);
+    expect(findMany.mock.calls[0][0]).toMatchObject({
+      where: { companyId: 'co-1', period: '2026-09' },
+      skip: 100,
+      take: 100,
+    });
+  });
+
+  it('caps the page size at 200', async () => {
+    const { service, findMany } = withHistory(500);
+    await service.historyPage(caller, 'co-1', undefined, { pageSize: 1000 });
+    expect(findMany.mock.calls[0][0]).toMatchObject({ take: 200 });
+  });
+});

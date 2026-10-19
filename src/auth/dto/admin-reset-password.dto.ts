@@ -1,5 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { IsNewPassword } from '../password-policy';
 
 export const ADMIN_RESET_METHODS = ['link', 'temporary_password'] as const;
@@ -9,6 +15,7 @@ export class AdminResetPasswordDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   targetAccountId: string;
 
   /**

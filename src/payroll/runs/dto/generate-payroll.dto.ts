@@ -1,6 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PayrollRunStatus } from '@prisma/client';
-import { IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import {
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 
 export class GeneratePayrollDto {
   @ApiProperty({ example: '2026-08', description: 'Period key, YYYY-MM.' })
@@ -12,6 +18,7 @@ export class GeneratePayrollDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   companyId?: string;
 }
 

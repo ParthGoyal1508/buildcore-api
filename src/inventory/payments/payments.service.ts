@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   AuditAction,
   AuditEntityType,
@@ -9,6 +13,16 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuditLogService } from '../../auth/audit-log.service';
+import { detectContentType } from '../../common/storage/file-type';
+import {
+  assertAllowedFileType,
+  compressImageUpload,
+  decodeBase64Upload,
+  JPEG,
+  PDF,
+  PNG,
+  WEBP,
+} from '../../common/uploads';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
@@ -50,8 +64,22 @@ export interface PaymentView {
   createdAt: Date;
 }
 
+/**
+ * The create response: a `PaymentView` plus two additive fields (036 M10).
+ *
+ * `replayed` is true when an `Idempotency-Key` matched an earlier request and no new payment was
+ * recorded. `warnings` carries non-blocking notices — today, a reference already used for the
+ * same vendor.
+ */
+export interface CreatedPaymentView extends PaymentView {
+  replayed: boolean;
+  warnings: string[];
+}
+
 export interface PaginatedPayments {
   payments: PaymentView[];
+  /** Across every page of the filter (036 M12). */
+  totals: { amount: number; allocatedAmount: number };
   total: number;
   page: number;
   pageSize: number;
@@ -119,10 +147,31 @@ export class PaymentsService {
     dto: CreatePaymentDto,
     ipAddress: string,
     companyId?: string,
-  ): Promise<PaymentView> {
+    idempotencyKey?: string,
+  ): Promise<CreatedPaymentView> {
     const targetCompanyId = this.refs.targetCompanyOf(caller, companyId);
-    const vendorName = await this.refs.requireVendorName(caller, dto.vendorId);
+
+    // A repeat of a request already served (036 M10): answered with what the first one made,
+    // before anything is validated or locked, so a double-click costs one read.
+    if (idempotencyKey) {
+      const replay = await this.replayOf(
+        caller,
+        targetCompanyId,
+        idempotencyKey,
+        dto,
+      );
+      if (replay) return replay;
+    }
+
+    const vendorName = await this.refs.requireActiveVendor(
+      caller,
+      dto.vendorId,
+      targetCompanyId,
+    );
     const date = this.refs.parseDate(dto.date);
+    // Blank for a cash payment recorded without one (036 M10). The column stays NOT NULL and the
+    // view keeps `referenceNumber: string`, so no reader has to learn a new null.
+    const referenceNumber = dto.referenceNumber?.trim() ?? '';
 
     const created = await withRlsContext(
       this.prisma,
@@ -176,8 +225,9 @@ export class PaymentsService {
             amount: dto.amount,
             date,
             paymentMode: dto.paymentMode,
-            referenceNumber: dto.referenceNumber.trim(),
+            referenceNumber,
             allocatedAmount,
+            idempotencyKey: idempotencyKey ?? null,
           },
         });
 
@@ -194,7 +244,26 @@ export class PaymentsService {
 
         return { payment, allocatedAmount, count: allocations.length };
       },
-    );
+    ).catch(async (error: unknown) => {
+      // Two requests with one key raced past the replay check above; the unique index let only
+      // one commit. The loser's whole transaction rolled back — no bill was touched — and it
+      // answers with the winner's payment, exactly as a later repeat would.
+      if (
+        idempotencyKey &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        const replay = await this.replayOf(
+          caller,
+          targetCompanyId,
+          idempotencyKey,
+          dto,
+        );
+        if (replay) return replay;
+      }
+      throw error;
+    });
+    if ('replayed' in created) return created;
 
     await this.auditLog.record({
       entityType: AuditEntityType.PAYMENT,
@@ -230,7 +299,126 @@ export class PaymentsService {
       hasProof: false,
       proofUploadedAt: null,
       createdAt: created.payment.createdAt,
+      replayed: false,
+      warnings: await this.duplicateReferenceWarnings(caller, {
+        companyId: targetCompanyId,
+        vendorId: dto.vendorId,
+        referenceNumber,
+        excludeId: created.payment.id,
+      }),
     };
+  }
+
+  /**
+   * The payment an `Idempotency-Key` already produced, as the create response — or null when the
+   * key is new (036 M10).
+   *
+   * A key reused for a *different* payment is refused rather than replayed: answering "recorded"
+   * for ₹50,000 to vendor B with the ₹5,000 payment to vendor A that first used the key would tell
+   * the client a payment exists that does not. A key whose payment was since deleted is refused
+   * too — replaying a deleted payment would report money that has been taken back.
+   */
+  private async replayOf(
+    caller: AuthenticatedUser,
+    companyId: string,
+    idempotencyKey: string,
+    dto: CreatePaymentDto,
+  ): Promise<CreatedPaymentView | null> {
+    const existing = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.payment.findUnique({
+          where: { companyId_idempotencyKey: { companyId, idempotencyKey } },
+          include: { _count: { select: { allocations: true } } },
+        }),
+    );
+    if (!existing) return null;
+    if (
+      existing.vendorId !== dto.vendorId ||
+      this.paise(toNumber(existing.amount)) !== this.paise(dto.amount)
+    ) {
+      throw new ConflictException(
+        'This Idempotency-Key was already used for a different payment. Send a new key for a new payment.',
+      );
+    }
+    if (existing.deleted) {
+      throw new ConflictException(
+        'The payment recorded with this Idempotency-Key has since been deleted. Send a new key to record it again.',
+      );
+    }
+    const amount = toNumber(existing.amount);
+    const allocated = toNumber(existing.allocatedAmount);
+    const vendorNames = await this.refs.vendorNames(caller, [
+      existing.vendorId,
+    ]);
+    return {
+      id: existing.id,
+      companyId: existing.companyId,
+      vendorId: existing.vendorId,
+      vendorName: vendorNames.get(existing.vendorId) ?? 'Unknown vendor',
+      amount,
+      date: existing.date,
+      paymentMode: existing.paymentMode,
+      referenceNumber: existing.referenceNumber,
+      allocatedAmount: allocated,
+      unallocatedBalance: this.paise(amount - allocated),
+      allocatedBillCount: existing._count.allocations,
+      hasProof: existing.proofRef !== null,
+      proofUploadedAt: existing.proofUploadedAt,
+      createdAt: existing.createdAt,
+      replayed: true,
+      warnings: [],
+    };
+  }
+
+  /**
+   * Warns — does not refuse — when the vendor already has a live payment with the same
+   * reference (036 M10).
+   *
+   * Not a constraint: a cheque number or UPI reference can legitimately repeat (a reissued cheque,
+   * a vendor's own numbering, a bank that recycles short references), so a hard unique would
+   * block real payments. But the common case is a payment entered twice, and the person
+   * recording it should be told while they can still delete one.
+   */
+  private async duplicateReferenceWarnings(
+    caller: AuthenticatedUser,
+    params: {
+      companyId: string;
+      vendorId: string;
+      referenceNumber: string;
+      excludeId: string;
+    },
+  ): Promise<string[]> {
+    if (!params.referenceNumber) return [];
+    const earlier = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.payment.findFirst({
+          where: {
+            companyId: params.companyId,
+            vendorId: params.vendorId,
+            deleted: false,
+            id: { not: params.excludeId },
+            referenceNumber: {
+              equals: params.referenceNumber,
+              mode: 'insensitive',
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { date: true, amount: true },
+        }),
+    );
+    if (!earlier) return [];
+    const [y, m, d] = earlier.date.toISOString().slice(0, 10).split('-');
+    return [
+      `Reference ${params.referenceNumber} was already used for a payment of ` +
+        `₹${toNumber(earlier.amount).toLocaleString(
+          'en-IN',
+        )} to this vendor on ${d}-${m}-${y}. ` +
+        'Check this is not the same payment entered twice.',
+    ];
   }
 
   async findAll(
@@ -266,7 +454,7 @@ export class PaymentsService {
         : {}),
     };
 
-    const { rows, total } = await withRlsContext(
+    const { rows, total, sum } = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
@@ -280,7 +468,11 @@ export class PaymentsService {
           }),
           tx.payment.count({ where }),
         ]);
-        return { rows, total };
+        const sum = await tx.payment.aggregate({
+          where,
+          _sum: { amount: true, allocatedAmount: true },
+        });
+        return { rows, total, sum };
       },
     );
 
@@ -310,6 +502,10 @@ export class PaymentsService {
           createdAt: row.createdAt,
         };
       }),
+      totals: {
+        amount: toNumber(sum._sum.amount),
+        allocatedAmount: toNumber(sum._sum.allocatedAmount),
+      },
       total,
       page,
       pageSize,
@@ -449,7 +645,7 @@ export class PaymentsService {
   async attachProof(
     caller: AuthenticatedUser,
     paymentId: string,
-    input: { data: Buffer; contentType: string },
+    input: { data: string },
     ipAddress: string,
   ): Promise<PaymentView> {
     const ctx = rlsContextFor(caller);
@@ -459,10 +655,21 @@ export class PaymentsService {
     if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
     assertInScope(caller, payment, `Payment ${paymentId}`);
 
+    // 036 M11/B4-B6: the shared upload helpers — 413 past 10 MB, 415 for anything but a PDF or a
+    // photo (read from the bytes; the declared `contentType` is no longer what is stored), and a
+    // photographed advice compressed. These messages are what the screen now shows instead of a
+    // generic failure.
+    const bytes = decodeBase64Upload(input.data, 'The payment proof');
+    const type = assertAllowedFileType(
+      bytes,
+      [PDF, JPEG, PNG, WEBP],
+      'The payment proof',
+    );
+    const image = await compressImageUpload(bytes, type.contentType);
     const proofRef = await this.storage.put(
       `payment-proof/${payment.companyId}`,
-      input.data,
-      input.contentType,
+      image?.main.data ?? bytes,
+      image?.main.contentType ?? type.contentType,
     );
 
     const updated = await withRlsContext(this.prisma, ctx, (tx) =>
@@ -541,6 +748,11 @@ export class PaymentsService {
     });
 
     const data = await this.storage.get(payment.proofRef);
-    return { data, contentType: 'application/octet-stream' };
+    // Typed from the bytes (036 M11), so the advice opens inline in the viewer.
+    return {
+      data,
+      contentType:
+        detectContentType(data)?.contentType ?? 'application/octet-stream',
+    };
   }
 }

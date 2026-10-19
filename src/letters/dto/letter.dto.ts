@@ -1,12 +1,12 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsBase64,
   IsObject,
   IsOptional,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsBase64Payload } from '../../common/uploads/base64-payload';
 
 /**
  * Compose a letter (017 US3).
@@ -22,6 +22,7 @@ export class ComposeLetterDto {
   })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   letterKindKey: string;
 
   @ApiPropertyOptional({
@@ -30,11 +31,13 @@ export class ComposeLetterDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional({ description: 'Address it to a candidate.' })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   candidateId?: string;
 
   @ApiPropertyOptional({
@@ -52,6 +55,7 @@ export class ComposeLetterDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   subjectId?: string;
 
   @ApiPropertyOptional({
@@ -73,6 +77,7 @@ export class ComposeLetterDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   signatoryId?: string;
 }
 
@@ -90,13 +95,14 @@ export class ReissueLetterDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   signatoryId?: string;
 }
 
 /** The executed copy that comes back signed by the other party (FR-017). */
 export class CountersignedLetterDto {
   @ApiProperty({ description: 'The scanned executed copy, base64-encoded.' })
-  @IsBase64()
+  @IsBase64Payload()
   data: string;
 
   @ApiProperty({ example: 'application/pdf' })
@@ -110,26 +116,31 @@ export class PrefillLetterQueryDto {
   @ApiProperty({ example: 'appointment' })
   @IsString()
   @MinLength(1)
+  @MaxLength(200)
   letterKindKey: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   employeeId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   candidateId?: string;
 
   /** A project letter's subject — its project fields pre-fill from it (2026-10-14). */
   @ApiPropertyOptional({ example: 'project' })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   subjectType?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   subjectId?: string;
 }

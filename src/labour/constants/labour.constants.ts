@@ -22,3 +22,7 @@ export const MAX_PAGE_SIZE = 200;
 
 /** Characters kept visible when masking PII to its last 4 (FR-009). */
 export const PII_VISIBLE_CHARS = 4;
+
+/** 036: the largest advance one request may ask for, and the most instalments it may run over. */
+export const MAX_ADVANCE_AMOUNT = 1_000_000;
+export const MAX_RECOVERY_INSTALMENTS = 104;

@@ -12,6 +12,7 @@
   },
   "maxWorkers": 1,
   "setupFiles": [
+    "<rootDir>/refuse-shared-database.ts",
     "<rootDir>/bound-connection-pool.ts"
   ]
 }

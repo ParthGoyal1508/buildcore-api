@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
   IsBoolean,
   IsDateString,
@@ -12,8 +13,8 @@ import {
   IsString,
   Matches,
   Max,
-  Min,
   MaxLength,
+  Min,
   ValidateIf,
 } from 'class-validator';
 
@@ -42,6 +43,7 @@ export class CreateEmployeeDto {
   @ApiProperty({ description: 'Site the employee is posted at.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   siteId: string;
 
   @ApiProperty({
@@ -49,6 +51,7 @@ export class CreateEmployeeDto {
   })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(100)
   shiftId: string;
 
   // ── Tab 1: Identity ───────────────────────────────────────────────────────
@@ -102,6 +105,7 @@ export class CreateEmployeeDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   photoRef?: string;
 
   // ── Tab 2: Employment ─────────────────────────────────────────────────────
@@ -109,11 +113,13 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   departmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   designationId?: string;
 
   @ApiPropertyOptional({ enum: EmploymentType })
@@ -139,6 +145,7 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   reportingToEmployeeId?: string;
 
   @ApiPropertyOptional()
@@ -160,11 +167,13 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   dailyRate?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   payMode?: string;
 
   @ApiPropertyOptional({ enum: CalculationMode })
@@ -175,6 +184,7 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   workmanId?: string;
 
   // ── Tab 3: Statutory ──────────────────────────────────────────────────────
@@ -210,18 +220,21 @@ export class CreateEmployeeDto {
   @ValidateIf((o: CreateEmployeeDto) => o.pfApplicable === true)
   @IsString()
   @Matches(/^\d{12}$/, { message: 'uan must be exactly 12 digits' })
+  @MaxLength(200)
   uan?: string;
 
   @ApiPropertyOptional({ description: 'Required when PF applies.' })
   @ValidateIf((o: CreateEmployeeDto) => o.pfApplicable === true)
   @IsString()
   @IsNotEmpty({ message: 'pfNumber is required when pfApplicable is true' })
+  @MaxLength(200)
   pfNumber?: string;
 
   @ApiPropertyOptional({ description: 'Required when ESIC applies.' })
   @ValidateIf((o: CreateEmployeeDto) => o.esicApplicable === true)
   @IsString()
   @IsNotEmpty({ message: 'esicNumber is required when esicApplicable is true' })
+  @MaxLength(200)
   esicNumber?: string;
 
   @ApiPropertyOptional({
@@ -246,45 +259,53 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   basic?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   hra?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   conveyanceAllowance?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   siteAllowance?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsNumber()
   @Min(0)
+  @Max(9_999_999_999.99)
   specialAllowance?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   paymentMode?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   bankName?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   bankBranch?: string;
 
   @ApiPropertyOptional({
@@ -335,16 +356,19 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   presentAddress?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   presentCity?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   presentState?: string;
 
   @ApiPropertyOptional()
@@ -355,16 +379,19 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(2_000)
   permanentAddress?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   permanentCity?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   permanentState?: string;
 
   @ApiPropertyOptional()
@@ -375,11 +402,13 @@ export class CreateEmployeeDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   emergencyContactName?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   emergencyContactRelation?: string;
 
   @ApiPropertyOptional()
@@ -466,22 +495,25 @@ export class ListEmployeesQueryDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   search?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   departmentId?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   siteId?: string;
 
   @ApiPropertyOptional({ description: 'Defaults to active-only when omitted.' })
   @IsOptional()
   @IsBoolean()
-  @Type(() => Boolean)
+  @BooleanQuery()
   isActive?: boolean;
 
   @ApiPropertyOptional({ default: 1 })
@@ -489,6 +521,7 @@ export class ListEmployeesQueryDto {
   @IsInt()
   @Min(1)
   @Type(() => Number)
+  @Max(2_147_483_647)
   page?: number;
 
   @ApiPropertyOptional({ default: 25, maximum: 100 })
@@ -498,6 +531,17 @@ export class ListEmployeesQueryDto {
   @Max(100)
   @Type(() => Number)
   pageSize?: number;
+
+  /**
+   * Server-side order (036 F12): `code`, `name` or `joining`, then `:asc` or `:desc`. The list's
+   * header sort only ever reordered the 25 rows on screen, which read as the register's order.
+   */
+  @ApiPropertyOptional({ example: 'name:asc' })
+  @IsOptional()
+  @Matches(/^(code|name|joining):(asc|desc)$/, {
+    message: 'sort must be code, name or joining, then :asc or :desc',
+  })
+  sort?: string;
 }
 
 /** The single PII field a reveal request names (005 FR-003, research.md §3). */

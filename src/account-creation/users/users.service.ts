@@ -162,6 +162,14 @@ export class UsersService {
     if (!isCrossCompany && !dto.companyId) {
       throw new BadRequestException('companyId is required for this role.');
     }
+    // A company's own role is given only to accounts of that company (036 C10).
+    if (role.companyId && role.companyId !== dto.companyId) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ROLE_OF_ANOTHER_COMPANY',
+        message: `The ${role.name} role belongs to another company.`,
+      });
+    }
 
     // Exactly one source for the name shown in the account list.
     if (dto.employeeId && dto.displayName) {
