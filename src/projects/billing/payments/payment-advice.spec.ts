@@ -99,9 +99,13 @@ describe('what the advice reads from the payment and the vendor', () => {
   const build = (
     vendor: Record<string, string | null> | null,
     payment = {},
+    hideCash = false,
   ) => {
     const tx = {
       $executeRaw: async () => 0,
+      company: {
+        findUnique: async () => ({ hideCashTransactions: hideCash }),
+      },
       rABill: {
         findFirst: async () => ({ workOrder: { partnerId: 'v-1' } }),
       },
@@ -112,6 +116,7 @@ describe('what the advice reads from the payment and the vendor', () => {
           paidOn: new Date('2025-10-18T00:00:00.000Z'),
           reference: 'HDFCR52025101874160134',
           transactionNo: null,
+          companyId: 'co-1',
           instrument: 'bank_transfer',
           mode: null,
           particulars: null,
@@ -203,5 +208,18 @@ describe('what the advice reads from the payment and the vendor', () => {
     }).viewFor(ctx, 'co-1', 'p-1');
     expect(view.rows[0].particulars).toBe('RA-03');
     expect(view.details.right[3][1]).toBe('NEFT/RTGS');
+  });
+
+  it('has no advice for a cash payment while cash is hidden (038)', async () => {
+    const vendor = { bankName: null, bankAccountNumber: null, ifscCode: null };
+    for (const payment of [{ instrument: 'cash' }, { mode: 'Cash' }]) {
+      await expect(
+        build(vendor, payment, true).viewFor(ctx, 'co-1', 'p-1'),
+      ).rejects.toMatchObject({ status: 404 });
+    }
+    // A bank payment's advice is unaffected.
+    await expect(
+      build(vendor, {}, true).viewFor(ctx, 'co-1', 'p-1'),
+    ).resolves.toBeDefined();
   });
 });

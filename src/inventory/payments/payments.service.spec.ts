@@ -34,6 +34,11 @@ const build = (bills: ReturnType<typeof bill>[]) => {
   let createdPayment: Record<string, unknown> = {};
 
   const prisma = createPrismaMock({
+    // 038: no company hides cash unless a test says so.
+    company: {
+      findMany: jest.fn().mockResolvedValue([]),
+      findUnique: jest.fn().mockResolvedValue({ hideCashTransactions: false }),
+    },
     purchaseBill: {
       update: jest.fn(async ({ where, data }: never) => {
         const w = where as { id: string };
@@ -337,5 +342,126 @@ describe('PaymentsService — cash, duplicates and double submits (036 M10)', ()
     expect(created.warnings[0]).toMatch(
       /UTR-1 was already used .* on 01-09-2026/,
     );
+  });
+});
+
+describe('PaymentsService — hiding cash (038)', () => {
+  const hide = (prisma: ReturnType<typeof build>['prisma'], on: boolean) => {
+    prisma.tx.company.findMany.mockResolvedValue(on ? [{ id: 'co-1' }] : []);
+    prisma.tx.company.findUnique.mockResolvedValue({
+      hideCashTransactions: on,
+    });
+  };
+  const listMocks = (prisma: ReturnType<typeof build>['prisma']) => {
+    prisma.tx.payment.findMany = jest.fn().mockResolvedValue([]);
+    prisma.tx.payment.count = jest.fn().mockResolvedValue(0);
+    prisma.tx.payment.aggregate = jest
+      .fn()
+      .mockResolvedValue({ _sum: { amount: null, allocatedAmount: null } });
+  };
+
+  it('lists, counts and sums without the cash payments of a company hiding cash', async () => {
+    const { service, prisma } = build([]);
+    hide(prisma, true);
+    listMocks(prisma);
+    await service.findAll(caller, { paymentMode: PaymentMode.cash } as never);
+    const expected = {
+      NOT: { paymentMode: PaymentMode.cash, companyId: { in: ['co-1'] } },
+    };
+    for (const call of [
+      prisma.tx.payment.findMany,
+      prisma.tx.payment.count,
+      prisma.tx.payment.aggregate,
+    ]) {
+      expect(call.mock.calls[0][0].where).toMatchObject(expected);
+    }
+  });
+
+  it('lists cash as before while cash is not hidden', async () => {
+    const { service, prisma } = build([]);
+    listMocks(prisma);
+    await service.findAll(caller, {} as never);
+    expect(
+      prisma.tx.payment.findMany.mock.calls[0][0].where.NOT,
+    ).toBeUndefined();
+  });
+
+  it('reads a bill as paid without its cash allocations, without writing anything', async () => {
+    const { service, prisma } = build([]);
+    hide(prisma, true);
+    const row = {
+      id: 'b1',
+      purchaseId: 'p1',
+      vendorId: 'vendor-1',
+      billDate: new Date(),
+      totalAmount: decimal(1000),
+      paidAmount: decimal(1000),
+      paymentStatus: PurchaseBillStatus.paid,
+    };
+    // The cash-touched bill the status filter looks up, and then the bill list itself.
+    prisma.tx.purchaseBill.findMany
+      .mockResolvedValueOnce([row])
+      .mockResolvedValueOnce([row]);
+    prisma.tx.paymentAllocation.groupBy = jest
+      .fn()
+      .mockResolvedValue([
+        { billId: 'b1', _sum: { allocatedAmount: decimal(600) } },
+      ]);
+    const { bills, totalOutstanding } = await service.findBills(
+      caller,
+      {} as never,
+    );
+    expect(bills[0]).toMatchObject({
+      paidAmount: 400,
+      outstanding: 600,
+      paymentStatus: PurchaseBillStatus.part_paid,
+    });
+    expect(totalOutstanding).toBe(600);
+    expect(prisma.tx.purchaseBill.update).not.toHaveBeenCalled();
+    // The fully-paid-by-cash bill reads part paid, so the default "not paid" filter lets it in.
+    const where = prisma.tx.purchaseBill.findMany.mock.calls[1][0].where;
+    expect(JSON.stringify(where)).toContain('"in":["b1"]');
+  });
+
+  const cashPayment = {
+    id: 'pay-c',
+    companyId: 'co-1',
+    vendorId: 'vendor-1',
+    paymentMode: PaymentMode.cash,
+    deleted: false,
+    proofRef: 'ref',
+    allocations: [],
+  };
+
+  it('refuses deleting a cash payment while cash is hidden', async () => {
+    const { service, prisma } = build([]);
+    hide(prisma, true);
+    prisma.tx.payment.findUnique.mockResolvedValue(cashPayment);
+    prisma.tx.payment.update = jest.fn();
+    await expect(service.remove(caller, 'pay-c', '::1')).rejects.toMatchObject({
+      response: { code: 'CASH_HIDDEN' },
+    });
+    expect(prisma.tx.payment.update).not.toHaveBeenCalled();
+  });
+
+  it('deletes a cash payment while cash is not hidden', async () => {
+    const { service, prisma } = build([]);
+    prisma.tx.payment.findUnique.mockResolvedValue(cashPayment);
+    prisma.tx.payment.update = jest.fn().mockResolvedValue({});
+    prisma.tx.paymentAllocation.deleteMany = jest.fn();
+    await service.remove(caller, 'pay-c', '::1');
+    expect(prisma.tx.payment.update).toHaveBeenCalled();
+  });
+
+  it("answers 404 for a hidden cash payment's proof and 403 for attaching one", async () => {
+    const { service, prisma } = build([]);
+    hide(prisma, true);
+    prisma.tx.payment.findFirst.mockResolvedValue(cashPayment);
+    await expect(service.downloadProof(caller, 'pay-c', '::1')).rejects.toThrow(
+      /not found/,
+    );
+    await expect(
+      service.attachProof(caller, 'pay-c', { data: 'x' }, '::1'),
+    ).rejects.toMatchObject({ response: { code: 'CASH_HIDDEN' } });
   });
 });

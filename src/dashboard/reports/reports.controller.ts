@@ -79,7 +79,8 @@ export class ReportsController {
   // POST only because the filter set will not fit in a query string. It may record an
   // export job for the async path, but that row is bookkeeping about a read, not the
   // thing being authorised; a role that may view a report may take it away with them,
-  // which is also why 019 FR-015 applies cash hiding to exports.
+  // which is also why cash hiding applies to exports: with cash hidden (038) the export
+  // leaves cash rows out of its rows and totals — `ReportsService.run` does it for both.
   @RequireLevel(AccessLevel.read)
   @ApiOperation({
     summary: 'Export a report to PDF or Excel',

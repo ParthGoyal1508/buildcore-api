@@ -6,16 +6,30 @@ import {
   ActivityLogService,
 } from './activity-log.service';
 
-function build() {
-  const findMany = jest.fn(async () => []);
+function build(hidingCompanies: string[] = []) {
+  const findMany = jest.fn<Promise<{ id: string }[]>, [unknown?]>(
+    async () => [],
+  );
+  const ids = (prefix: string) => jest.fn(async () => [{ id: `${prefix}-1` }]);
   const prisma = createPrismaMock({
     auditLogEntry: { findMany },
     user: {
       findMany: jest.fn(async () => [{ id: 'acct-1', displayName: 'Ravi' }]),
       count: jest.fn(async () => 1),
     },
+    company: {
+      findMany: jest.fn(async () => hidingCompanies.map((id) => ({ id }))),
+    },
+    payment: { findMany: ids('pay') },
+    labourPaymentSheet: { findMany: ids('sheet') },
+    labourAdvance: { findMany: ids('adv') },
+    equipmentDisposal: { findMany: ids('disp') },
   });
-  return { service: new ActivityLogService(prisma as never), findMany };
+  return {
+    service: new ActivityLogService(prisma as never),
+    findMany,
+    prisma,
+  };
 }
 
 type FindArgs = { where: Record<string, unknown>; take?: number };
@@ -103,6 +117,71 @@ describe('ActivityLogService filters (036 E3)', () => {
     await expect(service.actors(caller, { q: 'ra' })).resolves.toEqual({
       items: [{ id: 'acct-1', name: 'Ravi' }],
       total: 1,
+    });
+  });
+
+  describe('cash hidden (038)', () => {
+    const caller = {
+      id: 'u',
+      companyId: 'co',
+      permissions: [Permission.DASHBOARD],
+      grants: [],
+    } as never;
+
+    it('leaves the log untouched when no company in scope hides cash', async () => {
+      const { service, findMany } = build();
+      await service.feed(caller, {});
+      expect(findMany).toHaveBeenCalledTimes(1);
+      const args = (findMany.mock.calls[0] as unknown as [FindArgs])[0];
+      expect(args.where.companyId).toBe('co');
+      expect(args.where).not.toHaveProperty('AND.1');
+    });
+
+    it('excludes the entries about cash records, from the feed and the export', async () => {
+      const { service, findMany } = build(['co']);
+      findMany.mockImplementation(async (args?: unknown) => {
+        const where = (args as FindArgs).where;
+        // The positive lookup of cash entries is the one with an `OR` of matchers.
+        return JSON.stringify(where).includes(
+          '"OR":[{"entityType":"LABOUR_ADVANCE"',
+        )
+          ? [{ id: 'entry-cash' }]
+          : [];
+      });
+      await service.feed(caller, {});
+      const lookup = (findMany.mock.calls[0] as unknown as [FindArgs])[0];
+      const text = JSON.stringify(lookup.where);
+      for (const id of ['pay-1', 'sheet-1', 'adv-1', 'disp-1']) {
+        expect(text).toContain(id);
+      }
+      expect(text).toContain('"equals":"Cash"');
+      const feed = (findMany.mock.calls[1] as unknown as [FindArgs])[0];
+      expect(feed.where).toEqual({
+        AND: [
+          expect.objectContaining({ companyId: 'co' }),
+          { id: { notIn: ['entry-cash'] } },
+        ],
+      });
+
+      findMany.mockClear();
+      await service.exportRows(caller, {});
+      const exported = (findMany.mock.calls[1] as unknown as [FindArgs])[0];
+      expect(exported.where).toEqual(
+        expect.objectContaining({
+          AND: [expect.anything(), { id: { notIn: ['entry-cash'] } }],
+        }),
+      );
+    });
+
+    it('asks only about the served company for a company-scoped caller', async () => {
+      const { service, prisma } = build();
+      await service.feed(caller, {});
+      const companyFind = (prisma.tx.company.findMany as jest.Mock).mock
+        .calls[0][0];
+      expect(companyFind.where).toEqual({
+        hideCashTransactions: true,
+        id: 'co',
+      });
     });
   });
 });

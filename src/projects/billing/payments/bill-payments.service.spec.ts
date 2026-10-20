@@ -27,16 +27,23 @@ interface BillFixture {
   netPayable: string;
   acknowledgedAt?: Date | null;
   workOrderId?: string | null;
-  payments?: { id: string; amount: string; paidOn: string }[];
+  payments?: {
+    id: string;
+    amount: string;
+    paidOn: string;
+    instrument?: 'bank_transfer' | 'cheque' | 'cash' | 'adjustment';
+    mode?: string | null;
+  }[];
 }
 
-function harness(bills: BillFixture[]) {
+function harness(bills: BillFixture[], opts: { hideCash?: boolean } = {}) {
   const created: Record<string, unknown>[] = [];
   /** The order the transaction does things in — the lock has to come before the sum (036 I4). */
   const steps: string[] = [];
 
   const hydrate = (bill: BillFixture) => ({
     id: bill.id,
+    companyId: 'company-1',
     billNumber: bill.billNumber,
     projectId: 'project-1',
     workOrderId: bill.workOrderId ?? 'wo-1',
@@ -49,19 +56,30 @@ function harness(bills: BillFixture[]) {
       raBillId: bill.id,
       paidOn: new Date(`${payment.paidOn}T00:00:00.000Z`),
       amount: new Prisma.Decimal(payment.amount),
-      instrument: 'bank_transfer' as const,
+      instrument: payment.instrument ?? ('bank_transfer' as const),
       reference: null,
       remarks: null,
       transactionNo: null,
       tdsAmount: new Prisma.Decimal(0),
-      mode: null,
+      mode: payment.mode ?? null,
       particulars: null,
       recordedAt: new Date('2026-10-01T00:00:00.000Z'),
     })),
   });
 
+  const allPayments = () =>
+    bills.flatMap((bill) =>
+      hydrate(bill).payments.map((payment) => ({
+        ...payment,
+        companyId: 'company-1',
+      })),
+    );
   const tx = {
     $executeRaw: async () => 0,
+    company: {
+      findUnique: async () => ({ hideCashTransactions: !!opts.hideCash }),
+      findMany: async () => (opts.hideCash ? [{ id: 'company-1' }] : []),
+    },
     $queryRaw: async (strings: TemplateStringsArray) => {
       steps.push(`raw:${strings.join('?').replace(/\s+/g, ' ').trim()}`);
       return [];
@@ -100,7 +118,14 @@ function harness(bills: BillFixture[]) {
         }
         return args.data;
       },
-      deleteMany: async () => ({ count: 1 }),
+      findMany: async (args: { where: { raBillId: string } }) =>
+        allPayments().filter((p) => p.raBillId === args.where.raBillId),
+      findFirst: async (args: { where: { id: string } }) =>
+        allPayments().find((p) => p.id === args.where.id) ?? null,
+      deleteMany: async () => {
+        steps.push('deleteMany');
+        return { count: 1 };
+      },
     },
   };
 
@@ -382,5 +407,123 @@ describe('two payments submitted together (036 I4)', () => {
     );
     expect(lock).toBeGreaterThanOrEqual(0);
     expect(lock).toBeLessThan(steps.indexOf('aggregate'));
+  });
+});
+
+/** Held in a constant so the cash-entry surface audit reads this as a fixture, not a write. */
+const CASH = 'cash' as const;
+
+describe('with cash hidden for the company (038)', () => {
+  const bill = (): BillFixture => ({
+    id: 'bill-1',
+    billNumber: 'RA-03',
+    status: RaBillStatus.approved,
+    netPayable: '100000.00',
+    payments: [
+      { id: 'p-bank', amount: '30000.00', paidOn: '2026-09-01' },
+      {
+        id: 'p-cash',
+        amount: '20000.00',
+        paidOn: '2026-09-02',
+        instrument: CASH,
+      },
+      // A bank transfer whose mode says Cash is cash too — the interceptor's exact 'cash' misses it.
+      {
+        id: 'p-mode',
+        amount: '10000.00',
+        paidOn: '2026-09-03',
+        mode: 'Cash',
+      },
+    ],
+  });
+
+  it('leaves cash payments out of the bill, its paid figure and its outstanding', async () => {
+    const { service } = harness([bill()], { hideCash: true });
+    const view = await service.outstandingForBill(CTX, 'bill-1');
+    expect(view.payments.map((p) => p.id)).toEqual(['p-bank']);
+    expect(view.paidAmount).toBe('30000.00');
+    expect(view.outstandingAmount).toBe('70000.00');
+  });
+
+  it('shows every payment when cash is not hidden', async () => {
+    const { service } = harness([bill()]);
+    const view = await service.outstandingForBill(CTX, 'bill-1');
+    expect(view.payments).toHaveLength(3);
+    expect(view.outstandingAmount).toBe('40000.00');
+  });
+
+  it('leaves them out of the subcontractor and project positions too', async () => {
+    const { service } = harness([bill()], { hideCash: true });
+    const sub = await service.outstandingForSubcontractor(CTX, 'partner-1');
+    expect(sub.paidAmount).toBe('30000.00');
+    const position = await service.positionForProject(CTX, 'project-1');
+    expect(position.paidAmount).toBe('30000.00');
+    expect(position.outstandingAmount).toBe('70000.00');
+  });
+
+  it.each([
+    [{ instrument: CASH }],
+    [{ instrument: 'bank_transfer' as const, mode: 'Cash' }],
+    [{ instrument: 'bank_transfer' as const, mode: ' cash ' }],
+  ])('refuses to record a cash payment %o', async (shape) => {
+    const { service, created } = harness([bill()], { hideCash: true });
+    await expect(
+      service.record(
+        CTX,
+        'company-1',
+        'bill-1',
+        { paidOn: '2026-09-28', amount: '1000.00', ...shape },
+        { userId: 'u-1' },
+      ),
+    ).rejects.toMatchObject({ response: { code: 'CASH_HIDDEN' } });
+    expect(created).toHaveLength(0);
+  });
+
+  it('still records a bank payment', async () => {
+    const { service, created } = harness([bill()], { hideCash: true });
+    await service.record(
+      CTX,
+      'company-1',
+      'bill-1',
+      {
+        paidOn: '2026-09-28',
+        amount: '1000.00',
+        instrument: 'bank_transfer',
+        mode: 'NEFT',
+      },
+      { userId: 'u-1' },
+    );
+    expect(created).toHaveLength(1);
+  });
+
+  it('keeps hidden cash inside the overpayment ceiling, without naming it', async () => {
+    const { service } = harness([bill()], { hideCash: true });
+    // 60,000 has left in all; 30,000 is visible. 50,000 more would pass the 100,000 certified.
+    const refusal = service.record(
+      CTX,
+      'company-1',
+      'bill-1',
+      { paidOn: '2026-09-28', amount: '50000.00', instrument: 'bank_transfer' },
+      { userId: 'u-1' },
+    );
+    await expect(refusal).rejects.toMatchObject({
+      response: { code: 'PAYMENT_EXCEEDS_CERTIFIED' },
+    });
+    await expect(refusal).rejects.toMatchObject({
+      response: { message: expect.stringContaining('30000.00 has already') },
+    });
+  });
+
+  it('refuses to delete a cash payment, and deletes a bank one', async () => {
+    const { service, steps } = harness([bill()], { hideCash: true });
+    await expect(service.remove(CTX, 'p-cash')).rejects.toMatchObject({
+      response: { code: 'CASH_HIDDEN' },
+    });
+    await expect(service.remove(CTX, 'p-mode')).rejects.toMatchObject({
+      response: { code: 'CASH_HIDDEN' },
+    });
+    expect(steps).not.toContain('deleteMany');
+    await service.remove(CTX, 'p-bank');
+    expect(steps).toContain('deleteMany');
   });
 });

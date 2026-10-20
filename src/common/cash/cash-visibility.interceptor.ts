@@ -18,24 +18,25 @@ import {
 } from './cash-surfaces';
 
 /**
- * Hides cash amounts when the company has asked for them hidden (019 FR-014, FR-015, FR-017).
+ * The backstop for hiding cash (019 FR-014, FR-015; demoted by 038).
  *
- * **Shapes the response; never touches a query or a row.** FR-017 is explicit that hiding is a
- * display control and not a data operation, so this is the only honest place for it: a filter in
- * the query layer would change what is stored-adjacent, and a check in each service would be the
- * same condition written thirty times with one of them wrong.
+ * **038 is the rule; this is the safety net.** With `hideCashTransactions` on, cash does not
+ * exist as far as the app shows it: each owning module leaves cash records out of its lists,
+ * details, totals and exports, and refuses cash writes (`cash-policy.ts`). Nothing here filters
+ * rows or corrects a total — a response shaper cannot know what a total was summed from. What it
+ * still does is mask, on the way out, any row that says it is cash (`paymentMode`, `mode` or
+ * `instrument` naming cash, in any case) and that some surface let through anyway, so a gap in
+ * a module shows a hidden amount rather than a cash figure.
  *
- * A hidden amount becomes `null` with `amountHidden: true` beside it — **never zero**. A zero is
- * a figure, and neither a reader nor a spreadsheet summing a column can tell a hidden amount
- * from a real one; marking it is what stops an export silently understating a total by the value
- * of every cash payment in it.
+ * **Shapes the response; never touches a query or a row.** Hiding never deletes or alters data
+ * (038 FR-005); turning the setting off restores every screen exactly.
  *
- * **The denomination breakup is the one exception, and it is a holder exception** (FR-017d, added
- * 2026-10-02). It stays hidden from everyone except a caller holding `CASH_ENTRY`. Hiding a note
- * count from the cashier who has to count the notes against it conceals nothing from anybody it
- * was meant to conceal from, while making the screen's only purpose unreachable. Amounts are not
- * treated the same way: a cashier needs the breakup to pay out, and needs no view of what every
- * other cash payment in the company came to.
+ * A masked amount becomes `null` with `amountHidden: true` beside it — never zero, which would
+ * read as a real figure.
+ *
+ * **The denomination breakup** stays hidden from everyone except a caller holding `CASH_ENTRY`
+ * (019 FR-017d). Under 038 a cash sheet is itself hidden while cash is hidden, so this only
+ * matters for a breakup some surface still returns.
  */
 @Injectable()
 export class CashVisibilityInterceptor implements NestInterceptor {
@@ -60,13 +61,13 @@ export class CashVisibilityInterceptor implements NestInterceptor {
 
 /**
  * Whether this caller's company has asked for cash hidden, and whether they still see the breakup.
+ * (For a plain yes/no, prefer `CashPolicyService.isHidden` from `cash-policy.ts`.)
  *
  * Exported because **a response sent through `@Res()` never reaches this interceptor.** Nest's
  * response-mapping pipe runs on what a handler returns, and a handler that writes to the raw
  * response returns nothing — so every file download in this product is outside the interceptor's
- * reach by construction. An export that silently understated a total by every cash payment in it
- * would be worse than one that says a figure is hidden, so those surfaces ask this directly rather
- * than each re-deriving the rule (Principle III).
+ * reach by construction. Under 038 such an export leaves cash rows out of its rows and totals itself;
+ * this masking is what it applies on top, as the same backstop (Principle III).
  */
 export async function cashHidingFor(
   prisma: PrismaService,

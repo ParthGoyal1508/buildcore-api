@@ -16,6 +16,12 @@ import { LineItem, parseLineItems } from '../../letters/line-items';
 import { effectiveCompanyId } from '../../settings/company-scope';
 import { ItemsService } from '../../settings/item-masters/items.service';
 import { InventoryRefsService } from '../inventory-refs.service';
+import {
+  billWithoutHiddenCash,
+  cashHiddenCompaniesTx,
+  excludeHiddenCash,
+  hiddenCashByBillTx,
+} from '../payments/cash-hiding';
 import { toNumber } from '../stock/stock.types';
 
 /** The letter kind a purchase order is (2026-10-15, `purchase-orders/page.tsx`). */
@@ -178,8 +184,8 @@ export class PurchaseOrdersService {
     const orders = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.purchaseOrder.findMany({
+      async (tx) => {
+        const found = await tx.purchaseOrder.findMany({
           where: {
             companyId,
             ...(filters.vendorId ? { vendorId: filters.vendorId } : {}),
@@ -195,7 +201,28 @@ export class PurchaseOrdersService {
             },
           },
           orderBy: [{ issuedAt: 'desc' }],
-        }),
+        });
+        // 038: "paid" leaves out cash while the company hides it.
+        const hidden = await cashHiddenCompaniesTx(tx, { companyId });
+        const cash = await hiddenCashByBillTx(
+          tx,
+          found.flatMap((o) =>
+            o.lines.flatMap((l) =>
+              l.purchases.flatMap((p) => (p.bill ? [p.bill.id] : [])),
+            ),
+          ),
+          hidden,
+        );
+        return found.map((o) => ({
+          ...o,
+          lines: o.lines.map((l) => ({
+            ...l,
+            purchases: l.purchases.map((p) =>
+              p.bill ? { ...p, bill: billWithoutHiddenCash(p.bill, cash) } : p,
+            ),
+          })),
+        }));
+      },
     );
     const vendorNames = await this.refs.vendorNames(
       caller,
@@ -223,8 +250,9 @@ export class PurchaseOrdersService {
     const order = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
-        tx.purchaseOrder.findFirst({
+      async (tx) => {
+        const hidden = await cashHiddenCompaniesTx(tx, { companyId });
+        const found = await tx.purchaseOrder.findFirst({
           where: { companyId, OR: [{ id }, { letterId: id }] },
           include: {
             lines: {
@@ -238,7 +266,13 @@ export class PurchaseOrdersService {
                     bill: {
                       include: {
                         allocations: {
-                          where: { payment: { deleted: false } },
+                          // 038: a hidden cash payment is not traced.
+                          where: {
+                            payment: {
+                              deleted: false,
+                              ...excludeHiddenCash(hidden),
+                            },
+                          },
                           include: { payment: true },
                         },
                       },
@@ -248,7 +282,25 @@ export class PurchaseOrdersService {
               },
             },
           },
-        }),
+        });
+        if (!found) return found;
+        const cash = await hiddenCashByBillTx(
+          tx,
+          found.lines.flatMap((l) =>
+            l.purchases.flatMap((p) => (p.bill ? [p.bill.id] : [])),
+          ),
+          hidden,
+        );
+        return {
+          ...found,
+          lines: found.lines.map((l) => ({
+            ...l,
+            purchases: l.purchases.map((p) =>
+              p.bill ? { ...p, bill: billWithoutHiddenCash(p.bill, cash) } : p,
+            ),
+          })),
+        };
+      },
     );
     if (!order) {
       // An issued PO this caller can see is always structured by the sync above, so "not found"

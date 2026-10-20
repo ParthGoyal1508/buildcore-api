@@ -4,9 +4,11 @@ import {
   ForbiddenException,
   Injectable,
   NestInterceptor,
+  Optional,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AccessLevel, Permission } from '@prisma/client';
+import { PrismaService } from 'nestjs-prisma';
 import { Observable } from 'rxjs';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -14,6 +16,7 @@ import { levelForMethod } from '../access-levels';
 import { ACCESS_LEVEL_KEY } from '../decorators/access-level.decorator';
 import { REQUIRES_CASH_ENTRY_KEY } from '../decorators/cash-entry.decorator';
 import { PermissionRefusalService } from '../guards/permission-refusal.service';
+import { cashHiddenError, isCashHidden, servedCompanyOf } from './cash-policy';
 import {
   CASH_MODE_FIELDS,
   UNCONDITIONAL_CASH_FIELDS,
@@ -67,10 +70,15 @@ export class CashEntryInterceptor implements NestInterceptor {
      * Optional for the reason `PermissionsGuard`'s is: a refusal must not depend on there being
      * somewhere to record it.
      */
-    private readonly refusals?: PermissionRefusalService,
+    @Optional() private readonly refusals?: PermissionRefusalService,
+    /** Reads the company's cash-hiding setting (038). Optional so unit tests can omit it. */
+    @Optional() private readonly prisma?: PrismaService,
   ) {}
 
-  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+  async intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+  ): Promise<Observable<unknown>> {
     if (context.getType() !== 'http') return next.handle();
 
     const request = context.switchToHttp().getRequest<CashEntryRequest>();
@@ -99,6 +107,16 @@ export class CashEntryInterceptor implements NestInterceptor {
     // No authenticated caller: `JwtAuthGuard` has already refused anything that needed one,
     // and a route that needs none cannot be recording a company's cash.
     if (!user) return next.handle();
+
+    // 038: with cash hidden for the company, no cash is entered at all — by anyone, Super Admin
+    // included — until the setting is turned off. Checked before the permission, because holding
+    // CASH_ENTRY does not override it.
+    if (
+      this.prisma &&
+      (await isCashHidden(this.prisma, servedCompanyOf(user)))
+    ) {
+      throw cashHiddenError();
+    }
 
     if (mayEnterCash(user)) return next.handle();
 

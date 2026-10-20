@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type { Site } from '@prisma/client';
 import {
@@ -22,6 +23,10 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  CashPolicyService,
+  cashHiddenError,
+} from '../../common/cash/cash-policy';
 import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { SitesService } from '../../projects/sites/sites.service';
@@ -44,6 +49,13 @@ import {
   reservedByAdvance,
   restoreFor,
 } from './payment-sheet.rules';
+import {
+  cashCarrySources,
+  isCashLine,
+  isCashSheet,
+  isHiddenLine,
+  visibleSheetLines,
+} from '../cash/labour-cash-view';
 
 export type { DeductionEntry } from './payment-sheet.rules';
 
@@ -70,7 +82,25 @@ export class PaymentSheetService {
     private readonly storage: StorageService,
     private readonly images: ImageProcessingService,
     private readonly days: LabourDayService,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
+
+  /** 038: whether cash is hidden for this company. */
+  private cashHidden(companyId: string | null | undefined): Promise<boolean> {
+    return this.cash ? this.cash.isHidden(companyId) : Promise.resolve(false);
+  }
+
+  /** 038: a direct (cash) sheet cannot be generated, approved, reopened, rebuilt, deleted or paid
+   * while cash is hidden for its company. */
+  private async assertSheetWritable(sheet: {
+    companyId: string;
+    engagementType: EngagementType;
+  }): Promise<void> {
+    if (isCashSheet(sheet) && (await this.cashHidden(sheet.companyId))) {
+      throw cashHiddenError();
+    }
+  }
 
   /**
    * Generates a draft sheet for one site and period (031) from the period's approved musters —
@@ -123,6 +153,8 @@ export class PaymentSheetService {
     // The sheet belongs to the site's company, whoever generates it.
     const companyId = site.companyId;
     const projectId = site.projectId ?? null;
+    // 038: a direct sheet is paid in cash; none is generated while cash is hidden.
+    await this.assertSheetWritable({ companyId, engagementType });
 
     const sheetId = await withRlsContext(
       this.prisma,
@@ -521,7 +553,52 @@ export class PaymentSheetService {
           orderBy: { periodFrom: 'desc' },
         }),
     );
-    return rows.map((row) => ({
+    // 038: with cash hidden for a sheet's company, a direct (cash) sheet is not listed and a
+    // contractor sheet's totals leave out its cash lines.
+    const hidden = this.cash
+      ? await this.cash.hiddenAmong(rows.map((r) => r.companyId))
+      : new Set<string>();
+    let visibleRows = rows;
+    if (hidden.size > 0) {
+      visibleRows = rows.filter(
+        (r) => !(hidden.has(r.companyId) && isCashSheet(r)),
+      );
+      const affected = visibleRows.filter((r) => hidden.has(r.companyId));
+      if (affected.length > 0) {
+        const totals = await withRlsContext(
+          this.prisma,
+          rlsContextFor(caller),
+          async (tx) => {
+            const lines = await tx.paymentSheetLine.findMany({
+              where: { sheetId: { in: affected.map((r) => r.id) } },
+            });
+            const sources = await cashCarrySources(tx, lines);
+            return new Map(
+              affected.map((r) => [
+                r.id,
+                visibleSheetLines(
+                  r,
+                  lines.filter((l) => l.sheetId === r.id),
+                  sources,
+                ),
+              ]),
+            );
+          },
+        );
+        visibleRows = visibleRows.map((r) => {
+          const t = totals.get(r.id);
+          return t
+            ? {
+                ...r,
+                grossTotal: new Prisma.Decimal(t.grossTotal),
+                deductionTotal: new Prisma.Decimal(t.deductionTotal),
+                netTotal: new Prisma.Decimal(t.netTotal),
+              }
+            : r;
+        });
+      }
+    }
+    return visibleRows.map((row) => ({
       id: row.id,
       projectId: row.projectId,
       siteId: row.siteId,
@@ -546,6 +623,27 @@ export class PaymentSheetService {
       throw new NotFoundException(`Payment sheet ${id} not found`);
     }
     assertInScope(caller, row, `Payment sheet ${id}`);
+
+    // 038: with cash hidden, a direct (cash) sheet does not exist, and a contractor sheet shows
+    // only its non-cash lines with totals worked out from them.
+    if (await this.cashHidden(row.companyId)) {
+      if (isCashSheet(row)) {
+        throw new NotFoundException(`Payment sheet ${id} not found`);
+      }
+      const sources = await withRlsContext(
+        this.prisma,
+        rlsContextFor(caller),
+        (tx) => cashCarrySources(tx, row.lines),
+      );
+      const view = visibleSheetLines(row, row.lines, sources);
+      if (view.changed) {
+        row.lines = view.lines;
+        row.grossTotal = new Prisma.Decimal(view.grossTotal);
+        row.deductionTotal = new Prisma.Decimal(view.deductionTotal);
+        row.netTotal = new Prisma.Decimal(view.netTotal);
+        row.denominationBreakup = null;
+      }
+    }
 
     const disbursed = row.lines.filter(
       (l) => l.status === PaymentSheetLineStatus.disbursed,
@@ -644,6 +742,7 @@ export class PaymentSheetService {
       }
       assertInScope(caller, sheet, `Payment sheet ${id}`);
       companyId = sheet.companyId;
+      await this.assertSheetWritable(sheet);
       if (sheet.status !== PaymentSheetStatus.draft) {
         throw new ConflictException('Only a draft sheet can be approved');
       }
@@ -673,13 +772,7 @@ export class PaymentSheetService {
         },
       });
     });
-    await this.audit(
-      AuditAction.UPDATE,
-      id,
-      companyId,
-      caller,
-      ipAddress,
-    );
+    await this.audit(AuditAction.UPDATE, id, companyId, caller, ipAddress);
     return this.findOne(caller, id);
   }
 
@@ -791,6 +884,7 @@ export class PaymentSheetService {
           throw new NotFoundException(`Payment sheet ${id} not found`);
         }
         assertInScope(caller, row, `Payment sheet ${id}`);
+        await this.assertSheetWritable(row);
         if (row.siteId) {
           await this.supervisorSites.assertSiteAllowed(caller, row.siteId);
         }
@@ -834,6 +928,7 @@ export class PaymentSheetService {
       throw new NotFoundException(`Payment sheet ${id} not found`);
     }
     assertInScope(caller, found, `Payment sheet ${id}`);
+    await this.assertSheetWritable(found);
     if (found.siteId) {
       await this.lockForSheet(tx, found.companyId, found.siteId);
     }
@@ -941,6 +1036,9 @@ export class PaymentSheetService {
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
       companyId = line.sheet.companyId;
+      // 038: nothing cash is paid while cash is hidden — not a cash payment, not a line of a direct
+      // (cash) sheet, not the remainder of an earlier cash payment.
+      await this.assertLineWritable(tx, line, dto.paymentMode);
 
       if (
         line.sheet.status !== PaymentSheetStatus.approved &&
@@ -1027,12 +1125,17 @@ export class PaymentSheetService {
       await this.recomputeSheetStatus(tx, line.sheetId);
     });
 
+    // The line and its mode, so the activity log can tell a cash disbursal (038).
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
       companyId,
       caller,
       ipAddress,
+      {
+        lineId,
+        paymentMode: dto.paymentMode,
+      },
     );
     return this.findOne(caller, sheetId);
   }
@@ -1044,6 +1147,7 @@ export class PaymentSheetService {
     ipAddress: string,
   ) {
     let sheetId = '';
+    let reversedMode: LabourPaymentMode | null = null;
     // The line's own company for the audit row, not the caller's home company (036 3e).
     let companyId: string | null = null;
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
@@ -1057,6 +1161,9 @@ export class PaymentSheetService {
       assertInScope(caller, line, `Payment line ${lineId}`);
       sheetId = line.sheetId;
       companyId = line.sheet.companyId;
+      // 038: a cash payment is not reversed while cash is hidden.
+      await this.assertLineWritable(tx, line, null);
+      reversedMode = line.paymentMode;
 
       if (line.status !== PaymentSheetLineStatus.disbursed) {
         throw new ConflictException('Only a disbursed line can be reversed');
@@ -1119,14 +1226,48 @@ export class PaymentSheetService {
       await this.recomputeSheetStatus(tx, line.sheetId);
     });
 
+    // The line and the mode it had been paid in, so the activity log can tell a cash reversal (038).
     await this.audit(
       AuditAction.UPDATE,
       sheetId,
       companyId,
       caller,
       ipAddress,
+      {
+        lineId,
+        paymentMode: reversedMode,
+        reversed: true,
+      },
     );
     return this.findOne(caller, sheetId);
+  }
+
+  /**
+   * 038: refuses a change to a line that is cash — on a direct sheet, disbursed in cash, about to be
+   * paid in cash, or carrying forward a cash payment's remainder — while cash is hidden.
+   */
+  private async assertLineWritable(
+    tx: Prisma.TransactionClient,
+    line: {
+      paymentMode: LabourPaymentMode | null;
+      carriedFromLineId: string | null;
+      sheet: { companyId: string; engagementType: EngagementType };
+    },
+    newMode: LabourPaymentMode | null,
+  ): Promise<void> {
+    const maybeCash =
+      isCashSheet(line.sheet) ||
+      isCashLine(line) ||
+      newMode === LabourPaymentMode.cash ||
+      !!line.carriedFromLineId;
+    if (!maybeCash || !(await this.cashHidden(line.sheet.companyId))) return;
+    if (
+      isCashSheet(line.sheet) ||
+      newMode === LabourPaymentMode.cash ||
+      isHiddenLine(line, await cashCarrySources(tx, [line]))
+    ) {
+      throw cashHiddenError();
+    }
   }
 
   /**

@@ -69,6 +69,14 @@ describe('isCashMode', () => {
     expect(isCashMode(undefined)).toBe(false);
     expect(isCashMode(null)).toBe(false);
   });
+
+  it('recognises free-text spellings of cash (038)', () => {
+    expect(isCashMode('Cash')).toBe(true);
+    expect(isCashMode('CASH')).toBe(true);
+    expect(isCashMode(' cash ')).toBe(true);
+    expect(isCashMode('cashless')).toBe(false);
+    expect(isCashMode('Cheque')).toBe(false);
+  });
 });
 
 describe('hideCash', () => {

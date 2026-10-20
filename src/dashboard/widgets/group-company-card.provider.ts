@@ -83,11 +83,14 @@ const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
  * grouped or batched read across every accessible company, and the six run in parallel —
  * the card count does not change how many queries a load costs.
  *
- * ## Cash visibility does not apply
+ * ## Hiding cash (038)
  *
- * `hideCashTransactions` hides the amounts of individual **cash payments**. These are
- * aggregates — gross salary, statutory contributions, loan balances, contract value —
- * none of which is a cash transaction or reveals one, so nothing here is masked.
+ * With `hideCashTransactions` on, a company's cash transactions must not show or count on its
+ * card (FR-006: each company's own setting). None of these metrics is built from one — gross
+ * salary, statutory contributions, salary-loan balances, contract value, headcount and document
+ * counts read no vendor payment, bill payment, labour sheet or advance, or disposal — so there is
+ * nothing to leave out. A metric added here that sums any of those must apply
+ * `CashPolicyService.hiddenAmong(ids)` per company.
  */
 @Injectable()
 export class GroupCompanyCardProvider {

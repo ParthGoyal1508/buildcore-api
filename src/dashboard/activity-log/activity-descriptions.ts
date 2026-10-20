@@ -51,8 +51,8 @@ export function describeEvent(row: Row): string | null {
       'confirmedByPassword' in changes)
   ) {
     return changes.hideCashTransactions
-      ? 'Hid cash amounts'
-      : 'Showed cash amounts';
+      ? 'Hid cash transactions'
+      : 'Showed cash transactions';
   }
   if (changes.event === 'bulk_shift_change') {
     const n = Number(changes.count);

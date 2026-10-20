@@ -23,6 +23,7 @@ import { PermissionRefusalModule } from './common/guards/permission-refusal.modu
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
 import { CompanyHeaderInterceptor } from './settings/company-selection/company-header.interceptor';
 import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
+import { CashModule } from './common/cash/cash.module';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -43,6 +44,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
 
 @Module({
   imports: [
+    CashModule,
     ConfigModule.forRoot({ isGlobal: true, load: [config] }),
     ThrottlerModule.forRootAsync({
       // `default` (the auth limit), `app` (app-wide) and `export` — see common/throttle (036 B9).

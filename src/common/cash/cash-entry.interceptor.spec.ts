@@ -74,11 +74,71 @@ async function run(
     reflector,
     refusals as never | undefined,
   );
-  const result = interceptor.intercept(context, {
+  const result = await interceptor.intercept(context, {
     handle: () => of('handler ran'),
   });
   return lastValueFrom(result);
 }
+
+/** 038: a Prisma stand-in whose only job is to answer the company's cash-hiding setting. */
+function prismaHiding(hidden: boolean) {
+  const tx = {
+    $executeRaw: jest.fn(),
+    company: {
+      findUnique: jest.fn().mockResolvedValue({ hideCashTransactions: hidden }),
+    },
+  };
+  return { $transaction: (fn: (t: typeof tx) => unknown) => fn(tx) };
+}
+
+async function runHiding(
+  hidden: boolean,
+  request: Record<string, unknown>,
+): Promise<unknown> {
+  const { context, reflector } = contextFor(request);
+  const interceptor = new CashEntryInterceptor(
+    reflector,
+    undefined,
+    prismaHiding(hidden) as never,
+  );
+  const result = await interceptor.intercept(context, {
+    handle: () => of('handler ran'),
+  });
+  return lastValueFrom(result);
+}
+
+describe('CashEntryInterceptor with cash hidden for the company (038)', () => {
+  const cashPayment = {
+    method: 'POST',
+    url: '/inventory/payments',
+    body: { vendorId: 'v1', amount: 5000, paymentMode: 'cash' },
+  };
+
+  it('refuses a cash entry even from a CASH_ENTRY holder', async () => {
+    await expect(
+      runHiding(true, { user: CASHIER, ...cashPayment }),
+    ).rejects.toMatchObject({
+      response: { code: 'CASH_HIDDEN' },
+    });
+  });
+
+  it('lets the same cash entry through once hiding is off', async () => {
+    await expect(
+      runHiding(false, { user: CASHIER, ...cashPayment }),
+    ).resolves.toBe('handler ran');
+  });
+
+  it('leaves a bank payment alone while cash is hidden', async () => {
+    await expect(
+      runHiding(true, {
+        user: CLERK,
+        method: 'POST',
+        url: '/inventory/payments',
+        body: { vendorId: 'v1', amount: 5000, paymentMode: 'bank_transfer' },
+      }),
+    ).resolves.toBe('handler ran');
+  });
+});
 
 describe('CashEntryInterceptor', () => {
   it('refuses a cash payment from a caller without CASH_ENTRY', async () => {

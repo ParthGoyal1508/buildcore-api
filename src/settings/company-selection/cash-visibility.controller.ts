@@ -83,7 +83,7 @@ export class CashVisibilityController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Whether cash amounts are currently hidden' })
+  @ApiOperation({ summary: 'Whether cash transactions are currently hidden' })
   async current(
     @UserEntity() caller: AuthenticatedUser,
     @Query('companyId') companyId?: string,
@@ -104,12 +104,13 @@ export class CashVisibilityController {
 
   @Patch()
   @ApiOperation({
-    summary: 'Hide or show cash amounts across the application',
+    summary: 'Hide or show cash transactions across the application',
     description:
-      'A **display** control. FR-017: nothing is deleted or altered while it is on, and ' +
-      'turning it off restores every figure exactly. Amounts are returned as null with ' +
-      '`amountHidden: true` beside them rather than as zero — a zero is a figure, and a ' +
-      'spreadsheet summing a column cannot tell one from a hidden value.\n\n' +
+      'Hide **and** block (038). While on, no cash transaction of the company appears ' +
+      'anywhere — lists, details, totals, reports, exports, dashboard, notifications, ' +
+      'activity log — and every total is computed without cash; nobody, Super Admin ' +
+      'included, can record or change a cash transaction (403 `CASH_HIDDEN`). Nothing is ' +
+      'deleted or altered: turning it off restores everything exactly.\n\n' +
       'Super Admin only, and only with a live confirmation from ' +
       '`POST /auth/confirm-password` (purpose `cash-visibility`) in `X-Confirmation-Token`.',
   })

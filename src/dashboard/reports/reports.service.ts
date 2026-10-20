@@ -3,7 +3,11 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+
+import { CashPolicyService } from '../../common/cash/cash-policy';
+import { CASH_MODE_FIELDS, isCashMode } from '../../common/cash/cash-surfaces';
 
 import { parseDateOnly } from '../../hr/leave/leave-days';
 import type { Permission } from '@prisma/client';
@@ -11,6 +15,7 @@ import type { Permission } from '@prisma/client';
 import type { DashboardContext } from '../context';
 import {
   REPORT_PROVIDERS,
+  type ReportData,
   type ReportProvider,
   type ReportResult,
   type ReportRunParams,
@@ -33,6 +38,7 @@ export interface ReportTypeSummary {
 export class ReportsService {
   constructor(
     @Inject(REPORT_PROVIDERS) private readonly providers: ReportProvider[],
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
 
   /** Any one of a type's declared permissions, or no declaration at all. */
@@ -86,8 +92,23 @@ export class ReportsService {
         },
       };
     }
-    return provider.run(ctx, params);
+    const data = await provider.run(ctx, params);
+    // 038 backstop, for the run and the export alike (the export calls this, and its `@Res()`
+    // response never reaches the masking interceptor). The sources these reports read already
+    // leave cash out; a row that still says it is cash is dropped, so a total summed from the rows
+    // leaves it out too.
+    return this.cash && (await this.cash.isHidden(ctx.companyId))
+      ? withoutCashRows(data)
+      : data;
   }
+}
+
+/** The report without any row whose payment mode names cash (038 FR-001, FR-002). */
+export function withoutCashRows(data: ReportData): ReportData {
+  const rows = data.rows.filter(
+    (row) => !CASH_MODE_FIELDS.some((field) => isCashMode(row[field])),
+  );
+  return rows.length === data.rows.length ? data : { ...data, rows };
 }
 
 /** The longest range one report run covers (036 E2) — the attendance report reads one day per day. */

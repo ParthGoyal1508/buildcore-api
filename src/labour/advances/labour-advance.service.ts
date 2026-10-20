@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AdvanceStatus,
@@ -17,6 +18,10 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
+import {
+  CashPolicyService,
+  cashHiddenError,
+} from '../../common/cash/cash-policy';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { SkillCategoriesService } from '../../settings/skill-categories/skill-categories.service';
 import { LabourRefsService } from '../labour-refs.service';
@@ -94,26 +99,46 @@ export class LabourAdvanceService {
     private readonly refs: LabourRefsService,
     private readonly skillCategories: SkillCategoriesService,
     private readonly siteRates: SiteWageRateService,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
+
+  /**
+   * 038: an advance is always paid in cash at site, so while cash is hidden for its company no
+   * advance is shown, raised, approved or disbursed.
+   */
+  private cashHidden(companyId: string | null | undefined): Promise<boolean> {
+    return this.cash ? this.cash.isHidden(companyId) : Promise.resolve(false);
+  }
+
+  private async assertAdvancesAllowed(
+    companyId: string | null | undefined,
+  ): Promise<void> {
+    if (await this.cashHidden(companyId)) throw cashHiddenError();
+  }
 
   async findAll(
     caller: AuthenticatedUser,
     query: { companyId?: string; workerId?: string; status?: AdvanceStatus },
   ): Promise<AdvanceView[]> {
-    const rows = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      (tx) =>
-        tx.labourAdvance.findMany({
-          where: {
-            ...companyScope(caller, query.companyId),
-            deletedAt: null,
-            ...(query.workerId ? { workerId: query.workerId } : {}),
-            ...(query.status ? { status: query.status } : {}),
-          },
-          orderBy: { createdAt: 'desc' },
-        }),
+    let rows = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.labourAdvance.findMany({
+        where: {
+          ...companyScope(caller, query.companyId),
+          deletedAt: null,
+          ...(query.workerId ? { workerId: query.workerId } : {}),
+          ...(query.status ? { status: query.status } : {}),
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
     );
+    // 038: advances of a company hiding cash are not listed.
+    const hidden = this.cash
+      ? await this.cash.hiddenAmong(rows.map((r) => r.companyId))
+      : new Set<string>();
+    if (hidden.size > 0) {
+      rows = rows.filter((r) => !hidden.has(r.companyId));
+    }
 
     const workers = await this.workerSummaries(
       caller,
@@ -135,6 +160,9 @@ export class LabourAdvanceService {
       throw new NotFoundException(`Advance ${id} not found`);
     }
     assertInScope(caller, row, `Advance ${id}`);
+    if (await this.cashHidden(row.companyId)) {
+      throw new NotFoundException(`Advance ${id} not found`);
+    }
 
     const workers = await this.workerSummaries(caller, [row.workerId]);
     const people = await this.refs.userNames([row.createdBy, row.approvedBy]);
@@ -184,6 +212,7 @@ export class LabourAdvanceService {
     if (!companyId) {
       throw new NotFoundException('Company not found');
     }
+    await this.assertAdvancesAllowed(companyId);
     const termsProblem = advanceTermsProblem(
       dto.amount,
       dto.recoveryInstalments,
@@ -244,6 +273,7 @@ export class LabourAdvanceService {
           throw new NotFoundException(`Advance ${id} not found`);
         }
         assertInScope(caller, existing, `Advance ${id}`);
+        await this.assertAdvancesAllowed(existing.companyId);
         if (existing.status !== AdvanceStatus.pending) {
           throw new ConflictException('Only a pending advance can be approved');
         }
@@ -288,6 +318,7 @@ export class LabourAdvanceService {
           throw new NotFoundException(`Advance ${id} not found`);
         }
         assertInScope(caller, existing, `Advance ${id}`);
+        await this.assertAdvancesAllowed(existing.companyId);
         if (existing.status !== AdvanceStatus.approved) {
           throw new ConflictException(
             'Only an approved advance can be disbursed',

@@ -1,6 +1,10 @@
 /**
  * Every place this product holds a cash amount (019 FR-014, FR-015, plan D6).
  *
+ * Since 038 these lists are the **backstop**, not the rule: with cash hidden, the owning modules
+ * leave cash records out of every read and every total (`cash-policy.ts`), and the masking that
+ * uses these fields only catches a cash row some surface still lets through.
+ *
  * One exported constant rather than a condition repeated per module (Principle III), and a
  * **closed list**, which is a liability: a module added later holds cash, nobody updates this,
  * and a figure appears on a screen somebody was told would hide it. `cash-surfaces.spec.ts`
@@ -66,7 +70,15 @@ export const CASH_MODE_FIELDS: readonly string[] = [
   'instrument',
 ];
 
-/** True when a value names a cash payment mode. */
+/**
+ * True when a value names a cash payment mode — in any case and ignoring surrounding spaces (038).
+ * The enums spell it `cash`, but free-text mode fields do not: an equipment disposal's
+ * `paymentMode` and a bill payment's bank `mode` hold what a person typed or picked, `Cash` or
+ * `CASH`, and an exact match let those through.
+ */
 export function isCashMode(value: unknown): boolean {
-  return typeof value === 'string' && CASH_ENUM_VALUES.includes(value);
+  return (
+    typeof value === 'string' &&
+    CASH_ENUM_VALUES.includes(value.trim().toLowerCase())
+  );
 }
