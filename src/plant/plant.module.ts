@@ -82,7 +82,8 @@ import { EquipmentDisposalService } from './disposal/equipment-disposal.service'
     // item, so this module submits into the spine rather than keeping an approval of its own.
     ApprovalsModule,
     SettingsModule,
-    ProjectsModule,
+    // In the projects → hr → payroll → plant → inventory → partners cycle (039).
+    forwardRef(() => ProjectsModule),
     PartnersModule,
     forwardRef(() => HrModule),
     InventoryModule,

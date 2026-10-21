@@ -122,8 +122,22 @@ function isAllowed(line: string): boolean {
     file === 'src/inventory/payments/dto/payment.dto.spec.ts'
   )
     return true;
+  // Reads that hide cash (038, 039): the filters that leave a hidden company's cash out of every
+  // list and total, and the activity read that counts cash entries. They select by cash; they
+  // never record it. Their specs and two fixtures assert that behaviour with a cash value.
+  if (
+    file === 'src/inventory/payments/cash-hiding.ts' ||
+    file === 'src/inventory/payments/cash-hiding.spec.ts' ||
+    file === 'src/dashboard/activity-log/cash-entries.ts' ||
+    file === 'src/plant/disposal/equipment-disposal.service.spec.ts' ||
+    file === 'src/plant/maintenance/job-card-flow.service.spec.ts'
+  )
+    return true;
   const trimmed = code.trim();
   if (trimmed.startsWith('*') || trimmed.startsWith('//')) return true;
+
+  // A query filter excluding cash, `mode: { not: …Mode.cash }` — a read, never a write.
+  if (/\bnot:\s*\w*Mode\.\w+/.test(code)) return true;
 
   // A comparison, not a write. `dto.paymentMode === LabourPaymentMode.cash` is the service
   // reading what the caller sent — which the interceptor has already gated.

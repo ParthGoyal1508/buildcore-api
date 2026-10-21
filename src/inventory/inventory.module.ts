@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { LettersModule } from '../letters/letters.module';
@@ -54,7 +54,13 @@ import { TransfersService } from './transfers/transfers.service';
 @Module({
   // `LettersModule` for 036 M9: a purchase order is a letter, and its lines are read through
   // `LettersService.listForSubject` — never from `shared.IssuedLetter` directly.
-  imports: [SettingsModule, ProjectsModule, PartnersModule, LettersModule],
+  // forwardRef: ProjectsModule reaches back here through hr → payroll → plant (039).
+  imports: [
+    SettingsModule,
+    forwardRef(() => ProjectsModule),
+    PartnersModule,
+    LettersModule,
+  ],
   controllers: [
     CategoriesController,
     ItemsController,

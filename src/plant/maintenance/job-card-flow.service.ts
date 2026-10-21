@@ -698,15 +698,14 @@ export class JobCardFlowService {
           orderBy: { createdAt: 'asc' },
         }),
     );
-    const visible = events.filter(
-      (e) =>
-        !(
-          cashHidden &&
-          e.kind === 'payment' &&
-          (e.detail as { mode?: string } | null)?.mode ===
-            JobCardPaymentMode.cash
-        ),
-    );
+    const visible = events.filter((e) => {
+      const mode = (e.detail as { mode?: string } | null)?.mode;
+      return !(
+        cashHidden &&
+        e.kind === 'payment' &&
+        mode === JobCardPaymentMode.cash
+      );
+    });
     const names = await actorNamesFor(
       this.prisma,
       visible.map((e) => e.actorUserId),
