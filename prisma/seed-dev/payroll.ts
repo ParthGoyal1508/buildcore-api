@@ -541,7 +541,6 @@ async function buildHistory(
   const { prisma, company } = ctx;
   const companyId = company.id;
   const makerCaller = callerOf(people.maker, companyId);
-  const directorCaller = callerOf(people.director, companyId);
   const steps: TimedStep[] = [];
   const counts: ModuleResult = {};
   const bump = (k: string, n = 1) => (counts[k] = (counts[k] ?? 0) + n);
@@ -563,7 +562,12 @@ async function buildHistory(
   const employeeFor = (seq: string) =>
     byCode.get(`${company.shortCode}-${seq}`);
 
-  // ── Loans: recorded by HR, approved by the director ──
+  // ── Loans: recorded by HR, approved on their chain by Head Office (2026-10-20) ──
+  // The chain's default level is Head Office; its approver must not be the maker, so a company
+  // with a single Head Office user leaves its loans and advances pending, as a real one would.
+  const hoCaller = callerOf(people.hrApprover, companyId);
+  const hoUser = approverOf(people.hrApprover, companyId);
+  const hoMayApprove = people.hrApprover.userId !== people.maker.userId;
   for (const plan of LOANS[company.shortCode] ?? []) {
     const employeeId = employeeFor(plan.code);
     if (!employeeId) continue;
@@ -586,8 +590,12 @@ async function buildHistory(
           data: { createdAt, updatedAt: createdAt },
         });
         await stampAudit(since, createdAt, [loan.id]);
+        if (!hoMayApprove) {
+          bump('loans');
+          return;
+        }
         const since2 = sinceNow();
-        await s.loans.approve(directorCaller, loan.id);
+        await s.loans.approve(hoCaller, loan.id, hoUser);
         await prisma.loan.update({
           where: { id: loan.id },
           data: { updatedAt: approvedAt },
@@ -599,7 +607,7 @@ async function buildHistory(
     });
   }
 
-  // ── Salary advances: recorded by HR, approved (and paid out) by the director ──
+  // ── Salary advances: recorded by HR, approved (and paid out) on their chain by Head Office ──
   for (const plan of ADVANCES[company.shortCode] ?? []) {
     const employeeId = employeeFor(plan.code);
     if (!employeeId) continue;
@@ -621,9 +629,9 @@ async function buildHistory(
           data: { createdAt, updatedAt: createdAt },
         });
         await stampAudit(since, createdAt, [advance.id]);
-        if (plan.approved) {
+        if (plan.approved && hoMayApprove) {
           const since2 = sinceNow();
-          await s.advances.approve(directorCaller, advance.id);
+          await s.advances.approve(hoCaller, advance.id, hoUser);
           await prisma.salaryAdvance.update({
             where: { id: advance.id },
             data: { updatedAt: approvedAt, disbursedOn: d(plan.created) },

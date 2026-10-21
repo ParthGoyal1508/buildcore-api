@@ -104,6 +104,12 @@ export const webRoutes = {
    */
   hrAttendance: (): string => '/dashboard/hr/attendance',
 
+  /** The 2026-10-20 approval flows' own screens; none has a page per item. */
+  hrReimbursements: (): string => '/dashboard/hr/reimbursements',
+  hrLoans: (): string => '/dashboard/hr/loans',
+  hrAdvances: (): string => '/dashboard/hr/advances',
+  labourAdvances: (): string => '/dashboard/labour/advances',
+
   /** `app/dashboard/hr/payroll/[id]/page.tsx` — the run itself, not `/payroll/runs/:id`. */
   payrollRun: (runId: string): string => `/dashboard/hr/payroll/${runId}`,
 

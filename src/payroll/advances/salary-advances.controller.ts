@@ -28,6 +28,7 @@ import {
   CreateSalaryAdvanceDto,
   ListAdvancesQueryDto,
 } from './dto/salary-advance.dto';
+import { RejectAdvanceDto } from './dto/reject-advance.dto';
 import { SalaryAdvancesService } from './salary-advances.service';
 import { resolveCompanyId } from '../../settings/company-scope';
 
@@ -100,6 +101,27 @@ export class SalaryAdvancesController {
     @Req() request: Request,
     @Param('id') id: string,
   ) {
-    return this.advances.approve(callerFrom(user, request), id);
+    return this.advances.approve(callerFrom(user, request), id, user);
+  }
+
+  @Patch(':id/reject')
+  @ApiOperation({
+    summary: 'Reject a pending advance (2026-10-20)',
+    description:
+      'A decision on the advance’s approval chain. It is never paid or recovered. A reason ' +
+      'is required.',
+  })
+  async reject(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Body() dto: RejectAdvanceDto,
+  ) {
+    return this.advances.reject(
+      callerFrom(user, request),
+      id,
+      dto.reason,
+      user,
+    );
   }
 }

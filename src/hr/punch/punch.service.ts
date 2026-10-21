@@ -30,7 +30,7 @@ import type {
   SettingsConfig,
   WorkspaceConfig,
 } from '../../common/configs/config.interface';
-import { withRlsContext } from '../../common/prisma/rls-context';
+import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { CompaniesService } from '../../settings/companies/companies.service';
 import { SitesService } from '../../projects/sites/sites.service';
@@ -750,5 +750,36 @@ export class PunchService {
       punch,
       approval: states.get(punch.id) ?? null,
     }));
+  }
+
+  /**
+   * The selfie behind a flagged punch, for whoever decides the exception (2026-10-20). Null for a
+   * punch with no capture. A face that did not match is the very thing being decided, and the
+   * approver had no way to look at it.
+   */
+  async exceptionPhoto(
+    ctx: RlsContext,
+    punchId: string,
+  ): Promise<Buffer | null> {
+    const ref = await this.exceptionPhotoRef(ctx, punchId);
+    return ref ? this.storage.get(ref) : null;
+  }
+
+  /** Whether `exceptionPhoto` has a selfie to give — without fetching it. */
+  async hasExceptionPhoto(ctx: RlsContext, punchId: string): Promise<boolean> {
+    return (await this.exceptionPhotoRef(ctx, punchId)) !== null;
+  }
+
+  private async exceptionPhotoRef(
+    ctx: RlsContext,
+    punchId: string,
+  ): Promise<string | null> {
+    const punch = await withRlsContext(this.prisma, ctx, (tx) =>
+      tx.punchRecord.findFirst({
+        where: { id: punchId },
+        select: { photoRef: true },
+      }),
+    );
+    return punch?.photoRef ?? null;
   }
 }

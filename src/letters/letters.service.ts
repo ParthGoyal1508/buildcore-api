@@ -724,6 +724,60 @@ export class LettersService {
     const letter = await this.requireLetter(ctx, companyId, letterId);
     this.assertMayActOnKind(caller, letter.letterKind.key);
     this.assertNotIssued(letter);
+    return this.renderComposed(caller, ctx, companyId, letter);
+  }
+
+  /**
+   * The letter its approval is about, for the Approvals page (2026-10-20): the issued document
+   * once there is one, the draft rendering before that.
+   *
+   * No letter-kind permission check — the caller's right to read it was established against the
+   * approval itself (`ApprovalService.mayViewFiles`), and a Director approving a work order need
+   * not hold the work-order permission. Null when `letterId` is not a letter under that approval.
+   */
+  async approvalDocument(
+    caller: AuthenticatedUser,
+    letterId: string,
+    actionType: string,
+  ): Promise<Buffer | null> {
+    const found = await this.approvalLetter(caller, letterId, actionType);
+    if (!found) return null;
+    const { letter, ctx, companyId } = found;
+    if (letter.renderedRef) return this.storage.get(letter.renderedRef);
+    return this.renderComposed(caller, ctx, companyId, letter);
+  }
+
+  /** Whether `approvalDocument` has a letter to give — without rendering it. */
+  async hasApprovalDocument(
+    caller: AuthenticatedUser,
+    letterId: string,
+    actionType: string,
+  ): Promise<boolean> {
+    return (await this.approvalLetter(caller, letterId, actionType)) !== null;
+  }
+
+  private async approvalLetter(
+    caller: AuthenticatedUser,
+    letterId: string,
+    actionType: string,
+  ) {
+    const companyId = this.companyOf(caller);
+    const ctx = rlsContextFor(caller);
+    const letter = await this.requireLetter(ctx, companyId, letterId).catch(
+      () => null,
+    );
+    if (!letter || letter.letterKind.approvalActionType !== actionType) {
+      return null;
+    }
+    return { letter, ctx, companyId };
+  }
+
+  private async renderComposed(
+    caller: AuthenticatedUser,
+    ctx: ReturnType<typeof rlsContextFor>,
+    companyId: string,
+    letter: LetterRow,
+  ): Promise<Buffer> {
     const variables = await this.finalVariables(
       caller,
       ctx,

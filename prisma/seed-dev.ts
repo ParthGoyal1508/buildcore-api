@@ -5558,9 +5558,12 @@ async function main() {
  * Labour Supervisor.
  *
  * A company is seeded whole or not at all, so a login added to its staff list later never reaches
- * a database seeded before it. This creates the missing account — without an employee record,
- * which needs the company's masters and payroll set up exactly as the first run did — so every
- * role can still be signed in to. Keyed on the username, so a re-run finds it and does nothing.
+ * a database seeded before it. This creates the missing account, and the employee record behind it
+ * — the way the first run builds one: the next code in the company's series, its department and
+ * designation, a site, the general shift, the usual salary split and this year's leave balances —
+ * so My Workspace, attendance and payroll treat the person as staff. A login found without an
+ * employee (made by an earlier run of this top-up) gets one too. Keyed on the username and on the
+ * user's link, so a re-run does nothing.
  *
  * A Labour Supervisor registers labour and marks attendance only at the sites assigned to them
  * (031), and with none assigned their whole module is empty. One holding no site is given the
@@ -5591,13 +5594,16 @@ async function topUpRoleLogins(
       if (!s.login) continue;
       const roleId = roles.get(s.login.role);
       if (!roleId) continue;
+      const email = `${s.login.username}@${spec.emailDomain}`;
       const exists = await prisma.user.findUnique({
         where: { username: s.login.username },
         select: { id: true },
       });
-      if (exists) continue;
-      const email = `${s.login.username}@${spec.emailDomain}`;
-      await prisma.user.create({
+      if (exists) {
+        await ensureEmployeeFor(exists.id, company.id, spec, s, email);
+        continue;
+      }
+      const user = await prisma.user.create({
         data: {
           email,
           username: s.login.username,
@@ -5610,6 +5616,7 @@ async function topUpRoleLogins(
           userRoles: { create: { roleId, companyId: company.id } },
         },
       });
+      await ensureEmployeeFor(user.id, company.id, spec, s, email);
       logins.push({
         company: spec.name,
         name: `${s.first} ${s.last}`,
@@ -5651,6 +5658,108 @@ async function topUpRoleLogins(
       });
     }
   }
+}
+
+/**
+ * The employee record for a topped-up login (see `topUpRoleLogins`). Built from the staff entry the
+ * way the company's first run builds one; does nothing if the user already has an employee.
+ */
+async function ensureEmployeeFor(
+  userId: string,
+  companyId: string,
+  spec: (typeof COMPANIES)[number],
+  s: (typeof COMPANIES)[number]['staff'][number],
+  email: string,
+): Promise<void> {
+  if (
+    await prisma.employee.findUnique({
+      where: { userId },
+      select: { id: true },
+    })
+  )
+    return;
+  const [dept, desig, shift, sites] = await Promise.all([
+    prisma.department.findFirst({ where: { companyId, name: s.dept } }),
+    prisma.designation.findFirst({ where: { companyId, name: s.desig } }),
+    prisma.shift.findFirst({
+      where: { companyId, name: { startsWith: 'General' } },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.site.findMany({
+      where: { companyId, projectId: { not: null }, status: 'active' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    }),
+  ]);
+  if (!shift || sites.length === 0) {
+    console.warn(
+      `    ${s.first} ${s.last}: no shift or site to place them at — skipped`,
+    );
+    return;
+  }
+  // The next code in the company's series, taken the way the app's generator takes it.
+  const seq = await prisma.employeeCodeSequence.upsert({
+    where: { companyId },
+    create: { companyId, lastNumber: 1 },
+    update: { lastNumber: { increment: 1 } },
+  });
+  const isManager = s.desig === 'Project Manager' || s.desig === 'Director';
+  const gross = s.basic / 0.5;
+  const employee = await prisma.employee.create({
+    data: {
+      userId,
+      companyId,
+      siteId: sites[seq.lastNumber % sites.length].id,
+      shiftId: shift.id,
+      employeeCode: `${spec.shortCode}-${String(seq.lastNumber).padStart(
+        4,
+        '0',
+      )}`,
+      firstName: s.first,
+      lastName: s.last,
+      gender: s.gender,
+      departmentId: dept?.id ?? null,
+      designationId: desig?.id ?? null,
+      employmentType: 'full_time',
+      dateOfJoining: d(s.joined),
+      confirmationDate: d(s.joined),
+      calculationMode: 'monthly',
+      mobile: s.mobile,
+      email,
+      basic: money(s.basic),
+      hra: money(Math.round(s.basic * 0.4)),
+      conveyanceAllowance: money(1600),
+      siteAllowance: money(isManager ? 5000 : 2500),
+      specialAllowance: money(Math.round(gross - s.basic * 1.4 - 4100)),
+      pfApplicable: true,
+      esicApplicable: gross <= 21000,
+      paymentMode: 'bank',
+      presentCity: spec.city,
+      presentState: spec.state,
+      presentPinCode: spec.pin,
+      idCardIssued: true,
+      safetyInductionCompleted: true,
+      bankVerificationDone: true,
+      siteAccessGranted: true,
+    },
+  });
+  await prisma.leaveBalance.createMany({
+    data: (
+      [
+        ['earned', 12],
+        ['casual', 6],
+        ['sick', 6],
+        ['lwp', 0],
+      ] as const
+    ).map(([leaveType, opening]) => ({
+      employeeId: employee.id,
+      leaveType,
+      financialYear: '2026-27',
+      opening: money(opening),
+    })),
+    skipDuplicates: true,
+  });
+  console.log(`    ${s.first} ${s.last} → employee ${employee.employeeCode}`);
 }
 
 main()

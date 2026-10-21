@@ -64,7 +64,9 @@ export class ApprovalHistoryQueryDto {
    * last step for one still open — which is also what the list is sorted by (D2). Omit both for
    * every date, as before.
    */
-  @ApiPropertyOptional({ description: 'From this day (YYYY-MM-DD), inclusive.' })
+  @ApiPropertyOptional({
+    description: 'From this day (YYYY-MM-DD), inclusive.',
+  })
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'from must be a YYYY-MM-DD date' })
   from?: string;

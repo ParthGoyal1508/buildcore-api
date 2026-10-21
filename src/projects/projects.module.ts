@@ -236,6 +236,10 @@ import { ProjectLetterSource } from './portfolio/project-letter-source';
   // `updateDoneQty` opens its own transaction and a report must move every line or none, and
   // `setDoneQtyAbsolute`, which is reconciliation repair's one exception to relative movement.
   exports: [
+    // For the Approvals page's files (2026-10-20): a DWR's attachments and a bill package's PDF,
+    // for their approver.
+    DwrService,
+    BillPackageViewBuilder,
     BoqService,
     SitesService,
     ProjectsService,
