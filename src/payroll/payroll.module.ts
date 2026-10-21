@@ -16,6 +16,7 @@ import { SalaryAdvancesController } from './advances/salary-advances.controller'
 import { SalaryAdvancesService } from './advances/salary-advances.service';
 import { PayrollRegisterController } from './registers/payroll-register.controller';
 import { PayrollRegisterService } from './registers/payroll-register.service';
+import { StatutoryRegisterService } from './registers/statutory-register.service';
 import { TdsController } from './tds/tds.controller';
 import { TdsService } from './tds/tds.service';
 import { ApprovalsModule } from '../approvals/approvals.module';
@@ -100,6 +101,7 @@ import { SalaryService } from './salary/salary.service';
     TdsService,
     SalaryAdvancesService,
     PayrollRegisterService,
+    StatutoryRegisterService,
     PayrollScheduleService,
     PayrollScheduleCron,
     AuditLogService,
