@@ -122,6 +122,7 @@ export const MODULE_ENTITY_TYPES: Record<ActivityModule, AuditEntityType[]> = {
   inventory: [
     AuditEntityType.ITEM_CATEGORY,
     AuditEntityType.ITEM,
+    AuditEntityType.COMPOSITE_ITEM,
     AuditEntityType.PURCHASE,
     AuditEntityType.GOODS_RECEIPT_NOTE,
     AuditEntityType.ISSUE,
@@ -204,6 +205,7 @@ export const MODULE_PERMISSIONS: Record<ActivityModule, Permission[]> = {
   machinery: [
     Permission.MACHINERY,
     Permission.MAINTENANCE,
+    Permission.MAINTENANCE_PAY,
     Permission.LOGBOOK,
     Permission.FUEL,
     Permission.HIRE_BILLS,

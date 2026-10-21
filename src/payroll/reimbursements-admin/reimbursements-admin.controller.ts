@@ -123,7 +123,7 @@ export class ReimbursementsAdminController {
     @Param('id') id: string,
     @Body() dto: ApproveClaimDto,
   ) {
-    return this.claims.approveClaim(callerFrom(user, request), id, dto);
+    return this.claims.approveClaim(callerFrom(user, request), id, dto, user);
   }
 
   @Patch(':id/reject')
@@ -139,7 +139,7 @@ export class ReimbursementsAdminController {
     @Param('id') id: string,
     @Body() dto: RejectClaimDto,
   ) {
-    return this.claims.rejectClaim(callerFrom(user, request), id, dto);
+    return this.claims.rejectClaim(callerFrom(user, request), id, dto, user);
   }
 
   @Patch(':id/pay')

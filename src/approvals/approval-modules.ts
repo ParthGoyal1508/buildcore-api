@@ -7,13 +7,19 @@ import {
   ACTION_CLIENT_BILL,
   ACTION_DIRECTOR_FINAL_SET_CHANGE,
   ACTION_DWR,
+  ACTION_EMPLOYEE_LOAN,
   ACTION_EXIT_CLEARANCE_WAIVER,
   ACTION_FINAL_SETTLEMENT,
+  ACTION_LABOUR_ADVANCE,
+  ACTION_LEAVE_APPLICATION,
   ACTION_OPERATOR_FUEL_RECOVERY,
+  ACTION_JOB_CARD,
   ACTION_PAYMENT_RELEASE,
   ACTION_PAYROLL_RUN,
   ACTION_PURCHASE_RATE_CHANGE,
   ACTION_RA_BILL,
+  ACTION_REIMBURSEMENT_CLAIM,
+  ACTION_SALARY_ADVANCE,
   ACTION_WORK_ORDER_AWARD,
 } from './default-chains';
 
@@ -83,13 +89,25 @@ export const APPROVAL_MODULES: readonly ApprovalModule[] = [
     ],
   },
   {
+    key: 'leave',
+    label: 'Leave & claims',
+    actionTypes: [ACTION_LEAVE_APPLICATION, ACTION_REIMBURSEMENT_CLAIM],
+  },
+  {
     key: 'payroll',
     label: 'Payroll & exits',
     actionTypes: [
       ACTION_PAYROLL_RUN,
       ACTION_FINAL_SETTLEMENT,
       ACTION_EXIT_CLEARANCE_WAIVER,
+      ACTION_EMPLOYEE_LOAN,
+      ACTION_SALARY_ADVANCE,
     ],
+  },
+  {
+    key: 'labour',
+    label: 'Labour',
+    actionTypes: [ACTION_LABOUR_ADVANCE],
   },
   {
     key: 'inventory',
@@ -101,7 +119,7 @@ export const APPROVAL_MODULES: readonly ApprovalModule[] = [
   {
     key: 'plant',
     label: 'Plant & machinery',
-    actionTypes: [ACTION_OPERATOR_FUEL_RECOVERY],
+    actionTypes: [ACTION_OPERATOR_FUEL_RECOVERY, ACTION_JOB_CARD],
   },
   {
     key: 'settings',

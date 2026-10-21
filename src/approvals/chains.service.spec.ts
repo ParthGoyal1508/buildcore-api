@@ -689,9 +689,14 @@ describe('ChainsService', () => {
         });
       }
 
-      // Payroll keeps its three levels — a one-level payroll chain would drop the Site
-      // Incharge and HR levels the client asked for (Note 7).
-      expect(byAction.get('payroll_run').levels.create).toHaveLength(3);
+      // Payroll goes to the Director alone since 039 (2026-10-20): it is generated for the whole
+      // company, so the Site Incharge level never fitted it.
+      expect(byAction.get('payroll_run').levels.create).toEqual([
+        expect.objectContaining({ slotKey: 'final', isFinalAuthority: true }),
+      ]);
+      expect(byAction.get('job_card').levels.create).toEqual([
+        expect.objectContaining({ slotKey: 'final', label: 'Head Office' }),
+      ]);
     });
 
     it('is idempotent — a company that already has the chain is left alone', async () => {

@@ -104,6 +104,12 @@ export const webRoutes = {
    */
   hrAttendance: (): string => '/dashboard/hr/attendance',
 
+  /** The 2026-10-20 approval flows' own screens; none has a page per item. */
+  hrReimbursements: (): string => '/dashboard/hr/reimbursements',
+  hrLoans: (): string => '/dashboard/hr/loans',
+  hrAdvances: (): string => '/dashboard/hr/advances',
+  labourAdvances: (): string => '/dashboard/labour/advances',
+
   /** `app/dashboard/hr/payroll/[id]/page.tsx` — the run itself, not `/payroll/runs/:id`. */
   payrollRun: (runId: string): string => `/dashboard/hr/payroll/${runId}`,
 
@@ -114,6 +120,13 @@ export const webRoutes = {
    * calls them "the part of this screen somebody has to act on".
    */
   plantFuel: (): string => '/dashboard/plant/fuel',
+
+  /**
+   * `app/dashboard/plant/maintenance/page.tsx`, which opens the job card named by `?jobCard=` (039).
+   * The page reads that parameter, so a Head Office reviewer lands on the card itself.
+   */
+  plantMaintenanceJobCard: (jobId: string): string =>
+    `/dashboard/plant/maintenance?jobCard=${encodeURIComponent(jobId)}`,
 
   /**
    * `app/dashboard/settings/approvals/page.tsx`, which carries the director-final set and its

@@ -35,15 +35,44 @@ const UNMIGRATED = [
     what: 'labour payment sheet',
     file: 'src/labour/payment-sheets/payment-sheet.service.ts',
   },
-  {
-    what: 'labour advance',
-    file: 'src/labour/advances/labour-advance.service.ts',
-  },
+  // The labour advance left this list on 2026-10-20 — see `MIGRATED` below.
   {
     what: 'recruitment requisition',
     file: 'src/recruitment/requisitions/requisition.service.ts',
   },
 ];
+
+/**
+ * Single-step approvals moved onto the spine on purpose (2026-10-20: "Everything which has approval
+ * should be there in the settings"). The opposite assertion to `UNMIGRATED`: each must now submit
+ * to its chain and decide through it, so a half-migration — a module that kept deciding on its own
+ * beside the chain — fails here too.
+ */
+const MIGRATED = [
+  { what: 'leave application', file: 'src/hr/leave/leave.service.ts' },
+  {
+    what: 'reimbursement claim (admin decision)',
+    file: 'src/payroll/reimbursements-admin/reimbursements-admin.service.ts',
+  },
+  { what: 'employee loan', file: 'src/payroll/loans/loans.service.ts' },
+  {
+    what: 'salary advance',
+    file: 'src/payroll/advances/salary-advances.service.ts',
+  },
+  {
+    what: 'labour advance',
+    file: 'src/labour/advances/labour-advance.service.ts',
+  },
+];
+
+describe('2026-10-20 — migrated single-step approvals decide on their chain', () => {
+  it.each(MIGRATED)('the $what decides through the spine', ({ file }) => {
+    const source = readFileSync(join(REPO_ROOT, file), 'utf8');
+    expect(source).toContain('approvals.decideByEntity');
+    expect(source).toContain('APPROVAL_COMPLETED_EVENT');
+    expect(source).toContain('APPROVAL_REJECTED_EVENT');
+  });
+});
 
 describe('FR-022 — unmigrated modules keep their own approvals', () => {
   it.each(UNMIGRATED)(
@@ -538,6 +567,10 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // **Verified by grep: nothing under it calls `ApprovalService` or `approvals.submit`** —
           // a guarantee is recorded and tracked, never submitted for approval.
           ':(exclude)src/projects/bank-guarantees',
+          // 2026-10-20: the labour advance moved onto its approval chain on purpose, with the
+          // module wiring that needs. It is asserted by `MIGRATED` above instead.
+          ':(exclude)src/labour/advances',
+          ':(exclude)src/labour/labour.module.ts',
         ],
         {
           cwd: REPO_ROOT,

@@ -16,8 +16,10 @@ import {
 import { PrismaService } from 'nestjs-prisma';
 
 import { ApprovalService } from '../../approvals/approvals.service';
+import { ChainsService } from '../../approvals/chains.service';
 import { ACTION_PAYROLL_RUN } from '../../approvals/default-chains';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { actorNamesFor } from '../../common/actor-name';
 import type { HrPayrollConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
@@ -29,9 +31,12 @@ import { ReimbursementsAdminService } from '../reimbursements-admin/reimbursemen
 import { SalaryAdvancesService } from '../advances/salary-advances.service';
 import { TdsService } from '../tds/tds.service';
 import {
+  EDITABLE_LINE_FIELDS,
   computePayrollLine,
+  netPayForLine,
   type AttendanceInput,
   type CompanyPayrollRates,
+  type EditableLineField,
   type EmployeePayrollInput,
 } from './payroll-computation';
 
@@ -72,6 +77,8 @@ export class PayrollEngineService {
      * the same gate the bank sheet uses, through the same single implementation.
      */
     private readonly approvals: ApprovalService,
+    /** 039: whether the company has a payroll chain at all, for the process-needs-approval rule. */
+    private readonly chains: ChainsService,
   ) {
     this.hrPayroll = configService.get<HrPayrollConfig>('hrPayroll');
   }
@@ -82,8 +89,22 @@ export class PayrollEngineService {
    * Regenerating a Draft replaces its line items — an admin correcting attendance
    * and re-running is the normal path. A Processed or Paid run is immutable and
    * refuses (FR-015).
+   *
+   * 039: a draft with the Director (pending) or already approved by them refuses too — the
+   * figures in front of the Director must be the figures that get paid. A draft with hand edits
+   * refuses with `PAYROLL_RUN_HAS_EDITS` unless `discardEdits` is passed: a regeneration replaces
+   * every line, and wiping justified corrections because somebody pressed Generate again would be
+   * silent loss of exactly the work the edit history records. With `discardEdits` the corrections
+   * go but their history stays (`PayrollLineItemEdit.lineItemId` is set null, not cascaded). A returned run's chain is abandoned
+   * once the new lines are written, since the Director's remarks were about lines that no longer
+   * exist; HR sends the new figures afresh.
    */
-  async generate(caller: Caller, companyId: string, period: string) {
+  async generate(
+    caller: Caller,
+    companyId: string,
+    period: string,
+    options: { discardEdits?: boolean } = {},
+  ) {
     const { year, month } = this.parsePeriod(period);
 
     const existing = await withRlsContext(this.prisma, caller.rls, (tx) =>
@@ -95,6 +116,42 @@ export class PayrollEngineService {
       throw new ConflictException(
         `Payroll for ${period} is already ${existing.status} and cannot be regenerated.`,
       );
+    }
+
+    let abandonLiveApproval = false;
+    let discardedEditedLines = 0;
+    if (existing) {
+      const approval = await this.approvals.stateOfSystem(
+        ACTION_PAYROLL_RUN,
+        existing.id,
+        companyId,
+      );
+      assertApprovalAllowsChange(approval?.state ?? null, 'regenerated');
+      abandonLiveApproval = approval?.state === 'returned';
+
+      discardedEditedLines = await withRlsContext(
+        this.prisma,
+        caller.rls,
+        (tx) =>
+          tx.payrollLineItem.count({
+            where: {
+              payrollRunId: existing.id,
+              NOT: { editedFields: { isEmpty: true } },
+            },
+          }),
+      );
+      if (discardedEditedLines > 0 && !options.discardEdits) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PAYROLL_RUN_HAS_EDITS',
+          editedLineCount: discardedEditedLines,
+          message:
+            `${discardedEditedLines} line${
+              discardedEditedLines === 1 ? ' has' : 's have'
+            } been corrected by hand in this draft. Regenerating replaces every line and ` +
+            `discards those corrections — confirm that to go ahead.`,
+        });
+      }
     }
 
     const company = await this.companies.getPayrollRates(companyId);
@@ -395,11 +452,24 @@ export class PayrollEngineService {
       throw error;
     });
 
+    if (abandonLiveApproval) {
+      await this.approvals.abandon(
+        ACTION_PAYROLL_RUN,
+        run.id,
+        companyId,
+        'Regenerated after it was returned; the figures the Director returned no longer exist.',
+      );
+    }
+
     await this.auditLog.record({
       entityType: AuditEntityType.PAYROLL_RUN,
       action: existing ? AuditAction.UPDATE : AuditAction.CREATE,
       entityId: run.id,
-      changes: { period, employeeCount: lines.length },
+      changes: {
+        period,
+        employeeCount: lines.length,
+        ...(discardedEditedLines > 0 ? { discardedEditedLines } : {}),
+      },
       accountId: caller.userId,
       companyId,
       ipAddress: caller.ipAddress,
@@ -451,6 +521,11 @@ export class PayrollEngineService {
 
     if (target === PayrollRunStatus.paid) {
       await this.assertApprovedForPayment(run.companyId, runId);
+    }
+    // 039: the figures processing freezes must be the figures the Director approved. F&F runs keep
+    // their own path (fnf.service.ts) and are approved after processing, as before.
+    if (target === PayrollRunStatus.processed && !run.isFnf) {
+      await this.assertApprovedForProcessing(run.companyId, runId);
     }
 
     const updated = await withRlsContext(
@@ -535,25 +610,353 @@ export class PayrollEngineService {
   }
 
   /**
-   * Rejects any write against a run whose figures are frozen (FR-015).
+   * Refuses `draft → processed` until the Director has approved the run (039).
+   *
+   * Before 039 a run was processed first and approved after, so the figures the Director saw were
+   * already frozen and a return could change nothing. Now HR corrects the draft, sends it, and
+   * processes only what came back approved.
+   *
+   * A company with **no** payroll chain and a run never submitted is let through, as before: there
+   * is nobody to send it to, and refusing would mean nobody gets paid because nobody configured an
+   * approver. The bank sheet and `paid` stay held on `mayTakeEffect` regardless, so the control is
+   * not lost — only moved to where the gap is reported.
+   */
+  /**
+   * Whether the company has a payroll chain, i.e. whether a run must go to the Director before it
+   * can be processed (039). Lets the run screen offer Process only when the server will accept it.
+   */
+  async approvalRequired(companyId: string): Promise<boolean> {
+    const chain = await this.chains.findActiveChain(
+      { isSuperAdmin: false, companyId },
+      companyId,
+      ACTION_PAYROLL_RUN,
+    );
+    return chain !== null;
+  }
+
+  private async assertApprovedForProcessing(
+    companyId: string,
+    runId: string,
+  ): Promise<void> {
+    const gate = await this.approvals.mayTakeEffect({
+      actionType: ACTION_PAYROLL_RUN,
+      entityType: ACTION_PAYROLL_RUN,
+      entityId: runId,
+      companyId,
+    });
+    if (gate.allowed && gate.state === 'approved') return;
+    if (gate.state === null) {
+      const chain = await this.chains.findActiveChain(
+        { isSuperAdmin: false, companyId },
+        companyId,
+        ACTION_PAYROLL_RUN,
+      );
+      if (!chain) return;
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_SUBMITTED',
+        runId,
+        message:
+          'This payroll run has not been sent to the Director yet. Send it for approval; it can ' +
+          'be processed once the Director approves it.',
+      });
+    }
+    if (gate.state === 'returned') {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_RETURNED',
+        message:
+          'The Director returned this payroll run. Make the corrections asked for and send it ' +
+          'again; it can be processed once approved.',
+      });
+    }
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'PAYROLL_RUN_NOT_APPROVED',
+      message:
+        gate.state === 'pending'
+          ? `This payroll run is awaiting ${
+              gate.levelLabel ?? 'the Director'
+            }. It can be processed once approved.`
+          : `This payroll run was ${gate.state} and cannot be processed. Send it for approval again.`,
+    });
+  }
+
+  /**
+   * Rejects any write against a run whose figures are frozen (FR-015), or that is in front of the
+   * Director or already approved by them (039).
    *
    * Called by every path that would touch a line item. Enforced here rather than
    * left to the UI because "processed payroll is immutable" is an integrity
    * guarantee, and a guarantee that only the client enforces is not one.
+   *
+   * Editable means: a draft never sent, or one the Director returned (or that was rejected, or
+   * whose chain was abandoned — each of which ends with HR sending it again).
    */
-  async assertRunMutable(caller: Caller, runId: string): Promise<void> {
+  async assertRunMutable(
+    caller: Caller,
+    runId: string,
+  ): Promise<{
+    id: string;
+    companyId: string;
+    period: string;
+    status: PayrollRunStatus;
+    isFnf: boolean;
+  }> {
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({
         where: { id: runId },
-        select: { status: true },
+        select: {
+          id: true,
+          companyId: true,
+          period: true,
+          status: true,
+          isFnf: true,
+        },
       }),
     );
     if (!run) throw new NotFoundException('Payroll run not found');
     if (run.status !== PayrollRunStatus.draft) {
-      throw new ConflictException(
-        `This run is ${run.status}; its figures are immutable (FR-015).`,
-      );
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_DRAFT',
+        message: `This run is ${run.status}; its figures are immutable (FR-015).`,
+      });
     }
+    const approval = await this.approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      runId,
+      run.companyId,
+    );
+    assertApprovalAllowsChange(approval?.state ?? null, 'changed');
+    return run;
+  }
+
+  /**
+   * Corrects one generated line by hand (039).
+   *
+   * Every changed column gets its own `PayrollLineItemEdit` row carrying the one justification —
+   * so the history reads per figure, which is how anyone checking it asks ("why did this basic
+   * change?"). `editedFields` is a union over every edit so far, for the highlighting. Net pay is
+   * recomputed by `netPayForLine`, never typed. All of it, and the conditional "still a draft"
+   * read, in one RLS transaction: a half-applied correction with no history row is the one outcome
+   * this must not allow.
+   *
+   * Only for regular runs. An F&F run's single line is computed by the settlement (gratuity, leave
+   * encashment, notice recovery), and the place to correct it is the settlement itself.
+   */
+  async editLine(
+    caller: Caller,
+    runId: string,
+    lineItemId: string,
+    changes: Record<string, unknown>,
+    justification: string,
+  ) {
+    const reason = justification?.trim() ?? '';
+    if (!reason) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_EDIT_JUSTIFICATION_REQUIRED',
+        message: 'Say why this line is being changed.',
+      });
+    }
+    const requested = validateLineChanges(changes);
+
+    const run = await this.assertRunMutable(caller, runId);
+    if (run.isFnf) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_FNF_NOT_EDITABLE',
+        message:
+          'A full and final settlement is corrected on the settlement itself, not line by line.',
+      });
+    }
+
+    const result = await withRlsContext(this.prisma, caller.rls, async (tx) => {
+      // Re-read inside the transaction: the run may have been processed since the check above.
+      const stillDraft = await tx.payrollRun.findFirst({
+        where: { id: runId, status: PayrollRunStatus.draft },
+        select: { id: true },
+      });
+      if (!stillDraft) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PAYROLL_RUN_NOT_DRAFT',
+          message:
+            'This payroll run was processed a moment ago; its figures can no longer be changed.',
+        });
+      }
+      const line = await tx.payrollLineItem.findFirst({
+        where: { id: lineItemId, payrollRunId: runId },
+      });
+      if (!line) throw new NotFoundException('Payroll line not found');
+
+      const changed = (
+        Object.entries(requested) as [EditableLineField, Prisma.Decimal][]
+      ).filter(([field, value]) => !line[field].equals(value));
+      if (changed.length === 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PAYROLL_EDIT_NO_CHANGE',
+          message: 'Those are already the figures on this line.',
+        });
+      }
+
+      const next = { ...line, ...Object.fromEntries(changed) };
+      if (next.specialAllowance.lessThan(line.reimbursementTotal)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PAYROLL_EDIT_BELOW_REIMBURSEMENT',
+          message: `Special allowance includes ₹${line.reimbursementTotal.toFixed(
+            2,
+          )} of reimbursements this run settles, so it cannot be set below that.`,
+        });
+      }
+      const netPay = netPayForLine({
+        basic: this.num(next.basic),
+        hra: this.num(next.hra),
+        conveyanceAllowance: this.num(next.conveyanceAllowance),
+        siteAllowance: this.num(next.siteAllowance),
+        specialAllowance: this.num(next.specialAllowance),
+        otWages: this.num(next.otWages),
+        employeePf: this.num(next.employeePf),
+        employeeEsic: this.num(next.employeeEsic),
+        professionalTax: this.num(next.professionalTax),
+        tds: this.num(next.tds),
+        loanEmiDeduction: this.num(next.loanEmiDeduction),
+        reimbursementTotal: this.num(next.reimbursementTotal),
+        advanceRecovered: this.num(next.advanceRecovered),
+        fuelRecoveryDeduction: this.num(next.fuelRecoveryDeduction),
+      });
+      if (netPay < 0) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PAYROLL_EDIT_NET_NEGATIVE',
+          message:
+            'With these figures the salary would not cover the advance and fuel recoveries this ' +
+            'line already takes. Change the recovery on the advance or fuel record and regenerate, ' +
+            'or keep more of the salary.',
+        });
+      }
+
+      const updated = await tx.payrollLineItem.update({
+        where: { id: line.id },
+        data: {
+          ...Object.fromEntries(changed),
+          netPay,
+          editedFields: [
+            ...new Set([...line.editedFields, ...changed.map(([f]) => f)]),
+          ],
+        },
+      });
+      await tx.payrollLineItemEdit.createMany({
+        data: changed.map(([field, value]) => ({
+          companyId: run.companyId,
+          payrollRunId: runId,
+          lineItemId: line.id,
+          employeeId: line.employeeId,
+          field,
+          oldValue: line[field],
+          newValue: value,
+          justification: reason,
+          editedByUserId: caller.userId,
+        })),
+      });
+      return {
+        updated,
+        fields: Object.fromEntries(
+          changed.map(([field, value]) => [
+            field,
+            { from: line[field].toString(), to: value.toString() },
+          ]),
+        ),
+        netPay: { from: line.netPay.toString(), to: netPay.toFixed(2) },
+      };
+    });
+
+    await this.auditLog.record({
+      entityType: AuditEntityType.PAYROLL_RUN,
+      action: AuditAction.UPDATE,
+      entityId: runId,
+      changes: {
+        lineItemId,
+        employeeId: result.updated.employeeId,
+        fields: result.fields,
+        netPay: result.netPay,
+        justification: reason,
+      },
+      accountId: caller.userId,
+      companyId: run.companyId,
+      ipAddress: caller.ipAddress,
+    });
+
+    return { ...result.updated, ...lineTotals(result.updated) };
+  }
+
+  /**
+   * The hand corrections on a run, newest first, optionally for one line (039) — who, which
+   * figure, old → new, why and when, with the editor and the employee named.
+   */
+  async lineEdits(caller: Caller, runId: string, lineItemId?: string) {
+    const rows = await withRlsContext(this.prisma, caller.rls, async (tx) => {
+      const run = await tx.payrollRun.findFirst({
+        where: { id: runId },
+        select: { id: true },
+      });
+      if (!run) throw new NotFoundException('Payroll run not found');
+      // A line's history is its employee's within the run, not its row id: a regeneration replaces
+      // the row, and the edits made to the one it replaced must still show against the person.
+      let employeeId: string | undefined;
+      if (lineItemId) {
+        const line = await tx.payrollLineItem.findFirst({
+          where: { id: lineItemId, payrollRunId: runId },
+          select: { employeeId: true },
+        });
+        if (!line) throw new NotFoundException('Payroll line not found');
+        employeeId = line.employeeId;
+      }
+      return tx.payrollLineItemEdit.findMany({
+        where: { payrollRunId: runId, ...(employeeId ? { employeeId } : {}) },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+    const [names, employees] = await Promise.all([
+      actorNamesFor(
+        this.prisma,
+        rows.map((r) => r.editedByUserId),
+      ),
+      withRlsContext(this.prisma, caller.rls, (tx) =>
+        tx.employee.findMany({
+          where: { id: { in: [...new Set(rows.map((r) => r.employeeId))] } },
+          select: {
+            id: true,
+            employeeCode: true,
+            firstName: true,
+            lastName: true,
+          },
+        }),
+      ),
+    ]);
+    const employeeById = new Map(employees.map((e) => [e.id, e]));
+    return rows.map((r) => {
+      const e = employeeById.get(r.employeeId);
+      return {
+        id: r.id,
+        lineItemId: r.lineItemId,
+        employeeId: r.employeeId,
+        employeeCode: e?.employeeCode ?? null,
+        employeeName: e
+          ? [e.firstName, e.lastName].filter(Boolean).join(' ').trim() || null
+          : null,
+        field: r.field,
+        oldValue: r.oldValue,
+        newValue: r.newValue,
+        justification: r.justification,
+        editedByUserId: r.editedByUserId,
+        editedByName: names.get(r.editedByUserId) ?? null,
+        createdAt: r.createdAt,
+      };
+    });
   }
 
   /**
@@ -580,6 +983,14 @@ export class PayrollEngineService {
           'Only a draft run can be discarded; this one has been processed.',
       });
     }
+    // 039: a draft sent to the Director leaves their queue with it, rather than waiting there on a
+    // run that no longer exists.
+    await this.approvals.abandon(
+      ACTION_PAYROLL_RUN,
+      runId,
+      run.companyId,
+      'The draft payroll run was discarded.',
+    );
     await this.auditLog.record({
       entityType: AuditEntityType.PAYROLL_RUN,
       action: AuditAction.DELETE,
@@ -1112,6 +1523,90 @@ export function lineTotals(line: {
       line.advanceRecovered,
     ]),
   };
+}
+
+/**
+ * Whether a draft's approval state lets its figures change (039): never while it is with the
+ * Director, and never once the Director has approved it — the approved figures are the ones paid.
+ */
+function assertApprovalAllowsChange(
+  state: string | null,
+  verb: 'changed' | 'regenerated',
+): void {
+  if (state === 'pending') {
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'PAYROLL_RUN_AWAITING_APPROVAL',
+      message: `This payroll run is with the Director for approval, so it cannot be ${verb} until they approve or return it.`,
+    });
+  }
+  if (state === 'approved') {
+    throw new ConflictException({
+      statusCode: 409,
+      code: 'PAYROLL_RUN_ALREADY_APPROVED',
+      message: `The Director has approved this payroll run, so it cannot be ${verb}. Process it, or discard the draft and generate the period again.`,
+    });
+  }
+}
+
+/** Largest value a `Decimal(12, 2)` column holds. */
+const MAX_LINE_AMOUNT = 9_999_999_999.99;
+
+/**
+ * The `changes` body of a line edit, checked and converted (039): only the allow-listed columns,
+ * each a non-negative rupee amount with at most two decimals. Checked here rather than with
+ * class-validator because the keys are the data — a DTO cannot declare "any of these ten".
+ */
+export function validateLineChanges(
+  changes: Record<string, unknown>,
+): Partial<Record<EditableLineField, Prisma.Decimal>> {
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'PAYROLL_EDIT_INVALID',
+      message: 'Send the changed figures as { field: amount }.',
+    });
+  }
+  const entries = Object.entries(changes);
+  if (entries.length === 0) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'PAYROLL_EDIT_NO_CHANGE',
+      message: 'Nothing to change.',
+    });
+  }
+  const out: Partial<Record<EditableLineField, Prisma.Decimal>> = {};
+  for (const [field, value] of entries) {
+    if (!(EDITABLE_LINE_FIELDS as readonly string[]).includes(field)) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_EDIT_FIELD_NOT_EDITABLE',
+        field,
+        message: `${field} cannot be changed by hand. Editable: ${EDITABLE_LINE_FIELDS.join(
+          ', ',
+        )}.`,
+      });
+    }
+    const amount = typeof value === 'string' ? Number(value) : value;
+    if (
+      typeof amount !== 'number' ||
+      !Number.isFinite(amount) ||
+      amount < 0 ||
+      amount > MAX_LINE_AMOUNT ||
+      Math.abs(Math.round(amount * 100) - amount * 100) > 1e-6
+    ) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PAYROLL_EDIT_INVALID_AMOUNT',
+        field,
+        message: `${field} must be an amount of zero or more, to at most two decimals.`,
+      });
+    }
+    out[field as EditableLineField] = new Prisma.Decimal(
+      amount,
+    ).toDecimalPlaces(2);
+  }
+  return out;
 }
 
 /** `PayrollLineItem.fuelRecoveries` → typed rows, tolerating null and malformed JSON. */

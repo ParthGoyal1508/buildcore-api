@@ -231,9 +231,14 @@ export class EquipmentServiceDueRule implements ReminderRuleProvider {
       today.setHours(0, 0, 0, 0);
 
       return schedules.flatMap((schedule): ReminderCandidate[] => {
+        // Rounded to one decimal: the difference of two decimal readings is a float, and the raw
+        // value reached the subject as "20.527000000000044 hours remaining".
         const remaining =
-          Number(schedule.nextDueReading) -
-          Number(schedule.equipment.currentReading);
+          Math.round(
+            (Number(schedule.nextDueReading) -
+              Number(schedule.equipment.currentReading)) *
+              10,
+          ) / 10;
         const subject = `${schedule.serviceType} — ${schedule.equipment.code} ${schedule.equipment.name}`;
         const actionLink = `/dashboard/plant/services?equipmentId=${schedule.equipmentId}`;
 

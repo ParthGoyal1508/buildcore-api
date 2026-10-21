@@ -25,6 +25,7 @@ import type { Response } from 'express';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { SelfService } from '../../common/decorators/route-access.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import {
@@ -190,7 +191,16 @@ export class CompaniesController {
     return this.companiesService.setLogo(caller, id, dto.data, ipAddress);
   }
 
+  /**
+   * Open to every signed-in user of the company (039). The description below always said so, but
+   * the class-level `COMPANY_SETTINGS` applied here too, so everyone without it — every role but
+   * Super Admin — drew a 403 in the sidebar on every page. The empty `@RequirePermissions()`
+   * overrides the class's list; `@SelfService()` then declares the route, and `OwnCompanyGuard`
+   * still confines the caller to their own company.
+   */
   @Get(':id/logo')
+  @RequirePermissions()
+  @SelfService()
   @ApiOperation({
     summary: 'The company logo currently in force',
     description:

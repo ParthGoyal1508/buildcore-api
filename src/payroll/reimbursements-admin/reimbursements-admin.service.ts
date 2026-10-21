@@ -3,10 +3,13 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import {
   AuditAction,
+  ApprovalDecisionAction,
   AuditEntityType,
   Prisma,
   ReimbursementClaimStatus,
@@ -14,7 +17,17 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  APPROVAL_REJECTED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+  type ApprovalRejectedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_REIMBURSEMENT_CLAIM } from '../../approvals/default-chains';
+import type { AuthenticatedUser } from '../../auth/authenticated-user';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { submitClaimForApproval } from '../../hr/reimbursements/claim-approval';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { readReceipt } from '../../hr/reimbursements/reimbursement.service';
@@ -38,11 +51,25 @@ const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
  */
 @Injectable()
 export class ReimbursementsAdminService {
+  private readonly logger = new Logger(ReimbursementsAdminService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly storage: StorageService,
+    private readonly approvals: ApprovalService,
   ) {}
+
+  /** Whether a claim has a receipt — for the Approvals page's files, without reading it. */
+  async hasReceipt(caller: Caller, claimId: string): Promise<boolean> {
+    const claim = await withRlsContext(this.prisma, caller.rls, (tx) =>
+      tx.reimbursementClaim.findFirst({
+        where: { id: claimId },
+        select: { receiptRef: true },
+      }),
+    );
+    return !!claim?.receiptRef;
+  }
 
   /**
    * A claim's receipt, for the approver (036 F17). There was no way to see it before: the review
@@ -74,13 +101,6 @@ export class ReimbursementsAdminService {
       // Drafts belong to the employee who has not submitted them yet; an admin
       // list that included them would show claims nobody has asked for.
       status: query.status ?? { not: ReimbursementClaimStatus.draft },
-      // HR's submitted queue holds only what is HR's to decide (2026-10-16): no reporting manager,
-      // or the manager has approved it on. One still with the manager is not HR's yet.
-      ...(query.status === ReimbursementClaimStatus.submitted
-        ? {
-            OR: [{ managerUserId: null }, { managerDecidedAt: { not: null } }],
-          }
-        : {}),
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
       ...(query.from || query.to
         ? {
@@ -110,52 +130,213 @@ export class ReimbursementsAdminService {
     return { items, total, page, pageSize };
   }
 
-  /** Approves a submitted claim (FR-037). */
-  async approveClaim(caller: Caller, claimId: string, dto: ApproveClaimDto) {
-    const claim = await this.requireClaim(caller, claimId);
-    await this.assertNotOwnClaim(caller, claim);
-    this.assertTransition(claim.status, ReimbursementClaimStatus.approved);
-
-    const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.reimbursementClaim.update({
-        where: { id: claimId },
-        data: {
-          status: ReimbursementClaimStatus.approved,
-          decidedByUserId: caller.userId,
-          decidedAt: new Date(),
-          adminRemarks: dto.remarks?.trim() ?? null,
-        },
-      }),
+  /**
+   * Approves a submitted claim (FR-037) — a decision on its approval chain (2026-10-20). The
+   * claim is approved when the chain's last level approves; until then it stays submitted.
+   */
+  async approveClaim(
+    caller: Caller,
+    claimId: string,
+    dto: ApproveClaimDto,
+    user: AuthenticatedUser,
+  ) {
+    return this.decideOnChain(
+      caller,
+      claimId,
+      ApprovalDecisionAction.approve,
+      dto.remarks,
+      user,
     );
-
-    await this.audit(caller, claim.companyId, claimId, {
-      decision: 'approved',
-    });
-    return updated;
   }
 
   /** Rejects a submitted claim. Remarks are mandatory (FR-037). */
-  async rejectClaim(caller: Caller, claimId: string, dto: RejectClaimDto) {
+  async rejectClaim(
+    caller: Caller,
+    claimId: string,
+    dto: RejectClaimDto,
+    user: AuthenticatedUser,
+  ) {
+    return this.decideOnChain(
+      caller,
+      claimId,
+      ApprovalDecisionAction.reject,
+      dto.remarks,
+      user,
+    );
+  }
+
+  private async decideOnChain(
+    caller: Caller,
+    claimId: string,
+    action: ApprovalDecisionAction,
+    remarks: string | undefined,
+    user: AuthenticatedUser,
+  ) {
     const claim = await this.requireClaim(caller, claimId);
     await this.assertNotOwnClaim(caller, claim);
-    this.assertTransition(claim.status, ReimbursementClaimStatus.rejected);
-
-    const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.reimbursementClaim.update({
-        where: { id: claimId },
-        data: {
-          status: ReimbursementClaimStatus.rejected,
-          decidedByUserId: caller.userId,
-          decidedAt: new Date(),
-          adminRemarks: dto.remarks.trim(),
-        },
-      }),
+    this.assertTransition(
+      claim.status,
+      action === ApprovalDecisionAction.approve
+        ? ReimbursementClaimStatus.approved
+        : ReimbursementClaimStatus.rejected,
     );
+    await this.ensureInChain(claim);
 
-    await this.audit(caller, claim.companyId, claimId, {
-      decision: 'rejected',
-    });
-    return updated;
+    const view = await this.approvals.decideByEntity(
+      ACTION_REIMBURSEMENT_CLAIM,
+      claimId,
+      { action, reason: remarks?.trim() || null },
+      user,
+      caller.ipAddress,
+    );
+    if (view.state === 'approved' || view.state === 'rejected') {
+      await this.applyOutcome(claimId, view.state, caller.userId, remarks);
+    }
+    return this.requireClaim(caller, claimId);
+  }
+
+  /** The chain approved the claim at its last level (2026-10-20). */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_REIMBURSEMENT_CLAIM) return;
+    await this.onChainOutcome(event.entityId, event.companyId, 'approved');
+  }
+
+  /** The chain rejected it, at any level. */
+  @OnEvent(APPROVAL_REJECTED_EVENT)
+  async onApprovalRejected(event: ApprovalRejectedEvent): Promise<void> {
+    if (event.entityType !== ACTION_REIMBURSEMENT_CLAIM) return;
+    await this.onChainOutcome(event.entityId, event.companyId, 'rejected');
+  }
+
+  /** Logs rather than throws: the decision is already committed in the spine. */
+  private async onChainOutcome(
+    claimId: string,
+    companyId: string,
+    outcome: 'approved' | 'rejected',
+  ): Promise<void> {
+    try {
+      const state = await this.approvals.stateOfSystem(
+        ACTION_REIMBURSEMENT_CLAIM,
+        claimId,
+        companyId,
+      );
+      const latest = state?.latestDecision;
+      await this.applyOutcome(
+        claimId,
+        outcome,
+        latest?.actorUserId ?? null,
+        latest?.reason ?? undefined,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Could not apply the ${outcome} chain outcome to claim ${claimId}`,
+        error as Error,
+      );
+    }
+  }
+
+  /**
+   * The final decision, written once: conditional on the claim still being submitted, so the
+   * admin screen's own decide and the spine's event — which both arrive for a decision taken
+   * there — record it once between them.
+   */
+  private async applyOutcome(
+    claimId: string,
+    outcome: 'approved' | 'rejected',
+    deciderUserId: string | null,
+    remarks: string | undefined,
+  ): Promise<void> {
+    const status =
+      outcome === 'approved'
+        ? ReimbursementClaimStatus.approved
+        : ReimbursementClaimStatus.rejected;
+    const { moved, companyId } = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      async (tx) => {
+        const result = await tx.reimbursementClaim.updateMany({
+          where: { id: claimId, status: ReimbursementClaimStatus.submitted },
+          data: {
+            status,
+            decidedByUserId: deciderUserId,
+            decidedAt: new Date(),
+            adminRemarks: remarks?.trim() || null,
+          },
+        });
+        const claim = await tx.reimbursementClaim.findFirst({
+          where: { id: claimId },
+          select: { companyId: true },
+        });
+        return { moved: result.count === 1, companyId: claim?.companyId };
+      },
+    );
+    if (!moved || !companyId) return;
+    await this.audit(
+      { userId: deciderUserId ?? '', ipAddress: '' } as Caller,
+      companyId,
+      claimId,
+      { decision: outcome },
+    );
+  }
+
+  /**
+   * A claim submitted before claims joined the spine has no chain; it is put into one when first
+   * decided, so the decision still runs through the company's configured levels.
+   */
+  private async ensureInChain(claim: {
+    id: string;
+    companyId: string;
+    employeeId: string;
+    amount: Prisma.Decimal;
+    description: string;
+    expenseDate: Date;
+  }): Promise<boolean> {
+    const state = await this.approvals.stateOfSystem(
+      ACTION_REIMBURSEMENT_CLAIM,
+      claim.id,
+      claim.companyId,
+    );
+    if (state) return false;
+    const claimant = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: false, companyId: claim.companyId },
+      (tx) =>
+        tx.employee.findFirst({
+          where: { id: claim.employeeId },
+          select: { userId: true, firstName: true, lastName: true },
+        }),
+    );
+    if (!claimant) throw new NotFoundException('Claimant not found');
+    await submitClaimForApproval(
+      this.approvals,
+      claim,
+      claimant,
+      claimant.userId,
+    );
+    return true;
+  }
+
+  /**
+   * Puts every pending claim with no approval chain into one (2026-10-20) — those raised before
+   * claims joined the spine, so they reach the Approvals queue rather than waiting for somebody to
+   * open the module screen. Idempotent; run by `npm run backfill:approvals`. Returns how many it
+   * submitted.
+   */
+  async backfillApprovals(): Promise<number> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.reimbursementClaim.findMany({
+          where: { status: ReimbursementClaimStatus.submitted },
+        }),
+    );
+    let submitted = 0;
+    for (const claim of rows) {
+      if (await this.ensureInChain(claim)) submitted += 1;
+    }
+    return submitted;
   }
 
   /**
@@ -292,20 +473,8 @@ export class ReimbursementsAdminService {
    */
   private async assertNotOwnClaim(
     caller: Caller,
-    claim: {
-      employeeId: string;
-      managerUserId: string | null;
-      managerDecidedAt: Date | null;
-    },
+    claim: { employeeId: string },
   ): Promise<void> {
-    // Still with the reporting manager (2026-10-16): not HR's to decide yet.
-    if (claim.managerUserId && !claim.managerDecidedAt) {
-      throw new ConflictException({
-        code: 'AWAITING_MANAGER',
-        message:
-          'This claim is still with the employee’s reporting manager. HR decides it once they have approved it.',
-      });
-    }
     const claimant = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findFirst({
         where: { id: claim.employeeId },
@@ -355,7 +524,7 @@ export class ReimbursementsAdminService {
       action: AuditAction.UPDATE,
       entityId: claimId,
       changes,
-      accountId: caller.userId,
+      accountId: caller.userId || undefined,
       companyId,
       ipAddress: caller.ipAddress,
     });

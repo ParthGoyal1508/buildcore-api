@@ -38,10 +38,12 @@
     "studio": "prisma studio",
     "studio:prod": "sh -c 'set -a; . ./.env.production.local; set +a; npx prisma studio -p 5556'",
     "seed:chains": "ts-node prisma/seed-approval-chains.ts",
+    "backfill:approvals": "ts-node prisma/backfill-approval-chains.ts",
     "seed:defaults": "ts-node prisma/seed-company-defaults.ts",
     "seed:billing-demo": "ts-node prisma/seed-billing-demo.ts",
     "seed:demo": "ts-node prisma/seed-demo.ts",
     "seed:dev": "ts-node prisma/seed-dev.ts",
+    "seed:dev:complete": "ts-node prisma/seed-dev-complete.ts",
     "seed:hr-docs": "ts-node prisma/seed-hr-docs.ts",
     "seed:demo:remote": "./scripts/seed-remote-demo.sh",
     "db:demo": "prisma migrate reset --force --skip-seed && ts-node prisma/seed-demo.ts"
@@ -85,6 +87,7 @@
     "@nestjs/testing": "10.1.0",
     "@swc/cli": "^0.1.62",
     "@swc/core": "^1.3.70",
+    "@swc/jest": "^0.2.36",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "4.17.17",
     "@types/jest": "^29.5.3",
@@ -116,7 +119,18 @@
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.(t|j)s$": "ts-jest"
+      "^.+\\.(t|j)s$": [
+        "@swc/jest",
+        {
+          "jsc": {
+            "parser": { "syntax": "typescript", "decorators": true },
+            "transform": { "legacyDecorator": true, "decoratorMetadata": true },
+            "target": "es2021",
+            "keepClassNames": true
+          },
+          "module": { "type": "commonjs", "noInterop": true }
+        }
+      ]
     },
     "collectCoverageFrom": [
       "**/*.(t|j)s"

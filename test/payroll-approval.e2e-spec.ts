@@ -31,8 +31,9 @@ import { PayrollScheduleService } from '../src/payroll/runs/payroll-schedule.ser
  * Payroll runs itself, then waits for the right people — spec US2 scenarios 1 to 6
  * (016 T040).
  *
- * The claim under test is that **a payroll run cannot reach money without three recorded
- * approvals**, and that the inputs cannot be quietly changed while it is being reviewed.
+ * The claim under test is that **a payroll run cannot reach money without the Director's recorded
+ * approval** (039: one level, sent by HR after correcting the draft), and that the inputs cannot
+ * be quietly changed while it is being reviewed.
  * Those are the two places in this feature where an error costs real money.
  *
  * The scheduler is driven by calling `createRunsForPreviousPeriod` directly rather than
@@ -420,7 +421,7 @@ describe('Payroll approval chain (e2e)', () => {
     await app?.close();
   }, 90_000);
 
-  it('scenario 1 — the schedule draws up the previous period and it is awaiting the first level', async () => {
+  it('scenario 1 — the schedule draws up the previous period and leaves it for HR to send (039)', async () => {
     const result = await schedule.createRunsForPreviousPeriod(whenItFires);
 
     expect(result.period).toBe(period);
@@ -431,21 +432,15 @@ describe('Payroll approval chain (e2e)', () => {
     // Distinguishable from a run somebody created by hand — which matters, because the
     // production instance may be suspended when the cron is due.
     expect(run.createdBySchedule).toBe(true);
+    expect(run.status).toBe('draft');
 
+    // 039: not in any chain. HR reviews and corrects the draft, then sends it.
     const state = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
       run.id,
       companyId,
     );
-    expect(state).toMatchObject({
-      state: 'pending',
-      currentPosition: 1,
-      totalLevels: 3,
-      levelLabel: 'Site Incharge',
-      // Nobody raised it — and it does not pretend somebody did.
-      originatorUserId: null,
-      originatorName: 'The system',
-    });
+    expect(state).toBeNull();
   }, 60_000);
 
   it('scenario 6 — firing again creates no duplicate', async () => {
@@ -464,29 +459,111 @@ describe('Payroll approval chain (e2e)', () => {
     expect(after).toBe(1);
   }, 60_000);
 
-  it('scenario 2 — a bank transfer sheet is refused, naming the outstanding level', async () => {
+  it('scenario 2 — neither processing nor a bank sheet before the Director approves (039)', async () => {
     const run = await runForPeriod();
+
+    const processing = await http()
+      .patch(`/hr/payroll/runs/${run.id}/status`)
+      .set(auth(hrUser.token))
+      .send({ status: 'processed' })
+      .expect(409);
+    expect(processing.body.code).toBe('PAYROLL_RUN_NOT_SUBMITTED');
 
     const error = await bankSheet
       .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
       .catch((e) => e);
-
-    expect(error.response.code).toBe('PAYROLL_RUN_NOT_APPROVED');
-    // Naming the level is the difference between "go and find out whose desk this is on"
-    // and "go to the site in-charge".
-    expect(error.response.message).toContain('Site Incharge');
+    expect(error.response.code).toBe('PAYROLL_RUN_NOT_FINALISED');
   }, 60_000);
 
-  it('021 T041 — slips are refused while the run is unapproved, naming the level', async () => {
+  it('039 — HR corrects a generated line, with a justification, and the change is recorded', async () => {
+    const run = await runForPeriod();
+    const line = await sys.payrollLineItem.findFirst({
+      where: { payrollRunId: run.id, employeeId },
+    });
+
+    await http()
+      .patch(`/hr/payroll/runs/${run.id}/lines/${line.id}`)
+      .set(auth(hrUser.token))
+      .send({ changes: { basic: Number(line.basic) + 1000 } })
+      .expect(400);
+
+    const res = await http()
+      .patch(`/hr/payroll/runs/${run.id}/lines/${line.id}`)
+      .set(auth(hrUser.token))
+      .send({
+        changes: { basic: Number(line.basic) + 1000 },
+        justification: 'Increment effective this month was missed',
+      })
+      .expect(200);
+    expect(res.body.editedFields).toEqual(['basic']);
+    expect(Number(res.body.netPay)).toBeGreaterThan(Number(line.netPay));
+
+    const detail = await http()
+      .get(`/hr/payroll/runs/${run.id}`)
+      .set(auth(hrUser.token))
+      .expect(200);
+    expect(detail.body.lineItems[0].editedFields).toEqual(['basic']);
+
+    const edits = await http()
+      .get(`/hr/payroll/runs/${run.id}/edits?lineItemId=${line.id}`)
+      .set(auth(hrUser.token))
+      .expect(200);
+    expect(edits.body).toHaveLength(1);
+    expect(edits.body[0]).toMatchObject({
+      field: 'basic',
+      justification: 'Increment effective this month was missed',
+      editedByUserId: hrUser.userId,
+      editedByName: expect.stringContaining('HrOffice'),
+    });
+
+    // Regenerating would wipe the correction, so it asks first.
+    const regen = await http()
+      .post('/hr/payroll/runs')
+      .set(auth(hrUser.token))
+      .send({ period })
+      .expect(409);
+    expect(regen.body.code).toBe('PAYROLL_RUN_HAS_EDITS');
+  }, 60_000);
+
+  it('039 — HR sends it to the Director; edits lock while it waits', async () => {
+    const run = await runForPeriod();
+    const sent = await http()
+      .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
+      .set(auth(hrUser.token))
+      .expect(201);
+    expect(sent.body).toMatchObject({ runId: run.id, submitted: true });
+
+    const state = await approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      run.id,
+      companyId,
+    );
+    expect(state).toMatchObject({
+      state: 'pending',
+      currentPosition: 1,
+      totalLevels: 1,
+      levelLabel: 'Director',
+      originatorUserId: hrUser.userId,
+    });
+
+    const line = await sys.payrollLineItem.findFirst({
+      where: { payrollRunId: run.id, employeeId },
+    });
+    const locked = await http()
+      .patch(`/hr/payroll/runs/${run.id}/lines/${line.id}`)
+      .set(auth(hrUser.token))
+      .send({ changes: { hra: 1 }, justification: 'x' })
+      .expect(409);
+    expect(locked.body.code).toBe('PAYROLL_RUN_AWAITING_APPROVAL');
+
+    const error = await bankSheet
+      .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
+      .catch((e) => e);
+    expect(error.response.code).toBe('PAYROLL_RUN_NOT_FINALISED');
+  }, 60_000);
+
+  it('021 T041 — slips are refused while the run is unapproved', async () => {
     /**
-     * The refusal and the permission are the same claim read twice, and the task was recorded
-     * `NOT RUN` because the e2e harness could not finish a run. The second half is below, after
-     * scenario 5 has approved the run.
-     *
-     * `requireApprovedRun` shares `outstandingApproval` with the bank sheet deliberately, so the
-     * two cannot disagree about whether a run is approved. This test and scenario 2 are what make
-     * that sharing observable: both refuse, with the same reason, from the same source.
-     *
      * Emailing a slip is the one action here that **cannot be undone** — a bank sheet downloaded
      * early can be deleted, and 500 emails sent against an unapproved run cannot be recalled.
      */
@@ -498,10 +575,6 @@ describe('Payroll approval chain (e2e)', () => {
       .send({});
 
     expect(res.status).toBe(409);
-    expect(res.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
-    // The level, not just "not approved": an administrator who is told which desk the run is
-    // waiting at can go and ask. One who is told only that it is unapproved cannot.
-    expect(res.body.message).toMatch(/awaiting/i);
 
     // And nothing was queued. A refusal that still wrote delivery rows would send on the next
     // retry, which is the quiet version of this failure.
@@ -522,45 +595,73 @@ describe('Payroll approval chain (e2e)', () => {
     expect(res.body.message).toMatch(/Only HR may edit/);
   }, 60_000);
 
-  it('scenario 2b — the sheet stays refused after the first level approves', async () => {
+  it('039 — the Director returns it with remarks; HR corrects and sends it again', async () => {
     const run = await runForPeriod();
     const state = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
       run.id,
       companyId,
     );
-
     await approvals.decide(
-      { instanceId: state.instanceId, action: ApprovalDecisionAction.approve },
-      asUser(siteUser.userId, [siteRoleId]),
+      {
+        instanceId: state.instanceId,
+        action: ApprovalDecisionAction.return,
+        reason: 'Check the site allowance for the new joiners',
+      },
+      asUser(directorUser.userId, [finalRoleId]),
       '127.0.0.1',
     );
 
-    const error = await bankSheet
-      .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
-      .catch((e) => e);
+    const detail = await http()
+      .get(`/hr/payroll/runs/${run.id}`)
+      .set(auth(hrUser.token))
+      .expect(200);
+    expect(detail.body.approval).toMatchObject({
+      state: 'returned',
+      latestDecision: {
+        action: 'return',
+        reason: 'Check the site allowance for the new joiners',
+      },
+    });
 
-    expect(error.response.code).toBe('PAYROLL_RUN_NOT_APPROVED');
-    expect(error.response.message).toContain('HR Office');
+    const line = await sys.payrollLineItem.findFirst({
+      where: { payrollRunId: run.id, employeeId },
+    });
+    await http()
+      .patch(`/hr/payroll/runs/${run.id}/lines/${line.id}`)
+      .set(auth(hrUser.token))
+      .send({
+        changes: { siteAllowance: 1500 },
+        justification: 'Site allowance per the Director',
+      })
+      .expect(200);
+
+    await http()
+      .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
+      .set(auth(hrUser.token))
+      .expect(201);
+    const again = await approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      run.id,
+      companyId,
+    );
+    // Resubmitted by its originator: the same instance, a new round, its history kept.
+    expect(again).toMatchObject({
+      instanceId: state.instanceId,
+      state: 'pending',
+      round: 2,
+    });
   }, 60_000);
 
   /**
    * FR-016 and FR-017 together, as they behave once corrections travel a chain of their own
-   * (016 Phase 8).
+   * (016 Phase 8): the void happens when the correction is *applied*, not when it is asked for.
    *
-   * **What changed, and why the assertion moved.** `POST /hr/attendance` used to apply the
-   * edit on the spot, so the payroll chain restarted the moment HR pressed save. It now
-   * raises the correction into its own Site → HR → Director chain, which means that at
-   * submission time *the attendance has not changed* — and so the approvers' figures still
-   * hold, and voiding their approvals then would be wrong. A correction that is later
-   * rejected must not have cost a payroll run its approvals.
-   *
-   * The void still happens; it happens at the moment it becomes true, which is application.
-   * That is what the second half of this test pins down, and it is the property that
-   * actually protects the money: no run reaches a bank sheet on figures that have since
-   * been corrected.
+   * 039: voided means abandoned and handed back to HR, not restarted. The stored lines do not
+   * change with attendance — only a regeneration recomputes them — so restarting put the same
+   * figures back in front of the Director.
    */
-  it('scenario 4 — a correction voids the approvals when it is applied, not when it is asked for', async () => {
+  it('scenario 4 — a correction voids the approval when it is applied, not when it is asked for', async () => {
     const run = await runForPeriod();
 
     const before = await approvals.stateOfSystem(
@@ -568,7 +669,7 @@ describe('Payroll approval chain (e2e)', () => {
       run.id,
       companyId,
     );
-    expect(before.currentPosition).toBe(2); // the site in-charge approved above
+    expect(before.state).toBe('pending');
 
     const submitted = await http()
       .post('/hr/attendance')
@@ -576,18 +677,15 @@ describe('Payroll approval chain (e2e)', () => {
       .send({ employeeId, date: `${period}-12`, inTime: '09:05' })
       .expect(201);
 
-    // Pending, not applied — so the run's approvers have nothing to re-approve yet.
+    // Pending, not applied — so the run's approval stands for now.
     const whilePending = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
       run.id,
       companyId,
     );
-    expect(whilePending.currentPosition).toBe(2);
+    expect(whilePending.state).toBe('pending');
     expect(whilePending.instanceId).toBe(before.instanceId);
 
-    // Now walk the correction's own chain to completion. Its instance id comes from the
-    // submission response — the route answers with the item it raised, which is the only
-    // handle a caller has on a correction that has not been applied yet.
     const correctionInstanceId = submitted.body.approvalInstanceId;
     expect(correctionInstanceId).toBeTruthy();
     for (const [userId, roleId] of [
@@ -605,49 +703,35 @@ describe('Payroll approval chain (e2e)', () => {
       );
     }
 
-    // **Eventual, and deliberately awaited here rather than assumed.** The spine announces
-    // completion fire-and-forget, so a correction is applied — and the payroll chain voided —
-    // on a later tick than the decision that approved it. The old version of this test could
-    // assert immediately because the edit and the void happened inside the request; now they
-    // do not, and a test that read the state once would pass or fail on timing.
     const after = await eventually(async () => {
       const state = await approvals.stateOfSystem(
         ACTION_PAYROLL_RUN,
         run.id,
         companyId,
       );
-      // The restart is a new instance, which is the signal that the void has landed.
-      if (state.instanceId === before.instanceId) return null;
-      return state;
+      return state.state === 'abandoned' ? state : null;
     });
-    expect(after.state).toBe('pending');
-    // Back to level 1: the approval already given was to figures that no longer hold.
-    expect(after.currentPosition).toBe(1);
-    expect(after.instanceId).not.toBe(before.instanceId);
+    expect(after.instanceId).toBe(before.instanceId);
   }, 60_000);
 
-  it('scenario 5 — the sheet is produced once every level has approved', async () => {
+  it('scenario 5 — sent again, approved by the Director, processed: the sheet is produced', async () => {
     const run = await runForPeriod();
 
-    for (const [userId, roleId] of [
-      [siteUser.userId, siteRoleId],
-      [hrUser.userId, hrRoleId],
-      [directorUser.userId, finalRoleId],
-    ] as const) {
-      const state = await approvals.stateOfSystem(
-        ACTION_PAYROLL_RUN,
-        run.id,
-        companyId,
-      );
-      await approvals.decide(
-        {
-          instanceId: state.instanceId,
-          action: ApprovalDecisionAction.approve,
-        },
-        asUser(userId, [roleId]),
-        '127.0.0.1',
-      );
-    }
+    await http()
+      .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
+      .set(auth(hrUser.token))
+      .expect(201);
+    const state = await approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      run.id,
+      companyId,
+    );
+    expect(state.state).toBe('pending');
+    await approvals.decide(
+      { instanceId: state.instanceId, action: ApprovalDecisionAction.approve },
+      asUser(directorUser.userId, [finalRoleId]),
+      '127.0.0.1',
+    );
 
     const final = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
@@ -656,6 +740,18 @@ describe('Payroll approval chain (e2e)', () => {
     );
     expect(final.state).toBe('approved');
 
+    // An approved draft is still a draft: the sheet waits for processing.
+    const early = await bankSheet
+      .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)
+      .catch((e) => e);
+    expect(early.response.code).toBe('PAYROLL_RUN_NOT_FINALISED');
+
+    await http()
+      .patch(`/hr/payroll/runs/${run.id}/status`)
+      .set(auth(hrUser.token))
+      .send({ status: 'processed' })
+      .expect(200);
+
     const sheet = await bankSheet.build(
       callerFor(directorUser.userId, [finalRoleId]) as never,
       run.id,
@@ -663,27 +759,18 @@ describe('Payroll approval chain (e2e)', () => {
     expect(sheet.filename).toContain(period);
     expect(sheet.buffer.length).toBeGreaterThan(0);
 
-    // All three approvers are named, in order (FR-002, SC-002).
+    // The Director is named (FR-002, SC-002).
     const history = await approvals.historyOf(
       ACTION_PAYROLL_RUN,
       run.id,
       asUser(directorUser.userId, [finalRoleId]),
     );
-    expect(history.map((h) => h.actorUserId)).toEqual([
-      siteUser.userId,
-      hrUser.userId,
-      directorUser.userId,
-    ]);
-    expect(history.map((h) => h.levelLabel)).toEqual([
-      'Site Incharge',
-      'HR Office',
-      'Director',
-    ]);
+    expect(history.map((h) => h.actorUserId)).toEqual([directorUser.userId]);
+    expect(history.map((h) => h.levelLabel)).toEqual(['Director']);
   }, 60_000);
 
   it('021 T041 — slips send once the run is approved', async () => {
-    // Runs after scenario 5, which approved this period's run. The pairing is the point: the same
-    // call, the same caller, the same run — only the approval state differs.
+    // Runs after scenario 5, which approved and processed this period's run.
     const run = await runForPeriod();
     const state = await approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
@@ -799,25 +886,19 @@ describe('Payroll approval chain (e2e)', () => {
       .expect(201);
   }, 60_000);
 
-  it('2026-10-17 — processing a run by hand puts it into its approval chain', async () => {
+  it('039 — processing a draft never sent to the Director is refused', async () => {
     const draft = await sys.payrollRun.create({
       data: { companyId, period: '2019-02', status: 'draft' },
     });
-    await http()
+    const res = await http()
       .patch(`/hr/payroll/runs/${draft.id}/status`)
       .set(auth(hrUser.token))
       .send({ status: 'processed' })
-      .expect(200);
-
-    const state = await approvals.stateOfSystem(
-      ACTION_PAYROLL_RUN,
-      draft.id,
-      companyId,
-    );
-    expect(state).toMatchObject({ state: 'pending', currentPosition: 1 });
+      .expect(409);
+    expect(res.body.code).toBe('PAYROLL_RUN_NOT_SUBMITTED');
   }, 60_000);
 
-  it('2026-10-17 — a run processed without approval says so, and can be submitted once', async () => {
+  it('2026-10-17 — a run processed without approval says so, and can be sent once', async () => {
     const run = await sys.payrollRun.create({
       data: { companyId, period: '2019-01', status: 'processed' },
     });
@@ -830,15 +911,16 @@ describe('Payroll approval chain (e2e)', () => {
       runId: run.id,
     });
 
-    await http()
+    const sent = await http()
       .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
       .set(auth(hrUser.token))
-      .expect(201, { runId: run.id, submitted: true });
+      .expect(201);
+    expect(sent.body).toMatchObject({ runId: run.id, submitted: true });
     const again = await http()
       .post(`/hr/payroll/runs/${run.id}/submit-for-approval`)
       .set(auth(hrUser.token))
       .expect(409);
-    expect(again.body.message).toMatch(/already in its approval chain/);
+    expect(again.body.code).toBe('PAYROLL_RUN_AWAITING_APPROVAL');
 
     const refused = await bankSheet
       .build(callerFor(directorUser.userId, [finalRoleId]) as never, run.id)

@@ -18,6 +18,7 @@ import {
 } from '@prisma/client';
 import { Permission } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { EMPLOYEE_NAME_SELECT, employeeNameOf } from '../employee-name';
 
 import { randomUUID } from 'crypto';
 
@@ -195,7 +196,7 @@ export class AttendanceAdminService {
     const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findFirst({
         where: { id: dto.employeeId },
-        select: { id: true, companyId: true },
+        select: { companyId: true, ...EMPLOYEE_NAME_SELECT },
       }),
     );
     if (!employee) throw new NotFoundException('Employee not found');
@@ -251,7 +252,12 @@ export class AttendanceAdminService {
       employee.companyId,
     );
 
-    return employee;
+    // The approval subject names the employee; the id told the approver nothing (it read "cmv… — 2026-10-12").
+    return {
+      id: employee.id,
+      companyId: employee.companyId,
+      name: employeeNameOf(employee) ?? employee.employeeCode,
+    };
   }
 
   /** The employee a correction belongs to, with no gate applied. */

@@ -33,6 +33,14 @@ import {
 } from '../constants/inventory.constants';
 import { InventoryRefsService } from '../inventory-refs.service';
 import { toNumber } from '../stock/stock.types';
+import { cashHiddenError, isCashHiddenTx } from '../../common/cash/cash-policy';
+import {
+  billStatusFilterTx,
+  billWithoutHiddenCash,
+  cashHiddenCompaniesTx,
+  excludeHiddenCash,
+  hiddenCashByBillTx,
+} from './cash-hiding';
 import {
   CreatePaymentDto,
   ListBillsDto,
@@ -272,6 +280,8 @@ export class PaymentsService {
       changes: {
         after: {
           amount: dto.amount,
+          // 038: lets the activity log recognise a cash payment after it is deleted.
+          paymentMode: dto.paymentMode,
           allocatedAmount: created.allocatedAmount,
           billsAllocated: created.count,
         },
@@ -394,12 +404,16 @@ export class PaymentsService {
     const earlier = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) =>
+      async (tx) =>
         tx.payment.findFirst({
           where: {
             companyId: params.companyId,
             vendorId: params.vendorId,
             deleted: false,
+            // 038: a hidden cash payment is not there to be warned about.
+            ...excludeHiddenCash(
+              await cashHiddenCompaniesTx(tx, { companyId: params.companyId }),
+            ),
             id: { not: params.excludeId },
             referenceNumber: {
               equals: params.referenceNumber,
@@ -431,8 +445,9 @@ export class PaymentsService {
       MAX_PAGE_SIZE,
     );
 
-    const where: Prisma.PaymentWhereInput = {
-      ...companyScope(caller, query.companyId),
+    const scope = companyScope(caller, query.companyId);
+    const filters: Prisma.PaymentWhereInput = {
+      ...scope,
       deleted: false,
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       ...(query.paymentMode ? { paymentMode: query.paymentMode } : {}),
@@ -458,6 +473,12 @@ export class PaymentsService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // 038: cash payments of a company hiding cash are not listed, counted or summed — and a
+        // `paymentMode=cash` filter there finds nothing.
+        const where: Prisma.PaymentWhereInput = {
+          ...filters,
+          ...excludeHiddenCash(await cashHiddenCompaniesTx(tx, scope)),
+        };
         const [rows, total] = await Promise.all([
           tx.payment.findMany({
             where,
@@ -520,18 +541,40 @@ export class PaymentsService {
     caller: AuthenticatedUser,
     query: ListBillsDto,
   ): Promise<{ bills: BillView[]; totalOutstanding: number }> {
-    const where: Prisma.PurchaseBillWhereInput = {
-      ...companyScope(caller, query.companyId),
+    const scope = companyScope(caller, query.companyId);
+    const base: Prisma.PurchaseBillWhereInput = {
+      ...scope,
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
-      ...(query.paymentStatus
-        ? { paymentStatus: query.paymentStatus }
-        : { paymentStatus: { not: PurchaseBillStatus.paid } }),
     };
+    const wanted = query.paymentStatus;
 
     const rows = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      (tx) => tx.purchaseBill.findMany({ where, orderBy: { billDate: 'asc' } }),
+      async (tx) => {
+        // 038: with cash hidden, a bill's paid figure leaves out its cash allocations — worked
+        // out on read from the stored total, never written — and the status filter goes by that.
+        const hidden = await cashHiddenCompaniesTx(tx, scope);
+        const status = await billStatusFilterTx(tx, {
+          base,
+          hidden,
+          matches: wanted
+            ? { paymentStatus: wanted }
+            : { paymentStatus: { not: PurchaseBillStatus.paid } },
+          accepts: (s) =>
+            wanted ? s === wanted : s !== PurchaseBillStatus.paid,
+        });
+        const bills = await tx.purchaseBill.findMany({
+          where: { AND: [base, status] },
+          orderBy: { billDate: 'asc' },
+        });
+        const cash = await hiddenCashByBillTx(
+          tx,
+          bills.map((bill) => bill.id),
+          hidden,
+        );
+        return bills.map((bill) => billWithoutHiddenCash(bill, cash));
+      },
     );
 
     const vendorNames = await this.refs.vendorNames(
@@ -587,6 +630,13 @@ export class PaymentsService {
           throw new NotFoundException(`Payment ${id} not found`);
         }
         assertInScope(caller, existing, `Payment ${id}`);
+        // 038: nobody deletes (and so reverses) a cash payment while the company hides cash.
+        if (
+          existing.paymentMode === PaymentMode.cash &&
+          (await isCashHiddenTx(tx, existing.companyId))
+        ) {
+          throw cashHiddenError();
+        }
 
         for (const allocation of existing.allocations) {
           const [bill] = await tx.$queryRaw<LockedBill[]>`
@@ -629,9 +679,35 @@ export class PaymentsService {
       entityType: AuditEntityType.PAYMENT,
       action: AuditAction.DELETE,
       entityId: id,
+      changes: { before: { paymentMode: removed.paymentMode } },
       accountId: caller.id,
       companyId: removed.companyId,
       ipAddress,
+    });
+  }
+
+  /**
+   * A live payment by id, or null. For a cash payment while its company hides cash (038): null on
+   * a read, so its proof answers 404 as if the payment had never been recorded, and 403
+   * `CASH_HIDDEN` on a write (attaching a proof edits the payment).
+   */
+  private visiblePayment(
+    ctx: ReturnType<typeof rlsContextFor>,
+    paymentId: string,
+    purpose: 'read' | 'write' = 'read',
+  ) {
+    return withRlsContext(this.prisma, ctx, async (tx) => {
+      const payment = await tx.payment.findFirst({
+        where: { id: paymentId, deleted: false },
+      });
+      if (
+        payment?.paymentMode === PaymentMode.cash &&
+        (await isCashHiddenTx(tx, payment.companyId))
+      ) {
+        if (purpose === 'write') throw cashHiddenError();
+        return null;
+      }
+      return payment;
     });
   }
 
@@ -649,9 +725,7 @@ export class PaymentsService {
     ipAddress: string,
   ): Promise<PaymentView> {
     const ctx = rlsContextFor(caller);
-    const payment = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.payment.findFirst({ where: { id: paymentId, deleted: false } }),
-    );
+    const payment = await this.visiblePayment(ctx, paymentId, 'write');
     if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
     assertInScope(caller, payment, `Payment ${paymentId}`);
 
@@ -684,7 +758,11 @@ export class PaymentsService {
       entityType: AuditEntityType.PAYMENT,
       action: AuditAction.UPDATE,
       entityId: paymentId,
-      changes: { proofAttached: true, replaced: payment.proofRef !== null },
+      changes: {
+        proofAttached: true,
+        replaced: payment.proofRef !== null,
+        paymentMode: payment.paymentMode,
+      },
       accountId: caller.id,
       companyId: payment.companyId,
       ipAddress,
@@ -723,9 +801,7 @@ export class PaymentsService {
     ipAddress: string,
   ): Promise<{ data: Buffer; contentType: string }> {
     const ctx = rlsContextFor(caller);
-    const payment = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.payment.findFirst({ where: { id: paymentId, deleted: false } }),
-    );
+    const payment = await this.visiblePayment(ctx, paymentId);
     if (!payment) throw new NotFoundException(`Payment ${paymentId} not found`);
     assertInScope(caller, payment, `Payment ${paymentId}`);
     if (!payment.proofRef) {
@@ -741,7 +817,7 @@ export class PaymentsService {
       entityType: AuditEntityType.PAYMENT,
       action: AuditAction.READ,
       entityId: paymentId,
-      changes: { retrieved: 'proof' },
+      changes: { retrieved: 'proof', paymentMode: payment.paymentMode },
       accountId: caller.id,
       companyId: payment.companyId,
       ipAddress,

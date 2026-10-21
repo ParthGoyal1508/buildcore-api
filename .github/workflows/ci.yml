@@ -23,6 +23,9 @@ jobs:
           cache: 'npm'
       - run: npm install
       - run: npm run lint
+      # Type checking happens here (nest-cli `typeCheck: true`), once. Jest only transpiles, with
+      # @swc/jest: ts-jest type-checked every spec's whole import graph again in each worker, which
+      # was ~95% of a 22-minute test step (582 s → 24 s locally, 2026-10-21).
       - run: npm run build
       # `large-body-routes.spec.ts` builds the whole Nest application (~1.8 GB). The 2026-10-18
       # "Jest worker encountered 4 child process exceptions" failures were that suite crashing on

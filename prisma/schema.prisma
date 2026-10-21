@@ -361,6 +361,10 @@ enum Permission {
   /// Hire bill verification and payment. Separate from `MAINTENANCE` because
   /// approving a rental invoice is an accounts decision, not a workshop one.
   HIRE_BILLS
+  /// 039: recording Head Office's payment against an approved job card's final bill. Its own
+  /// permission because site staff hold `MAINTENANCE` to raise and correct cards, and paying a
+  /// workshop is an accounts decision made at Head Office.
+  MAINTENANCE_PAY
 
   /// Added by 011. Access to the recruitment funnel (requisitions, candidates,
   /// interviews, offers, joining, onboarding, letters, resignations). Reuses the
@@ -1641,6 +1645,9 @@ enum AuditEntityType {
   APPROVAL_DECISION
   APPROVAL_REFUSED
   APPROVAL_CHAIN_CONFIG
+
+  /// 039: the composite item master (a mix such as DLC concrete, issued as its sub-items).
+  COMPOSITE_ITEM
 
   @@schema("shared")
 }
@@ -4072,13 +4079,11 @@ model LeaveApplication {
   decidedByUserId String?
   decidedAt       DateTime?
 
-  /// The reporting manager's login, who decides first (2026-10-16: "first go to reporting manager
-  /// and then HR"). Null when the employee has no reporting manager with a login — the application
-  /// then goes straight to HR, as every one did before. Set at application and never changed, so
-  /// a later change of manager does not move an application already in somebody's queue.
+  /// History only. From 2026-10-16 to 2026-10-20 the reporting manager decided first ("first go to
+  /// reporting manager and then HR"); the client then withdrew that stage and every application
+  /// goes straight to head office. Kept so the manager's remarks on applications from that window
+  /// still read; nothing sets these any more.
   managerUserId    String?
-  /// When the manager approved it on to HR. A manager's rejection is final and is recorded in the
-  /// decision fields above instead.
   managerDecidedAt DateTime?
   managerRemarks   String?
 
@@ -4228,8 +4233,7 @@ model ReimbursementClaim {
   decidedAt       DateTime?
   adminRemarks    String?
 
-  /// The reporting manager's login, who decides first (2026-10-16) — the same stage as
-  /// `LeaveApplication.managerUserId`, set when the claim is submitted.
+  /// History only — see `LeaveApplication.managerUserId`; the stage was withdrawn on 2026-10-20.
   managerUserId    String?
   managerDecidedAt DateTime?
   managerRemarks   String?
@@ -4793,6 +4797,8 @@ enum SalaryAdvanceStatus {
   approved
   disbursed
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("hr")
 }
@@ -4966,11 +4972,16 @@ model PayrollLineItem {
   gratuity     Decimal @default(0) @db.Decimal(12, 2)
   bonus        Decimal @default(0) @db.Decimal(12, 2)
 
+  /// 039: the columns a person changed by hand after generation, so the run screen can highlight
+  /// them. The who/old/new/why of each change is `PayrollLineItemEdit`.
+  editedFields String[] @default([])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
-  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payrollRun PayrollRun            @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee              @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  edits      PayrollLineItemEdit[]
 
   @@unique([payrollRunId, employeeId])
   @@index([employeeId])
@@ -4978,10 +4989,39 @@ model PayrollLineItem {
   @@schema("payroll")
 }
 
+/// 039: one hand edit to one field of a generated payroll line — who, the old and new figure,
+/// and the mandatory justification. Append-only, the `LabourPunchCorrection` shape.
+model PayrollLineItemEdit {
+  id        String @id @default(cuid())
+  companyId String
+
+  payrollRunId String
+  /// Null once the line is regenerated away: the edit history must outlive the line it changed,
+  /// so who changed what stays readable by run and employee.
+  lineItemId   String?
+  lineItem     PayrollLineItem? @relation(fields: [lineItemId], references: [id], onDelete: SetNull)
+  employeeId   String
+
+  field         String
+  oldValue      Decimal @db.Decimal(12, 2)
+  newValue      Decimal @db.Decimal(12, 2)
+  justification String
+
+  editedByUserId String
+  createdAt      DateTime @default(now())
+
+  @@index([companyId])
+  @@index([payrollRunId])
+  @@index([lineItemId, createdAt])
+  @@schema("payroll")
+}
+
 enum LoanStatus {
   pending
   active
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("payroll")
 }
@@ -6152,6 +6192,11 @@ model ApprovalInstance {
   /// cannot be worn down by repetition without leaving a trace.
   returnCount Int @default(0)
 
+  /// People who may not decide this item, whatever roles they hold (2026-10-20): the applicant,
+  /// the maker, the employee being paid. Stamped at submit by the owning module and refused by
+  /// `ApprovalService.decide`; such items are left out of their queue too.
+  excludedUserIds String[] @default([])
+
   /// A one-off grant of authority at the CURRENT level to one named person (FR-019).
   ///
   /// Reassignment needs storage because authority in this model comes from holding a
@@ -6325,6 +6370,46 @@ model Item {
   @@unique([companyId, code])
   @@index([companyId])
   @@index([companyId, categoryId])
+  @@schema("settings")
+}
+
+/// 039: an item made of other items in fixed proportions — "DLC concrete for plant foundation",
+/// per 1 Cum: cement 0.08 MT, crusher dust 0.827 MT, … It holds no stock of its own: issuing
+/// 10 Cum issues each sub-item × 10 from the chosen store.
+model CompositeItem {
+  id        String @id @default(cuid())
+  companyId String
+
+  name        String
+  unit        ItemUnit
+  description String?
+  active      Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  components CompositeItemComponent[]
+
+  @@unique([companyId, name])
+  @@index([companyId])
+  @@schema("settings")
+}
+
+model CompositeItemComponent {
+  id        String @id @default(cuid())
+  companyId String
+
+  compositeItemId String
+  compositeItem   CompositeItem @relation(fields: [compositeItemId], references: [id], onDelete: Cascade)
+
+  /// `settings.Item` — same schema, but kept a plain id like every inventory reference to Item.
+  itemId     String
+  /// How much of the sub-item, in its own unit, goes into one unit of the composite.
+  qtyPerUnit Decimal @db.Decimal(18, 6)
+  position   Int     @default(0)
+
+  @@unique([compositeItemId, itemId])
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -6757,6 +6842,13 @@ model Issue {
   returnedOn       DateTime? @db.Date
   receivedBy       String?
 
+  /// 039: set when this row is one sub-item of a composite issue ("10 Cum of DLC concrete").
+  /// Every row of that issue shares `issueGroupId` and the slip number; each row deducts its own
+  /// item, rounded to 3 decimals, exactly as a plain issue would.
+  compositeItemId   String?
+  compositeQuantity Decimal? @db.Decimal(18, 3)
+  issueGroupId      String?
+
   /// The indent line this issue fulfils, if it came from one (FR-023).
   indentLineId String?
   indentLine   MaterialIndentLine? @relation(fields: [indentLineId], references: [id])
@@ -6773,6 +6865,7 @@ model Issue {
   @@index([indentLineId])
   @@index([companyId, projectId])
   @@index([companyId, vendorId])
+  @@index([issueGroupId])
   @@schema("inventory")
 }
 
@@ -7812,14 +7905,117 @@ model MaintenanceJob {
   jobCardNo String?
   card      Json?
 
+  /// 039: the job card's own workflow, separate from `status` (which is the repair's open/closed).
+  /// Null for a job that has no card. Site raises it with the quotation, Head Office approves or
+  /// sends it back, site uploads the final bill, Head Office records payment. Who did what and when
+  /// is `JobCardEvent`; the approve/return decisions themselves are also the spine's.
+  jobCardStatus         JobCardStatus?
+  /// The approval spine item while the card is with Head Office.
+  jobCardApprovalItemId String?
+  /// The remarks Head Office sent it back with — shown to site until it is resubmitted.
+  jobCardReturnRemarks  String?
+
+  /// The workshop's quotation: required to submit.
+  quotationAmount      Decimal? @db.Decimal(18, 2)
+  quotationFileRef     String?
+  quotationFileName    String?
+  quotationContentType String?
+
+  /// The final bill copy site uploads once the card is approved.
+  finalBillNumber      String?
+  finalBillDate        DateTime? @db.Date
+  finalBillAmount      Decimal?  @db.Decimal(18, 2)
+  finalBillFileRef     String?
+  finalBillFileName    String?
+  finalBillContentType String?
+  finalBillUploadedAt  DateTime?
+  finalBillUploadedBy  String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  partMovements SparePartMovement[]
-  serviceBills  ServiceBill[]
+  partMovements   SparePartMovement[]
+  serviceBills    ServiceBill[]
+  jobCardEvents   JobCardEvent[]
+  jobCardPayments JobCardPayment[]
 
   @@index([companyId, status])
   @@index([companyId, equipmentId, status])
+  @@index([companyId, jobCardStatus])
+  @@schema("plant")
+}
+
+/// 039: where a job card stands. "Sent for correction" is `returned`: a draft that carries Head
+/// Office's remarks, editable by site and resubmitted from there.
+enum JobCardStatus {
+  draft
+  pending_approval
+  returned
+  approved
+  bill_uploaded
+  paid
+
+  @@schema("plant")
+}
+
+enum JobCardPaymentMode {
+  bank_transfer
+  cheque
+  upi
+  cash
+
+  @@schema("plant")
+}
+
+/// 039: one line of a job card's history — created, edited, submitted, sent for correction,
+/// resubmitted, approved, final bill uploaded, payment recorded. Append-only.
+model JobCardEvent {
+  id        String @id @default(cuid())
+  companyId String
+
+  maintenanceJobId String
+  maintenanceJob   MaintenanceJob @relation(fields: [maintenanceJobId], references: [id], onDelete: Cascade)
+
+  /// `created | edited | submitted | returned | resubmitted | approved | bill_uploaded | payment | paid`
+  /// — a string so a new kind needs no migration, the `EquipmentEvent` rule.
+  kind       String
+  fromStatus JobCardStatus?
+  toStatus   JobCardStatus?
+  remarks    String?
+  detail     Json?
+
+  actorUserId String?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId])
+  @@index([maintenanceJobId, createdAt])
+  @@schema("plant")
+}
+
+/// 039: a payment Head Office made against a job card's final bill. Several when paid in parts;
+/// the card is `paid` once they reach the bill amount. Append-only.
+model JobCardPayment {
+  id        String @id @default(cuid())
+  companyId String
+
+  maintenanceJobId String
+  maintenanceJob   MaintenanceJob @relation(fields: [maintenanceJobId], references: [id], onDelete: Cascade)
+
+  amount          Decimal            @db.Decimal(18, 2)
+  paidOn          DateTime           @db.Date
+  mode            JobCardPaymentMode
+  referenceNumber String?
+  remarks         String?
+
+  proofFileRef     String?
+  proofFileName    String?
+  proofContentType String?
+
+  recordedByUserId String
+  createdAt        DateTime @default(now())
+
+  @@index([companyId])
+  @@index([maintenanceJobId])
   @@schema("plant")
 }
 
@@ -8191,6 +8387,8 @@ enum AdvanceStatus {
   approved
   disbursed
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("labour")
 }

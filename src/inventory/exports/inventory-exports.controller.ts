@@ -179,6 +179,17 @@ export class InventoryExportsController {
         { header: 'Item', width: 28, value: (r) => r.itemName },
         { header: 'Unit', width: 8, value: (r) => r.unit },
         { header: 'Quantity', format: 'quantity', value: (r) => r.quantity },
+        // 039: the mix a sub-item row was issued as part of, "DLC Concrete · 10 CUM".
+        {
+          header: 'Composite',
+          width: 26,
+          value: (r) =>
+            r.compositeItemName
+              ? `${r.compositeItemName} · ${r.compositeQuantity} ${
+                  r.compositeUnit ?? ''
+                }`.trim()
+              : null,
+        },
         {
           header: 'Returned',
           format: 'quantity',

@@ -17,6 +17,7 @@ const build = (options: {
   serviceBills?: { netPayable: Prisma.Decimal }[];
   fuelTotal?: number;
   projectsThrows?: boolean;
+  projectStart?: Date | null;
 }) => {
   const prisma = createPrismaMock({
     equipment: {
@@ -44,6 +45,9 @@ const build = (options: {
     getSitesByProject: options.projectsThrows
       ? jest.fn().mockRejectedValue(new Error('projects is down'))
       : jest.fn().mockResolvedValue(options.siteIds ?? ['site-1']),
+    getProjectStartDate: options.projectsThrows
+      ? jest.fn().mockRejectedValue(new Error('projects is down'))
+      : jest.fn().mockResolvedValue(options.projectStart ?? null),
   };
   const service = new PlantService(
     prisma as never,
@@ -87,6 +91,48 @@ describe('PlantService.getMachineryCostByProject (FR-008, FR-025)', () => {
     await expect(
       service.getMachineryCostByProject('project-1', 'co-1', range),
     ).resolves.toBe(12000);
+  });
+
+  it('charges depreciation only from the project start, not the whole cumulative range', async () => {
+    const { service } = build({
+      projectStart: new Date('2026-07-15T00:00:00.000Z'),
+      equipment: [
+        {
+          id: 'eq-1',
+          ownership: 'owned',
+          purchaseCost: decimal(1200000),
+          depreciationRate: decimal(12),
+          purchaseDate: new Date('2019-04-01T00:00:00.000Z'),
+        },
+      ],
+    });
+
+    // A cumulative P&L asks from 2000; the project began in July, so July–September is 3 months
+    // at 12,000 — not 26 years' worth.
+    await expect(
+      service.getMachineryCostByProject('project-1', 'co-1', {
+        from: new Date('2000-01-01T00:00:00.000Z'),
+        to: new Date('2026-09-30T00:00:00.000Z'),
+      }),
+    ).resolves.toBe(36000);
+  });
+
+  it('charges nothing for a machine bought after the range ends', async () => {
+    const { service } = build({
+      equipment: [
+        {
+          id: 'eq-1',
+          ownership: 'owned',
+          purchaseCost: decimal(1200000),
+          depreciationRate: decimal(12),
+          purchaseDate: new Date('2026-11-01T00:00:00.000Z'),
+        },
+      ],
+    });
+
+    await expect(
+      service.getMachineryCostByProject('project-1', 'co-1', range),
+    ).resolves.toBe(0);
   });
 
   it('includes spare parts and verified service bills — the FR-025 correction', async () => {

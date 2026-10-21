@@ -25,6 +25,7 @@ import {
   targetLabelOf,
   targetLabelsFor,
 } from './activity-descriptions';
+import { hiddenCashEntryIds } from './cash-entries';
 
 /** One row of the Activity Log feed (contracts/dashboard-api.md). */
 export interface ActivityLogEntry {
@@ -269,7 +270,7 @@ export class ActivityLogService {
         ],
       };
     }
-    return {
+    const base: Prisma.AuditLogEntryWhereInput = {
       // RLS is not enforced on the legacy audit table, so scope explicitly here:
       // an ordinary caller sees only their own company, a Super Admin sees all — or, having
       // selected a company, that company. Not `user.companyId`: that is the **home** company,
@@ -280,6 +281,10 @@ export class ActivityLogService {
       ...(query.userId ? { accountId: query.userId } : {}),
       ...(search ? { AND: [search] } : {}),
     };
+    // 038: an entry about a cash transaction of a company hiding cash is left out, as if the
+    // transaction had never been recorded — from the feed and the CSV export alike.
+    const hidden = await hiddenCashEntryIds(this.prisma, ctx, base);
+    return hidden.length ? { AND: [base, { id: { notIn: hidden } }] } : base;
   }
 
   /** A custom `from`/`to` (business-timezone days, inclusive) or the preset (036 E3). */

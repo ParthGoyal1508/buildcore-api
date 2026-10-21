@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { StorageModule } from '../common/storage/storage.module';
@@ -31,13 +31,13 @@ import { VendorIdentitySource } from './vendors/vendor-identity.source';
  * order totals, both still stubs; `StorageModule` for contractor documents. No
  * cross-schema query anywhere — Principle I.
  *
- * The dependency runs partners → projects, one way. When 008 needs
- * `getSubcontractorCostByProject()` for its P&L it will point the other way too, and
- * that edge will need `forwardRef()` on both sides. It is not needed today, and
- * adding it pre-emptively would hide a real cycle if one appeared for another reason.
+ * The dependency runs partners → projects directly, but projects now reaches partners back
+ * through hr → payroll → plant → inventory, so the edge is a real cycle and takes
+ * `forwardRef()`. Without it, loading the graph from `ProjectsModule` (as a spec does) reads
+ * `ProjectsModule` here before it exists — `undefined` under ts-jest, an error under swc.
  */
 @Module({
-  imports: [SettingsModule, ProjectsModule, StorageModule],
+  imports: [SettingsModule, forwardRef(() => ProjectsModule), StorageModule],
   controllers: [
     VendorCategoriesController,
     VendorsController,

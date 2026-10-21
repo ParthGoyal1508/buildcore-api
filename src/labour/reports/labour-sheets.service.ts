@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
 import { PrismaService } from 'nestjs-prisma';
 
@@ -18,6 +19,12 @@ import {
 } from '../attendance/muster-attendance.service';
 import { SupervisorSiteService } from '../supervisor-sites/supervisor-site.service';
 import { deductionEntries } from '../payment-sheets/payment-sheet.rules';
+import { CashPolicyService } from '../../common/cash/cash-policy';
+import {
+  cashCarrySources,
+  isCashSheet,
+  visibleSheetLines,
+} from '../cash/labour-cash-view';
 
 export interface SheetFile {
   buffer: Buffer;
@@ -57,6 +64,8 @@ export class LabourSheetsService {
     private readonly refs: LabourRefsService,
     private readonly supervisorSites: SupervisorSiteService,
     private readonly muster: MusterAttendanceService,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
 
   /**
@@ -233,6 +242,26 @@ export class LabourSheetsService {
       throw new NotFoundException(`Payment sheet ${id} not found`);
     }
     assertInScope(caller, sheet, `Payment sheet ${id}`);
+    // 038: this download bypasses the interceptors (@Res), so cash hiding is applied here: a direct
+    // (cash) sheet does not exist, and a contractor sheet prints only its non-cash lines and their
+    // totals.
+    if (this.cash && (await this.cash.isHidden(sheet.companyId))) {
+      if (isCashSheet(sheet)) {
+        throw new NotFoundException(`Payment sheet ${id} not found`);
+      }
+      const sources = await withRlsContext(
+        this.prisma,
+        rlsContextFor(caller),
+        (tx) => cashCarrySources(tx, sheet.lines),
+      );
+      const view = visibleSheetLines(sheet, sheet.lines, sources);
+      if (view.changed) {
+        sheet.lines = view.lines;
+        sheet.grossTotal = new Prisma.Decimal(view.grossTotal);
+        sheet.deductionTotal = new Prisma.Decimal(view.deductionTotal);
+        sheet.netTotal = new Prisma.Decimal(view.netTotal);
+      }
+    }
     if (sheet.siteId) {
       await this.supervisorSites.assertSiteAllowed(caller, sheet.siteId);
     }

@@ -34,7 +34,14 @@ import {
   UpdateMaintenanceJobDto,
 } from './dto/maintenance.dto';
 import { formFormatOf, sendForm } from '../../common/form-document';
+import { contentDispositionFor } from '../../common/storage/file-type';
+import {
+  JobCardFinalBillDto,
+  JobCardQuotationDto,
+  RecordJobCardPaymentDto,
+} from './dto/job-card-flow.dto';
 import { JobCardDto } from './dto/job-card.dto';
+import { JobCardFile, JobCardFlowService } from './job-card-flow.service';
 import { JobCardService } from './job-card.service';
 import { MaintenanceService } from './maintenance.service';
 
@@ -56,6 +63,7 @@ export class MaintenanceController {
     private readonly maintenance: MaintenanceService,
     private readonly spareParts: SparePartsService,
     private readonly jobCards: JobCardService,
+    private readonly jobCardFlow: JobCardFlowService,
   ) {}
 
   @Get('job-card/prefill')
@@ -105,8 +113,135 @@ export class MaintenanceController {
     @UserEntity() caller: AuthenticatedUser,
     @Param('id') id: string,
     @Body() card: JobCardDto,
+    @Ip() ipAddress: string,
   ) {
-    return this.jobCards.save(caller, id, card);
+    return this.jobCards.save(caller, id, card, ipAddress);
+  }
+
+  // ── The job card's workflow (039): quotation → Head Office → final bill → payment ──
+
+  @Put(':id/job-card/quotation')
+  @ApiOperation({
+    summary:
+      "Set the workshop's quotation amount, and upload or replace its file",
+    description:
+      'Required to submit, not to save a draft. Only while the card is a draft or sent back ' +
+      'for correction (409 JOB_CARD_NOT_EDITABLE otherwise).',
+  })
+  async saveQuotation(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: JobCardQuotationDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.jobCardFlow.saveQuotation(caller, id, dto, ipAddress);
+  }
+
+  @Post(':id/job-card/submit')
+  @ApiOperation({
+    summary:
+      'Send the job card to Head Office for approval, or resubmit it after correction',
+    description:
+      '400 JOB_CARD_QUOTATION_REQUIRED without the quotation file and amount; 409 ' +
+      'JOB_CARD_NOT_SUBMITTABLE unless the card is a draft or sent back for correction.',
+  })
+  async submitJobCard(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Ip() ipAddress: string,
+  ) {
+    return this.jobCardFlow.submit(caller, id, ipAddress);
+  }
+
+  @Post(':id/job-card/final-bill')
+  @ApiOperation({
+    summary: "Upload the workshop's final bill against an approved job card",
+    description:
+      'Replaceable until the first payment is recorded (409 JOB_CARD_BILL_LOCKED after).',
+  })
+  async uploadFinalBill(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: JobCardFinalBillDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.jobCardFlow.uploadFinalBill(caller, id, dto, ipAddress);
+  }
+
+  @Get(':id/job-card/payments')
+  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @ApiOperation({
+    summary: "The final bill's payments, the paid total and the balance",
+  })
+  async jobCardPayments(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.jobCardFlow.payments(caller, id);
+  }
+
+  @Post(':id/job-card/payments')
+  @RequirePermissions(Permission.MAINTENANCE_PAY)
+  @ApiOperation({
+    summary: 'Record a payment against the final bill (Head Office)',
+    description:
+      'Part payments allowed; the card becomes `paid` when they reach the bill. 400 ' +
+      'JOB_CARD_OVERPAYMENT beyond the balance. Cash needs CASH_ENTRY and is refused while the ' +
+      'company hides cash.',
+  })
+  async recordJobCardPayment(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RecordJobCardPaymentDto,
+    @Ip() ipAddress: string,
+  ) {
+    return this.jobCardFlow.recordPayment(caller, id, dto, ipAddress);
+  }
+
+  @Get(':id/job-card/history')
+  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @ApiOperation({
+    summary: 'Who did what to the job card, and when — oldest first',
+  })
+  async jobCardHistory(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    return this.jobCardFlow.history(caller, id);
+  }
+
+  @Get(':id/job-card/quotation/file')
+  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @ApiOperation({ summary: 'Download the quotation' })
+  async quotationFile(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    sendFile(res, await this.jobCardFlow.quotationFile(caller, id));
+  }
+
+  @Get(':id/job-card/final-bill/file')
+  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @ApiOperation({ summary: 'Download the final bill' })
+  async finalBillFile(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    sendFile(res, await this.jobCardFlow.finalBillFile(caller, id));
+  }
+
+  @Get(':id/job-card/payments/:paymentId/proof')
+  @RequirePermissions(Permission.MAINTENANCE, Permission.MAINTENANCE_PAY)
+  @ApiOperation({ summary: "Download a payment's proof" })
+  async paymentProof(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('paymentId') paymentId: string,
+    @Res() res: Response,
+  ) {
+    sendFile(res, await this.jobCardFlow.paymentProof(caller, id, paymentId));
   }
 
   @Get()
@@ -160,7 +295,7 @@ export class MaintenanceController {
   ) {
     const job = await this.maintenance.create(caller, dto, ipAddress);
     // Opened from the job card form (2026-10-15): the card is saved, and numbered, with it.
-    if (dto.card) await this.jobCards.save(caller, job.id, dto.card);
+    if (dto.card) await this.jobCards.save(caller, job.id, dto.card, ipAddress);
     return job;
   }
 
@@ -231,4 +366,13 @@ export class MaintenanceController {
   ) {
     return this.maintenance.close(caller, id, dto, ipAddress);
   }
+}
+
+/** A stored job card file, under its own name and type — never cached. */
+function sendFile(res: Response, file: JobCardFile) {
+  res.setHeader('Content-Type', file.contentType);
+  res.setHeader('Content-Disposition', contentDispositionFor(file.filename));
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Disposition');
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(file.data);
 }

@@ -46,7 +46,19 @@ import { ProjectLockGuard } from '../guards/project-lock.guard';
 export class ProjectsController {
   constructor(private readonly projects: ProjectsService) {}
 
+  /**
+   * `PROJECTS`, **`INVENTORY` or `DAILY_WORKER_REGISTRY`** (039), for the list alone — the project
+   * picker of two modules whose standard roles hold nothing of the portfolio. An issue is tagged
+   * with the project the material went to (the Storekeeper role), and a labour payment sheet is
+   * generated and named per project (the Labour Supervisor role). One project, and every write,
+   * stay `PROJECTS`.
+   */
   @Get()
+  @RequirePermissions(
+    Permission.PROJECTS,
+    Permission.INVENTORY,
+    Permission.DAILY_WORKER_REGISTRY,
+  )
   @ApiOperation({
     summary: 'Paginated portfolio list with search, status and client filters',
   })

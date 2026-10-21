@@ -18,6 +18,10 @@ import { bookValue as depreciatedBookValue } from '../../assets/depreciation';
 import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { businessToday } from '../../common/business-date';
+import {
+  CashPolicyService,
+  cashHiddenError,
+} from '../../common/cash/cash-policy';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import { assertInScope, companyScope } from '../../settings/company-scope';
@@ -28,6 +32,13 @@ import type { DisposeEquipmentDto, ListDisposalsDto } from './dto/disposal.dto';
 /** Ten megabytes — the ceiling every document upload in the app shares. */
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const ATTACHMENT_NAMESPACE = 'equipment-disposal';
+
+/**
+ * A sale received in cash (038). Only a sale carries a payment mode; a scrapping never does.
+ * Compared loosely, because the column is free text and older rows were written by hand.
+ */
+export const isCashDisposal = (row: { paymentMode?: string | null }) =>
+  row.paymentMode?.trim().toLowerCase() === 'cash';
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 const iso = (d: Date) => d.toISOString().slice(0, 10);
@@ -85,7 +96,27 @@ export class EquipmentDisposalService {
     private readonly auditLog: AuditLogService,
     private readonly refs: PlantRefsService,
     private readonly storage: StorageService,
+    private readonly cash: CashPolicyService,
   ) {}
+
+  /**
+   * 038 — what "the cash sale does not exist" means for a disposal. The **machine** stays disposed:
+   * its status is a fact about the equipment, not a transaction, and un-retiring it on screen would
+   * put a sold machine back in every picker. What is hidden is the cash sale record itself — the
+   * row on the Scrapped & Sold dashboard and its export, its value, buyer, invoice and profit, the
+   * counts and totals, its attachment and its by-id read (404). Reversing it is refused.
+   */
+  private async hiddenCash<
+    T extends { companyId: string; paymentMode: string | null },
+  >(rows: T[]): Promise<T[]> {
+    const cashRows = rows.filter(isCashDisposal);
+    if (cashRows.length === 0) return rows;
+    const hidden = await this.cash.hiddenAmong(
+      cashRows.map((r) => r.companyId),
+    );
+    if (hidden.size === 0) return rows;
+    return rows.filter((r) => !(isCashDisposal(r) && hidden.has(r.companyId)));
+  }
 
   /**
    * What the dispose form and its confirmation step need: the book value on the date where the
@@ -144,6 +175,10 @@ export class EquipmentDisposalService {
     }
 
     const isSale = dto.type === EquipmentDisposalType.sold;
+    // 038. A sale received in cash is a cash transaction; with cash hidden nobody records one.
+    if (isSale && isCashDisposal(dto)) {
+      await this.cash.assertCashAllowed(machine.companyId);
+    }
     if (isSale) {
       if (!dto.counterpartyName?.trim()) {
         throw new BadRequestException('Enter the buyer’s name.');
@@ -297,7 +332,13 @@ export class EquipmentDisposalService {
       accountId: caller.id,
       companyId: machine.companyId,
       ipAddress,
-      changes: { equipmentId: machine.id, type: label, releasedSiteId },
+      // `paymentMode` so the activity log can leave a cash sale's entries out while cash is hidden (038).
+      changes: {
+        equipmentId: machine.id,
+        type: label,
+        releasedSiteId,
+        paymentMode: isSale ? dto.paymentMode ?? null : null,
+      },
     });
     return this.findOne(caller, created.id);
   }
@@ -323,6 +364,13 @@ export class EquipmentDisposalService {
         code: 'EQUIPMENT_NOT_DISPOSED',
         message: `${machine.code} is not scrapped or sold, so there is nothing to reverse.`,
       });
+    }
+    // 038. A cash sale is not reversed while cash is hidden — reversing it is changing it.
+    if (
+      isCashDisposal(disposal) &&
+      (await this.cash.isHidden(disposal.companyId))
+    ) {
+      throw cashHiddenError();
     }
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       await tx.equipmentDisposal.update({
@@ -361,7 +409,11 @@ export class EquipmentDisposalService {
       accountId: caller.id,
       companyId: machine.companyId,
       ipAddress,
-      changes: { reversed: true, reason: reason.trim() },
+      changes: {
+        reversed: true,
+        reason: reason.trim(),
+        paymentMode: disposal.paymentMode,
+      },
     });
     return this.findOne(caller, disposal.id);
   }
@@ -397,14 +449,17 @@ export class EquipmentDisposalService {
         where: { equipmentId: machine.id, reversedAt: null },
       }),
     );
-    return row ? this.findOne(caller, row.id) : null;
+    if (!row || (await this.hiddenCash([row])).length === 0) return null;
+    return this.findOne(caller, row.id);
   }
 
   async findOne(caller: AuthenticatedUser, id: string): Promise<DisposalView> {
     const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.equipmentDisposal.findUnique({ where: { id } }),
     );
-    if (!row) throw new NotFoundException('Disposal not found');
+    if (!row || (await this.hiddenCash([row])).length === 0) {
+      throw new NotFoundException('Disposal not found');
+    }
     assertInScope(caller, row, 'Disposal');
     const [view] = await this.toViews(caller, [row]);
     return view;
@@ -414,7 +469,11 @@ export class EquipmentDisposalService {
     const row = await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
       tx.equipmentDisposal.findUnique({ where: { id } }),
     );
-    if (!row || !row.attachmentRef)
+    if (
+      !row ||
+      !row.attachmentRef ||
+      (await this.hiddenCash([row])).length === 0
+    )
       throw new NotFoundException('No attachment');
     assertInScope(caller, row, 'Disposal');
     return {
@@ -451,7 +510,8 @@ export class EquipmentDisposalService {
           orderBy: { disposalDate: 'desc' },
         }),
     );
-    let items = await this.toViews(caller, rows);
+    // 038: a cash sale of a company hiding cash is left out of the rows, counts and totals alike.
+    let items = await this.toViews(caller, await this.hiddenCash(rows));
     if (query.categoryId)
       items = items.filter((i) => i.categoryId === query.categoryId);
     if (query.search?.trim()) {

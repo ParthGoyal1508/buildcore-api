@@ -273,8 +273,76 @@ async function writeLetterPdf(title: string, body: string): Promise<string> {
  */
 /**
  * The four roles of the recommended model (Roles and Approvals, 2026-10-18), with read and
- * write per permission. Super Admin keeps every permission, as its migration grants it.
+ * write per permission, and the client's six standard roles (039, 2026-10-20). Super Admin keeps
+ * every permission, as its migration grants it.
  */
+/**
+ * Role 1 (039): every module except Dashboard, with its approvals and payments; Settings for
+ * masters only — user and role management, company settings, data delete, cross-company access and
+ * machine disposal stay with Super Admin.
+ */
+const OPERATIONS_MANAGER: Permission[] = [
+  Permission.MY_WORKSPACE,
+  Permission.PARTNERS,
+  Permission.SETTINGS,
+  Permission.CASH_ENTRY,
+  Permission.EMPLOYEES,
+  Permission.ATTENDANCE,
+  Permission.PAYROLL,
+  Permission.CHALLANS,
+  Permission.LOANS,
+  Permission.HR_LETTERS,
+  Permission.PROJECTS,
+  Permission.PROJECT_FINANCIALS,
+  Permission.PROJECT_LOCK,
+  Permission.BANK_GUARANTEES,
+  Permission.DWR,
+  Permission.MACHINERY,
+  Permission.LOGBOOK,
+  Permission.FUEL,
+  Permission.MAINTENANCE,
+  Permission.HIRE_BILLS,
+  Permission.MAINTENANCE_PAY,
+  Permission.INVENTORY,
+  Permission.INVENTORY_APPROVE,
+  Permission.DAILY_WORKER_REGISTRY,
+  Permission.LABOUR_APPROVE,
+  Permission.LABOUR_PUNCH_CORRECT,
+  Permission.RECRUITMENT,
+  Permission.RECRUITMENT_APPROVE,
+  Permission.ASSETS,
+  Permission.ASSETS_APPROVE,
+  Permission.REPORTS,
+  Permission.DATA_EXPORT,
+];
+const PROJECTS_MODULE: Permission[] = [
+  Permission.PROJECTS,
+  Permission.PROJECT_FINANCIALS,
+  Permission.PROJECT_LOCK,
+  Permission.BANK_GUARANTEES,
+  Permission.DWR,
+];
+/** Role 2: as Operations Manager, without Projects. */
+const ACCOUNTS_AND_ADMIN = OPERATIONS_MANAGER.filter(
+  (p) => !PROJECTS_MODULE.includes(p),
+);
+/** Role 3: as Accounts & Admin, without Reports and HR & Payroll. */
+const SITE_OPERATIONS = ACCOUNTS_AND_ADMIN.filter(
+  (p) =>
+    !(
+      [
+        Permission.EMPLOYEES,
+        Permission.ATTENDANCE,
+        Permission.PAYROLL,
+        Permission.CHALLANS,
+        Permission.LOANS,
+        Permission.HR_LETTERS,
+        Permission.REPORTS,
+        Permission.DATA_EXPORT,
+      ] as Permission[]
+    ).includes(p),
+);
+
 const ROLE_GRANTS: Record<
   Exclude<DevRole, 'Super Admin'>,
   { write: Permission[]; read: Permission[] }
@@ -292,6 +360,8 @@ const ROLE_GRANTS: Record<
       Permission.LOGBOOK,
       Permission.FUEL,
       Permission.INVENTORY,
+      // 039: the Site In-charge raises job cards, as `20261021100002_standard_roles` grants.
+      Permission.MAINTENANCE,
     ],
     read: [
       Permission.PROJECTS,
@@ -324,6 +394,7 @@ const ROLE_GRANTS: Record<
       Permission.LABOUR_APPROVE,
       Permission.MACHINERY,
       Permission.MAINTENANCE,
+      Permission.MAINTENANCE_PAY,
       Permission.HIRE_BILLS,
       Permission.ASSETS,
       Permission.ASSETS_APPROVE,
@@ -342,6 +413,27 @@ const ROLE_GRANTS: Record<
   },
   // Their own records only.
   'General User': { write: [Permission.MY_WORKSPACE], read: [] },
+  // The client's standard roles, exactly as `20261021100002_standard_roles` creates them — read and
+  // write on every permission, as the migration grants. Roles 4–6 hold the doing permission alone;
+  // approvals stay with the roles above them.
+  'Operations Manager': { write: OPERATIONS_MANAGER, read: [] },
+  'Accounts & Admin': { write: ACCOUNTS_AND_ADMIN, read: [] },
+  'Site Operations': { write: SITE_OPERATIONS, read: [] },
+  'DWR Entry': { write: [Permission.DWR, Permission.MY_WORKSPACE], read: [] },
+  'Labour Supervisor': {
+    write: [Permission.DAILY_WORKER_REGISTRY, Permission.MY_WORKSPACE],
+    read: [],
+  },
+  Storekeeper: {
+    write: [Permission.INVENTORY, Permission.MY_WORKSPACE],
+    read: [],
+  },
+};
+
+/** Where each standard role lands after signing in, as the migration sets it. */
+const ROLE_HOMES: Partial<Record<DevRole, string>> = {
+  'Labour Supervisor': 'labour',
+  Storekeeper: 'inventory',
 };
 
 async function shapeRoles(): Promise<void> {
@@ -354,12 +446,7 @@ async function shapeRoles(): Promise<void> {
       data: { name: to },
     });
   }
-  const keep: DevRole[] = [
-    'Super Admin',
-    'Site Incharge',
-    'Head Office',
-    'General User',
-  ];
+  const keep: string[] = ['Super Admin', ...Object.keys(ROLE_GRANTS)];
   const extra = await prisma.role.findMany({
     where: { companyId: null, name: { notIn: keep } },
     select: { id: true },
@@ -379,7 +466,13 @@ async function shapeRoles(): Promise<void> {
       role?.id ??
       (await prisma.role.create({ data: { name, permissions: [] } })).id;
     const all = [...new Set([...grants.write, ...grants.read])];
-    await prisma.role.update({ where: { id }, data: { permissions: all } });
+    await prisma.role.update({
+      where: { id },
+      data: {
+        permissions: all,
+        homeModule: ROLE_HOMES[name as DevRole] ?? undefined,
+      },
+    });
     await prisma.rolePermission.deleteMany({ where: { roleId: id } });
     await prisma.rolePermission.createMany({
       data: [
@@ -438,7 +531,8 @@ const DIR_ONLY = [L(1, SLOT_FINAL, 'Director', true)];
 const DEV_CHAINS: Record<string, ReturnType<typeof L>[]> = {
   attendance_exception: SITE_HO,
   attendance_correction: SITE_HO,
-  payroll_run: SITE_HO_DIR,
+  // 039 (2026-10-20): payroll is generated for the whole company and goes to the Director alone.
+  payroll_run: DIR_ONLY,
   operator_fuel_recovery: SITE_HO,
   dwr: HO_ONLY,
   ra_bill: SITE_HO_DIR,
@@ -1843,8 +1937,21 @@ interface StaffSpec {
   login?: { username: string; password: string; role: DevRole };
 }
 
-/** The four roles of the recommended model (Roles and Approvals, 2026-10-18). */
-type DevRole = 'Super Admin' | 'Site Incharge' | 'Head Office' | 'General User';
+/**
+ * The four roles of the recommended model (Roles and Approvals, 2026-10-18), and the client's six
+ * standard roles (039, 2026-10-20).
+ */
+type DevRole =
+  | 'Super Admin'
+  | 'Site Incharge'
+  | 'Head Office'
+  | 'General User'
+  | 'Operations Manager'
+  | 'Accounts & Admin'
+  | 'Site Operations'
+  | 'DWR Entry'
+  | 'Labour Supervisor'
+  | 'Storekeeper';
 
 interface CompanySpec {
   name: string;
@@ -2132,6 +2239,98 @@ const COMPANIES: CompanySpec[] = [
         joined: '2024-01-08',
         mobile: '9414052310',
       },
+      // One login per standard role (039), so each can be signed in to and walked. Before
+      // the last two on purpose: those two become the recruitment pipeline's joined hires.
+      {
+        first: 'Naveen',
+        last: 'Khatri',
+        gender: 'male',
+        dept: 'Projects',
+        desig: 'Senior Engineer',
+        basic: 72000,
+        joined: '2021-11-15',
+        mobile: '9414052313',
+        login: {
+          username: 'naveen.khatri',
+          password: 'Naveen@6274',
+          role: 'Operations Manager',
+        },
+      },
+      {
+        first: 'Rekha',
+        last: 'Maheshwari',
+        gender: 'female',
+        dept: 'Accounts & Finance',
+        desig: 'Accountant',
+        basic: 44000,
+        joined: '2022-07-04',
+        mobile: '9414052314',
+        login: {
+          username: 'rekha.maheshwari',
+          password: 'Rekha@3158',
+          role: 'Accounts & Admin',
+        },
+      },
+      {
+        first: 'Suresh',
+        last: 'Jangid',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Site Engineer',
+        basic: 39000,
+        joined: '2023-04-17',
+        mobile: '9414052315',
+        login: {
+          username: 'suresh.jangid',
+          password: 'Suresh@7429',
+          role: 'Site Operations',
+        },
+      },
+      {
+        first: 'Mukesh',
+        last: 'Dhakad',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Surveyor',
+        basic: 25000,
+        joined: '2024-02-12',
+        mobile: '9414052316',
+        login: {
+          username: 'mukesh.dhakad',
+          password: 'Mukesh@2685',
+          role: 'DWR Entry',
+        },
+      },
+      {
+        first: 'Ramprasad',
+        last: 'Gujar',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Site Supervisor',
+        basic: 22000,
+        joined: '2023-06-26',
+        mobile: '9414052317',
+        login: {
+          username: 'ramprasad.gujar',
+          password: 'Ramprasad@4917',
+          role: 'Labour Supervisor',
+        },
+      },
+      {
+        first: 'Dinesh',
+        last: 'Kumawat',
+        gender: 'male',
+        dept: 'Stores & Procurement',
+        desig: 'Store Keeper',
+        basic: 23500,
+        joined: '2023-10-02',
+        mobile: '9414052318',
+        login: {
+          username: 'dinesh.kumawat',
+          password: 'Dinesh@8503',
+          role: 'Storekeeper',
+        },
+      },
       {
         first: 'Bhanwar',
         last: 'Lal Mali',
@@ -2364,6 +2563,98 @@ const COMPANIES: CompanySpec[] = [
         basic: 26000,
         joined: '2023-08-14',
         mobile: '9828031409',
+      },
+      // One login per standard role (039), as for the first company. Before the last two on purpose:
+      // those two become the recruitment pipeline's joined hires.
+      {
+        first: 'Vivek',
+        last: 'Bhardwaj',
+        gender: 'male',
+        dept: 'Projects',
+        desig: 'Senior Engineer',
+        basic: 70000,
+        joined: '2021-09-06',
+        mobile: '9828031412',
+        login: {
+          username: 'vivek.bhardwaj',
+          password: 'Vivek@5381',
+          role: 'Operations Manager',
+        },
+      },
+      {
+        first: 'Anjali',
+        last: 'Saxena',
+        gender: 'female',
+        dept: 'Accounts & Finance',
+        desig: 'Accountant',
+        basic: 42000,
+        joined: '2022-12-12',
+        mobile: '9828031413',
+        login: {
+          username: 'anjali.saxena',
+          password: 'Anjali@7046',
+          role: 'Accounts & Admin',
+        },
+      },
+      {
+        first: 'Pradeep',
+        last: 'Chaudhary',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Site Engineer',
+        basic: 37000,
+        joined: '2023-05-22',
+        mobile: '9828031414',
+        login: {
+          username: 'pradeep.chaudhary',
+          password: 'Pradeep@2954',
+          role: 'Site Operations',
+        },
+      },
+      {
+        first: 'Shivam',
+        last: 'Tripathi',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Surveyor',
+        basic: 24500,
+        joined: '2024-03-04',
+        mobile: '9828031415',
+        login: {
+          username: 'shivam.tripathi',
+          password: 'Shivam@6813',
+          role: 'DWR Entry',
+        },
+      },
+      {
+        first: 'Ramkishan',
+        last: 'Yadav',
+        gender: 'male',
+        dept: 'Engineering',
+        desig: 'Site Supervisor',
+        basic: 21500,
+        joined: '2023-08-14',
+        mobile: '9828031416',
+        login: {
+          username: 'ramkishan.yadav',
+          password: 'Ramkishan@3478',
+          role: 'Labour Supervisor',
+        },
+      },
+      {
+        first: 'Mohit',
+        last: 'Agrawal',
+        gender: 'male',
+        dept: 'Stores & Procurement',
+        desig: 'Store Keeper',
+        basic: 23000,
+        joined: '2023-11-20',
+        mobile: '9828031417',
+        login: {
+          username: 'mohit.agrawal',
+          password: 'Mohit@9162',
+          role: 'Storekeeper',
+        },
       },
       {
         first: 'Imran',
@@ -2943,13 +3234,15 @@ async function main() {
   // (`is_local = false`) because this whole script is one short-lived connection.
   await prisma.$executeRaw`SELECT set_config('app.is_super_admin', 'true', false)`;
 
-  const fy = '2026-2027';
+  // The app's financial-year label ('2026-27'), which is what leave balances are read by.
+  const fy = '2026-27';
   const today = dateOnly(new Date());
 
-  // ── The four roles (Roles and Approvals, 2026-10-18) ────────────────────────
+  // ── The roles (Roles and Approvals, 2026-10-18; standard roles, 039) ────────
   // The migrations seed ten global roles. A develop database starts with the recommended four:
   // Super Admin and General User stay, Site Admin becomes Site Incharge, HO User becomes Head
-  // Office, and the six others are removed — nobody holds them in a fresh database.
+  // Office, and the six others are removed — nobody holds them in a fresh database. The client's
+  // six standard roles (039) are kept beside them, with one login each.
   await shapeRoles();
   const roleByName = new Map(
     (await prisma.role.findMany({ where: { companyId: null } })).map(
@@ -3186,7 +3479,7 @@ async function main() {
       });
     }
 
-    // ── Staff; seven of them have a login, each with one of the four roles ─────
+    // ── Staff; some of them have a login, each with one of the roles above ─────
     const employees = [];
     let directorId: string | null = null;
     for (const [i, s] of spec.staff.entries()) {
@@ -5215,6 +5508,8 @@ async function main() {
     );
   }
 
+  await topUpRoleLogins(logins);
+
   console.log(
     `\n  Totals: ${totals.employees} employees, ${totals.punches} punches, ${totals.workers} labour workers, ${totals.assets} assets`,
   );
@@ -5236,7 +5531,7 @@ async function main() {
   console.log('\n  Logins');
   for (const l of logins) {
     console.log(
-      `    ${l.company.padEnd(30)} ${l.role.padEnd(14)} ${l.username.padEnd(
+      `    ${l.company.padEnd(30)} ${l.role.padEnd(18)} ${l.username.padEnd(
         18,
       )} ${l.password.padEnd(14)} ${l.name}`,
     );
@@ -5256,6 +5551,215 @@ async function main() {
     );
     console.log(`\n  Logins written to ${process.env.SEED_DEV_LOGINS_FILE}`);
   }
+}
+
+/**
+ * The logins a company already present was skipped before it had (039), and a site for the
+ * Labour Supervisor.
+ *
+ * A company is seeded whole or not at all, so a login added to its staff list later never reaches
+ * a database seeded before it. This creates the missing account, and the employee record behind it
+ * — the way the first run builds one: the next code in the company's series, its department and
+ * designation, a site, the general shift, the usual salary split and this year's leave balances —
+ * so My Workspace, attendance and payroll treat the person as staff. A login found without an
+ * employee (made by an earlier run of this top-up) gets one too. Keyed on the username and on the
+ * user's link, so a re-run does nothing.
+ *
+ * A Labour Supervisor registers labour and marks attendance only at the sites assigned to them
+ * (031), and with none assigned their whole module is empty. One holding no site is given the
+ * company's active project sites, as the HR office would.
+ */
+async function topUpRoleLogins(
+  logins: {
+    company: string;
+    name: string;
+    username: string;
+    email: string;
+    password: string;
+    role: string;
+  }[],
+): Promise<void> {
+  const roles = new Map(
+    (await prisma.role.findMany({ where: { companyId: null } })).map(
+      (r) => [r.name, r.id] as const,
+    ),
+  );
+  for (const spec of COMPANIES) {
+    const company = await prisma.company.findUnique({
+      where: { shortCode: spec.shortCode },
+      select: { id: true },
+    });
+    if (!company) continue;
+    for (const s of spec.staff) {
+      if (!s.login) continue;
+      const roleId = roles.get(s.login.role);
+      if (!roleId) continue;
+      const email = `${s.login.username}@${spec.emailDomain}`;
+      const exists = await prisma.user.findUnique({
+        where: { username: s.login.username },
+        select: { id: true },
+      });
+      if (exists) {
+        await ensureEmployeeFor(exists.id, company.id, spec, s, email);
+        continue;
+      }
+      const user = await prisma.user.create({
+        data: {
+          email,
+          username: s.login.username,
+          firstname: s.first,
+          lastname: s.last,
+          displayName: `${s.first} ${s.last}`,
+          password: await hash(s.login.password),
+          companyId: company.id,
+          status: 'active',
+          userRoles: { create: { roleId, companyId: company.id } },
+        },
+      });
+      await ensureEmployeeFor(user.id, company.id, spec, s, email);
+      logins.push({
+        company: spec.name,
+        name: `${s.first} ${s.last}`,
+        username: s.login.username,
+        email,
+        password: s.login.password,
+        role: s.login.role,
+      });
+    }
+
+    const supervisors = await prisma.user.findMany({
+      where: {
+        companyId: company.id,
+        userRoles: { some: { role: { name: 'Labour Supervisor' } } },
+      },
+      select: { id: true },
+    });
+    const sites = await prisma.site.findMany({
+      where: {
+        companyId: company.id,
+        projectId: { not: null },
+        status: 'active',
+      },
+      select: { id: true },
+    });
+    for (const supervisor of supervisors) {
+      if (
+        await prisma.supervisorSite.count({ where: { userId: supervisor.id } })
+      )
+        continue;
+      await prisma.supervisorSite.createMany({
+        data: sites.map((site) => ({
+          companyId: company.id,
+          userId: supervisor.id,
+          siteId: site.id,
+          createdBy: 'seed:dev',
+        })),
+        skipDuplicates: true,
+      });
+    }
+  }
+}
+
+/**
+ * The employee record for a topped-up login (see `topUpRoleLogins`). Built from the staff entry the
+ * way the company's first run builds one; does nothing if the user already has an employee.
+ */
+async function ensureEmployeeFor(
+  userId: string,
+  companyId: string,
+  spec: (typeof COMPANIES)[number],
+  s: (typeof COMPANIES)[number]['staff'][number],
+  email: string,
+): Promise<void> {
+  if (
+    await prisma.employee.findUnique({
+      where: { userId },
+      select: { id: true },
+    })
+  )
+    return;
+  const [dept, desig, shift, sites] = await Promise.all([
+    prisma.department.findFirst({ where: { companyId, name: s.dept } }),
+    prisma.designation.findFirst({ where: { companyId, name: s.desig } }),
+    prisma.shift.findFirst({
+      where: { companyId, name: { startsWith: 'General' } },
+      orderBy: { createdAt: 'asc' },
+    }),
+    prisma.site.findMany({
+      where: { companyId, projectId: { not: null }, status: 'active' },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    }),
+  ]);
+  if (!shift || sites.length === 0) {
+    console.warn(
+      `    ${s.first} ${s.last}: no shift or site to place them at — skipped`,
+    );
+    return;
+  }
+  // The next code in the company's series, taken the way the app's generator takes it.
+  const seq = await prisma.employeeCodeSequence.upsert({
+    where: { companyId },
+    create: { companyId, lastNumber: 1 },
+    update: { lastNumber: { increment: 1 } },
+  });
+  const isManager = s.desig === 'Project Manager' || s.desig === 'Director';
+  const gross = s.basic / 0.5;
+  const employee = await prisma.employee.create({
+    data: {
+      userId,
+      companyId,
+      siteId: sites[seq.lastNumber % sites.length].id,
+      shiftId: shift.id,
+      employeeCode: `${spec.shortCode}-${String(seq.lastNumber).padStart(
+        4,
+        '0',
+      )}`,
+      firstName: s.first,
+      lastName: s.last,
+      gender: s.gender,
+      departmentId: dept?.id ?? null,
+      designationId: desig?.id ?? null,
+      employmentType: 'full_time',
+      dateOfJoining: d(s.joined),
+      confirmationDate: d(s.joined),
+      calculationMode: 'monthly',
+      mobile: s.mobile,
+      email,
+      basic: money(s.basic),
+      hra: money(Math.round(s.basic * 0.4)),
+      conveyanceAllowance: money(1600),
+      siteAllowance: money(isManager ? 5000 : 2500),
+      specialAllowance: money(Math.round(gross - s.basic * 1.4 - 4100)),
+      pfApplicable: true,
+      esicApplicable: gross <= 21000,
+      paymentMode: 'bank',
+      presentCity: spec.city,
+      presentState: spec.state,
+      presentPinCode: spec.pin,
+      idCardIssued: true,
+      safetyInductionCompleted: true,
+      bankVerificationDone: true,
+      siteAccessGranted: true,
+    },
+  });
+  await prisma.leaveBalance.createMany({
+    data: (
+      [
+        ['earned', 12],
+        ['casual', 6],
+        ['sick', 6],
+        ['lwp', 0],
+      ] as const
+    ).map(([leaveType, opening]) => ({
+      employeeId: employee.id,
+      leaveType,
+      financialYear: '2026-27',
+      opening: money(opening),
+    })),
+    skipDuplicates: true,
+  });
+  console.log(`    ${s.first} ${s.last} → employee ${employee.employeeCode}`);
 }
 
 main()

@@ -16,6 +16,7 @@ import { PasswordChangeInterceptor } from './auth/password-change.interceptor';
 import { AccountCreationModule } from './account-creation/account-creation.module';
 import { AssetsModule } from './assets/assets.module';
 import { ApprovalsModule } from './approvals/approvals.module';
+import { ApprovalFilesModule } from './approval-files/approval-files.module';
 import { LettersModule } from './letters/letters.module';
 import { NocsModule } from './nocs/nocs.module';
 import { SearchModule } from './search/search.module';
@@ -23,6 +24,7 @@ import { PermissionRefusalModule } from './common/guards/permission-refusal.modu
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
 import { CompanyHeaderInterceptor } from './settings/company-selection/company-header.interceptor';
 import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
+import { CashModule } from './common/cash/cash.module';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
 import { AuthModule } from './auth/auth.module';
 import { DashboardModule } from './dashboard/dashboard.module';
@@ -43,6 +45,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
 
 @Module({
   imports: [
+    CashModule,
     ConfigModule.forRoot({ isGlobal: true, load: [config] }),
     ThrottlerModule.forRootAsync({
       // `default` (the auth limit), `app` (app-wide) and `export` — see common/throttle (036 B9).
@@ -97,6 +100,7 @@ import type { SecurityConfig } from './common/configs/config.interface';
     // behaviour changes. Registering it now is what makes the DI graph resolve at boot
     // rather than at the first module migration.
     ApprovalsModule,
+    ApprovalFilesModule,
     LettersModule,
     NocsModule,
     // 021 US1's cross-register search (`bugs.md` item 4). Listed **before** nothing in

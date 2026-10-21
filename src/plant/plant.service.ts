@@ -419,10 +419,11 @@ export class PlantService implements OnModuleInit {
     dateRange: { from: Date; to: Date },
   ): Promise<number> {
     try {
-      const siteIds = await this.projects.getSitesByProject(projectId, {
-        isSuperAdmin: false,
-        companyId,
-      });
+      const ctx = { isSuperAdmin: false as const, companyId };
+      const [siteIds, projectStart] = await Promise.all([
+        this.projects.getSitesByProject(projectId, ctx),
+        this.projects.getProjectStartDate(projectId, ctx),
+      ]);
       if (siteIds.length === 0) return 0;
 
       return await withRlsContext(
@@ -436,6 +437,7 @@ export class PlantService implements OnModuleInit {
               ownership: true,
               purchaseCost: true,
               depreciationRate: true,
+              purchaseDate: true,
             },
           });
           if (equipment.length === 0) return 0;
@@ -490,10 +492,18 @@ export class PlantService implements OnModuleInit {
             0,
           );
 
-          const months = monthsBetween(dateRange.from, dateRange.to);
+          // Depreciation is time-based, so it is charged only for the months the machine could
+          // have worked on this project: not before the project started, nor before it was bought.
+          // A cumulative P&L asks from 2000-01-01 (so early transaction costs count), and
+          // multiplying that by a monthly charge billed a new project 26 years of depreciation.
           const depreciation = equipment
             .filter((row) => row.ownership === 'owned')
             .reduce((sum, row) => {
+              const from = [dateRange.from, projectStart, row.purchaseDate]
+                .filter((d): d is Date => d instanceof Date)
+                .reduce((a, b) => (b > a ? b : a));
+              if (from > dateRange.to) return sum;
+              const months = monthsBetween(from, dateRange.to);
               const cost = Number(row.purchaseCost ?? 0);
               const rate = Number(row.depreciationRate ?? 0);
               return sum + ((cost * rate) / 100 / MONTHS_PER_YEAR) * months;

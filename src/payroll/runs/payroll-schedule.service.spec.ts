@@ -78,6 +78,7 @@ function harness(
 
   const approvals = {
     submit: jest.fn(async () => view()),
+    resubmit: jest.fn(async () => view()),
     abandon: jest.fn(async () => undefined),
     stateOfSystem: jest.fn(async () =>
       opts.approval === undefined ? null : opts.approval,
@@ -125,7 +126,7 @@ describe('period arithmetic in the business timezone', () => {
 describe('PayrollScheduleService.createRunsForPreviousPeriod (T031, T039)', () => {
   const onTheFirst = new Date('2026-08-31T19:00:00Z'); // 1 Sep 00:30 IST
 
-  it('creates the previous period’s run for every active company and submits each into its chain', async () => {
+  it('creates the previous period’s run for every active company and leaves it for HR to send (039)', async () => {
     const { service, engine, approvals, prisma } = harness();
     const result = await service.createRunsForPreviousPeriod(onTheFirst);
 
@@ -144,16 +145,9 @@ describe('PayrollScheduleService.createRunsForPreviousPeriod (T031, T039)', () =
       expect.objectContaining({ data: { createdBySchedule: true } }),
     );
 
-    expect(approvals.submit).toHaveBeenCalledTimes(2);
-    expect(approvals.submit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        actionType: ACTION_PAYROLL_RUN,
-        entityType: ACTION_PAYROLL_RUN,
-        // Nobody raised it. A stand-in account would put a person's name against the
-        // schedule's work.
-        originatorUserId: null,
-      }),
-    );
+    // 039: HR reviews, corrects and sends the run. A run the schedule pushed into the Director's
+    // queue could not be corrected, and — with no originator — never resubmitted after a return.
+    expect(approvals.submit).not.toHaveBeenCalled();
   });
 
   it('creates no duplicate when the period already has a run', async () => {
@@ -171,18 +165,14 @@ describe('PayrollScheduleService.createRunsForPreviousPeriod (T031, T039)', () =
     expect(engine.generate).not.toHaveBeenCalled();
   });
 
-  it('still submits a manually created run into the chain', async () => {
-    // A run created by hand before the schedule fired must not escape approval simply
-    // because it got there first.
+  it('does not submit a manually created run either (039)', async () => {
     const { service, approvals } = harness({
       existingRuns: { 'co-1': { id: 'run-1', status: PayrollRunStatus.draft } },
       companies: [{ id: 'co-1' }],
     });
 
     await service.createRunsForPreviousPeriod(onTheFirst);
-    expect(approvals.submit).toHaveBeenCalledWith(
-      expect.objectContaining({ entityId: 'run-1' }),
-    );
+    expect(approvals.submit).not.toHaveBeenCalled();
   });
 
   it('does not resubmit a run already travelling its chain', async () => {
@@ -244,20 +234,6 @@ describe('PayrollScheduleService.createRunsForPreviousPeriod (T031, T039)', () =
       { companyId: 'co-1', reason: 'No active employees to pay' },
     ]);
     expect(result.created).toEqual(['co-2']);
-  });
-
-  it('creates the run even when it cannot enter a chain', async () => {
-    // A missing chain is a configuration gap. Refusing to create the run would mean
-    // nobody gets paid because nobody has configured an approver yet — and the bank
-    // sheet is held regardless, so the control is not lost.
-    const { service, approvals } = harness();
-    approvals.submit = jest.fn(async () => {
-      throw new Error('No active approval chain is configured');
-    });
-
-    const result = await service.createRunsForPreviousPeriod(onTheFirst);
-    expect(result.created).toEqual(['co-1', 'co-2']);
-    expect(result.failed).toEqual([]);
   });
 });
 
@@ -325,7 +301,7 @@ describe('PayrollScheduleService.isPeriodUnderReview (T036)', () => {
 });
 
 describe('PayrollScheduleService — invalidation on attendance change (T038)', () => {
-  it('abandons the live chain and starts a new one', async () => {
+  it('abandons the live chain and hands the run back to HR (039)', async () => {
     const { service, approvals } = harness({
       existingRuns: { 'co-1': { id: 'run-1', status: PayrollRunStatus.draft } },
       approval: null,
@@ -344,8 +320,9 @@ describe('PayrollScheduleService — invalidation on attendance change (T038)', 
       'co-1',
       expect.stringContaining('edited after approval began'),
     );
-    // And resubmitted, so the chain restarts from level 1 rather than being left closed.
-    expect(approvals.submit).toHaveBeenCalled();
+    // 039: not resubmitted. The lines do not change with attendance — only a regeneration does —
+    // so restarting the chain put the same stale figures back in front of the Director.
+    expect(approvals.submit).not.toHaveBeenCalled();
   });
 
   it('leaves a paid run alone', async () => {
@@ -380,5 +357,94 @@ describe('PayrollScheduleService — invalidation on attendance change (T038)', 
         actorUserId: 'hr-1',
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('PayrollScheduleService.sendToDirector (039)', () => {
+  const hr = { id: 'hr-1' } as never;
+  const draft = { 'co-1': { id: 'run-1', status: PayrollRunStatus.draft } };
+
+  it('submits a never-sent draft with the sender as originator', async () => {
+    const { service, approvals } = harness({ existingRuns: draft });
+    await service.sendToDirector('co-1', 'run-1', hr);
+    expect(approvals.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: ACTION_PAYROLL_RUN,
+        entityId: 'run-1',
+        // Recorded, so the spine's originator-only resubmit works after a return.
+        originatorUserId: 'hr-1',
+      }),
+    );
+  });
+
+  it('resubmits a run its sender gets back, keeping the instance and its history', async () => {
+    const { service, approvals } = harness({
+      existingRuns: draft,
+      approval: view({ state: 'returned', originatorUserId: 'hr-1' }),
+    });
+    await service.sendToDirector('co-1', 'run-1', hr);
+    expect(approvals.resubmit).toHaveBeenCalledWith(
+      ACTION_PAYROLL_RUN,
+      'run-1',
+      'co-1',
+      'hr-1',
+      hr,
+    );
+    expect(approvals.abandon).not.toHaveBeenCalled();
+    expect(approvals.submit).not.toHaveBeenCalled();
+  });
+
+  it('abandons and submits afresh a returned run the schedule sent (null originator)', async () => {
+    const { service, approvals } = harness({
+      existingRuns: draft,
+      approval: view({ state: 'returned', originatorUserId: null }),
+    });
+    await service.sendToDirector('co-1', 'run-1', hr);
+    expect(approvals.resubmit).not.toHaveBeenCalled();
+    expect(approvals.abandon).toHaveBeenCalledWith(
+      ACTION_PAYROLL_RUN,
+      'run-1',
+      'co-1',
+      expect.any(String),
+    );
+    expect(approvals.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ originatorUserId: 'hr-1' }),
+    );
+  });
+
+  it.each([
+    ['pending', 'PAYROLL_RUN_AWAITING_APPROVAL'],
+    ['approved', 'PAYROLL_RUN_ALREADY_APPROVED'],
+  ] as const)('refuses a run whose chain is %s', async (state, code) => {
+    const { service, approvals } = harness({
+      existingRuns: draft,
+      approval: view({ state }),
+    });
+    const error = await service
+      .sendToDirector('co-1', 'run-1', hr)
+      .catch((e) => e);
+    expect(error.getResponse()).toMatchObject({ code });
+    expect(approvals.submit).not.toHaveBeenCalled();
+  });
+
+  it('refuses a paid run', async () => {
+    const { service } = harness({
+      existingRuns: { 'co-1': { id: 'run-1', status: PayrollRunStatus.paid } },
+    });
+    const error = await service
+      .sendToDirector('co-1', 'run-1', hr)
+      .catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: 'PAYROLL_RUN_ALREADY_PAID',
+    });
+  });
+
+  it('starts a fresh chain after a rejection', async () => {
+    const { service, approvals } = harness({
+      existingRuns: draft,
+      approval: view({ state: 'rejected' }),
+    });
+    await service.sendToDirector('co-1', 'run-1', hr);
+    expect(approvals.submit).toHaveBeenCalled();
   });
 });

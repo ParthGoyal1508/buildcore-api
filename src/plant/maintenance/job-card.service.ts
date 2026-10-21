@@ -1,8 +1,19 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { CodeSeriesType, Prisma, SparePartMovementType } from '@prisma/client';
+import {
+  AuditAction,
+  AuditEntityType,
+  CodeSeriesType,
+  JobCardPaymentMode,
+  JobCardStatus,
+  Prisma,
+  SparePartMovementType,
+} from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import { AuditLogService } from '../../auth/audit-log.service';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
+import { actorNamesFor } from '../../common/actor-name';
+import { CashPolicyService } from '../../common/cash/cash-policy';
 import {
   type FormDocument,
   type FormFormat,
@@ -20,6 +31,13 @@ import { CodeSeriesService } from '../../settings/code-series/code-series.servic
 import { assertInScope } from '../../settings/company-scope';
 import { PlantRefsService } from '../plant-refs.service';
 import {
+  EDITABLE_STATUSES,
+  changedUnderneath,
+  effectiveJobCardStatus,
+  inStatus,
+  notEditable,
+} from './job-card-workflow';
+import {
   JOB_CARD_CHECKS,
   JOB_CARD_CONDITIONS,
   JOB_CARD_PRIORITIES,
@@ -35,6 +53,33 @@ export type JobCard = Omit<JobCardDto, 'inspections' | 'parts' | 'signOff'> & {
   parts?: NonNullable<JobCardDto['parts']>;
   signOff?: NonNullable<JobCardDto['signOff']>;
 };
+
+/**
+ * Where the card stands in its approval-and-payment workflow (039). Null on a card not yet saved.
+ * Files are named, never linked: they are fetched through the card's download routes.
+ */
+export interface JobCardWorkflow {
+  status: JobCardStatus;
+  /** Head Office's correction remarks while the card is `returned` (or why it was rejected). */
+  returnRemarks: string | null;
+  quotation: {
+    amount: number | null;
+    fileName: string | null;
+    hasFile: boolean;
+  };
+  finalBill: {
+    billNumber: string | null;
+    billDate: string | null;
+    amount: number | null;
+    fileName: string | null;
+    uploadedAt: Date | null;
+    uploadedByName: string | null;
+  } | null;
+  /** Paid so far — without cash while the company hides cash (038). */
+  paidTotal: number;
+  /** Bill amount less `paidTotal`; null until there is a bill. */
+  balance: number | null;
+}
 
 /** The card with its number, the machine's own details filled in, and the parts drawn from store. */
 export interface JobCardView {
@@ -52,6 +97,7 @@ export interface JobCardView {
     rate: number;
     amount: number;
   }[];
+  workflow: JobCardWorkflow | null;
 }
 
 /** Job cards and maintenance jobs share the plant module's own short infix. */
@@ -74,6 +120,8 @@ export class JobCardService {
     private readonly prisma: PrismaService,
     private readonly refs: PlantRefsService,
     private readonly codeSeries: CodeSeriesService,
+    private readonly auditLog: AuditLogService,
+    private readonly cash: CashPolicyService,
   ) {}
 
   /** Section 1 as the machine fills it — for a card being started before the job exists. */
@@ -89,6 +137,7 @@ export class JobCardService {
       projectHeading: machine.projectHeading,
       card: { ...machine.defaults, date: today() },
       storeParts: [],
+      workflow: null,
     };
   }
 
@@ -117,22 +166,40 @@ export class JobCardService {
         rate: Number(m.rate),
         amount: Number(m.amount),
       })),
+      workflow: await this.workflow(job),
     };
   }
 
-  /** Saves the card, numbering it the first time. */
+  /**
+   * Saves the card, numbering it the first time.
+   *
+   * Only while it is site's to change (039): a draft, or a card Head Office sent back for
+   * correction. Once submitted the card is what Head Office is deciding on, and after approval it
+   * is what the workshop is paid against — changing it then would change a figure somebody has
+   * already agreed to. The first save records `created`; later saves record `edited` with the
+   * fields that changed, which is enough for the history without copying the card into it.
+   */
   async save(
     caller: AuthenticatedUser,
     jobId: string,
     card: JobCardDto,
+    ipAddress: string,
   ): Promise<JobCardView> {
     const job = await this.job(caller, jobId);
+    const status = effectiveJobCardStatus(job);
+    if (status && !EDITABLE_STATUSES.includes(status))
+      throw notEditable(status);
+    const isNew = status === null;
+
     // The machine's details as they stand when the card is first saved are written into it, so
     // the card keeps the odometer it was opened at rather than following the machine forward.
     const machine = job.card
       ? null
       : await this.machine(caller, job.equipmentId);
     const stored = { ...(machine?.defaults ?? {}), ...withoutBlanks(card) };
+    const changed = isNew
+      ? []
+      : changedFields((job.card ?? {}) as JobCard, stored as JobCard);
     await withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {
       const jobCardNo =
         job.jobCardNo ??
@@ -147,13 +214,42 @@ export class JobCardService {
               select: { id: true },
             })),
         ));
-      await tx.maintenanceJob.update({
-        where: { id: jobId },
+      // Conditional on the status read above, so a save cannot land on a card submitted meanwhile.
+      const updated = await tx.maintenanceJob.updateMany({
+        where: {
+          id: jobId,
+          ...(isNew ? { jobCardStatus: null } : inStatus(status)),
+        },
         data: {
           jobCardNo,
           card: JSON.parse(JSON.stringify(stored)) as Prisma.InputJsonObject,
+          // A pre-039 card (null status) becomes an explicit draft on its first write.
+          jobCardStatus: status ?? JobCardStatus.draft,
         },
       });
+      if (updated.count === 0) throw changedUnderneath();
+      if (isNew || changed.length > 0) {
+        await tx.jobCardEvent.create({
+          data: {
+            companyId: job.companyId,
+            maintenanceJobId: jobId,
+            kind: isNew ? 'created' : 'edited',
+            fromStatus: status,
+            toStatus: status ?? JobCardStatus.draft,
+            detail: isNew ? { jobCardNo } : { fields: changed },
+            actorUserId: caller.id,
+          },
+        });
+      }
+    });
+    await this.auditLog.record({
+      entityType: AuditEntityType.MAINTENANCE_JOB,
+      action: AuditAction.UPDATE,
+      entityId: jobId,
+      accountId: caller.id,
+      companyId: job.companyId,
+      ipAddress,
+      changes: isNew ? { jobCard: 'created' } : { jobCardFields: changed },
     });
     return this.get(caller, jobId);
   }
@@ -194,12 +290,58 @@ export class JobCardService {
             include: { sparePart: true },
             orderBy: { createdAt: 'asc' },
           },
+          jobCardPayments: { select: { amount: true, mode: true } },
         },
       }),
     );
     if (!job) throw new NotFoundException('Maintenance job not found');
     assertInScope(caller, job, 'Maintenance job');
     return job;
+  }
+
+  private async workflow(
+    job: Awaited<ReturnType<JobCardService['job']>>,
+  ): Promise<JobCardWorkflow | null> {
+    const status = effectiveJobCardStatus(job);
+    if (!status) return null;
+    // 038: while the company hides cash, a cash payment does not exist — not in the total either.
+    const cashHidden = await this.cash.isHidden(job.companyId);
+    const paidTotal =
+      job.jobCardPayments
+        .filter((p) => !(cashHidden && p.mode === JobCardPaymentMode.cash))
+        .reduce((sum, p) => sum + Math.round(Number(p.amount) * 100), 0) / 100;
+    const billAmount =
+      job.finalBillAmount === null ? null : Number(job.finalBillAmount);
+    const uploader = job.finalBillUploadedBy
+      ? (await actorNamesFor(this.prisma, [job.finalBillUploadedBy])).get(
+          job.finalBillUploadedBy,
+        ) ?? null
+      : null;
+    return {
+      status,
+      returnRemarks: job.jobCardReturnRemarks,
+      quotation: {
+        amount:
+          job.quotationAmount === null ? null : Number(job.quotationAmount),
+        fileName: job.quotationFileName,
+        hasFile: job.quotationFileRef !== null,
+      },
+      finalBill: job.finalBillFileRef
+        ? {
+            billNumber: job.finalBillNumber,
+            billDate: job.finalBillDate?.toISOString().slice(0, 10) ?? null,
+            amount: billAmount,
+            fileName: job.finalBillFileName,
+            uploadedAt: job.finalBillUploadedAt,
+            uploadedByName: uploader,
+          }
+        : null,
+      paidTotal,
+      balance:
+        billAmount === null
+          ? null
+          : Math.round((billAmount - paidTotal) * 100) / 100,
+    };
   }
 
   /** What section 1 reads off the machine, and the project heading. */
@@ -263,6 +405,18 @@ export class JobCardService {
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+/** The card's top-level fields whose value differs between two saves — for the `edited` event. */
+export function changedFields(before: JobCard, after: JobCard): string[] {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  return [...keys]
+    .filter(
+      (key) =>
+        JSON.stringify(before[key as keyof JobCard] ?? null) !==
+        JSON.stringify(after[key as keyof JobCard] ?? null),
+    )
+    .sort();
 }
 
 /** A stored card's fields, dropping empty strings so they do not hide the machine's own values. */

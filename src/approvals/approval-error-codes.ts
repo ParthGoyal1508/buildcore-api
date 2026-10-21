@@ -21,6 +21,13 @@
 export const APPROVAL_NOT_AUTHORISED = 'APPROVAL_NOT_AUTHORISED';
 
 /**
+ * The caller is barred from deciding this particular item (2026-10-20): they applied for it,
+ * recorded it, or are the employee it pays. Distinct from `APPROVAL_NOT_AUTHORISED` because
+ * they may well hold the level's role — telling them otherwise would be untrue.
+ */
+export const APPROVAL_OWN_ITEM = 'APPROVAL_OWN_ITEM';
+
+/**
  * The caller already recorded a decision on this item in this round (FR-021a).
  *
  * This is the code the interface most needs and the one a browser cannot compute.
@@ -119,6 +126,7 @@ export const APPROVAL_DIRECTOR_REQUIRED = 'APPROVAL_DIRECTOR_REQUIRED';
 /** Every refusal code the spine can return. */
 export type ApprovalErrorCode =
   | typeof APPROVAL_NOT_AUTHORISED
+  | typeof APPROVAL_OWN_ITEM
   | typeof APPROVAL_ALREADY_DECIDED
   | typeof APPROVAL_SLOT_UNMAPPED
   | typeof APPROVAL_NOT_PENDING

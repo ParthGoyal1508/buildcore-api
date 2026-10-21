@@ -4,30 +4,55 @@ import { LeaveApplicationStatus } from '@prisma/client';
 import { createPrismaMock } from '../../settings/testing/prisma-mock';
 import { LeaveService } from './leave.service';
 
-/** 2026-10-16 access-control audit, H3: nobody decides their own leave. */
-describe('LeaveService.decide — self-approval', () => {
+/**
+ * Deciding leave from the HR screen (2026-10-20: leave is on the approval spine).
+ *
+ * Nobody decides their own leave (2026-10-16 access-control audit, H3); the chain decides who may
+ * act and when the decision is final; the balance moves only on the final approval, once.
+ */
+describe('LeaveService.decide', () => {
   function build(
     applicantUserId: string | null,
-    stage: { managerUserId?: string; managerDecidedAt?: Date } = {},
+    chain: { state?: string; inChain?: boolean } = {},
+    leaveType = 'casual',
   ) {
-    const update = jest.fn().mockResolvedValue({ id: 'la-1' });
+    const application = {
+      id: 'la-1',
+      employeeId: 'emp-1',
+      status: LeaveApplicationStatus.pending,
+      leaveType,
+      fromDate: new Date('2026-10-25'),
+      dayCount: 1,
+    };
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const upsert = jest.fn().mockResolvedValue({});
     const prisma = createPrismaMock({
       leaveApplication: {
-        findFirst: jest.fn().mockResolvedValue({
-          id: 'la-1',
-          employeeId: 'emp-1',
-          status: LeaveApplicationStatus.pending,
-          leaveType: 'lwp',
-          managerUserId: null,
-          managerDecidedAt: null,
-          ...stage,
-        }),
-        update,
+        findFirst: jest.fn().mockResolvedValue(application),
+        findFirstOrThrow: jest.fn().mockResolvedValue(application),
+        updateMany,
       },
+      leaveBalance: { upsert },
       employee: {
-        findFirst: jest.fn().mockResolvedValue({ userId: applicantUserId }),
+        findFirst: jest.fn().mockResolvedValue({
+          userId: applicantUserId,
+          companyId: 'co-1',
+          firstName: 'Hemraj',
+          lastName: 'Saini',
+        }),
       },
     });
+    const approvals = {
+      stateOfSystem: jest
+        .fn()
+        .mockResolvedValue(
+          chain.inChain === false ? null : { state: 'pending' },
+        ),
+      submit: jest.fn().mockResolvedValue({}),
+      decideByEntity: jest
+        .fn()
+        .mockResolvedValue({ state: chain.state ?? 'approved' }),
+    };
     const config = { get: () => ({ timezone: 'Asia/Kolkata' }) };
     const service = new LeaveService(
       prisma as never,
@@ -36,60 +61,91 @@ describe('LeaveService.decide — self-approval', () => {
       {} as never,
       {} as never,
       { record: jest.fn() } as never,
+      approvals as never,
       config as never,
     );
-    return { service, update };
+    return { service, approvals, updateMany, upsert };
   }
 
   const caller = {
     userId: 'user-1',
     companyId: 'co-1',
+    ipAddress: '',
     rls: { isSuperAdmin: false, companyId: 'co-1' },
   } as never;
+  const user = { id: 'user-1' } as never;
 
   it('refuses the applicant deciding their own application', async () => {
-    const { service, update } = build('user-1');
+    const { service, approvals } = build('user-1');
     await expect(
-      service.decide(caller, 'la-1', { decision: 'approved' } as never),
+      service.decide(caller, 'la-1', { decision: 'approved' } as never, user),
     ).rejects.toBeInstanceOf(ForbiddenException);
-    expect(update).not.toHaveBeenCalled();
+    expect(approvals.decideByEntity).not.toHaveBeenCalled();
   });
 
-  it('lets someone else decide it', async () => {
-    const { service, update } = build('user-2');
-    await service
-      .decide(caller, 'la-1', { decision: 'rejected' } as never)
-      .catch(() => undefined);
-    expect(update).toHaveBeenCalled();
+  it('records the decision on the chain and debits the balance on final approval', async () => {
+    const { service, approvals, updateMany, upsert } = build('user-2');
+    await service.decide(
+      caller,
+      'la-1',
+      { decision: 'approved' } as never,
+      user,
+    );
+    expect(approvals.decideByEntity).toHaveBeenCalledWith(
+      'leave_application',
+      'la-1',
+      expect.objectContaining({ action: 'approve' }),
+      user,
+      '',
+    );
+    expect(updateMany.mock.calls[0][0].data.status).toBe('approved');
+    expect(upsert).toHaveBeenCalled();
   });
 
-  // 2026-10-16: reporting manager first, then HR.
-  it('refuses HR deciding an application still with the reporting manager', async () => {
-    const { service, update } = build('user-2', { managerUserId: 'mgr-1' });
-    await expect(
-      service.decide(caller, 'la-1', { decision: 'approved' } as never),
-    ).rejects.toMatchObject({ response: { code: 'AWAITING_MANAGER' } });
-    expect(update).not.toHaveBeenCalled();
+  it('leaves the application pending when the chain moves on to another level', async () => {
+    const { service, updateMany } = build('user-2', { state: 'pending' });
+    await service.decide(
+      caller,
+      'la-1',
+      { decision: 'approved' } as never,
+      user,
+    );
+    expect(updateMany).not.toHaveBeenCalled();
   });
 
-  it('lets HR decide once the manager has approved it on', async () => {
-    const { service, update } = build('user-2', {
-      managerUserId: 'mgr-1',
-      managerDecidedAt: new Date(),
+  it('does not debit the balance twice when the spine event arrives as well', async () => {
+    const { service, updateMany, upsert } = build('user-2');
+    updateMany
+      .mockResolvedValueOnce({ count: 1 })
+      .mockResolvedValueOnce({ count: 0 });
+    await service.decide(
+      caller,
+      'la-1',
+      { decision: 'approved' } as never,
+      user,
+    );
+    await service.onApprovalCompleted({
+      entityType: 'leave_application',
+      entityId: 'la-1',
+      companyId: 'co-1',
+      instanceId: 'i-1',
     });
-    await service
-      .decide(caller, 'la-1', { decision: 'rejected', remarks: 'x' } as never)
-      .catch(() => undefined);
-    expect(update).toHaveBeenCalled();
+    expect(upsert).toHaveBeenCalledTimes(1);
   });
 
-  it('a manager approval passes the application to HR without deciding it', async () => {
-    const { service, update } = build('user-2', { managerUserId: 'user-1' });
-    await service
-      .managerDecide(caller, 'la-1', { decision: 'approved' } as never)
-      .catch(() => undefined);
-    const data = update.mock.calls[0][0].data;
-    expect(data.managerDecidedAt).toBeInstanceOf(Date);
-    expect(data.status).toBeUndefined();
+  it('puts an application filed before 2026-10-20 into its chain before deciding', async () => {
+    const { service, approvals } = build('user-2', { inChain: false });
+    await service.decide(
+      caller,
+      'la-1',
+      { decision: 'rejected', remarks: 'x' } as never,
+      user,
+    );
+    expect(approvals.submit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionType: 'leave_application',
+        excludedUserIds: ['user-2', 'user-2'],
+      }),
+    );
   });
 });

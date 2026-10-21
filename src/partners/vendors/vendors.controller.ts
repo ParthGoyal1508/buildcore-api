@@ -34,7 +34,14 @@ import { VendorsService } from './vendors.service';
 export class VendorsController {
   constructor(private readonly vendors: VendorsService) {}
 
+  /**
+   * `PARTNERS` **or `INVENTORY`** (039), for the two reads. Every inventory form — purchase,
+   * issue, payment, purchase order — picks a vendor from this list and labels the chosen one from
+   * `:id`, so a Storekeeper (`INVENTORY` alone) could not fill one in. Creating and editing a
+   * vendor, and its TDS position, stay `PARTNERS`.
+   */
   @Get()
+  @RequirePermissions(Permission.PARTNERS, Permission.INVENTORY)
   @ApiOperation({ summary: 'Paginated vendor list with search and filters' })
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
@@ -61,6 +68,7 @@ export class VendorsController {
   }
 
   @Get(':id')
+  @RequirePermissions(Permission.PARTNERS, Permission.INVENTORY)
   @ApiOperation({
     summary: 'One vendor with contacts, categories and hire terms',
   })

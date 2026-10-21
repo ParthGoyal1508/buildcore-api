@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { EngagementType, MusterStatus, Prisma } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../auth/authenticated-user';
 import { RlsContext, withRlsContext } from '../common/prisma/rls-context';
+import { CashPolicyService } from '../common/cash/cash-policy';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { LabourRefsService } from './labour-refs.service';
 import { SiteWageRateService } from './site-rates/site-wage-rate.service';
@@ -43,6 +44,8 @@ export class LabourService {
     private readonly projects: ProjectsService,
     private readonly refs: LabourRefsService,
     private readonly siteRates: SiteWageRateService,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
 
   async getLabourCostByProject(
@@ -95,6 +98,10 @@ export class LabourService {
       },
     );
 
+    // 038: directly engaged labour is paid in cash; with cash hidden it is left out of the cost.
+    const directHidden =
+      !!companyId && !!this.cash && (await this.cash.isHidden(companyId));
+
     const workerIds = Array.from(new Set(lines.map((l) => l.workerId)));
     const workers = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.labourWorker.findMany({ where: { id: { in: workerIds } } }),
@@ -116,6 +123,9 @@ export class LabourService {
       for (const [workerId, workerLines] of perWorker) {
         const worker = workerById.get(workerId);
         if (!worker) continue;
+        if (directHidden && worker.engagementType === EngagementType.direct) {
+          continue;
+        }
         const rateOverride = worker.rateOverride
           ? worker.rateOverride.toNumber()
           : null;

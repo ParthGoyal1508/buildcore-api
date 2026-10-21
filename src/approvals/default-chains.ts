@@ -126,6 +126,23 @@ export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
 export const ACTION_RA_BILL = 'ra_bill';
 
 /**
+ * 039: a maintenance job card, raised by site with the workshop's quotation and approved — or sent
+ * back for correction — by Head Office before the work is paid for. One level, labelled
+ * "Head Office", on the final slot (Super Admin by default); a company wanting more defines it in
+ * Settings → Approvals.
+ */
+export const ACTION_JOB_CARD = 'job_card';
+
+export const DEFAULT_JOB_CARD_LEVELS: ChainLevelInput[] = [
+  {
+    position: 1,
+    slotKey: SLOT_FINAL,
+    label: 'Head Office',
+    isFinalAuthority: true,
+  },
+];
+
+/**
  * Approving a bill to the client before it is issued (2026-10-13).
  *
  * A subcontractor's bill package goes through `ra_bill`, the chain that has always decided
@@ -185,6 +202,23 @@ export const ACTION_PURCHASE_RATE_CHANGE = 'purchase_rate_change';
 export const ACTION_DWR = 'dwr';
 
 /**
+ * Leave, reimbursement claims, employee loans, salary advances and labour advances (2026-10-20).
+ *
+ * Each had its own single approve step, guarded by a module permission and invisible to Settings →
+ * Approvals; the client: "Everything which has approval should be there in the settings". They move
+ * onto the spine with the one level they already had — Head Office — and a company adds levels in
+ * settings. The module's effect (debiting the leave balance, starting a loan's deductions, paying
+ * an advance out) runs on the chain's final approval. Each item carries the people who may not
+ * decide it (`SubmitApprovalInput.excludedUserIds`): the maker-checker each module enforced at its
+ * own endpoint, which the Approvals page would otherwise go around.
+ */
+export const ACTION_LEAVE_APPLICATION = 'leave_application';
+export const ACTION_REIMBURSEMENT_CLAIM = 'reimbursement_claim';
+export const ACTION_EMPLOYEE_LOAN = 'employee_loan';
+export const ACTION_SALARY_ADVANCE = 'salary_advance';
+export const ACTION_LABOUR_ADVANCE = 'labour_advance';
+
+/**
  * Employer → HR → Director, the shape Note 2 describes.
  *
  * Labels are set explicitly rather than left to the slot-key fallback because these
@@ -203,6 +237,12 @@ export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
 ];
 
 /**
+ * **Superseded 2026-10-20 (039): payroll goes to the Director alone.** Payroll is generated for the
+ * whole company, so a Site Incharge level never fitted it; HR edits the generated run (each change
+ * justified) and sends it to the Director, who approves or returns it. Migration
+ * 20261021100001_flow_corrections moves companies still on the old default. What follows is the
+ * history of the three-level shape.
+ *
  * Site Incharge → HR Office → Director, the shape Note 7 describes for payroll.
  *
  * The same three slots as the attendance chain, deliberately: the client's
@@ -215,10 +255,8 @@ export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
  * should see "Site Incharge" rather than the attendance queue's "Site / Employer".
  */
 export const DEFAULT_PAYROLL_RUN_LEVELS: ChainLevelInput[] = [
-  { position: 1, slotKey: SLOT_FIRST_APPROVER, label: 'Site Incharge' },
-  { position: 2, slotKey: SLOT_HR, label: 'HR Office' },
   {
-    position: 3,
+    position: 1,
     slotKey: SLOT_FINAL,
     label: 'Director',
     isFinalAuthority: true,
@@ -239,6 +277,16 @@ export const DEFAULT_DIRECTOR_FINAL_LEVELS: ChainLevelInput[] = [
     position: 1,
     slotKey: SLOT_FINAL,
     label: 'Director',
+    isFinalAuthority: true,
+  },
+];
+
+/** One Head Office level — what the five 2026-10-20 flows had before they joined the spine. */
+export const DEFAULT_HEAD_OFFICE_LEVELS: ChainLevelInput[] = [
+  {
+    position: 1,
+    slotKey: SLOT_HR,
+    label: 'Head Office',
     isFinalAuthority: true,
   },
 ];
@@ -299,6 +347,8 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
   // about what the client confirmed and an RA bill is not on it.
   [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // 039: a job card goes to Head Office before the workshop is paid.
+  [ACTION_JOB_CARD, DEFAULT_JOB_CARD_LEVELS],
   [ACTION_CLIENT_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // 028 FR-009 and FR-010. Both one Director level, for the reason each constant gives. Seeded here
   // so a company gets them on creation like every other chain — a chain installed per company by
@@ -310,6 +360,13 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // seeder is idempotent per chain and is the remedy for every chain added after a company was
   // created, as 028's two were.
   [ACTION_DWR, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // 2026-10-20: the HR and labour money flows, one Head Office level each — see the constants.
+  // Migration `20261020120000_hr_money_approval_chains` installs them in existing companies.
+  [ACTION_LEAVE_APPLICATION, DEFAULT_HEAD_OFFICE_LEVELS],
+  [ACTION_REIMBURSEMENT_CLAIM, DEFAULT_HEAD_OFFICE_LEVELS],
+  [ACTION_EMPLOYEE_LOAN, DEFAULT_HEAD_OFFICE_LEVELS],
+  [ACTION_SALARY_ADVANCE, DEFAULT_HEAD_OFFICE_LEVELS],
+  [ACTION_LABOUR_ADVANCE, DEFAULT_HEAD_OFFICE_LEVELS],
   // FR-018's remaining action types, each a director-only chain (T048). Seeded even where no module
   // submits into them yet: without the chain, feature 017's first work order would be refused as a
   // configuration fault in every company at once, and the remedy would be a settings visit per

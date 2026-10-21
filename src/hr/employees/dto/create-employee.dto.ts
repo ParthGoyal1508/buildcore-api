@@ -2,6 +2,9 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { BooleanQuery } from '../../../common/decorators/boolean-query.decorator';
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
   IsBoolean,
   IsDateString,
   IsEmail,
@@ -510,6 +513,12 @@ export class ListEmployeesQueryDto {
   @MaxLength(100)
   siteId?: string;
 
+  @ApiPropertyOptional({ description: 'Employees on this shift only.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  shiftId?: string;
+
   @ApiPropertyOptional({ description: 'Defaults to active-only when omitted.' })
   @IsOptional()
   @IsBoolean()
@@ -542,6 +551,29 @@ export class ListEmployeesQueryDto {
     message: 'sort must be code, name or joining, then :asc or :desc',
   })
   sort?: string;
+}
+
+/** The most employees one bulk shift change moves (036). */
+export const BULK_SHIFT_MAX_EMPLOYEES = 2000;
+
+/**
+ * Moves many employees onto one shift at once (036) — Day/Night crews rotate weekly or every
+ * ten days, and opening each employee's form for that was the whole of the old workflow.
+ */
+export class BulkShiftDto {
+  @ApiProperty({ description: 'The shift every listed employee moves onto.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  shiftId: string;
+
+  @ApiProperty({ type: [String], maxItems: BULK_SHIFT_MAX_EMPLOYEES })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(BULK_SHIFT_MAX_EMPLOYEES)
+  @IsString({ each: true })
+  @MaxLength(100, { each: true })
+  employeeIds: string[];
 }
 
 /** The single PII field a reveal request names (005 FR-003, research.md §3). */

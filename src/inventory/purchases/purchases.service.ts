@@ -43,6 +43,14 @@ import { InventoryRefsService } from '../inventory-refs.service';
 import { PurchaseOrdersService } from '../purchase-orders/purchase-orders.service';
 import { StockService } from '../stock/stock.service';
 import { toNumber } from '../stock/stock.types';
+import { cashHiddenError } from '../../common/cash/cash-policy';
+import {
+  billStatusFilterTx,
+  billWithoutHiddenCash,
+  cashHiddenCompaniesTx,
+  hiddenCashByBillTx,
+  hiddenCashPayment,
+} from '../payments/cash-hiding';
 import {
   CreatePurchaseDto,
   ListPurchasesDto,
@@ -389,17 +397,15 @@ export class PurchasesService {
       MAX_PAGE_SIZE,
     );
 
-    const where: Prisma.PurchaseWhereInput = {
-      ...companyScope(caller, query.companyId),
+    const scope = companyScope(caller, query.companyId);
+    const filters: Prisma.PurchaseWhereInput = {
+      ...scope,
       // Soft-deleted purchases are absent from every list. They exist so the ledger
       // reversal has something to point at, not so they can be browsed.
       deleted: false,
       ...(query.siteId ? { siteId: query.siteId } : {}),
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       ...(query.itemId ? { itemId: query.itemId } : {}),
-      ...(query.paymentStatus
-        ? { bill: { paymentStatus: query.paymentStatus } }
-        : {}),
       ...(query.dateFrom || query.dateTo
         ? {
             date: {
@@ -418,7 +424,22 @@ export class PurchasesService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
-        const [rows, total] = await Promise.all([
+        // 038: with cash hidden, a bill's paid figure (and its status) leaves out what cash paid
+        // — worked out here from the stored total, never written back.
+        const hidden = await cashHiddenCompaniesTx(tx, scope);
+        const wanted = query.paymentStatus;
+        const where: Prisma.PurchaseWhereInput = wanted
+          ? {
+              ...filters,
+              bill: await billStatusFilterTx(tx, {
+                base: { purchase: filters },
+                hidden,
+                matches: { paymentStatus: wanted },
+                accepts: (status) => status === wanted,
+              }),
+            }
+          : filters;
+        const [found, total] = await Promise.all([
           tx.purchase.findMany({
             where,
             include: {
@@ -432,7 +453,7 @@ export class PurchasesService {
           }),
           tx.purchase.count({ where }),
         ]);
-        const [sum, paid] = await Promise.all([
+        const [sum, storedPaid, hiddenCash] = await Promise.all([
           tx.purchase.aggregate({
             where,
             _sum: { amount: true, quantity: true },
@@ -441,7 +462,32 @@ export class PurchasesService {
             where: { purchase: where },
             _sum: { paidAmount: true },
           }),
+          hidden.length > 0
+            ? tx.paymentAllocation.aggregate({
+                where: {
+                  bill: { purchase: where },
+                  payment: hiddenCashPayment(hidden),
+                },
+                _sum: { allocatedAmount: true },
+              })
+            : null,
         ]);
+        const cash = await hiddenCashByBillTx(
+          tx,
+          found.flatMap((row) => (row.bill ? [row.bill.id] : [])),
+          hidden,
+        );
+        const rows = found.map((row) =>
+          row.bill
+            ? { ...row, bill: billWithoutHiddenCash(row.bill, cash) }
+            : row,
+        );
+        const paid =
+          Math.round(
+            (toNumber(storedPaid._sum.paidAmount) -
+              toNumber(hiddenCash?._sum.allocatedAmount ?? null)) *
+              100,
+          ) / 100;
         return { rows, total, sum, paid };
       },
     );
@@ -492,7 +538,7 @@ export class PurchasesService {
       }),
       totals: {
         amount: toNumber(sum._sum.amount),
-        paidAmount: toNumber(paid._sum.paidAmount),
+        paidAmount: paid,
         quantity: query.itemId ? toNumber(sum._sum.quantity) : null,
       },
       total,
@@ -613,7 +659,7 @@ export class PurchasesService {
           });
         }
 
-        return tx.purchase.update({
+        const saved = await tx.purchase.update({
           where: { id },
           data: {
             ...(date ? { date } : {}),
@@ -627,6 +673,14 @@ export class PurchasesService {
             purchaseOrderLine: { include: { purchaseOrder: true } },
           },
         });
+        // 038: the paid figure handed back reads without hidden cash, as the list does.
+        if (!saved.bill) return saved;
+        const cash = await hiddenCashByBillTx(
+          tx,
+          [saved.bill.id],
+          await cashHiddenCompaniesTx(tx, { companyId: saved.companyId }),
+        );
+        return { ...saved, bill: billWithoutHiddenCash(saved.bill, cash) };
       },
     );
 
@@ -700,6 +754,13 @@ export class PurchasesService {
         assertInScope(caller, existing, `Purchase ${id}`);
 
         if (existing.bill && existing.bill.allocations.length > 0) {
+          // 038: a bill paid in hidden cash would answer "delete the payment" about a payment the
+          // caller cannot see or delete — it is refused as the cash it is.
+          const hidden = await cashHiddenCompaniesTx(tx, {
+            companyId: existing.companyId,
+          });
+          const cash = await hiddenCashByBillTx(tx, [existing.bill.id], hidden);
+          if (cash.size > 0) throw cashHiddenError();
           throw new ConflictException(
             'This bill has allocated payments. Delete the payment before deleting the purchase.',
           );

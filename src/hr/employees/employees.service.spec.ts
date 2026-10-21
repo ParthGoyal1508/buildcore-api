@@ -50,6 +50,7 @@ function build(txOverrides: Record<string, unknown> = {}) {
     update: jest.fn(),
     findMany: jest.fn(),
     count: jest.fn(),
+    updateMany: jest.fn(),
     ...txOverrides,
   };
   // withRlsContext opens a transaction and issues two set_config statements via
@@ -69,6 +70,15 @@ function build(txOverrides: Record<string, unknown> = {}) {
   } as never;
 
   const auditLog = { record: jest.fn().mockResolvedValue(undefined) };
+  const referenceData = {
+    getShift: jest.fn().mockResolvedValue({
+      companyId: 'co-1',
+      name: 'Night',
+      inTime: '20:00',
+      outTime: '08:00',
+      graceMinutes: 0,
+    }),
+  };
   const codes = {
     getNextEmployeeCode: jest.fn().mockResolvedValue('ACME-0007'),
   };
@@ -87,6 +97,7 @@ function build(txOverrides: Record<string, unknown> = {}) {
     codes as never,
     auditLog as never,
     salaryRevisions,
+    referenceData as never,
   );
   return {
     service,
@@ -95,6 +106,7 @@ function build(txOverrides: Record<string, unknown> = {}) {
     codes,
     salaryRevision,
     salaryRevisions,
+    referenceData,
   };
 }
 
@@ -351,5 +363,66 @@ describe('EmployeesService — salary edits are revisions (2026-10-14)', () => {
     employee.create.mockResolvedValue(employeeRow(PAY));
     await service.create(CALLER, 'co-1', { basic: 20000 } as never);
     expect(salaryRevision.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('EmployeesService — bulk shift change (036)', () => {
+  it('moves every listed employee and records one audit entry', async () => {
+    const { service, employee, auditLog } = build();
+    employee.updateMany.mockResolvedValue({ count: 2 });
+    employee.count.mockResolvedValue(2);
+
+    await expect(
+      service.bulkSetShift(CALLER, 'co-1', {
+        shiftId: 'shift-night',
+        employeeIds: ['emp-1', 'emp-2', 'emp-1'],
+      }),
+    ).resolves.toEqual({ updated: 2, shiftId: 'shift-night' });
+
+    expect(employee.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['emp-1', 'emp-2'] }, companyId: 'co-1' },
+      data: { shiftId: 'shift-night' },
+    });
+    expect(auditLog.record).toHaveBeenCalledTimes(1);
+    expect(auditLog.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: AuditEntityType.EMPLOYEE,
+        action: AuditAction.UPDATE,
+        companyId: 'co-1',
+        changes: expect.objectContaining({
+          event: 'bulk_shift_change',
+          shiftName: 'Night',
+          count: 2,
+        }),
+      }),
+    );
+  });
+
+  it("refuses another company's shift", async () => {
+    const { service, referenceData, employee } = build();
+    referenceData.getShift.mockResolvedValue({
+      companyId: 'co-2',
+      name: 'Night',
+    });
+    await expect(
+      service.bulkSetShift(CALLER, 'co-1', {
+        shiftId: 'shift-other',
+        employeeIds: ['emp-1'],
+      }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(employee.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('moves nobody when any id is not an active employee of the company', async () => {
+    const { service, employee, auditLog } = build();
+    employee.count.mockResolvedValue(1);
+    await expect(
+      service.bulkSetShift(CALLER, 'co-1', {
+        shiftId: 'shift-night',
+        employeeIds: ['emp-1', 'emp-left'],
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(employee.updateMany).not.toHaveBeenCalled();
+    expect(auditLog.record).not.toHaveBeenCalled();
   });
 });

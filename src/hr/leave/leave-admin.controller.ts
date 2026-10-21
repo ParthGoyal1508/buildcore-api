@@ -80,6 +80,6 @@ export class LeaveAdminController {
     @Param('id') id: string,
     @Body() dto: LeaveDecisionDto,
   ) {
-    return this.leave.decide(callerFrom(user, request), id, dto);
+    return this.leave.decide(callerFrom(user, request), id, dto, user);
   }
 }

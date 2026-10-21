@@ -1,10 +1,16 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { AttendanceType, MusterStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { companyScope } from '../../settings/company-scope';
+import { CashPolicyService } from '../../common/cash/cash-policy';
+import {
+  cashCarrySources,
+  isCashSheet,
+  visibleSheetLines,
+} from '../cash/labour-cash-view';
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { dayFractionOf } from '../payment-sheets/wage-calc.util';
 import { LabourRefsService } from '../labour-refs.service';
@@ -17,6 +23,8 @@ export class LabourReportsService {
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly refs: LabourRefsService,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
 
   /** Workers' names and codes by id, for the labels the reports return beside ids (036 O8). */
@@ -223,7 +231,7 @@ export class LabourReportsService {
     query: { projectId: string; periodFrom: string; periodTo: string },
   ) {
     const { from, to } = this.parseRange(query.periodFrom, query.periodTo);
-    const sheets = await withRlsContext(
+    let sheets = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
       (tx) =>
@@ -238,6 +246,30 @@ export class LabourReportsService {
           include: { lines: true },
         }),
     );
+    // 038: with cash hidden for a sheet's company, its direct (cash) sheets and cash lines are not
+    // in the register, and advance recovery is taken out of the lines that remain.
+    const hidden = this.cash
+      ? await this.cash.hiddenAmong(sheets.map((s) => s.companyId))
+      : new Set<string>();
+    if (hidden.size > 0) {
+      const kept = sheets.filter(
+        (s) => !(hidden.has(s.companyId) && isCashSheet(s)),
+      );
+      const sources = await withRlsContext(
+        this.prisma,
+        rlsContextFor(caller),
+        (tx) =>
+          cashCarrySources(
+            tx,
+            kept.flatMap((s) => s.lines),
+          ),
+      );
+      sheets = kept.map((s) =>
+        hidden.has(s.companyId)
+          ? { ...s, lines: visibleSheetLines(s, s.lines, sources).lines }
+          : s,
+      );
+    }
 
     const labels = await this.workerLabels(
       caller,

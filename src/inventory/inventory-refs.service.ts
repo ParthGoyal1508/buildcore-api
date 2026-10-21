@@ -6,6 +6,10 @@ import { parseDateOnly } from '../hr/leave/leave-days';
 import { PartnersService } from '../partners/partners.service';
 import { ProjectsService } from '../projects/portfolio/projects.service';
 import { SitesService } from '../projects/sites/sites.service';
+import {
+  CompositeItemView,
+  CompositeItemsService,
+} from '../settings/item-masters/composite-items.service';
 import { ItemView, ItemsService } from '../settings/item-masters/items.service';
 import { companyScope } from '../settings/company-scope';
 
@@ -25,6 +29,7 @@ export class InventoryRefsService {
     private readonly sites: SitesService,
     private readonly partners: PartnersService,
     private readonly projects: ProjectsService,
+    private readonly compositeItems: CompositeItemsService,
   ) {}
 
   /**
@@ -248,5 +253,50 @@ export class InventoryRefsService {
       categoryId: filters.categoryId,
       companyId: filters.companyId,
     });
+  }
+
+  /** A composite item (039) of the target company that may be issued: it exists and is active. */
+  async requireActiveCompositeItem(
+    caller: AuthenticatedUser,
+    compositeItemId: string,
+    companyId: string,
+  ): Promise<CompositeItemView> {
+    const composite = await this.compositeItems.getCompositeItem(
+      caller,
+      compositeItemId,
+    );
+    if (!composite || composite.companyId !== companyId) {
+      throw new BadRequestException(
+        `Composite item ${compositeItemId} does not exist in this company`,
+      );
+    }
+    if (!composite.active) {
+      throw new BadRequestException(
+        `${composite.name} is inactive. Reactivate it in the item master before issuing it.`,
+      );
+    }
+    return composite;
+  }
+
+  /** Active composites for the issue form's picker, by name (039). */
+  async searchCompositeItems(
+    caller: AuthenticatedUser,
+    query: { search?: string; companyId?: string },
+  ): Promise<CompositeItemView[]> {
+    const page = await this.compositeItems.findAll(caller, {
+      search: query.search,
+      companyId: query.companyId,
+      active: true,
+      pageSize: 50,
+    });
+    return page.compositeItems;
+  }
+
+  /** Composite names and units for a list of ids, in one query (039). */
+  async compositeNames(
+    caller: AuthenticatedUser,
+    ids: string[],
+  ): Promise<Map<string, { name: string; unit: string }>> {
+    return this.compositeItems.getNamesByIds(caller, ids);
   }
 }

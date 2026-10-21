@@ -5,8 +5,8 @@ import { IsBoolean } from 'class-validator';
 export class CashVisibilityDto {
   @ApiProperty({
     description:
-      'True hides cash amounts across screens, reports and exports. A display control ' +
-      'only — no data is altered (FR-017).',
+      'True hides every cash transaction (screens, totals, reports, exports) and blocks ' +
+      'new cash entries for everyone until turned off (038). No data is altered.',
   })
   @IsBoolean()
   hideCashTransactions: boolean;

@@ -7,9 +7,18 @@ import {
 import { PaymentInstrument, Prisma, RaBillStatus } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  cashHiddenError,
+  isCashHiddenTx,
+} from '../../../common/cash/cash-policy';
 import type { RlsContext } from '../../../common/prisma/rls-context';
 import { withRlsContext } from '../../../common/prisma/rls-context';
 import { BILLING_ERRORS } from '../billing-error-codes';
+import {
+  cashHiddenCompaniesTx,
+  isCashPayment,
+  paymentVisible,
+} from './cash-payments';
 
 /** One payment, as a screen reads it. */
 export interface PaymentView {
@@ -147,6 +156,11 @@ export class BillPaymentsService {
       this.prisma,
       ctx,
       async (tx) => {
+        // 038. With cash hidden for the company nobody records cash — `instrument = cash`, or a mode
+        // spelled "Cash" that the request interceptor's exact match lets through.
+        const hidden = await isCashHiddenTx(tx, companyId);
+        if (hidden && isCashPayment(input)) throw cashHiddenError();
+
         // 036 I4. The bill row is locked before the paid-to-date sum is read, and held until the
         // payment is inserted. Without it the check was aggregate-then-insert, and two payments
         // submitted together each read the same paid figure, each passed, and together paid past
@@ -184,14 +198,26 @@ export class BillPaymentsService {
           _sum: { amount: true },
         });
         const alreadyPaid = paid._sum.amount ?? ZERO;
+        // The ceiling counts every payment, cash included — money that left is not paid twice
+        // because it is hidden. The message, though, names only what the reader may see (038).
         if (alreadyPaid.plus(amount).greaterThan(bill.netPayable)) {
+          const shownPaid = hidden
+            ? (
+                await tx.rABillPayment.findMany({
+                  where: { raBillId },
+                  select: { amount: true, instrument: true, mode: true },
+                })
+              )
+                .filter((payment) => !isCashPayment(payment))
+                .reduce((total, payment) => total.plus(payment.amount), ZERO)
+            : alreadyPaid;
           throw new ConflictException({
             statusCode: 409,
             code: BILLING_ERRORS.paymentExceedsCertified,
             message:
               `${bill.billNumber} was certified at ${bill.netPayable.toFixed(
                 2,
-              )} and ${alreadyPaid.toFixed(2)} has already been paid. ` +
+              )} and ${shownPaid.toFixed(2)} has already been paid. ` +
               `Paying ${amount.toFixed(
                 2,
               )} would take the total past it — which is either this ` +
@@ -232,6 +258,18 @@ export class BillPaymentsService {
   /** Removes a payment recorded in error. The only correction route — a payment is never edited. */
   async remove(ctx: RlsContext, paymentId: string): Promise<void> {
     await withRlsContext(this.prisma, ctx, async (tx) => {
+      // 038. A cash payment of a company hiding cash cannot be removed until cash is shown again.
+      const existing = await tx.rABillPayment.findFirst({
+        where: { id: paymentId },
+        select: { companyId: true, instrument: true, mode: true },
+      });
+      if (
+        existing &&
+        isCashPayment(existing) &&
+        (await isCashHiddenTx(tx, existing.companyId))
+      ) {
+        throw cashHiddenError();
+      }
       // `deleteMany` rather than `delete`: under row-level security a `delete` by primary key on
       // another company's row raises a Prisma not-found that reads as a bug, where this returns a
       // count the caller can turn into the 404 it actually is.
@@ -263,12 +301,17 @@ export class BillPaymentsService {
       const bills = await tx.rABill.findMany({
         where: { projectId },
         select: {
+          companyId: true,
           status: true,
           amount: true,
           netPayable: true,
-          payments: { select: { amount: true } },
+          payments: {
+            select: { amount: true, instrument: true, mode: true },
+          },
         },
       });
+      // 038: paid is summed without the cash payments of a company hiding cash.
+      const hidden = await cashHiddenCompaniesTx(tx, ctx);
 
       const certified = bills.filter(
         (bill) => bill.status === RaBillStatus.approved,
@@ -282,7 +325,12 @@ export class BillPaymentsService {
       // route; summing the wider one means a bill whose status is later corrected cannot strand
       // money that has demonstrably left.
       const paidAmount = sum(bills, (bill) =>
-        sum(bill.payments, (payment) => payment.amount),
+        sum(
+          bill.payments.filter((payment) =>
+            paymentVisible(hidden, bill.companyId, payment),
+          ),
+          (payment) => payment.amount,
+        ),
       );
 
       return {
@@ -306,6 +354,7 @@ export class BillPaymentsService {
         where: { id: raBillId },
         select: {
           id: true,
+          companyId: true,
           billNumber: true,
           projectId: true,
           workOrderId: true,
@@ -316,7 +365,7 @@ export class BillPaymentsService {
         },
       });
       if (!bill) throw new NotFoundException('RA bill not found');
-      return toBillView(bill);
+      return toBillView(bill, await cashHiddenCompaniesTx(tx, ctx));
     });
   }
 
@@ -345,6 +394,7 @@ export class BillPaymentsService {
         },
         select: {
           id: true,
+          companyId: true,
           billNumber: true,
           projectId: true,
           workOrderId: true,
@@ -356,7 +406,8 @@ export class BillPaymentsService {
         orderBy: [{ billingDate: 'asc' }, { billNumber: 'asc' }],
       });
 
-      const views = bills.map(toBillView);
+      const hidden = await cashHiddenCompaniesTx(tx, ctx);
+      const views = bills.map((bill) => toBillView(bill, hidden));
       const certified = views.reduce(
         (total, view) => total.plus(view.certifiedAmount),
         ZERO,
@@ -379,6 +430,7 @@ export class BillPaymentsService {
 
 type BillEntity = {
   id: string;
+  companyId?: string;
   billNumber: string;
   projectId: string;
   workOrderId: string | null;
@@ -401,11 +453,19 @@ type BillEntity = {
   }[];
 };
 
-function toBillView(bill: BillEntity): BillOutstandingView {
+function toBillView(
+  bill: BillEntity,
+  hidden: ReadonlySet<string> = new Set(),
+): BillOutstandingView {
+  // 038. A cash payment of a company hiding cash is not shown and not summed: the bill reads as
+  // though it had never been made, and outstanding rises by it.
+  const payments = bill.payments.filter((payment) =>
+    paymentVisible(hidden, bill.companyId, payment),
+  );
   // Summed as `Decimal`, never as a number. Three part payments of a third each leave an
   // outstanding of 0.000000000004 in floating point, and a bill that will not close is a bill
   // somebody chases.
-  const paid = bill.payments.reduce(
+  const paid = payments.reduce(
     (total, payment) => total.plus(payment.amount),
     ZERO,
   );
@@ -420,7 +480,7 @@ function toBillView(bill: BillEntity): BillOutstandingView {
     certifiedAmount: bill.netPayable.toFixed(2),
     paidAmount: paid.toFixed(2),
     outstandingAmount: bill.netPayable.minus(paid).toFixed(2),
-    payments: bill.payments.map((payment) => ({
+    payments: payments.map((payment) => ({
       id: payment.id,
       raBillId: payment.raBillId,
       paidOn: payment.paidOn.toISOString().slice(0, 10),

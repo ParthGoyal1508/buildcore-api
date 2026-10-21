@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { StockLedgerType } from '@prisma/client';
+import { Prisma, StockLedgerType } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
 import { AuthenticatedUser } from '../../auth/authenticated-user';
@@ -136,7 +136,7 @@ export class StockQueryService {
       }
     }
 
-    const where = {
+    const baseWhere = {
       ...companyScope(caller, query.companyId),
       ...(query.siteId ? { siteId: query.siteId } : {}),
       ...(itemIdFilter ? { itemId: { in: itemIdFilter } } : {}),
@@ -157,6 +157,15 @@ export class StockQueryService {
       this.prisma,
       rlsContextFor(caller),
       async (tx) => {
+        // 039: only rows with stock on hand, for the issue form's item picker. `inStock` is never
+        // stored, so the ids are found by the same arithmetic in SQL first and the page is cut
+        // from them — paging the full set and dropping empty rows would return short pages.
+        const where = query.inStockOnly
+          ? {
+              ...baseWhere,
+              id: { in: await this.inStockIds(tx, query.siteId) },
+            }
+          : baseWhere;
         if (filterInMemory) {
           const balances = await tx.stockBalance.findMany({
             where,
@@ -250,6 +259,23 @@ export class StockQueryService {
       page,
       pageSize,
     };
+  }
+
+  /**
+   * The balance rows with stock on hand — `received + transferIn − issued − transferOut > 0`, the
+   * definition `inStockOf` computes — optionally at one store. Scoped by the caller's RLS context
+   * like every other read in the transaction.
+   */
+  private async inStockIds(
+    tx: Prisma.TransactionClient,
+    siteId?: string,
+  ): Promise<string[]> {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "inventory"."StockBalance"
+      WHERE "received" + "transferIn" - "issued" - "transferOut" > 0
+      ${siteId ? Prisma.sql`AND "siteId" = ${siteId}` : Prisma.empty}
+    `;
+    return rows.map((row) => row.id);
   }
 
   /**

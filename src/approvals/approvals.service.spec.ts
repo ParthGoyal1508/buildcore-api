@@ -8,6 +8,7 @@ import {
 import { createPrismaMock } from '../settings/testing/prisma-mock';
 import {
   APPROVAL_ALREADY_DECIDED,
+  APPROVAL_OWN_ITEM,
   APPROVAL_NOT_AUTHORISED,
   APPROVAL_NOT_PENDING,
   APPROVAL_REASON_REQUIRED,
@@ -89,6 +90,7 @@ const instanceRow = (overrides: Record<string, unknown> = {}) => ({
   currentPosition: 1,
   state: 'pending' as ApprovalState,
   originatorUserId: 'originator-1',
+  excludedUserIds: [] as string[],
   round: 1,
   returnCount: 0,
   delegatedToUserId: null,
@@ -353,6 +355,25 @@ describe('ApprovalService', () => {
       expect(error.response.code).toBe(APPROVAL_ALREADY_DECIDED);
       expect(error.response.code).not.toBe(APPROVAL_NOT_AUTHORISED);
       expect(error.response.message).toMatch(/reassigned/);
+    });
+
+    it('refuses someone barred from this item even though they hold the level (2026-10-20)', async () => {
+      // The applicant of a leave application, holding Head Office: the role says yes, the item
+      // says no — and it says so as their own item, not as missing authority.
+      const everyRole = [ROLE_FIRST, ROLE_HR, ROLE_SUPER];
+      const { service } = harness(
+        instanceRow({ excludedUserIds: ['applicant-1'] }),
+      );
+
+      const error = await service
+        .decide(
+          { instanceId: 'inst-1', action: ApprovalDecisionAction.approve },
+          caller('applicant-1', everyRole),
+          '10.0.0.1',
+        )
+        .catch((e) => e);
+
+      expect(error.response.code).toBe(APPROVAL_OWN_ITEM);
     });
 
     it('requires a reason to reject and to return, but not to approve (FR-006)', async () => {
@@ -954,7 +975,7 @@ describe('ApprovalService', () => {
   });
 
   describe('the queue (T016, T021)', () => {
-    it('excludes items the caller has already decided on', async () => {
+    it('excludes items the caller has already decided on this round, and only this round', async () => {
       const { service, prisma } = harness();
       prisma.tx.roleSlotMapping.findMany = jest
         .fn()
@@ -962,13 +983,35 @@ describe('ApprovalService', () => {
       prisma.tx.approvalLevel.findMany = jest
         .fn()
         .mockResolvedValue([{ chainId: 'chain-1', position: 2 }]);
+      const item = (id: string, round: number, decisions: object[]) => ({
+        id,
+        round,
+        decisions,
+        currentPosition: 2,
+        entityType: 'job_card',
+        entityId: `e-${id}`,
+        subject: id,
+        href: null,
+        originatorUserId: null,
+        createdAt: new Date('2026-10-20T10:00:00Z'),
+        chain: { actionType: 'job_card', levels: [] },
+      });
+      prisma.tx.approvalInstance.findMany = jest.fn().mockResolvedValue([
+        // Decided by hr-1 in this round: forbidden to act again, so not listed.
+        item('decided', 1, [{ actorUserId: 'hr-1', round: 1 }]),
+        // Returned by hr-1 in round 1 and resubmitted: theirs to decide again (039).
+        item('resubmitted', 2, [{ actorUserId: 'hr-1', round: 1 }]),
+        // Somebody else's decision does not take it off hr-1's queue.
+        item('fresh', 1, [{ actorUserId: 'other', round: 1 }]),
+      ]);
 
-      await service.queueFor(caller('hr-1', [ROLE_HR]));
+      const page = await service.queueFor(caller('hr-1', [ROLE_HR]));
 
+      expect(page.items.map((i) => i.instanceId)).toEqual([
+        'resubmitted',
+        'fresh',
+      ]);
       const where = prisma.tx.approvalInstance.findMany.mock.calls[0][0].where;
-      // A queue that lists work you are forbidden to action teaches people to ignore the
-      // queue — so the exclusion is in the query, not applied afterwards.
-      expect(where.decisions).toEqual({ none: { actorUserId: 'hr-1' } });
       expect(where.state).toBe('pending');
     });
 

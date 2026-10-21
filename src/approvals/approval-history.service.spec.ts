@@ -343,13 +343,19 @@ describe('ApprovalHistoryService filters (036 D1)', () => {
   it('refuses a From after the To', async () => {
     const { service } = harness();
     await expect(
-      service.historyFor(caller('me'), { from: '2026-10-05', to: '2026-10-01' }),
+      service.historyFor(caller('me'), {
+        from: '2026-10-05',
+        to: '2026-10-01',
+      }),
     ).rejects.toMatchObject({ status: 400 });
   });
 
   it('searches the subject and the people who raised or decided', async () => {
     const { service, tx } = harness();
-    await service.historyFor(caller('me'), { q: 'ravi', requestedBy: 'raiser' });
+    await service.historyFor(caller('me'), {
+      q: 'ravi',
+      requestedBy: 'raiser',
+    });
     const { where } = tx.approvalInstance.findMany.mock.calls[0][0];
     expect(where.AND).toContainEqual({ originatorUserId: 'raiser' });
     expect(where.AND).toContainEqual({

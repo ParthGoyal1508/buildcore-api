@@ -56,7 +56,14 @@ export class BoqController {
     private readonly imports: BoqImportService,
   ) {}
 
+  /**
+   * `PROJECTS` **or `DWR`** (039), for this read alone. A daily work report is measured against
+   * BOQ lines, and its form offers them from this tree, so the DWR Entry role — which holds `DWR`
+   * and nothing of the portfolio — could not record a line without it. Every write here, and the
+   * alerts, stay `PROJECTS`.
+   */
   @Get()
+  @RequirePermissions(Permission.PROJECTS, Permission.DWR)
   @ApiOperation({
     summary: 'The project’s BOQ as a two-level tree',
     description:

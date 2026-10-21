@@ -34,6 +34,7 @@ import {
   APPROVAL_DIRECTOR_REQUIRED,
   APPROVAL_NOT_COMPLETE,
   APPROVAL_NOT_AUTHORISED,
+  APPROVAL_OWN_ITEM,
   APPROVAL_NOT_PENDING,
   APPROVAL_NOT_SUBMITTED,
   APPROVAL_REASON_REQUIRED,
@@ -62,6 +63,19 @@ import { repairStoredApprovalHref, webRoutes } from '../common/web-routes';
 import { ACTION_DIRECTOR_FINAL_SET_CHANGE } from './default-chains';
 
 /** The event a module listens for to learn its item finished the chain (T013). */
+/** Whether `userId` has already decided this item in its current round (FR-021a). */
+function decidedThisRound(
+  instance: {
+    round: number;
+    decisions: { actorUserId: string; round: number }[];
+  },
+  userId: string,
+): boolean {
+  return instance.decisions.some(
+    (d) => d.actorUserId === userId && d.round === instance.round,
+  );
+}
+
 export const APPROVAL_COMPLETED_EVENT = 'approval.completed';
 
 /**
@@ -116,6 +130,25 @@ export interface ApprovalRejectedEvent {
   entityId: string;
   companyId: string;
   instanceId: string;
+}
+
+/**
+ * The event a module listens for to learn its item was **returned** for correction (039). The
+ * same gap rejection had until 2026-10-04: a job card or payroll run sent back by Head Office or
+ * the Director stayed "pending" in its own table, and the person who must correct it could not
+ * see that it was theirs again. The reason is on the instance's latest decision.
+ */
+export const APPROVAL_RETURNED_EVENT = 'approval.returned';
+
+export interface ApprovalReturnedEvent {
+  entityType: string;
+  entityId: string;
+  companyId: string;
+  instanceId: string;
+  /** The approver's remarks — mandatory on a return. */
+  reason: string | null;
+  /** Who returned it. */
+  actorUserId: string;
 }
 
 /** Raised on the same index that enforces it, so the two cannot disagree. */
@@ -211,6 +244,13 @@ export class ApprovalService {
             href: input.href ?? null,
             viewPermission: input.viewPermission,
             originatorUserId: input.originatorUserId,
+            excludedUserIds: [
+              ...new Set(
+                (input.excludedUserIds ?? []).filter(
+                  (id): id is string => !!id,
+                ),
+              ),
+            ],
             currentPosition: 1,
           },
           include: {
@@ -398,6 +438,16 @@ export class ApprovalService {
       );
     }
 
+    // 2026-10-20. Maker-checker, where the decision is taken: the applicant, the maker or the
+    // employee being paid may hold this level's role and still not decide their own item.
+    if (instance.excludedUserIds.includes(caller.id)) {
+      await refuse(
+        APPROVAL_OWN_ITEM,
+        `You cannot decide this item yourself — you raised it, recorded it, or it pays you. ` +
+          `Another approver at this level must decide it.`,
+      );
+    }
+
     // FR-021a. Checked here so the refusal is legible, and enforced by the unique index
     // below so a race cannot slip past it.
     if (
@@ -526,8 +576,50 @@ export class ApprovalService {
         outcome as ApprovalRejectedEvent,
       );
     }
+    if (updated.state === 'returned') {
+      this.events.emit(APPROVAL_RETURNED_EVENT, {
+        ...outcome,
+        reason,
+        actorUserId: caller.id,
+      } as ApprovalReturnedEvent);
+    }
 
     return this.toView(updated, caller);
+  }
+
+  /**
+   * A decision taken from the owning module's own screen (2026-10-20), on the item's live chain.
+   *
+   * The leave, claim, loan and advance screens kept their Approve / Reject buttons when those
+   * flows moved onto the spine; each now records a decision here, so the chain — not the module's
+   * permission — says who may decide and when the item takes effect. 409 `APPROVAL_NOT_SUBMITTED`
+   * when the item has no live chain.
+   */
+  async decideByEntity(
+    entityType: string,
+    entityId: string,
+    input: Omit<DecideApprovalInput, 'instanceId'>,
+    caller: AuthenticatedUser,
+    ipAddress: string,
+  ): Promise<ApprovalInstanceView> {
+    const instance = await this.loadByEntity(
+      rlsContextFor(caller),
+      entityType,
+      entityId,
+    );
+    if (!instance || !isLive(instance.state)) {
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          'This item is not waiting in an approval chain, so there is nothing to decide.',
+        code: APPROVAL_NOT_SUBMITTED,
+      });
+    }
+    return this.decide(
+      { ...input, instanceId: instance.id },
+      caller,
+      ipAddress,
+    );
   }
 
   /**
@@ -690,6 +782,29 @@ export class ApprovalService {
     return [...instance.decisions]
       .sort((a, b) => a.decidedAt.getTime() - b.decidedAt.getTime())
       .map((d) => this.toDecisionView(d, instance, names));
+  }
+
+  /**
+   * Whether this viewer may open the files of an item in a chain (2026-10-20: "we were not seeing
+   * any attachment while approving").
+   *
+   * Everyone who may read its history, and also whoever can decide it now. A Director at the final
+   * level often holds none of the module's permissions, and being asked to approve a bill without
+   * seeing it is worse than useless. False when the item was never in a chain.
+   */
+  async mayViewFiles(
+    entityType: string,
+    entityId: string,
+    viewer: AuthenticatedUser,
+  ): Promise<boolean> {
+    const instance = await this.loadByEntity(
+      rlsContextFor(viewer),
+      entityType,
+      entityId,
+    );
+    if (!instance) return false;
+    if (this.mayViewHistory(instance, viewer)) return true;
+    return (await this.toView(instance, viewer)).canActNow;
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1070,17 +1185,27 @@ export class ApprovalService {
           companyId,
           state: 'pending',
           OR: reachable,
-          // FR-021a, applied to the listing rather than only to the action.
-          decisions: { none: { actorUserId: caller.id } },
+          // An item this caller may not decide at all (2026-10-20). "Already decided" is
+          // filtered below, per round.
+          NOT: { excludedUserIds: { has: caller.id } },
         },
         include: { chain: { include: { levels: true } }, decisions: true },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        take: limit + 1,
-        ...(paging.cursor ? { cursor: { id: paging.cursor }, skip: 1 } : {}),
       });
     });
 
-    const page = rows.slice(0, limit);
+    // FR-021a, applied to the listing rather than only to the action — and per *round*, which
+    // the query cannot express (a decision's round against its own item's). It used to drop any
+    // item the caller had ever decided, so an item they returned and its author resubmitted never
+    // came back to them: a one-level chain's correction loop stopped dead (found by 039, whose
+    // job cards and payroll runs are returned and resubmitted to the same approver). Paged here
+    // for the same reason; a company's pending queue is small.
+    const open = rows.filter((r) => !decidedThisRound(r, caller.id));
+    const start = paging.cursor
+      ? open.findIndex((r) => r.id === paging.cursor) + 1
+      : 0;
+    const window = open.slice(start, start + limit + 1);
+    const page = window.slice(0, limit);
     const names = await this.namesFor(
       page.map((r) => r.originatorUserId).filter((id): id is string => !!id),
     );
@@ -1119,7 +1244,7 @@ export class ApprovalService {
           isFinalAuthority: level?.isFinalAuthority ?? false,
         };
       }),
-      nextCursor: rows.length > limit ? page[page.length - 1].id : null,
+      nextCursor: window.length > limit ? page[page.length - 1].id : null,
     };
   }
 
@@ -1156,14 +1281,23 @@ export class ApprovalService {
       ];
       if (reachable.length === 0) return 0;
 
-      return tx.approvalInstance.count({
+      // Counted the way `queueFor` lists: decided *this round* is what takes an item off.
+      const pending = await tx.approvalInstance.findMany({
         where: {
           companyId,
           state: 'pending',
           OR: reachable,
-          decisions: { none: { actorUserId: caller.id } },
+          NOT: { excludedUserIds: { has: caller.id } },
+        },
+        select: {
+          round: true,
+          decisions: {
+            where: { actorUserId: caller.id },
+            select: { actorUserId: true, round: true },
+          },
         },
       });
+      return pending.filter((r) => !decidedThisRound(r, caller.id)).length;
     });
   }
 
@@ -1205,6 +1339,8 @@ export class ApprovalService {
             chainId: l.chainId,
             currentPosition: { lt: l.position },
           })),
+          // Not coming to them at all if they may not decide it (2026-10-20).
+          NOT: { excludedUserIds: { has: caller.id } },
         },
         include: { chain: { include: { levels: true } } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -1783,6 +1919,10 @@ export class ApprovalService {
       )
     ) {
       return { canActNow: false, inertReason: 'already_decided' };
+    }
+
+    if (instance.excludedUserIds.includes(viewer.id)) {
+      return { canActNow: false, inertReason: 'own_item' };
     }
 
     if (!roleId) {

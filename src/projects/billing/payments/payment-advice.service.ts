@@ -12,6 +12,7 @@ import { rupeesInWords } from '../../../common/rupees-in-words';
 import { CompaniesService } from '../../../settings/companies/companies.service';
 import { ProjectSourcesRegistry } from '../../portfolio/project-sources.registry';
 import { BILLING_ERRORS } from '../billing-error-codes';
+import { cashHiddenCompaniesTx, paymentVisible } from './cash-payments';
 import { PaymentAdviceRenderer } from './payment-advice.renderer';
 
 /**
@@ -197,8 +198,8 @@ export class PaymentAdviceService {
     companyId: string,
     paymentId: string,
   ): Promise<PaymentAdviceView> {
-    const payment = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.rABillPayment.findFirst({
+    const payment = await withRlsContext(this.prisma, ctx, async (tx) => {
+      const row = await tx.rABillPayment.findFirst({
         where: { id: paymentId },
         include: {
           raBill: {
@@ -212,8 +213,20 @@ export class PaymentAdviceService {
             },
           },
         },
-      }),
-    );
+      });
+      // 038. A cash payment of a company hiding cash has no advice: it does not exist, so 404.
+      if (
+        row &&
+        !paymentVisible(
+          await cashHiddenCompaniesTx(tx, ctx),
+          row.companyId,
+          row,
+        )
+      ) {
+        return null;
+      }
+      return row;
+    });
     if (!payment) throw new NotFoundException('Payment not found');
     const bill = payment.raBill;
     if (bill.status !== RaBillStatus.approved) {

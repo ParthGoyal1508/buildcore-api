@@ -31,7 +31,7 @@ describe('activity log descriptions', () => {
           confirmedByPassword: true,
         }),
       ),
-    ).toBe('Hid cash amounts');
+    ).toBe('Hid cash transactions');
     expect(
       describeEvent(
         row(AuditEntityType.COMPANY, AuditAction.UPDATE, {
@@ -39,7 +39,7 @@ describe('activity log descriptions', () => {
           confirmedByPassword: true,
         }),
       ),
-    ).toBe('Showed cash amounts');
+    ).toBe('Showed cash transactions');
   });
 
   it('leaves an ordinary update to "Updated"', () => {

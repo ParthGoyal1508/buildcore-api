@@ -1,8 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import {
   EngagementType,
   MusterStatus,
   PaymentSheetStatus,
+  Prisma,
   RateSource,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
@@ -18,6 +19,13 @@ import {
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { companyScope } from '../../settings/company-scope';
 import { dayFractionOf, roundMoney } from '../payment-sheets/wage-calc.util';
+import { CashPolicyService } from '../../common/cash/cash-policy';
+import {
+  cashCarrySources,
+  isCashSheet,
+  type LineFigures,
+  visibleSheetLines,
+} from '../cash/labour-cash-view';
 
 /**
  * The sheet statuses whose figures the roll-up counts (FR-013 says *approved* sheets).
@@ -176,7 +184,53 @@ export class MonthlyWageRollupService
     private readonly prisma: PrismaService,
     private readonly projects: ProjectsService,
     private readonly sources: ProjectSourcesRegistry,
+    /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
+    @Optional() private readonly cash?: CashPolicyService,
   ) {}
+
+  /**
+   * 038: the sheets as they read with cash hidden for their company — direct (cash) sheets gone,
+   * and each remaining sheet's cash lines gone, advance recovery taken out of the rest, and its
+   * recorded totals worked out from what is left. So the roll-up, the drill-down and the P&L all
+   * leave cash out, and still add up to each other. Unchanged when nothing is hidden.
+   */
+  private async withoutCash<
+    S extends {
+      companyId: string;
+      engagementType: EngagementType;
+      grossTotal: Prisma.Decimal;
+      deductionTotal: Prisma.Decimal;
+      netTotal: Prisma.Decimal;
+      lines: L[];
+    },
+    L extends LineFigures,
+  >(ctx: RlsContext, sheets: S[]): Promise<S[]> {
+    if (!this.cash || sheets.length === 0) return sheets;
+    const hidden = await this.cash.hiddenAmong(sheets.map((s) => s.companyId));
+    if (hidden.size === 0) return sheets;
+    const kept = sheets.filter(
+      (s) => !(hidden.has(s.companyId) && isCashSheet(s)),
+    );
+    const carrySources = await withRlsContext(this.prisma, ctx, (tx) =>
+      cashCarrySources(
+        tx,
+        kept.flatMap((s) => s.lines),
+      ),
+    );
+    return kept.map((s) => {
+      if (!hidden.has(s.companyId)) return s;
+      const view = visibleSheetLines(s, s.lines, carrySources);
+      return view.changed
+        ? {
+            ...s,
+            lines: view.lines,
+            grossTotal: new Prisma.Decimal(view.grossTotal),
+            deductionTotal: new Prisma.Decimal(view.deductionTotal),
+            netTotal: new Prisma.Decimal(view.netTotal),
+          }
+        : s;
+    });
+  }
 
   /**
    * Announces labour's cost source to the project P&L (T026).
@@ -223,7 +277,7 @@ export class MonthlyWageRollupService
     if (projectIds.length === 0) return totals;
 
     try {
-      const sheets = await withRlsContext(this.prisma, ctx, (tx) =>
+      const stored = await withRlsContext(this.prisma, ctx, (tx) =>
         tx.labourPaymentSheet.findMany({
           where: {
             companyId,
@@ -235,6 +289,7 @@ export class MonthlyWageRollupService
           include: { lines: true },
         }),
       );
+      const sheets = await this.withoutCash(ctx, stored);
 
       const counted = sheets.filter((sheet) =>
         COUNTED_SHEET_STATUSES.includes(sheet.status),
@@ -303,7 +358,7 @@ export class MonthlyWageRollupService
     const ctx = rlsContextFor(caller);
     const { monthStart, monthEnd } = monthBounds(query.year, query.month);
 
-    const sheets = await withRlsContext(this.prisma, ctx, (tx) =>
+    const stored = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.labourPaymentSheet.findMany({
         where: {
           ...companyScope(caller, query.companyId),
@@ -317,6 +372,7 @@ export class MonthlyWageRollupService
         orderBy: [{ periodFrom: 'asc' }, { engagementType: 'asc' }],
       }),
     );
+    const sheets = await this.withoutCash(ctx, stored);
 
     const counted = sheets.filter((sheet) =>
       COUNTED_SHEET_STATUSES.includes(sheet.status),
@@ -478,7 +534,7 @@ export class MonthlyWageRollupService
     // must not take the other cost lines down with it; a failure here is one person opening one
     // figure, and the drill-down reports it as unreadable rather than handing back an empty list
     // that reads as "this month had no wages".
-    const sheets = await withRlsContext(this.prisma, ctx, (tx) =>
+    const stored = await withRlsContext(this.prisma, ctx, (tx) =>
       tx.labourPaymentSheet.findMany({
         where: {
           companyId,
@@ -491,6 +547,7 @@ export class MonthlyWageRollupService
         orderBy: { periodFrom: 'asc' },
       }),
     );
+    const sheets = await this.withoutCash(ctx, stored);
 
     const records: ProjectCostRecord[] = [];
     for (const sheet of sheets) {

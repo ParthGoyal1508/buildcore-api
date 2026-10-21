@@ -41,7 +41,13 @@ import { ItemCategoriesService } from '../../settings/item-masters/item-categori
 export class CategoriesController {
   constructor(private readonly categories: ItemCategoriesService) {}
 
+  /**
+   * `SETTINGS` **or `INVENTORY`** (039), for this read alone. The Stock screen filters by category,
+   * and a Storekeeper — `INVENTORY` and nothing else — drew a 403 on it every time it opened.
+   * Creating, renaming and deleting a category stay `SETTINGS`.
+   */
   @Get()
+  @RequirePermissions(Permission.SETTINGS, Permission.INVENTORY)
   @ApiOperation({
     summary: 'Item categories with their item counts',
     description:

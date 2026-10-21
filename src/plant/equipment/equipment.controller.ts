@@ -60,7 +60,13 @@ export class EquipmentController {
     private readonly photos: EquipmentPhotosService,
   ) {}
 
+  /**
+   * `MACHINERY` **or `INVENTORY`** (039), for the list alone. The issue form offers the machine an
+   * issue (diesel, a spare) went into from this list, and a Storekeeper (`INVENTORY` alone) drew a
+   * 403 every time it opened. One machine, its documents and every write stay `MACHINERY`.
+   */
   @Get()
+  @RequirePermissions(Permission.MACHINERY, Permission.INVENTORY)
   @ApiOperation({
     summary: 'Paginated asset register',
     description:

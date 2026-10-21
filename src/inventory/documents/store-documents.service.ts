@@ -448,21 +448,47 @@ export class StoreDocumentsService {
           throw new NotFoundException('Issue not found');
         }
         assertInScope(caller, found, 'Issue');
-        return found;
+        // 039: a composite issue is one slip for every sub-item it took from the store.
+        const lines = found.issueGroupId
+          ? await tx.issue.findMany({
+              where: { issueGroupId: found.issueGroupId, deleted: false },
+              orderBy: { itemId: 'asc' },
+            })
+          : [found];
+        return { ...found, lines };
       },
     );
     const ctx = rlsContextFor(caller);
-    const [company, items, sites, project, activity] = await Promise.all([
-      this.company(issue.companyId),
-      this.refs.itemsByIds(caller, [issue.itemId]),
-      this.refs.siteNames(caller, [issue.siteId]),
-      this.projectName(caller, issue.projectId),
-      issue.activityId
-        ? this.projects.getActivityById(issue.activityId, ctx).catch(() => null)
-        : Promise.resolve(null),
-    ]);
+    const [company, items, sites, project, activity, composites] =
+      await Promise.all([
+        this.company(issue.companyId),
+        this.refs.itemsByIds(
+          caller,
+          issue.lines.map((line) => line.itemId),
+        ),
+        this.refs.siteNames(caller, [issue.siteId]),
+        this.projectName(caller, issue.projectId),
+        issue.activityId
+          ? this.projects
+              .getActivityById(issue.activityId, ctx)
+              .catch(() => null)
+          : Promise.resolve(null),
+        this.refs.compositeNames(
+          caller,
+          issue.compositeItemId ? [issue.compositeItemId] : [],
+        ),
+      ]);
     const item = items.get(issue.itemId);
     const store = sites.get(issue.siteId) ?? '';
+    const composite = issue.compositeItemId
+      ? composites.get(issue.compositeItemId)
+      : undefined;
+    // "DLC Concrete for plant foundation · 10 CUM", printed above the sub-items it was issued as.
+    const compositeLabel = issue.compositeItemId
+      ? `${composite?.name ?? 'Composite item'} · ${qty(
+          toNumber(issue.compositeQuantity),
+        )} ${composite?.unit ?? ''}`.trim()
+      : null;
     return this.render(
       {
         company,
@@ -503,22 +529,35 @@ export class StoreDocumentsService {
               { label: 'Qty. Issued', width: 9, align: 'right' },
               { label: 'Remarks', width: 14 },
             ],
-            rows: [
-              [
-                '1',
-                item ? `${item.name} (${item.code})` : 'Unknown item',
-                item?.unit ?? '',
-                issue.indentLine
-                  ? qty(toNumber(issue.indentLine.requestedQuantity))
-                  : '',
-                qty(toNumber(issue.quantity)),
-                issue.returnedQuantity !== null
-                  ? `Returned ${qty(toNumber(issue.returnedQuantity))}`
-                  : '',
-              ],
-            ],
+            rows: [...issue.lines]
+              .sort((a, b) =>
+                (items.get(a.itemId)?.name ?? '').localeCompare(
+                  items.get(b.itemId)?.name ?? '',
+                ),
+              )
+              .map((line, i) => {
+                const lineItem = items.get(line.itemId);
+                return [
+                  String(i + 1),
+                  lineItem
+                    ? `${lineItem.name} (${lineItem.code})`
+                    : 'Unknown item',
+                  lineItem?.unit ?? '',
+                  // A composite never fulfils an indent, so this is only ever the one plain line.
+                  issue.indentLine
+                    ? qty(toNumber(issue.indentLine.requestedQuantity))
+                    : '',
+                  qty(toNumber(line.quantity)),
+                  line.returnedQuantity !== null
+                    ? `Returned ${qty(toNumber(line.returnedQuantity))}`
+                    : '',
+                ];
+              }),
           },
-          remarks('Purpose / Remarks:', issue.remarks),
+          remarks(
+            'Purpose / Remarks:',
+            [compositeLabel, issue.remarks].filter(Boolean).join(' — ') || null,
+          ),
           ...signOff([
             ['Issued By', 'Storekeeper'],
             ['Approved By', 'Authorized Engineer / PM'],
@@ -577,16 +616,23 @@ export class StoreDocumentsService {
       query.siteId,
       companyId,
     );
-    const [company, items, projectId] = await Promise.all([
+    const [company, items, projectId, composites] = await Promise.all([
       this.company(companyId),
       this.refs.itemsByIds(
         caller,
         rows.map((r) => r.itemId),
       ),
       this.refs.projectOfSite(caller, query.siteId).catch(() => null),
+      this.refs.compositeNames(
+        caller,
+        rows.flatMap((r) => (r.compositeItemId ? [r.compositeItemId] : [])),
+      ),
     ]);
     const project = await this.projectName(caller, projectId);
-    const slips = rows.flatMap((r) => (r.slipNo ? [r.slipNo] : []));
+    // A composite issue's rows share one slip number; the header names each slip once.
+    const slips = [
+      ...new Set(rows.flatMap((r) => (r.slipNo ? [r.slipNo] : []))),
+    ];
     const span =
       dashDate(from) === dashDate(to)
         ? dashDate(from)
@@ -604,7 +650,20 @@ export class StoreDocumentsService {
         r.returnedQuantity === null ? '' : qty(toNumber(r.returnedQuantity)),
         dashDate(r.returnedOn),
         r.receivedBy ?? '',
-        [r.slipNo, r.remarks].filter(Boolean).join(' · '),
+        // 039: a sub-item row says which mix it went out as, "DLC Concrete · 10 CUM".
+        [
+          r.slipNo,
+          r.compositeItemId
+            ? `${
+                composites.get(r.compositeItemId)?.name ?? 'Composite item'
+              } · ${qty(toNumber(r.compositeQuantity))} ${
+                composites.get(r.compositeItemId)?.unit ?? ''
+              }`.trim()
+            : null,
+          r.remarks,
+        ]
+          .filter(Boolean)
+          .join(' · '),
       ];
     });
     return this.render(

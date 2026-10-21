@@ -31,6 +31,7 @@ import { LogbookController } from './logbook/logbook.controller';
 import { LogbookSheetService } from './logbook/logbook-sheet.service';
 import { LogbookService } from './logbook/logbook.service';
 import { MaintenanceController } from './maintenance/maintenance.controller';
+import { JobCardFlowService } from './maintenance/job-card-flow.service';
 import { JobCardService } from './maintenance/job-card.service';
 import { MaintenanceService } from './maintenance/maintenance.service';
 import { PlantRefsService } from './plant-refs.service';
@@ -81,7 +82,8 @@ import { EquipmentDisposalService } from './disposal/equipment-disposal.service'
     // item, so this module submits into the spine rather than keeping an approval of its own.
     ApprovalsModule,
     SettingsModule,
-    ProjectsModule,
+    // In the projects → hr → payroll → plant → inventory → partners cycle (039).
+    forwardRef(() => ProjectsModule),
     PartnersModule,
     forwardRef(() => HrModule),
     InventoryModule,
@@ -120,6 +122,7 @@ import { EquipmentDisposalService } from './disposal/equipment-disposal.service'
     ServiceScheduleService,
     MaintenanceService,
     JobCardService,
+    JobCardFlowService,
     HireBillsService,
     HireOrdersService,
     SparePartsService,

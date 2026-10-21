@@ -2436,12 +2436,11 @@ the cost of their own leave.']
   adminRemarks String [note: 'Mandatory when `status` is `rejected` (FR-022a); enforced at the service layer.']
   decidedByUserId String
   decidedAt DateTime
-  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16: "first go to reporting manager
-and then HR"). Null when the employee has no reporting manager with a login — the application
-then goes straight to HR, as every one did before. Set at application and never changed, so
-a later change of manager does not move an application already in somebody\'s queue.']
-  managerDecidedAt DateTime [note: 'When the manager approved it on to HR. A manager\'s rejection is final and is recorded in the
-decision fields above instead.']
+  managerUserId String [note: 'History only. From 2026-10-16 to 2026-10-20 the reporting manager decided first ("first go to
+reporting manager and then HR"); the client then withdrew that stage and every application
+goes straight to head office. Kept so the manager\'s remarks on applications from that window
+still read; nothing sets these any more.']
+  managerDecidedAt DateTime
   managerRemarks String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -2519,8 +2518,7 @@ category\'s configured threshold (FR-030).']
 splitting them into a second table would make "one claim, one status" untrue.']
   decidedAt DateTime
   adminRemarks String
-  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16) — the same stage as
-`LeaveApplication.managerUserId`, set when the claim is submitted.']
+  managerUserId String [note: 'History only — see `LeaveApplication.managerUserId`; the stage was withdrawn on 2026-10-20.']
   managerDecidedAt DateTime
   managerRemarks String
   createdAt DateTime [default: `now()`, not null]
@@ -2966,10 +2964,13 @@ settles exactly these, not every approved claim the employee happens to have by 
   employerEsic Decimal [not null, default: 0]
   gratuity Decimal [not null, default: 0]
   bonus Decimal [not null, default: 0]
+  editedFields String[] [not null, note: '039: the columns a person changed by hand after generation, so the run screen can highlight
+them. The who/old/new/why of each change is `PayrollLineItemEdit`.']
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   payrollRun PayrollRun [not null]
   employee Employee [not null]
+  edits PayrollLineItemEdit [not null]
 
   indexes {
     (payrollRunId, employeeId) [unique]
@@ -2979,6 +2980,25 @@ settles exactly these, not every approved claim the employee happens to have by 
 truth that `/hr/challans/*`, 003\'s `/my/salary`, and 008\'s Project P&L labour
 cost line all read from (data-model.md §Payroll Line Item). Immutable once its
 run reaches `processed` (FR-015), enforced at the write path.'
+}
+
+Table PayrollLineItemEdit {
+  id String [pk]
+  companyId String [not null]
+  payrollRunId String [not null]
+  lineItemId String [note: 'Null once the line is regenerated away: the edit history must outlive the line it changed,
+so who changed what stays readable by run and employee.']
+  lineItem PayrollLineItem
+  employeeId String [not null]
+  field String [not null]
+  oldValue Decimal [not null]
+  newValue Decimal [not null]
+  justification String [not null]
+  editedByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '039: one hand edit to one field of a generated payroll line — who, the old and new figure,
+and the mandatory justification. Append-only, the `LabourPunchCorrection` shape.'
 }
 
 Table Loan {
@@ -3709,6 +3729,9 @@ resubmitted, and part of both decision uniques below — without it, resubmissio
 would collide with the decisions of the round that was returned (FR-005, FR-020).']
   returnCount Int [not null, default: 0, note: 'Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
 cannot be worn down by repetition without leaving a trace.']
+  excludedUserIds String[] [not null, note: 'People who may not decide this item, whatever roles they hold (2026-10-20): the applicant,
+the maker, the employee being paid. Stamped at submit by the owning module and refused by
+`ApprovalService.decide`; such items are left out of their queue too.']
   delegatedToUserId String [note: 'A one-off grant of authority at the CURRENT level to one named person (FR-019).
 
 Reassignment needs storage because authority in this model comes from holding a
@@ -3800,6 +3823,40 @@ two years ago still resolves its item name.']
   indexes {
     (companyId, name) [unique]
     (companyId, code) [unique]
+  }
+}
+
+Table CompositeItem {
+  id String [pk]
+  companyId String [not null]
+  name String [not null]
+  unit ItemUnit [not null]
+  description String
+  active Boolean [not null, default: true]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+  components CompositeItemComponent [not null]
+
+  indexes {
+    (companyId, name) [unique]
+  }
+
+  Note: '039: an item made of other items in fixed proportions — "DLC concrete for plant foundation",
+per 1 Cum: cement 0.08 MT, crusher dust 0.827 MT, … It holds no stock of its own: issuing
+10 Cum issues each sub-item × 10 from the chosen store.'
+}
+
+Table CompositeItemComponent {
+  id String [pk]
+  companyId String [not null]
+  compositeItemId String [not null]
+  compositeItem CompositeItem [not null]
+  itemId String [not null, note: '`settings.Item` — same schema, but kept a plain id like every inventory reference to Item.']
+  qtyPerUnit Decimal [not null, note: 'How much of the sub-item, in its own unit, goes into one unit of the composite.']
+  position Int [not null, default: 0]
+
+  indexes {
+    (compositeItemId, itemId) [unique]
   }
 }
 
@@ -4069,6 +4126,11 @@ may not read `plant`\'s tables, and the slip prints the number, which is what it
   returnedQuantity Decimal
   returnedOn DateTime
   receivedBy String
+  compositeItemId String [note: '039: set when this row is one sub-item of a composite issue ("10 Cum of DLC concrete").
+Every row of that issue shares `issueGroupId` and the slip number; each row deducts its own
+item, rounded to 3 decimals, exactly as a plain issue would.']
+  compositeQuantity Decimal
+  issueGroupId String
   indentLineId String [note: 'The indent line this issue fulfils, if it came from one (FR-023).']
   indentLine MaterialIndentLine
   deleted Boolean [not null, default: false]
@@ -4648,10 +4710,68 @@ many printed fields — priority, job type, the complaint, the inspection and ou
 rows, the handover checks, the sign-off names — as one validated document. Kept as JSON
 because none of it is summed, filtered or joined on: it is what the card prints.']
   card Json
+  jobCardStatus JobCardStatus [note: '039: the job card\'s own workflow, separate from `status` (which is the repair\'s open/closed).
+Null for a job that has no card. Site raises it with the quotation, Head Office approves or
+sends it back, site uploads the final bill, Head Office records payment. Who did what and when
+is `JobCardEvent`; the approve/return decisions themselves are also the spine\'s.']
+  jobCardApprovalItemId String [note: 'The approval spine item while the card is with Head Office.']
+  jobCardReturnRemarks String [note: 'The remarks Head Office sent it back with — shown to site until it is resubmitted.']
+  quotationAmount Decimal [note: 'The workshop\'s quotation: required to submit.']
+  quotationFileRef String
+  quotationFileName String
+  quotationContentType String
+  finalBillNumber String [note: 'The final bill copy site uploads once the card is approved.']
+  finalBillDate DateTime
+  finalBillAmount Decimal
+  finalBillFileRef String
+  finalBillFileName String
+  finalBillContentType String
+  finalBillUploadedAt DateTime
+  finalBillUploadedBy String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
   partMovements SparePartMovement [not null]
   serviceBills ServiceBill [not null]
+  jobCardEvents JobCardEvent [not null]
+  jobCardPayments JobCardPayment [not null]
+}
+
+Table JobCardEvent {
+  id String [pk]
+  companyId String [not null]
+  maintenanceJobId String [not null]
+  maintenanceJob MaintenanceJob [not null]
+  kind String [not null, note: '`created | edited | submitted | returned | resubmitted | approved | bill_uploaded | payment | paid`
+— a string so a new kind needs no migration, the `EquipmentEvent` rule.']
+  fromStatus JobCardStatus
+  toStatus JobCardStatus
+  remarks String
+  detail Json
+  actorUserId String
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '039: one line of a job card\'s history — created, edited, submitted, sent for correction,
+resubmitted, approved, final bill uploaded, payment recorded. Append-only.'
+}
+
+Table JobCardPayment {
+  id String [pk]
+  companyId String [not null]
+  maintenanceJobId String [not null]
+  maintenanceJob MaintenanceJob [not null]
+  amount Decimal [not null]
+  paidOn DateTime [not null]
+  mode JobCardPaymentMode [not null]
+  referenceNumber String
+  remarks String
+  proofFileRef String
+  proofFileName String
+  proofContentType String
+  recordedByUserId String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  Note: '039: a payment Head Office made against a job card\'s final bill. Several when paid in parts;
+the card is `paid` once they reach the bill amount. Append-only.'
 }
 
 Table HireBill {
@@ -6021,6 +6141,7 @@ Enum Permission {
   LABOUR_PUNCH_CORRECT
   MAINTENANCE
   HIRE_BILLS
+  MAINTENANCE_PAY
   RECRUITMENT
   RECRUITMENT_APPROVE
   HR_LETTERS
@@ -6186,6 +6307,7 @@ Enum AuditEntityType {
   APPROVAL_DECISION
   APPROVAL_REFUSED
   APPROVAL_CHAIN_CONFIG
+  COMPOSITE_ITEM
 }
 
 Enum AuditAction {
@@ -6478,6 +6600,7 @@ Enum SalaryAdvanceStatus {
   approved
   disbursed
   closed
+  rejected
 }
 
 Enum PayrollRunStatus {
@@ -6490,6 +6613,7 @@ Enum LoanStatus {
   pending
   active
   closed
+  rejected
 }
 
 Enum LoanScheduleStatus {
@@ -6735,6 +6859,22 @@ Enum FuelAttribution {
   neither
 }
 
+Enum JobCardStatus {
+  draft
+  pending_approval
+  returned
+  approved
+  bill_uploaded
+  paid
+}
+
+Enum JobCardPaymentMode {
+  bank_transfer
+  cheque
+  upi
+  cash
+}
+
 Enum EngagementType {
   direct
   contractor
@@ -6815,6 +6955,7 @@ Enum AdvanceStatus {
   approved
   disbursed
   closed
+  rejected
 }
 
 Enum AssetTrackingMode {
@@ -7157,6 +7298,8 @@ Ref: PayrollLineItem.payrollRunId > PayrollRun.id [delete: Cascade]
 
 Ref: PayrollLineItem.employeeId > Employee.id [delete: Cascade]
 
+Ref: PayrollLineItemEdit.lineItemId > PayrollLineItem.id [delete: Set Null]
+
 Ref: Loan.employeeId > Employee.id [delete: Cascade]
 
 Ref: LoanScheduleEntry.loanId > Loan.id [delete: Cascade]
@@ -7225,6 +7368,8 @@ Ref: Item.companyId > Company.id [delete: Cascade]
 
 Ref: Item.categoryId > ItemCategory.id
 
+Ref: CompositeItemComponent.compositeItemId > CompositeItem.id [delete: Cascade]
+
 Ref: Purchase.indentLineId > MaterialIndentLine.id
 
 Ref: Purchase.purchaseOrderLineId > PurchaseOrderLine.id
@@ -7278,6 +7423,10 @@ Ref: ServiceSchedule.equipmentId > Equipment.id [delete: Cascade]
 Ref: MaintenanceJob.equipmentId > Equipment.id [delete: Cascade]
 
 Ref: MaintenanceJob.linkedServiceScheduleId > ServiceSchedule.id
+
+Ref: JobCardEvent.maintenanceJobId > MaintenanceJob.id [delete: Cascade]
+
+Ref: JobCardPayment.maintenanceJobId > MaintenanceJob.id [delete: Cascade]
 
 Ref: HireBill.equipmentId > Equipment.id [delete: Cascade]
 

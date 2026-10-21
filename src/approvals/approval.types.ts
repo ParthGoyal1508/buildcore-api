@@ -37,7 +37,9 @@ export type InertReason =
   | 'awaiting_other'
   | 'already_decided'
   | 'insufficient_authority'
-  | 'slot_unmapped';
+  | 'slot_unmapped'
+  /** The viewer applied for, recorded, or is paid by this item (2026-10-20). */
+  | 'own_item';
 
 /** One recorded act, as the interface renders it. */
 export interface ApprovalDecisionView {
@@ -158,6 +160,12 @@ export interface SubmitApprovalInput {
    * type is for.
    */
   viewPermission: Permission;
+  /**
+   * People who may not decide this item whatever roles they hold (2026-10-20): the applicant, the
+   * maker, the employee being paid. The spine authorised by role alone, leaving maker-checker to
+   * each module's own endpoint — which the Approvals page bypasses.
+   */
+  excludedUserIds?: (string | null | undefined)[];
 }
 
 /** One decision being recorded. */
