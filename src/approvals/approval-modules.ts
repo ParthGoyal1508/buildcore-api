@@ -10,6 +10,7 @@ import {
   ACTION_EXIT_CLEARANCE_WAIVER,
   ACTION_FINAL_SETTLEMENT,
   ACTION_OPERATOR_FUEL_RECOVERY,
+  ACTION_JOB_CARD,
   ACTION_PAYMENT_RELEASE,
   ACTION_PAYROLL_RUN,
   ACTION_PURCHASE_RATE_CHANGE,
@@ -101,7 +102,7 @@ export const APPROVAL_MODULES: readonly ApprovalModule[] = [
   {
     key: 'plant',
     label: 'Plant & machinery',
-    actionTypes: [ACTION_OPERATOR_FUEL_RECOVERY],
+    actionTypes: [ACTION_OPERATOR_FUEL_RECOVERY, ACTION_JOB_CARD],
   },
   {
     key: 'settings',

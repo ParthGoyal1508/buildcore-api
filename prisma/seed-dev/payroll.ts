@@ -657,11 +657,6 @@ async function buildHistory(
 
   const runIds = new Map<string, string>();
   const bankFiles = new Map<string, Buffer>();
-  const approvalLevels: { slot: string; actor: Actor }[] = [
-    { slot: 'first', actor: people.firstApprover },
-    { slot: 'hr', actor: people.hrApprover },
-    { slot: 'final', actor: people.director },
-  ];
 
   for (const [index, { period, firstOfNext }] of periods.entries()) {
     const latest = index === periods.length - 1;
@@ -703,12 +698,13 @@ async function buildHistory(
     // The office's calendar for the month's payroll, each step on a working day after the last.
     const times: Date[] = [];
     let day = workday(firstOfNext);
+    // 039: HR reviews the draft and sends it to the Director, who approves it before it is
+    // processed — the order the product now enforces.
     const plan: [number, number, number][] = [
       [0, 11, 0], // generate
-      [0, 17, 30], // process (and submit for approval)
-      [1, 10, 30], // site incharge approves
-      [1, 12, 15], // head office approves
-      [1, 15, 0], // director approves
+      [0, 17, 30], // HR sends it to the Director
+      [1, 12, 15], // director approves
+      [0, 15, 0], // process
       [1, 11, 0], // bank sheet
       [0, 16, 30], // marked paid
       [2, 12, 0], // bank's returned sheet reconciled
@@ -717,7 +713,7 @@ async function buildHistory(
       day = workday(addDays(day, gap));
       times.push(at(day, h, m));
     }
-    const [tGen, tProc, tL1, tL2, tL3, tBank, tPaid, tRecon] = times;
+    const [tGen, tSend, tApprove, tProc, tBank, tPaid, tRecon] = times;
 
     steps.push({
       when: tGen,
@@ -745,6 +741,60 @@ async function buildHistory(
     });
 
     steps.push({
+      when: tSend,
+      label: `send ${period} to the director`,
+      run: async () => {
+        const runId = runIds.get(period);
+        const since = sinceNow();
+        const instance = await s.schedule.sendToDirector(
+          companyId,
+          runId,
+          approverOf(people.maker, companyId),
+        );
+        await prisma.approvalInstance.update({
+          where: { id: instance.instanceId },
+          data: { createdAt: tSend, updatedAt: tSend },
+        });
+        await stampAudit(since, tSend, [runId, instance.instanceId]);
+      },
+    });
+
+    // The latest month waits on the director; every earlier one was approved, processed and paid.
+    if (latest) continue;
+
+    steps.push({
+      when: tApprove,
+      label: `approve ${period} (director)`,
+      run: async () => {
+        const runId = runIds.get(period);
+        const instance = await prisma.approvalInstance.findFirst({
+          where: { companyId, entityId: runId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        });
+        const since = sinceNow();
+        await s.approvals.decide(
+          { instanceId: instance.id, action: ApprovalDecisionAction.approve },
+          approverOf(people.director, companyId),
+          OFFICE_IP,
+        );
+        await prisma.approvalDecision.updateMany({
+          where: {
+            approvalInstanceId: instance.id,
+            actorUserId: people.director.userId,
+          },
+          data: { decidedAt: tApprove },
+        });
+        await prisma.approvalInstance.update({
+          where: { id: instance.id },
+          data: { updatedAt: tApprove },
+        });
+        await stampAudit(since, tApprove, [instance.id]);
+        bump('approval decisions');
+      },
+    });
+
+    steps.push({
       when: tProc,
       label: `process ${period}`,
       run: async () => {
@@ -755,7 +805,6 @@ async function buildHistory(
           runId,
           PayrollRunStatus.processed,
         );
-        await s.schedule.submitIfNeverSubmitted(companyId, runId);
         await prisma.payrollRun.update({
           where: { id: runId },
           data: {
@@ -789,60 +838,9 @@ async function buildHistory(
           },
           data: { updatedAt: tProc },
         });
-        const instance = await prisma.approvalInstance.findFirst({
-          where: { companyId, entityId: runId },
-          select: { id: true },
-        });
-        if (instance) {
-          await prisma.approvalInstance.update({
-            where: { id: instance.id },
-            data: { createdAt: tProc, updatedAt: tProc },
-          });
-        }
-        await stampAudit(since, tProc, [
-          runId,
-          ...(instance ? [instance.id] : []),
-        ]);
+        await stampAudit(since, tProc, [runId]);
       },
     });
-
-    // The latest month waits on the director; every earlier one was approved and paid.
-    const levels = latest ? approvalLevels.slice(0, 2) : approvalLevels;
-    const levelTimes = [tL1, tL2, tL3];
-    for (const [i, level] of levels.entries()) {
-      const when = levelTimes[i];
-      steps.push({
-        when,
-        label: `approve ${period} (${level.slot})`,
-        run: async () => {
-          const runId = runIds.get(period);
-          const instance = await prisma.approvalInstance.findFirst({
-            where: { companyId, entityId: runId },
-            select: { id: true },
-          });
-          const since = sinceNow();
-          await s.approvals.decide(
-            { instanceId: instance.id, action: ApprovalDecisionAction.approve },
-            approverOf(level.actor, companyId),
-            OFFICE_IP,
-          );
-          await prisma.approvalDecision.updateMany({
-            where: {
-              approvalInstanceId: instance.id,
-              actorUserId: level.actor.userId,
-            },
-            data: { decidedAt: when },
-          });
-          await prisma.approvalInstance.update({
-            where: { id: instance.id },
-            data: { updatedAt: when },
-          });
-          await stampAudit(since, when, [instance.id]);
-          bump('approval decisions');
-        },
-      });
-    }
-    if (latest) continue;
 
     steps.push({
       when: tBank,

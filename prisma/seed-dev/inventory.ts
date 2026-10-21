@@ -27,6 +27,7 @@
  * VENDORS series would allocate, and that series' `CodeSequence` is moved past them so the next
  * vendor created in the app does not have to step over them.
  */
+import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import { resolve as resolvePath } from 'path';
 
@@ -62,7 +63,7 @@ import {
 } from '../../src/settings/code-series/code-series.formats';
 import { STANDARD_TERMS } from '../../src/settings/terms-templates/standard-terms';
 import { lastCompletedMonth } from '../../src/partners/compliance/compliance-status.service';
-import { at, d, dateOnly, money } from './support';
+import { at, d, dateOnly, daysAgo, money } from './support';
 import type { CompanyContext, ModuleResult } from './support';
 
 // ─── Constants the app defines elsewhere ──────────────────────────────────────
@@ -2314,4 +2315,501 @@ async function seedBocw(ctx: CompanyContext, people: People): Promise<number> {
     }
   }
   return created;
+}
+
+// ─── Concrete mixes (039) ─────────────────────────────────────────────────────
+
+/**
+ * The client's mix sheets weigh every material in MT, but the base item master carries cement in
+ * bags and aggregates in cubic metres. These are the MT items the sheets name, kept separate from
+ * the bag/CUM ones so neither stock is re-unitised.
+ */
+const MIX_ITEMS: {
+  key: string;
+  code: string;
+  name: string;
+  cat: string;
+  hsn: string;
+  rate: number;
+  /** Typical lot per receipt, MT. */
+  lot: number;
+  vendor: 'cement' | 'crusher';
+}[] = [
+  {
+    key: 'cement',
+    code: 'CEM-BULK',
+    name: 'Cement (Bulk)',
+    cat: 'Cement & Binders',
+    hsn: '2523',
+    rate: 5800,
+    lot: 32,
+    vendor: 'cement',
+  },
+  {
+    key: 'dust',
+    code: 'AGG-CDUST',
+    name: 'Crusher Dust',
+    cat: 'Aggregates',
+    hsn: '2517',
+    rate: 600,
+    lot: 140,
+    vendor: 'crusher',
+  },
+  {
+    key: 'agg20',
+    code: 'AGG-20MM-MT',
+    name: 'Aggregate 20 mm',
+    cat: 'Aggregates',
+    hsn: '2517',
+    rate: 375,
+    lot: 160,
+    vendor: 'crusher',
+  },
+  {
+    key: 'agg10',
+    code: 'AGG-10MM-MT',
+    name: 'Aggregate 10 mm',
+    cat: 'Aggregates',
+    hsn: '2517',
+    rate: 400,
+    lot: 110,
+    vendor: 'crusher',
+  },
+  {
+    key: 'flyash',
+    code: 'CEM-FLYASH',
+    name: 'Fly Ash',
+    cat: 'Cement & Binders',
+    hsn: '2621',
+    rate: 1200,
+    lot: 22,
+    vendor: 'cement',
+  },
+  {
+    key: 'msand',
+    code: 'AGG-MSAND-MT',
+    name: 'M Sand',
+    cat: 'Aggregates',
+    hsn: '2517',
+    rate: 800,
+    lot: 120,
+    vendor: 'crusher',
+  },
+];
+
+/** The client's sheets, per 1 Cum, in MT. */
+const MIXES: {
+  name: string;
+  description: string;
+  components: [string, number][];
+}[] = [
+  {
+    name: 'DLC Concrete for plant foundation',
+    description:
+      'Dry lean concrete under the batching plant foundation — per 1 Cum, as the mix sheet.',
+    components: [
+      ['cement', 0.08],
+      ['dust', 0.827],
+      ['agg20', 0.75],
+      ['agg10', 0.525],
+      ['flyash', 0.1],
+    ],
+  },
+  {
+    name: 'M20 Concrete for plant foundation',
+    description:
+      'M20 concrete for the batching plant foundation — per 1 Cum, as the mix sheet.',
+    components: [
+      ['cement', 0.18],
+      ['msand', 0.827],
+      ['agg20', 0.75],
+      ['agg10', 0.525],
+      ['flyash', 0.08],
+    ],
+  },
+];
+
+/** Past pours issued as a mix: `[mix index, store index, Cum, days ago, issued to]`. */
+const MIX_POURS: [number, number, number, number, string][] = [
+  [0, 0, 12, 9, 'Batching plant foundation — DLC bed'],
+  [1, 1, 8, 4, 'Batching plant foundation — M20 raft'],
+];
+
+function must<T>(value: T | undefined, what: string): T {
+  if (value === undefined) throw new Error(`Missing ${what}`);
+  return value;
+}
+
+/**
+ * The MT raw materials the concrete mixes need, received at the company's first three site stores
+ * the way the base seed receives everything (purchase + GRN + bill + ledger, the running weighted
+ * average on the balance), the two mixes as composite items, and a past pour of each issued as a
+ * composite (one slip, a row per sub-item sharing `issueGroupId`) — `SEED_DEV_ONLY=composites`.
+ *
+ * Written in a handful of bulk statements so it runs in seconds against a remote database.
+ * Idempotent: items and mixes are matched by name; stock is laid down only when none of the
+ * materials has a ledger entry yet.
+ */
+export async function seedComposites(
+  ctx: CompanyContext,
+): Promise<ModuleResult> {
+  const { prisma, company, rng: r } = ctx;
+  const result: ModuleResult = {};
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // ── Items ──────────────────────────────────────────────────────────────────
+  const [cats, existingItems] = await Promise.all([
+    prisma.itemCategory.findMany({ where: { companyId: company.id } }),
+    prisma.item.findMany({
+      where: {
+        companyId: company.id,
+        OR: [
+          { code: { in: MIX_ITEMS.map((m) => m.code) } },
+          { name: { in: MIX_ITEMS.map((m) => m.name) } },
+        ],
+      },
+    }),
+  ]);
+  const catId = new Map(cats.map((c) => [c.name, c.id]));
+  const missing = MIX_ITEMS.filter(
+    (m) => !existingItems.some((i) => i.code === m.code || i.name === m.name),
+  );
+  for (const i of existingItems) {
+    if (i.unit !== 'MT') {
+      throw new Error(
+        `${company.shortCode}: item ${i.code} "${i.name}" exists in ${i.unit}; the mixes need MT.`,
+      );
+    }
+  }
+  if (missing.some((m) => !catId.has(m.cat))) return result; // no item master to extend
+  const createdItems = missing.length
+    ? await prisma.item.createManyAndReturn({
+        data: missing.map((m) => ({
+          companyId: company.id,
+          code: m.code,
+          name: m.name,
+          categoryId: catId.get(m.cat) as string,
+          unit: 'MT' as const,
+          hsnCode: m.hsn,
+        })),
+        skipDuplicates: true,
+      })
+    : [];
+  if (createdItems.length) result['items'] = createdItems.length;
+  const all = [...existingItems, ...createdItems];
+  const itemOf = new Map(
+    MIX_ITEMS.map((m) => [
+      m.key,
+      all.find((i) => i.code === m.code || i.name === m.name),
+    ]),
+  );
+  const idOf = (key: string) => must(itemOf.get(key), `item ${key}`).id;
+
+  // ── Composite items ────────────────────────────────────────────────────────
+  const haveMixes = new Set(
+    (
+      await prisma.compositeItem.findMany({
+        where: {
+          companyId: company.id,
+          name: { in: MIXES.map((m) => m.name) },
+        },
+        select: { name: true },
+      })
+    ).map((c) => c.name),
+  );
+  for (const mix of MIXES) {
+    if (haveMixes.has(mix.name)) continue;
+    await prisma.compositeItem.create({
+      data: {
+        companyId: company.id,
+        name: mix.name,
+        unit: 'CUM',
+        description: mix.description,
+        components: {
+          create: mix.components.map(([key, qty], position) => ({
+            companyId: company.id,
+            itemId: idOf(key),
+            qtyPerUnit: new Prisma.Decimal(qty),
+            position,
+          })),
+        },
+      },
+    });
+    result['composite items'] = (result['composite items'] ?? 0) + 1;
+  }
+
+  // ── Stock: skipped once any of the materials has moved ─────────────────────
+  const itemIds = MIX_ITEMS.map((m) => idOf(m.key));
+  if (
+    (await prisma.stockLedgerEntry.count({
+      where: { companyId: company.id, itemId: { in: itemIds } },
+    })) > 0
+  ) {
+    return result;
+  }
+  const [sites, vendors, grns, slips, slipSeq, mixes] = await Promise.all([
+    prisma.site.findMany({
+      where: { companyId: company.id },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true, name: true, projectId: true },
+    }),
+    prisma.vendor.findMany({
+      where: { companyId: company.id, type: 'material' },
+      orderBy: { code: 'asc' },
+      select: { id: true, name: true },
+    }),
+    prisma.goodsReceiptNote.findMany({
+      where: { companyId: company.id },
+      select: { grnNumber: true },
+    }),
+    prisma.issue.findMany({
+      where: { companyId: company.id, slipNo: { startsWith: 'MIS-' } },
+      select: { slipNo: true },
+    }),
+    prisma.codeSequence.findUnique({
+      where: {
+        companyId_seriesType: {
+          companyId: company.id,
+          seriesType: 'ISSUE_SLIP',
+        },
+      },
+    }),
+    prisma.compositeItem.findMany({
+      where: { companyId: company.id, name: { in: MIXES.map((m) => m.name) } },
+      select: { id: true, name: true },
+    }),
+  ]);
+  const stores = sites.filter((s) => !/office/i.test(s.name)).slice(0, 3);
+  const vendorFor = {
+    cement:
+      vendors.find((v) => /cement/i.test(v.name)) ?? vendors[0] ?? undefined,
+    crusher:
+      vendors.find((v) => /crusher|grit|stone/i.test(v.name)) ??
+      vendors[0] ??
+      undefined,
+  };
+  if (!stores.length || !vendorFor.cement || !vendorFor.crusher) return result;
+  const vendorId = {
+    cement: vendorFor.cement.id,
+    crusher: vendorFor.crusher.id,
+  };
+
+  // GRNs continue the register's own `{code}/GRN/26-27/NNNN` run.
+  const grnPrefix = `${company.shortCode}/GRN/26-27/`;
+  let grnSeq = grns
+    .filter((g) => g.grnNumber.startsWith(grnPrefix))
+    .map((g) => Number(g.grnNumber.slice(grnPrefix.length)))
+    .filter(Number.isInteger)
+    .reduce((max, n) => Math.max(max, n), 0);
+
+  type Lot = {
+    siteId: string;
+    itemId: string;
+    vendorId: string;
+    date: Date;
+    quantity: number;
+    rate: number;
+  };
+  const lots: Lot[] = [];
+  for (const [si, store] of stores.entries()) {
+    const rounds = si === 0 ? 2 : 1;
+    for (const m of MIX_ITEMS) {
+      for (let k = 0; k < rounds; k++) {
+        lots.push({
+          siteId: store.id,
+          itemId: idOf(m.key),
+          vendorId: vendorId[m.vendor],
+          date: daysAgo(34 - k * 16 - si * 3),
+          // Whole tonnes off the weighbridge slip, a little either side of the usual lot.
+          quantity: Math.round(m.lot * (0.8 + r.rand() * 0.4)),
+          rate: round2(m.rate * (0.97 + r.rand() * 0.06)),
+        });
+      }
+    }
+  }
+  const lotKey = (x: { siteId: string; itemId: string; date: Date }) =>
+    `${x.siteId}|${x.itemId}|${x.date.toISOString()}`;
+
+  // Balances as `StockService.recomputeWAR` derives them: purchases move the average, issues don't.
+  const bal = new Map<
+    string,
+    {
+      itemId: string;
+      siteId: string;
+      received: number;
+      issued: number;
+      qty: number;
+      war: number;
+    }
+  >();
+  for (const lot of lots) {
+    const k = `${lot.itemId}|${lot.siteId}`;
+    const b = bal.get(k) ?? {
+      itemId: lot.itemId,
+      siteId: lot.siteId,
+      received: 0,
+      issued: 0,
+      qty: 0,
+      war: 0,
+    };
+    b.war = (b.qty * b.war + lot.quantity * lot.rate) / (b.qty + lot.quantity);
+    b.qty += lot.quantity;
+    b.received += lot.quantity;
+    bal.set(k, b);
+  }
+
+  // The pours, drawn from stock just laid down.
+  let slipN = Math.max(
+    slipSeq?.lastNumber ?? 0,
+    ...slips.map((s) => Number((s.slipNo ?? '').slice(4)) || 0),
+  );
+  const slipFormat = CODE_SERIES_FORMATS.ISSUE_SLIP ?? {
+    prefix: 'MIS-',
+    base: 0,
+    step: 1,
+    width: 4,
+  };
+  const issueRows: Prisma.IssueCreateManyInput[] = [];
+  for (const [mixIdx, storeIdx, cum, ago, issuedTo] of MIX_POURS) {
+    const store = stores[storeIdx];
+    const mix = mixes.find((x) => x.name === MIXES[mixIdx].name);
+    if (!store || !mix) continue;
+    slipN += 1;
+    const slipNo = formatCode(slipFormat, slipN);
+    const issueGroupId = randomUUID();
+    for (const [key, perCum] of MIXES[mixIdx].components) {
+      const itemId = idOf(key);
+      // `compositeLines`: each sub-item rounded half-up on its own to the column's 3 decimals.
+      const quantity = new Prisma.Decimal(cum)
+        .mul(perCum)
+        .toDecimalPlaces(3, Prisma.Decimal.ROUND_HALF_UP);
+      const b = must(bal.get(`${itemId}|${store.id}`), 'balance');
+      b.issued += quantity.toNumber();
+      b.qty -= quantity.toNumber();
+      issueRows.push({
+        companyId: company.id,
+        siteId: store.id,
+        itemId,
+        date: daysAgo(ago),
+        quantity,
+        issuedTo,
+        projectId: store.projectId,
+        slipNo,
+        compositeItemId: mix.id,
+        compositeQuantity: new Prisma.Decimal(cum),
+        issueGroupId,
+      });
+    }
+  }
+
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.is_super_admin', 'true', true)`;
+      const purchases = await tx.purchase.createManyAndReturn({
+        data: lots.map((lot) => ({
+          companyId: company.id,
+          siteId: lot.siteId,
+          itemId: lot.itemId,
+          vendorId: lot.vendorId,
+          date: lot.date,
+          quantity: money(lot.quantity),
+          rate: money(lot.rate),
+          amount: money(round2(lot.quantity * lot.rate)),
+          remarks: 'For the batching plant foundation',
+        })),
+        select: { id: true, siteId: true, itemId: true, date: true },
+      });
+      const lotOf = new Map(lots.map((lot) => [lotKey(lot), lot]));
+      const sorted = purchases
+        .map((p) => ({ p, lot: must(lotOf.get(lotKey(p)), 'lot') }))
+        .sort((a, b) => a.lot.date.getTime() - b.lot.date.getTime());
+      await tx.goodsReceiptNote.createMany({
+        data: sorted.map(({ p, lot }) => ({
+          companyId: company.id,
+          purchaseId: p.id,
+          grnNumber: `${grnPrefix}${String(++grnSeq).padStart(4, '0')}`,
+          siteId: lot.siteId,
+          receivedQuantity: money(lot.quantity),
+          acceptedQuantity: money(lot.quantity),
+          rejectedQuantity: money(0),
+          condition: 'good',
+        })),
+      });
+      await tx.purchaseBill.createMany({
+        data: sorted.map(({ p, lot }) => ({
+          companyId: company.id,
+          purchaseId: p.id,
+          vendorId: lot.vendorId,
+          totalAmount: money(round2(lot.quantity * lot.rate)),
+          billDate: addDays(lot.date, 2),
+        })),
+      });
+      const issues = issueRows.length
+        ? await tx.issue.createManyAndReturn({
+            data: issueRows,
+            select: {
+              id: true,
+              siteId: true,
+              itemId: true,
+              date: true,
+              quantity: true,
+            },
+          })
+        : [];
+      await tx.stockLedgerEntry.createMany({
+        data: [
+          ...sorted.map(({ p, lot }) => ({
+            companyId: company.id,
+            itemId: lot.itemId,
+            siteId: lot.siteId,
+            type: 'purchase' as const,
+            quantity: money(lot.quantity),
+            rate: money(lot.rate),
+            referenceId: p.id,
+            date: lot.date,
+          })),
+          ...issues.map((i) => ({
+            companyId: company.id,
+            itemId: i.itemId,
+            siteId: i.siteId,
+            type: 'issue' as const,
+            quantity: i.quantity,
+            referenceId: i.id,
+            date: i.date,
+          })),
+        ],
+      });
+      await tx.stockBalance.createMany({
+        data: [...bal.values()].map((b) => ({
+          companyId: company.id,
+          itemId: b.itemId,
+          siteId: b.siteId,
+          received: money(Math.round(b.received * 1000) / 1000),
+          issued: money(Math.round(b.issued * 1000) / 1000),
+          avgRate: money(Math.round(b.war * 1e6) / 1e6),
+        })),
+      });
+      if (issueRows.length) {
+        await tx.codeSequence.upsert({
+          where: {
+            companyId_seriesType: {
+              companyId: company.id,
+              seriesType: 'ISSUE_SLIP',
+            },
+          },
+          create: {
+            companyId: company.id,
+            seriesType: 'ISSUE_SLIP',
+            lastNumber: slipN,
+          },
+          update: { lastNumber: slipN },
+        });
+      }
+      result['purchases'] = purchases.length;
+      result['composite issue rows'] = issues.length;
+      result['stock balances'] = bal.size;
+    },
+    { timeout: 120_000, maxWait: 30_000 },
+  );
+  return result;
 }

@@ -260,3 +260,99 @@ export function computePayrollLine(
     bonus,
   };
 }
+
+/**
+ * The line columns a person may change by hand after generation (039).
+ *
+ * **Earnings and the employee's own statutory and tax deductions — nothing that settles anything.**
+ * A correction to a generated payroll is a correction to what the employee earned or what was taken
+ * for PF, ESIC, PT or TDS, so those are open. Left closed, each for a reason:
+ *
+ * - `loanEmiDeduction`, `advanceRecovered`, `fuelRecoveryDeduction` — processing settles exactly
+ *   these amounts against a loan schedule, an advance and named fuel recoveries (036 F1/F2/F5).
+ *   An edited figure would no longer match what is settled, and the remedy for a wrong recovery is
+ *   on the loan, advance or recovery itself, followed by a regeneration.
+ * - Employer contributions (`employerPf`, `employerEsic`, gratuity, …) — they never touch net pay,
+ *   and the challans file them as computed at the statutory rates. A hand-typed employer share
+ *   would be a challan figure nobody can derive. Change the rate or the employee's PF/ESIC
+ *   applicability and regenerate instead.
+ * - Attendance (`payableDays`, `otHours`) — not money, and the earnings already carry its effect;
+ *   correct the day itself on the attendance screen.
+ *
+ * Editing one head does not recompute the others: PF is not re-derived from an edited basic. The
+ * person correcting the line changes every head they mean to change, each with its justification —
+ * a correction that silently moved figures it did not mention would be the thing the edit history
+ * exists to rule out. Net pay *is* recomputed, by `netPayForLine`, because it is never typed.
+ */
+export const EDITABLE_LINE_FIELDS = [
+  'basic',
+  'hra',
+  'conveyanceAllowance',
+  'siteAllowance',
+  'specialAllowance',
+  'otWages',
+  'employeePf',
+  'employeeEsic',
+  'professionalTax',
+  'tds',
+] as const;
+
+export type EditableLineField = (typeof EDITABLE_LINE_FIELDS)[number];
+
+/** The stored line's money columns, as numbers, that net pay is formed from. */
+export interface StoredLineMoney {
+  basic: number;
+  hra: number;
+  conveyanceAllowance: number;
+  siteAllowance: number;
+  /** As stored: includes `reimbursementTotal`, which generation folds into it. */
+  specialAllowance: number;
+  otWages: number;
+  employeePf: number;
+  employeeEsic: number;
+  professionalTax: number;
+  tds: number;
+  loanEmiDeduction: number;
+  reimbursementTotal: number;
+  advanceRecovered: number;
+  fuelRecoveryDeduction: number;
+}
+
+/**
+ * Net pay of a stored line, formed exactly as `PayrollEngineService.generate` forms it (039).
+ *
+ * Generation computes `computePayrollLine`'s net — salary gross less PF, ESIC, PT, TDS and the loan
+ * EMI, floored at zero — and *then* adds the reimbursements and takes the advance and fuel
+ * recoveries. The stored special allowance already includes the reimbursements, so they are taken
+ * back out to recover the salary gross before the floor is applied; doing otherwise would let a
+ * reimbursement absorb a deduction the salary could not cover, which generation never does.
+ *
+ * May return a negative figure when an edit leaves less salary than the recoveries the line
+ * already plans; the caller refuses that rather than flooring it, because the recoveries are
+ * settled at processing at their full planned amount.
+ */
+export function netPayForLine(line: StoredLineMoney): number {
+  const salaryGross = round2(
+    line.basic +
+      line.hra +
+      line.conveyanceAllowance +
+      line.siteAllowance +
+      line.specialAllowance -
+      line.reimbursementTotal +
+      line.otWages,
+  );
+  const totalDeductions = round2(
+    line.employeePf +
+      line.employeeEsic +
+      line.professionalTax +
+      line.tds +
+      line.loanEmiDeduction,
+  );
+  const salaryNet = round2(Math.max(salaryGross - totalDeductions, 0));
+  return round2(
+    salaryNet +
+      line.reimbursementTotal -
+      line.advanceRecovered -
+      line.fuelRecoveryDeduction,
+  );
+}

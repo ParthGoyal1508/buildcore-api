@@ -1,5 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { MaintenanceStatus, MaintenanceType } from '@prisma/client';
+import {
+  JobCardStatus,
+  MaintenanceStatus,
+  MaintenanceType,
+} from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsEnum,
@@ -129,6 +133,14 @@ export class ListMaintenanceDto {
   @IsOptional()
   @IsEnum(MaintenanceType)
   type?: MaintenanceType;
+
+  @ApiPropertyOptional({
+    enum: JobCardStatus,
+    description: "The job card's workflow status (039)",
+  })
+  @IsOptional()
+  @IsEnum(JobCardStatus)
+  jobCardStatus?: JobCardStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

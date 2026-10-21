@@ -116,6 +116,13 @@ export const webRoutes = {
   plantFuel: (): string => '/dashboard/plant/fuel',
 
   /**
+   * `app/dashboard/plant/maintenance/page.tsx`, which opens the job card named by `?jobCard=` (039).
+   * The page reads that parameter, so a Head Office reviewer lands on the card itself.
+   */
+  plantMaintenanceJobCard: (jobId: string): string =>
+    `/dashboard/plant/maintenance?jobCard=${encodeURIComponent(jobId)}`,
+
+  /**
    * `app/dashboard/settings/approvals/page.tsx`, which carries the director-final set and its
    * pending change. The spine's own director-final submission linked to
    * `/settings/approvals/director-final` — no `/dashboard`, and a sub-page that never existed —

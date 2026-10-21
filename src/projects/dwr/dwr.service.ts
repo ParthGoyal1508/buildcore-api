@@ -32,7 +32,13 @@ import {
   EquipmentLogbookDay,
   ProjectSourcesRegistry,
 } from '../portfolio/project-sources.registry';
-import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
+import { AuthenticatedUser } from '../../auth/authenticated-user';
+import {
+  RlsContext,
+  rlsContextFor,
+  withRlsContext,
+} from '../../common/prisma/rls-context';
+import { companyScope } from '../../settings/company-scope';
 import {
   contentDispositionFor,
   detectContentType,
@@ -814,6 +820,40 @@ export class DwrService {
    * page returned — a total equal to the page length is the classic way a paginated list tells a
    * reader there are 25 reports when there are 300.
    */
+  /**
+   * The caller's company's projects, as the DWR picker shows them (039). Identity and lock state
+   * only: this is read by holders of `DWR` without `PROJECTS`, so nothing the portfolio guards —
+   * the contract value, the client, the summaries — is selected.
+   */
+  async projectsForEntry(
+    caller: AuthenticatedUser,
+    companyId?: string,
+  ): Promise<
+    {
+      id: string;
+      code: string;
+      name: string;
+      location: string | null;
+      status: string;
+      isLocked: boolean;
+    }[]
+  > {
+    return withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+      tx.project.findMany({
+        where: companyScope(caller, companyId),
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          location: true,
+          status: true,
+          isLocked: true,
+        },
+        orderBy: { code: 'asc' },
+      }),
+    );
+  }
+
   async list(
     ctx: RlsContext,
     query: ListDwrDto,

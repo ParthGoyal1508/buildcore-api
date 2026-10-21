@@ -1,13 +1,16 @@
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Permission } from '@prisma/client';
+import { ApprovalDecisionAction, Permission } from '@prisma/client';
 import { hash } from 'argon2';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 
 import { AppModule } from '../src/app.module';
 import { SLOT_FIRST_APPROVER, SLOT_HR } from '../src/approvals/approval-slots';
+import { ApprovalService } from '../src/approvals/approvals.service';
 import { ChainsService } from '../src/approvals/chains.service';
+import { ACTION_PAYROLL_RUN } from '../src/approvals/default-chains';
+import type { AuthenticatedUser } from '../src/auth/authenticated-user';
 import { configureApp } from '../src/common/configure-app';
 import { withRlsContext } from '../src/common/prisma/rls-context';
 
@@ -17,6 +20,7 @@ import { withRlsContext } from '../src/common/prisma/rls-context';
  *   * F1/F3: generating and regenerating a draft leaves the advance balance alone; processing takes
  *     it once and the payslip shows it.
  *   * F6: two "process" requests at once settle once; `processed → paid` waits for approval.
+ *   * 039: processing waits for the Director, whom HR sends the draft to.
  *   * F7/F8: run detail carries its exceptions and each line's server gross and deductions.
  *   * F11: the bank sheet generates by POST; history pages with `X-Total-Count`.
  *   * F19: the maker of an advance or loan cannot approve it.
@@ -73,6 +77,8 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
   let checker: { userId: string; token: string };
   let advanceId: string;
   let runId: string;
+  /** The role the payroll chain's one level (Director, the final slot) resolves to. */
+  let directorRoleId: string;
 
   const makeUser = async (label: string, permissions: Permission[]) => {
     const user = await sys.user.create({
@@ -183,6 +189,11 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
 
     maker = await makeUser('Maker', [Permission.PAYROLL, Permission.LOANS]);
     checker = await makeUser('Checker', [Permission.PAYROLL, Permission.LOANS]);
+    // 039: the checker also approves payroll as the Director.
+    directorRoleId = chainRole.Final;
+    await sys.userRole.create({
+      data: { userId: checker.userId, roleId: directorRoleId, companyId },
+    });
     const actor = { userId: maker.userId, ipAddress: '127.0.0.1' };
     const ctx = { isSuperAdmin: false, companyId };
     await app
@@ -338,6 +349,47 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
       }
     });
 
+    it('039 — processing waits for the Director, whom HR sends the draft to', async () => {
+      const unsent = await http()
+        .patch(`/hr/payroll/runs/${runId}/status`)
+        .set(auth(maker.token))
+        .send({ status: 'processed' })
+        .expect(409);
+      expect(unsent.body.code).toBe('PAYROLL_RUN_NOT_SUBMITTED');
+
+      await http()
+        .post(`/hr/payroll/runs/${runId}/submit-for-approval`)
+        .set(auth(maker.token))
+        .expect(201);
+      const pending = await http()
+        .patch(`/hr/payroll/runs/${runId}/status`)
+        .set(auth(maker.token))
+        .send({ status: 'processed' })
+        .expect(409);
+      expect(pending.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
+
+      const approvals = app.get(ApprovalService);
+      const state = await approvals.stateOfSystem(
+        ACTION_PAYROLL_RUN,
+        runId,
+        companyId,
+      );
+      await approvals.decide(
+        {
+          instanceId: state.instanceId,
+          action: ApprovalDecisionAction.approve,
+        },
+        {
+          id: checker.userId,
+          companyId,
+          roleIds: [directorRoleId],
+          permissions: [],
+          grants: [],
+        } as unknown as AuthenticatedUser,
+        '127.0.0.1',
+      );
+    });
+
     it('two simultaneous process requests settle once', async () => {
       const results = await Promise.all(
         [0, 1].map(() =>
@@ -374,15 +426,21 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
     });
 
     it('refuses processed → paid while the approval is pending (F6)', async () => {
+      // A run processed before 039, approval sent afterwards and still pending. A run processed
+      // since 039 was approved first, so this is the case the gate is still for.
+      const legacy = await sys.payrollRun.create({
+        data: { companyId, period: '2019-03', status: 'processed' },
+      });
+      await http()
+        .post(`/hr/payroll/runs/${legacy.id}/submit-for-approval`)
+        .set(auth(maker.token))
+        .expect(201);
       const res = await http()
-        .patch(`/hr/payroll/runs/${runId}/status`)
+        .patch(`/hr/payroll/runs/${legacy.id}/status`)
         .set(auth(maker.token))
         .send({ status: 'paid' })
         .expect(409);
-      expect([
-        'PAYROLL_RUN_NOT_APPROVED',
-        'PAYROLL_RUN_NOT_SUBMITTED',
-      ]).toContain(res.body.code);
+      expect(res.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
     });
 
     it('refuses to regenerate a processed run', async () => {
@@ -421,19 +479,37 @@ describe('Payroll hardening (036 stream 1a, e2e)', () => {
 
   describe('F11 — bank sheet', () => {
     it('generates by POST, gated on approval like the GET', async () => {
+      // The run above is approved and processed; this one is processed and still with the Director.
+      const [y, m] = period.split('-').map(Number);
+      const earlier =
+        m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+      const legacy = await sys.payrollRun.create({
+        data: { companyId, period: earlier, status: 'processed' },
+      });
+      await http()
+        .post(`/hr/payroll/runs/${legacy.id}/submit-for-approval`)
+        .set(auth(maker.token))
+        .expect(201);
+
       const post = await http()
-        .post(`/hr/payroll/runs/${runId}/bank-sheet`)
+        .post(`/hr/payroll/runs/${legacy.id}/bank-sheet`)
         .set(auth(maker.token))
         .expect(409);
       expect(post.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
 
-      const [year, month] = period.split('-').map(Number);
+      const [year, month] = earlier.split('-').map(Number);
       const byMonth = await http()
         .post('/hr/payroll/bank-sheet')
         .set(auth(maker.token))
         .send({ year, month })
         .expect(409);
       expect(byMonth.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
+      const preview = await http()
+        .get('/hr/payroll/bank-sheet/preview')
+        .query({ year, month })
+        .set(auth(maker.token))
+        .expect(409);
+      expect(preview.body.code).toBe('PAYROLL_RUN_NOT_APPROVED');
     });
 
     it('pages the history and reports the total in X-Total-Count', async () => {

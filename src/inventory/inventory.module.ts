@@ -4,6 +4,7 @@ import { AuditLogService } from '../auth/audit-log.service';
 import { LettersModule } from '../letters/letters.module';
 import { PartnersModule } from '../partners/partners.module';
 import { ProjectsModule } from '../projects/projects.module';
+import { CompositeItemsService } from '../settings/item-masters/composite-items.service';
 import { ItemCategoriesService } from '../settings/item-masters/item-categories.service';
 import { ItemsService } from '../settings/item-masters/items.service';
 import { SettingsModule } from '../settings/settings.module';
@@ -17,6 +18,7 @@ import { IndentsService } from './indents/indents.service';
 import { InventoryRefsService } from './inventory-refs.service';
 import { InventoryService } from './inventory.service';
 import { InventoryItemsService } from './items/inventory-items.service';
+import { CompositeItemsController } from './items/composite-items.controller';
 import { ItemsController } from './items/items.controller';
 import { IssuesController } from './issues/issues.controller';
 import { IssuesService } from './issues/issues.service';
@@ -56,6 +58,7 @@ import { TransfersService } from './transfers/transfers.service';
   controllers: [
     CategoriesController,
     ItemsController,
+    CompositeItemsController,
     StockController,
     PurchasesController,
     IssuesController,
@@ -83,6 +86,7 @@ import { TransfersService } from './transfers/transfers.service';
     InventoryService,
     ItemCategoriesService,
     ItemsService,
+    CompositeItemsService,
     AuditLogService,
   ],
   // Exported for 008's Project P&L, which sums material cost from this module

@@ -21,11 +21,27 @@ export class CreateIssueDto {
   @MaxLength(100)
   siteId!: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional({
+    description:
+      'The item issued. Give this or `compositeItemId`, not both (039).',
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(100)
-  itemId!: string;
+  itemId?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "A composite item (039): `quantity` is then in the composite's unit and each sub-item is " +
+      'issued in proportion, rounded to 3 decimals, under one slip. Not with `itemId` or ' +
+      '`indentLineId`.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  compositeItemId?: string;
 
   @ApiProperty({ example: '2026-09-04' })
   @IsDateString()
@@ -104,7 +120,57 @@ export class CreateIssueDto {
   remarks?: string;
 }
 
+/** The issue form's preview of a composite issue (039): each sub-item's need against the store. */
+export class CompositePreviewDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  compositeItemId!: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  siteId!: string;
+
+  @ApiProperty({ example: 10 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsPositive()
+  @Max(999_999_999_999_999)
+  quantity!: number;
+
+  @ApiPropertyOptional({ description: 'Cross-company callers only' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  companyId?: string;
+}
+
+/** The issue form's composite picker (039): active composites by name. */
+export class CompositeChoicesDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  search?: string;
+
+  @ApiPropertyOptional({ description: 'Cross-company callers only' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  companyId?: string;
+}
+
 export class ListIssuesDto {
+  /** 039: every sub-item row of one composite issue. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  issueGroupId?: string;
+
   /** 036 M12: the project, vendor and slip number the register is searched by. */
   @ApiPropertyOptional()
   @IsOptional()

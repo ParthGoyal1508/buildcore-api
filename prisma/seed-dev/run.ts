@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 
 import { seedAssets } from './assets';
 import { seedHr } from './hr';
-import { seedInventory } from './inventory';
+import { seedComposites, seedInventory } from './inventory';
 import { seedLabour } from './labour';
 import { seedPayroll } from './payroll';
 import { seedPlant } from './plant';
@@ -27,6 +27,7 @@ export const MODULES: { name: string; run: CompletionModule; seed: number }[] =
     { name: 'hr', run: seedHr, seed: 1101 },
     { name: 'payroll', run: seedPayroll, seed: 2203 },
     { name: 'inventory', run: seedInventory, seed: 3307 },
+    { name: 'composites', run: seedComposites, seed: 3313 },
     { name: 'plant', run: seedPlant, seed: 4409 },
     { name: 'labour', run: seedLabour, seed: 5501 },
     { name: 'projects', run: seedProjects, seed: 6607 },

@@ -47,7 +47,13 @@ export class ItemsController {
     private readonly inventoryItems: InventoryItemsService,
   ) {}
 
+  /**
+   * The two reads accept `INVENTORY` too (039). Every purchase, indent and order line picks its
+   * item from this list, so a Storekeeper (`INVENTORY` alone) could not record a purchase or raise
+   * an indent at all. Maintaining the master stays `SETTINGS`.
+   */
   @Get()
+  @RequirePermissions(Permission.SETTINGS, Permission.INVENTORY)
   @ApiOperation({
     summary: 'Paginated item list with search and category filter',
   })
@@ -59,6 +65,7 @@ export class ItemsController {
   }
 
   @Get(':id')
+  @RequirePermissions(Permission.SETTINGS, Permission.INVENTORY)
   @ApiOperation({ summary: 'One item' })
   async findOne(
     @UserEntity() caller: AuthenticatedUser,

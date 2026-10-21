@@ -75,6 +75,13 @@ function build(opts: {
   debitAccount?: string | null;
   /** Advances recovered from the transfer, keyed by employee (021 FR-010, FR-011). */
   recoveries?: Record<string, { salaryAdvanceId: string; amount: number }[]>;
+  /** 039: the run's status and what `outstandingApproval` reports. */
+  status?: string;
+  outstanding?: {
+    levelLabel: string | null;
+    state: string;
+    submitted: boolean;
+  } | null;
 }) {
   const employees = opts.employees ?? [employee()];
   const nets = opts.netPay ?? employees.map(() => 55000);
@@ -87,6 +94,7 @@ function build(opts: {
         companyId: 'co-1',
         period: '2026-07',
         isFnf: false,
+        status: opts.status ?? 'processed',
         generatedAt: new Date('2026-07-31T00:00:00.000Z'),
         createdAt: new Date('2026-07-31T00:00:00.000Z'),
         lineItems: employees.map((e, index) => ({
@@ -114,7 +122,9 @@ function build(opts: {
   const pii = {
     decrypt: (value: string | null) => value?.replace(/^enc:/, '') ?? null,
   };
-  const schedule = { outstandingApproval: async () => null };
+  const schedule = {
+    outstandingApproval: async () => opts.outstanding ?? null,
+  };
   // 2026-10-17: every generated file is kept for the history.
   const storage = {
     put: async () => 'ref-1',
@@ -608,4 +618,54 @@ describe('BankSheetService — history paging (036 F11)', () => {
     await service.historyPage(caller, 'co-1', undefined, { pageSize: 1000 });
     expect(findMany.mock.calls[0][0]).toMatchObject({ take: 200 });
   });
+});
+
+describe('BankSheetService — only after the Director approves (039)', () => {
+  beforeEach(() => {
+    recoveryWrites = [];
+  });
+
+  it('refuses a draft, even an approved one, for both the sheet and the preview', async () => {
+    const service = build({ status: 'draft' });
+    for (const call of [
+      () => service.build(caller, 'run-1'),
+      () => service.preview(caller, 'run-1'),
+    ]) {
+      const error = await call().catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_RUN_NOT_FINALISED',
+      });
+    }
+    expect(recoveryWrites).toEqual([]);
+  });
+
+  it('refuses a run never sent to the Director, naming the run', async () => {
+    const service = build({
+      outstanding: { levelLabel: null, state: 'pending', submitted: false },
+    });
+    const error = await service.build(caller, 'run-1').catch((e) => e);
+    expect(error.getResponse()).toMatchObject({
+      code: 'PAYROLL_RUN_NOT_SUBMITTED',
+      runId: 'run-1',
+    });
+  });
+
+  it.each(['build', 'preview'] as const)(
+    '%s refuses while the Director has not approved',
+    async (method) => {
+      const service = build({
+        outstanding: {
+          levelLabel: 'Director',
+          state: 'pending',
+          submitted: true,
+        },
+      });
+      const error = await service[method](caller, 'run-1').catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_RUN_NOT_APPROVED',
+      });
+      expect(error.message).toMatch(/awaiting Director/);
+      expect(recoveryWrites).toEqual([]);
+    },
+  );
 });

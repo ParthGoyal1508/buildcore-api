@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Permission, PayrollRunStatus } from '@prisma/client';
@@ -6,7 +11,11 @@ import { PrismaService } from 'nestjs-prisma';
 
 import { ApprovalService } from '../../approvals/approvals.service';
 import { ACTION_PAYROLL_RUN } from '../../approvals/default-chains';
-import { isLive } from '../../approvals/approval.types';
+import {
+  isLive,
+  type ApprovalInstanceView,
+} from '../../approvals/approval.types';
+import type { AuthenticatedUser } from '../../auth/authenticated-user';
 import type { SettingsConfig } from '../../common/configs/config.interface';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import {
@@ -51,8 +60,16 @@ export class PayrollScheduleService {
   }
 
   /**
-   * Creates the previous period's run for every active company and submits each into its
-   * approval chain (FR-013, FR-014).
+   * Creates the previous period's run for every active company (FR-013) — and, since 039, stops
+   * there.
+   *
+   * **No longer submits the run into its chain (039).** The client's flow is: payroll is generated,
+   * HR reviews and corrects it (each change justified), and HR *sends* it to the Director. A run the
+   * schedule pushed straight into the Director's queue was one HR could no longer correct — edits
+   * are locked while the Director has it — and, with no originator, one that could never be
+   * resubmitted after a return. So the sweep generates the draft and HR sends it from the run screen
+   * (`sendToDirector`). The bank sheet stays held until the Director approves, as before (FR-014's
+   * control is unchanged; only who starts the chain is).
    *
    * **Idempotency comes from the database, not from this method being careful.** The
    * partial unique index `PayrollRun_companyId_period_regular_key` already guarantees one
@@ -94,14 +111,6 @@ export class PayrollScheduleService {
         const existing = await this.findRegularRun(company.id, period);
         if (existing) {
           result.alreadyPresent.push(company.id);
-          // Still ensure it is in a chain: a run created manually before the schedule
-          // fired must not skip approval simply because it got there first. But only one that
-          // has never been submitted (2026-10-16): the sweep now repeats over the first week of
-          // the month, and a run already approved or rejected must not be pulled back into a
-          // fresh chain the next morning.
-          await this.submitForApproval(company.id, existing.id, period, {
-            onlyIfNeverSubmitted: true,
-          });
           continue;
         }
 
@@ -118,7 +127,6 @@ export class PayrollScheduleService {
           }),
         );
 
-        await this.submitForApproval(company.id, generated.runId, period);
         result.created.push(company.id);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -200,19 +208,18 @@ export class PayrollScheduleService {
   }
 
   /**
-   * Puts a processed run into its approval chain if it has never been in one (2026-10-17).
+   * Puts an F&F run into its approval chain when it is processed, if it has never been in one
+   * (2026-10-17).
    *
-   * Only the monthly sweep used to submit runs, so a run generated and processed by hand sat
-   * outside any chain — and a bank sheet, which needs the chain approved, could never be produced
-   * for it. Processing now calls this, and so does the "Submit for approval" action for runs
-   * processed before the fix. A run already in a chain, in any state, is left alone: approved,
-   * rejected or abandoned is a decision, not a gap.
-   *
-   * Unlike the sweep, a missing chain is reported, because a person is waiting on the answer.
+   * Since 039 a regular run is sent to the Director by HR *before* processing, and processing
+   * refuses without the approval — so for a regular run this always finds the chain already there
+   * and does nothing. It remains for F&F runs, which are still approved after processing. A run
+   * already in a chain, in any state, is left alone.
    */
   async submitIfNeverSubmitted(
     companyId: string,
     runId: string,
+    originatorUserId: string | null,
   ): Promise<'submitted' | 'already_submitted'> {
     const existing = await this.approvals.stateOfSystem(
       ACTION_PAYROLL_RUN,
@@ -226,7 +233,7 @@ export class PayrollScheduleService {
       actionType: ACTION_PAYROLL_RUN,
       entityType: ACTION_PAYROLL_RUN,
       entityId: runId,
-      originatorUserId: null,
+      originatorUserId,
       subject: `Payroll run ${run?.period ?? ''}`.trim(),
       href: webRoutes.payrollRun(runId),
       viewPermission: Permission.PAYROLL,
@@ -235,11 +242,92 @@ export class PayrollScheduleService {
   }
 
   /**
-   * Restarts a run's chain because its attendance changed underneath it (FR-017).
+   * HR sends the run to the Director (039): the explicit step after reviewing and correcting it.
    *
-   * Every approval already given is void: the figures the approvers agreed to are no
-   * longer the figures. Abandoning and resubmitting is what makes that true in the record
-   * rather than merely in principle.
+   * The sender is recorded as the originator, which is what lets the spine's originator-only
+   * `resubmit` work after a return — the schedule used to submit with a null originator, and such a
+   * run could never be sent again. A returned run sent by its originator is resubmitted (a new
+   * round on the same instance, its history kept). A returned run whose originator is somebody else
+   * or nobody (submitted by the schedule before 039) is abandoned and submitted afresh under the
+   * sender: payroll is HR's as a team, and a return must not strand a run because the colleague who
+   * first sent it is away. Rejected or abandoned chains likewise start a fresh one.
+   */
+  async sendToDirector(
+    companyId: string,
+    runId: string,
+    sender: AuthenticatedUser,
+  ): Promise<ApprovalInstanceView> {
+    const run = await this.findRunById(companyId, runId);
+    if (!run) throw new NotFoundException('Payroll run not found');
+    if (run.status === PayrollRunStatus.paid) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_ALREADY_PAID',
+        message: 'This payroll run has been paid; there is nothing to approve.',
+      });
+    }
+
+    const existing = await this.approvals.stateOfSystem(
+      ACTION_PAYROLL_RUN,
+      runId,
+      companyId,
+    );
+    if (existing?.state === 'pending') {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_AWAITING_APPROVAL',
+        message: `This payroll run is already with ${
+          existing.levelLabel ?? 'the Director'
+        } for approval.`,
+      });
+    }
+    if (existing?.state === 'approved') {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_ALREADY_APPROVED',
+        message: 'The Director has already approved this payroll run.',
+      });
+    }
+    if (existing?.state === 'returned') {
+      if (existing.originatorUserId === sender.id) {
+        return this.approvals.resubmit(
+          ACTION_PAYROLL_RUN,
+          runId,
+          companyId,
+          sender.id,
+          sender,
+        );
+      }
+      await this.approvals.abandon(
+        ACTION_PAYROLL_RUN,
+        runId,
+        companyId,
+        'Returned run sent again by another HR user; a fresh chain replaces it.',
+      );
+    }
+
+    return this.approvals.submit({
+      companyId,
+      actionType: ACTION_PAYROLL_RUN,
+      entityType: ACTION_PAYROLL_RUN,
+      entityId: runId,
+      originatorUserId: sender.id,
+      subject: `Payroll run ${run.period}`,
+      href: webRoutes.payrollRun(runId),
+      // Who may read this run's approval history (FR-009). Payroll figures are not
+      // company-wide reading, so this is the `PAYROLL` permission and not a laxer one.
+      viewPermission: Permission.PAYROLL,
+    });
+  }
+
+  /**
+   * Voids a run's approval because its attendance changed underneath it (FR-017).
+   *
+   * Every approval already given is void: the figures the approvers agreed to are no longer the
+   * figures. **Since 039 the chain is abandoned and not restarted.** The stored lines do not
+   * change when attendance does — only a regeneration recomputes them — so restarting the chain
+   * put the same stale figures back in front of the Director. Abandoning hands the run back to HR,
+   * who regenerate (or correct) it and send it again.
    */
   async invalidateApprovals(
     companyId: string,
@@ -247,11 +335,11 @@ export class PayrollScheduleService {
     reason: string,
   ): Promise<void> {
     await this.approvals.abandon(ACTION_PAYROLL_RUN, runId, companyId, reason);
-    await this.submitForApproval(companyId, runId);
   }
 
   /**
-   * Restarts a run's chain when attendance underneath it changed (FR-017, T038).
+   * Voids a run's approval when attendance underneath it changed (FR-017, T038; 039: abandoned,
+   * not restarted — see `invalidateApprovals`).
    *
    * The listener half of the pairing described in `attendance-events.ts`: `hr` announces
    * that it changed something in a reviewed period and needs no answer, so this reacts.
@@ -274,63 +362,14 @@ export class PayrollScheduleService {
         `Attendance for ${event.period} was edited after approval began.`,
       );
       this.logger.log(
-        `Payroll run ${run.id} (${event.period}) restarted its approval chain after an ` +
-          `attendance edit.`,
+        `Payroll run ${run.id} (${event.period}) had its approval voided after an ` +
+          `attendance edit; HR must send it again.`,
       );
     } catch (error) {
       this.logger.error(
-        `Could not restart the approval chain for ${event.companyId}/${event.period} ` +
+        `Could not void the approval chain for ${event.companyId}/${event.period} ` +
           `after an attendance edit: ` +
           `${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  /** Puts a run into the payroll chain, tolerating one that is already there. */
-  private async submitForApproval(
-    companyId: string,
-    runId: string,
-    period?: string,
-    options: { onlyIfNeverSubmitted?: boolean } = {},
-  ): Promise<void> {
-    const existing = await this.approvals.stateOfSystem(
-      ACTION_PAYROLL_RUN,
-      runId,
-      companyId,
-    );
-    if (existing && isLive(existing.state)) return;
-    // The sweep's guard: any chain at all — approved, rejected or abandoned — means this run has
-    // been through approval, and a scheduled job is not the one to start it again.
-    if (existing && options.onlyIfNeverSubmitted) return;
-
-    const run = period ? { period } : await this.findRunById(companyId, runId);
-
-    try {
-      await this.approvals.submit({
-        companyId,
-        actionType: ACTION_PAYROLL_RUN,
-        entityType: ACTION_PAYROLL_RUN,
-        entityId: runId,
-        // Null, not a stand-in account: nobody raised this run. `ApprovalInstance`
-        // records the originator as a real foreign key, so naming an arbitrary user
-        // would put a person's name against work the schedule did.
-        originatorUserId: null,
-        subject: `Payroll run ${run?.period ?? ''}`.trim(),
-        href: webRoutes.payrollRun(runId),
-        // Who may read this run's approval history (FR-009). Payroll figures are not
-        // company-wide reading, so this is the `PAYROLL` permission and not a laxer one.
-        viewPermission: Permission.PAYROLL,
-      });
-    } catch (error) {
-      // A missing chain is a configuration gap. It must not abort the sweep: the run
-      // itself is correct and valuable, and refusing to create it would mean nobody gets
-      // paid because nobody has configured an approver yet.
-      this.logger.error(
-        `Payroll run ${runId} could not enter its approval chain: ` +
-          `${
-            error instanceof Error ? error.message : String(error)
-          }. The run exists and ` +
-          `is held from producing a bank sheet until this is fixed.`,
       );
     }
   }

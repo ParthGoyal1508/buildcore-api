@@ -35,6 +35,9 @@ export const CASH_MODE_ENUMS: readonly string[] = [
   // 028 FR-021. `RABillPayment.instrument`, which is why `instrument` joins the mode fields below:
   // naming the enum alone hides nothing, as this file's own comment warns.
   'PaymentInstrument',
+  // 039: a payment Head Office makes against a job card's final bill. Its field is `mode`, already
+  // in CASH_MODE_FIELDS, and its figure `amount`.
+  'JobCardPaymentMode',
 ];
 
 /**

@@ -1,6 +1,5 @@
 import {
   Body,
-  ConflictException,
   Controller,
   Delete,
   Get,
@@ -37,9 +36,12 @@ import { TransactionSheetService } from './transaction-sheet.service';
 import { UploadTransactionSheetDto } from './dto/transaction-sheet.dto';
 import { PiiCipherService } from '../../hr/employees/pii-cipher.service';
 import {
+  EditPayrollLineDto,
   GeneratePayrollDto,
   SetRunStatusDto,
 } from './dto/generate-payroll.dto';
+import { ApprovalService } from '../../approvals/approvals.service';
+import { ACTION_PAYROLL_RUN } from '../../approvals/default-chains';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { resolveCompanyId } from '../../settings/company-scope';
 
@@ -59,6 +61,8 @@ export class PayrollRunsController {
     private readonly pii: PiiCipherService,
     /** Puts a run processed here into its approval chain (2026-10-17). */
     private readonly schedule: PayrollScheduleService,
+    /** 039: each run's approval state, for the runs table and the run screen. */
+    private readonly approvals: ApprovalService,
   ) {}
 
   private companyOf(user: AuthenticatedUser, requested?: string): string {
@@ -76,20 +80,80 @@ export class PayrollRunsController {
     @Req() request: Request,
     @Query('companyId') companyId?: string,
   ) {
-    return this.engine.list(
+    const runs = await this.engine.list(
       callerFrom(user, request),
       this.companyOf(user, companyId),
     );
+    // 039: where each run stands with the Director. The batch read, never one per row.
+    const approvals = await this.approvals.statesOf(
+      ACTION_PAYROLL_RUN,
+      runs.map((r) => r.id),
+      user,
+    );
+    return runs.map((r) => ({ ...r, approval: approvals.get(r.id) ?? null }));
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'One run with its computed line items' })
+  @ApiOperation({
+    summary: 'One run with its computed line items',
+    description:
+      'Each line carries `editedFields` (039), the columns corrected by hand. `approval` is the ' +
+      "run's approval state — level, Director's remarks on a return — or null when never sent. " +
+      '`approvalRequired` says whether the company has a payroll chain, so processing needs it.',
+  })
   async getRun(
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('id') id: string,
   ) {
-    return this.engine.getRun(callerFrom(user, request), id);
+    const run = await this.engine.getRun(callerFrom(user, request), id);
+    const [approval, approvalRequired] = await Promise.all([
+      this.approvals.stateOf(ACTION_PAYROLL_RUN, id, user),
+      this.engine.approvalRequired(run.companyId),
+    ]);
+    return { ...run, approval, approvalRequired };
+  }
+
+  @Patch(':id/lines/:lineId')
+  @ApiOperation({
+    summary: 'Correct one generated line by hand, with a justification (039)',
+    description:
+      'Only while the run is a draft that is not with the Director and not approved — never ' +
+      'sent, or returned. One history row per changed figure; net pay is recomputed. Refusals: ' +
+      '409 `PAYROLL_RUN_NOT_DRAFT`, `PAYROLL_RUN_AWAITING_APPROVAL`, `PAYROLL_RUN_ALREADY_APPROVED`, ' +
+      '`PAYROLL_FNF_NOT_EDITABLE`; 400 `PAYROLL_EDIT_FIELD_NOT_EDITABLE`, ' +
+      '`PAYROLL_EDIT_INVALID_AMOUNT`, `PAYROLL_EDIT_NO_CHANGE`, `PAYROLL_EDIT_NET_NEGATIVE`, ' +
+      '`PAYROLL_EDIT_BELOW_REIMBURSEMENT`, `PAYROLL_EDIT_JUSTIFICATION_REQUIRED`.',
+  })
+  async editLine(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body() dto: EditPayrollLineDto,
+  ) {
+    return this.engine.editLine(
+      callerFrom(user, request),
+      id,
+      lineId,
+      dto.changes,
+      dto.justification,
+    );
+  }
+
+  @Get(':id/edits')
+  @ApiOperation({
+    summary: 'Hand corrections on a run, newest first (039)',
+    description:
+      'Who changed which figure, old → new, why and when. `lineItemId` narrows it to one line.',
+  })
+  async lineEdits(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Query('lineItemId') lineItemId?: string,
+  ) {
+    return this.engine.lineEdits(callerFrom(user, request), id, lineItemId);
   }
 
   @Delete(':id')
@@ -114,11 +178,15 @@ export class PayrollRunsController {
     summary: 'Generate a Draft payroll run',
     description:
       'Computes one line per active employee in a single transaction. ' +
-      'Regenerating a Draft replaces its lines; a Processed or Paid run refuses.',
+      'Regenerating a Draft replaces its lines; a Processed or Paid run refuses. 039: a draft ' +
+      'with the Director or approved refuses (`PAYROLL_RUN_AWAITING_APPROVAL`, ' +
+      '`PAYROLL_RUN_ALREADY_APPROVED`), and one with hand corrections refuses with ' +
+      '`PAYROLL_RUN_HAS_EDITS` unless `discardEdits` is true.',
   })
   @ApiResponse({
     status: 409,
-    description: 'That period is already processed or paid.',
+    description:
+      'That period is already processed or paid, is with the Director, or has hand edits.',
   })
   async generate(
     @UserEntity() user: AuthenticatedUser,
@@ -129,6 +197,7 @@ export class PayrollRunsController {
       callerFrom(user, request),
       this.companyOf(user, dto.companyId),
       dto.period,
+      { discardEdits: dto.discardEdits === true },
     );
   }
 
@@ -137,7 +206,9 @@ export class PayrollRunsController {
     summary: 'Advance a run: draft → processed → paid',
     description:
       'Processing freezes the figures (FR-015) and settles the loan schedule ' +
-      'entries the run deducted. Neither transition is reversible.',
+      'entries the run deducted. Neither transition is reversible. 039: processing a regular run ' +
+      "needs the Director's approval first — 409 `PAYROLL_RUN_NOT_SUBMITTED`, " +
+      '`PAYROLL_RUN_NOT_APPROVED` or `PAYROLL_RUN_RETURNED` otherwise.',
   })
   @ApiResponse({ status: 409, description: 'Transition not permitted.' })
   async setStatus(
@@ -149,12 +220,12 @@ export class PayrollRunsController {
     const caller = callerFrom(user, request);
     const result = await this.engine.setStatus(caller, id, dto.status);
     if (result.status === PayrollRunStatus.processed) {
-      // 2026-10-17: processing puts the run into its approval chain, as the monthly sweep does —
-      // otherwise a run processed by hand never reaches an approver and its bank sheet is held for
-      // good. A missing chain does not undo the processing; the bank sheet says what is needed.
+      // 2026-10-17, narrowed by 039: a regular run is approved before it can be processed, so this
+      // finds its chain and does nothing. An F&F run is still approved after processing, and this
+      // is what puts it in front of an approver. A missing chain does not undo the processing.
       const run = await this.engine.getRun(caller, id);
       await this.schedule
-        .submitIfNeverSubmitted(run.companyId, id)
+        .submitIfNeverSubmitted(run.companyId, id, user.id)
         .catch(() => undefined);
     }
     return result;
@@ -162,10 +233,13 @@ export class PayrollRunsController {
 
   @Post(':id/submit-for-approval')
   @ApiOperation({
-    summary: 'Put a processed run into its approval chain',
+    summary: 'Send the run to the Director for approval (039)',
     description:
-      'For a run processed before processing submitted it automatically. A run already in a ' +
-      'chain, in any state, is refused with 409.',
+      "HR's explicit step after reviewing and correcting the draft; the sender is recorded as " +
+      'the originator, so a returned run can be sent again. Also sends an older processed run that ' +
+      'never entered a chain. 409 `PAYROLL_RUN_AWAITING_APPROVAL` when already with the Director, ' +
+      '`PAYROLL_RUN_ALREADY_APPROVED`, `PAYROLL_RUN_ALREADY_PAID`, or ' +
+      '`APPROVAL_CHAIN_NOT_CONFIGURED`.',
   })
   async submitForApproval(
     @UserEntity() user: AuthenticatedUser,
@@ -173,21 +247,12 @@ export class PayrollRunsController {
     @Param('id') id: string,
   ) {
     const run = await this.engine.getRun(callerFrom(user, request), id);
-    if (run.status === PayrollRunStatus.draft) {
-      throw new ConflictException(
-        'Process this run before submitting it for approval.',
-      );
-    }
-    const outcome = await this.schedule.submitIfNeverSubmitted(
+    const approval = await this.schedule.sendToDirector(
       run.companyId,
       id,
+      user,
     );
-    if (outcome === 'already_submitted') {
-      throw new ConflictException(
-        'This payroll run is already in its approval chain.',
-      );
-    }
-    return { runId: id, submitted: true };
+    return { runId: id, submitted: true, approval };
   }
 
   @Get(':id/slip-deliveries')

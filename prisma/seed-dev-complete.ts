@@ -4,6 +4,7 @@
  *
  *   npm run seed:dev:complete                       # local database from DATABASE_URL
  *   SEED_DEV_ONLY=hr,payroll npm run seed:dev:complete   # just those modules
+ *   SEED_DEV_ONLY=composites npm run seed:dev:complete   # the concrete mixes and their MT stock
  *
  * Aim it at a remote host only on purpose (SEED_DEV_ALLOW_HOST=<host>); the production host is
  * refused outright. See prisma/seed-dev/support.ts for the rules every module follows.

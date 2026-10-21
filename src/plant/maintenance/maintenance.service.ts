@@ -8,6 +8,7 @@ import {
   AuditAction,
   AuditEntityType,
   EquipmentStatus,
+  JobCardStatus,
   MaintenanceStatus,
   Prisma,
 } from '@prisma/client';
@@ -20,6 +21,7 @@ import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import { assertInScope, companyScope } from '../../settings/company-scope';
 import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../constants/plant.constants';
+import { effectiveJobCardStatus, inStatus } from './job-card-workflow';
 import {
   CloseMaintenanceJobDto,
   CreateMaintenanceJobDto,
@@ -49,6 +51,11 @@ export interface MaintenanceJobRow {
   linkedServiceScheduleId: string | null;
   /** The job card's number, once a card has been saved (2026-10-15). */
   jobCardNo: string | null;
+  /**
+   * Where the job card stands in its approval-and-payment workflow (039); null without a card.
+   * A card saved before 039 reads `draft`.
+   */
+  jobCardStatus: JobCardStatus | null;
   status: MaintenanceStatus;
   createdAt: Date;
 }
@@ -112,6 +119,7 @@ export class MaintenanceService {
       totalCost: partsCost + (labourCost ?? 0) + serviceBillCost,
       linkedServiceScheduleId: row.linkedServiceScheduleId,
       jobCardNo: row.jobCardNo,
+      jobCardStatus: effectiveJobCardStatus(row),
       status: row.status,
       createdAt: row.createdAt,
     };
@@ -144,6 +152,17 @@ export class MaintenanceService {
       ...(query.equipmentId ? { equipmentId: query.equipmentId } : {}),
       ...(query.status ? { status: query.status } : {}),
       ...(query.type ? { type: query.type } : {}),
+      ...(query.jobCardStatus
+        ? query.jobCardStatus === JobCardStatus.draft
+          ? // A pre-039 card has a number and a null status, and reads as a draft.
+            {
+              OR: [
+                { jobCardStatus: JobCardStatus.draft },
+                { jobCardStatus: null, jobCardNo: { not: null } },
+              ],
+            }
+          : inStatus(query.jobCardStatus)
+        : {}),
     };
 
     return withRlsContext(this.prisma, rlsContextFor(caller), async (tx) => {

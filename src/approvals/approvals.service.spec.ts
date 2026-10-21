@@ -954,7 +954,7 @@ describe('ApprovalService', () => {
   });
 
   describe('the queue (T016, T021)', () => {
-    it('excludes items the caller has already decided on', async () => {
+    it('excludes items the caller has already decided on this round, and only this round', async () => {
       const { service, prisma } = harness();
       prisma.tx.roleSlotMapping.findMany = jest
         .fn()
@@ -962,13 +962,35 @@ describe('ApprovalService', () => {
       prisma.tx.approvalLevel.findMany = jest
         .fn()
         .mockResolvedValue([{ chainId: 'chain-1', position: 2 }]);
+      const item = (id: string, round: number, decisions: object[]) => ({
+        id,
+        round,
+        decisions,
+        currentPosition: 2,
+        entityType: 'job_card',
+        entityId: `e-${id}`,
+        subject: id,
+        href: null,
+        originatorUserId: null,
+        createdAt: new Date('2026-10-20T10:00:00Z'),
+        chain: { actionType: 'job_card', levels: [] },
+      });
+      prisma.tx.approvalInstance.findMany = jest.fn().mockResolvedValue([
+        // Decided by hr-1 in this round: forbidden to act again, so not listed.
+        item('decided', 1, [{ actorUserId: 'hr-1', round: 1 }]),
+        // Returned by hr-1 in round 1 and resubmitted: theirs to decide again (039).
+        item('resubmitted', 2, [{ actorUserId: 'hr-1', round: 1 }]),
+        // Somebody else's decision does not take it off hr-1's queue.
+        item('fresh', 1, [{ actorUserId: 'other', round: 1 }]),
+      ]);
 
-      await service.queueFor(caller('hr-1', [ROLE_HR]));
+      const page = await service.queueFor(caller('hr-1', [ROLE_HR]));
 
+      expect(page.items.map((i) => i.instanceId)).toEqual([
+        'resubmitted',
+        'fresh',
+      ]);
       const where = prisma.tx.approvalInstance.findMany.mock.calls[0][0].where;
-      // A queue that lists work you are forbidden to action teaches people to ignore the
-      // queue — so the exclusion is in the query, not applied afterwards.
-      expect(where.decisions).toEqual({ none: { actorUserId: 'hr-1' } });
       expect(where.state).toBe('pending');
     });
 

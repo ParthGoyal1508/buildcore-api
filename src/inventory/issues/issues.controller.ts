@@ -20,7 +20,13 @@ import { JwtAuthGuard } from '../../auth/jwt-auth.guard';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
-import { CreateIssueDto, ListIssuesDto, ReturnIssueDto } from './dto/issue.dto';
+import {
+  CompositeChoicesDto,
+  CompositePreviewDto,
+  CreateIssueDto,
+  ListIssuesDto,
+  ReturnIssueDto,
+} from './dto/issue.dto';
 import { IssuesService } from './issues.service';
 
 @ApiTags('Inventory')
@@ -40,13 +46,43 @@ export class IssuesController {
     return this.issues.findAll(caller, query);
   }
 
+  @Get('composites')
+  @ApiOperation({
+    summary: 'Active composite items for the issue form (039)',
+    description:
+      'Each with its sub-items and their quantity per unit. Readable with INVENTORY alone; ' +
+      'the recipes are edited under /inventory/composite-items.',
+  })
+  async compositeChoices(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: CompositeChoicesDto,
+  ) {
+    return this.issues.compositeChoices(caller, query);
+  }
+
+  @Get('composite-preview')
+  @ApiOperation({
+    summary: 'What a composite issue would take from a store (039)',
+    description:
+      'Per sub-item: the quantity required (quantity × qty per unit, rounded half-up to 3 ' +
+      'decimals), what the store has, and any shortfall. Advisory; the issue re-checks under lock.',
+  })
+  async compositePreview(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query() query: CompositePreviewDto,
+  ) {
+    return this.issues.compositePreview(caller, query);
+  }
+
   @Post()
   @ApiOperation({
     summary: 'Issue material to work',
     description:
       'Locks the item-store balance for the transaction and refuses with 422 and ' +
       '`availableStock` when the quantity exceeds what is there. This is the single ' +
-      'point of stock enforcement in the module (FR-003).',
+      'point of stock enforcement in the module (FR-003). With `compositeItemId` instead of ' +
+      '`itemId` (039), every sub-item is issued in proportion under one slip and a shortfall ' +
+      'refuses with 422 and `shortfalls` listing every short sub-item.',
   })
   async create(
     @UserEntity() caller: AuthenticatedUser,
@@ -77,6 +113,8 @@ export class IssuesController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Soft-delete an issue and return the material to stock',
+    description:
+      'A row of a composite issue (039) deletes and reverses its whole group in one transaction.',
   })
   async remove(
     @UserEntity() caller: AuthenticatedUser,

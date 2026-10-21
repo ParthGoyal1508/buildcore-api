@@ -126,6 +126,23 @@ export const ACTION_EXIT_CLEARANCE_WAIVER = 'exit_clearance_waiver';
 export const ACTION_RA_BILL = 'ra_bill';
 
 /**
+ * 039: a maintenance job card, raised by site with the workshop's quotation and approved — or sent
+ * back for correction — by Head Office before the work is paid for. One level, labelled
+ * "Head Office", on the final slot (Super Admin by default); a company wanting more defines it in
+ * Settings → Approvals.
+ */
+export const ACTION_JOB_CARD = 'job_card';
+
+export const DEFAULT_JOB_CARD_LEVELS: ChainLevelInput[] = [
+  {
+    position: 1,
+    slotKey: SLOT_FINAL,
+    label: 'Head Office',
+    isFinalAuthority: true,
+  },
+];
+
+/**
  * Approving a bill to the client before it is issued (2026-10-13).
  *
  * A subcontractor's bill package goes through `ra_bill`, the chain that has always decided
@@ -203,6 +220,12 @@ export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
 ];
 
 /**
+ * **Superseded 2026-10-20 (039): payroll goes to the Director alone.** Payroll is generated for the
+ * whole company, so a Site Incharge level never fitted it; HR edits the generated run (each change
+ * justified) and sends it to the Director, who approves or returns it. Migration
+ * 20261021100001_flow_corrections moves companies still on the old default. What follows is the
+ * history of the three-level shape.
+ *
  * Site Incharge → HR Office → Director, the shape Note 7 describes for payroll.
  *
  * The same three slots as the attendance chain, deliberately: the client's
@@ -215,10 +238,8 @@ export const DEFAULT_ATTENDANCE_EXCEPTION_LEVELS: ChainLevelInput[] = [
  * should see "Site Incharge" rather than the attendance queue's "Site / Employer".
  */
 export const DEFAULT_PAYROLL_RUN_LEVELS: ChainLevelInput[] = [
-  { position: 1, slotKey: SLOT_FIRST_APPROVER, label: 'Site Incharge' },
-  { position: 2, slotKey: SLOT_HR, label: 'HR Office' },
   {
-    position: 3,
+    position: 1,
     slotKey: SLOT_FINAL,
     label: 'Director',
     isFinalAuthority: true,
@@ -299,6 +320,8 @@ export const DEFAULT_COMPANY_CHAINS: [string, ChainLevelInput[]][] = [
   // rather than added to `DIRECTOR_FINAL_SEEDED_ACTIONS`, because that list carries a policy claim
   // about what the client confirmed and an RA bill is not on it.
   [ACTION_RA_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
+  // 039: a job card goes to Head Office before the workshop is paid.
+  [ACTION_JOB_CARD, DEFAULT_JOB_CARD_LEVELS],
   [ACTION_CLIENT_BILL, DEFAULT_DIRECTOR_FINAL_LEVELS],
   // 028 FR-009 and FR-010. Both one Director level, for the reason each constant gives. Seeded here
   // so a company gets them on creation like every other chain — a chain installed per company by

@@ -8,6 +8,7 @@ import {
   findStaleRecoveries,
   lineTotals,
 } from './payroll-engine.service';
+import { netPayForLine } from './payroll-computation';
 
 /**
  * 036 stream 1a. The payroll engine's run lifecycle against a mocked database.
@@ -82,6 +83,7 @@ function storedLine(overrides: Record<string, unknown> = {}) {
     employerEsic: D(0),
     gratuity: D(0),
     bonus: D(0),
+    editedFields: [],
     ...overrides,
   };
 }
@@ -92,6 +94,12 @@ function build(
     run?: Record<string, unknown>;
     lines?: Record<string, unknown>[];
     gate?: { allowed: boolean; state: string | null; levelLabel?: string };
+    /** 039: the run's spine state, as `stateOfSystem` reports it. */
+    approvalState?: string | null;
+    /** 039: whether the company has an active payroll chain. */
+    hasChain?: boolean;
+    /** 039: lines with hand edits, as the regeneration guard counts them. */
+    editedLineCount?: number;
     statusMoveCount?: number;
     draftClaimCount?: number;
     advance?: Record<string, unknown> | null;
@@ -139,6 +147,17 @@ function build(
       })),
     },
     payrollLineItem: {
+      count: jest.fn().mockResolvedValue(opts.editedLineCount ?? 0),
+      findFirst: jest
+        .fn()
+        .mockImplementation(
+          ({ where }: never) =>
+            lines.find((l) => l.id === (where as { id: string }).id) ?? null,
+        ),
+      update: jest.fn().mockImplementation(({ where, data }: never) => ({
+        ...lines.find((l) => l.id === (where as { id: string }).id),
+        ...(data as object),
+      })),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
       createMany: jest.fn().mockImplementation(({ data }: never) => {
         created.push(...(data as Record<string, unknown>[]));
@@ -154,6 +173,11 @@ function build(
     employee: {
       findMany: jest.fn().mockResolvedValue([EMPLOYEE]),
     },
+    payrollLineItemEdit: {
+      createMany: jest.fn().mockResolvedValue({ count: 1 }),
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    user: { findMany: jest.fn().mockResolvedValue([]) },
     loanScheduleEntry: {
       findMany: jest.fn().mockResolvedValue([]),
       updateMany: jest.fn(),
@@ -233,6 +257,17 @@ function build(
       levelLabel: null,
       ...opts.gate,
     }),
+    stateOfSystem: jest
+      .fn()
+      .mockResolvedValue(
+        opts.approvalState ? { state: opts.approvalState } : null,
+      ),
+    abandon: jest.fn().mockResolvedValue(undefined),
+  };
+  const chains = {
+    findActiveChain: jest
+      .fn()
+      .mockResolvedValue(opts.hasChain === false ? null : { id: 'chain-1' }),
   };
   const auditLog = { record: jest.fn().mockResolvedValue(undefined) };
 
@@ -269,6 +304,7 @@ function build(
     auditLog as never,
     { get: (key: string) => (config() as never)[key] } as never,
     approvals as never,
+    chains as never,
   );
   return {
     service,
@@ -565,6 +601,312 @@ describe('PayrollEngineService (036 stream 1a)', () => {
     it('lineTotals counts fuel and advance among the deductions', () => {
       const totals = lineTotals(storedLine() as never);
       expect(totals.totalDeductions.toNumber()).toBe(200 + 1000 + 300 + 2000);
+    });
+  });
+});
+
+describe('PayrollEngineService — payroll correction (039)', () => {
+  const asNumbers = (line: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(line).map(([k, v]) => [
+        k,
+        v instanceof Prisma.Decimal ? v.toNumber() : v,
+      ]),
+    ) as never;
+
+  describe('netPayForLine', () => {
+    it('reproduces the net pay generation stored', () => {
+      // 30,000 salary − 1,200 (PT + EMI) + 500 reimbursed − 2,000 advance − 300 fuel.
+      expect(netPayForLine(asNumbers(storedLine()))).toBe(27000);
+    });
+
+    it('floors the salary part at zero before reimbursements and recoveries, as generation does', () => {
+      const net = netPayForLine(
+        asNumbers(
+          storedLine({
+            basic: D(0),
+            hra: D(0),
+            conveyanceAllowance: D(0),
+            siteAllowance: D(0),
+            specialAllowance: D(500),
+            tds: D(5000),
+            advanceRecovered: D(0),
+            fuelRecoveryDeduction: D(0),
+          }),
+        ),
+      );
+      // The reimbursement is paid even though deductions exceed the salary.
+      expect(net).toBe(500);
+    });
+  });
+
+  describe('editLine', () => {
+    it('updates the figures, recomputes net, records one history row per field and audits', async () => {
+      const { service, prisma } = build();
+      const auditLog = (
+        service as unknown as { auditLog: { record: jest.Mock } }
+      ).auditLog;
+      const line = await service.editLine(
+        caller,
+        'run-1',
+        'line-1',
+        { basic: 21000, tds: 300 },
+        '  Increment from August missed  ',
+      );
+
+      const update = prisma.tx.payrollLineItem.update.mock.calls[0][0];
+      expect(Number(update.data.basic)).toBe(21000);
+      expect(Number(update.data.tds)).toBe(300);
+      // +1,000 basic − 300 TDS.
+      expect(update.data.netPay).toBe(27700);
+      expect(update.data.editedFields.sort()).toEqual(['basic', 'tds']);
+
+      const edits =
+        prisma.tx.payrollLineItemEdit.createMany.mock.calls[0][0].data;
+      expect(edits).toHaveLength(2);
+      expect(edits[0]).toMatchObject({
+        companyId: 'co-1',
+        payrollRunId: 'run-1',
+        lineItemId: 'line-1',
+        employeeId: 'emp-1',
+        field: 'basic',
+        justification: 'Increment from August missed',
+        editedByUserId: 'user-hr',
+      });
+      expect(Number(edits[0].oldValue)).toBe(20000);
+      expect(Number(edits[0].newValue)).toBe(21000);
+
+      expect(auditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'PAYROLL_RUN',
+          entityId: 'run-1',
+          changes: expect.objectContaining({
+            justification: 'Increment from August missed',
+            netPay: { from: '27000', to: '27700.00' },
+          }),
+        }),
+      );
+      expect(line.netPay).toBe(27700);
+    });
+
+    it('keeps earlier edited fields in the union', async () => {
+      const { service, prisma } = build({
+        lines: [storedLine({ editedFields: ['hra'] })],
+      });
+      await service.editLine(caller, 'run-1', 'line-1', { basic: 21000 }, 'x');
+      const update = prisma.tx.payrollLineItem.update.mock.calls[0][0];
+      expect(update.data.editedFields).toEqual(['hra', 'basic']);
+    });
+
+    it('records only the fields that actually changed', async () => {
+      const { service, prisma } = build({
+        lines: [storedLine({ editedFields: [] })],
+      });
+      await service.editLine(
+        caller,
+        'run-1',
+        'line-1',
+        { basic: 20000, hra: 5500 },
+        'HRA revised',
+      );
+      const edits =
+        prisma.tx.payrollLineItemEdit.createMany.mock.calls[0][0].data;
+      expect(edits.map((e: { field: string }) => e.field)).toEqual(['hra']);
+    });
+
+    it.each([
+      [{ loanEmiDeduction: 0 }, 'PAYROLL_EDIT_FIELD_NOT_EDITABLE'],
+      [{ employerPf: 0 }, 'PAYROLL_EDIT_FIELD_NOT_EDITABLE'],
+      [{ netPay: 1 }, 'PAYROLL_EDIT_FIELD_NOT_EDITABLE'],
+      [{ basic: -1 }, 'PAYROLL_EDIT_INVALID_AMOUNT'],
+      [{ basic: 1.005 }, 'PAYROLL_EDIT_INVALID_AMOUNT'],
+      [{}, 'PAYROLL_EDIT_NO_CHANGE'],
+      [{ basic: 20000 }, 'PAYROLL_EDIT_NO_CHANGE'],
+      [{ specialAllowance: 100 }, 'PAYROLL_EDIT_BELOW_REIMBURSEMENT'],
+      [
+        {
+          basic: 0,
+          hra: 0,
+          conveyanceAllowance: 0,
+          siteAllowance: 0,
+          specialAllowance: 500,
+        },
+        'PAYROLL_EDIT_NET_NEGATIVE',
+      ],
+    ])('refuses %j with %s', async (changes, code) => {
+      const { service, prisma } = build();
+      const error = await service
+        .editLine(caller, 'run-1', 'line-1', changes, 'reason')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({ code });
+      expect(prisma.tx.payrollLineItem.update).not.toHaveBeenCalled();
+    });
+
+    it('requires a justification', async () => {
+      const { service } = build();
+      const error = await service
+        .editLine(caller, 'run-1', 'line-1', { basic: 1 }, '   ')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_EDIT_JUSTIFICATION_REQUIRED',
+      });
+    });
+
+    it.each([
+      ['pending', 'PAYROLL_RUN_AWAITING_APPROVAL'],
+      ['approved', 'PAYROLL_RUN_ALREADY_APPROVED'],
+    ])('refuses while the approval is %s', async (approvalState, code) => {
+      const { service, prisma } = build({ approvalState });
+      const error = await service
+        .editLine(caller, 'run-1', 'line-1', { basic: 21000 }, 'reason')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({ code });
+      expect(prisma.tx.payrollLineItem.update).not.toHaveBeenCalled();
+    });
+
+    it.each(['returned', 'rejected', 'abandoned'])(
+      'allows edits once the approval is %s',
+      async (approvalState) => {
+        const { service, prisma } = build({ approvalState });
+        await service.editLine(
+          caller,
+          'run-1',
+          'line-1',
+          { basic: 21000 },
+          'r',
+        );
+        expect(prisma.tx.payrollLineItem.update).toHaveBeenCalled();
+      },
+    );
+
+    it('refuses a processed run', async () => {
+      const { service } = build({
+        run: { status: PayrollRunStatus.processed },
+      });
+      const error = await service
+        .editLine(caller, 'run-1', 'line-1', { basic: 21000 }, 'r')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_RUN_NOT_DRAFT',
+      });
+    });
+
+    it('refuses an F&F run', async () => {
+      const { service } = build({ run: { isFnf: true } });
+      const error = await service
+        .editLine(caller, 'run-1', 'line-1', { basic: 21000 }, 'r')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_FNF_NOT_EDITABLE',
+      });
+    });
+  });
+
+  describe('regeneration', () => {
+    const existingRun = { id: 'run-1', status: PayrollRunStatus.draft };
+
+    it('refuses to wipe hand edits unless told to discard them', async () => {
+      const { service, prisma } = build({ existingRun, editedLineCount: 2 });
+      const error = await service
+        .generate(caller, 'co-1', '2026-09')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_RUN_HAS_EDITS',
+        editedLineCount: 2,
+      });
+      expect(prisma.tx.payrollLineItem.deleteMany).not.toHaveBeenCalled();
+
+      await service.generate(caller, 'co-1', '2026-09', { discardEdits: true });
+      expect(prisma.tx.payrollLineItem.deleteMany).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['pending', 'PAYROLL_RUN_AWAITING_APPROVAL'],
+      ['approved', 'PAYROLL_RUN_ALREADY_APPROVED'],
+    ])('refuses while the approval is %s', async (approvalState, code) => {
+      const { service } = build({ existingRun, approvalState });
+      const error = await service
+        .generate(caller, 'co-1', '2026-09')
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({ code });
+    });
+
+    it('abandons a returned chain once the new lines are written', async () => {
+      const { service, approvals } = build({
+        existingRun,
+        approvalState: 'returned',
+      });
+      await service.generate(caller, 'co-1', '2026-09');
+      expect(approvals.abandon).toHaveBeenCalledWith(
+        'payroll_run',
+        'run-1',
+        'co-1',
+        expect.any(String),
+      );
+    });
+  });
+
+  describe('processing needs the Director’s approval', () => {
+    it('refuses a run never sent when the company has a payroll chain', async () => {
+      const { service, prisma } = build({
+        gate: { allowed: false, state: null },
+      });
+      const error = await service
+        .setStatus(caller, 'run-1', PayrollRunStatus.processed)
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({
+        code: 'PAYROLL_RUN_NOT_SUBMITTED',
+        runId: 'run-1',
+      });
+      expect(prisma.tx.payrollRun.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['pending', 'PAYROLL_RUN_NOT_APPROVED'],
+      ['returned', 'PAYROLL_RUN_RETURNED'],
+      ['rejected', 'PAYROLL_RUN_NOT_APPROVED'],
+    ])('refuses a run whose approval is %s', async (state, code) => {
+      const { service } = build({
+        gate: { allowed: false, state, levelLabel: 'Director' },
+      });
+      const error = await service
+        .setStatus(caller, 'run-1', PayrollRunStatus.processed)
+        .catch((e) => e);
+      expect(error.getResponse()).toMatchObject({ code });
+    });
+
+    it('lets a company with no payroll chain process as before', async () => {
+      const { service, prisma } = build({
+        gate: { allowed: false, state: null },
+        hasChain: false,
+      });
+      await service.setStatus(caller, 'run-1', PayrollRunStatus.processed);
+      expect(prisma.tx.payrollRun.updateMany).toHaveBeenCalled();
+    });
+
+    it('leaves F&F runs on their own path', async () => {
+      const { service, prisma } = build({
+        run: { isFnf: true },
+        gate: { allowed: false, state: null },
+      });
+      await service.setStatus(caller, 'run-1', PayrollRunStatus.processed);
+      expect(prisma.tx.payrollRun.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  describe('discarding a draft', () => {
+    it('takes it out of the Director’s queue', async () => {
+      const { service, prisma, approvals } = build();
+      prisma.tx.payrollRun.deleteMany = jest
+        .fn()
+        .mockResolvedValue({ count: 1 });
+      await service.discardDraft(caller, 'run-1');
+      expect(approvals.abandon).toHaveBeenCalledWith(
+        'payroll_run',
+        'run-1',
+        'co-1',
+        expect.any(String),
+      );
     });
   });
 });

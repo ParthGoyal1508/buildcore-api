@@ -58,8 +58,16 @@ export class SitesController {
    * directly and would break on a `{ items, total }` envelope. The paginated
    * administrative list is `GET /projects/sites/list`.
    */
+  /**
+   * The three reads accept `INVENTORY` too (039): a store is a site, and every inventory form
+   * picks one — the Storekeeper role holds `INVENTORY` alone. Writes stay `PROJECTS`.
+   */
   @Get()
-  @RequirePermissions(Permission.PROJECTS, Permission.EMPLOYEES)
+  @RequirePermissions(
+    Permission.PROJECTS,
+    Permission.EMPLOYEES,
+    Permission.INVENTORY,
+  )
   @ApiOperation({ summary: 'Sites in this company, for a picker' })
   @ApiQuery({
     name: 'companyId',
@@ -92,7 +100,11 @@ export class SitesController {
    * coexist without ambiguity.
    */
   @Get('list')
-  @RequirePermissions(Permission.PROJECTS, Permission.EMPLOYEES)
+  @RequirePermissions(
+    Permission.PROJECTS,
+    Permission.EMPLOYEES,
+    Permission.INVENTORY,
+  )
   @ApiOperation({
     summary: 'Paginated site list with project and status filters',
   })
@@ -120,7 +132,11 @@ export class SitesController {
   }
 
   @Get(':id')
-  @RequirePermissions(Permission.PROJECTS, Permission.EMPLOYEES)
+  @RequirePermissions(
+    Permission.PROJECTS,
+    Permission.EMPLOYEES,
+    Permission.INVENTORY,
+  )
   @ApiOperation({
     summary: 'One site, including the geofence and weekly-off data from 003',
   })

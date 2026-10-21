@@ -13,6 +13,7 @@ const build = (vendor: Record<string, unknown> | null) => {
     {} as never,
     partners as never,
     {} as never,
+    {} as never,
   );
   return { service, items };
 };

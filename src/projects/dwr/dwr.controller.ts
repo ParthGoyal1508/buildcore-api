@@ -421,6 +421,26 @@ export class DwrController {
 
   // ── Reading ──────────────────────────────────────────────────────────────
 
+  /**
+   * Declared before `projects/dwr/:dwrId`, which would otherwise take `projects` as a report id.
+   */
+  @Get('projects/dwr/projects')
+  @ApiOperation({
+    summary:
+      'The projects a report can be recorded against, for the DWR picker (039)',
+    description:
+      'Code, name, location, status and lock state — nothing else. A holder of `DWR` alone (the ' +
+      'DWR Entry role) has to pick a project to report on, and the portfolio list it would ' +
+      'otherwise read carries the contract value and needs `PROJECTS`. The client, the money ' +
+      'and every other tab of a project stay behind that permission.',
+  })
+  async projects(
+    @UserEntity() caller: AuthenticatedUser,
+    @Query('companyId') companyId?: string,
+  ) {
+    return this.dwr.projectsForEntry(caller, companyId);
+  }
+
   @Get('projects/dwr')
   @ApiOperation({
     summary: 'A project’s reports, filtered and paginated',

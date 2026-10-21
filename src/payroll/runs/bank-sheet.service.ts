@@ -512,6 +512,19 @@ export class BankSheetService {
     );
     if (!run) throw new NotFoundException('Payroll run not found');
 
+    // 039: since the Director approves the *draft* (and processing then freezes it), an approved
+    // run can still be a draft. The figures are not final until processed, so the per-run sheet
+    // refuses a draft as `findRegularRun` already did for the by-month sheet.
+    if (run.status === PayrollRunStatus.draft) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'PAYROLL_RUN_NOT_FINALISED',
+        message:
+          'This payroll run is still a draft. Process it, once the Director has approved it, ' +
+          'before generating the bank sheet.',
+      });
+    }
+
     // 016 FR-015: a run may not produce a bank transfer sheet until its approval chain
     // is complete. This is the point where the chain stops being paperwork and starts
     // being control — everything before it is a record of opinions; this is the file
@@ -530,8 +543,8 @@ export class BankSheetService {
       throw new ConflictException({
         statusCode: 409,
         message:
-          'This payroll run has not been submitted for approval yet. Submit it, and the bank ' +
-          'sheet can be produced once every level has approved.',
+          'This payroll run has not been sent to the Director for approval yet. Send it, and the ' +
+          'bank sheet can be produced once the Director has approved it.',
         code: 'PAYROLL_RUN_NOT_SUBMITTED',
         runId: run.id,
       });

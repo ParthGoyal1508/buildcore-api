@@ -37,6 +37,15 @@ export class ListStockDto {
   @IsBoolean()
   belowReorderLevel?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Only item-stores with stock on hand (039) — the issue form offers nothing it cannot issue',
+  })
+  @IsOptional()
+  @BooleanQuery()
+  @IsBoolean()
+  inStockOnly?: boolean;
+
   @ApiPropertyOptional({ default: 1 })
   @IsOptional()
   @Type(() => Number)
