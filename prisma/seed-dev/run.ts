@@ -77,4 +77,26 @@ export async function runCompletion(
       );
     }
   }
+
+  // 2026-10-20: leave, claims, loans and advances are approved on chains. The modules above write
+  // pending ones straight into their tables, so they are put into their chains here — through the
+  // API's own services, as `npm run backfill:approvals` does on a live database.
+  const { NestFactory } = await import('@nestjs/core');
+  const { AppModule } = await import('../../src/app.module');
+  const { backfillApprovalChains } = await import(
+    '../backfill-approval-chains'
+  );
+  const app = await NestFactory.createApplicationContext(AppModule, {
+    logger: ['error', 'warn'],
+  });
+  try {
+    const counts = await backfillApprovalChains(app);
+    console.log(
+      `  approval chains: ${Object.entries(counts)
+        .map(([k, n]) => `${k} ${n}`)
+        .join(', ')}`,
+    );
+  } finally {
+    await app.close();
+  }
 }

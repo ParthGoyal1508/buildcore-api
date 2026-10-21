@@ -8,6 +8,7 @@ import {
 import { createPrismaMock } from '../settings/testing/prisma-mock';
 import {
   APPROVAL_ALREADY_DECIDED,
+  APPROVAL_OWN_ITEM,
   APPROVAL_NOT_AUTHORISED,
   APPROVAL_NOT_PENDING,
   APPROVAL_REASON_REQUIRED,
@@ -89,6 +90,7 @@ const instanceRow = (overrides: Record<string, unknown> = {}) => ({
   currentPosition: 1,
   state: 'pending' as ApprovalState,
   originatorUserId: 'originator-1',
+  excludedUserIds: [] as string[],
   round: 1,
   returnCount: 0,
   delegatedToUserId: null,
@@ -353,6 +355,25 @@ describe('ApprovalService', () => {
       expect(error.response.code).toBe(APPROVAL_ALREADY_DECIDED);
       expect(error.response.code).not.toBe(APPROVAL_NOT_AUTHORISED);
       expect(error.response.message).toMatch(/reassigned/);
+    });
+
+    it('refuses someone barred from this item even though they hold the level (2026-10-20)', async () => {
+      // The applicant of a leave application, holding Head Office: the role says yes, the item
+      // says no — and it says so as their own item, not as missing authority.
+      const everyRole = [ROLE_FIRST, ROLE_HR, ROLE_SUPER];
+      const { service } = harness(
+        instanceRow({ excludedUserIds: ['applicant-1'] }),
+      );
+
+      const error = await service
+        .decide(
+          { instanceId: 'inst-1', action: ApprovalDecisionAction.approve },
+          caller('applicant-1', everyRole),
+          '10.0.0.1',
+        )
+        .catch((e) => e);
+
+      expect(error.response.code).toBe(APPROVAL_OWN_ITEM);
     });
 
     it('requires a reason to reject and to return, but not to approve (FR-006)', async () => {

@@ -4072,13 +4072,11 @@ model LeaveApplication {
   decidedByUserId String?
   decidedAt       DateTime?
 
-  /// The reporting manager's login, who decides first (2026-10-16: "first go to reporting manager
-  /// and then HR"). Null when the employee has no reporting manager with a login — the application
-  /// then goes straight to HR, as every one did before. Set at application and never changed, so
-  /// a later change of manager does not move an application already in somebody's queue.
+  /// History only. From 2026-10-16 to 2026-10-20 the reporting manager decided first ("first go to
+  /// reporting manager and then HR"); the client then withdrew that stage and every application
+  /// goes straight to head office. Kept so the manager's remarks on applications from that window
+  /// still read; nothing sets these any more.
   managerUserId    String?
-  /// When the manager approved it on to HR. A manager's rejection is final and is recorded in the
-  /// decision fields above instead.
   managerDecidedAt DateTime?
   managerRemarks   String?
 
@@ -4228,8 +4226,7 @@ model ReimbursementClaim {
   decidedAt       DateTime?
   adminRemarks    String?
 
-  /// The reporting manager's login, who decides first (2026-10-16) — the same stage as
-  /// `LeaveApplication.managerUserId`, set when the claim is submitted.
+  /// History only — see `LeaveApplication.managerUserId`; the stage was withdrawn on 2026-10-20.
   managerUserId    String?
   managerDecidedAt DateTime?
   managerRemarks   String?
@@ -4793,6 +4790,8 @@ enum SalaryAdvanceStatus {
   approved
   disbursed
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("hr")
 }
@@ -4982,6 +4981,8 @@ enum LoanStatus {
   pending
   active
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("payroll")
 }
@@ -6151,6 +6152,11 @@ model ApprovalInstance {
   /// Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
   /// cannot be worn down by repetition without leaving a trace.
   returnCount Int @default(0)
+
+  /// People who may not decide this item, whatever roles they hold (2026-10-20): the applicant,
+  /// the maker, the employee being paid. Stamped at submit by the owning module and refused by
+  /// `ApprovalService.decide`; such items are left out of their queue too.
+  excludedUserIds String[] @default([])
 
   /// A one-off grant of authority at the CURRENT level to one named person (FR-019).
   ///
@@ -8191,6 +8197,8 @@ enum AdvanceStatus {
   approved
   disbursed
   closed
+  /// Refused by its approval chain (2026-10-20).
+  rejected
 
   @@schema("labour")
 }

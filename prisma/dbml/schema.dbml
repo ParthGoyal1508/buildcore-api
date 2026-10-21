@@ -2436,12 +2436,11 @@ the cost of their own leave.']
   adminRemarks String [note: 'Mandatory when `status` is `rejected` (FR-022a); enforced at the service layer.']
   decidedByUserId String
   decidedAt DateTime
-  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16: "first go to reporting manager
-and then HR"). Null when the employee has no reporting manager with a login — the application
-then goes straight to HR, as every one did before. Set at application and never changed, so
-a later change of manager does not move an application already in somebody\'s queue.']
-  managerDecidedAt DateTime [note: 'When the manager approved it on to HR. A manager\'s rejection is final and is recorded in the
-decision fields above instead.']
+  managerUserId String [note: 'History only. From 2026-10-16 to 2026-10-20 the reporting manager decided first ("first go to
+reporting manager and then HR"); the client then withdrew that stage and every application
+goes straight to head office. Kept so the manager\'s remarks on applications from that window
+still read; nothing sets these any more.']
+  managerDecidedAt DateTime
   managerRemarks String
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [not null]
@@ -2519,8 +2518,7 @@ category\'s configured threshold (FR-030).']
 splitting them into a second table would make "one claim, one status" untrue.']
   decidedAt DateTime
   adminRemarks String
-  managerUserId String [note: 'The reporting manager\'s login, who decides first (2026-10-16) — the same stage as
-`LeaveApplication.managerUserId`, set when the claim is submitted.']
+  managerUserId String [note: 'History only — see `LeaveApplication.managerUserId`; the stage was withdrawn on 2026-10-20.']
   managerDecidedAt DateTime
   managerRemarks String
   createdAt DateTime [default: `now()`, not null]
@@ -3709,6 +3707,9 @@ resubmitted, and part of both decision uniques below — without it, resubmissio
 would collide with the decisions of the round that was returned (FR-005, FR-020).']
   returnCount Int [not null, default: 0, note: 'Times this item has been returned and resubmitted (FR-020). Surfaced so a chain
 cannot be worn down by repetition without leaving a trace.']
+  excludedUserIds String[] [not null, note: 'People who may not decide this item, whatever roles they hold (2026-10-20): the applicant,
+the maker, the employee being paid. Stamped at submit by the owning module and refused by
+`ApprovalService.decide`; such items are left out of their queue too.']
   delegatedToUserId String [note: 'A one-off grant of authority at the CURRENT level to one named person (FR-019).
 
 Reassignment needs storage because authority in this model comes from holding a
@@ -6478,6 +6479,7 @@ Enum SalaryAdvanceStatus {
   approved
   disbursed
   closed
+  rejected
 }
 
 Enum PayrollRunStatus {
@@ -6490,6 +6492,7 @@ Enum LoanStatus {
   pending
   active
   closed
+  rejected
 }
 
 Enum LoanScheduleStatus {
@@ -6815,6 +6818,7 @@ Enum AdvanceStatus {
   approved
   disbursed
   closed
+  rejected
 }
 
 Enum AssetTrackingMode {

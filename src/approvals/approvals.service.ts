@@ -34,6 +34,7 @@ import {
   APPROVAL_DIRECTOR_REQUIRED,
   APPROVAL_NOT_COMPLETE,
   APPROVAL_NOT_AUTHORISED,
+  APPROVAL_OWN_ITEM,
   APPROVAL_NOT_PENDING,
   APPROVAL_NOT_SUBMITTED,
   APPROVAL_REASON_REQUIRED,
@@ -211,6 +212,13 @@ export class ApprovalService {
             href: input.href ?? null,
             viewPermission: input.viewPermission,
             originatorUserId: input.originatorUserId,
+            excludedUserIds: [
+              ...new Set(
+                (input.excludedUserIds ?? []).filter(
+                  (id): id is string => !!id,
+                ),
+              ),
+            ],
             currentPosition: 1,
           },
           include: {
@@ -398,6 +406,16 @@ export class ApprovalService {
       );
     }
 
+    // 2026-10-20. Maker-checker, where the decision is taken: the applicant, the maker or the
+    // employee being paid may hold this level's role and still not decide their own item.
+    if (instance.excludedUserIds.includes(caller.id)) {
+      await refuse(
+        APPROVAL_OWN_ITEM,
+        `You cannot decide this item yourself — you raised it, recorded it, or it pays you. ` +
+          `Another approver at this level must decide it.`,
+      );
+    }
+
     // FR-021a. Checked here so the refusal is legible, and enforced by the unique index
     // below so a race cannot slip past it.
     if (
@@ -528,6 +546,41 @@ export class ApprovalService {
     }
 
     return this.toView(updated, caller);
+  }
+
+  /**
+   * A decision taken from the owning module's own screen (2026-10-20), on the item's live chain.
+   *
+   * The leave, claim, loan and advance screens kept their Approve / Reject buttons when those
+   * flows moved onto the spine; each now records a decision here, so the chain — not the module's
+   * permission — says who may decide and when the item takes effect. 409 `APPROVAL_NOT_SUBMITTED`
+   * when the item has no live chain.
+   */
+  async decideByEntity(
+    entityType: string,
+    entityId: string,
+    input: Omit<DecideApprovalInput, 'instanceId'>,
+    caller: AuthenticatedUser,
+    ipAddress: string,
+  ): Promise<ApprovalInstanceView> {
+    const instance = await this.loadByEntity(
+      rlsContextFor(caller),
+      entityType,
+      entityId,
+    );
+    if (!instance || !isLive(instance.state)) {
+      throw new ConflictException({
+        statusCode: 409,
+        message:
+          'This item is not waiting in an approval chain, so there is nothing to decide.',
+        code: APPROVAL_NOT_SUBMITTED,
+      });
+    }
+    return this.decide(
+      { ...input, instanceId: instance.id },
+      caller,
+      ipAddress,
+    );
   }
 
   /**
@@ -690,6 +743,29 @@ export class ApprovalService {
     return [...instance.decisions]
       .sort((a, b) => a.decidedAt.getTime() - b.decidedAt.getTime())
       .map((d) => this.toDecisionView(d, instance, names));
+  }
+
+  /**
+   * Whether this viewer may open the files of an item in a chain (2026-10-20: "we were not seeing
+   * any attachment while approving").
+   *
+   * Everyone who may read its history, and also whoever can decide it now. A Director at the final
+   * level often holds none of the module's permissions, and being asked to approve a bill without
+   * seeing it is worse than useless. False when the item was never in a chain.
+   */
+  async mayViewFiles(
+    entityType: string,
+    entityId: string,
+    viewer: AuthenticatedUser,
+  ): Promise<boolean> {
+    const instance = await this.loadByEntity(
+      rlsContextFor(viewer),
+      entityType,
+      entityId,
+    );
+    if (!instance) return false;
+    if (this.mayViewHistory(instance, viewer)) return true;
+    return (await this.toView(instance, viewer)).canActNow;
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1072,6 +1148,8 @@ export class ApprovalService {
           OR: reachable,
           // FR-021a, applied to the listing rather than only to the action.
           decisions: { none: { actorUserId: caller.id } },
+          // And an item this caller may not decide at all (2026-10-20).
+          NOT: { excludedUserIds: { has: caller.id } },
         },
         include: { chain: { include: { levels: true } }, decisions: true },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -1162,6 +1240,7 @@ export class ApprovalService {
           state: 'pending',
           OR: reachable,
           decisions: { none: { actorUserId: caller.id } },
+          NOT: { excludedUserIds: { has: caller.id } },
         },
       });
     });
@@ -1205,6 +1284,8 @@ export class ApprovalService {
             chainId: l.chainId,
             currentPosition: { lt: l.position },
           })),
+          // Not coming to them at all if they may not decide it (2026-10-20).
+          NOT: { excludedUserIds: { has: caller.id } },
         },
         include: { chain: { include: { levels: true } } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -1783,6 +1864,10 @@ export class ApprovalService {
       )
     ) {
       return { canActNow: false, inertReason: 'already_decided' };
+    }
+
+    if (instance.excludedUserIds.includes(viewer.id)) {
+      return { canActNow: false, inertReason: 'own_item' };
     }
 
     if (!roleId) {

@@ -26,6 +26,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { CloseLoanDto } from './dto/close-loan.dto';
 import { CreateLoanDto, ListLoansQueryDto } from './dto/create-loan.dto';
+import { RejectAdvanceDto } from '../advances/dto/reject-advance.dto';
 import { LoansService } from './loans.service';
 import { resolveCompanyId } from '../../settings/company-scope';
 
@@ -108,7 +109,24 @@ export class LoansController {
     @Req() request: Request,
     @Param('id') id: string,
   ) {
-    return this.loans.approve(callerFrom(user, request), id);
+    return this.loans.approve(callerFrom(user, request), id, user);
+  }
+
+  @Patch(':id/reject')
+  @ApiOperation({
+    summary: 'Reject a pending loan (2026-10-20)',
+    description:
+      'A decision on the loan’s approval chain. The loan is never activated, so nothing is ' +
+      'deducted. A reason is required.',
+  })
+  @ApiResponse({ status: 409, description: 'Loan is not pending.' })
+  async reject(
+    @UserEntity() user: AuthenticatedUser,
+    @Req() request: Request,
+    @Param('id') id: string,
+    @Body() dto: RejectAdvanceDto,
+  ) {
+    return this.loans.reject(callerFrom(user, request), id, dto.reason, user);
   }
 
   @Patch(':id/close')
