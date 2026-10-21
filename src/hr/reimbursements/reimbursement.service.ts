@@ -12,7 +12,10 @@ import {
   ReimbursementClaimStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
+import { ApprovalService } from '../../approvals/approvals.service';
+import { ACTION_REIMBURSEMENT_CLAIM } from '../../approvals/default-chains';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { submitClaimForApproval } from './claim-approval';
 import { withRlsContext } from '../../common/prisma/rls-context';
 import { StorageService } from '../../common/storage/storage.service';
 import {
@@ -56,6 +59,7 @@ export class ReimbursementService {
     private readonly auditLog: AuditLogService,
     private readonly storage: StorageService,
     private readonly images: ImageProcessingService,
+    private readonly approvals: ApprovalService,
   ) {}
 
   /**
@@ -155,13 +159,8 @@ export class ReimbursementService {
       : undefined;
     this.assertReceiptRule(category, dto.amount, receiptRef);
 
-    // The reporting manager decides first, then HR (2026-10-16); stamped now even on a draft, and
-    // again at submission in `updateClaim`, so the claim reaches whoever manages the employee then.
-    const managerUserId = await this.employees.reportingManagerUserId(
-      caller.rls,
-      employee,
-    );
-
+    // Straight to head office (2026-10-20). The reporting-manager stage added on 2026-10-16 was
+    // withdrawn at the client's request; the manager columns stay for claims decided then.
     const created = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.reimbursementClaim.create({
         data: {
@@ -172,7 +171,6 @@ export class ReimbursementService {
           expenseDate: parseDateOnly(dto.expenseDate),
           description: dto.description,
           receiptRef: receiptRef ?? null,
-          managerUserId,
           status:
             dto.status === 'draft'
               ? ReimbursementClaimStatus.draft
@@ -180,6 +178,24 @@ export class ReimbursementService {
         },
       }),
     );
+
+    // Into its approval chain once submitted (2026-10-20); a draft waits for `updateClaim`. Undone
+    // when the company has no chain, rather than left where nobody could decide it.
+    if (created.status === ReimbursementClaimStatus.submitted) {
+      try {
+        await submitClaimForApproval(
+          this.approvals,
+          created,
+          employee,
+          caller.userId,
+        );
+      } catch (error) {
+        await withRlsContext(this.prisma, caller.rls, (tx) =>
+          tx.reimbursementClaim.delete({ where: { id: created.id } }),
+        );
+        throw error;
+      }
+    }
 
     await this.audit(caller, AuditAction.CREATE, created, {
       categoryId: dto.categoryId,
@@ -229,12 +245,6 @@ export class ReimbursementService {
     );
     this.assertReceiptRule(category, amount, receiptRef ?? undefined);
 
-    // Submitting a draft routes it to the employee's current reporting manager (2026-10-16).
-    const submitting = dto.status !== undefined && dto.status !== 'draft';
-    const managerUserId = submitting
-      ? await this.employees.reportingManagerUserId(caller.rls, employee)
-      : undefined;
-
     const updated = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.reimbursementClaim.update({
         where: { id },
@@ -246,7 +256,6 @@ export class ReimbursementService {
             ? { expenseDate: parseDateOnly(dto.expenseDate) }
             : {}),
           ...(dto.description ? { description: dto.description } : {}),
-          ...(submitting ? { managerUserId, managerDecidedAt: null } : {}),
           ...(dto.status
             ? {
                 status:
@@ -258,6 +267,30 @@ export class ReimbursementService {
         },
       }),
     );
+
+    // A draft being submitted enters its chain now (2026-10-20). If that fails it goes back to
+    // being a draft, so the employee can try again rather than hold a claim nobody can decide.
+    if (
+      existing.status === ReimbursementClaimStatus.draft &&
+      updated.status === ReimbursementClaimStatus.submitted
+    ) {
+      try {
+        await submitClaimForApproval(
+          this.approvals,
+          updated,
+          employee,
+          caller.userId,
+        );
+      } catch (error) {
+        await withRlsContext(this.prisma, caller.rls, (tx) =>
+          tx.reimbursementClaim.update({
+            where: { id },
+            data: { status: ReimbursementClaimStatus.draft },
+          }),
+        );
+        throw error;
+      }
+    }
 
     await this.audit(caller, AuditAction.UPDATE, updated, {
       categoryId,
@@ -300,6 +333,14 @@ export class ReimbursementService {
           data: { status: ReimbursementClaimStatus.withdrawn },
         });
       },
+    );
+
+    // Nothing left for the approver to decide.
+    await this.approvals.abandon(
+      ACTION_REIMBURSEMENT_CLAIM,
+      withdrawn.id,
+      withdrawn.companyId,
+      'Withdrawn by the employee.',
     );
 
     await this.audit(caller, AuditAction.UPDATE, withdrawn, {
@@ -368,104 +409,6 @@ export class ReimbursementService {
     }
   }
 
-  /** Filtered on employeeId as well as id: RLS confines this to the caller's
-   * company, and a company contains other employees (FR-033). */
-  /**
-   * Claims waiting on the caller as reporting manager (2026-10-16), each employee named.
-   * Self-service: the authority is the reporting line stamped on the claim at submission.
-   */
-  async listForManager(caller: Caller) {
-    const rows = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.reimbursementClaim.findMany({
-        where: {
-          managerUserId: caller.userId,
-          managerDecidedAt: null,
-          status: ReimbursementClaimStatus.submitted,
-        },
-        orderBy: { createdAt: 'asc' },
-      }),
-    );
-    if (rows.length === 0) return [];
-    const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.findMany({
-        where: { id: { in: [...new Set(rows.map((row) => row.employeeId))] } },
-        select: {
-          id: true,
-          employeeCode: true,
-          firstName: true,
-          lastName: true,
-        },
-      }),
-    );
-    const byId = new Map(employees.map((e) => [e.id, e]));
-    return rows.map((row) => {
-      const e = byId.get(row.employeeId);
-      return {
-        ...row,
-        employeeCode: e?.employeeCode ?? null,
-        employeeName: e ? `${e.firstName} ${e.lastName}`.trim() : null,
-      };
-    });
-  }
-
-  /**
-   * The reporting manager's decision on a claim (2026-10-16). Approval passes it on to HR, who
-   * approve and pay it; rejection is final, with the manager recorded as decider.
-   */
-  async managerDecide(
-    caller: Caller,
-    id: string,
-    decision: 'approved' | 'rejected',
-    remarks: string | undefined,
-  ): Promise<ReimbursementClaim> {
-    if (decision === 'rejected' && !remarks?.trim()) {
-      throw new BadRequestException(
-        'Remarks are required when rejecting a claim.',
-      );
-    }
-    const decided = await withRlsContext(
-      this.prisma,
-      caller.rls,
-      async (tx) => {
-        const claim = await tx.reimbursementClaim.findFirst({
-          where: { id, managerUserId: caller.userId },
-        });
-        if (!claim) throw new NotFoundException('Claim not found');
-        if (
-          claim.status !== ReimbursementClaimStatus.submitted ||
-          claim.managerDecidedAt
-        ) {
-          throw new ConflictException(
-            'You have already decided this claim, or it has been withdrawn.',
-          );
-        }
-        const now = new Date();
-        return tx.reimbursementClaim.update({
-          where: { id },
-          data:
-            decision === 'approved'
-              ? {
-                  managerDecidedAt: now,
-                  managerRemarks: remarks?.trim() || null,
-                }
-              : {
-                  managerDecidedAt: now,
-                  managerRemarks: remarks?.trim() || null,
-                  status: ReimbursementClaimStatus.rejected,
-                  adminRemarks: remarks?.trim() || null,
-                  decidedByUserId: caller.userId,
-                  decidedAt: now,
-                },
-        });
-      },
-    );
-    await this.audit(caller, AuditAction.UPDATE, decided, {
-      stage: 'manager',
-      decision,
-    });
-    return decided;
-  }
-
   /** The caller's own receipt, to open from My Workspace (036 F17/G5). */
   async ownReceipt(
     caller: Caller,
@@ -479,6 +422,8 @@ export class ReimbursementService {
     return readReceipt(this.storage, claim);
   }
 
+  /** Filtered on employeeId as well as id: RLS confines this to the caller's
+   * company, and a company contains other employees (FR-033). */
   private async requireOwnClaim(
     caller: Caller,
     employeeId: string,

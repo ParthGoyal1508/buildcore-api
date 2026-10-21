@@ -335,6 +335,8 @@ function advanceService(hidden: boolean) {
       findUnique: jest.fn(async () => advance),
       create: jest.fn(async () => advance),
       update: jest.fn(async () => advance),
+      updateMany: jest.fn(async () => ({ count: 1 })),
+      findUniqueOrThrow: jest.fn(async () => advance),
     },
     paymentSheetLine: { findMany: jest.fn(async () => []) },
     labourWorker: { findMany: jest.fn(async () => []) },
@@ -349,6 +351,11 @@ function advanceService(hidden: boolean) {
     refs as never,
     {} as never,
     {} as never,
+    // The approval chain (2026-10-20): in one, and the decision final.
+    {
+      stateOfSystem: jest.fn(async () => ({ state: 'pending' })),
+      decideByEntity: jest.fn(async () => ({ state: 'approved' })),
+    } as never,
     cashPolicy(hidden) as never,
   );
   return { service, tx };
@@ -391,7 +398,7 @@ describe('labour advances with cash hidden (038)', () => {
       id: 'a-1',
     });
     await service.approve(caller, 'a-1', 'ip');
-    expect(tx.labourAdvance.update).toHaveBeenCalled();
+    expect(tx.labourAdvance.updateMany).toHaveBeenCalled();
   });
 });
 

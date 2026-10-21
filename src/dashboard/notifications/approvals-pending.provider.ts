@@ -79,6 +79,11 @@ const KIND_LABELS: Record<string, string> = {
   exit_clearance_waiver: 'exit clearance waiver',
   purchase_rate_change: 'purchase rate change',
   director_final_set_change: 'director final change',
+  leave_application: 'leave application',
+  reimbursement_claim: 'reimbursement claim',
+  employee_loan: 'loan',
+  salary_advance: 'salary advance',
+  labour_advance: 'labour advance',
 };
 
 function kindLabel(actionType: string, moduleLabel: string): string {

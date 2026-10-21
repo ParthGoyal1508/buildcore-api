@@ -1,3 +1,4 @@
+import { ApprovalsModule } from '../approvals/approvals.module';
 import { Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
@@ -55,7 +56,14 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
  * `projects` needs from `labour` arrives as a service call, never a cross-schema join.
  */
 @Module({
-  imports: [SettingsModule, ProjectsModule, PartnersModule, UsersModule],
+  // ApprovalsModule (2026-10-20): a labour advance travels its approval chain.
+  imports: [
+    SettingsModule,
+    ProjectsModule,
+    PartnersModule,
+    UsersModule,
+    ApprovalsModule,
+  ],
   controllers: [
     WageRateController,
     SkillCategoriesController,

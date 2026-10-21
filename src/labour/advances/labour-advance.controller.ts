@@ -18,6 +18,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CreateAdvanceDto, ListAdvancesDto } from './dto/advance.dto';
+import { RejectAdvanceDto } from '../../payroll/advances/dto/reject-advance.dto';
 import { LabourAdvanceService } from './labour-advance.service';
 
 @ApiTags('Labour')
@@ -70,6 +71,22 @@ export class LabourAdvanceController {
     @Ip() ip: string,
   ) {
     return this.advances.approve(caller, id, ip);
+  }
+
+  @Patch(':id/reject')
+  @RequirePermissions(Permission.LABOUR_APPROVE)
+  @ApiOperation({
+    summary: 'Reject a pending advance (LABOUR_APPROVE, 2026-10-20)',
+    description:
+      'A decision on the advance’s approval chain. It is never disbursed. A reason is required.',
+  })
+  async reject(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: RejectAdvanceDto,
+    @Ip() ip: string,
+  ) {
+    return this.advances.reject(caller, id, dto.reason, ip);
   }
 
   @Patch(':id/disburse')

@@ -3,19 +3,32 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   Optional,
 } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import {
   AdvanceStatus,
+  ApprovalDecisionAction,
   AuditAction,
   AuditEntityType,
+  Permission,
   Prisma,
   WorkerStatus,
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 
+import {
+  APPROVAL_COMPLETED_EVENT,
+  APPROVAL_REJECTED_EVENT,
+  ApprovalService,
+  type ApprovalCompletedEvent,
+  type ApprovalRejectedEvent,
+} from '../../approvals/approvals.service';
+import { ACTION_LABOUR_ADVANCE } from '../../approvals/default-chains';
 import { AuditLogService } from '../../auth/audit-log.service';
+import { webRoutes } from '../../common/web-routes';
 import { AuthenticatedUser } from '../../auth/authenticated-user';
 import { rlsContextFor, withRlsContext } from '../../common/prisma/rls-context';
 import {
@@ -93,12 +106,15 @@ type WorkerSummary = {
 
 @Injectable()
 export class LabourAdvanceService {
+  private readonly logger = new Logger(LabourAdvanceService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
     private readonly refs: LabourRefsService,
     private readonly skillCategories: SkillCategoriesService,
     private readonly siteRates: SiteWageRateService,
+    private readonly approvals: ApprovalService,
     /** 038: hiding cash. Optional so unit tests can omit it (then nothing is hidden). */
     @Optional() private readonly cash?: CashPolicyService,
   ) {}
@@ -253,6 +269,17 @@ export class LabourAdvanceService {
         }),
     );
 
+    // Into its approval chain (2026-10-20); undone if the company has none, rather than left
+    // pending where nobody could ever approve it.
+    try {
+      await this.submitForApproval(caller, created, caller.id);
+    } catch (error) {
+      await withRlsContext(this.prisma, rlsContextFor(caller), (tx) =>
+        tx.labourAdvance.delete({ where: { id: created.id } }),
+      );
+      throw error;
+    }
+
     await this.audit(
       AuditAction.CREATE,
       created.id,
@@ -263,47 +290,258 @@ export class LabourAdvanceService {
     return this.viewOf(caller, created);
   }
 
+  /**
+   * Approves an advance — a decision on its approval chain (2026-10-20). It becomes approved, ready
+   * to disburse, on the chain's final approval.
+   */
   async approve(caller: AuthenticatedUser, id: string, ipAddress: string) {
-    const updated = await withRlsContext(
+    return this.decideOnChain(
+      caller,
+      id,
+      ApprovalDecisionAction.approve,
+      null,
+      ipAddress,
+    );
+  }
+
+  /** Rejects a pending advance (2026-10-20): it is never disbursed or recovered. */
+  async reject(
+    caller: AuthenticatedUser,
+    id: string,
+    reason: string,
+    ipAddress: string,
+  ) {
+    if (!reason.trim()) {
+      throw new BadRequestException(
+        'A reason is required to reject an advance.',
+      );
+    }
+    return this.decideOnChain(
+      caller,
+      id,
+      ApprovalDecisionAction.reject,
+      reason,
+      ipAddress,
+    );
+  }
+
+  private async decideOnChain(
+    caller: AuthenticatedUser,
+    id: string,
+    action: ApprovalDecisionAction,
+    reason: string | null,
+    ipAddress: string,
+  ) {
+    const existing = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      async (tx) => {
-        const existing = await tx.labourAdvance.findUnique({ where: { id } });
-        if (!existing || existing.deletedAt) {
-          throw new NotFoundException(`Advance ${id} not found`);
-        }
-        assertInScope(caller, existing, `Advance ${id}`);
-        await this.assertAdvancesAllowed(existing.companyId);
-        if (existing.status !== AdvanceStatus.pending) {
-          throw new ConflictException('Only a pending advance can be approved');
-        }
-        // Maker-checker (036 O12, decision 4): whoever raised the advance cannot approve it, with
-        // no override — otherwise one person holding both permissions pays themselves a loan.
-        if (existing.createdBy && existing.createdBy === caller.id) {
-          throw new ForbiddenException({
-            code: 'SELF_APPROVAL',
-            message:
-              'You raised this advance, so you cannot approve it. Another approver must.',
-          });
-        }
-        return tx.labourAdvance.update({
-          where: { id },
-          data: {
-            status: AdvanceStatus.approved,
-            approvedBy: caller.id,
-            approvedAt: new Date(),
-          },
-        });
-      },
+      (tx) => tx.labourAdvance.findUnique({ where: { id } }),
     );
-    await this.audit(
-      AuditAction.UPDATE,
+    if (!existing || existing.deletedAt) {
+      throw new NotFoundException(`Advance ${id} not found`);
+    }
+    assertInScope(caller, existing, `Advance ${id}`);
+    await this.assertAdvancesAllowed(existing.companyId);
+    if (existing.status !== AdvanceStatus.pending) {
+      throw new ConflictException('Only a pending advance can be decided');
+    }
+    // Maker-checker (036 O12, decision 4): whoever raised the advance cannot decide it, with no
+    // override — otherwise one person holding both permissions pays themselves a loan. Also refused
+    // by the spine for advances raised since 2026-10-20.
+    if (existing.createdBy && existing.createdBy === caller.id) {
+      throw new ForbiddenException({
+        code: 'SELF_APPROVAL',
+        message:
+          'You raised this advance, so you cannot decide it. Another approver must.',
+      });
+    }
+    await this.ensureInChain(caller, existing);
+
+    const view = await this.approvals.decideByEntity(
+      ACTION_LABOUR_ADVANCE,
       id,
-      updated.companyId,
+      { action, reason },
       caller,
       ipAddress,
     );
+    if (view.state === 'approved' || view.state === 'rejected') {
+      await this.applyOutcome(id, view.state, caller.id, ipAddress);
+    }
+    const updated = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) => tx.labourAdvance.findUniqueOrThrow({ where: { id } }),
+    );
     return this.viewOf(caller, updated);
+  }
+
+  /** The chain approved the advance at its last level (2026-10-20). */
+  @OnEvent(APPROVAL_COMPLETED_EVENT)
+  async onApprovalCompleted(event: ApprovalCompletedEvent): Promise<void> {
+    if (event.entityType !== ACTION_LABOUR_ADVANCE) return;
+    await this.onChainOutcome(event.entityId, event.companyId, 'approved');
+  }
+
+  /** The chain rejected it, at any level. */
+  @OnEvent(APPROVAL_REJECTED_EVENT)
+  async onApprovalRejected(event: ApprovalRejectedEvent): Promise<void> {
+    if (event.entityType !== ACTION_LABOUR_ADVANCE) return;
+    await this.onChainOutcome(event.entityId, event.companyId, 'rejected');
+  }
+
+  /** Logs rather than throws: the decision is already committed in the spine. */
+  private async onChainOutcome(
+    id: string,
+    companyId: string,
+    outcome: 'approved' | 'rejected',
+  ): Promise<void> {
+    try {
+      const state = await this.approvals.stateOfSystem(
+        ACTION_LABOUR_ADVANCE,
+        id,
+        companyId,
+      );
+      await this.applyOutcome(
+        id,
+        outcome,
+        state?.latestDecision?.actorUserId ?? null,
+        '',
+      );
+    } catch (error) {
+      this.logger.error(
+        `Could not apply the ${outcome} chain outcome to labour advance ${id}`,
+        error as Error,
+      );
+    }
+  }
+
+  /**
+   * The final decision, written once: conditional on still pending, so the advances screen's own
+   * decide and the spine's event — both of which arrive for a decision taken there — record it
+   * once between them. A rejected advance keeps its zero balance and is never disbursed.
+   */
+  private async applyOutcome(
+    id: string,
+    outcome: 'approved' | 'rejected',
+    deciderUserId: string | null,
+    ipAddress: string,
+  ): Promise<void> {
+    const { moved, companyId } = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      async (tx) => {
+        const result = await tx.labourAdvance.updateMany({
+          where: { id, status: AdvanceStatus.pending },
+          data:
+            outcome === 'approved'
+              ? {
+                  status: AdvanceStatus.approved,
+                  approvedBy: deciderUserId,
+                  approvedAt: new Date(),
+                }
+              : { status: AdvanceStatus.rejected },
+        });
+        const row = await tx.labourAdvance.findUnique({
+          where: { id },
+          select: { companyId: true },
+        });
+        return { moved: result.count === 1, companyId: row?.companyId };
+      },
+    );
+    if (!moved || !companyId) return;
+    await this.auditLog.record({
+      entityType: AuditEntityType.LABOUR_ADVANCE,
+      action: AuditAction.UPDATE,
+      entityId: id,
+      changes: { [outcome]: true },
+      accountId: deciderUserId ?? undefined,
+      companyId,
+      ipAddress,
+    });
+  }
+
+  private async submitForApproval(
+    caller: AuthenticatedUser,
+    advance: {
+      id: string;
+      companyId: string;
+      workerId: string;
+      amount: Prisma.Decimal | number;
+    },
+    makerUserId: string | null,
+  ): Promise<void> {
+    const worker = (await this.workerSummaries(caller, [advance.workerId])).get(
+      advance.workerId,
+    );
+    const amount = Number(advance.amount).toLocaleString('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+    });
+    await this.approvals.submit({
+      companyId: advance.companyId,
+      actionType: ACTION_LABOUR_ADVANCE,
+      entityType: ACTION_LABOUR_ADVANCE,
+      entityId: advance.id,
+      originatorUserId: makerUserId,
+      subject: `${worker?.fullName ?? 'Labour'}${
+        worker?.labourCode ? ` (${worker.labourCode})` : ''
+      } — advance of ${amount}`,
+      href: webRoutes.labourAdvances(),
+      viewPermission: Permission.LABOUR_APPROVE,
+      // 036 O12: not whoever raised it. Workers have no logins, so there is no payee to exclude.
+      excludedUserIds: [makerUserId],
+    });
+  }
+
+  /** An advance raised before advances joined the spine is put into its chain when first decided. */
+  private async ensureInChain(
+    caller: AuthenticatedUser,
+    advance: {
+      id: string;
+      companyId: string;
+      workerId: string;
+      amount: Prisma.Decimal;
+      createdBy: string | null;
+    },
+  ): Promise<boolean> {
+    const state = await this.approvals.stateOfSystem(
+      ACTION_LABOUR_ADVANCE,
+      advance.id,
+      advance.companyId,
+    );
+    if (state) return false;
+    await this.submitForApproval(caller, advance, advance.createdBy);
+    return true;
+  }
+
+  /**
+   * Puts every pending advance with no approval chain into one (2026-10-20) — those raised before
+   * labour advances joined the spine, so they reach the Approvals queue rather than waiting for somebody to
+   * open the module screen. Idempotent; run by `npm run backfill:approvals`. Returns how many it
+   * submitted.
+   */
+  async backfillApprovals(): Promise<number> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.labourAdvance.findMany({
+          where: { status: AdvanceStatus.pending, deletedAt: null },
+        }),
+    );
+    let submitted = 0;
+    for (const advance of rows) {
+      // A cross-company system caller: it is used only to read the worker's name.
+      const system = {
+        id: advance.createdBy ?? '',
+        companyId: advance.companyId,
+        selectedCompanyId: null,
+        permissions: [Permission.CROSS_COMPANY_ACCESS],
+        roleIds: [],
+      } as unknown as AuthenticatedUser;
+      if (await this.ensureInChain(system, advance)) submitted += 1;
+    }
+    return submitted;
   }
 
   /** Disburses an approved advance: its outstanding balance becomes the full amount

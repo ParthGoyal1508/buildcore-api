@@ -809,6 +809,20 @@ export class DwrService {
     };
   }
 
+  /** A report's files, for its approver to open from the Approvals page (2026-10-20). */
+  async attachmentsOf(
+    ctx: RlsContext,
+    dwrId: string,
+  ): Promise<{ id: string; fileName: string; mimeType: string }[]> {
+    return withRlsContext(this.prisma, ctx, (tx) =>
+      tx.dWRAttachment.findMany({
+        where: { dwrId },
+        select: { id: true, fileName: true, mimeType: true },
+        orderBy: { uploadedAt: 'asc' },
+      }),
+    );
+  }
+
   // ───────────────────────────────────────────────────────────────────────────
   // Reading (Phase E — FR-026, FR-027, FR-032, FR-033)
   // ───────────────────────────────────────────────────────────────────────────
