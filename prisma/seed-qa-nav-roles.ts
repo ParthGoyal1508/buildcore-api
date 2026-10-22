@@ -95,13 +95,20 @@ async function main() {
   const password = await hash('secret42');
 
   for (const fixture of FIXTURES) {
-    const role = await prisma.role.upsert({
-      where: { name: fixture.roleName },
-      // Rewritten on every run so an edited fixture takes effect rather than silently
-      // keeping whatever the first run created.
-      update: { permissions: [...fixture.permissions] },
-      create: { name: fixture.roleName, permissions: [...fixture.permissions] },
+    // Role names are no longer unique (roles became per company), so find the global one by
+    // name. Rewritten on every run so an edited fixture takes effect rather than silently
+    // keeping whatever the first run created.
+    const existing = await prisma.role.findFirst({
+      where: { name: fixture.roleName, companyId: null },
     });
+    const role = existing
+      ? await prisma.role.update({
+          where: { id: existing.id },
+          data: { permissions: [...fixture.permissions] },
+        })
+      : await prisma.role.create({
+          data: { name: fixture.roleName, permissions: [...fixture.permissions] },
+        });
 
     const user = await prisma.user.upsert({
       where: { email: fixture.email },
