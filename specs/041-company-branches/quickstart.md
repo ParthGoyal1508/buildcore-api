@@ -28,9 +28,10 @@ In Settings → Companies → PRPL → Branches:
 
 ## 3. Billing from a branch (US2, SC-002, SC-003)
 1. Set a project to the Gujarat branch.
-2. Issue an RA bill to a client whose GSTIN starts with `24`. The header shows `24AAMCP8659H1ZU` and
-   Godhra, and the tax is **CGST+SGST**.
-3. Repeat with a client whose GSTIN starts with `08`. The tax is **IGST**.
+2. With the project set to CGST+SGST, compose an RA bill to a client whose GSTIN starts with `24`.
+   The header shows `24AAMCP8659H1ZU` and Godhra, and there is no tax-basis warning.
+3. Repeat with a client whose GSTIN starts with `08`. The bill warns that the parties are in
+   different states (24 and 08); the tax is still the project's choice (2026-10-14 rule).
 4. Move the project to Rajasthan. Re-open the bills from steps 2–3: they are unchanged. A new bill
    shows Rajasthan.
 5. On that project, issue a work order letter and print a GRN. Both show the project's branch.

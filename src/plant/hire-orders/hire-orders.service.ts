@@ -270,7 +270,7 @@ export class HireOrdersService {
   ): Promise<RenderedForm> {
     const order = await this.findOne(caller, id);
     const [company, vendor] = await Promise.all([
-      this.refs.documentCompany(order.companyId),
+      this.refs.documentCompany(order.companyId, order.projectId),
       this.refs.vendorParticulars(caller, order.vendorId),
     ]);
     return renderFormFile(

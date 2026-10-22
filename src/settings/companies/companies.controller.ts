@@ -44,6 +44,12 @@ import { SetPunchAccuracyDto } from './dto/set-punch-accuracy.dto';
 import { SetLetterheadDto } from './dto/set-letterhead.dto';
 import { SetLogoDto } from './dto/set-logo.dto';
 import { SetPunchEnforcementDto } from './dto/set-punch-enforcement.dto';
+import { CompanyBranchesService } from './company-branches.service';
+import {
+  CompanyBranchDto,
+  CreateCompanyBranchDto,
+  UpdateCompanyBranchDto,
+} from './dto/company-branch.dto';
 
 @ApiTags('settings/companies')
 @ApiBearerAuth()
@@ -57,6 +63,7 @@ export class CompaniesController {
     private readonly companiesService: CompaniesService,
     private readonly employeeCodeService: EmployeeCodeService,
     private readonly numbering: NumberingService,
+    private readonly branches: CompanyBranchesService,
   ) {}
 
   @Get()
@@ -368,6 +375,71 @@ export class CompaniesController {
       id,
       dto.punchBlockEnforced,
     );
+  }
+
+  @Get(':id/branches')
+  @ApiOperation({
+    summary: "A company's branches — one per GST registration (041)",
+    description:
+      'Head office first. Every company has exactly one head office.',
+  })
+  @ApiOkResponse({ type: [CompanyBranchDto] })
+  listBranches(@Param('id') id: string): Promise<CompanyBranchDto[]> {
+    return this.branches.list(id);
+  }
+
+  @Post(':id/branches')
+  @ApiOperation({
+    summary: 'Add a branch (041)',
+    description:
+      "The GSTIN's first two digits must be the GST code of the branch's state, and its " +
+      "characters 3–12 the company's PAN when one is recorded. A new branch is never the head " +
+      'office; use `POST :id/branches/:branchId/head-office` for that.',
+  })
+  @ApiOkResponse({ type: CompanyBranchDto })
+  @ApiConflictResponse({ description: 'Another branch already has this GSTIN' })
+  createBranch(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: CreateCompanyBranchDto,
+    @Ip() ip: string,
+  ): Promise<CompanyBranchDto> {
+    return this.branches.create(caller, id, dto, ip);
+  }
+
+  @Patch(':id/branches/:branchId')
+  @ApiOperation({
+    summary: 'Edit, deactivate or reactivate a branch (041)',
+    description:
+      'Editing the head office also updates the company’s own GSTIN / address / codes, which ' +
+      'mirror it. The head office cannot be deactivated.',
+  })
+  @ApiOkResponse({ type: CompanyBranchDto })
+  updateBranch(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('branchId') branchId: string,
+    @Body() dto: UpdateCompanyBranchDto,
+    @Ip() ip: string,
+  ): Promise<CompanyBranchDto> {
+    return this.branches.update(caller, id, branchId, dto, ip);
+  }
+
+  @Post(':id/branches/:branchId/head-office')
+  @ApiOperation({
+    summary: 'Make this branch the head office (041)',
+    description:
+      'One transaction: the old head office stops being one, this one becomes it, and the ' +
+      'company’s own GSTIN / address / codes are copied from it. Returns every branch.',
+  })
+  @ApiOkResponse({ type: [CompanyBranchDto] })
+  makeHeadOffice(
+    @UserEntity() caller: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('branchId') branchId: string,
+    @Ip() ip: string,
+  ): Promise<CompanyBranchDto[]> {
+    return this.branches.makeHeadOffice(caller, id, branchId, ip);
   }
 
   @Patch(':id')

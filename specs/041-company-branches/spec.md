@@ -58,23 +58,23 @@ When a project is created or edited, the user chooses which branch it belongs to
 nothing, the head office is used. Every outgoing document raised for that project prints that
 branch's GSTIN and address as the issuer or as the "bill to" party, instead of the company's single
 address. This covers RA bills, debit notes, hire bills, payment advice, and purchase, work and hire
-orders. The CGST+SGST or IGST split on a bill follows from the branch's GSTIN and the client's
-GSTIN.
+orders. The CGST+SGST or IGST split stays the project's choice; the check that warns when the
+parties' states disagree with it now uses the branch's GSTIN.
 
 **Why this priority**: This is the reason the feature exists. Billing a Gujarat site from the
 Rajasthan GSTIN is a wrong tax invoice, and a vendor invoicing the wrong GSTIN costs the company its
 input tax credit.
 
 **Independent Test**: Assign a project to PRPL's Gujarat branch, issue an RA bill to a client with a
-Gujarat GSTIN, and confirm the bill shows GSTIN `24AAMCP8659H1ZU`, the Godhra address and
-CGST+SGST. Then issue a purchase order on the same project and confirm its "bill to" block shows the
+Gujarat GSTIN, and confirm the bill shows GSTIN `24AAMCP8659H1ZU` and the Godhra address, with no tax-basis
+warning on a CGST+SGST project. Then issue a purchase order on the same project and confirm its "bill to" block shows the
 Gujarat GSTIN and address.
 
 **Acceptance Scenarios**:
 
 1. **Given** a project with no branch chosen, **When** an RA bill is issued, **Then** the issuer GSTIN, state and address are the head office's.
-2. **Given** a project on the Gujarat branch and a client whose GSTIN starts with `24`, **When** an RA bill is issued, **Then** the tax is split CGST+SGST (intra-state).
-3. **Given** a project on the Gujarat branch and a client whose GSTIN starts with `08`, **When** an RA bill is issued, **Then** the tax is IGST (inter-state).
+2. **Given** a project on the Gujarat branch set to CGST+SGST and a client whose GSTIN starts with `24`, **When** an RA bill is composed, **Then** no tax-basis warning is shown (both parties are in state 24).
+3. **Given** a project on the Gujarat branch set to CGST+SGST and a client whose GSTIN starts with `08`, **When** an RA bill is composed, **Then** the bill warns that the parties are in different states (24 and 08) — the tax is still the project's choice.
 4. **Given** an RA bill already issued from the head office, **When** the project is moved to the Gujarat branch, **Then** the issued bill still shows the head office GSTIN and address, and only bills issued after the move show Gujarat.
 5. **Given** a project on the Maharashtra branch, **When** a purchase order, work order or hire order is printed, **Then** its buyer / "bill to" block shows the Maharashtra GSTIN and address.
 6. **Given** a project on the Delhi branch, **When** documents are numbered, **Then** they continue in the company's single series. There is no separate series per branch.
@@ -167,7 +167,7 @@ office for both.
 
 - **FR-007**: Each project MUST belong to one active branch of its company. It MUST default to the head office when none is chosen, and MUST be changeable later.
 - **FR-008**: Every outgoing document raised for a project MUST print that project's branch GSTIN, state and address wherever it prints the company's GSTIN, state or address today. That means as the issuer on RA bills, debit notes, hire bills and payment advice, and as the buyer / "bill to" party on purchase, work and hire orders.
-- **FR-009**: The intra/inter-state tax basis on a bill MUST be derived from the project's branch GSTIN and the counterparty's GSTIN.
+- **FR-009**: The intra/inter-state tax basis stays the project's own choice (CGST+SGST or IGST, decided 2026-10-14). The check that warns when the two parties' registrations point the other way MUST compare the project's **branch** GSTIN with the counterparty's, not the head office's. *(Corrected during implementation: the spec originally said the basis is derived from the GSTINs, which the 2026-10-14 project-flag decision had already replaced.)*
 - **FR-010**: Documents that record issuer details at issue (RA bills and issued letters) MUST keep what they recorded. Changing a project's branch, or editing a branch, MUST NOT alter them. Documents that read the company live today (debit notes, payment advice, store documents, hire orders and bills, payslips) MUST read the project's or employee's current branch the same way. They follow a branch change exactly as they follow a company edit today. *(Narrowed during planning, research R5.)*
 - **FR-011**: Document numbering MUST remain one series per company, unaffected by branches.
 - **FR-012**: Company-level documents not tied to a project MUST use the head office. A document about a specific employee MUST use that employee's branch.
@@ -205,7 +205,7 @@ office for both.
 
 - **SC-001**: The client's two companies load from their workbook as 2 companies with 12 branches in total (PRPL 5, TE 7), with no manual re-entry.
 - **SC-002**: 100% of RA bills, debit notes, hire bills, payment advice and orders issued after release on a non-head-office project show that branch's GSTIN and address.
-- **SC-003**: On every bill whose branch and client GSTINs are both present, the CGST+SGST vs IGST split matches the two state codes in 100% of cases.
+- **SC-003**: On every bill whose branch and client GSTINs are both present, the tax-basis warning compares the branch's state (not the head office's) with the client's, in 100% of cases.
 - **SC-004**: Every document issued before release renders identically after release.
 - **SC-005**: For any processed run, the per-branch PF, ESIC and PT totals add up exactly to the company total.
 - **SC-006**: An administrator can add a new branch and move a project onto it in under 2 minutes.

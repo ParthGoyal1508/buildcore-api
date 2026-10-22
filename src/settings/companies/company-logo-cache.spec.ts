@@ -28,6 +28,7 @@ function build() {
     companies as never,
     {} as never,
     {} as never,
+    {} as never,
   );
   return { controller };
 }

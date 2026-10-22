@@ -98,6 +98,11 @@ function build(txOverrides: Record<string, unknown> = {}) {
     auditLog as never,
     salaryRevisions,
     referenceData as never,
+    // 041: every employee is on a branch; these tests do not care which.
+    {
+      branchForNewRecord: jest.fn().mockResolvedValue('branch-head-office'),
+      assertActiveBranch: jest.fn().mockResolvedValue(undefined),
+    } as never,
   );
   return {
     service,

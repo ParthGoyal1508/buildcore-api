@@ -661,6 +661,7 @@ model Company {
   vendorCategories        VendorCategory[]
   codeSequences           CodeSequence[]
   codeFormats             CodeFormat[]
+  branches                CompanyBranch[]
 
   // Feature 004's reminders engine. Company-scoped so a deleted company takes its
   // reminder state with it rather than leaving orphan rows the engine would keep
@@ -1921,6 +1922,11 @@ model Project {
   clientId String
   client   Client @relation(fields: [clientId], references: [id])
 
+  /// `settings.CompanyBranch.id` the project bills from (041): the GSTIN and address its bills,
+  /// orders and store documents print, and so the state its intra/inter-state tax is decided
+  /// from. Defaults to the head office. Bare id, not a relation — see the note on `Site.companyId`.
+  branchId String
+
   location      String?
   /// Decimal, not Float: this is money, and it is the denominator of every margin
   /// percentage the P&L reports.
@@ -2004,6 +2010,7 @@ model Project {
   @@index([companyId])
   @@index([companyId, status])
   @@index([clientId])
+  @@index([branchId])
   @@schema("projects")
 }
 
@@ -3627,6 +3634,10 @@ model Employee {
   companyId String
   /// `projects.Site.id`; read through `SitesService`.
   siteId    String
+  /// `settings.CompanyBranch.id` — the GST registration / PF establishment the employee belongs to
+  /// (041). Chosen on the employee; defaults to the head office. Validated through
+  /// `CompaniesService.assertActiveBranch`, never a cross-schema relation.
+  branchId  String
   /// `settings.Shift.id`; the shift duration OT is computed against, read through
   /// `SettingsModule`'s exported service (research.md §9).
   shiftId   String
@@ -3768,6 +3779,7 @@ model Employee {
   @@unique([companyId, employeeCode])
   @@index([companyId])
   @@index([siteId])
+  @@index([branchId])
   @@schema("hr")
 }
 
@@ -4915,6 +4927,10 @@ model PayrollLineItem {
   /// `projects.Project.id` — nullable; null for HO/overhead staff. Resolved via
   /// ProjectsService, never a cross-schema Prisma relation (FR-046).
   projectId String?
+  /// `settings.CompanyBranch.id` the employee was on when this line was generated (041) — the PF /
+  /// ESIC / PT establishment it is filed under. Stamped from `Employee.branchId` by the engine and
+  /// never re-read, so moving an employee later does not move a processed month.
+  branchId  String?
 
   // ── Attendance basis ──────────────────────────────────────────────────────
   monthDays   Int
@@ -4986,6 +5002,7 @@ model PayrollLineItem {
   @@unique([payrollRunId, employeeId])
   @@index([employeeId])
   @@index([projectId])
+  @@index([branchId])
   @@schema("payroll")
 }
 
@@ -5421,6 +5438,58 @@ model CodeFormat {
   updatedAt DateTime @updatedAt
 
   @@unique([companyId, series])
+  @@schema("settings")
+}
+
+/// One GST registration — a place of business — of a company (041). A company registered for GST
+/// in five states has five branches; exactly one is the head office.
+///
+/// A branch carries what differs between registrations: the GSTIN, the address printed beside it,
+/// contacts, and the PF / ESIC / PT establishment codes (the client's PF codes differ per branch).
+/// What is the same on every registration — legal name, PAN, CIN, TAN, rates — stays on `Company`.
+///
+/// `Company`'s own gstin / address / codes columns are kept and mirror the head office, written in
+/// the same transaction as any head-office change, so a reader not yet branch-aware keeps printing
+/// what it printed before (research R2).
+///
+/// Two "at most one" rules live in the migration as partial unique indexes, because `@@unique`
+/// treats every NULL as distinct: one head office per company, one GSTIN per company when present.
+model CompanyBranch {
+  id        String  @id @default(cuid())
+  companyId String
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  /// Short name shown where a branch is chosen. Null → "City (State)".
+  label     String?
+  /// Name printed on documents. Null → the company's legal name.
+  tradeName String?
+
+  /// 15 characters; characters 1–2 are the GST code of `state`, 3–12 the company's PAN.
+  gstin   String?
+  /// Nullable only so a migrated company with blanks still gets its head office; the form
+  /// requires them.
+  address String?
+  city    String?
+  /// A state name, as `Company.state` stores it; the GST code is derived (`gst-states.ts`).
+  state   String?
+  pinCode String?
+  phone   String?
+  email   String?
+  website String?
+
+  pfEstablishmentCode      String?
+  esicCode                 String?
+  professionalTaxRegNumber String?
+
+  isHeadOffice Boolean @default(false)
+  /// An inactive branch keeps the projects, employees and documents already on it, but cannot be
+  /// chosen for new ones. The head office is never inactive.
+  isActive     Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([companyId])
   @@schema("settings")
 }
 
@@ -9816,6 +9885,11 @@ model IssuedLetter {
   /// cross-schema read the move was made to avoid; the owning module resolves it.
   subjectType String?
   subjectId   String?
+  /// `settings.CompanyBranch.id` the letter is issued from (041) — the GSTIN and address its
+  /// header prints. Resolved at compose: a project subject's branch, an employee's branch, or the
+  /// composer's choice. Null on letters issued before branches existed, which means the head
+  /// office. Bare id, not a relation, for the reason `Site.companyId` gives.
+  branchId    String?
 
   templateId String
 

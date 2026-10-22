@@ -213,7 +213,7 @@ export class HireBillsService {
     equipment: {
       select: { code: true, name: true, registrationNo: true, meterType: true },
     },
-    hireOrder: { select: { code: true } },
+    hireOrder: { select: { code: true, projectId: true } },
     fuelDeductions: { select: { amount: true } },
   } as const;
 
@@ -896,7 +896,7 @@ export class HireBillsService {
       },
     );
     const [company, vendor] = await Promise.all([
-      this.refs.documentCompany(row.companyId),
+      this.refs.documentCompany(row.companyId, row.hireOrder?.projectId),
       this.refs.vendorParticulars(caller, row.vendorId),
     ]);
     const bill = this.toRow(row, vendor?.name ?? 'Unknown vendor');

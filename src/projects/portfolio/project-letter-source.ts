@@ -25,6 +25,27 @@ export class ProjectLetterSource implements OnModuleInit {
 
   onModuleInit(): void {
     this.sources.register('project', (caller, id) => this.record(caller, id));
+    // 041: a work order or LOI is addressed to its work order, not its project, and is issued
+    // from the branch of the project it is on. Only the branch is answered; no template reads it.
+    this.sources.register('work_order', (caller, id) =>
+      this.workOrderBranch(caller, id),
+    );
+  }
+
+  private async workOrderBranch(
+    caller: AuthenticatedUser,
+    workOrderId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const workOrder = await withRlsContext(
+      this.prisma,
+      rlsContextFor(caller),
+      (tx) =>
+        tx.workOrder.findFirst({
+          where: { id: workOrderId },
+          select: { project: { select: { branchId: true } } },
+        }),
+    );
+    return workOrder ? { branchId: workOrder.project.branchId } : null;
   }
 
   async record(
@@ -46,6 +67,7 @@ export class ProjectLetterSource implements OnModuleInit {
             startDate: true,
             expectedEndDate: true,
             cgstApplicable: true,
+            branchId: true,
             client: { select: { name: true, address: true } },
           },
         }),
@@ -71,6 +93,8 @@ export class ProjectLetterSource implements OnModuleInit {
       // The project's GST choice (2026-10-14), so a work order splits its tax the way every
       // bill on the project does.
       gstOnBills: project.cgstApplicable ? 'CGST + SGST' : 'IGST',
+      // 041: the branch the project bills from — the GSTIN and address its work orders print.
+      branchId: project.branchId,
     };
   }
 }

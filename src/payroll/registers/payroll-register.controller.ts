@@ -24,6 +24,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { PayrollRegisterService } from './payroll-register.service';
 import { StatutoryRegisterService } from './statutory-register.service';
+import { StatutoryRegisterQueryDto } from './dto/statutory-register-query.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
 
@@ -125,14 +126,17 @@ export class PayrollRegisterController {
     @Req() request: Request,
     @Param('runId') runId: string,
     @Res() response: Response,
-    @Query('projectId') projectId?: string,
-    @Query('siteId') siteId?: string,
+    @Query() query: StatutoryRegisterQueryDto,
   ): Promise<void> {
     const { buffer, filename } = await this.statutory.export(
       callerFrom(user, request),
       user,
       runId,
-      { projectId, siteId },
+      {
+        projectId: query.projectId,
+        siteId: query.siteId,
+        branchId: query.branchId,
+      },
     );
     response.setHeader(
       'Content-Type',

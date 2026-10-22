@@ -12,6 +12,7 @@ import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import { EmployeeCodeService } from '../../settings/employee-code/employee-code.service';
 import type { Caller } from '../biometrics/face-enrolment.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
+import { CompaniesService } from '../../settings/companies/companies.service';
 import type {
   BulkShiftDto,
   CreateEmployeeDto,
@@ -67,6 +68,9 @@ export class EmployeesService {
     private readonly auditLog: AuditLogService,
     private readonly salaryRevisions: SalaryRevisionsService,
     private readonly referenceData: ReferenceDataService,
+    // 041: the branch — PF / ESIC establishment — an employee is filed under is validated, and
+    // the head office resolved, through `settings`' exported service.
+    private readonly companies: CompaniesService,
   ) {}
 
   /** The employee record for an account, or null if the account has none. */
@@ -344,6 +348,10 @@ export class EmployeesService {
       esicNumber: dto.esicNumber ?? null,
     });
 
+    const branchId = await this.companies.branchForNewRecord(
+      companyId,
+      dto.branchId,
+    );
     const employeeCode = await this.employeeCode.getNextEmployeeCode(
       companyId,
       caller.rls,
@@ -354,6 +362,7 @@ export class EmployeesService {
         data: {
           ...(this.toColumns(dto) as Prisma.EmployeeUncheckedCreateInput),
           companyId,
+          branchId,
           employeeCode,
         },
       }),
@@ -381,6 +390,11 @@ export class EmployeesService {
       tx.employee.findFirst({ where: { id: employeeId } }),
     );
     if (!existing) throw new NotFoundException('Employee not found');
+    // 041. Moving an employee to another branch files their *next* payroll there; a processed
+    // month keeps the branch its lines recorded.
+    if (dto.branchId !== undefined && dto.branchId !== existing.branchId) {
+      await this.companies.assertActiveBranch(existing.companyId, dto.branchId);
+    }
 
     this.assertStatutoryConsistent({
       pfApplicable: dto.pfApplicable ?? existing.pfApplicable,

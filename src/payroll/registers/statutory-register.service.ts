@@ -28,6 +28,7 @@ import {
 import { ProjectsService } from '../../projects/portfolio/projects.service';
 import { ReferenceDataService } from '../../settings/reference-data/reference-data.service';
 import { parseFuelRecoveries } from '../engine/payroll-engine.service';
+import { CompaniesService } from '../../settings/companies/companies.service';
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const num = (d: Prisma.Decimal | null | undefined) => d?.toNumber() ?? 0;
@@ -284,13 +285,15 @@ export class StatutoryRegisterService {
     private readonly pii: PiiCipherService,
     private readonly auditLog: AuditLogService,
     private readonly config: ConfigService,
+    // 041: the establishment heading the register — a branch's address and PF / ESIC codes.
+    private readonly companies: CompaniesService,
   ) {}
 
   async export(
     caller: Caller,
     user: AuthenticatedUser,
     runId: string,
-    filters: { projectId?: string; siteId?: string } = {},
+    filters: { projectId?: string; siteId?: string; branchId?: string } = {},
   ): Promise<{ buffer: Buffer; filename: string }> {
     const rls = caller.rls;
     const run = await withRlsContext(this.prisma, rls, (tx) =>
@@ -333,20 +336,33 @@ export class StatutoryRegisterService {
       }
     }
 
-    const company = await withRlsContext(this.prisma, rls, (tx) =>
-      tx.company.findFirst({
-        where: { id: run.companyId },
-        select: {
-          id: true,
-          name: true,
-          address: true,
-          city: true,
-          pfEstablishmentCode: true,
-          esicCode: true,
-        },
-      }),
+    // The establishment (041): the branch asked for, or the head office — whose address and codes
+    // the company's own columns have always mirrored, so an unfiltered register reads as before.
+    if (filters.branchId) {
+      await this.companies.assertActiveBranch(run.companyId, filters.branchId, {
+        allowInactive: true,
+      });
+    }
+    const branch = await this.companies.getBranchIdentity(
+      run.companyId,
+      filters.branchId,
     );
-    if (!company) throw new NotFoundException('Company not found');
+    const company = {
+      id: run.companyId,
+      name: branch.name,
+      address: branch.address,
+      city: branch.city,
+      pfEstablishmentCode: branch.pfEstablishmentCode,
+      esicCode: branch.esicCode,
+    };
+    // A line records the branch it was filed under; someone on the register with no line this
+    // month (a joiner, an unsettled leaver) is placed by the branch they are on now.
+    const onBranch = (e: { id: string; branchId: string }) =>
+      !filters.branchId ||
+      (linesByEmployee
+        .get(e.id)
+        ?.some((l) => l.branchId === filters.branchId) ??
+        e.branchId === filters.branchId);
 
     // Sites in scope, and the project whose name heads the wage register.
     const sites = await withRlsContext(this.prisma, rls, (tx) =>
@@ -404,6 +420,7 @@ export class StatutoryRegisterService {
     }
     const inScope = employees
       .filter((e) => siteIds.includes(e.siteId))
+      .filter(onBranch)
       .filter((e) => {
         if (linesByEmployee.has(e.id)) return true;
         const left = lastDay.get(e.id);
@@ -608,6 +625,7 @@ export class StatutoryRegisterService {
         revealedFields: ['aadhaar', 'pan', 'bankAccountNumber'],
         ...(filters.siteId ? { siteId: filters.siteId } : {}),
         ...(filters.projectId ? { projectId: filters.projectId } : {}),
+        ...(filters.branchId ? { branchId: filters.branchId } : {}),
       },
       accountId: caller.userId,
       companyId: company.id,
@@ -648,10 +666,18 @@ export class StatutoryRegisterService {
       monthLabel,
       establishmentLine:
         `Name of the Establishment - ${establishment}` +
+        // For one branch a missing code is said on the sheet rather than silently left off: the
+        // register is filed under that code (041 FR-017).
         (company.pfEstablishmentCode
           ? `     PF Code - ${company.pfEstablishmentCode}`
+          : filters.branchId
+          ? '     PF Code - (not recorded)'
           : '') +
-        (company.esicCode ? `     ESIC Code - ${company.esicCode}` : '') +
+        (company.esicCode
+          ? `     ESIC Code - ${company.esicCode}`
+          : filters.branchId
+          ? '     ESIC Code - (not recorded)'
+          : '') +
         `     Name of Owner -          LIN -          Month of ${monthLabel}`,
       projectLine: `Project Name - ${
         project
@@ -682,9 +708,13 @@ export class StatutoryRegisterService {
       context,
     );
 
-    const scope = filtered
-      ? `_${filenamePart(scopeLabel || project?.name || 'Project')}`
-      : '';
+    const scope =
+      (filtered
+        ? `_${filenamePart(scopeLabel || project?.name || 'Project')}`
+        : '') +
+      (filters.branchId
+        ? `_${filenamePart(branch.city || branch.state || 'Branch')}`
+        : '');
     return {
       buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
       filename: `Statutory_Register_${filenamePart(company.name)}${scope}_${

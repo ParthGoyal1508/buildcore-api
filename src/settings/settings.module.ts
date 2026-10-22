@@ -14,6 +14,8 @@ import { EquipmentCategoriesService } from './machinery-masters/equipment-catego
 import { EquipmentDocTypesService } from './machinery-masters/equipment-doc-types.service';
 import { ConditionGradesService } from './asset-masters/condition-grades.service';
 import { CompaniesService } from './companies/companies.service';
+import { CompanyBranchesController } from './companies/company-branches.controller';
+import { CompanyBranchesService } from './companies/company-branches.service';
 import { EmployeeCodeService } from './employee-code/employee-code.service';
 import { DepartmentsController } from './reference-data/departments.controller';
 import { DesignationsController } from './reference-data/designations.controller';
@@ -71,6 +73,7 @@ import { CompanySelectionService } from './company-selection/company-selection.s
     SignatoriesController,
     ReimbursementCategoriesController,
     CompaniesController,
+    CompanyBranchesController,
     CompanyDocumentsController,
     RolesController,
     UsersAdminController,
@@ -82,6 +85,7 @@ import { CompanySelectionService } from './company-selection/company-selection.s
   ],
   providers: [
     CompaniesService,
+    CompanyBranchesService,
     // Stateless: it only signs and verifies, so a second instance here beside AuthModule's costs
     // nothing and avoids importing AuthModule into Settings for one class.
     PasswordConfirmationService,

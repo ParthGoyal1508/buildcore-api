@@ -108,6 +108,11 @@ describe('CompaniesService', () => {
       const prisma = createPrismaMock({
         company: { findFirst: jest.fn().mockResolvedValue(null), create },
         employeeCodeSequence: { create: jest.fn() },
+        // 041: a company is created with its head office.
+        companyBranch: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'branch-ho' }),
+        },
         // 016 resolves the Super Admin role here so the approval spine never reads
         // `settings.Role` itself (Principle I). Null is a valid answer.
         role: {
@@ -155,6 +160,11 @@ describe('CompaniesService', () => {
       const prisma = createPrismaMock({
         company: { findFirst: jest.fn().mockResolvedValue(null), create },
         employeeCodeSequence: { create: jest.fn() },
+        // 041: a company is created with its head office.
+        companyBranch: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'branch-ho' }),
+        },
         // 016 resolves the Super Admin role here so the approval spine never reads
         // `settings.Role` itself (Principle I). Null is a valid answer.
         role: {
@@ -205,6 +215,10 @@ describe('CompaniesService', () => {
           create: jest.fn().mockResolvedValue(companyRow()),
         },
         employeeCodeSequence: { create: seqCreate },
+        companyBranch: {
+          findFirst: jest.fn().mockResolvedValue(null),
+          create: jest.fn().mockResolvedValue({ id: 'branch-ho' }),
+        },
         role: {
           findFirst: jest.fn().mockResolvedValue({ id: 'role-super' }),
           // The three default slot roles, resolved by name since 2026-10-04 so a new
@@ -334,6 +348,13 @@ describe('CompaniesService', () => {
             findUnique: jest.fn().mockResolvedValue(existing),
             findFirst: jest.fn().mockResolvedValue(null),
             update: jest.fn(async ({ data }) => ({ ...existing, ...data })),
+          },
+          // 041: the form's GSTIN / address / codes are the head office's.
+          companyBranch: {
+            findFirst: jest
+              .fn()
+              .mockResolvedValue({ id: 'branch-ho', ...existing }),
+            update: jest.fn(),
           },
         });
         const service = new CompaniesService(

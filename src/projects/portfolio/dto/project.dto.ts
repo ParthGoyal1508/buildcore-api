@@ -68,6 +68,16 @@ export class CreateProjectDto {
   @MaxLength(100)
   clientId!: string;
 
+  /** The company branch (GST registration) the project bills from (041). Omitted → head office. */
+  @ApiPropertyOptional({
+    description:
+      'Company branch the project bills from; defaults to the head office',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  branchId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
