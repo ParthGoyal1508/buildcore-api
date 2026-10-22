@@ -49,6 +49,8 @@ const MONTH_NAMES = [
 /** Row 9 of the client's attendance sheet: one letter per weekday, Sunday first. */
 const WEEKDAY_LETTER = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const DAY_COLUMNS = 31;
+/** Employees whose month of attendance is fetched at once; each fetch holds several connections. */
+const ATTENDANCE_CONCURRENCY = 2;
 
 /** Form D's codes. The client writes O for a weekly off, not W/O. */
 const CODE: Record<AttendanceStatus, string> = {
@@ -447,19 +449,19 @@ export class StatutoryRegisterService {
     }
 
     // The attendance grid, from the computation payroll and the employee's own screen use.
-    const grids = await Promise.all(
-      inScope.map((e) =>
-        this.history.getMonthForEmployee(
-          caller,
-          {
-            id: e.id,
-            siteId: e.siteId,
-            shiftId: e.shiftId,
-            companyId: e.companyId,
-          },
-          month,
-          year,
-        ),
+    // A few employees at a time: each lookup runs several queries at once, and the whole workforce
+    // in parallel exhausts the connection pool (seen against Neon with 18 employees).
+    const grids = await mapInBatches(inScope, ATTENDANCE_CONCURRENCY, (e) =>
+      this.history.getMonthForEmployee(
+        caller,
+        {
+          id: e.id,
+          siteId: e.siteId,
+          shiftId: e.shiftId,
+          companyId: e.companyId,
+        },
+        month,
+        year,
       ),
     );
 
@@ -1621,6 +1623,19 @@ function indianDate(at: Date | null): Date | null {
   return new Date(
     Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()),
   );
+}
+
+/** `items.map(fn)` with at most `size` calls in flight, results in input order. */
+async function mapInBatches<T, R>(
+  items: T[],
+  size: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < items.length; i += size) {
+    out.push(...(await Promise.all(items.slice(i, i + size).map(fn))));
+  }
+  return out;
 }
 
 function ddmmyyyy(d: Date): string {
