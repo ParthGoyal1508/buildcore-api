@@ -571,6 +571,23 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // module wiring that needs. It is asserted by `MIGRATED` above instead.
           ':(exclude)src/labour/advances',
           ':(exclude)src/labour/labour.module.ts',
+          // 038 (cash hiding), 2026-10-19: labour's cash view hides and blocks cash when the
+          // company hides it. **Verified by grep: none calls `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/labour/cash',
+          // 039 (flow corrections), 2026-10-21: composite items (a mix issued as its sub-items),
+          // the item / category / vendor controllers that list and pick them, and the stock query
+          // that issues them. **Verified by grep: none calls `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/inventory/categories/categories.controller.ts',
+          ':(exclude)src/inventory/items',
+          ':(exclude)src/inventory/stock/stock-query.service.spec.ts',
+          ':(exclude)src/partners/vendors/vendors.controller.ts',
+          // 039 again: the job card goes from the site to Head Office approval and on to payment.
+          // That flow submits to the approval spine **on purpose** — the client asked for it — so
+          // it is excluded here the way the labour advance is above, not left looking unmigrated.
+          ':(exclude)src/plant/maintenance/job-card-flow.service.ts',
+          ':(exclude)src/plant/maintenance/job-card-flow.service.spec.ts',
+          ':(exclude)src/plant/maintenance/job-card-workflow.ts',
+          ':(exclude)src/plant/maintenance/job-card.service.spec.ts',
         ],
         {
           cwd: REPO_ROOT,
