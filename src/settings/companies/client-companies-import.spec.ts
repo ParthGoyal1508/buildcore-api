@@ -278,4 +278,59 @@ describe('client Companies tab → companies and branches (041)', () => {
       /Row 8 \(PRPL\): GSTIN 08AAMCP8659H1ZU starts 08, but Gujarat is 24/,
     );
   });
+
+  it('takes the company-wide settings from the head-office row, and drops a stray comma', () => {
+    const sheet = new ExcelJS.Workbook().addWorksheet('Companies');
+    sheet.addRow([
+      'Company Legal Name *',
+      'Short Code *',
+      'State *',
+      'GSTIN',
+      'PAN *',
+      'CIN',
+      'ESIC Code',
+      'Salary Debit Account No.',
+      'Payroll Lock Day',
+      'Labour Wage Cycle',
+      'Labour Full Day Hours',
+    ]);
+    sheet.addRow([
+      PRPL,
+      'PRPL',
+      'Delhi',
+      '07AAMCP8659H1ZQ',
+      'AAMCP8659H',
+      null,
+      null,
+      '09310400000999',
+      1,
+      null,
+      null,
+    ]);
+    sheet.addRow([
+      PRPL,
+      'PRPL',
+      'RAJASTHAN',
+      '08AAMCP8659H1ZO',
+      'AAMCP8659H',
+      CIN,
+      '15000833350001000,',
+      '09310400000813',
+      2,
+      'Monthly',
+      8,
+    ]);
+    const { plans, problems } = planCompanies(readCompanyRows(sheet));
+    expect(problems).toEqual([]);
+    expect(plans[0].settings).toEqual({
+      payrollDebitAccountNumber: '09310400000813',
+      payrollLockDay: '2',
+      labourWageCycle: 'Monthly',
+      labourFullDayHours: '8',
+    });
+    expect(plans[0].branches[0]).toMatchObject({
+      isHeadOffice: true,
+      esicCode: '15000833350001000',
+    });
+  });
 });

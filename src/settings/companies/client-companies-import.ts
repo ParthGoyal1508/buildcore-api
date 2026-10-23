@@ -35,7 +35,25 @@ export interface CompanyRow {
   pfEstablishmentCode: string | null;
   esicCode: string | null;
   professionalTaxRegNumber: string | null;
+  // Company-wide settings the same tab carries — taken from the head-office row.
+  payrollDebitAccountNumber: string | null;
+  payrollLockDay: string | null;
+  labourWageCycle: string | null;
+  labourFullDayHours: string | null;
+  labourHalfDayHours: string | null;
+  labourStandardHours: string | null;
 }
+
+/** The company-wide settings on the tab, as typed; `scripts/import-client-companies.ts` checks them. */
+export const COMPANY_SETTING_FIELDS = [
+  'payrollDebitAccountNumber',
+  'payrollLockDay',
+  'labourWageCycle',
+  'labourFullDayHours',
+  'labourHalfDayHours',
+  'labourStandardHours',
+] as const;
+export type CompanySettingField = (typeof COMPANY_SETTING_FIELDS)[number];
 
 export interface CompanyPlan {
   shortCode: string;
@@ -43,6 +61,8 @@ export interface CompanyPlan {
   pan: string | null;
   cin: string | null;
   tan: string | null;
+  /** Each setting from the head-office row, else the first row that fills it; absent if none do. */
+  settings: Partial<Record<CompanySettingField, string>>;
   /** The head office first, then the rest in sheet order. */
   branches: (CompanyRow & { isHeadOffice: boolean })[];
 }
@@ -65,7 +85,14 @@ const HEADERS: Record<string, keyof Omit<CompanyRow, 'rowNumber'>> = {
   tan: 'tan',
   'pf establishment code': 'pfEstablishmentCode',
   'esic code': 'esicCode',
-  'professional tax reg. no.': 'professionalTaxRegNumber',
+  // Header text passes through `cellText` too, which drops a trailing full stop.
+  'professional tax reg. no': 'professionalTaxRegNumber',
+  'salary debit account no': 'payrollDebitAccountNumber',
+  'payroll lock day': 'payrollLockDay',
+  'labour wage cycle': 'labourWageCycle',
+  'labour full day hours': 'labourFullDayHours',
+  'labour half day hours': 'labourHalfDayHours',
+  'labour overtime after (hours)': 'labourStandardHours',
 };
 
 /** A cell as text: hyperlinks and rich text flattened, numbers kept as typed (PIN, phone). */
@@ -83,7 +110,13 @@ function cellText(value: ExcelJS.CellValue): string | null {
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     return null;
   }
-  const text = String(value).replace(/\s+/g, ' ').trim();
+  // A trailing comma or full stop is a typing slip, not part of a code: the client's ESIC code
+  // arrived as `15000833350001000,`.
+  const text = String(value)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[,.]+$/, '')
+    .trim();
   return text || null;
 }
 
@@ -198,12 +231,19 @@ export function planCompanies(rows: CompanyRow[]): {
     const cinState = cinStateName(cin);
     const head =
       (cinState && group.find((r) => r.state === cinState)) || group[0];
+    const settings = Object.fromEntries(
+      COMPANY_SETTING_FIELDS.flatMap((field) => {
+        const value = head[field] ?? group.find((r) => r[field])?.[field];
+        return value ? [[field, value]] : [];
+      }),
+    );
     plans.push({
       shortCode,
       legalName: first('legalName') ?? shortCode,
       pan,
       cin,
       tan: first('tan'),
+      settings,
       branches: [head, ...group.filter((r) => r !== head)].map((r) => ({
         ...r,
         isHeadOffice: r === head,

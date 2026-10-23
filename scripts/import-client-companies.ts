@@ -62,6 +62,13 @@ async function main() {
   if (!sheet) throw new Error(`${file} has no "Companies" tab.`);
 
   const { plans, problems } = planCompanies(readCompanyRows(sheet));
+  for (const plan of plans) {
+    try {
+      settingsData(plan);
+    } catch (error) {
+      problems.push(`${plan.shortCode}: ${(error as Error).message}`);
+    }
+  }
   if (problems.length > 0) {
     console.error('The Companies tab needs correcting first:\n');
     for (const p of problems) console.error(`  - ${p}`);
@@ -104,10 +111,20 @@ async function importCompany(
     console.log(`${plan.shortCode} — ${plan.legalName}`);
     let changes = 0;
 
+    const wanted: Record<string, unknown> = {
+      ...Object.fromEntries(
+        (['pan', 'cin', 'tan'] as const)
+          .filter((f) => plan[f])
+          .map((f) => [f, plan[f]]),
+      ),
+      ...settingsData(plan),
+    };
+    // Decimals compare as text, so 8 on file and 8 on the sheet are not reported as a change.
     const companyData = Object.fromEntries(
-      (['pan', 'cin', 'tan'] as const)
-        .filter((f) => plan[f] && plan[f] !== company[f])
-        .map((f) => [f, plan[f]]),
+      Object.entries(wanted).filter(
+        ([f, value]) =>
+          String(company[f as keyof typeof company]) !== String(value),
+      ),
     );
     if (Object.keys(companyData).length > 0) {
       console.log(`  ~ company ${JSON.stringify(companyData)}`);
@@ -201,6 +218,55 @@ async function importCompany(
     if (error instanceof DryRun) return error.changes;
     throw error;
   }
+}
+
+/**
+ * The company-wide settings the tab carries — salary debit account, payroll lock day, labour wage
+ * cycle and day hours — checked and converted; a value out of range throws with the reason.
+ */
+function settingsData(plan: CompanyPlan): Record<string, string | number> {
+  const s = plan.settings;
+  const out: Record<string, string | number> = {};
+  if (s.payrollDebitAccountNumber) {
+    // Text, never a number: an account number's leading zero is part of it.
+    if (!/^\d{6,20}$/.test(s.payrollDebitAccountNumber)) {
+      throw new Error(
+        `salary debit account "${s.payrollDebitAccountNumber}" is not 6–20 digits.`,
+      );
+    }
+    out.payrollDebitAccountNumber = s.payrollDebitAccountNumber;
+  }
+  if (s.payrollLockDay) {
+    const day = Number(s.payrollLockDay);
+    if (!Number.isInteger(day) || day < 1 || day > 31) {
+      throw new Error(
+        `payroll lock day "${s.payrollLockDay}" is not a day of the month.`,
+      );
+    }
+    out.payrollLockDay = day;
+  }
+  if (s.labourWageCycle) {
+    const cycle = s.labourWageCycle.toLowerCase();
+    if (!['weekly', 'fortnightly', 'monthly'].includes(cycle)) {
+      throw new Error(
+        `labour wage cycle "${s.labourWageCycle}" is not Weekly, Fortnightly or Monthly.`,
+      );
+    }
+    out.labourWageCycle = cycle;
+  }
+  for (const field of [
+    'labourFullDayHours',
+    'labourHalfDayHours',
+    'labourStandardHours',
+  ] as const) {
+    if (!s[field]) continue;
+    const hours = Number(s[field]);
+    if (!(hours > 0 && hours <= 24)) {
+      throw new Error(`${field} "${s[field]}" is not between 0 and 24 hours.`);
+    }
+    out[field] = hours;
+  }
+  return out;
 }
 
 class DryRun extends Error {
