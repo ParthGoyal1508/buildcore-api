@@ -722,6 +722,7 @@ export class EmployeesService {
       isActive: query.isActive ?? true,
       ...(query.departmentId ? { departmentId: query.departmentId } : {}),
       ...(query.siteId ? { siteId: query.siteId } : {}),
+      ...(query.branchId ? { branchId: query.branchId } : {}),
       ...(query.shiftId ? { shiftId: query.shiftId } : {}),
       ...(term
         ? {
