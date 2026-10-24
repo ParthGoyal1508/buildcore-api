@@ -68,6 +68,9 @@ export interface ProjectListItem {
   startDate: Date;
   expectedEndDate: Date | null;
   isLocked: boolean;
+  /** 041: the branch (GST registration) the project bills from, and its display name. */
+  branchId: string;
+  branch: string | null;
   /**
    * Present only when the caller asked for `include=documentReadiness` (017 FR-008).
    *
@@ -534,6 +537,8 @@ export class ProjectsService {
             startDate: project.startDate,
             expectedEndDate: project.expectedEndDate,
             isLocked: project.isLocked,
+            branchId: project.branchId,
+            branch: null as string | null,
           })),
           total,
           page,
@@ -544,6 +549,13 @@ export class ProjectsService {
     );
 
     const { companyIds, ...page_ } = listed;
+    // Named through `settings` after the transaction closes (Principle I; Prisma cannot nest one).
+    const branchNames = await this.companies.branchLabels(
+      page_.items.map((item) => item.branchId),
+    );
+    for (const item of page_.items) {
+      item.branch = branchNames.get(item.branchId) ?? null;
+    }
     if (!wantsReadiness(query.include)) return page_;
 
     // FR-008: readiness in the LIST, without opening each project. Fetched after the

@@ -39,6 +39,7 @@ import { UpdateCompanyDto } from './dto/update-company.dto';
 import { logoVersionOf } from '../company-selection/company-selection.service';
 import { gstStateCodeFor } from '../../common/gst-states';
 import {
+  branchLabel,
   composeAddress,
   ensureHeadOffice,
   mirrorHeadOffice,
@@ -958,6 +959,24 @@ export class CompaniesService {
         tx.companyBranch.groupBy({ by: ['companyId'], _count: { _all: true } }),
     );
     return new Map(rows.map((r) => [r.companyId, r._count._all]));
+  }
+
+  /**
+   * 041: branch display names by id — "Delhi (Delhi)", "Deoli (Rajasthan)" — for lists that show a
+   * row's branch (the project portfolio) without reading `settings.CompanyBranch` themselves.
+   */
+  async branchLabels(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.companyBranch.findMany({
+          where: { id: { in: [...new Set(ids)] } },
+          select: { id: true, label: true, city: true, state: true },
+        }),
+    );
+    return new Map(rows.map((b) => [b.id, branchLabel(b)]));
   }
 
   /** A company's display name, for feature 011's letter token substitution. */
