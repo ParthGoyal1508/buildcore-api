@@ -602,7 +602,7 @@ const config: Config = {
     driver: (process.env.EMAIL_DRIVER as 'console' | 'resend') || 'console',
     apiKey: process.env.RESEND_API_KEY,
     fromAddress:
-      process.env.EMAIL_FROM_ADDRESS || 'BuildCore <onboarding@resend.dev>',
+      process.env.EMAIL_FROM_ADDRESS || 'Tirupati Groups <onboarding@resend.dev>',
     // Where the set-password link points. Defaults to the local frontend port.
     appBaseUrl: process.env.APP_BASE_URL || 'http://localhost:3001',
     // Off unless a deployment explicitly asks for it — see the interface comment.
