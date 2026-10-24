@@ -24,6 +24,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { PayrollRegisterService } from './payroll-register.service';
 import { StatutoryRegisterService } from './statutory-register.service';
+import { StatutoryRegisterQueryDto } from './dto/statutory-register-query.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
 
@@ -48,7 +49,7 @@ export class PayrollRegisterController {
   @ApiOperation({
     summary: 'Full earnings and deductions breakup with column totals',
     description:
-      'Filterable by department, project or site. When unfiltered, the totals ' +
+      'Filterable by department, project, site or branch. When unfiltered, the totals ' +
       'are reconciled against the run’s own stored total and any difference is ' +
       'reported rather than shown as a quietly different number.',
   })
@@ -60,11 +61,13 @@ export class PayrollRegisterController {
     @Query('departmentId') departmentId?: string,
     @Query('projectId') projectId?: string,
     @Query('siteId') siteId?: string,
+    @Query('branchId') branchId?: string,
   ) {
     return this.registers.salaryRegister(callerFrom(user, request), runId, {
       departmentId,
       projectId,
       siteId,
+      branchId,
     });
   }
 
@@ -95,11 +98,12 @@ export class PayrollRegisterController {
     @Query('departmentId') departmentId?: string,
     @Query('projectId') projectId?: string,
     @Query('siteId') siteId?: string,
+    @Query('branchId') branchId?: string,
   ): Promise<void> {
     const { buffer, filename } = await this.registers.exportRegister(
       callerFrom(user, request),
       runId,
-      { departmentId, projectId, siteId },
+      { departmentId, projectId, siteId, branchId },
     );
     response.setHeader(
       'Content-Type',
@@ -125,14 +129,17 @@ export class PayrollRegisterController {
     @Req() request: Request,
     @Param('runId') runId: string,
     @Res() response: Response,
-    @Query('projectId') projectId?: string,
-    @Query('siteId') siteId?: string,
+    @Query() query: StatutoryRegisterQueryDto,
   ): Promise<void> {
     const { buffer, filename } = await this.statutory.export(
       callerFrom(user, request),
       user,
       runId,
-      { projectId, siteId },
+      {
+        projectId: query.projectId,
+        siteId: query.siteId,
+        branchId: query.branchId,
+      },
     );
     response.setHeader(
       'Content-Type',

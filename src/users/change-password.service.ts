@@ -97,6 +97,7 @@ export class ChangePasswordService {
     try {
       await this.email.sendPasswordChangedEmail({
         to: caller.email,
+        companyId: caller.companyId,
         changedAt: updated.updatedAt,
         via: 'self',
       });

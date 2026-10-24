@@ -374,6 +374,7 @@ payment-sheet builder while concealing nothing anybody wanted concealed.']
   vendorCategories VendorCategory [not null]
   codeSequences CodeSequence [not null]
   codeFormats CodeFormat [not null]
+  branches CompanyBranch [not null]
   itemCategories ItemCategory [not null]
   items Item [not null]
   equipmentCategories EquipmentCategory [not null]
@@ -978,6 +979,9 @@ caller omits it, so two concurrent creates can never collide.']
   name String [not null]
   clientId String [not null]
   client Client [not null]
+  branchId String [not null, note: '`settings.CompanyBranch.id` the project bills from (041): the GSTIN and address its bills,
+orders and store documents print, and so the state its intra/inter-state tax is decided
+from. Defaults to the head office. Bare id, not a relation — see the note on `Site.companyId`.']
   location String
   contractValue Decimal [not null, note: 'Decimal, not Float: this is money, and it is the denominator of every margin
 percentage the P&L reports.']
@@ -2151,6 +2155,9 @@ Postgres permits many NULLs under a unique index, which is precisely the shape w
 one account per employee, any number of employees with no account.']
   companyId String [not null, note: 'RLS-protected. Bare id, not a relation — see the note on `Site.companyId`.']
   siteId String [not null, note: '`projects.Site.id`; read through `SitesService`.']
+  branchId String [not null, note: '`settings.CompanyBranch.id` — the GST registration / PF establishment the employee belongs to
+(041). Chosen on the employee; defaults to the head office. Validated through
+`CompaniesService.assertActiveBranch`, never a cross-schema relation.']
   shiftId String [not null, note: '`settings.Shift.id`; the shift duration OT is computed against, read through
 `SettingsModule`\'s exported service (research.md §9).']
   employeeCode String [not null, note: 'Allocated by `settings`\' employee-code sequence (feature 002).']
@@ -2925,6 +2932,9 @@ Table PayrollLineItem {
   employeeId String [not null]
   projectId String [note: '`projects.Project.id` — nullable; null for HO/overhead staff. Resolved via
 ProjectsService, never a cross-schema Prisma relation (FR-046).']
+  branchId String [note: '`settings.CompanyBranch.id` the employee was on when this line was generated (041) — the PF /
+ESIC / PT establishment it is filed under. Stamped from `Employee.branchId` by the engine and
+never re-read, so moving an employee later does not move a processed month.']
   monthDays Int [not null]
   payableDays Decimal [not null]
   lopDays Decimal [not null, default: 0]
@@ -3253,6 +3263,45 @@ keeps the built-in format (`CODE_SERIES_DEFAULTS`), which is Parth Realcon\'s.
 `PROJECTS`, `VENDORS`, `WORK_ORDER` are counted: `prefix` + (`base` + n × `step`), padded to
 `width`. `EQUIPMENT` and `ASSETS` are named: letters from the item\'s name, a serial per prefix
 padded to `width`, `separator`, the manufacturing year.'
+}
+
+Table CompanyBranch {
+  id String [pk]
+  companyId String [not null]
+  company Company [not null]
+  label String [note: 'Short name shown where a branch is chosen. Null → "City (State)".']
+  tradeName String [note: 'Name printed on documents. Null → the company\'s legal name.']
+  gstin String [note: '15 characters; characters 1–2 are the GST code of `state`, 3–12 the company\'s PAN.']
+  address String [note: 'Nullable only so a migrated company with blanks still gets its head office; the form
+requires them.']
+  city String
+  state String [note: 'A state name, as `Company.state` stores it; the GST code is derived (`gst-states.ts`).']
+  pinCode String
+  phone String
+  email String
+  website String
+  pfEstablishmentCode String
+  esicCode String
+  professionalTaxRegNumber String
+  isHeadOffice Boolean [not null, default: false]
+  isActive Boolean [not null, default: true, note: 'An inactive branch keeps the projects, employees and documents already on it, but cannot be
+chosen for new ones. The head office is never inactive.']
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [not null]
+
+  Note: 'One GST registration — a place of business — of a company (041). A company registered for GST
+in five states has five branches; exactly one is the head office.
+
+A branch carries what differs between registrations: the GSTIN, the address printed beside it,
+contacts, and the PF / ESIC / PT establishment codes (the client\'s PF codes differ per branch).
+What is the same on every registration — legal name, PAN, CIN, TAN, rates — stays on `Company`.
+
+`Company`\'s own gstin / address / codes columns are kept and mirror the head office, written in
+the same transaction as any head-office change, so a reader not yet branch-aware keeps printing
+what it printed before (research R2).
+
+Two "at most one" rules live in the migration as partial unique indexes, because `@@unique`
+treats every NULL as distinct: one head office per company, one GSTIN per company when present.'
 }
 
 Table CodeSequence {
@@ -5771,6 +5820,10 @@ the guarantee.']
 never dereferences it. Resolving `subjectId` to a vendor name would be exactly the
 cross-schema read the move was made to avoid; the owning module resolves it.']
   subjectId String
+  branchId String [note: '`settings.CompanyBranch.id` the letter is issued from (041) — the GSTIN and address its
+header prints. Resolved at compose: a project subject\'s branch, an employee\'s branch, or the
+composer\'s choice. Null on letters issued before branches existed, which means the head
+office. Bare id, not a relation, for the reason `Site.companyId` gives.']
   templateId String [not null]
   signatoryId String [note: 'Who signed, and **the graphic as applied** (research §5). Both, not just the id:
 FR-013 requires a previously issued letter to render as it was issued, and a
@@ -7307,6 +7360,8 @@ Ref: LoanScheduleEntry.loanId > Loan.id [delete: Cascade]
 Ref: SalarySlip.employeeId > Employee.id [delete: Cascade]
 
 Ref: CodeFormat.companyId > Company.id [delete: Cascade]
+
+Ref: CompanyBranch.companyId > Company.id [delete: Cascade]
 
 Ref: CodeSequence.companyId > Company.id
 

@@ -33,6 +33,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PrismaClient } from '@prisma/client';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
 
 const API = process.env.DEMO_API_URL ?? 'http://localhost:3000';
 const EMAIL = process.env.DEMO_EMAIL ?? 'admin@buildcore.dev';
@@ -190,6 +191,7 @@ async function main(): Promise<void> {
   const project = await prisma.project.create({
     data: {
       companyId,
+      branchId: await headOfficeBranchId(prisma, companyId),
       code: PROJECT_CODE,
       name: 'Widening of NH-52 (Deva Khera) to NH-148D (Dhor), MDR-419 — billing demo',
       clientId: client.id,

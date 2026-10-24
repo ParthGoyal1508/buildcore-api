@@ -207,7 +207,7 @@ export class PaymentAdviceService {
               billNumber: true,
               billingDate: true,
               status: true,
-              project: { select: { name: true } },
+              project: { select: { name: true, branchId: true } },
               workOrder: { select: { partnerId: true, code: true } },
               package: { select: { periodFrom: true, periodTo: true } },
             },
@@ -239,7 +239,11 @@ export class PaymentAdviceService {
       });
     }
 
-    const company = await this.companies.getDocumentIdentity(companyId);
+    // 041: the advice goes out under the branch the bill's project bills from.
+    const company = await this.companies.getDocumentIdentity(
+      companyId,
+      payment.raBill.project?.branchId,
+    );
     const source = this.sources.vendorIdentitySource();
     const vendor =
       bill.workOrder?.partnerId && source

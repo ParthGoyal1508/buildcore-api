@@ -11,6 +11,7 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'nestjs-prisma';
 import * as ExcelJS from 'exceljs';
+import { CompaniesService } from '../../settings/companies/companies.service';
 
 import { RlsContext, withRlsContext } from '../../common/prisma/rls-context';
 import type { Caller } from '../../hr/biometrics/face-enrolment.service';
@@ -48,6 +49,17 @@ export interface ChallanView {
   };
   /** Employees the scheme applies to but who have no statutory number on file. */
   missingStatutoryNumber: { employeeCode: string; name: string }[];
+  /**
+   * 041: the one establishment this challan covers, or null for the whole company. The code is
+   * the scheme's own — PF establishment code, ESIC code, or PT registration number.
+   */
+  branch: {
+    id: string;
+    label: string;
+    establishmentCode: string | null;
+  } | null;
+  /** Said, never refused: e.g. a branch with no PF establishment code recorded (FR-017). */
+  warnings: string[];
 }
 
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -180,7 +192,11 @@ const SETTLED_RUN_STATUSES = [
  */
 @Injectable()
 export class ChallansService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // 041: the establishment a per-branch challan is filed under, read through `settings`.
+    private readonly companies: CompaniesService,
+  ) {}
 
   /**
    * Each company's **latest** processed run, summarised (Group Dashboard, 2026-10-15).
@@ -288,7 +304,12 @@ export class ChallansService {
     companyId: string,
     type: ChallanType,
     period: string,
+    /** 041: one establishment's challan — only the lines recorded under that branch. */
+    branchId?: string,
   ): Promise<ChallanView> {
+    const branch = branchId
+      ? await this.establishment(companyId, branchId, type)
+      : null;
     const run = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.payrollRun.findFirst({
         where: { companyId, period, isFnf: false },
@@ -310,9 +331,15 @@ export class ChallansService {
       );
     }
 
+    // The branch each line recorded when it was generated, never the employee's branch today:
+    // moving someone after the month was processed must not move their contribution (041).
+    const lineItems = branchId
+      ? run.lineItems.filter((l) => l.branchId === branchId)
+      : run.lineItems;
+
     const employees = await withRlsContext(this.prisma, caller.rls, (tx) =>
       tx.employee.findMany({
-        where: { id: { in: run.lineItems.map((l) => l.employeeId) } },
+        where: { id: { in: lineItems.map((l) => l.employeeId) } },
       }),
     );
     const byId = new Map(employees.map((e) => [e.id, e]));
@@ -320,7 +347,7 @@ export class ChallansService {
     const rows: ChallanRow[] = [];
     const missing: { employeeCode: string; name: string }[] = [];
 
-    for (const line of run.lineItems) {
+    for (const line of lineItems) {
       const e = byId.get(line.employeeId);
       if (!e) continue;
       const name = [e.firstName, e.lastName].filter(Boolean).join(' ').trim();
@@ -364,6 +391,41 @@ export class ChallansService {
           : {}),
       },
       missingStatutoryNumber: missing,
+      branch: branch && {
+        id: branch.id,
+        label: branch.label,
+        establishmentCode: branch.establishmentCode,
+      },
+      warnings: branch?.warning ? [branch.warning] : [],
+    };
+  }
+
+  /** The branch a per-establishment challan is for, with this scheme's code and any gap in it. */
+  private async establishment(
+    companyId: string,
+    branchId: string,
+    type: ChallanType,
+  ) {
+    // An inactive branch is allowed: last year's challan for a closed site is still filed.
+    await this.companies.assertActiveBranch(companyId, branchId, {
+      allowInactive: true,
+    });
+    const b = await this.companies.getBranchIdentity(companyId, branchId);
+    const label =
+      [b.city, b.state && `(${b.state})`].filter(Boolean).join(' ') || b.name;
+    const [establishmentCode, scheme] =
+      type === 'pf'
+        ? [b.pfEstablishmentCode, 'PF establishment code']
+        : type === 'esic'
+        ? [b.esicCode, 'ESIC code']
+        : [b.professionalTaxRegNumber, 'professional tax registration number'];
+    return {
+      id: b.branchId,
+      label,
+      establishmentCode,
+      warning: establishmentCode
+        ? null
+        : `No ${scheme} is recorded for ${label}. Add it under Settings → Companies → Branches before filing.`,
     };
   }
 
@@ -373,8 +435,9 @@ export class ChallansService {
     companyId: string,
     type: ChallanType,
     period: string,
+    branchId?: string,
   ): Promise<{ buffer: Buffer; filename: string }> {
-    const view = await this.get(caller, companyId, type, period);
+    const view = await this.get(caller, companyId, type, period, branchId);
 
     const workbook = new ExcelJS.Workbook();
     workbook.created = new Date();
@@ -427,6 +490,21 @@ export class ChallansService {
       if (col) col.numFmt = '#,##0.00';
     }
 
+    // 041: which establishment this file is for, and any code it is missing, in the file itself.
+    if (view.branch) {
+      const about = workbook.addWorksheet('Establishment');
+      about.columns = [
+        { header: 'Branch', key: 'label', width: 30 },
+        { header: 'Code', key: 'code', width: 24 },
+      ];
+      about.getRow(1).font = { bold: true };
+      about.addRow({
+        label: view.branch.label,
+        code: view.branch.establishmentCode ?? '',
+      });
+      for (const warning of view.warnings) about.addRow({ label: warning });
+    }
+
     // Surfaced in the file itself, not just the API: whoever files this needs to
     // see that some employees are missing the number the filing requires.
     if (view.missingStatutoryNumber.length > 0) {
@@ -441,7 +519,17 @@ export class ChallansService {
 
     return {
       buffer: Buffer.from(await workbook.xlsx.writeBuffer()),
-      filename: `${type}-challan-${period}.xlsx`,
+      filename: view.branch
+        ? `${type}-challan-${period}-${slug(view.branch.label)}.xlsx`
+        : `${type}-challan-${period}.xlsx`,
     };
   }
+}
+
+/** "Rewari (Haryana)" → "rewari-haryana", for a file name. */
+function slug(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
 }

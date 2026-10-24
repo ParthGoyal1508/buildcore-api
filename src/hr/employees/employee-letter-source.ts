@@ -175,6 +175,9 @@ export class EmployeeLetterSource implements OnModuleInit {
       relation: relationOf(genderOf(employee.title, employee.gender)),
       fatherName: employee.fatherName,
       employeeCode: employee.employeeCode,
+      // 041: which company branch a letter about this employee is issued from. Not a field any
+      // template prints; the letters module reads it to choose the header.
+      branchId: employee.branchId,
       email: employee.email,
       phone: employee.mobile,
       address:

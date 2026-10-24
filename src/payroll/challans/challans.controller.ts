@@ -25,6 +25,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { callerFrom } from '../../hr/caller-context';
 import { ChallansService, type ChallanType } from './challans.service';
+import { ChallanQueryDto } from './dto/challan-query.dto';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { resolveCompanyId } from '../../settings/company-scope';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
@@ -75,14 +76,14 @@ export class ChallansController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('type') type: string,
-    @Query('period') period: string,
-    @Query('companyId') companyId?: string,
+    @Query() query: ChallanQueryDto,
   ) {
     return this.challans.get(
       callerFrom(user, request),
-      this.companyOf(user, companyId),
+      this.companyOf(user, query.companyId),
       this.assertType(type),
-      period,
+      query.period,
+      query.branchId,
     );
   }
 
@@ -95,15 +96,15 @@ export class ChallansController {
     @UserEntity() user: AuthenticatedUser,
     @Req() request: Request,
     @Param('type') type: string,
-    @Query('period') period: string,
+    @Query() query: ChallanQueryDto,
     @Res() response: Response,
-    @Query('companyId') companyId?: string,
   ): Promise<void> {
     const { buffer, filename } = await this.challans.export(
       callerFrom(user, request),
-      this.companyOf(user, companyId),
+      this.companyOf(user, query.companyId),
       this.assertType(type),
-      period,
+      query.period,
+      query.branchId,
     );
     response.setHeader(
       'Content-Type',

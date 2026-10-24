@@ -1,5 +1,6 @@
 import { Global, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import type { EmailConfig } from '../../common/configs/config.interface';
 import { ConsoleEmailAdapter } from './console-email.adapter';
 import { EmailService } from './email.service';
@@ -18,12 +19,15 @@ import { ResendEmailAdapter } from './resend-email.adapter';
   providers: [
     {
       provide: EmailService,
-      useFactory: (configService: ConfigService): EmailService => {
+      useFactory: (
+        configService: ConfigService,
+        moduleRef: ModuleRef,
+      ): EmailService => {
         const logger = new Logger('EmailModule');
         const config = configService.get<EmailConfig>('email');
 
         if (config.driver === 'resend') {
-          const adapter = new ResendEmailAdapter(configService);
+          const adapter = new ResendEmailAdapter(configService, moduleRef);
           logger.log(`Email transport: ${adapter.describe()}`);
           return adapter;
         }
@@ -60,7 +64,7 @@ import { ResendEmailAdapter } from './resend-email.adapter';
         logger.log(`Email transport: ${adapter.describe()}`);
         return adapter;
       },
-      inject: [ConfigService],
+      inject: [ConfigService, ModuleRef],
     },
   ],
   exports: [EmailService],

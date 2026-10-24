@@ -63,6 +63,8 @@ export interface SlipIdentitySource {
   firstName: string | null;
   lastName: string | null;
   companyId: string;
+  /** 041: the branch whose address the payslip prints; absent → head office. */
+  branchId?: string | null;
   departmentId: string | null;
   designationId: string | null;
   dateOfJoining: Date | null;
@@ -356,18 +358,11 @@ export class SalaryService {
     employee: SlipIdentitySource,
   ): Promise<SlipIdentity> {
     const [company, department, designation] = await Promise.all([
-      withRlsContext(this.prisma, { isSuperAdmin: true }, (tx) =>
-        tx.company.findUnique({
-          where: { id: employee.companyId },
-          select: {
-            name: true,
-            address: true,
-            city: true,
-            state: true,
-            pinCode: true,
-          },
-        }),
-      ),
+      // As the branch the employee belongs to (041) — the establishment they are paid under —
+      // through `settings`' exported read rather than its table (Principle I).
+      this.companies
+        .getBranchIdentity(employee.companyId, employee.branchId)
+        .catch(() => null),
       employee.departmentId
         ? withRlsContext(this.prisma, caller.rls, (tx) =>
             tx.department.findUnique({

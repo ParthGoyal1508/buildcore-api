@@ -27,6 +27,7 @@
 import { PrismaClient } from '@prisma/client';
 import { hash } from 'argon2';
 import { financialYearOf } from '../src/hr/leave/leave-days';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
 
 const prisma = new PrismaClient();
 
@@ -177,6 +178,7 @@ async function main() {
           data: {
             userId: user.id,
             companyId: company.id,
+            branchId: await headOfficeBranchId(prisma, company.id),
             siteId: site.id,
             shiftId: shift.id,
             employeeCode: await nextEmployeeCode(company.id, company.shortCode),

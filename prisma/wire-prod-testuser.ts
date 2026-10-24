@@ -21,6 +21,7 @@
  * put most punches out of range — recorded as a geofence exception, not a failure.
  */
 import { PrismaClient } from '@prisma/client';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
 
 const prisma = new PrismaClient();
 
@@ -200,6 +201,7 @@ async function main() {
       data: {
         userId: user.id,
         companyId: company.id,
+        branchId: await headOfficeBranchId(prisma, company.id),
         siteId: site.id,
         shiftId: shift.id,
         employeeCode,

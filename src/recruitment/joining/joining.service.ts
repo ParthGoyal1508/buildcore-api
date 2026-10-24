@@ -116,6 +116,12 @@ export class JoiningService {
     const employeeDto: CreateEmployeeDto = {
       siteId,
       shiftId,
+      branchId: await this.refs.branchForJoiner(
+        caller,
+        companyId,
+        candidate.requisition.projectId,
+        siteId,
+      ),
       firstName,
       lastName: rest.join(' ') || undefined,
       dob: dto.dateOfBirth,

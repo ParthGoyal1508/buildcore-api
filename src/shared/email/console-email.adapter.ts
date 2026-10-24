@@ -8,8 +8,12 @@ import {
   renderInviteEmail,
   renderPasswordChangedEmail,
   renderPasswordResetEmail,
+  RenderOptions,
   renderPayslipEmail,
 } from './email-templates';
+
+/** Only subjects are logged here, and no subject prints a time. */
+const SUBJECT_ONLY: RenderOptions = { timeZone: 'UTC' };
 
 /**
  * Writes email to the application log instead of sending it — the dev/test adapter.
@@ -34,7 +38,7 @@ export class ConsoleEmailAdapter extends EmailService {
     isResend: boolean;
     expiresAt: Date;
   }): Promise<void> {
-    const { subject } = renderInviteEmail(input);
+    const { subject } = renderInviteEmail(input, SUBJECT_ONLY);
     this.logger.log(
       [
         '',
@@ -53,7 +57,7 @@ export class ConsoleEmailAdapter extends EmailService {
     to: string;
     unlockAt: Date;
   }): Promise<void> {
-    const { subject } = renderAccountLockedEmail(input);
+    const { subject } = renderAccountLockedEmail(input, SUBJECT_ONLY);
     this.logger.log(
       `[console adapter] ${subject} → ${
         input.to
@@ -67,7 +71,7 @@ export class ConsoleEmailAdapter extends EmailService {
     expiresAt: Date;
     requestedByAdmin: boolean;
   }): Promise<void> {
-    const { subject } = renderPasswordResetEmail(input);
+    const { subject } = renderPasswordResetEmail(input, SUBJECT_ONLY);
     // The link in full, as the invite's is, and for the same reason: it is the only way to
     // reach the next step locally — and why this adapter is refused in production.
     this.logger.log(
@@ -89,7 +93,7 @@ export class ConsoleEmailAdapter extends EmailService {
     changedAt: Date;
     via: 'self' | 'reset_link';
   }): Promise<void> {
-    const { subject } = renderPasswordChangedEmail(input);
+    const { subject } = renderPasswordChangedEmail(input, SUBJECT_ONLY);
     this.logger.log(`[console adapter] ${subject} → ${input.to}`);
   }
 

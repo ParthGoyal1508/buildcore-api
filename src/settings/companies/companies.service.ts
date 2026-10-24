@@ -37,6 +37,45 @@ import { VendorCategoriesService } from '../vendor-categories/vendor-categories.
 import { CreateCompanyDto } from './dto/create-company.dto';
 import { UpdateCompanyDto } from './dto/update-company.dto';
 import { logoVersionOf } from '../company-selection/company-selection.service';
+import { gstStateCodeFor } from '../../common/gst-states';
+import {
+  branchLabel,
+  composeAddress,
+  ensureHeadOffice,
+  mirrorHeadOffice,
+  pickMirrored,
+} from './company-branches';
+
+/** A company as one of its branches (041) — see `CompaniesService.getBranchIdentity`. */
+export interface CompanyBranchIdentity {
+  branchId: string;
+  isHeadOffice: boolean;
+  /** The branch's trade name, else the company's legal name. */
+  name: string;
+  legalName: string;
+  shortCode: string;
+  pan: string | null;
+  cin: string | null;
+  tan: string | null;
+  logoRef: string | null;
+  gstin: string | null;
+  /** The street line alone, as a bill header has always frozen it. */
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  stateCode: string | null;
+  pinCode: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  pfEstablishmentCode: string | null;
+  esicCode: string | null;
+  professionalTaxRegNumber: string | null;
+  /** "street, City, State - PIN". */
+  composedAddress: string | null;
+  /** "City, State". */
+  place: string | null;
+}
 
 /** Where company letterheads live in blob storage (2026-10-11). */
 const LETTERHEAD_NAMESPACE = 'letterhead';
@@ -623,33 +662,35 @@ export class CompaniesService {
    * Exported rather than read across the schema boundary, which Principle I
    * forbids. Read **once per bill and frozen onto it** (023 FR-028), so an
    * address corrected next year does not change a document that was signed.
+   *
+   * **Per branch (041).** `branchId` is the project's branch — the GST registration the bill is
+   * raised under — and null or absent means the head office. `address` stays the raw street line,
+   * exactly what was frozen before branches existed, so a head-office bill reads as it always did.
    */
-  async getBillingIdentity(companyId: string): Promise<{
+  async getBillingIdentity(
+    companyId: string,
+    branchId?: string | null,
+  ): Promise<{
     name: string;
     gstin: string | null;
     pan: string | null;
     state: string | null;
+    stateCode: string | null;
     address: string | null;
+    city: string | null;
+    pinCode: string | null;
   }> {
-    const company = await withRlsContext(
-      this.prisma,
-      { isSuperAdmin: true },
-      (tx) =>
-        tx.company.findUnique({
-          where: { id: companyId },
-          select: {
-            name: true,
-            gstin: true,
-            pan: true,
-            state: true,
-            address: true,
-          },
-        }),
-    );
-    if (!company) {
-      throw new NotFoundException('Company not found');
-    }
-    return company;
+    const b = await this.getBranchIdentity(companyId, branchId);
+    return {
+      name: b.name,
+      gstin: b.gstin,
+      pan: b.pan,
+      state: b.state,
+      stateCode: b.stateCode,
+      address: b.address,
+      city: b.city,
+      pinCode: b.pinCode,
+    };
   }
 
   /**
@@ -658,8 +699,14 @@ export class CompaniesService {
    * For the payment advice, which carries each company's own mark and registered address. The logo
    * comes back as bytes, or null where none is uploaded — a missing logo prints the name alone
    * rather than refusing the document.
+   *
+   * `branchId` as for `getBillingIdentity` (041): the project's or employee's branch, head office
+   * when absent. The logo is the company's — branches share it.
    */
-  async getDocumentIdentity(companyId: string): Promise<{
+  async getDocumentIdentity(
+    companyId: string,
+    branchId?: string | null,
+  ): Promise<{
     name: string;
     address: string | null;
     gstin: string | null;
@@ -668,46 +715,120 @@ export class CompaniesService {
     /** "Deoli, Rajasthan" — where a work order's disputes are heard (2026-10-15). */
     place: string | null;
   }> {
-    const company = await withRlsContext(
+    const b = await this.getBranchIdentity(companyId, branchId);
+    const logo = b.logoRef
+      ? await this.storage.get(b.logoRef).catch(() => null)
+      : null;
+    return {
+      name: b.name,
+      address: b.composedAddress,
+      gstin: b.gstin,
+      pan: b.pan,
+      logo,
+      place: b.place,
+    };
+  }
+
+  /**
+   * Everything a document may print about the company as one of its branches (041): the company's
+   * legal identity (name, PAN, CIN, TAN, logo) with the branch's GSTIN, address, contacts and
+   * establishment codes.
+   *
+   * `branchId` null or absent — or naming a branch this company does not have, which a stale id on
+   * an old record could — resolves to the head office: a document is never refused for it.
+   */
+  async getBranchIdentity(
+    companyId: string,
+    branchId?: string | null,
+  ): Promise<CompanyBranchIdentity> {
+    const { company, branch } = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      async (tx) => {
+        const company = await tx.company.findUnique({
+          where: { id: companyId },
+        });
+        if (!company) throw new NotFoundException('Company not found');
+        const chosen = branchId
+          ? await tx.companyBranch.findFirst({
+              where: { id: branchId, companyId },
+            })
+          : null;
+        const branch = chosen ?? (await ensureHeadOffice(tx, companyId));
+        return { company, branch };
+      },
+    );
+    const { address: composedAddress, place } = composeAddress(branch);
+    return {
+      branchId: branch.id,
+      isHeadOffice: branch.isHeadOffice,
+      name: branch.tradeName?.trim() || company.name,
+      legalName: company.name,
+      shortCode: company.shortCode,
+      pan: company.pan,
+      cin: company.cin,
+      tan: company.tan,
+      logoRef: company.logoRef,
+      gstin: branch.gstin,
+      address: branch.address,
+      city: branch.city,
+      state: branch.state,
+      stateCode: gstStateCodeFor(branch.state),
+      pinCode: branch.pinCode,
+      phone: branch.phone,
+      email: branch.email,
+      website: branch.website,
+      pfEstablishmentCode: branch.pfEstablishmentCode,
+      esicCode: branch.esicCode,
+      professionalTaxRegNumber: branch.professionalTaxRegNumber,
+      composedAddress,
+      place,
+    };
+  }
+
+  /** The head office's id — what a project or employee created without a branch belongs to. */
+  async headOfficeBranchId(companyId: string): Promise<string> {
+    const head = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) => ensureHeadOffice(tx, companyId),
+    );
+    return head.id;
+  }
+
+  /**
+   * Refuses a branch that is not this company's, or (unless `allowInactive`) is deactivated — for
+   * a project or employee being put on it. Filters over history pass `allowInactive`.
+   */
+  async assertActiveBranch(
+    companyId: string,
+    branchId: string,
+    { allowInactive = false }: { allowInactive?: boolean } = {},
+  ): Promise<void> {
+    const branch = await withRlsContext(
       this.prisma,
       { isSuperAdmin: true },
       (tx) =>
-        tx.company.findUnique({
-          where: { id: companyId },
-          select: {
-            name: true,
-            address: true,
-            city: true,
-            state: true,
-            pinCode: true,
-            gstin: true,
-            pan: true,
-            logoRef: true,
-          },
+        tx.companyBranch.findFirst({
+          where: { id: branchId, companyId },
+          select: { isActive: true },
         }),
     );
-    if (!company) throw new NotFoundException('Company not found');
-    const place = [company.city, company.state].filter(Boolean).join(', ');
-    const address =
-      [
-        company.address,
-        place && company.pinCode
-          ? `${place} - ${company.pinCode}`
-          : place || company.pinCode,
-      ]
-        .filter(Boolean)
-        .join(', ') || null;
-    const logo = company.logoRef
-      ? await this.storage.get(company.logoRef).catch(() => null)
-      : null;
-    return {
-      name: company.name,
-      address,
-      gstin: company.gstin,
-      pan: company.pan,
-      logo,
-      place: place || null,
-    };
+    if (!branch || (!branch.isActive && !allowInactive)) {
+      throw new BadRequestException(
+        'Branch not found for this company or inactive.',
+      );
+    }
+  }
+
+  /** A branch named on a create, or the head office when none is. Validated either way. */
+  async branchForNewRecord(
+    companyId: string,
+    branchId?: string | null,
+  ): Promise<string> {
+    if (!branchId) return this.headOfficeBranchId(companyId);
+    await this.assertActiveBranch(companyId, branchId);
+    return branchId;
   }
 
   /**
@@ -827,6 +948,35 @@ export class CompaniesService {
    * source other modules' dropdowns read (see `listActiveForOtherModules`). */
   async findAll(): Promise<Company[]> {
     return this.prisma.company.findMany({ orderBy: { name: 'asc' } });
+  }
+
+  /** 041: branches per company, for the companies list. Read as system — the table is under RLS. */
+  async branchCounts(): Promise<Map<string, number>> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.companyBranch.groupBy({ by: ['companyId'], _count: { _all: true } }),
+    );
+    return new Map(rows.map((r) => [r.companyId, r._count._all]));
+  }
+
+  /**
+   * 041: branch display names by id — "Delhi (Delhi)", "Deoli (Rajasthan)" — for lists that show a
+   * row's branch (the project portfolio) without reading `settings.CompanyBranch` themselves.
+   */
+  async branchLabels(ids: string[]): Promise<Map<string, string>> {
+    if (ids.length === 0) return new Map();
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.companyBranch.findMany({
+          where: { id: { in: [...new Set(ids)] } },
+          select: { id: true, label: true, city: true, state: true },
+        }),
+    );
+    return new Map(rows.map((b) => [b.id, branchLabel(b)]));
   }
 
   /** A company's display name, for feature 011's letter token substitution. */
@@ -1007,6 +1157,10 @@ export class CompaniesService {
           data: { companyId: company.id, lastNumber: 0 },
         });
 
+        // Its head office (041), from the GSTIN and address it was created with: every project
+        // and employee must be on a branch, and a company is never without one.
+        await ensureHeadOffice(tx, company.id, company);
+
         return company;
       },
     );
@@ -1084,6 +1238,18 @@ export class CompaniesService {
           where: { id },
           data: { ...dto, ...(shortCode ? { shortCode } : {}) },
         });
+        // The GSTIN, address and codes on this form are the head office's (041): they are written
+        // to that branch, and the company's own columns then mirror it, so the two never differ.
+        const mirrored = pickMirrored(dto);
+        if (Object.keys(mirrored).length > 0) {
+          const head = await ensureHeadOffice(tx, id);
+          await tx.companyBranch.update({
+            where: { id: head.id },
+            data: mirrored,
+          });
+          // Writes back the values just written, unless the branch had drifted from them.
+          await mirrorHeadOffice(tx, id);
+        }
         return { before: existing, updated: row };
       },
     );

@@ -87,11 +87,21 @@ export class PlantRefsService {
     );
   }
 
-  /** The company as a printed plant document heads it: name, address, logo (2026-10-15). */
+  /**
+   * The company as a printed plant document heads it: name, address, logo (2026-10-15).
+   *
+   * As the branch (041) of `projectId` when the document has one — a hire order or its bill — and
+   * the head office otherwise: a job card or logbook names a machine, not a project.
+   */
   async documentCompany(
     companyId: string,
+    projectId?: string | null,
   ): Promise<FormCompany & { place: string | null }> {
-    const identity = await this.companies.getDocumentIdentity(companyId);
+    const branchId = await this.projects.branchIdOf(companyId, projectId);
+    const identity = await this.companies.getDocumentIdentity(
+      companyId,
+      branchId,
+    );
     return {
       name: identity.name,
       address: identity.address,

@@ -229,6 +229,7 @@ export class AuthService {
     if (justLocked) {
       await this.emailService.sendAccountLockedEmail({
         to: user.email,
+        companyId: user.companyId,
         unlockAt: lockedUntil,
       });
       await this.auditLogService.recordAuthEvent(
@@ -560,7 +561,10 @@ export class AuthService {
 
     let emailDispatchFailed = false;
     try {
-      await this.emailService.sendAdminPasswordResetEmail({ to: target.email });
+      await this.emailService.sendAdminPasswordResetEmail({
+        to: target.email,
+        companyId: target.companyId,
+      });
     } catch (error) {
       emailDispatchFailed = true;
       this.logger.error(

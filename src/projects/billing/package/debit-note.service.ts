@@ -324,7 +324,7 @@ export class DebitNoteService {
       async (tx) => ({
         project: await tx.project.findFirst({
           where: { id: projectId },
-          select: { name: true, code: true, location: true },
+          select: { name: true, code: true, location: true, branchId: true },
         }),
         workOrder: await tx.workOrder.findFirst({
           where: { id: input.workOrderId, projectId },
@@ -336,7 +336,11 @@ export class DebitNoteService {
     if (!workOrder) {
       throw new BadRequestException('That work order is not on this project.');
     }
-    const company = await this.companies.getDocumentIdentity(companyId);
+    // 041: printed as the branch the project bills from.
+    const company = await this.companies.getDocumentIdentity(
+      companyId,
+      project.branchId,
+    );
     const source = this.sources.vendorIdentitySource();
     const vendor =
       workOrder.partnerId && source
@@ -582,7 +586,9 @@ export class DebitNoteService {
         where: { id: noteId },
         include: {
           lines: { orderBy: { recordedAt: 'asc' } },
-          project: { select: { name: true, code: true, location: true } },
+          project: {
+            select: { name: true, code: true, location: true, branchId: true },
+          },
           workOrder: { select: { code: true, partnerId: true } },
           recoveredOnPackage: {
             select: {
@@ -596,7 +602,10 @@ export class DebitNoteService {
     );
     if (!note) throw new NotFoundException('Debit note not found');
 
-    const company = await this.companies.getDocumentIdentity(note.companyId);
+    const company = await this.companies.getDocumentIdentity(
+      note.companyId,
+      note.project?.branchId,
+    );
     const frozen = note.recoveredOnPackage?.receiverName
       ? note.recoveredOnPackage
       : null;

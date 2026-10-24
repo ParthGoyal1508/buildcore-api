@@ -79,6 +79,8 @@ function build(opts: {
   quotedPercentage?: number;
   /** The bill line `setClaim` carries a claim onto. */
   claimLine?: { rate: number; nonBoq: boolean; quotedPercentage: number };
+  /** 041: the company branch the project bills from. */
+  branchId?: string;
 }): Built {
   const direction = opts.direction ?? BillDirection.to_client;
   const boq = opts.boq ?? [
@@ -103,6 +105,7 @@ function build(opts: {
       findFirst: async () => ({
         id: 'p-1',
         clientId: 'client-1',
+        branchId: opts.branchId ?? 'branch-ho',
         cgstApplicable: true,
         quotedPercentage: dec(opts.quotedPercentage ?? 0),
         clientRetentionFraction:
@@ -403,13 +406,15 @@ function build(opts: {
       labourCessFraction: '0.010000',
     }),
     // Both parties in Rajasthan, as the client's own package has them.
-    getBillingIdentity: async () => ({
-      name: 'H.G. Infra Engineering Ltd',
-      gstin: '08AABCH1234D1ZX',
-      pan: 'AABCH1234D',
-      state: 'Rajasthan',
-      address: 'Jaipur',
-    }),
+    getBillingIdentity: jest.fn(
+      async (_companyId: string, _branchId?: string | null) => ({
+        name: 'H.G. Infra Engineering Ltd',
+        gstin: '08AABCH1234D1ZX',
+        pan: 'AABCH1234D',
+        state: 'Rajasthan',
+        address: 'Jaipur',
+      }),
+    ),
   };
 
   // The registry, not an injected `VendorsService` — `PartnersModule` imports `ProjectsModule`, so
@@ -453,7 +458,10 @@ function build(opts: {
     pkg: () => pkgRow,
     bill: () => billRow,
     // Exposed for the reason tests.
-    ...({ claimUpdates, lineUpdates, billUpdates } as Record<string, unknown>),
+    ...({ claimUpdates, lineUpdates, billUpdates, companies } as Record<
+      string,
+      unknown
+    >),
   } as Built & { claimUpdates: Record<string, unknown>[] };
 }
 
@@ -619,6 +627,42 @@ describe('composing a bill package', () => {
       taxBasis: 'intra_state',
       taxBasisSource: 'from_project_flag',
     });
+  });
+
+  it('reads the company as the branch the project bills from (041)', async () => {
+    // A Gujarat project's bills are raised under the Gujarat GSTIN: the header and the tax-basis
+    // check both ask for the project's branch, never the head office by default.
+    const built = build({
+      direction: BillDirection.to_subcontractor,
+      branchId: 'branch-gj',
+      award: [
+        {
+          id: 'award-1',
+          description: 'Mapped',
+          rate: 1000,
+          boqTaskItemId: 'boq-1',
+          awardedQty: 10,
+        },
+      ],
+      approved: { 'boq-1': '1.000' },
+    });
+
+    await built.service.compose({ isSuperAdmin: true }, 'c-1', {
+      ...period,
+      direction: BillDirection.to_subcontractor,
+      workOrderId: 'wo-1',
+    });
+
+    const calls = (
+      built as unknown as { companies: { getBillingIdentity: jest.Mock } }
+    ).companies.getBillingIdentity.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(
+      calls.every(
+        ([companyId, branchId]) =>
+          companyId === 'c-1' && branchId === 'branch-gj',
+      ),
+    ).toBe(true);
   });
 
   it('numbers a package from the bill it raises, not from its own count', async () => {

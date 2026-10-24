@@ -198,6 +198,7 @@ describe('UsersService', () => {
       expect(email.sendInviteEmail).not.toHaveBeenCalled();
       expect(email.sendAccountReadyEmail).toHaveBeenCalledWith({
         to: 'new.person@example.com',
+        companyId: 'co-1',
         loginUrl: 'http://localhost:3001/login',
         username: 'new.person',
       });

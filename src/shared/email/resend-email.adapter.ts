@@ -1,19 +1,46 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { Resend } from 'resend';
-import type { EmailConfig } from '../../common/configs/config.interface';
+import type {
+  EmailConfig,
+  SettingsConfig,
+} from '../../common/configs/config.interface';
+import { CompaniesService } from '../../settings/companies/companies.service';
 import { EmailDeliveryError, EmailService } from './email.service';
 import {
+  EmailBrand,
+  LOGO_CONTENT_ID,
+  RenderOptions,
   RenderedEmail,
   renderAccountDeactivatedEmail,
   renderAccountLockedEmail,
   renderAccountReadyEmail,
   renderAdminPasswordResetEmail,
+  renderEmailLayout,
   renderInviteEmail,
   renderPasswordChangedEmail,
   renderPasswordResetEmail,
   renderPayslipEmail,
 } from './email-templates';
+
+/** How long a company's name and logo are reused before being read again. */
+const BRAND_CACHE_MS = 10 * 60 * 1000;
+
+interface Attachment {
+  filename: string;
+  content: Buffer;
+  contentId?: string;
+}
+
+interface ResolvedBrand {
+  brand: EmailBrand;
+  logo: Attachment | null;
+}
+
+/** JPEG and PNG are what the company form accepts; the extension is how Resend types the part. */
+const logoFilename = (bytes: Buffer): string =>
+  bytes.subarray(0, 4).toString('hex') === '89504e47' ? 'logo.png' : 'logo.jpg';
 
 /**
  * Real delivery through Resend — the production adapter (constitution v1.3.0,
@@ -24,8 +51,18 @@ export class ResendEmailAdapter extends EmailService {
   private readonly logger = new Logger('EmailService');
   private readonly client: Resend;
   private readonly from: string;
+  private readonly renderOptions: RenderOptions;
+  private readonly brands = new Map<
+    string,
+    { at: number; value: Promise<ResolvedBrand> }
+  >();
 
-  constructor(configService: ConfigService) {
+  constructor(
+    configService: ConfigService,
+    // Resolved per send rather than injected: `settings` reaches the email transport through its
+    // users module, so importing it here would close a loop at boot.
+    private readonly moduleRef: ModuleRef,
+  ) {
     super();
     const config = configService.get<EmailConfig>('email');
 
@@ -51,13 +88,64 @@ export class ResendEmailAdapter extends EmailService {
 
     this.client = new Resend(config.apiKey);
     this.from = config.fromAddress;
+    this.renderOptions = {
+      timeZone: configService.get<SettingsConfig>('settings').timezone,
+    };
+  }
+
+  /**
+   * The recipient's company name and logo, through `settings`' exported read (Principle I).
+   *
+   * Cached briefly, because a payroll run sends one per employee for the same company. A logo that
+   * cannot be read sends the email with the name in its place: an invite is never held back for
+   * want of a picture.
+   */
+  private brandFor(
+    companyId: string | null | undefined,
+  ): Promise<ResolvedBrand> {
+    if (!companyId) {
+      return Promise.resolve({
+        brand: { companyName: null, hasLogo: false },
+        logo: null,
+      });
+    }
+    const cached = this.brands.get(companyId);
+    if (cached && Date.now() - cached.at < BRAND_CACHE_MS) return cached.value;
+
+    const value = this.moduleRef
+      .get(CompaniesService, { strict: false })
+      .getDocumentIdentity(companyId)
+      .then(
+        ({ name, logo }): ResolvedBrand => ({
+          brand: { companyName: name || null, hasLogo: logo !== null },
+          logo: logo
+            ? {
+                filename: logoFilename(logo),
+                content: logo,
+                contentId: LOGO_CONTENT_ID,
+              }
+            : null,
+        }),
+      )
+      .catch((error: Error): ResolvedBrand => {
+        this.brands.delete(companyId);
+        this.logger.warn(
+          `Company ${companyId} could not be read for email branding; sending unbranded. ${error.message}`,
+        );
+        return { brand: { companyName: null, hasLogo: false }, logo: null };
+      });
+    this.brands.set(companyId, { at: Date.now(), value });
+    return value;
   }
 
   private async send(
     to: string,
+    companyId: string | null | undefined,
     message: RenderedEmail,
-    attachments?: { filename: string; content: Buffer }[],
+    attachments: Attachment[] = [],
   ): Promise<void> {
+    const { brand, logo } = await this.brandFor(companyId);
+    const parts = logo ? [logo, ...attachments] : attachments;
     // Resend's SDK reports failures in the response body rather than by throwing,
     // so a caller that only wrapped this in try/catch would treat every rejected
     // send as a success.
@@ -66,8 +154,8 @@ export class ResendEmailAdapter extends EmailService {
       to,
       subject: message.subject,
       text: message.text,
-      html: message.html,
-      ...(attachments ? { attachments } : {}),
+      html: renderEmailLayout(message.html, brand),
+      ...(parts.length > 0 ? { attachments: parts } : {}),
     });
     if (error) {
       // The recipient is logged; the message body is not, since an invite body
@@ -79,62 +167,90 @@ export class ResendEmailAdapter extends EmailService {
 
   async sendInviteEmail(input: {
     to: string;
+    companyId?: string | null;
     setPasswordUrl: string;
     isResend: boolean;
     expiresAt: Date;
   }): Promise<void> {
-    await this.send(input.to, renderInviteEmail(input));
+    await this.send(
+      input.to,
+      input.companyId,
+      renderInviteEmail(input, this.renderOptions),
+    );
   }
 
   async sendAccountLockedEmail(input: {
     to: string;
+    companyId?: string | null;
     unlockAt: Date;
   }): Promise<void> {
-    await this.send(input.to, renderAccountLockedEmail(input));
+    await this.send(
+      input.to,
+      input.companyId,
+      renderAccountLockedEmail(input, this.renderOptions),
+    );
   }
 
   async sendPasswordResetEmail(input: {
     to: string;
+    companyId?: string | null;
     resetUrl: string;
     expiresAt: Date;
     requestedByAdmin: boolean;
   }): Promise<void> {
-    await this.send(input.to, renderPasswordResetEmail(input));
+    await this.send(
+      input.to,
+      input.companyId,
+      renderPasswordResetEmail(input, this.renderOptions),
+    );
   }
 
   async sendPasswordChangedEmail(input: {
     to: string;
+    companyId?: string | null;
     changedAt: Date;
     via: 'self' | 'reset_link';
   }): Promise<void> {
-    await this.send(input.to, renderPasswordChangedEmail(input));
+    await this.send(
+      input.to,
+      input.companyId,
+      renderPasswordChangedEmail(input, this.renderOptions),
+    );
   }
 
-  async sendAdminPasswordResetEmail(input: { to: string }): Promise<void> {
-    await this.send(input.to, renderAdminPasswordResetEmail());
+  async sendAdminPasswordResetEmail(input: {
+    to: string;
+    companyId?: string | null;
+  }): Promise<void> {
+    await this.send(input.to, input.companyId, renderAdminPasswordResetEmail());
   }
 
-  async sendAccountDeactivatedEmail(input: { to: string }): Promise<void> {
-    await this.send(input.to, renderAccountDeactivatedEmail());
+  async sendAccountDeactivatedEmail(input: {
+    to: string;
+    companyId?: string | null;
+  }): Promise<void> {
+    await this.send(input.to, input.companyId, renderAccountDeactivatedEmail());
   }
 
   async sendAccountReadyEmail(input: {
     to: string;
+    companyId?: string | null;
     loginUrl: string;
     username: string | null;
   }): Promise<void> {
-    await this.send(input.to, renderAccountReadyEmail(input));
+    await this.send(input.to, input.companyId, renderAccountReadyEmail(input));
   }
 
   async sendPayslipEmail(input: {
     to: string;
+    companyId?: string | null;
     employeeName: string;
     periodLabel: string;
     companyName: string;
     pdf: Buffer;
     filename: string;
   }): Promise<void> {
-    await this.send(input.to, renderPayslipEmail(input), [
+    await this.send(input.to, input.companyId, renderPayslipEmail(input), [
       { filename: input.filename, content: input.pdf },
     ]);
   }

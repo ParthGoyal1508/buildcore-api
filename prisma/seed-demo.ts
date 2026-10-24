@@ -49,6 +49,7 @@ import {
 } from '../src/settings/document-kinds';
 import { DEFAULT_DOCUMENT_TYPES } from '../src/settings/reference-data/default-document-types';
 import { DEFAULT_VENDOR_CATEGORIES } from '../src/settings/vendor-categories/vendor-categories.service';
+import { headOfficeBranchId } from './seeds/company-branches.seed';
 
 // Resolved before the client is built, because a remote target has to adjust
 // DATABASE_URL and `PrismaClient` reads it at construction.
@@ -2476,6 +2477,7 @@ async function main() {
         await prisma.project.create({
           data: {
             companyId: company.id,
+            branchId: await headOfficeBranchId(prisma, company.id),
             code: p.code,
             name: p.name,
             clientId: clients[p.client].id,
@@ -2570,6 +2572,7 @@ async function main() {
         data: {
           userId: user.id,
           companyId: company.id,
+          branchId: await headOfficeBranchId(prisma, company.id),
           siteId: sites[i % sites.length].id,
           shiftId: generalShift.id,
           // The format the app's own generator produces, so codes issued later

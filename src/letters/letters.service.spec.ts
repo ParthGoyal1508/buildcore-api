@@ -159,6 +159,28 @@ function harness(
   const records = new LetterRecordSources();
   const employeeResolver = jest.fn(async () => opts.employee ?? null);
   records.register('employee', employeeResolver);
+  // 041: the company as its head office — what every letter here was issued from — read from the
+  // same `company` row a test may have overridden, as the service once read it itself.
+  const companies = {
+    getBranchIdentity: jest.fn(
+      async (_companyId: string, _branchId?: string | null) => ({
+        branchId: 'branch-ho',
+        name: 'Test Company',
+        logoRef: null,
+        gstin: null,
+        pan: null,
+        address: null,
+        city: null,
+        state: null,
+        pinCode: null,
+        phone: null,
+        email: null,
+        website: null,
+        ...((await tx.company.findUnique()) ?? {}),
+      }),
+    ),
+    assertActiveBranch: jest.fn(async () => undefined),
+  };
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   const service = new LettersService(
@@ -173,6 +195,7 @@ function harness(
     fields,
     records,
     { bodyFor: async () => '1. Standard terms.' } as never,
+    companies as never,
   );
   // What the body was rendered with — the observable half of pre-fill.
   const render = jest.spyOn(service as any, 'render'); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -190,6 +213,8 @@ function harness(
     kinds,
     employeeResolver,
     renderedWith,
+    records,
+    companies,
   };
 }
 
@@ -414,6 +439,76 @@ describe('LettersService — listing by kind, and what was typed (2026-10-15)', 
     await expect(
       service.compose(financeCaller, compose),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+});
+
+describe('LettersService — the branch a letter is issued from (041)', () => {
+  const PURCHASE_ORDER = kind({
+    id: 'k-po',
+    key: 'letter_purchase_order',
+    label: 'Purchase order',
+  });
+  const created = (tx: { issuedLetter: { create: jest.Mock } }) =>
+    (
+      tx.issuedLetter.create.mock.calls[0] as unknown as [
+        { data: Record<string, unknown> },
+      ]
+    )[0].data;
+
+  it('issues a purchase order with no project from the branch the composer chose', async () => {
+    const { service, tx, companies } = harness({ kind: PURCHASE_ORDER });
+    await service.compose(callerWith(Permission.INVENTORY), {
+      letterKindKey: 'letter_purchase_order',
+      subjectType: 'vendor',
+      subjectId: 'v-1',
+      branchId: 'branch-mh',
+      variables: { vendorName: 'Shree' },
+    });
+    expect(companies.assertActiveBranch).toHaveBeenCalledWith(
+      COMPANY,
+      'branch-mh',
+      {
+        allowInactive: true,
+      },
+    );
+    expect(created(tx as never).branchId).toBe('branch-mh');
+  });
+
+  it('issues a project letter from the project’s own branch, whatever was asked', async () => {
+    const { service, tx, records } = harness({ kind: WORK_ORDER });
+    records.register('project', async () => ({
+      name: 'NH-52',
+      branchId: 'branch-gj',
+    }));
+    await service.compose(financeCaller, {
+      ...composeWorkOrder,
+      subjectType: 'project',
+      subjectId: 'p-1',
+      branchId: 'branch-mh',
+    });
+    expect(created(tx as never).branchId).toBe('branch-gj');
+  });
+
+  it('issues a work order from the branch of the project it is on', async () => {
+    const { service, tx, records } = harness({ kind: WORK_ORDER });
+    records.register('work_order', async () => ({ branchId: 'branch-up' }));
+    await service.compose(financeCaller, {
+      ...composeWorkOrder,
+      subjectType: 'work_order',
+      subjectId: 'wo-1',
+    });
+    expect(created(tx as never).branchId).toBe('branch-up');
+  });
+
+  it('leaves a letter with nothing to go on on the head office', async () => {
+    const { service, tx } = harness({ kind: PURCHASE_ORDER });
+    await service.compose(callerWith(Permission.INVENTORY), {
+      letterKindKey: 'letter_purchase_order',
+      subjectType: 'vendor',
+      subjectId: 'v-1',
+      variables: { vendorName: 'Shree' },
+    });
+    expect(created(tx as never).branchId).toBeNull();
   });
 });
 

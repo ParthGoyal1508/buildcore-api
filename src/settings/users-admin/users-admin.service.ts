@@ -149,7 +149,11 @@ export class UsersAdminService {
     );
 
     if (before && before.status !== UserStatus.deactivated) {
-      await this.deactivation.afterDeactivation({ id, email: before.email });
+      await this.deactivation.afterDeactivation({
+        id,
+        email: before.email,
+        companyId: before.companyId,
+      });
     }
 
     await this.auditLog.record({
