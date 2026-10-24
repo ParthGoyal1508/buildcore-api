@@ -76,12 +76,17 @@ export class CompaniesController {
   async findAll(
     @UserEntity() caller: AuthenticatedUser,
   ): Promise<CompanyResponseDto[]> {
-    const companies = await this.companiesService.findAll();
+    const [companies, branchCounts] = await Promise.all([
+      this.companiesService.findAll(),
+      this.companiesService.branchCounts(),
+    ]);
     // A company-scoped administrator sees their own company only (2026-10-16 audit, C4).
     const visible = caller.permissions.includes(Permission.CROSS_COMPANY_ACCESS)
       ? companies
       : companies.filter((company) => company.id === caller.companyId);
-    return visible.map(CompanyResponseDto.fromEntity);
+    return visible.map((company) =>
+      CompanyResponseDto.fromEntity(company, branchCounts.get(company.id) ?? 0),
+    );
   }
 
   @Get(':id')

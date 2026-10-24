@@ -949,6 +949,17 @@ export class CompaniesService {
     return this.prisma.company.findMany({ orderBy: { name: 'asc' } });
   }
 
+  /** 041: branches per company, for the companies list. Read as system — the table is under RLS. */
+  async branchCounts(): Promise<Map<string, number>> {
+    const rows = await withRlsContext(
+      this.prisma,
+      { isSuperAdmin: true },
+      (tx) =>
+        tx.companyBranch.groupBy({ by: ['companyId'], _count: { _all: true } }),
+    );
+    return new Map(rows.map((r) => [r.companyId, r._count._all]));
+  }
+
   /** A company's display name, for feature 011's letter token substitution. */
   async getName(companyId: string): Promise<string> {
     const company = await withRlsContext(
