@@ -50,7 +50,6 @@ const UPLOAD_ROUTES = [
   'POST /projects/client-bills/:id/certify',
   'POST /projects/document-uploads',
   'POST /projects/dwr/:dwrId/attachments',
-  'POST /projects/ra-bills/:raBillId/signed-copy',
   'POST /recruitment/candidates/:id/resume',
   'POST /signatories',
   'PUT /plant/maintenance/:id/job-card/quotation',
