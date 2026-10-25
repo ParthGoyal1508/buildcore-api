@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsISO8601,
   IsLatitude,
   IsLongitude,
@@ -14,6 +17,9 @@ import {
   Min,
 } from 'class-validator';
 import { IsBase64Payload } from '../../../common/uploads/base64-payload';
+
+/** Photos one site delivery may carry (the client, 2026-10-25: "max 5"). */
+export const MAX_SITE_ENTRY_PHOTOS = 5;
 
 /**
  * A delivery recorded at the site (043). Partial by design: the vendor, quantity, rate and bill are
@@ -53,13 +59,17 @@ export class CreateSiteEntryDto {
   vehicleNo!: string;
 
   @ApiProperty({
+    type: [String],
     description:
-      'The delivery photographed live, base64-encoded (data-URL prefix optional).',
+      'The delivery photographed live, one to five photos, each base64-encoded (data-URL prefix ' +
+      'optional). The location below is the fix taken with the first.',
   })
-  @IsString()
-  @IsNotEmpty()
-  @IsBase64Payload()
-  photo!: string;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(MAX_SITE_ENTRY_PHOTOS)
+  @IsString({ each: true })
+  @IsBase64Payload({ each: true })
+  photos!: string[];
 
   @ApiProperty({ example: 19.076 })
   @Type(() => Number)

@@ -170,12 +170,24 @@ export class SiteEntriesService {
     }
 
     // Uploaded before the row is written, as every purchase upload is: a failed upload has saved
-    // nothing. If the write then fails, the photo is removed again, so nothing is half-saved.
-    const photoFileRef = await this.purchases.storeUpload(
-      dto.photo,
-      IMAGE_TYPES,
-      'The delivery photo',
-    );
+    // nothing. If a later photo or the write then fails, the stored photos are removed again, so
+    // nothing is half-saved.
+    const photoRefs: string[] = [];
+    try {
+      for (const [index, photo] of dto.photos.entries()) {
+        photoRefs.push(
+          await this.purchases.storeUpload(
+            photo,
+            IMAGE_TYPES,
+            `Delivery photo ${index + 1}`,
+          ),
+        );
+      }
+    } catch (error) {
+      await this.storage.deleteMany(photoRefs).catch(() => undefined);
+      throw error;
+    }
+    const [photoFileRef, ...extraPhotoFileRefs] = photoRefs;
 
     let created: Purchase;
     try {
@@ -191,6 +203,7 @@ export class SiteEntriesService {
             vehicleNo,
             deliveredAt,
             photoFileRef,
+            extraPhotoFileRefs,
             gpsLatitude: dto.latitude,
             gpsLongitude: dto.longitude,
             gpsAccuracyMeters: dto.accuracyMeters,
@@ -204,7 +217,7 @@ export class SiteEntriesService {
         }),
       );
     } catch (error) {
-      await this.storage.deleteMany([photoFileRef]).catch(() => undefined);
+      await this.storage.deleteMany(photoRefs).catch(() => undefined);
       // Two taps that both passed the check above: the second loses the unique index race and is
       // answered with what the first saved.
       if (

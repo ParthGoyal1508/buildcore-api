@@ -6671,6 +6671,9 @@ model Purchase {
   /// dusk with no signal must still be able to record that it arrived. Nullable for that reason and
   /// because the rule is not retrospective — purchases recorded before it existed keep their gaps.
   photoFileRef String?
+  /// The site's second to fifth delivery photos (043), in the order taken; `photoFileRef` is the
+  /// first. Empty for every purchase with one photo or none.
+  extraPhotoFileRefs String[] @default([])
   remarks      String?
 
   /// The indent line this purchase fulfils, if it came from one (FR-023).

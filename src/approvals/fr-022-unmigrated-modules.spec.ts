@@ -592,6 +592,10 @@ describe('FR-022 — unmigrated modules keep their own approvals', () => {
           // filter. **Verified by grep: nothing in it calls `ApprovalService` or
           // `approvals.submit`.**
           ':(exclude)src/labour/workers/labour-worker.service.spec.ts',
+          // 043 (site purchase entries), 2026-10-25: the site's delivery entry — a partial
+          // purchase Head Office completes. **Verified by grep: nothing in it calls
+          // `ApprovalService` or `approvals.submit`.**
+          ':(exclude)src/inventory/site-entries',
         ],
         {
           cwd: REPO_ROOT,
