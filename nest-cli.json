@@ -11,6 +11,10 @@
       {
         "include": "letters/fonts/*",
         "watchAssets": true
+      },
+      {
+        "include": "hr/biometrics/models/*.onnx",
+        "watchAssets": true
       }
     ]
   }

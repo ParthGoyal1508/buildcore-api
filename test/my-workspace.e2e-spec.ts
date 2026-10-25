@@ -3,8 +3,6 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from 'nestjs-prisma';
 import * as request from 'supertest';
 import { hash } from 'argon2';
-import { readFileSync } from 'fs';
-import { dirname, join } from 'path';
 import { Permission } from '@prisma/client';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/common/configure-app';
@@ -1738,16 +1736,33 @@ describe('My Workspace — enrolment and punch (e2e)', () => {
      * fully green suite coexisted with an enrolment endpoint that returned
      * `413 request entity too large` for every real request.
      *
-     * These cases post photographs of representative dimensions — the face-api
-     * package ships sample images — so a body limit regression fails here instead
-     * of in the field.
+     * These cases post photographs of representative dimensions, so a body limit
+     * regression fails here instead of in the field. The pixels are noise rather than a
+     * face — the matcher is the scripted fake, and noise is what keeps a JPEG at a real
+     * camera's size. (They were face-api's bundled sample photos until that package was
+     * removed on 2026-10-26.)
      */
-    const demoDir = join(
-      dirname(require.resolve('@vladmandic/face-api/package.json')),
-      'demo',
-    );
-    const realPhoto = () =>
-      readFileSync(join(demoDir, 'sample1.jpg')).toString('base64');
+    let photo = '';
+    const realPhoto = () => photo;
+
+    beforeAll(async () => {
+      type Sharp = (o: import('sharp').SharpOptions) => import('sharp').Sharp;
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const sharp: Sharp = require('sharp');
+      photo = (
+        await sharp({
+          create: {
+            width: 1280,
+            height: 960,
+            channels: 3,
+            background: '#808080',
+            noise: { type: 'gaussian', mean: 128, sigma: 30 },
+          },
+        })
+          .jpeg({ quality: 85 })
+          .toBuffer()
+      ).toString('base64');
+    });
 
     beforeAll(async () => {
       await http().delete('/my/face-enrol/consent').set(auth(employeeToken));

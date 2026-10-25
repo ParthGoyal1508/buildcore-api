@@ -2,8 +2,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
 import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
-import { BiometricsService } from '../hr/biometrics/biometrics.service';
-import { FaceApiBiometricsService } from '../hr/biometrics/face-api-biometrics.service';
+import { BiometricsModule } from '../hr/biometrics/biometrics.module';
 import { ImageProcessingService } from '../hr/biometrics/image-processing.service';
 import { NocsModule } from '../nocs/nocs.module';
 import { PartnersModule } from '../partners/partners.module';
@@ -69,6 +68,7 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     UsersModule,
     ApprovalsModule,
     NocsModule,
+    BiometricsModule,
   ],
   controllers: [
     WageRateController,
@@ -104,7 +104,6 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     MusterAttendanceService,
     ImageProcessingService,
     AuditLogService,
-    { provide: BiometricsService, useClass: FaceApiBiometricsService },
   ],
   exports: [
     LabourService,

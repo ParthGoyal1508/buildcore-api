@@ -61,9 +61,6 @@
     "@nestjs/swagger": "7.1.2",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "5.22.0",
-    "@tensorflow/tfjs": "^4.22.0",
-    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "@vladmandic/face-api": "^1.7.15",
     "argon2": "^0.31.0",
     "class-transformer": "0.5.1",
     "class-validator": "0.13.2",
@@ -72,6 +69,7 @@
     "exceljs": "^4.4.0",
     "helmet": "7.1.0",
     "nestjs-prisma": "0.22.0-dev.0",
+    "onnxruntime-node": "^1.30.0",
     "passport": "0.6.0",
     "passport-jwt": "4.0.1",
     "pdfkit": "^0.20.2",
@@ -123,12 +121,21 @@
         "@swc/jest",
         {
           "jsc": {
-            "parser": { "syntax": "typescript", "decorators": true },
-            "transform": { "legacyDecorator": true, "decoratorMetadata": true },
+            "parser": {
+              "syntax": "typescript",
+              "decorators": true
+            },
+            "transform": {
+              "legacyDecorator": true,
+              "decoratorMetadata": true
+            },
             "target": "es2021",
             "keepClassNames": true
           },
-          "module": { "type": "commonjs", "noInterop": true }
+          "module": {
+            "type": "commonjs",
+            "noInterop": true
+          }
         }
       ]
     },
