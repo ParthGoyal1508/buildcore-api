@@ -74,8 +74,10 @@ async function main(): Promise<void> {
       ['equipment document types', new EquipmentDocTypesService(...deps)],
     ];
 
-    // Resolved once, exactly as `CompaniesService.create` resolves them.
-    const chains = new ChainsService(...deps);
+    // Resolved once, exactly as `CompaniesService.create` resolves them. The third
+    // dependency (UsersService, 042) backs only `putSlotMapping`'s foreign-role
+    // refusal, which seeding never reaches — it upserts mappings directly.
+    const chains = new ChainsService(...deps, null as never);
     const superAdminRole = await prisma.role.findFirst({
       where: { isProtected: true },
       select: { id: true },
