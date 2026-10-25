@@ -239,6 +239,57 @@ describe('FuelRecoveryService', () => {
       expect(prisma.tx.hireBillDeduction.create).not.toHaveBeenCalled();
     });
 
+    it('refuses a recovery that would push the bill’s net negative (042)', async () => {
+      // The recompute used to write whatever came out of the arithmetic. A small bill —
+      // or one already carrying its own deduction and hold amounts — could end up owing
+      // the company money, a figure no vendor is going to pay.
+      const { service, prisma } = build();
+      prisma.tx.hireBill.findUniqueOrThrow.mockResolvedValue({
+        id: 'bill-1',
+        billedHours: 1,
+        rate: 100,
+        tdsRate: null,
+        basis: 'hours',
+        grossAmount: 100,
+        deductionAmount: 0,
+        holdAmount: 0,
+        status: HireBillStatus.verified,
+        // The recovery just written: 285 against a 100-rupee bill.
+        fuelDeductions: [{ amount: 285 }],
+      });
+
+      const attempt = service.deductFromHireBill(caller, 'exc-1', '127.0.0.1');
+      await expect(attempt).rejects.toMatchObject({
+        response: { code: 'FUEL_RECOVERY_EXCEEDS_BILL' },
+      });
+      const error = await attempt.catch((e) => e);
+      expect(error.status).toBe(409);
+      expect(error.response.message).toContain('below zero');
+    });
+
+    it('allows a recovery the bill can absorb (042)', async () => {
+      const { service, prisma } = build();
+      prisma.tx.hireBill.findUniqueOrThrow.mockResolvedValue({
+        id: 'bill-1',
+        billedHours: 10,
+        rate: 100,
+        tdsRate: null,
+        basis: 'hours',
+        grossAmount: 1000,
+        deductionAmount: 0,
+        holdAmount: 0,
+        status: HireBillStatus.verified,
+        fuelDeductions: [{ amount: 285 }],
+      });
+
+      await expect(
+        service.deductFromHireBill(caller, 'exc-1', '127.0.0.1'),
+      ).resolves.toBeDefined();
+      // The net written is the derived one: 1,000 − 285.
+      const [[update]] = (prisma.tx.hireBill.update as jest.Mock).mock.calls;
+      expect(Number(update.data.netPayable)).toBe(715);
+    });
+
     it('never touches a paid bill, even to reverse a deduction', async () => {
       const { service, prisma } = build({
         hireBillDeduction: { id: 'ded-1' },
