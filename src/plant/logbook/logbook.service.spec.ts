@@ -154,16 +154,6 @@ describe('LogbookService (036 K2, K4, K5)', () => {
     );
   });
 
-  it('refuses to edit an entry inside a paid hire bill (K5)', async () => {
-    const { service, prisma } = build({
-      bill: { ...billed, status: HireBillStatus.paid },
-    });
-    prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());
-    await expect(
-      service.update(caller, 'lb-1', { remarks: 'x' }, 'ip'),
-    ).rejects.toThrow(/cannot be edited/);
-  });
-
   it('keeps the whole deleted row in the audit log (K5)', async () => {
     const { service, prisma, audit } = build();
     prisma.tx.logbookEntry.findUnique.mockResolvedValue(entry());

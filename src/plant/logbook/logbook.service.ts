@@ -28,7 +28,6 @@ import {
   CorrectLogbookReadingsDto,
   CreateLogbookEntryDto,
   ListLogbookDto,
-  UpdateLogbookEntryDto,
 } from './dto/logbook.dto';
 
 export interface LogbookRow {
@@ -282,59 +281,6 @@ export class LogbookService {
     });
 
     return this.toRow(caller, created);
-  }
-
-  async update(
-    caller: AuthenticatedUser,
-    entryId: string,
-    dto: UpdateLogbookEntryDto,
-    ipAddress: string,
-  ): Promise<LogbookRow> {
-    const updated = await withRlsContext(
-      this.prisma,
-      rlsContextFor(caller),
-      async (tx) => {
-        const existing = await tx.logbookEntry.findUnique({
-          where: { id: entryId },
-        });
-        if (!existing) throw new NotFoundException('Logbook entry not found');
-        assertInScope(caller, existing, 'Logbook entry');
-        await this.assertNotBilled(tx, existing, 'edited');
-
-        if (dto.operatorId) {
-          await this.refs.requireEmployee(
-            caller,
-            dto.operatorId,
-            existing.companyId,
-          );
-        }
-
-        return tx.logbookEntry.update({
-          where: { id: entryId },
-          data: {
-            ...(dto.fuelConsumed !== undefined
-              ? { fuelConsumed: dto.fuelConsumed }
-              : {}),
-            ...(dto.remarks !== undefined ? { remarks: dto.remarks } : {}),
-            ...(dto.operatorId !== undefined
-              ? { operatorId: dto.operatorId }
-              : {}),
-          },
-          include: { equipment: { select: { code: true, name: true } } },
-        });
-      },
-    );
-
-    await this.auditLog.record({
-      entityType: AuditEntityType.LOGBOOK_ENTRY,
-      action: AuditAction.UPDATE,
-      entityId: entryId,
-      accountId: caller.id,
-      companyId: updated.companyId,
-      ipAddress,
-      changes: { ...dto },
-    });
-    return this.toRow(caller, updated);
   }
 
   /**
