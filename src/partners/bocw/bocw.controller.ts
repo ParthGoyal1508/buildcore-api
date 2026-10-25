@@ -21,7 +21,7 @@ import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
 import { BOCWService } from './bocw.service';
-import { CreateBocwPaymentDto } from './dto/bocw.dto';
+import { CreateBocwPaymentDto, ListBocwQueryDto } from './dto/bocw.dto';
 
 @ApiTags('Partners')
 @ApiBearerAuth()
@@ -41,9 +41,13 @@ export class BOCWController {
   })
   async list(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('companyId') companyId?: string,
+    @Query() query: ListBocwQueryDto,
   ) {
-    return this.bocw.list(caller, companyId);
+    // `search` and `status` narrow the rows server-side (042); the shape is unchanged.
+    return this.bocw.list(caller, query.companyId, {
+      search: query.search,
+      status: query.status,
+    });
   }
 
   @Get('export')

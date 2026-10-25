@@ -15,6 +15,7 @@ import { UserEntity } from '../../common/decorators/user.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { contentDispositionFor } from '../../common/storage/file-type';
 import { ExportThrottle } from '../../common/throttle/app-throttle';
+import { RagMatrixQueryDto } from './dto/rag-query.dto';
 import { RagService } from './rag.service';
 
 @ApiTags('Partners')
@@ -32,13 +33,15 @@ export class RagController {
       'Months later than the current one are `gray` rather than `missing` — a filing ' +
       'that is not yet due has not been missed.',
   })
-  @ApiQuery({ name: 'fy', example: '2025-26' })
   async matrix(
     @UserEntity() caller: AuthenticatedUser,
-    @Query('fy') fy: string,
-    @Query('companyId') companyId?: string,
+    @Query() query: RagMatrixQueryDto,
   ) {
-    return this.rag.buildMatrix(caller, fy, companyId);
+    // `search` and `status` narrow the rows server-side (042); the shape is unchanged.
+    return this.rag.buildMatrix(caller, query.fy, query.companyId, {
+      search: query.search,
+      status: query.status,
+    });
   }
 
   @Get('export')

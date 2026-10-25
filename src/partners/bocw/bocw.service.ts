@@ -14,6 +14,14 @@ import { CreateBocwPaymentDto } from './dto/bocw.dto';
 
 export type BocwStatus = 'pending' | 'partial' | 'paid';
 
+/** Server-side narrowing of the cess list (042): both optional, both ANDed. */
+export interface BocwListFilters {
+  /** Rows whose project name contains this, case-insensitive. */
+  search?: string;
+  /** Rows in this payment state only. */
+  status?: BocwStatus;
+}
+
 export interface BocwProjectRow {
   projectId: string;
   projectName: string;
@@ -70,6 +78,7 @@ export class BOCWService {
   async list(
     caller: AuthenticatedUser,
     companyId?: string,
+    filters: BocwListFilters = {},
   ): Promise<BocwListResponse> {
     const scope = companyScope(caller, companyId);
     const targetCompanyId = scope.companyId;
@@ -106,25 +115,35 @@ export class BOCWService {
       payments.map((row) => [row.projectId, Number(row._sum.amountPaid ?? 0)]),
     );
 
-    return {
-      cessRate,
-      unavailableModules,
-      rows: projects.map((project) => {
-        const cessLiability = toPaise(project.contractValue * cessRate);
-        const totalPaid = toPaise(paidByProject.get(project.projectId) ?? 0);
-        const balance = toPaise(cessLiability - totalPaid);
-        return {
-          projectId: project.projectId,
-          projectName: project.name,
-          contractValue: project.contractValue,
-          cessRate,
-          cessLiability,
-          totalPaid,
-          balance,
-          status: deriveStatus(balance, totalPaid),
-        };
-      }),
-    };
+    let rows = projects.map((project) => {
+      const cessLiability = toPaise(project.contractValue * cessRate);
+      const totalPaid = toPaise(paidByProject.get(project.projectId) ?? 0);
+      const balance = toPaise(cessLiability - totalPaid);
+      return {
+        projectId: project.projectId,
+        projectName: project.name,
+        contractValue: project.contractValue,
+        cessRate,
+        cessLiability,
+        totalPaid,
+        balance,
+        status: deriveStatus(balance, totalPaid),
+      };
+    });
+
+    // 042: the screen's project search and status filter, applied after the figures are derived —
+    // status only exists once the payments are summed. The export takes no filters and stays whole.
+    const needle = filters.search?.trim().toLowerCase();
+    if (needle) {
+      rows = rows.filter((row) =>
+        row.projectName.toLowerCase().includes(needle),
+      );
+    }
+    if (filters.status) {
+      rows = rows.filter((row) => row.status === filters.status);
+    }
+
+    return { cessRate, unavailableModules, rows };
   }
 
   /**
