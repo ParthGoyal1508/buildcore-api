@@ -42,6 +42,20 @@ export function holdsGrant(
   );
 }
 
+/**
+ * Whether the caller could hand out every one of `grants` — the boolean twin of
+ * `assertMayGrant`, for list endpoints that offer roles rather than refuse them (042).
+ */
+export function mayGrantAll(
+  caller: Pick<AuthenticatedUser, 'permissions' | 'grants'>,
+  grants: readonly Grant[],
+): boolean {
+  return grants.every(
+    ({ permission, level }) =>
+      ALWAYS_GRANTABLE.has(permission) || holdsGrant(caller, permission, level),
+  );
+}
+
 /** Refuses when any of `grants` is beyond what the caller holds, naming what is. */
 export function assertMayGrant(
   caller: Pick<AuthenticatedUser, 'permissions' | 'grants'>,
@@ -69,6 +83,23 @@ export function assertMayGrant(
  * Everything a role grants, as area-and-level pairs: its grant rows, plus both levels of any
  * legacy array entry that has no rows (the same reading `toAuthenticatedUser` gives it).
  */
+export function expandRoleGrants(
+  permissions: readonly Permission[],
+  rolePermissions: readonly Grant[],
+): Grant[] {
+  const grants: Grant[] = [...rolePermissions];
+  const withRows = new Set(grants.map((grant) => grant.permission));
+  for (const permission of permissions) {
+    if (withRows.has(permission)) continue;
+    grants.push(
+      { permission, level: AccessLevel.read },
+      { permission, level: AccessLevel.write },
+    );
+  }
+  return grants;
+}
+
+/** `expandRoleGrants` for a role fetched by id; null for an unknown role. */
 export async function roleGrants(
   tx: Pick<PrismaClient, 'role'>,
   roleId: string,
@@ -81,14 +112,5 @@ export async function roleGrants(
     },
   });
   if (!role) return null;
-  const grants: Grant[] = [...(role.rolePermissions ?? [])];
-  const withRows = new Set(grants.map((grant) => grant.permission));
-  for (const permission of role.permissions ?? []) {
-    if (withRows.has(permission)) continue;
-    grants.push(
-      { permission, level: AccessLevel.read },
-      { permission, level: AccessLevel.write },
-    );
-  }
-  return grants;
+  return expandRoleGrants(role.permissions ?? [], role.rolePermissions ?? []);
 }

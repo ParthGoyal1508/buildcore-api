@@ -137,7 +137,12 @@ export class MusterAttendanceService {
 
   async daily(
     caller: AuthenticatedUser,
-    query: { date?: string; siteId?: string; filter?: MusterFilter },
+    query: {
+      date?: string;
+      siteId?: string;
+      filter?: MusterFilter;
+      search?: string;
+    },
   ): Promise<{
     date: string;
     today: string;
@@ -155,9 +160,18 @@ export class MusterAttendanceService {
       ...ref,
       ...(days.get(date) ?? emptyDay(date)),
     }));
+    // The summary describes the whole day; `filter` and `search` narrow only the rows shown,
+    // so the headline counts cannot change under someone typing in the search box (042).
     const summary = summarise(rows);
     const filter = query.filter;
-    const items = filter ? rows.filter((r) => matches(r, filter)) : rows;
+    const needle = query.search?.trim().toLowerCase();
+    const items = rows.filter(
+      (r) =>
+        (!filter || matches(r, filter)) &&
+        (!needle ||
+          r.fullName.toLowerCase().includes(needle) ||
+          r.labourCode.toLowerCase().includes(needle)),
+    );
     return { date, today, summary, items };
   }
 

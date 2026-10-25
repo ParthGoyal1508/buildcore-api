@@ -65,6 +65,80 @@ describe('RAG cell colouring rule', () => {
   });
 });
 
+describe('RagService.buildMatrix filters (042)', () => {
+  // Two contractors: one with a verified April filing, one with nothing on file.
+  function build() {
+    const prisma = createPrismaMock({
+      contractorProfile: {
+        findMany: jest.fn(async () => [
+          { id: 'cp-1', vendor: { name: 'Dummy Labour Test Firm' } },
+          { id: 'cp-2', vendor: { name: 'Dummy Steel Test Firm' } },
+        ]),
+      },
+      monthlyCompliance: {
+        findMany: jest.fn(async () => [
+          {
+            id: 'mc-1',
+            contractorProfileId: 'cp-1',
+            month: '2025-04',
+            status: 'verified',
+          },
+        ]),
+      },
+    });
+    return new RagService(prisma as never);
+  }
+  const caller = { id: 'u1', companyId: 'c1', permissions: [] } as never;
+  const now = new Date('2025-06-15T00:00:00Z');
+
+  it('narrows by contractor name, case-insensitively', async () => {
+    const matrix = await build().buildMatrix(
+      caller,
+      '2025-26',
+      undefined,
+      { search: 'sTeEl' },
+      now,
+    );
+    expect(matrix.rows.map((r) => r.contractorName)).toEqual([
+      'Dummy Steel Test Firm',
+    ]);
+  });
+
+  it('keeps rows with at least one month in the asked state', async () => {
+    const service = build();
+    const verified = await service.buildMatrix(
+      caller,
+      '2025-26',
+      undefined,
+      { status: 'verified' },
+      now,
+    );
+    expect(verified.rows.map((r) => r.contractorProfileId)).toEqual(['cp-1']);
+
+    // Both have missing months (cp-1 from May, cp-2 throughout), so both qualify.
+    const missing = await service.buildMatrix(
+      caller,
+      '2025-26',
+      undefined,
+      { status: 'missing' },
+      now,
+    );
+    expect(missing.rows).toHaveLength(2);
+  });
+
+  it('returns the whole matrix when no filter is passed', async () => {
+    const matrix = await build().buildMatrix(
+      caller,
+      '2025-26',
+      undefined,
+      {},
+      now,
+    );
+    expect(matrix.rows).toHaveLength(2);
+    expect(matrix.months).toHaveLength(12);
+  });
+});
+
 describe('RagService.exportXlsx (036 N6)', () => {
   it('writes one row per contractor with each month as a word', async () => {
     const prisma = createPrismaMock({

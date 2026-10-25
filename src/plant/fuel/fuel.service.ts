@@ -51,6 +51,15 @@ export interface FuelVarianceEvent {
 
 export const FUEL_VARIANCE_EVENT = 'fuel_variance';
 
+/** What `createInTx` hands back: the row plus what the audit entry and variance event need. */
+export interface CreatedFuelResult {
+  created: Prisma.FuelEntryGetPayload<{
+    include: { equipment: { select: { code: true; name: true } } };
+  }>;
+  variance: { variancePercent: number | null; varianceAlert: boolean };
+  threshold: number;
+}
+
 /**
  * The result of comparing a day's consumption against its category's benchmark.
  *
@@ -262,155 +271,13 @@ export class FuelService {
     dto: CreateFuelEntryDto,
     ipAddress: string,
   ): Promise<FuelRow> {
-    const date = this.refs.parseDate(dto.date);
-    // 036 K10: fuel cannot have been drawn on a day that has not happened yet. Compared with
-    // today in the business timezone, not UTC, so a fill entered at 01:00 IST is not refused.
-    if (date > businessToday()) {
-      throw new BadRequestException('The fuel date cannot be in the future.');
-    }
-    if (dto.vendorId) await this.refs.requireVendorName(caller, dto.vendorId);
-    // The amount paid, when given, is the record (2026-10-15): the log book is kept in rupees
-    // advanced and litres drawn, and a rate rounded to the paisa would not multiply back to it.
-    if (dto.amount === undefined && dto.rate === undefined) {
-      throw new BadRequestException(
-        'Give the rate per litre or the amount paid.',
-      );
-    }
-    if (
-      dto.amount !== undefined &&
-      dto.rate === undefined &&
-      dto.quantity <= 0
-    ) {
-      throw new BadRequestException('Litres must be more than zero.');
-    }
-    const amount =
-      dto.amount ?? Math.round(dto.quantity * (dto.rate ?? 0) * 100) / 100;
-    const rate = dto.rate ?? Math.round((amount / dto.quantity) * 100) / 100;
-
-    const { created, variance, threshold } = await withRlsContext(
+    const result = await withRlsContext(
       this.prisma,
       rlsContextFor(caller),
-      async (tx) => {
-        const equipment = await tx.equipment.findUnique({
-          where: { id: dto.equipmentId },
-        });
-        if (!equipment) {
-          throw new BadRequestException(
-            `Equipment ${dto.equipmentId} does not exist.`,
-          );
-        }
-        assertInScope(caller, equipment, 'Equipment');
-        assertInService(equipment);
-
-        // 036 K1: a named site must be one of the machine's company's. Unchecked, a Super Admin
-        // (who can see every company's sites) could book this company's diesel to another
-        // company's site, where it would turn up in that site's costs.
-        if (dto.siteId) {
-          await this.refs.requireSiteName(
-            caller,
-            dto.siteId,
-            equipment.companyId,
-          );
-        }
-
-        const category = await tx.equipmentCategory.findUnique({
-          where: { id: equipment.categoryId },
-          select: {
-            fuelBenchmark: true,
-            fuelVarianceThresholdPercent: true,
-          },
-        });
-
-        // The logbook is the authority on what was burned and how far the machine
-        // ran. Where the operator recorded no consumption, what was *bought* that
-        // day is the best available proxy — a fuel entry with no logbook entry at
-        // all yields no variance, which is honest rather than guessed.
-        const logbook = await tx.logbookEntry.findUnique({
-          where: {
-            equipmentId_date: { equipmentId: dto.equipmentId, date },
-          },
-          select: { fuelConsumed: true, totalHours: true },
-        });
-
-        const threshold = Number(category?.fuelVarianceThresholdPercent ?? 15);
-        const variance = computeFuelVariance({
-          fuelConsumed:
-            logbook?.fuelConsumed !== null &&
-            logbook?.fuelConsumed !== undefined
-              ? Number(logbook.fuelConsumed)
-              : logbook
-              ? dto.quantity
-              : null,
-          totalHours: logbook ? Number(logbook.totalHours) : null,
-          benchmark:
-            category?.fuelBenchmark === null ||
-            category?.fuelBenchmark === undefined
-              ? null
-              : Number(category.fuelBenchmark),
-          thresholdPercent: threshold,
-        });
-
-        /**
-         * Where the fuel was drawn, defaulted from where the machine is deployed.
-         *
-         * Defaulted at *write* time and then stored, which is the entire difference
-         * between this column and reading `deployedSiteId` on every read. The default is
-         * right now and wrong the moment the machine moves — so it is captured now.
-         * A caller may override it, because diesel is routinely drawn somewhere other
-         * than where the machine sleeps.
-         */
-        const siteId = dto.siteId ?? equipment.deployedSiteId ?? null;
-
-        const created = await tx.fuelEntry.create({
-          data: {
-            companyId: equipment.companyId,
-            equipmentId: dto.equipmentId,
-            date,
-            quantity: dto.quantity,
-            rate,
-            amount,
-            cardNo: dto.cardNo?.trim() || null,
-            vendorId: dto.vendorId ?? null,
-            siteId,
-            variancePercent: variance.variancePercent,
-            varianceAlert: variance.varianceAlert,
-          },
-          include: { equipment: { select: { code: true, name: true } } },
-        });
-        return { created, variance, threshold };
-      },
+      (tx) => this.createInTx(caller, dto, tx),
     );
-
-    await this.auditLog.record({
-      entityType: AuditEntityType.FUEL_ENTRY,
-      action: AuditAction.CREATE,
-      entityId: created.id,
-      accountId: caller.id,
-      companyId: created.companyId,
-      ipAddress,
-      changes: {
-        equipmentId: created.equipmentId,
-        quantity: dto.quantity,
-        amount: Number(created.amount),
-        varianceAlert: created.varianceAlert,
-      },
-    });
-
-    if (variance.varianceAlert && variance.variancePercent !== null) {
-      // Emitted, not delivered: this module's job is to notice, and the
-      // notifications surface's job is to decide who hears about it. The same
-      // arrangement 007's compliance cron uses.
-      const event: FuelVarianceEvent = {
-        companyId: created.companyId,
-        fuelEntryId: created.id,
-        equipmentId: created.equipmentId,
-        equipmentCode: created.equipment.code,
-        date: created.date,
-        variancePercent: variance.variancePercent,
-        thresholdPercent: threshold,
-      };
-      this.events.emit(FUEL_VARIANCE_EVENT, event);
-    }
+    await this.recordCreated(caller, result, ipAddress);
+    const { created } = result;
 
     const [vendorName, siteName] = await Promise.all([
       created.vendorId
@@ -444,6 +311,171 @@ export class FuelService {
       varianceAlert: created.varianceAlert,
       createdAt: created.createdAt,
     };
+  }
+
+  /**
+   * The transactional core of `create` (042): every check and write, against the
+   * caller's transaction client. Extracted so the monthly logbook sheet can write a
+   * month's readings and diesel in **one** transaction — a failure on any row rolls
+   * back every row — while the single-entry route keeps opening its own.
+   *
+   * Neither the audit entry nor the variance event happens here: both would survive a
+   * rollback and describe a fill that never existed. Callers run `recordCreated` after
+   * their transaction commits.
+   */
+  async createInTx(
+    caller: AuthenticatedUser,
+    dto: CreateFuelEntryDto,
+    tx: Prisma.TransactionClient,
+  ): Promise<CreatedFuelResult> {
+    const date = this.refs.parseDate(dto.date);
+    // 036 K10: fuel cannot have been drawn on a day that has not happened yet. Compared with
+    // today in the business timezone, not UTC, so a fill entered at 01:00 IST is not refused.
+    if (date > businessToday()) {
+      throw new BadRequestException('The fuel date cannot be in the future.');
+    }
+    if (dto.vendorId) await this.refs.requireVendorName(caller, dto.vendorId);
+    // The amount paid, when given, is the record (2026-10-15): the log book is kept in rupees
+    // advanced and litres drawn, and a rate rounded to the paisa would not multiply back to it.
+    if (dto.amount === undefined && dto.rate === undefined) {
+      throw new BadRequestException(
+        'Give the rate per litre or the amount paid.',
+      );
+    }
+    if (
+      dto.amount !== undefined &&
+      dto.rate === undefined &&
+      dto.quantity <= 0
+    ) {
+      throw new BadRequestException('Litres must be more than zero.');
+    }
+    const amount =
+      dto.amount ?? Math.round(dto.quantity * (dto.rate ?? 0) * 100) / 100;
+    const rate = dto.rate ?? Math.round((amount / dto.quantity) * 100) / 100;
+
+    const equipment = await tx.equipment.findUnique({
+      where: { id: dto.equipmentId },
+    });
+    if (!equipment) {
+      throw new BadRequestException(
+        `Equipment ${dto.equipmentId} does not exist.`,
+      );
+    }
+    assertInScope(caller, equipment, 'Equipment');
+    assertInService(equipment);
+
+    // 036 K1: a named site must be one of the machine's company's. Unchecked, a Super Admin
+    // (who can see every company's sites) could book this company's diesel to another
+    // company's site, where it would turn up in that site's costs.
+    if (dto.siteId) {
+      await this.refs.requireSiteName(caller, dto.siteId, equipment.companyId);
+    }
+
+    const category = await tx.equipmentCategory.findUnique({
+      where: { id: equipment.categoryId },
+      select: {
+        fuelBenchmark: true,
+        fuelVarianceThresholdPercent: true,
+      },
+    });
+
+    // The logbook is the authority on what was burned and how far the machine
+    // ran. Where the operator recorded no consumption, what was *bought* that
+    // day is the best available proxy — a fuel entry with no logbook entry at
+    // all yields no variance, which is honest rather than guessed.
+    const logbook = await tx.logbookEntry.findUnique({
+      where: {
+        equipmentId_date: { equipmentId: dto.equipmentId, date },
+      },
+      select: { fuelConsumed: true, totalHours: true },
+    });
+
+    const threshold = Number(category?.fuelVarianceThresholdPercent ?? 15);
+    const variance = computeFuelVariance({
+      fuelConsumed:
+        logbook?.fuelConsumed !== null && logbook?.fuelConsumed !== undefined
+          ? Number(logbook.fuelConsumed)
+          : logbook
+          ? dto.quantity
+          : null,
+      totalHours: logbook ? Number(logbook.totalHours) : null,
+      benchmark:
+        category?.fuelBenchmark === null ||
+        category?.fuelBenchmark === undefined
+          ? null
+          : Number(category.fuelBenchmark),
+      thresholdPercent: threshold,
+    });
+
+    /**
+     * Where the fuel was drawn, defaulted from where the machine is deployed.
+     *
+     * Defaulted at *write* time and then stored, which is the entire difference
+     * between this column and reading `deployedSiteId` on every read. The default is
+     * right now and wrong the moment the machine moves — so it is captured now.
+     * A caller may override it, because diesel is routinely drawn somewhere other
+     * than where the machine sleeps.
+     */
+    const siteId = dto.siteId ?? equipment.deployedSiteId ?? null;
+
+    const created = await tx.fuelEntry.create({
+      data: {
+        companyId: equipment.companyId,
+        equipmentId: dto.equipmentId,
+        date,
+        quantity: dto.quantity,
+        rate,
+        amount,
+        cardNo: dto.cardNo?.trim() || null,
+        vendorId: dto.vendorId ?? null,
+        siteId,
+        variancePercent: variance.variancePercent,
+        varianceAlert: variance.varianceAlert,
+      },
+      include: { equipment: { select: { code: true, name: true } } },
+    });
+    return { created, variance, threshold };
+  }
+
+  /**
+   * The audit entry and, where due, the variance event for a created fill — recorded
+   * once the writing transaction committed (042).
+   */
+  async recordCreated(
+    caller: AuthenticatedUser,
+    { created, variance, threshold }: CreatedFuelResult,
+    ipAddress: string,
+  ): Promise<void> {
+    await this.auditLog.record({
+      entityType: AuditEntityType.FUEL_ENTRY,
+      action: AuditAction.CREATE,
+      entityId: created.id,
+      accountId: caller.id,
+      companyId: created.companyId,
+      ipAddress,
+      changes: {
+        equipmentId: created.equipmentId,
+        quantity: Number(created.quantity),
+        amount: Number(created.amount),
+        varianceAlert: created.varianceAlert,
+      },
+    });
+
+    if (variance.varianceAlert && variance.variancePercent !== null) {
+      // Emitted, not delivered: this module's job is to notice, and the
+      // notifications surface's job is to decide who hears about it. The same
+      // arrangement 007's compliance cron uses.
+      const event: FuelVarianceEvent = {
+        companyId: created.companyId,
+        fuelEntryId: created.id,
+        equipmentId: created.equipmentId,
+        equipmentCode: created.equipment.code,
+        date: created.date,
+        variancePercent: variance.variancePercent,
+        thresholdPercent: threshold,
+      };
+      this.events.emit(FUEL_VARIANCE_EVENT, event);
+    }
   }
 
   /**

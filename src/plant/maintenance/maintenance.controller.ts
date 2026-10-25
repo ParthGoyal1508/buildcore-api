@@ -31,7 +31,6 @@ import {
   CloseMaintenanceJobDto,
   CreateMaintenanceJobDto,
   ListMaintenanceDto,
-  UpdateMaintenanceJobDto,
 } from './dto/maintenance.dto';
 import { formFormatOf, sendForm } from '../../common/form-document';
 import { contentDispositionFor } from '../../common/storage/file-type';
@@ -335,20 +334,6 @@ export class MaintenanceController {
       dto,
       ipAddress,
     );
-  }
-
-  @Patch(':id')
-  @ApiOperation({
-    summary: 'Update a job',
-    description: '`partsCost` is not settable — it accrues from consumption.',
-  })
-  async update(
-    @UserEntity() caller: AuthenticatedUser,
-    @Param('id') id: string,
-    @Body() dto: UpdateMaintenanceJobDto,
-    @Ip() ipAddress: string,
-  ) {
-    return this.maintenance.update(caller, id, dto, ipAddress);
   }
 
   @Patch(':id/close')

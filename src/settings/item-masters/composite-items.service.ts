@@ -147,15 +147,6 @@ export class CompositeItemsService {
     });
   }
 
-  async findOne(
-    caller: AuthenticatedUser,
-    id: string,
-  ): Promise<CompositeItemView> {
-    const found = await this.getCompositeItem(caller, id);
-    if (!found) throw new NotFoundException(`Composite item ${id} not found`);
-    return found;
-  }
-
   /**
    * Resolves a composite for another module's write — the issue that deducts its sub-items —
    * returning `null` rather than throwing, the contract `ItemsService.getItem()` offers.

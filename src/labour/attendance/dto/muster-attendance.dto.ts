@@ -49,6 +49,16 @@ export class MusterDailyQueryDto {
   @IsOptional()
   @IsIn(FILTERS)
   filter?: MusterFilter;
+
+  @ApiPropertyOptional({
+    description:
+      'Rows whose worker name or labour code contains this, case-insensitive (042). ' +
+      'The summary still counts the whole day.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  search?: string;
 }
 
 export class MusterMonthlyQueryDto {

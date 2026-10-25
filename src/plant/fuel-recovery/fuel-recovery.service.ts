@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -307,7 +308,22 @@ export class FuelRecoveryService {
             createdByUserId: caller.id,
           },
         });
-        await this.recomputeNetPayable(tx, target.id);
+        const netPayable = await this.recomputeNetPayable(tx, target.id);
+        // A bill cannot owe the company money (042). Checked after the recompute, inside
+        // the same transaction, so the refusal rolls the deduction back with everything
+        // else — and against the *derived* net, which also counts the bill's own
+        // deduction and hold amounts, not just this recovery.
+        if (netPayable < 0) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: 'FUEL_RECOVERY_EXCEEDS_BILL',
+            message:
+              `Recovering ${shortfall.shortfallAmount} would take this hire bill` +
+              `${target.invoiceNo ? ` (${target.invoiceNo})` : ''} below zero — its net ` +
+              `payable would be ${netPayable}. Recover the loss from a later bill once it ` +
+              'is raised, or from the operator.',
+          });
+        }
         return deduction;
       },
     );
@@ -341,11 +357,14 @@ export class FuelRecoveryService {
    *
    * Takes the transaction client rather than opening its own, so the deduction and the net it implies
    * cannot be separated by a failure.
+   *
+   * Returns the derived net, so `deductFromHireBill` can refuse a recovery that would
+   * push it negative without repeating the arithmetic (042).
    */
   private async recomputeNetPayable(
     tx: Prisma.TransactionClient,
     hireBillId: string,
-  ): Promise<void> {
+  ): Promise<number> {
     const bill = await tx.hireBill.findUniqueOrThrow({
       where: { id: hireBillId },
       include: { fuelDeductions: { select: { amount: true } } },
@@ -368,6 +387,7 @@ export class FuelRecoveryService {
       where: { id: hireBillId },
       data: { netPayable: new Prisma.Decimal(netPayable) },
     });
+    return netPayable;
   }
 
   /**

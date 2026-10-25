@@ -1,4 +1,4 @@
-import { Controller, Get, Ip, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Ip, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Permission } from '@prisma/client';
 
@@ -7,29 +7,26 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { UserEntity } from '../common/decorators/user.decorator';
 import { PermissionsGuard } from '../common/guards/permissions.guard';
-import { EmployeesService } from '../hr/employees/employees.service';
 import { buildDashboardContext } from './context';
-import { EmployeeSearchQueryDto } from './dto/employee-search-query.dto';
 import { GroupCompanyCardProvider } from './widgets/group-company-card.provider';
 import { StatutoryCalendarProvider } from './widgets/statutory-calendar.provider';
 import type { WidgetResult } from './widgets/widget.types';
 import { GroupAccessGuard } from './group-access.guard';
 
 /**
- * The Group Dashboard (feature 004, US6): per-company cards + Group Total, a
- * cross-company employee search, and the statutory calendar. Scope is the caller's
- * accessible companies (spec FR-014–FR-017, FR-022).
+ * The Group Dashboard (feature 004, US6): per-company cards + Group Total and the
+ * statutory calendar. Scope is the caller's accessible companies (spec FR-014–FR-017,
+ * FR-022). The cross-company employee search this module also carried was deleted on
+ * 2026-10-25 (042 route cleanup) — the frontend declines it by design (`dashboard.ts:489`).
  *
- * **Two of the three handlers override the class's `DASHBOARD` with `EMPLOYEES`
- * (2026-10-10).** Both read employee data: the cards carry each company's headcount,
- * and the search returns named, coded employees across every company the caller can
- * reach. `DASHBOARD` is held by every employee, so until this changed, anyone could
- * type three letters and get a cross-company staff directory.
+ * **`companies` overrides the class's `DASHBOARD` with `EMPLOYEES` (2026-10-10).** It
+ * reads employee data: the cards carry each company's headcount. `DASHBOARD` is held by
+ * every employee, so until this changed, anyone could read a cross-company headcount.
  *
  * It is an override, not an addition — `@RequirePermissions(...)` is any-of, so listing
  * both would have widened the gate rather than narrowed it, and there is no all-of form.
- * The practical effect is the one intended: nobody reaches these without `EMPLOYEES`.
- * A caller holding `EMPLOYEES` but not `DASHBOARD` could now reach them by URL, which is
+ * The practical effect is the one intended: nobody reaches it without `EMPLOYEES`.
+ * A caller holding `EMPLOYEES` but not `DASHBOARD` could now reach it by URL, which is
  * the direction that matters least — they can already read the roster itself, and the
  * web shell still gates the page on both.
  *
@@ -48,7 +45,6 @@ export class GroupController {
   constructor(
     private readonly groupCards: GroupCompanyCardProvider,
     private readonly calendar: StatutoryCalendarProvider,
-    private readonly employees: EmployeesService,
   ) {}
 
   @Get('companies')
@@ -92,21 +88,4 @@ export class GroupController {
     return this.calendar.build(buildDashboardContext(user, ip));
   }
 
-  @Get('employees/search')
-  @RequirePermissions(Permission.EMPLOYEES)
-  @ApiOperation({
-    summary: 'Cross-company employee search by name or code',
-    description:
-      'Scoped to the caller’s accessible companies. Min 2 characters. Needs ' +
-      '`EMPLOYEES`: this is a staff directory, and a wider gate made it readable by ' +
-      'everybody.',
-  })
-  async search(
-    @UserEntity() user: AuthenticatedUser,
-    @Ip() ip: string,
-    @Query() query: EmployeeSearchQueryDto,
-  ) {
-    const ctx = buildDashboardContext(user, ip);
-    return this.employees.searchByTerm(ctx.rls, query.q);
-  }
 }

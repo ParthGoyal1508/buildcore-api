@@ -74,6 +74,22 @@ export class UsersService {
   }
 
   /**
+   * The company a role belongs to — `companyId` null for a global role — or null when no
+   * such role exists (042, slot-mapping fix). What `ChainsService.putSlotMapping` needs to
+   * refuse binding a slot to another company's role: `settings.Role` is this module's seam
+   * to read (Principle I — the spine may not query it itself), and the table carries no
+   * row-level security, so the read needs no tenant context.
+   */
+  async roleCompanyOf(
+    roleId: string,
+  ): Promise<{ companyId: string | null } | null> {
+    return this.prisma.role.findUnique({
+      where: { id: roleId },
+      select: { companyId: true },
+    });
+  }
+
+  /**
    * Accounts holding `roleId` outside `companyId` — including cross-company accounts, which
    * belong to none. Roles are global, so this is what decides whether a company administrator's
    * edit would reach other companies (2026-10-16 audit, C3).

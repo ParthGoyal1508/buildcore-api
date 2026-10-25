@@ -86,34 +86,6 @@ export class CreateLogbookEntryDto {
 }
 
 /**
- * Readings are absent by design: they are what `currentReading`, utilisation and
- * every hire bill's logbook snapshot are computed from, and editing them after the
- * fact would silently restate all three. A wrong reading is corrected through
- * `CorrectLogbookReadingsDto` (036 K6), which demands a reason and audits the change.
- */
-export class UpdateLogbookEntryDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 3 })
-  @Min(0)
-  @Max(999_999_999_999_999)
-  fuelConsumed?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  remarks?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  operatorId?: string;
-}
-
-/**
  * Correcting a day's readings (036 K6). The logbook sheet told people to "correct them from the
  * Logbook", and the Logbook offered only Delete — deleting and re-recording loses the operator,
  * project and remarks, and leaves no trace of what the figures were. This changes the two readings

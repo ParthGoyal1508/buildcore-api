@@ -701,15 +701,25 @@ export class AttendanceAdminService {
    * company, and the route is guarded by ATTENDANCE like every other admin route
    * here.
    */
+  /**
+   * One employee's attendance month, served under the **employee's own company** (042;
+   * user decision 25-10-2026 — every tab of a cross-company profile reads the employee's
+   * company). The row is resolved by id under the caller's RLS context alone, exactly as
+   * the profile endpoint (`EmployeesService.getMasked`) resolves it: whoever can open the
+   * profile can open its attendance. It used to be pinned to the caller's *resolved*
+   * company — a group administrator's home or selected one — so the same profile's
+   * attendance tab answered 404 whenever the employee belonged to a different company.
+   * The month's data then follows the employee row's own ids (site, shift, company), so
+   * nothing about the caller's selection leaks into whose calendar is computed.
+   */
   async employeeMonth(
     caller: Caller,
-    companyId: string,
     employeeId: string,
     month: number,
     year: number,
   ) {
     const employee = await withRlsContext(this.prisma, caller.rls, (tx) =>
-      tx.employee.findFirst({ where: { id: employeeId, companyId } }),
+      tx.employee.findFirst({ where: { id: employeeId } }),
     );
     if (!employee) {
       throw new NotFoundException('Employee not found');

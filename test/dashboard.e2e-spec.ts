@@ -886,16 +886,6 @@ describe('Dashboard reminders (e2e)', () => {
       }
     });
 
-    it('refuses the cross-company employee search', async () => {
-      // A staff directory by name, previously readable by anyone with DASHBOARD.
-      await http()
-        .get('/group/employees/search?q=an')
-        .set(auth(engineerToken))
-        .expect(403);
-
-      await http().get('/group/employees/search?q=an').set(auth()).expect(200);
-    });
-
     it('refuses the group company cards', async () => {
       await http().get('/group/companies').set(auth(engineerToken)).expect(403);
 

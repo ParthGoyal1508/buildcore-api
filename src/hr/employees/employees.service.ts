@@ -600,54 +600,6 @@ export class EmployeesService {
   }
 
   /**
-   * Cross-company employee search backing the Group Dashboard's search box (004
-   * FR-016). Matches the term against name and employee code across every company
-   * the caller's RLS context can see — a Super Admin's `{ isSuperAdmin: true }`
-   * spans all of them, an ordinary caller only their own.
-   *
-   * Returns name, code and companyId only — the same no-PII posture as
-   * `listActiveBySiteIds`. Aadhaar is stored encrypted, so it is not searchable by
-   * substring here; the box searches the two plaintext identifiers a user actually
-   * types (004 research-aligned).
-   */
-  async searchByTerm(
-    ctx: RlsContext,
-    term: string,
-  ): Promise<
-    { id: string; employeeCode: string; name: string; companyId: string }[]
-  > {
-    const rows = await withRlsContext(this.prisma, ctx, (tx) =>
-      tx.employee.findMany({
-        where: {
-          isActive: true,
-          OR: [
-            { employeeCode: { contains: term, mode: 'insensitive' } },
-            { firstName: { contains: term, mode: 'insensitive' } },
-            { lastName: { contains: term, mode: 'insensitive' } },
-          ],
-        },
-        select: {
-          id: true,
-          employeeCode: true,
-          firstName: true,
-          lastName: true,
-          companyId: true,
-        },
-        orderBy: { employeeCode: 'asc' },
-        take: 50,
-      }),
-    );
-    return rows.map((row) => ({
-      id: row.id,
-      employeeCode: row.employeeCode,
-      name:
-        [row.firstName, row.lastName].filter(Boolean).join(' ') ||
-        row.employeeCode,
-      companyId: row.companyId,
-    }));
-  }
-
-  /**
    * Active employees posted to any of a set of sites — the "Employees" tab on 008's
    * project detail (`GET /projects/:id`).
    *
