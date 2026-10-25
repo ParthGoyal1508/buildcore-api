@@ -139,7 +139,7 @@ const COLUMNS: { header: string; width: number }[] = [
 export class DwrWorkbookRenderer {
   async render(view: DwrWorkbookView): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = view.companyName ?? 'BuildCore';
+    workbook.creator = view.companyName ?? 'Tirupati Groups';
 
     // Pinned to the work date, not to the clock — the rule both bill renderers follow. A document
     // produced twice should differ in nothing a reader can see, metadata included.

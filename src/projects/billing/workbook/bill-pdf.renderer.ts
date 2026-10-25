@@ -77,7 +77,7 @@ export class BillPdfRenderer {
       // reader never sees, or "identical" is only true of the parts somebody thought to check.
       info: {
         Title: `${view.header.billLabel} — ${view.header.projectName}`,
-        Author: view.header.issuer.name ?? 'BuildCore',
+        Author: view.header.issuer.name ?? 'Tirupati Groups',
         CreationDate: new Date(`${view.header.billDate}T00:00:00.000Z`),
       },
     });

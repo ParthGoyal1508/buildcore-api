@@ -65,7 +65,7 @@ export class BillWorkbookRenderer {
     options: { abstractOnly?: boolean } = {},
   ): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
-    workbook.creator = view.header.issuer.name ?? 'BuildCore';
+    workbook.creator = view.header.issuer.name ?? 'Tirupati Groups';
 
     // Pinned rather than left to the clock. Two productions of one bill must differ in nothing a
     // reader can see, and a workbook records when it was written — so the timestamp is the bill's
