@@ -23,6 +23,8 @@ const UPLOAD_ROUTES = [
   'POST /hr/payroll/runs/:id/transaction-sheet',
   'POST /inventory/payments/:id/proof',
   'POST /inventory/purchases',
+  'POST /inventory/purchases/:id/complete',
+  'POST /inventory/site-entries',
   'POST /labour/attendance/punch',
   'POST /labour/muster-attendance/site-photos',
   'POST /labour/workers',

@@ -3960,13 +3960,33 @@ Table Purchase {
   companyId String [not null]
   siteId String [not null]
   itemId String [not null]
-  vendorId String [not null]
+  vendorId String [note: 'Null only while `status` is `partial_site` (043): the site records the delivery, Head Office
+names the vendor, quantity and rate when it completes it. A completed purchase always has all
+four — `PurchasesService.complete` refuses to finish without them.']
   date DateTime [not null]
-  quantity Decimal [not null]
-  rate Decimal [not null]
-  amount Decimal [not null, note: 'Stored rather than derived: `quantity × rate` rounded once at write time is
+  quantity Decimal
+  rate Decimal
+  amount Decimal [note: 'Stored rather than derived: `quantity × rate` rounded once at write time is
 what the vendor billed, and recomputing it on every read would let a rounding
 change silently restate historical spend.']
+  source PurchaseSource [not null, default: 'head_office', note: 'Who recorded it (043). Rows from before 043 are Head Office\'s and completed.']
+  status PurchaseStatus [not null, default: 'completed', note: 'A `partial_site` purchase has moved nothing: no ledger entry, stock balance, bill, GRN or
+agreed rate exists for it until Head Office completes it. Every reader that sums or values
+purchases filters to `completed`.']
+  vehicleNo String [note: '── What the site captured (043). Head Office may correct the vehicle, item and date; the rest
+is read-only evidence.
+Uppercase with every space removed, so one vehicle always reads the same.']
+  deliveredAt DateTime [note: 'When the delivery arrived, as the site entered it; `date` above is its calendar day.']
+  gpsLatitude Decimal
+  gpsLongitude Decimal
+  gpsAccuracyMeters Decimal
+  gpsCapturedAt DateTime [note: 'When the phone took the photo and the fix, as it reported it.']
+  geofenceDistanceMeters Decimal [note: 'From the site\'s geofence centre, computed on the server when the entry was accepted.']
+  createdByUserId String [note: '→ shared.User. Null on purchases recorded before 043.']
+  completedByUserId String
+  completedAt DateTime
+  clientRequestId String [unique, note: 'The submitting phone\'s id for this entry, so a double tap or a retry after a dropped
+connection returns the entry already saved instead of recording the delivery twice.']
   billFileRef String [note: 'Object-storage reference for the uploaded bill, same encrypted-reference
 pattern as `EmployeeDocument`/`ProjectDocument`.']
   photoFileRef String [note: 'The delivery photographed at the gate (028 FR-017). Same pattern as the bill beside it.
@@ -6204,6 +6224,7 @@ Enum Permission {
   CASH_ENTRY
   PROJECT_LOCK
   BANK_GUARANTEES
+  INVENTORY_SITE_ENTRY
 }
 
 Enum CompanyStatus {
@@ -6810,6 +6831,16 @@ Enum IndentStatus {
   partially_fulfilled
   fulfilled
   cancelled
+}
+
+Enum PurchaseSource {
+  head_office
+  site
+}
+
+Enum PurchaseStatus {
+  partial_site
+  completed
 }
 
 Enum MeterType {

@@ -23,6 +23,7 @@ import { SearchModule } from './search/search.module';
 import { PermissionRefusalModule } from './common/guards/permission-refusal.module';
 import { CompanySelectionModule } from './settings/company-selection/company-selection.module';
 import { CompanyHeaderInterceptor } from './settings/company-selection/company-header.interceptor';
+import { RequestedCompanyInterceptor } from './settings/company-selection/requested-company.interceptor';
 import { CashEntryInterceptor } from './common/cash/cash-entry.interceptor';
 import { CashModule } from './common/cash/cash.module';
 import { CashVisibilityInterceptor } from './common/cash/cash-visibility.interceptor';
@@ -151,6 +152,12 @@ import type { SecurityConfig } from './common/configs/config.interface';
       // tab that thinks it is in another one. Global for the reason the two above are.
       provide: APP_INTERCEPTOR,
       useClass: CompanyHeaderInterceptor,
+    },
+    {
+      // 2026-10-25: a `companyId` naming no company is refused before any module trusts it. Global for
+      // the reason the ones above are — 59 controllers read the field.
+      provide: APP_INTERCEPTOR,
+      useClass: RequestedCompanyInterceptor,
     },
     {
       // 019 FR-017a, FR-017b. Global for the same reason as the visibility interceptor above —

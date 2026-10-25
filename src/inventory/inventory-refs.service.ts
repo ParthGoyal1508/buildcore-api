@@ -5,7 +5,8 @@ import { rlsContextFor } from '../common/prisma/rls-context';
 import { parseDateOnly } from '../hr/leave/leave-days';
 import { PartnersService } from '../partners/partners.service';
 import { ProjectsService } from '../projects/portfolio/projects.service';
-import { SitesService } from '../projects/sites/sites.service';
+import { SiteGeofence, SitesService } from '../projects/sites/sites.service';
+import { CompaniesService } from '../settings/companies/companies.service';
 import {
   CompositeItemView,
   CompositeItemsService,
@@ -30,7 +31,34 @@ export class InventoryRefsService {
     private readonly partners: PartnersService,
     private readonly projects: ProjectsService,
     private readonly compositeItems: CompositeItemsService,
+    private readonly companies: CompaniesService,
   ) {}
+
+  /** A site's geofence, for a site entry's location check (043) — the punch's own source. */
+  async siteGeofence(
+    caller: AuthenticatedUser,
+    siteId: string,
+  ): Promise<SiteGeofence> {
+    return this.sites.getGeofence(rlsContextFor(caller), siteId);
+  }
+
+  /** The company's GPS accuracy ceiling, the same one attendance punches are held to (043). */
+  async punchAccuracyMaxMetres(companyId: string): Promise<number> {
+    return this.companies.getPunchAccuracyMaxMetres(companyId);
+  }
+
+  /** Active items matching a name or code, for the site entry's item picker (043). */
+  async searchActiveItems(
+    caller: AuthenticatedUser,
+    search: string | undefined,
+  ): Promise<ItemView[]> {
+    const page = await this.items.findAll(caller, {
+      search: search?.trim() || undefined,
+      active: true,
+      pageSize: 50,
+    });
+    return page.items;
+  }
 
   /**
    * The company a write belongs to: the caller's own, or the one a cross-company

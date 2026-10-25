@@ -420,6 +420,9 @@ enum Permission {
   /// 037: the Bank Guarantees register under Projects — tenders, their EMD and PBG
   /// guarantees, documents and the 30-day expiry alert.
   BANK_GUARANTEES
+  /// 043: record a delivery from the site — the "Create Inventory Purchase" page and nothing else
+  /// of Inventory. Granted to Site Incharge; `INVENTORY` is what opens the purchase list.
+  INVENTORY_SITE_ENTRY
 
   @@schema("settings")
 }
@@ -1370,6 +1373,8 @@ model AuditLogEntry {
   createdAt DateTime @default(now())
 
   @@index([accountId])
+  /// 043: one record's history, read beside it (`AuditLogService.listForEntity`).
+  @@index([entityType, entityId])
   @@schema("shared")
 }
 
@@ -6616,15 +6621,46 @@ model Purchase {
   companyId String
   siteId    String
   itemId    String
-  vendorId  String
+  /// Null only while `status` is `partial_site` (043): the site records the delivery, Head Office
+  /// names the vendor, quantity and rate when it completes it. A completed purchase always has all
+  /// four — `PurchasesService.complete` refuses to finish without them.
+  vendorId  String?
 
   date     DateTime @db.Date
-  quantity Decimal  @db.Decimal(18, 3)
-  rate     Decimal  @db.Decimal(18, 2)
+  quantity Decimal? @db.Decimal(18, 3)
+  rate     Decimal? @db.Decimal(18, 2)
   /// Stored rather than derived: `quantity × rate` rounded once at write time is
   /// what the vendor billed, and recomputing it on every read would let a rounding
   /// change silently restate historical spend.
-  amount   Decimal  @db.Decimal(18, 2)
+  amount   Decimal? @db.Decimal(18, 2)
+
+  /// Who recorded it (043). Rows from before 043 are Head Office's and completed.
+  source PurchaseSource @default(head_office)
+  /// A `partial_site` purchase has moved nothing: no ledger entry, stock balance, bill, GRN or
+  /// agreed rate exists for it until Head Office completes it. Every reader that sums or values
+  /// purchases filters to `completed`.
+  status PurchaseStatus @default(completed)
+
+  /// ── What the site captured (043). Head Office may correct the vehicle, item and date; the rest
+  /// is read-only evidence.
+  /// Uppercase with every space removed, so one vehicle always reads the same.
+  vehicleNo              String?
+  /// When the delivery arrived, as the site entered it; `date` above is its calendar day.
+  deliveredAt            DateTime?
+  gpsLatitude            Decimal?  @db.Decimal(10, 7)
+  gpsLongitude           Decimal?  @db.Decimal(10, 7)
+  gpsAccuracyMeters      Decimal?  @db.Decimal(10, 2)
+  /// When the phone took the photo and the fix, as it reported it.
+  gpsCapturedAt          DateTime?
+  /// From the site's geofence centre, computed on the server when the entry was accepted.
+  geofenceDistanceMeters Decimal?  @db.Decimal(10, 2)
+  /// → shared.User. Null on purchases recorded before 043.
+  createdByUserId        String?
+  completedByUserId      String?
+  completedAt            DateTime?
+  /// The submitting phone's id for this entry, so a double tap or a retry after a dropped
+  /// connection returns the entry already saved instead of recording the delivery twice.
+  clientRequestId        String?   @unique
 
   /// Object-storage reference for the uploaded bill, same encrypted-reference
   /// pattern as `EmployeeDocument`/`ProjectDocument`.
@@ -6662,6 +6698,23 @@ model Purchase {
   @@index([companyId, itemId, siteId])
   @@index([indentLineId])
   @@index([purchaseOrderLineId])
+  @@index([companyId, status])
+  @@schema("inventory")
+}
+
+/// Who recorded a purchase (043).
+enum PurchaseSource {
+  head_office
+  site
+
+  @@schema("inventory")
+}
+
+/// A site entry waits as `partial_site` until Head Office completes it (043).
+enum PurchaseStatus {
+  partial_site
+  completed
+
   @@schema("inventory")
 }
 

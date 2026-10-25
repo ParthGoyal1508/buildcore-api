@@ -1,5 +1,9 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { PurchaseBillStatus } from '@prisma/client';
+import { ApiProperty, ApiPropertyOptional, OmitType } from '@nestjs/swagger';
+import {
+  PurchaseBillStatus,
+  PurchaseSource,
+  PurchaseStatus,
+} from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   IsDateString,
@@ -202,9 +206,23 @@ export class CreatePurchaseDto {
 }
 
 /**
- * Quantity, rate, item, site and vendor are all absent by design: they are what the
+ * Head Office completing a site entry (043): everything the create form asks for except the store
+ * and the delivery photo, which the site captured and which stay as captured. Item and date come
+ * back prefilled with what the site entered and may be corrected; a changed GRN vehicle number
+ * corrects the site's.
+ */
+export class CompletePurchaseDto extends OmitType(CreatePurchaseDto, [
+  'siteId',
+  'photoFile',
+] as const) {}
+
+/**
+ * Quantity, rate, site and vendor are all absent by design: they are what the
  * stock ledger and the bill were computed from, and editing one in place would
  * leave both restating history. Correcting a purchase is delete plus re-create.
+ *
+ * Item and vehicle number are here for a site entry still waiting for Head Office (043), which has
+ * moved no stock yet; on a completed purchase the item is refused like the rest.
  */
 export class UpdatePurchaseDto {
   @ApiPropertyOptional({ example: '2026-09-04' })
@@ -217,6 +235,20 @@ export class UpdatePurchaseDto {
   @IsString()
   @MaxLength(500)
   remarks?: string;
+
+  @ApiPropertyOptional({ description: 'A partially filled site entry only' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(100)
+  itemId?: string;
+
+  @ApiPropertyOptional({ description: 'A partially filled site entry only' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  vehicleNo?: string;
 }
 
 export class ListPurchasesDto {
@@ -242,6 +274,19 @@ export class ListPurchasesDto {
   @IsOptional()
   @IsEnum(PurchaseBillStatus)
   paymentStatus?: PurchaseBillStatus;
+
+  @ApiPropertyOptional({
+    enum: PurchaseStatus,
+    description: '`partial_site`: site entries waiting for Head Office (043)',
+  })
+  @IsOptional()
+  @IsEnum(PurchaseStatus)
+  status?: PurchaseStatus;
+
+  @ApiPropertyOptional({ enum: PurchaseSource })
+  @IsOptional()
+  @IsEnum(PurchaseSource)
+  source?: PurchaseSource;
 
   @ApiPropertyOptional({ example: '2026-09-01' })
   @IsOptional()

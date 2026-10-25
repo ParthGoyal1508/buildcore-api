@@ -14,6 +14,7 @@ const build = (vendor: Record<string, unknown> | null) => {
     partners as never,
     {} as never,
     {} as never,
+    {} as never,
   );
   return { service, items };
 };

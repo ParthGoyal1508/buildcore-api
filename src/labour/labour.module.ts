@@ -1,5 +1,5 @@
 import { ApprovalsModule } from '../approvals/approvals.module';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 
 import { AuditLogService } from '../auth/audit-log.service';
 import { BiometricsService } from '../hr/biometrics/biometrics.service';
@@ -60,9 +60,11 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
   // ApprovalsModule (2026-10-20): a labour advance travels its approval chain.
   // NocsModule (042): the worker list's NOC-status filter asks `NocsService` which workers
   // are closed, instead of joining into the NOC table.
+  // forwardRef(ProjectsModule) since 043: `inventory` imports this module for site entries' stores,
+  // closing a file-level cycle projects → hr → payroll → plant → inventory → labour → projects.
   imports: [
     SettingsModule,
-    ProjectsModule,
+    forwardRef(() => ProjectsModule),
     PartnersModule,
     UsersModule,
     ApprovalsModule,
@@ -110,6 +112,8 @@ import { LabourSheetsService } from './reports/labour-sheets.service';
     // payment sheets (FR-013) through a service call, which is the only route Principle I allows
     // into `labour`'s tables.
     MonthlyWageRollupService,
+    // 043: an inventory site entry's store is the caller's assigned site — the same assignment.
+    SupervisorSiteService,
   ],
 })
 export class LabourModule {}
