@@ -144,6 +144,40 @@ it has no test runner). Branches `042-wave2a` (+907/−21, 12 files), `042-wave2
 new screen and fix — opened and looked at, not just crawled (dropdowns, modals, empty states).
 Outcomes get appended to this file.
 
+### Wave 3: outcome (25-10-2026)
+
+**Build health:** api `tsc` clean and 279 suites / 3,130 tests green on the merged
+`042-gap-closure` branch; web `tsc` clean and the production build green on its
+`042-gap-closure` branch (the three wave branches merged with zero conflicts).
+
+**Isolated verification stack:** fresh local `buildcore_042` database (migrate deploy + seed +
+chains + defaults + seed:dev), the 042 api on :3042 with local file storage, the 042 web on
+:3142 with `API_ORIGIN` baked to it. Nothing touched the shared Neon database.
+
+**Verified live (browser walkthrough + direct HTTP), closing the Wave-2 derived schemas:**
+- Letterhead: upload (`{contentType, sizeBytes}`), GET roundtrip as `image/png`, 404 = "plain
+  paper", and the Basic Info section rendering both states.
+- Punch settings: `PUT punch-accuracy` → `{punchAccuracyMaxMetres, effective}`,
+  `PUT punch-enforcement` → `{punchBlockEnforced}`, both fields riding `GET /settings/companies`,
+  and the Attendance tab showing the saved values.
+- Staff refusals endpoint + tab (evidence columns render); Reimbursement Register endpoint
+  (`{items, totals}`) + subtotal cards + honest empty state; `roles?grantable=true` (10 rows).
+- Purchase `PATCH` returns the full list-shaped row (no missing fields) and the Edit affordance
+  shows on real rows; labour daily search box, workers NOC filter, RAG/BOCW pages all render.
+- Reassign: a claim submitted as fixture, `POST …/reassign` → 201 with the approval state view
+  (`instanceId, state, currentPosition, …`) — the decide-schema reuse holds.
+- Fuel-exception rows carry `hireBillDeduction`/`operatorRecovery` (the Wave-2 blocker fix).
+
+**Left unverified live (unit-tested only):** the reverse-recovery response `{reversed}` and the
+two fixture-hungry UI actions (reverse button on a recovered row, reassign modal flow) — the
+seed has no recovered fuel exception. Worth one manual click each on dev once deployed.
+
+**Reminders for release:**
+- Deploy api and web together (older api 400s the new query params).
+- On api deploy/restart, the generated `src/metadata.ts` regenerates; a locally stale copy just
+  needs deleting once (nothing imports it statically — `tsc` and jest pass without it).
+- The local dev `nest start --watch` predating this branch should be restarted.
+
 ## Out of scope, tracked for later
 - Spec 039: approval-chain lifecycle (the kept chain routes), job card, payroll edits,
   composite items.
