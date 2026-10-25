@@ -108,6 +108,13 @@ export class FuelExceptionsService {
                 },
               },
             },
+            // How a confirmed exception was recovered, if it was — the list is where a reviewer
+            // sees "recovered" and where a wrong recovery is reversed, so it has to carry enough
+            // to say which kind exists and whether the operator one is still alive.
+            hireBillDeduction: { select: { id: true, amount: true } },
+            operatorRecovery: {
+              select: { id: true, amount: true, status: true, employeeId: true },
+            },
           },
         }),
     );
