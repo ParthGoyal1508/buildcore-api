@@ -11,8 +11,16 @@ WORKDIR /app
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Install app dependencies
-RUN npm install
+# Install app dependencies.
+#
+# ONNXRUNTIME_NODE_INSTALL=skip: on linux/x64, onnxruntime-node's postinstall otherwise downloads
+# its CUDA 12 GPU provider — a large download this CPU-only instance never loads. The CPU build the
+# face matcher uses ships inside the package itself.
+#
+# The prune drops the macOS and Windows binaries the same package bundles (~220 MB of the image).
+ENV ONNXRUNTIME_NODE_INSTALL=skip
+RUN npm install \
+  && find node_modules/onnxruntime-node/bin/napi-v6 -mindepth 1 -maxdepth 1 ! -name linux -exec rm -rf {} +
 
 COPY . .
 

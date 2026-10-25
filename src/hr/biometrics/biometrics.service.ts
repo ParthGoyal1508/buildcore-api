@@ -1,9 +1,11 @@
-/** The length of a face-api face descriptor: 128 32-bit floats. */
+/** The length of an SFace face embedding: 128 32-bit floats. */
 export const FACE_DESCRIPTOR_LENGTH = 128;
 
 export interface FaceMatch {
   matched: boolean;
-  /** Euclidean distance between the two descriptors; lower is more similar. */
+  /** How far apart the two descriptors are; lower is more similar. The real matcher
+   * reports cosine distance (`cosineDistance`), which is what lands in the
+   * `faceMatchDistance` columns. */
   distance: number;
 }
 
@@ -15,7 +17,7 @@ export interface FaceMatch {
  * inference against real photographs of real people — tests that would otherwise be
  * slow, flaky, and would require committing biometric data to the repository. And
  * it keeps every caller honest about the contract: services depend on "something
- * that compares faces", not on face-api specifically, so the earlier decision to
+ * that compares faces", not on a particular model, so the earlier decision to
  * store a descriptor rather than raw photos (research.md §2) stays enforceable.
  */
 export abstract class BiometricsService {
@@ -68,14 +70,38 @@ export class NoFaceDetectedError extends Error {
   }
 }
 
-/** Euclidean distance between two descriptors — the comparison face-api's accuracy
- * figures are defined in terms of. */
-export function euclideanDistance(a: Float32Array, b: Float32Array): number {
+function assertSameLength(a: Float32Array, b: Float32Array): void {
   if (a.length !== b.length) {
     throw new Error(
       `Cannot compare descriptors of different lengths (${a.length} vs ${b.length}).`,
     );
   }
+}
+
+/**
+ * `1 − cosine similarity`: 0 for the same direction, 1 for unrelated, 2 for opposite. The
+ * comparison SFace's accuracy figures are defined in terms of, flipped so that — like the
+ * Euclidean distance the stored `faceMatchDistance` columns held before it — lower means
+ * more alike. OpenCV's published match line of 0.363 similarity is a distance of 0.637.
+ */
+export function cosineDistance(a: Float32Array, b: Float32Array): number {
+  assertSameLength(a, b);
+  let dot = 0;
+  let aa = 0;
+  let bb = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    aa += a[i] * a[i];
+    bb += b[i] * b[i];
+  }
+  return 1 - dot / (Math.sqrt(aa * bb) || 1);
+}
+
+/** Euclidean distance between two descriptors. The matcher compares by
+ * `cosineDistance`; this stays for the deterministic test fakes, whose descriptors
+ * are not unit vectors. */
+export function euclideanDistance(a: Float32Array, b: Float32Array): number {
+  assertSameLength(a, b);
   let sum = 0;
   for (let i = 0; i < a.length; i += 1) {
     const delta = a[i] - b[i];

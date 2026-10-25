@@ -1,4 +1,28 @@
 <!--
+Sync Impact Report (v1.6.0, 2026-10-26)
+- Version change: 1.5.0 → 1.6.0
+- Modified principles: n/a
+- Modified sections:
+  - Technology Stack & Standards → Biometric face matching: the pre-approved mechanism is now
+    **`onnxruntime-node`** running OpenCV's YuNet detector and SFace recogniser, vendored, on a
+    worker thread — replacing `@vladmandic/face-api` on the TensorFlow.js WASM backend. This is the
+    "materially different face-matching mechanism (a native-binding library …)" the v1.1.0 entry
+    said needed its own amendment, so it gets one. Measured on the same photos and machine:
+    process memory after a 12 MP punch 1,284 MB → ~200 MB, ~60 ms → ~25 ms per photo, and the API's
+    event-loop stall per punch 68–90 ms → none, because inference left the main thread. The v1.4.0
+    companion note, which existed only to keep face-api on WASM, is replaced.
+  - Technology Stack & Standards → Image processing: decode's rationale now names the ONNX
+    pipeline instead of face-api. Same dependency, same two jobs.
+- Added sections: none
+- Removed sections: none
+- MINOR, not MAJOR or PATCH: the pre-approval is redirected to a different library under new
+  normative constraints (model licensing, vendoring, off-thread inference). The scope it grants —
+  in-process face verification for any module that needs it — is unchanged, and no principle is
+  removed or redefined. Same shape as v1.4.0's companion note, which also changed what the
+  biometric entry permits without widening who may use it.
+-->
+
+<!--
 Sync Impact Report (v1.5.0, 2026-10-03)
 - Version change: 1.4.0 → 1.5.0
 - Modified principles: n/a
@@ -167,19 +191,28 @@ production incident is far more expensive than wiring them from the start.
   validation) are pre-approved additions when the module that needs them lands. Introducing a
   *different* new architectural dependency (a second ORM, a second auth strategy, a second queue
   library) requires a constitution amendment first.
-- **Biometric face matching**: An in-process, npm-based face-recognition library (e.g.
-  `@vladmandic/face-api`, a maintained TensorFlow.js-based face-api fork — pure JS/WASM inference,
-  no native-binding build step) computing and comparing face embeddings locally in the backend is
-  pre-approved for any module that needs face verification (e.g. biometric attendance punching).
-  This is an explicit, narrow exception to needing a fresh amendment per module — a second,
-  materially different face-matching mechanism (a native-binding library, a hosted third-party
-  face-recognition API) still requires its own amendment before introduction.
-  *Companion note (v1.4.0)*: because this pre-approval permits only pure JS/WASM inference with no
-  native-binding build step, face-api MUST run on the TensorFlow.js WASM/CPU backend, which rules
-  out `@tensorflow/tfjs-node` and its bundled image decoder. Decoding an uploaded photo into a
-  tensor for inference therefore goes through `sharp` (see **Image processing** below). Adopting
-  `@tensorflow/tfjs-node` for speed would be a native-binding library and requires its own
-  amendment.
+- **Biometric face matching**: In-process face verification in the backend is pre-approved for
+  any module that needs it (e.g. biometric attendance punching), through **`onnxruntime-node`**
+  (CPU execution provider) running two vendored OpenCV Model Zoo models — **YuNet** for detection
+  (MIT) and **SFace** for the embedding (Apache-2.0) — computing and comparing face embeddings
+  locally. *Amended v1.6.0*: this replaced `@vladmandic/face-api` on the TensorFlow.js WASM
+  backend, the v1.1.0 mechanism, after measuring both (see the v1.6.0 Sync Impact Report). It is
+  a narrow exception to needing a fresh amendment per module, under these constraints:
+  - **Models are vendored and licence-checked.** The `.onnx` files live in the repository beside
+    the code that loads them, with their licences and checksums, and are never fetched at build or
+    boot. A model whose licence restricts commercial use (InsightFace's SCRFD and ArcFace weights,
+    for example) MUST NOT be introduced.
+  - **Inference runs off the event loop.** `onnxruntime-node` executes `session.run` synchronously
+    on the calling thread, so it MUST run on a worker thread, never the main one: on the main
+    thread every punch stalls every other request.
+  - **One matcher per process.** It is provided in exactly one Nest module, so the models are
+    loaded once.
+  - **CPU only.** The image MUST NOT install the CUDA execution provider the package's installer
+    fetches by default on linux/x64.
+  A second, materially different face-matching mechanism (another inference runtime, a hosted
+  third-party face-recognition API) still requires its own amendment before introduction. Changing
+  either model invalidates every stored template, so it also requires every enrolled face to be
+  captured again.
 - **PDF generation**: `pdfkit` (pure-Node, no headless-browser dependency) is pre-approved for any
   module that needs to generate a downloadable PDF document (e.g. a salary slip). A second,
   materially different PDF-generation mechanism (a headless-browser HTML-to-PDF renderer, a hosted
@@ -238,8 +271,9 @@ production incident is far more expensive than wiring them from the start.
   its own amendment before introduction.
 - **Image processing**: `sharp` (libvips) is pre-approved for server-side image decoding,
   downscaling, re-encoding, and EXIF stripping. **Rationale**: it serves two distinct needs with a
-  single dependency. First, decode — the biometric pre-approval above permits only WASM/CPU
-  inference, so `sharp` is what turns an uploaded photo into a tensor for face-api. Second,
+  single dependency. First, decode — onnxruntime has no image decoder, so `sharp` is what turns an
+  uploaded photo into the raw pixels the face models take (*amended v1.6.0*; until then this named
+  face-api, whose WASM backend had no decoder either). Second,
   compression — photos MUST be downscaled and re-encoded before storage (punch selfies to roughly
   640px longest edge at JPEG q72, enrolment photos to roughly 800px at q80) to keep object-storage
   growth bounded, with the exact values in centralized config per Principle III rather than inline.
@@ -280,4 +314,4 @@ Workflow & Quality Gates); a reviewer who approves a change that knowingly viola
 NON-NEGOTIABLE principle MUST record the justification in the PR description, and that
 justification MUST itself prompt a constitution amendment if the exception is expected to recur.
 
-**Version**: 1.5.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-10-03
+**Version**: 1.6.0 | **Ratified**: 2026-08-26 | **Last Amended**: 2026-10-26

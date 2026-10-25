@@ -12,8 +12,7 @@ import { PayrollModule } from '../payroll/payroll.module';
 import { AttendanceExceptionsController } from './attendance-exceptions/attendance-exceptions.controller';
 import { AttendanceExceptionReconciler } from './attendance-exceptions/attendance-exception.reconciler';
 import { AttendanceExceptionsService } from './attendance-exceptions/attendance-exceptions.service';
-import { BiometricsService } from './biometrics/biometrics.service';
-import { FaceApiBiometricsService } from './biometrics/face-api-biometrics.service';
+import { BiometricsModule } from './biometrics/biometrics.module';
 import { FaceEnrolmentController } from './biometrics/face-enrolment.controller';
 import { FaceEnrolmentService } from './biometrics/face-enrolment.service';
 import { ImageProcessingService } from './biometrics/image-processing.service';
@@ -88,6 +87,7 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     // HR letters pre-fill from the employee record: `EmployeeLetterSource` registers it
     // into `LetterRecordSources`, so `letters` never reads an `hr` table itself.
     LettersModule,
+    BiometricsModule,
   ],
   controllers: [
     LeaveCreditController,
@@ -142,7 +142,6 @@ import { EmployeeLetterSource } from './employees/employee-letter-source';
     ReimbursementService,
     SalaryRevisionsService,
     AuditLogService,
-    { provide: BiometricsService, useClass: FaceApiBiometricsService },
   ],
   // `LeaveService` is exported alongside `EmployeesService` so payroll-side
   // features can ask "which dates was this employee on approved leave" without

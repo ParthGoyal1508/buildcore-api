@@ -4,6 +4,6 @@ build/
 coverage/
 package-lock.json
 prisma/migrations/
-# Vendored face-api model weights are generated binary/JSON artifacts, not source.
-assets/models/
+# Vendored face models (README + licences beside them) are upstream files, not source.
+src/hr/biometrics/models/
 var/storage/

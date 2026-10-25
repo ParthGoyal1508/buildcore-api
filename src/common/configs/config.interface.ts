@@ -572,12 +572,11 @@ export interface WorkspaceConfig {
   punchAccuracyMaxMetresDefault: number;
   faceMatch: {
     /**
-     * Maximum Euclidean distance between two 128-float face descriptors for a punch
-     * to count as the same person (research.md §2). Lower is stricter. 0.6 is
-     * face-api's own documented default and the value its published accuracy
-     * figures are measured at; below ~0.4 legitimate matches start failing on
-     * lighting changes alone, which on a construction site means a worker who
-     * cannot punch in.
+     * Maximum cosine distance (`1 − cosine similarity`) between two SFace embeddings
+     * for a punch to count as the same person. Lower is stricter. 0.637 is OpenCV's
+     * published SFace match line of 0.363 similarity, the value its accuracy figures
+     * are measured at. Tightening it trades false matches for workers who cannot
+     * punch in under harsh site lighting — a field-tuning question, so env-set.
      */
     distanceThreshold: number;
     /**
@@ -587,43 +586,19 @@ export interface WorkspaceConfig {
     minEnrolmentPhotos: number;
     maxEnrolmentPhotos: number;
     /**
-     * Which detector finds the face before landmarks and the descriptor are
-     * computed. `tiny` is `tinyFaceDetector`; `ssd` is `ssdMobilenetv1`.
-     *
-     * Measured on 2026-09-17 against a 640×480 punch-sized frame, same machine:
-     *
-     * | detector      | process RSS | inference | event-loop block |
-     * |---------------|-------------|-----------|------------------|
-     * | `ssd`         | 399 MB      | 221–232ms | 228ms            |
-     * | `tiny` @320   | 239 MB      | 29–36ms   | 35ms             |
-     *
-     * `tiny` is the default because the blocking figure is the one that decides
-     * whether an attendance peak works: WASM inference runs on the main thread, so
-     * for its duration the API answers nothing else. At 228ms a 150-punch burst is
-     * roughly 34 seconds of aggregate stall; at 35ms it is about five.
-     *
-     * The trade is detection sensitivity — `tiny` is worse at *finding* a small,
-     * angled or badly lit face. Landmarks and the descriptor are unchanged, so this
-     * cannot cause a false *match*; it causes a miss, and under 020 FR-013 a miss is
-     * a refused punch and a lost day. Env-overridable in both directions so a
-     * deployment finding too many misses can return to `ssd` without a release.
+     * Threads onnxruntime may use inside one inference. Inference runs off the event
+     * loop either way; this caps how much CPU a burst of punches can take from every
+     * other request. 2 measured within 10% of an unbounded pool on an 8-core laptop
+     * (26 ms against 28 ms per photo), and ORT's own default counts the *host's*
+     * cores inside a container, which oversubscribes a small instance.
      */
-    detector: 'tiny' | 'ssd';
-    /**
-     * Input square the `tiny` detector resizes the frame to. One of 128, 160, 224,
-     * 320, 416, 512, 608 — larger finds smaller faces and costs more. Ignored when
-     * `detector` is `ssd`. 320 measured 29–36ms against 416's 49–56ms with no
-     * accuracy difference worth the latency on a punch selfie, where the face fills
-     * much of the frame.
-     */
-    tinyInputSize: number;
+    inferenceThreads: number;
     /**
      * Whether to load the models during application startup instead of on the first
-     * punch. True on a long-lived instance: the load is ~40–90ms plus the WASM heap
-     * allocation, and paying it at boot puts it where nobody is waiting — and
-     * surfaces an out-of-memory at startup rather than mid-punch. False keeps the
-     * original lazy behaviour, which is right where deploys are frequent and punches
-     * rare.
+     * punch. True on a long-lived instance: paying the load at boot puts it where
+     * nobody is waiting — and surfaces an out-of-memory at startup rather than
+     * mid-punch. False keeps the original lazy behaviour, which is right where deploys
+     * are frequent and punches rare.
      */
     preloadModels: boolean;
   };
